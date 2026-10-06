@@ -14,11 +14,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect/platform": "0.97.2",
-    "@effect/rpc": "0.76.2",
     "@lemma/core": "workspace:*",
     "@lemma/router": "workspace:*",
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

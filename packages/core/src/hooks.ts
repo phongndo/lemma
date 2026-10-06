@@ -56,7 +56,7 @@ export interface PluginIdentity {
 }
 
 /** Present during activation and in the environment captured by registered handlers. */
-export class PluginContext extends Context.Tag("@lemma/core/PluginContext")<
+export class PluginContext extends Context.Service<
   PluginContext,
   PluginIdentity & {
     /** Captures dependencies now; removes the handler when the plugin's scope closes. */
@@ -86,10 +86,10 @@ export class PluginContext extends Context.Tag("@lemma/core/PluginContext")<
     /** Attribute custom capability operations without wrapping or proxying their values. */
     readonly trace: <A, E, R>(name: string, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   }
->() {}
+>()("@lemma/core/PluginContext") {}
 
 /** Plugins define the hook tokens and terminal behavior; the core only dispatches. */
-export class Hooks extends Context.Tag("@lemma/core/Hooks")<
+export class Hooks extends Context.Service<
   Hooks,
   {
     readonly invoke: <I, O, E, R>(
@@ -98,4 +98,4 @@ export class Hooks extends Context.Tag("@lemma/core/Hooks")<
       terminal: (input: I) => Effect.Effect<O, E, R>,
     ) => Effect.Effect<O, E | HookError | CoreClosed, R>;
   }
->() {}
+>()("@lemma/core/Hooks") {}

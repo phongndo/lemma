@@ -36,8 +36,11 @@ interface Subscriber {
  * kinds (`turn-ended` can overtake the last `delta`).
  */
 export interface Hub {
-  /** One subscription per run of the stream; it starts with the interactions still open. */
-  readonly events: Stream.Stream<HostEvent>;
+  /**
+   * One subscription per run of the stream; it starts with the interactions still open, after `subscribed` when
+   * `acknowledge` (which a client asks for with `SUBSCRIBED_HEADER`).
+   */
+  readonly events: (acknowledge: boolean) => Stream.Stream<HostEvent>;
   readonly count: Effect.Effect<number>;
   /** Lossless delivery to current subscribers, for interaction traffic. */
   readonly broadcast: (event: HostEvent) => Effect.Effect<void>;
@@ -45,7 +48,10 @@ export interface Hub {
   readonly drained: Effect.Effect<void>;
 }
 
-export const makeHub = (owner: Context.Tag.Service<PluginContext>, open: () => Iterable<InteractionRequest>): Effect.Effect<Hub, EventError | CoreClosed> =>
+export const makeHub = (
+  owner: Context.Service.Shape<typeof PluginContext>,
+  open: () => Iterable<InteractionRequest>,
+): Effect.Effect<Hub, EventError | CoreClosed> =>
   Effect.gen(function* () {
     const subscribers = new Set<Subscriber>();
     let drained = yield* Deferred.make<void>();
@@ -81,7 +87,7 @@ export const makeHub = (owner: Context.Tag.Service<PluginContext>, open: () => I
       const subscriber: Subscriber = { feed: yield* Queue.sliding<HostEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<HostEvent>() };
       // Synchronous from here: no interaction can open or close between the replay and joining the set.
       yield* Effect.sync(() => {
-        for (const request of open()) subscriber.inbox.unsafeOffer({ type: "interaction", request });
+        for (const request of open()) Queue.offerUnsafe(subscriber.inbox, { type: "interaction", request });
         subscribers.add(subscriber);
       });
       if (subscribers.size === 1) drained = yield* Deferred.make<void>();
@@ -95,9 +101,14 @@ export const makeHub = (owner: Context.Tag.Service<PluginContext>, open: () => I
         if (subscribers.size === 0) yield* Deferred.succeed(drained, undefined);
       });
 
-    const events: Stream.Stream<HostEvent> = Stream.unwrapScoped(
-      Effect.map(Effect.acquireRelease(join, leave), (subscriber) => Stream.merge(Stream.fromQueue(subscriber.inbox), Stream.fromQueue(subscriber.feed))),
-    );
+    // `subscribed` first, once the subscriber has joined: a request's reply on the same socket can overtake the join.
+    const events = (acknowledge: boolean): Stream.Stream<HostEvent> =>
+      Stream.unwrap(
+        Effect.map(Effect.acquireRelease(join, leave), (subscriber) => {
+          const feed = Stream.merge(Stream.fromQueue(subscriber.inbox), Stream.fromQueue(subscriber.feed));
+          return acknowledge ? Stream.concat(Stream.succeed<HostEvent>({ type: "subscribed" }), feed) : feed;
+        }),
+      );
 
     return {
       events,

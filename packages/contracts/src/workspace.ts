@@ -76,7 +76,7 @@ export class WorkspaceError extends Data.TaggedError("WorkspaceError")<{
  * change the repository (no index refresh, no fetch); `checkout` is the only
  * write and does what `git switch` would, refusing rather than discarding work.
  */
-export class Workspace extends Context.Tag("lemma/Workspace")<
+export class Workspace extends Context.Service<
   Workspace,
   {
     readonly status: (path: string) => Effect.Effect<WorkspaceStatus>;
@@ -96,4 +96,4 @@ export class Workspace extends Context.Tag("lemma/Workspace")<
     /** Switch to `branch`, creating it from HEAD when `create` is set. Returns the new status. */
     readonly checkout: (path: string, branch: string, options?: { readonly create?: boolean }) => Effect.Effect<WorkspaceStatus, WorkspaceError>;
   }
->() {}
+>()("lemma/Workspace") {}

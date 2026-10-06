@@ -292,7 +292,7 @@ describe("agent", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const turn = yield* Effect.fork(a.prompt(id, text("go")));
+        const turn = yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(
           Effect.sync(() => rec.deltas.length),
           (n) => n >= 2,
@@ -342,7 +342,7 @@ describe("agent", () => {
         Effect.gen(function* () {
           const { id } = yield* newSession;
           const a = yield* Agent;
-          const turn = yield* Effect.fork(a.prompt(id, text("go")));
+          const turn = yield* Effect.forkChild(a.prompt(id, text("go")));
           yield* Deferred.await(started);
           yield* a.cancel(id);
           yield* Fiber.join(turn);
@@ -439,7 +439,7 @@ describe("agent", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const caller = yield* Effect.fork(a.prompt(id, text("go")));
+        const caller = yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(a.busy(id), (busy) => busy);
         const busy = yield* Effect.flip(a.prompt(id, text("again"), { whenBusy: "reject" }));
         expect(busy.reason).toBe("Busy");

@@ -1,7 +1,6 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
-import { Either, Schema } from "effect";
-import type { ParseResult } from "effect";
+import { Result, Schema } from "effect";
 import { SessionEvent } from "@lemma/contracts";
 
 /**
@@ -39,22 +38,22 @@ export type Marks = typeof Marks.Type;
 
 export type Line = Header | Checkout | Marks | SessionEvent;
 
-const decodeHeader = Schema.decodeUnknownEither(Header);
-const decodeCheckout = Schema.decodeUnknownEither(Checkout);
-const decodeMarks = Schema.decodeUnknownEither(Marks);
-const decodeEvent = Schema.decodeUnknownEither(SessionEvent);
+const decodeHeader = Schema.decodeUnknownResult(Header);
+const decodeCheckout = Schema.decodeUnknownResult(Checkout);
+const decodeMarks = Schema.decodeUnknownResult(Marks);
+const decodeEvent = Schema.decodeUnknownResult(SessionEvent);
 
 export const encodeLine = (line: Line): string => `${JSON.stringify(line)}\n`;
 
 const firstLine = (message: string) => message.split("\n")[0] ?? message;
 
-/** Decodes a line already parsed as JSON. Left carries a one-line reason. */
-export function decodeRecord(json: unknown, header: boolean): Either.Either<Line, string> {
-  if (header) return Either.mapLeft(decodeHeader(json), (error) => firstLine(error.message));
+/** Decodes a line already parsed as JSON. A failure carries a one-line reason. */
+export function decodeRecord(json: unknown, header: boolean): Result.Result<Line, string> {
+  if (header) return Result.mapError(decodeHeader(json), (error) => firstLine(error.message));
   const type = typeof json === "object" && json !== null ? (json as { type?: unknown }).type : undefined;
-  const decoded: Either.Either<Line, ParseResult.ParseError> =
+  const decoded: Result.Result<Line, Schema.SchemaError> =
     type === "checkout" ? decodeCheckout(json) : type === "marks" ? decodeMarks(json) : decodeEvent(json);
-  return Either.mapLeft(decoded, (error) => firstLine(error.message));
+  return Result.mapError(decoded, (error) => firstLine(error.message));
 }
 
 /** Url-safe random id that never starts with `-`, so a command line doesn't read it as an option. */

@@ -134,7 +134,7 @@ const mainWorkTree = (commonDir: string): string | undefined => (basename(common
 /** A branch name as a single path segment: `feat/x` → `feat-x`. */
 const folderName = (branch: string) => branch.replace(/[/\\]+/g, "-");
 
-export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Workspace> => {
+export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<typeof Workspace> => {
   const home = options.home ?? homedir();
   const { worktrees } = options;
 
@@ -299,7 +299,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
 };
 
 const WorkspaceConfig = Schema.Struct({
-  worktrees: Schema.optional(Schema.String).annotations({
+  worktrees: Schema.optional(Schema.String).annotate({
     description: "Where new worktrees go; defaults to worktrees in the host's home (~/.lemma/worktrees).",
   }),
 });

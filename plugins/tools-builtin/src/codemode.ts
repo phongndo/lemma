@@ -5,13 +5,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CodemodeSandbox, parseCodemodeSource, renderToolSample, toCodemodeIdentifier } from "@earendil-works/pi-codemode";
 import type { CodemodeCall, CodemodeError, CodemodeTool } from "@earendil-works/pi-codemode";
-import { Effect, Either, Runtime, Schema } from "effect";
+import { Effect, Result, Schema } from "effect";
 import type { Context } from "effect";
 import { contentText, ToolInvocation, ToolResult } from "@lemma/contracts";
 import type { Tool, Tools } from "@lemma/contracts";
 
 export const CodemodeInput = Schema.Struct({
-  code: Schema.String.annotations({ description: "Raw JavaScript source." }),
+  code: Schema.String.annotate({ description: "Raw JavaScript source." }),
 });
 export type CodemodeInput = typeof CodemodeInput.Type;
 
@@ -135,7 +135,7 @@ async function truncateOutput(items: readonly Content[], budget: number): Promis
  * A script reaches only the tools the request offered, read per script, and never codemode. Their
  * live output is this call's own.
  */
-export const codemodeTool = (registry: Context.Tag.Service<typeof Tools>): Tool<CodemodeInput> => ({
+export const codemodeTool = (registry: Context.Service.Shape<typeof Tools>): Tool<CodemodeInput> => ({
   name: "codemode",
   description: DESCRIPTION,
   input: CodemodeInput,
@@ -144,7 +144,7 @@ export const codemodeTool = (registry: Context.Tag.Service<typeof Tools>): Tool<
     Effect.gen(function* () {
       const started = performance.now();
       const { code, options } = yield* Effect.try({ try: () => parseCodemodeSource(input.code), catch: (cause) => cause });
-      const runtime = yield* Effect.runtime<never>();
+      const services = yield* Effect.context<never>();
       const listed = yield* registry.list;
       let count = 0;
       const tools = listed
@@ -163,10 +163,10 @@ export const codemodeTool = (registry: Context.Tag.Service<typeof Tools>): Tool<
               cwd,
               ...(offered === undefined ? {} : { offered }),
             });
-            const outcome = await Runtime.runPromise(runtime)(Effect.either(registry.execute(invocation, call.signal, { update: update ?? (() => {}) })));
-            if (Either.isLeft(outcome)) throw new Error(outcome.left.message);
-            const text = contentText(outcome.right.content);
-            if (outcome.right.isError) throw new Error(text || `Tool "${spec.name}" failed`);
+            const outcome = await Effect.runPromiseWith(services)(Effect.result(registry.execute(invocation, call.signal, { update: update ?? (() => {}) })));
+            if (Result.isFailure(outcome)) throw new Error(outcome.failure.message);
+            const text = contentText(outcome.success.content);
+            if (outcome.success.isError) throw new Error(text || `Tool "${spec.name}" failed`);
             return text;
           },
         }));

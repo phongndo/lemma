@@ -47,6 +47,8 @@ const describe = (line: Line): string => {
   }
   const event = line.event;
   switch (event.type) {
+    case "subscribed":
+      return "subscribed";
     case "notice":
       return `${event.notice.level}${event.notice.source === undefined ? "" : ` ${event.notice.source}:`} ${event.notice.message}`;
     case "delta":

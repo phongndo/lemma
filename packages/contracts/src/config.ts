@@ -1,4 +1,4 @@
-import { Either, Option, Predicate, Schema, SchemaAST } from "effect";
+import { Predicate, Result, Schema, SchemaAST, SchemaTransformation } from "effect";
 
 /**
  * Settings forms are projected from a plugin's config Schema, so a plugin gets
@@ -8,8 +8,8 @@ import { Either, Option, Predicate, Schema, SchemaAST } from "effect";
  * its property signature, and mark one whose value clients must never receive
  * with `secret`:
  *
- *   token: Schema.optional(Schema.String).annotations({ ...secret, description: "…" })
- *   baseUrl: Schema.propertySignature(Schema.String).annotations({ description: "…" })
+ *   token: Schema.optional(Schema.String).annotate({ ...secret, description: "…" })
+ *   baseUrl: Schema.String.annotateKey({ description: "…" })
  */
 export const SecretAnnotationId: unique symbol = Symbol.for("lemma/config/secret");
 export const secret = { [SecretAnnotationId]: true } as const;
@@ -19,7 +19,7 @@ export const ConfigField = Schema.Struct({
   title: Schema.String,
   description: Schema.optional(Schema.String),
   /** `strings` is a list of strings; `other` is anything a form does not edit (nested objects, records). */
-  type: Schema.Literal("string", "number", "integer", "boolean", "enum", "strings", "other"),
+  type: Schema.Literals(["string", "number", "integer", "boolean", "enum", "strings", "other"]),
   /** The choices of an `enum`. */
   options: Schema.optional(Schema.Array(Schema.String)),
   /** May be left unset. */
@@ -34,7 +34,7 @@ export type ConfigField = typeof ConfigField.Type;
 /** A plugin's config as a settings form shows it: editable values, and which secret fields hold a value. */
 export const ConfigValues = Schema.Struct({
   /** The config the plugin runs with, by field key: scalar and string-list fields that are not secret. */
-  values: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  values: Schema.Record(Schema.String, Schema.Unknown),
   /** Secret fields that have a value. */
   secretsSet: Schema.Array(Schema.String),
 });
@@ -46,51 +46,49 @@ const titleOf = (key: string): string => {
   return words.charAt(0).toUpperCase() + words.slice(1).toLowerCase();
 };
 
-const stripRefinements = (ast: SchemaAST.AST): SchemaAST.AST => (SchemaAST.isRefinement(ast) ? stripRefinements(ast.from) : ast);
-
 /** Drops `undefined` from a union: optional fields carry it in their type. */
-const defined = (ast: SchemaAST.AST): SchemaAST.AST => {
-  if (!SchemaAST.isUnion(ast)) return ast;
-  const members = ast.types.filter((member) => !SchemaAST.isUndefinedKeyword(member));
-  return members.length === 1 ? members[0]! : SchemaAST.Union.make(members);
-};
+const defined = (ast: SchemaAST.AST): readonly SchemaAST.AST[] =>
+  SchemaAST.isUnion(ast) ? ast.types.filter((member) => !SchemaAST.isUndefined(member)) : [ast];
 
 const classify = (ast: SchemaAST.AST): Pick<ConfigField, "type" | "options"> => {
-  const type = defined(ast);
-  const base = stripRefinements(type);
-  if (SchemaAST.isStringKeyword(base)) return { type: "string" };
-  if (SchemaAST.isBooleanKeyword(base)) return { type: "boolean" };
-  if (SchemaAST.isNumberKeyword(base)) {
-    // Refinements carry no portable "integer" marker, so ask the schema itself.
-    const is = Schema.is(Schema.make(type));
+  const members = defined(ast);
+  const base = members.length === 1 ? members[0]! : undefined;
+  if (base !== undefined && SchemaAST.isString(base)) return { type: "string" };
+  if (base !== undefined && SchemaAST.isBoolean(base)) return { type: "boolean" };
+  if (base !== undefined && SchemaAST.isNumber(base)) {
+    // Checks carry no portable "integer" marker, so ask the schema itself.
+    const is = Schema.is(Schema.make(base));
     return { type: is(1) && !is(1.5) ? "integer" : "number" };
   }
-  if (SchemaAST.isLiteral(base) && typeof base.literal === "string") return { type: "enum", options: [base.literal] };
-  if (SchemaAST.isUnion(base) && base.types.every((member) => SchemaAST.isLiteral(member) && typeof member.literal === "string")) {
-    return { type: "enum", options: base.types.map((member) => String((member as SchemaAST.Literal).literal)) };
+  const literals = members.flatMap((member) => (SchemaAST.isUnion(member) ? member.types : [member]));
+  if (literals.length > 0 && literals.every((member) => SchemaAST.isLiteral(member) && typeof member.literal === "string")) {
+    return { type: "enum", options: literals.map((member) => String((member as SchemaAST.Literal).literal)) };
   }
-  if (SchemaAST.isTupleType(base) && base.elements.length === 0 && base.rest.length === 1 && SchemaAST.isStringKeyword(stripRefinements(base.rest[0]!.type))) {
+  if (base !== undefined && SchemaAST.isArrays(base) && base.elements.length === 0 && base.rest.length === 1 && SchemaAST.isString(base.rest[0]!)) {
     return { type: "strings" };
   }
   return { type: "other" };
 };
 
-const annotation = <A>(signatures: readonly SchemaAST.Annotated[], get: (annotated: SchemaAST.Annotated) => Option.Option<A>): A | undefined => {
-  for (const signature of signatures) {
-    const found = get(signature);
-    if (Option.isSome(found)) return found.value;
+/** A field's annotations: those on its key, then its type's (a refined type keeps them on its last check). */
+const annotationsOf = (ast: SchemaAST.AST): Schema.Annotations.Annotations => ({ ...SchemaAST.resolve(ast), ...ast.context?.annotations });
+
+const annotation = (asts: readonly SchemaAST.AST[], key: "title" | "description"): string | undefined => {
+  for (const ast of asts) {
+    const found = annotationsOf(ast)[key];
+    if (typeof found === "string") return found;
   }
   return undefined;
 };
 
-const isSecret = (annotated: SchemaAST.Annotated): boolean => annotated.annotations[SecretAnnotationId] === true;
+const isSecret = (ast: SchemaAST.AST): boolean => (annotationsOf(ast) as Record<PropertyKey, unknown>)[SecretAnnotationId] === true;
 
 /** The struct's property signatures on its decoded side, with the encoded side's for annotations a transformation keeps there. */
-function properties(schema: Schema.Schema.AnyNoContext): { key: string; type: SchemaAST.AST; optional: boolean; annotated: SchemaAST.Annotated[] }[] {
-  const decoded = SchemaAST.typeAST(schema.ast);
-  const encoded = SchemaAST.encodedAST(schema.ast);
-  if (!SchemaAST.isTypeLiteral(decoded)) return [];
-  const encodedSignatures = SchemaAST.isTypeLiteral(encoded) ? encoded.propertySignatures : [];
+function properties(schema: Schema.Top): { key: string; type: SchemaAST.AST; optional: boolean; annotated: SchemaAST.AST[] }[] {
+  const decoded = SchemaAST.toType(schema.ast);
+  const encoded = SchemaAST.toEncoded(schema.ast);
+  if (!SchemaAST.isObjects(decoded)) return [];
+  const encodedSignatures = SchemaAST.isObjects(encoded) ? encoded.propertySignatures : [];
   return decoded.propertySignatures
     .filter((signature): signature is SchemaAST.PropertySignature & { name: string } => typeof signature.name === "string")
     .map((signature) => {
@@ -99,27 +97,28 @@ function properties(schema: Schema.Schema.AnyNoContext): { key: string; type: Sc
         key: signature.name,
         type: signature.type,
         // A field with a default is required once decoded but may be left out of the file.
-        optional: signature.isOptional || other?.isOptional === true,
-        // Not the type's: built-in refinements annotate themselves ("a positive number").
-        annotated: [signature, ...(other === undefined ? [] : [other])],
+        optional: SchemaAST.isOptional(signature.type) || (other !== undefined && SchemaAST.isOptional(other.type)),
+        annotated: [signature.type, ...(other === undefined ? [] : [other.type])],
       };
     });
 }
 
 /** What the plugin decodes an empty config to, encoded again: its defaults. Undefined when `{}` is not a valid config. */
-const defaultsOf = (schema: Schema.Schema.AnyNoContext): Record<string, unknown> | undefined => {
-  const decoded = Schema.decodeUnknownEither(schema)({});
-  if (Either.isLeft(decoded)) return undefined;
-  const encoded = Schema.encodeEither(schema)(decoded.right);
-  return Either.isRight(encoded) && typeof encoded.right === "object" && encoded.right !== null ? (encoded.right as Record<string, unknown>) : undefined;
+const defaultsOf = (schema: Schema.Codec<any, any>): Record<string, unknown> | undefined => {
+  const decoded = Schema.decodeUnknownResult(schema)({});
+  if (Result.isFailure(decoded)) return undefined;
+  const encoded = Schema.encodeResult(schema)(decoded.success);
+  return Result.isSuccess(encoded) && typeof encoded.success === "object" && encoded.success !== null
+    ? (encoded.success as Record<string, unknown>)
+    : undefined;
 };
 
 /** The form for a config Schema: one field per top-level property. Empty for a Schema that is not a struct. */
-export function describeConfig(schema: Schema.Schema.AnyNoContext): ConfigField[] {
+export function describeConfig(schema: Schema.Codec<any, any>): ConfigField[] {
   const defaults = defaultsOf(schema) ?? {};
   return properties(schema).map((property) => {
-    const description = annotation(property.annotated, SchemaAST.getDescriptionAnnotation);
-    const title = annotation(property.annotated, SchemaAST.getTitleAnnotation);
+    const description = annotation(property.annotated, "description");
+    const title = annotation(property.annotated, "title");
     const secretField = property.annotated.some(isSecret);
     return {
       key: property.key,
@@ -139,10 +138,11 @@ export function describeConfig(schema: Schema.Schema.AnyNoContext): ConfigField[
  * form edits and never a secret's value. An invalid config (the plugin would
  * not load) is shown as written.
  */
-export function configValues(schema: Schema.Schema.AnyNoContext, config: unknown, fields: readonly ConfigField[] = describeConfig(schema)): ConfigValues {
-  const decoded = Schema.decodeUnknownEither(schema)(config ?? {});
-  const encoded = Either.isRight(decoded) ? Schema.encodeEither(schema)(decoded.right) : Either.right(config);
-  const effective = Either.isRight(encoded) && typeof encoded.right === "object" && encoded.right !== null ? (encoded.right as Record<string, unknown>) : {};
+export function configValues(schema: Schema.Codec<any, any>, config: unknown, fields: readonly ConfigField[] = describeConfig(schema)): ConfigValues {
+  const decoded = Schema.decodeUnknownResult(schema)(config ?? {});
+  const encoded = Result.isSuccess(decoded) ? Schema.encodeResult(schema)(decoded.success) : Result.succeed(config);
+  const effective =
+    Result.isSuccess(encoded) && typeof encoded.success === "object" && encoded.success !== null ? (encoded.success as Record<string, unknown>) : {};
   const values: Record<string, unknown> = {};
   const secretsSet: string[] = [];
   for (const field of fields) {
@@ -164,17 +164,17 @@ export function configValues(schema: Schema.Schema.AnyNoContext, config: unknown
  *   config: migrateConfig(Config, ({ steps, ...rest }) => (steps === undefined ? rest : { maxSteps: steps, ...rest }))
  */
 export const migrateConfig = <A, I>(
-  schema: Schema.Schema<A, I>,
+  schema: Schema.Codec<A, I>,
   migrate: (config: Readonly<Record<string, unknown>>) => Record<string, unknown>,
-): Schema.Schema<A, unknown> =>
-  Schema.compose(
-    Schema.transform(Schema.Unknown, Schema.Unknown, {
-      strict: true,
-      decode: (config) => (Predicate.isRecord(config) ? migrate(config) : config),
-      encode: (config) => config,
-    }),
-    schema,
-    { strict: false },
+): Schema.Codec<A, unknown> =>
+  Schema.Unknown.pipe(
+    Schema.decodeTo(
+      schema,
+      SchemaTransformation.transform<I, unknown>({
+        decode: (config) => (Predicate.isObject(config) ? migrate(config) : config) as I,
+        encode: (config) => config,
+      }),
+    ),
   );
 
 const BOOLEANS: Readonly<Record<string, boolean>> = { true: true, false: false, on: true, off: false, yes: true, no: false };

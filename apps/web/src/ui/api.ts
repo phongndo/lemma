@@ -1,4 +1,3 @@
-import { Schema } from "effect";
 import * as solid from "solid-js";
 import html from "solid-js/html";
 import * as store from "solid-js/store";
@@ -21,6 +20,7 @@ import { bundled } from "../plugins/index.ts";
 import * as contracts from "./contracts.ts";
 import { defineUiPlugin, extendUiPlugin } from "./define.ts";
 import * as parts from "./parts.tsx";
+import { UiSchema } from "./schema.ts";
 import { DEFAULT_PART_ORDER, definePart, defineSlot } from "./slots.ts";
 
 /**
@@ -78,28 +78,8 @@ export const api = {
   copyText,
   /** For plugins written against the kernel directly. */
   core: { definePlugin, Event, Hook },
-  /**
-   * Enough of Effect Schema to declare a config, which the Plugins page turns
-   * into a form, and a route's params and search. Only these members, so the
-   * rest of Schema stays out of the app.
-   */
-  Schema: {
-    Array: Schema.Array,
-    Boolean: Schema.Boolean,
-    Int: Schema.Int,
-    Literal: Schema.Literal,
-    Number: Schema.Number,
-    NumberFromString: Schema.NumberFromString,
-    Record: Schema.Record,
-    String: Schema.String,
-    Struct: Schema.Struct,
-    between: Schema.between,
-    nonNegative: Schema.nonNegative,
-    optional: Schema.optional,
-    optionalWith: Schema.optionalWith,
-    positive: Schema.positive,
-    propertySignature: Schema.propertySignature,
-  },
+  /** Enough of Effect Schema to declare a config and a route's params and search (see `UiSchema`). */
+  Schema: UiSchema,
 };
 
 export type UiApi = typeof api;

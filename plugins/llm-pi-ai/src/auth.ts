@@ -1,4 +1,5 @@
-import { Cause, Effect, Exit, Runtime } from "effect";
+import { Cause, Effect, Exit } from "effect";
+import type { Context } from "effect";
 import type * as Pi from "@earendil-works/pi-ai";
 import type { Credential, Credentials, Interaction, NoticePayload } from "@lemma/contracts";
 
@@ -10,14 +11,14 @@ type InteractionService = typeof Interaction.Service;
  * itself (not a FiberFailure), and interruption rejects with the signal's
  * reason so pi-ai sees an ordinary abort.
  */
-export function runner(runtime: Runtime.Runtime<never>) {
-  const run = Runtime.runPromiseExit(runtime);
+export function runner(services: Context.Context<never>) {
+  const run = Effect.runPromiseExitWith(services);
   return async <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> => {
     const exit = await run(effect, signal === undefined ? undefined : { signal });
     if (Exit.isSuccess(exit)) return exit.value;
-    const failure = Cause.failureOption(exit.cause);
+    const failure = Cause.findErrorOption(exit.cause);
     if (failure._tag === "Some") throw failure.value;
-    if (Cause.isInterruptedOnly(exit.cause)) throw signal?.reason ?? new DOMException("Aborted", "AbortError");
+    if (Cause.hasInterruptsOnly(exit.cause)) throw signal?.reason ?? new DOMException("Aborted", "AbortError");
     throw Cause.squash(exit.cause);
   };
 }

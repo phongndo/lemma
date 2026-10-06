@@ -9,22 +9,22 @@ export const ApiKeyCredential = Schema.Struct({
   type: Schema.Literal("api_key"),
   key: Schema.optional(Schema.String),
   /** Provider-scoped settings such as account or gateway ids. */
-  env: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+  env: Schema.optional(Schema.Record(Schema.String, Schema.String)),
 });
 
 /** OAuth providers add their own fields (account ids, per-account base URLs); they are preserved. */
-export const OAuthCredential = Schema.Struct(
-  {
+export const OAuthCredential = Schema.StructWithRest(
+  Schema.Struct({
     type: Schema.Literal("oauth"),
     access: Schema.String,
     refresh: Schema.String,
     /** Epoch milliseconds. */
     expires: Schema.Number,
-  },
-  Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  }),
+  [Schema.Record(Schema.String, Schema.Unknown)],
 );
 
-export const Credential = Schema.Union(ApiKeyCredential, OAuthCredential);
+export const Credential = Schema.Union([ApiKeyCredential, OAuthCredential]);
 export type Credential = typeof Credential.Type;
 
 export class CredentialError extends Data.TaggedError("CredentialError")<{
@@ -40,7 +40,7 @@ export class CredentialError extends Data.TaggedError("CredentialError")<{
  * refresh and a concurrent login cannot overwrite each other. Returning
  * `undefined` leaves the entry unchanged.
  */
-export class Credentials extends Context.Tag("lemma/Credentials")<
+export class Credentials extends Context.Service<
   Credentials,
   {
     readonly read: (provider: string) => Effect.Effect<Credential | undefined, CredentialError>;
@@ -52,4 +52,4 @@ export class Credentials extends Context.Tag("lemma/Credentials")<
     ) => Effect.Effect<Credential | undefined, CredentialError | E>;
     readonly remove: (provider: string) => Effect.Effect<void, CredentialError>;
   }
->() {}
+>()("lemma/Credentials") {}

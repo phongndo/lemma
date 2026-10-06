@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import { Deferred, Duration, Effect, Fiber, FiberMap, Stream } from "effect";
-import { branchOf, contentText, trajectory } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Fiber, FiberMap, Semaphore, Stream } from "effect";
+import { branchOf, contentText, SUBSCRIBED_HEADER, trajectory } from "@lemma/contracts";
 import type {
   AssistantMessage,
   HostEvent,
@@ -83,7 +83,7 @@ const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: s
       Effect.gen(function* () {
         const policy = policyOf(io, options);
         if (next === undefined && policy === "dismiss") {
-          yield* rpc.Interaction.Dismiss({ id: request.id }).pipe(Effect.ignore);
+          yield* rpc["Interaction.Dismiss"]({ id: request.id }).pipe(Effect.ignore);
           io.err(`lemma: dismissed question "${request.title}"`);
           return;
         }
@@ -99,7 +99,7 @@ const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: s
           const answer = toAnswer(request, raw);
           if (typeof answer !== "string") {
             // Someone else may have answered first; that is not an error here.
-            yield* rpc.Interaction.Answer({ id: request.id, answer }).pipe(Effect.ignore);
+            yield* rpc["Interaction.Answer"]({ id: request.id, answer }).pipe(Effect.ignore);
             return;
           }
           io.err(`lemma: ${answer}`);
@@ -119,17 +119,26 @@ const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: s
   });
 
 /**
- * Subscribes to host events, then confirms the subscription with a call on
- * the same socket (calls on one socket are handled in order), so nothing the
- * command causes next is missed.
+ * Subscribes to host events and waits for the host's `subscribed`, so nothing
+ * the command causes next is missed (a question it asks among them). A call's
+ * reply is no such sign: the host handles calls on one socket concurrently.
+ * A host from before `subscribed` sends none; after a few seconds the command
+ * goes on regardless, as it used to.
  */
 const subscribe = (rpc: HostRpcClient, onEvent: (event: HostEvent) => Effect.Effect<void>) =>
   Effect.gen(function* () {
-    const fiber = yield* rpc.Host.Events().pipe(
-      Stream.runForEach((event) => onEvent(event).pipe(Effect.catchAllCause(() => Effect.void))),
-      Effect.forkScoped,
+    const subscribed = yield* Deferred.make<void>();
+    const fiber = yield* rpc["Host.Events"](undefined, { headers: { [SUBSCRIBED_HEADER]: "1" } }).pipe(
+      Stream.runForEach((event) =>
+        event.type === "subscribed" ? Deferred.succeed(subscribed, undefined) : onEvent(event).pipe(Effect.catchCause(() => Effect.void)),
+      ),
+      Effect.forkScoped({ startImmediately: true }),
     );
-    yield* rpc.Host.Info();
+    yield* Effect.raceFirst(
+      Deferred.await(subscribed).pipe(Effect.timeoutOrElse({ duration: Duration.seconds(5), orElse: () => Effect.void })),
+      // A subscription that fails first fails the command: its reason is the host's or the connection's.
+      Effect.andThen(Fiber.join(fiber), Effect.never),
+    );
     return fiber;
   });
 
@@ -167,7 +176,7 @@ const turnOptions = (options: Options): TurnOptions => ({
  */
 const turnOf = (rpc: HostRpcClient, sessionId: string, requestId?: string) =>
   Effect.gen(function* () {
-    const [info, events] = yield* Effect.all([rpc.Session.Get({ sessionId }), rpc.Session.Events({ sessionId })], { concurrency: "unbounded" });
+    const [info, events] = yield* Effect.all([rpc["Session.Get"]({ sessionId }), rpc["Session.Events"]({ sessionId })], { concurrency: "unbounded" });
     const placed = events.find((event) => event.data.type === "message" && event.data.requestId !== undefined && event.data.requestId === requestId);
     const turnId = placed?.data.type === "message" ? placed.data.turnId : undefined;
     // On that turn's own branch, through its last event: a checkout since may have left it off the session's.
@@ -187,7 +196,7 @@ const turnOf = (rpc: HostRpcClient, sessionId: string, requestId?: string) =>
       text: response === undefined ? "" : contentText(response.message.content),
     };
   });
-export type TurnResult = Effect.Effect.Success<ReturnType<typeof turnOf>>;
+export type TurnResult = Effect.Success<ReturnType<typeof turnOf>>;
 
 /** `lemma run <session|new> <prompt…>`: send a prompt and wait for the turn; `--follow` streams it. */
 export const runCommand =
@@ -200,7 +209,7 @@ export const runCommand =
       if (text === "" && images.length === 0) return yield* usage("run needs a prompt");
       const content: PromptContent = [...(text === "" ? [] : [{ type: "text", text } satisfies TextContent]), ...images];
 
-      const sessionId = target === "new" ? (yield* connection.rpc.Session.Create({ cwd: resolve(io.cwd, options.cwd ?? ".") })).id : target;
+      const sessionId = target === "new" ? (yield* connection.rpc["Session.Create"]({ cwd: resolve(io.cwd, options.cwd ?? ".") })).id : target;
       if (target === "new" && !options.json) io.err(`lemma: session ${sessionId}`);
       // Always an id: the result and `--follow` are about the turn that places this prompt, which a queue can delay.
       const requestId = options.requestId ?? randomUUID();
@@ -220,7 +229,7 @@ export const runCommand =
           const rpc = yield* connection.live;
           yield* subscribe(rpc, yield* questionHandler(rpc, io, options, `session:${sessionId}`));
         }
-        yield* connection.rpc.Agent.Prompt(payload);
+        yield* connection.rpc["Agent.Prompt"](payload);
         return result(yield* turnOf(connection.rpc, sessionId, requestId), options, false);
       }
 
@@ -317,7 +326,7 @@ export const runCommand =
           { discard: true },
         );
       // One event at a time, so a retry's join and the events after it show in order.
-      const lock = yield* Effect.makeSemaphore(1);
+      const lock = yield* Semaphore.make(1);
       yield* subscribe(rpc, (event) =>
         lock.withPermits(1)(
           Effect.gen(function* () {
@@ -341,7 +350,7 @@ export const runCommand =
       // A retry: the request id was placed before, so no message of it is coming. Follow the turn that placed it, from
       // what it has done so far: subscribed first, every event from here is held until that is shown.
       joining = true;
-      const log = yield* connection.rpc.Session.Events({ sessionId });
+      const log = yield* connection.rpc["Session.Events"]({ sessionId });
       const placed = log.find((event) => event.data.type === "message" && event.data.requestId === requestId);
       const turnId = placed?.data.type === "message" ? placed.data.turnId : undefined;
       if (turnId === undefined) {
@@ -353,7 +362,7 @@ export const runCommand =
         held = [];
         yield* Deferred.succeed(ended, undefined);
       } else {
-        const view = yield* connection.rpc.Agent.View({ sessionId });
+        const view = yield* connection.rpc["Agent.View"]({ sessionId });
         yield* lock.withPermits(1)(
           Effect.gen(function* () {
             ours = turnId;
@@ -408,7 +417,7 @@ export const runCommand =
           }),
         );
       }
-      yield* rpc.Agent.Prompt(payload);
+      yield* rpc["Agent.Prompt"](payload);
       // `turn-ended` may trail the reply; the log is authoritative either way.
       yield* Deferred.await(ended).pipe(Effect.timeout(Duration.seconds(2)), Effect.ignore);
       if (midLine) io.write?.("\n");
@@ -425,15 +434,15 @@ const result = (turn: TurnResult, options: Options, streamed: boolean): Output =
 export const cancelCommand =
   (sessionId: string): Command =>
   ({ rpc }) =>
-    Effect.as(rpc.Agent.Cancel({ sessionId }), { json: { cancelled: sessionId }, text: `cancelled any running turn in ${sessionId}` });
+    Effect.as(rpc["Agent.Cancel"]({ sessionId }), { json: { cancelled: sessionId }, text: `cancelled any running turn in ${sessionId}` });
 
 /** `lemma queue <session>`: prompts waiting for a turn. */
 export const queueCommand =
   (sessionId: string): Command =>
   ({ rpc }) =>
     Effect.gen(function* () {
-      yield* rpc.Session.Get({ sessionId });
-      const queue = yield* rpc.Agent.Queue({ sessionId });
+      yield* rpc["Session.Get"]({ sessionId });
+      const queue = yield* rpc["Agent.Queue"]({ sessionId });
       return { json: queue, text: formatQueue(queue) };
     });
 
@@ -442,7 +451,7 @@ export const withdrawCommand =
   (sessionId: string, requestId: string): Command =>
   ({ rpc }) =>
     Effect.gen(function* () {
-      if (!(yield* rpc.Agent.Withdraw({ sessionId, requestId }))) {
+      if (!(yield* rpc["Agent.Withdraw"]({ sessionId, requestId }))) {
         return yield* new CliError({
           code: "NotFound",
           message: `No queued prompt ${requestId} in ${sessionId}: a turn may have placed it already`,
@@ -475,6 +484,8 @@ export const eventsCommand: Command = (connection, io, options) =>
 
 const eventLine = (event: HostEvent): string => {
   switch (event.type) {
+    case "subscribed":
+      return "subscribed";
     case "notice":
       return noticeLine(event);
     case "delta":
@@ -540,28 +551,29 @@ export const answerCommand =
       if (request === undefined) return yield* new CliError({ code: "NotFound", message: `No open question ${id}`, subject: id, exit: ExitCode.failed });
       const answer = toAnswer(request, words.join(" "));
       if (typeof answer === "string") return yield* usage(answer);
-      yield* connection.rpc.Interaction.Answer({ id, answer });
+      yield* connection.rpc["Interaction.Answer"]({ id, answer });
       return { json: { answered: id, answer }, text: `answered "${request.title}"` };
     });
 
 export const dismissCommand =
   (id: string): Command =>
   ({ rpc }) =>
-    Effect.as(rpc.Interaction.Dismiss({ id }), { json: { dismissed: id }, text: `dismissed ${id}` });
+    Effect.as(rpc["Interaction.Dismiss"]({ id }), { json: { dismissed: id }, text: `dismissed ${id}` });
 
 // ------------------------------------------------------------------ providers and models
 
 export const modelsCommand: Command = ({ rpc }, _io, options) =>
-  Effect.map(rpc.Llm.Models(options.all ? {} : { available: true }), (models) => ({ json: models, text: formatModels(models) }));
+  Effect.map(rpc["Llm.Models"](options.all ? {} : { available: true }), (models) => ({ json: models, text: formatModels(models) }));
 
-export const providersCommand: Command = ({ rpc }) => Effect.map(rpc.Llm.Providers(), (providers) => ({ json: providers, text: formatProviders(providers) }));
+export const providersCommand: Command = ({ rpc }) =>
+  Effect.map(rpc["Llm.Providers"](), (providers) => ({ json: providers, text: formatProviders(providers) }));
 
 /** `lemma login <provider>`: runs the provider's login, answering its questions per the policy and printing its notices. */
 export const loginCommand =
   (provider: string): Command =>
   (connection, io, options) =>
     Effect.gen(function* () {
-      const info = (yield* connection.rpc.Llm.Providers()).find((candidate) => candidate.id === provider);
+      const info = (yield* connection.rpc["Llm.Providers"]()).find((candidate) => candidate.id === provider);
       if (info === undefined)
         return yield* new CliError({ code: "UnknownProvider", message: `No provider "${provider}"`, subject: provider, exit: ExitCode.failed });
       const method = options.method ?? info.auth[0]?.type;
@@ -576,17 +588,17 @@ export const loginCommand =
           yield* questions(event);
         }),
       );
-      yield* rpc.Llm.Login({ provider, type: method });
+      yield* rpc["Llm.Login"]({ provider, type: method });
       return { json: { loggedIn: provider, method }, text: `logged in to ${info.name}` };
     });
 
 export const logoutCommand =
   (provider: string): Command =>
   ({ rpc }) =>
-    Effect.as(rpc.Llm.Logout({ provider }), { json: { loggedOut: provider }, text: `logged out of ${provider}` });
+    Effect.as(rpc["Llm.Logout"]({ provider }), { json: { loggedOut: provider }, text: `logged out of ${provider}` });
 
 /** `lemma do`: lists the commands plugins registered; `lemma do <id>` runs one, answering its questions per the policy. */
-export const listCommandsCommand: Command = ({ rpc }) => Effect.map(rpc.Command.List(), (commands) => ({ json: commands, text: formatCommands(commands) }));
+export const listCommandsCommand: Command = ({ rpc }) => Effect.map(rpc["Command.List"](), (commands) => ({ json: commands, text: formatCommands(commands) }));
 
 export const doCommand =
   (id: string): Command =>
@@ -602,6 +614,6 @@ export const doCommand =
         }),
       );
       const cwd = resolve(io.cwd, options.cwd ?? ".");
-      const result = yield* rpc.Command.Run({ id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
+      const result = yield* rpc["Command.Run"]({ id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
       return { json: { command: id, ...result }, text: result.message ?? `${id}: done` };
     });

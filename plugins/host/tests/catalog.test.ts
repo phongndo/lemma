@@ -1,14 +1,14 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Layer, Schema } from "effect";
+import { Cause, Context, Effect, Layer, Schema } from "effect";
 import { secret } from "@lemma/contracts";
 import { definePlugin, PluginFault } from "@lemma/core";
 import type { Composition, PluginSnapshot } from "@lemma/core";
 import { catalog, faultHistory, resolveComposition, restartedBy, withReplacements } from "../src/index.ts";
 import type { KnownPlugin } from "../src/index.ts";
 
-class Llm extends Context.Tag("test/Llm")<Llm, string>() {}
-class Tools extends Context.Tag("test/Tools")<Tools, string>() {}
-class Agent extends Context.Tag("test/Agent")<Agent, string>() {}
+class Llm extends Context.Service<Llm, string>()("test/Llm") {}
+class Tools extends Context.Service<Tools, string>()("test/Tools") {}
+class Agent extends Context.Service<Agent, string>()("test/Agent") {}
 
 /** transport needs agent, which needs llm and tools; bash (a project plugin shadowing the bundled one) plugs into tools; my-llm is a second Llm provider. */
 const known: KnownPlugin[] = [
@@ -117,8 +117,8 @@ describe("catalog", () => {
 
   test("describes a plugin's config as a form with its current values, keeping secrets out", () => {
     const Config = Schema.Struct({
-      port: Schema.optionalWith(Schema.Number, { default: () => 7433 }).annotations({ description: "Where it listens" }),
-      token: Schema.optional(Schema.String).annotations(secret),
+      port: Schema.Number.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 7433))).annotate({ description: "Where it listens" }),
+      token: Schema.optional(Schema.String).annotate(secret),
     });
     const server = definePlugin({ id: "server", config: Config, layer: () => Layer.empty });
     const withServer: KnownPlugin[] = [...known, { plugin: server, source: "bundled" }];

@@ -1,4 +1,23 @@
-import { Cause, Context, Data, Deferred, Duration, Effect, Either, Exit, Fiber, Layer, Option, PubSub, Schedule, Scope, Stream, Tracer } from "effect";
+import {
+  Cause,
+  Context,
+  Data,
+  Deferred,
+  Duration,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Option,
+  PubSub,
+  Result,
+  Schedule,
+  Scope,
+  Semaphore,
+  Stream,
+  Tracer,
+} from "effect";
+import type { Pull } from "effect";
 import type { Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState } from "../core.ts";
 import { CapabilityMismatch, CompositionError, CoreClosed, DeadlineExceeded, Diagnostic, PluginFault, ReloadError, ShutdownTimeout } from "../errors.ts";
 import type { ReportedFault } from "../errors.ts";
@@ -14,6 +33,7 @@ import { plan } from "./graph.ts";
 import { attributes, HookRegistry } from "./hooks.ts";
 import type { OwnerHandle } from "./hooks.ts";
 import { RegistryStore } from "./registries.ts";
+import { runtimeSettings } from "./settings.ts";
 import type { ContributorHandle } from "./registries.ts";
 
 /** A plugin and its raw (undecoded) config. */
@@ -53,7 +73,7 @@ interface Instance {
   readonly plugin: Plugin;
   readonly rawConfig: unknown;
   readonly identity: PluginIdentity;
-  readonly scope: Scope.CloseableScope;
+  readonly scope: Scope.Closeable;
   readonly hooks: OwnerHandle;
   readonly observers: ObserverHandle;
   readonly contributions: ContributorHandle;
@@ -68,7 +88,7 @@ interface Instance {
 /** One published composition. In-flight work keeps the environment it entered with. */
 interface Revision {
   environment: Context.Context<never>;
-  readonly fibers: Set<Fiber.RuntimeFiber<unknown, unknown>>;
+  readonly fibers: Set<Fiber.Fiber<unknown, unknown>>;
   /** Admitted work whose fiber is not registered yet. */
   pending: number;
   readonly drained: Deferred.Deferred<void>;
@@ -106,11 +126,11 @@ class TrackedServices extends Map<string, unknown> {
 export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTimeout"> = {}): Effect.Effect<Runtime, never, Scope.Scope> {
   return Effect.gen(function* () {
     const defaults = {
-      activate: Duration.decode(options.deadlines?.activate ?? DEFAULTS.activate),
-      dispose: Duration.decode(options.deadlines?.dispose ?? DEFAULTS.dispose),
+      activate: Duration.fromInputUnsafe(options.deadlines?.activate ?? DEFAULTS.activate),
+      dispose: Duration.fromInputUnsafe(options.deadlines?.dispose ?? DEFAULTS.dispose),
     };
     const faults = yield* PubSub.sliding<ReportedFault>(256);
-    const shutdownLimit = Duration.decode(options.shutdownTimeout ?? defaults.dispose);
+    const shutdownLimit = Duration.fromInputUnsafe(options.shutdownTimeout ?? defaults.dispose);
     let shutdownFault: ShutdownTimeout | undefined;
     const pendingDisposals = new Set<Deferred.Deferred<void>>();
     let faultSequence = 0;
@@ -128,8 +148,8 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
     const supervisor = yield* Scope.make();
     /** Owns core.run fibers. */
     const work = yield* Scope.make();
-    const tasks = new Map<Fiber.RuntimeFiber<unknown, unknown>, TrackedServices>();
-    const lock = yield* Effect.makeSemaphore(1);
+    const tasks = new Map<Fiber.Fiber<unknown, unknown>, TrackedServices>();
+    const lock = yield* Semaphore.make(1);
     const closed = yield* Deferred.make<void, unknown>();
     let state: CoreSnapshot["state"] = "active";
     const instances = new Map<string, Instance>();
@@ -198,16 +218,16 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
     const background = (instance: Instance, name: string, task: Effect.Effect<unknown, unknown, unknown>, required: boolean) =>
       Effect.gen(function* () {
         if (state !== "active" || instance.state === "closed" || instance.state === "failed") return yield* new CoreClosed();
-        // Forked fibers inherit interruptibility; owned work must stop when its scope closes.
+        // Interruptible explicitly: owned work must stop when its scope closes.
         const fiber = yield* Effect.forkIn(
           Effect.interruptible(task.pipe(Effect.withSpan("core.background", { attributes: { ...attributes(instance.identity), "task.name": name } }))),
           instance.scope,
         );
         const watch = Fiber.await(fiber).pipe(
           Effect.flatMap((exit) => {
-            if (Exit.isSuccess(exit) || Cause.isInterruptedOnly(exit.cause)) return Effect.void;
+            if (Exit.isSuccess(exit) || Cause.hasInterruptsOnly(exit.cause)) return Effect.void;
             const fault = new PluginFault({ pluginId: instance.id, phase: "background", operation: name, cause: exit.cause });
-            return report(instance, fault).pipe(Effect.zipRight(required ? fail(instance, fault) : Effect.void));
+            return report(instance, fault).pipe(Effect.andThen(required ? fail(instance, fault) : Effect.void));
           }),
         );
         yield* Effect.forkIn(Effect.interruptible(watch), supervisor);
@@ -217,7 +237,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
       Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
           instance.state = "activating";
-          const context: Context.Tag.Service<PluginContext> = {
+          const context: Context.Service.Shape<typeof PluginContext> = {
             ...instance.identity,
             on: instance.hooks.on,
             add: instance.contributions.add,
@@ -233,7 +253,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                 if (options?.fatal && !published) instance.failing ??= fault;
                 // Reported at once; failing waits on the lifecycle lock, so it runs on its own supervised fiber.
                 return report(instance, fault).pipe(
-                  Effect.zipRight(options?.fatal && published ? Effect.forkIn(fail(instance, fault), supervisor) : Effect.void),
+                  Effect.andThen(options?.fatal && published ? Effect.forkIn(fail(instance, fault), supervisor) : Effect.void),
                   Effect.asVoid,
                 );
               }),
@@ -247,30 +267,31 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             [Registries.key, store],
           ]);
           for (const tag of instance.plugin.requires) {
-            if (!inputs.has(tag.key)) inputs.set(tag.key, environment.unsafeMap.get(tag.key));
+            if (!inputs.has(tag.key)) inputs.set(tag.key, environment.mapUnsafe.get(tag.key));
           }
-          const limit = Duration.decode(instance.plugin.deadlines?.activate ?? defaults.activate);
+          const limit = Duration.fromInputUnsafe(instance.plugin.deadlines?.activate ?? defaults.activate);
           const build = Effect.suspend(() => Layer.buildWithScope(instance.plugin.layer(config), instance.scope)).pipe(
-            Effect.mapInputContext((caller: Context.Context<never>) => {
-              const provided = new Map(inputs);
-              if (caller.unsafeMap.has(Tracer.ParentSpan.key)) {
-                provided.set(Tracer.ParentSpan.key, caller.unsafeMap.get(Tracer.ParentSpan.key));
-              }
-              return Context.unsafeMake<unknown>(provided);
+            Effect.updateContext((caller: Context.Context<never>) => {
+              // The caller's runtime settings and parent span come along; services only from the declared inputs.
+              const provided = new Map([...caller.mapUnsafe].filter(([key]) => runtimeSettings.has(key) || key === Tracer.ParentSpan.key));
+              for (const [key, value] of inputs) provided.set(key, value);
+              return Context.makeUnsafe<unknown>(provided);
             }),
+            // Building records the memo map it used in the output; that is not an export.
+            Effect.map(Context.omit(Layer.CurrentMemoMap)),
             Effect.flatMap((output) => {
               const declared = new Set(instance.plugin.provides.map((tag) => tag.key));
-              const missing = [...declared].filter((key) => !output.unsafeMap.has(key));
-              const undeclared = [...output.unsafeMap.keys()].filter((key) => !declared.has(key));
+              const missing = [...declared].filter((key) => !output.mapUnsafe.has(key));
+              const undeclared = [...output.mapUnsafe.keys()].filter((key) => !declared.has(key));
               if (missing.length || undeclared.length) {
                 return Effect.fail(new CapabilityMismatch({ pluginId: instance.id, missing, undeclared }));
               }
               return Effect.succeed(output);
             }),
-            Effect.disconnect,
-            Effect.timeoutFail({ duration: limit, onTimeout: () => new DeadlineExceeded({ pluginId: instance.id, phase: "activate", limit }) }),
-            Effect.catchAllCause((cause) =>
-              Cause.isInterruptedOnly(cause)
+            disconnect,
+            Effect.timeoutOrElse({ duration: limit, orElse: () => Effect.fail(new DeadlineExceeded({ pluginId: instance.id, phase: "activate", limit })) }),
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
                 ? Effect.failCause(cause as Cause.Cause<never>)
                 : Effect.fail(new PluginFault({ pluginId: instance.id, phase: "activate", cause, deadline: isDeadline(cause) })),
             ),
@@ -284,11 +305,11 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             instance.state = "active";
             return;
           }
-          if (Cause.isInterruptedOnly(exit.cause)) {
+          if (Cause.hasInterruptsOnly(exit.cause)) {
             yield* dispose(instance, exit, "closed");
             return yield* Effect.failCause(exit.cause as Cause.Cause<never>);
           }
-          const fault = Option.getOrThrow(Cause.failureOption(exit.cause));
+          const fault = Option.getOrThrow(Cause.findErrorOption(exit.cause));
           yield* report(instance, fault);
           yield* dispose(instance, exit, "failed");
           return yield* Effect.fail(fault);
@@ -301,14 +322,14 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
           instance.hooks.stop();
           instance.observers.retire();
           instance.contributions.stop();
-          const limit = Duration.decode(instance.plugin.deadlines?.dispose ?? defaults.dispose);
+          const limit = Duration.fromInputUnsafe(instance.plugin.deadlines?.dispose ?? defaults.dispose);
           const settled = yield* Deferred.make<void>();
           pendingDisposals.add(settled);
           const close = Scope.close(instance.scope, exit).pipe(
             Effect.ensuring(
               Effect.sync(() => {
                 pendingDisposals.delete(settled);
-                Deferred.unsafeDone(settled, Effect.void);
+                Deferred.doneUnsafe(settled, Effect.void);
               }),
             ),
           );
@@ -316,7 +337,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             Effect.map(Option.getOrElse((): Exit.Exit<void, unknown> => Exit.fail(new DeadlineExceeded({ pluginId: instance.id, phase: "dispose", limit })))),
             Effect.withSpan("core.dispose", { attributes: attributes(instance.identity) }),
           );
-          if (Exit.isFailure(result) && !Cause.isInterruptedOnly(result.cause)) {
+          if (Exit.isFailure(result) && !Cause.hasInterruptsOnly(result.cause)) {
             const fault = new PluginFault({ pluginId: instance.id, phase: "dispose", cause: result.cause, deadline: isDeadline(result.cause) });
             yield* report(instance, fault);
           }
@@ -356,7 +377,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             // resolution so unrelated tasks are not interrupted with the failed plugin.
             revision.environment = environmentOf();
             const removed = new Set([instance, ...halted].flatMap((item) => item.plugin.provides.map((tag) => tag.key)));
-            const affected: Fiber.RuntimeFiber<unknown, unknown>[] = [];
+            const affected: Fiber.Fiber<unknown, unknown>[] = [];
             for (const [fiber, services] of tasks) {
               if (services.read.has(Hooks.key) || [...removed].some((key) => services.read.has(key))) affected.push(fiber);
               for (const key of removed) services.delete(key);
@@ -380,17 +401,18 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
      * failing exhausts its schedule instead of restarting forever. An explicit
      * restart resets it.
      */
-    const drivers = new Map<string, Schedule.ScheduleDriver<unknown, PluginFault, never>>();
+    const drivers = new Map<string, (input: PluginFault) => Pull.Pull<unknown, never, unknown>>();
     const restartLoop = (failed: Instance, schedule: Schedule.Schedule<unknown, PluginFault>, fault: PluginFault): Effect.Effect<void> =>
       Effect.gen(function* () {
         const id = failed.id;
-        const driver = drivers.get(id) ?? (yield* Schedule.driver(schedule));
+        const driver = drivers.get(id) ?? (yield* Schedule.toStepWithSleep(schedule));
         drivers.set(id, driver);
         let last = fault;
         while (true) {
-          const step = yield* Effect.either(driver.next(last));
-          if (Either.isLeft(step)) return;
-          const result = yield* Effect.either(
+          // The step fails (with `Done`) once the schedule is exhausted.
+          const step = yield* Effect.result(driver(last));
+          if (Result.isFailure(step)) return;
+          const result = yield* Effect.result(
             applyLocked(
               currentMembers(),
               new Set([id]),
@@ -399,7 +421,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
               () => instances.get(id) === failed && failed.state === "failed" && drivers.get(id) === driver,
             ),
           );
-          if (Either.isRight(result)) return;
+          if (Result.isSuccess(result)) return;
           last = instances.get(id)?.fault ?? last;
         }
       });
@@ -437,8 +459,8 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
               members.map((member) => member.plugin),
               (id) => raw.get(id),
             );
-            if (Either.isLeft(planned)) return yield* new PlanError({ errors: planned.left });
-            const { ordered, configs, providers: nextProviders } = planned.right;
+            if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
+            const { ordered, configs, providers: nextProviders } = planned.success;
             const required = partial === undefined ? undefined : requiredClosure(ordered, nextProviders, partial.required);
 
             // Changed: new, different definition or config, forced, or depending on a changed provider.
@@ -509,7 +531,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                   }
                   const exit = yield* Effect.exit(restore(activate(instance, configs.get(plugin.id), environment)));
                   if (Exit.isFailure(exit)) {
-                    if (required === undefined || required.has(plugin.id) || Cause.isInterruptedOnly(exit.cause)) return yield* Effect.failCause(exit.cause);
+                    if (required === undefined || required.has(plugin.id) || Cause.hasInterruptsOnly(exit.cause)) return yield* Effect.failCause(exit.cause);
                     inactive.add(plugin.id);
                     continue;
                   }
@@ -525,7 +547,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
               for (const instance of [...staged].reverse()) {
                 if (instance.state !== "failed") yield* dispose(instance, outcome, "closed");
               }
-              const fault = Option.getOrNull(Cause.failureOption(outcome.cause));
+              const fault = Option.getOrNull(Cause.findErrorOption(outcome.cause));
               // The explicit gap cannot be undone here: stopped exclusive plugins stay down, attributed to this failure.
               for (const id of gapped) {
                 const instance = instances.get(id)!;
@@ -613,7 +635,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
               yield* dispose(instance, Exit.void, "closed");
               const fault = instance.fault;
               if (fault?.phase === "dispose") {
-                cause = cause ? Cause.sequential(cause, fault.cause) : fault.cause;
+                cause = cause ? Cause.combine(cause, fault.cause) : fault.cause;
                 // Surface the plugin deadline promptly, retaining providers until
                 // that plugin's actual cleanup finishes.
                 if (fault.deadline) yield* Deferred.failCause(closed, cause);
@@ -624,7 +646,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             state = "closed";
             if (cause) return yield* Effect.failCause(cause);
           });
-          yield* Effect.forkDaemon(
+          yield* Effect.forkDetach(
             Effect.uninterruptible(cleanup).pipe(
               Effect.exit,
               Effect.flatMap((exit) => Deferred.done(closed, exit)),
@@ -649,8 +671,8 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             const admitted = revision;
             admitted.pending++;
             const caller = yield* Effect.context<never>();
-            const services = new TrackedServices(Context.merge(caller, admitted.environment).unsafeMap);
-            const provided = Effect.mapInputContext(effect, (_: Context.Context<never>) => Context.unsafeMake<R>(services));
+            const services = new TrackedServices(Context.merge(caller, admitted.environment).mapUnsafe);
+            const provided = Effect.updateContext(effect, (_: Context.Context<never>) => Context.makeUnsafe<R>(services));
             const fiber = yield* Effect.forkIn(resume(provided), work);
             tasks.set(fiber, services);
             admitted.fibers.add(fiber);
@@ -661,7 +683,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
                 Effect.sync(() => {
                   tasks.delete(fiber);
                   admitted.fibers.delete(fiber);
-                  if (admitted.retired && admitted.fibers.size === 0 && admitted.pending === 0) Deferred.unsafeDone(admitted.drained, Effect.void);
+                  if (admitted.retired && admitted.fibers.size === 0 && admitted.pending === 0) Deferred.doneUnsafe(admitted.drained, Effect.void);
                 }),
               ),
             );
@@ -676,7 +698,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
         events: bus.inspect(),
         registries: store.inspect(),
       })),
-      faults: Stream.fromPubSub(faults, { maxChunkSize: 1 }),
+      faults: Stream.fromPubSub(faults),
       restart: (id, options) =>
         Effect.suspend((): Effect.Effect<void, ReloadError | CoreClosed> => {
           if (state !== "active") return Effect.fail(new CoreClosed());
@@ -719,6 +741,16 @@ function requiredClosure(ordered: readonly Plugin[], providers: ReadonlyMap<stri
   return found;
 }
 
+/** Run `effect` on its own fiber: interrupting the caller interrupts it without waiting for it to stop. */
+function disconnect<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
+  return Effect.uninterruptibleMask((restore) =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.forkDetach(restore(effect));
+      return yield* restore(Fiber.join(fiber)).pipe(Effect.onInterrupt(() => Effect.sync(() => fiber.interruptUnsafe())));
+    }),
+  );
+}
+
 /**
  * Wait for `effect` up to `limit`, from any fiber, including an uninterruptible or
  * already-interrupted one where Effect's timeout races cannot fire. On timeout the
@@ -732,16 +764,16 @@ function withDeadline<A, E>(
   return Effect.gen(function* () {
     const done = yield* Deferred.make<Option.Option<Exit.Exit<A, E>>>();
     const body = onTimeout === "continue" ? Effect.uninterruptible(effect) : Effect.interruptible(effect);
-    const worker = yield* Effect.forkDaemon(
+    const worker = yield* Effect.forkDetach(
       body.pipe(
         Effect.exit,
         Effect.flatMap((exit) => Deferred.succeed(done, Option.some(exit))),
       ),
     );
-    const timer = yield* Effect.forkDaemon(Effect.interruptible(Effect.sleep(limit)).pipe(Effect.zipRight(Deferred.succeed(done, Option.none()))));
+    const timer = yield* Effect.forkDetach(Effect.interruptible(Effect.sleep(limit)).pipe(Effect.andThen(Deferred.succeed(done, Option.none()))));
     const result = yield* Deferred.await(done);
-    yield* Fiber.interruptFork(timer);
-    if (Option.isNone(result) && onTimeout === "abandon") yield* Fiber.interruptFork(worker);
+    timer.interruptUnsafe();
+    if (Option.isNone(result) && onTimeout === "abandon") worker.interruptUnsafe();
     return result;
   });
 }
@@ -781,7 +813,7 @@ function faultDiagnostic(fault: PluginFault): Diagnostic {
 }
 
 function isDeadline(cause: Cause.Cause<unknown>): boolean {
-  return Option.exists(Cause.failureOption(cause), (failure) => failure instanceof DeadlineExceeded);
+  return Option.exists(Cause.findErrorOption(cause), (failure) => failure instanceof DeadlineExceeded);
 }
 
 function snapshot(instance: Instance): PluginSnapshot {

@@ -11,8 +11,8 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "./truncate.ts"
 import type { Truncation } from "./truncate.ts";
 
 export const BashInput = Schema.Struct({
-  command: Schema.String.annotations({ description: "Bash command to execute" }),
-  timeout: Schema.optional(Schema.Number.annotations({ description: "Timeout in seconds (optional; the tool description names the default)" })),
+  command: Schema.String.annotate({ description: "Bash command to execute" }),
+  timeout: Schema.optional(Schema.Number.annotate({ description: "Timeout in seconds (optional; the tool description names the default)" })),
 });
 export type BashInput = typeof BashInput.Type;
 

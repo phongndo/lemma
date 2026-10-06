@@ -25,10 +25,11 @@
     "bench": "node bench/core.ts"
   },
   "dependencies": {
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "24.19.0",
+    "fast-check": "4.10.2",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
   }

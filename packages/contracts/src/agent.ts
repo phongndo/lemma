@@ -21,7 +21,7 @@ export const TurnOptions = Schema.Struct({
 });
 export type TurnOptions = typeof TurnOptions.Type;
 
-export const PromptContent = Schema.Array(Schema.Union(TextContent, ImageContent));
+export const PromptContent = Schema.Array(Schema.Union([TextContent, ImageContent]));
 export type PromptContent = typeof PromptContent.Type;
 
 /**
@@ -29,7 +29,7 @@ export type PromptContent = typeof PromptContent.Type;
  * running turn after its current tool calls; `follow-up` waits and starts the
  * next turn; `reject` fails with `Busy`.
  */
-export const WhenBusy = Schema.Literal("steer", "follow-up", "reject");
+export const WhenBusy = Schema.Literals(["steer", "follow-up", "reject"]);
 export type WhenBusy = typeof WhenBusy.Type;
 
 /** A prompt waiting for a turn to place it (see `WhenBusy`). */
@@ -37,7 +37,7 @@ export const QueuedPrompt = Schema.Struct({
   /** The caller's `requestId`, or one the agent gave it. */
   requestId: Schema.String,
   content: PromptContent,
-  mode: Schema.Literal("steer", "follow-up"),
+  mode: Schema.Literals(["steer", "follow-up"]),
   options: Schema.optional(TurnOptions),
   /** Epoch milliseconds it was queued. */
   at: Schema.Number,
@@ -172,7 +172,7 @@ export interface PromptOptions extends TurnOptions {
   readonly whenBusy?: WhenBusy;
 }
 
-export class Agent extends Context.Tag("lemma/Agent")<
+export class Agent extends Context.Service<
   Agent,
   {
     /**
@@ -195,4 +195,4 @@ export class Agent extends Context.Tag("lemma/Agent")<
     /** The session as a client joining now should show it (see `AgentView`). */
     readonly view: (sessionId: string) => Effect.Effect<AgentView>;
   }
->() {}
+>()("lemma/Agent") {}

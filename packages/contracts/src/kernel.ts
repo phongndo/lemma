@@ -41,9 +41,9 @@ export interface KernelView {
   readonly capabilities: readonly CapabilityView[];
 }
 
-const byName = Order.mapInput(Order.string, (item: { readonly name: string }) => item.name);
+const byName = Order.mapInput(Order.String, (item: { readonly name: string }) => item.name);
 const runOrder = (a: { readonly plugin: string; readonly order: number }, b: { readonly plugin: string; readonly order: number }) =>
-  a.order - b.order || Order.string(a.plugin, b.plugin);
+  a.order - b.order || Order.String(a.plugin, b.plugin);
 
 /** `lemma/Llm` reads as `Llm`. */
 export const capabilityName = (key: string): string => key.slice(key.lastIndexOf("/") + 1);
@@ -103,7 +103,7 @@ export interface Table {
 const cell = (value: unknown): string => (value === undefined || value === null ? "" : typeof value === "string" ? value : JSON.stringify(value));
 
 const tableOf = (rows: readonly unknown[], title?: string): Table | undefined => {
-  if (!rows.every(Predicate.isRecord)) return undefined;
+  if (!rows.every(Predicate.isObject)) return undefined;
   const columns = [...new Set(rows.flatMap((row) => Object.keys(row)))];
   return { ...(title === undefined ? {} : { title }), columns, rows: rows.map((row) => columns.map((column) => cell(row[column]))) };
 };
@@ -119,7 +119,7 @@ export const tablesOf = (value: unknown): readonly Table[] | undefined => {
     const table = tableOf(value);
     return table === undefined ? undefined : [table];
   }
-  if (!Predicate.isRecord(value)) return undefined;
+  if (!Predicate.isObject(value)) return undefined;
   const tables: Table[] = [];
   for (const [key, rows] of Object.entries(value)) {
     const table = Array.isArray(rows) ? tableOf(rows, key) : undefined;

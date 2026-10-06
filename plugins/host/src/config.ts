@@ -1,6 +1,6 @@
 import { readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
-import { Effect, Either, ParseResult, Predicate, Schema } from "effect";
+import { Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
 import { ConfigFile } from "@lemma/contracts";
@@ -155,7 +155,7 @@ export function patchConfig(
   let next = text;
   const rowOf = (id: string): Record<string, unknown> => {
     const current: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.[section]?.[id];
-    return Predicate.isRecord(current) ? { ...current } : {};
+    return Predicate.isObject(current) ? { ...current } : {};
   };
   for (const [id, row] of Object.entries(rows)) {
     const edits: Record<string, unknown> = {};
@@ -167,23 +167,23 @@ export function patchConfig(
       next = applyEdits(next, modify(next, [section, id, key], value, FORMAT));
     }
     if (row.values !== undefined) {
-      if (!Predicate.isRecord(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
+      if (!Predicate.isObject(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
       for (const [key, value] of Object.entries(row.values)) {
         const config = rowOf(id).config;
-        if (value === null && !(Predicate.isRecord(config) && key in config)) continue;
+        if (value === null && !(Predicate.isObject(config) && key in config)) continue;
         next = applyEdits(next, modify(next, [section, id, "config", key], value === null ? undefined : value, FORMAT));
       }
       const config = rowOf(id).config;
-      if (Predicate.isRecord(config) && Object.keys(config).length === 0) next = applyEdits(next, modify(next, [section, id, "config"], undefined, FORMAT));
+      if (Predicate.isObject(config) && Object.keys(config).length === 0) next = applyEdits(next, modify(next, [section, id, "config"], undefined, FORMAT));
     }
     const list = (key: string): unknown[] => {
       const config = rowOf(id).config;
-      const value = Predicate.isRecord(config) ? config[key] : undefined;
+      const value = Predicate.isObject(config) ? config[key] : undefined;
       return Array.isArray(value) ? value : [];
     };
-    const indexOf = (key: string, itemId: unknown) => list(key).findIndex((item) => Predicate.isRecord(item) && item.id === itemId);
+    const indexOf = (key: string, itemId: unknown) => list(key).findIndex((item) => Predicate.isObject(item) && item.id === itemId);
     for (const [key, items] of Object.entries(row.add ?? {})) {
-      if (!Predicate.isRecord(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
+      if (!Predicate.isObject(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
       if (!Array.isArray((rowOf(id).config as Record<string, unknown>)[key])) next = applyEdits(next, modify(next, [section, id, "config", key], [], FORMAT));
       for (const item of items) {
         const at = indexOf(key, item.id);
@@ -200,7 +200,7 @@ export function patchConfig(
       }
     }
     const rows: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.[section];
-    if (Predicate.isRecord(rows) && Predicate.isRecord(rows[id]) && Object.keys(rows[id]).length === 0)
+    if (Predicate.isObject(rows) && Predicate.isObject(rows[id]) && Object.keys(rows[id]).length === 0)
       next = applyEdits(next, modify(next, [section, id], undefined, FORMAT));
   }
   return next;
@@ -266,7 +266,7 @@ export function updateConfig(
 ): Effect.Effect<ConfigUpdate, Diagnostic> {
   return Effect.gen(function* () {
     const previous = yield* readConfigText(path);
-    if (previous !== undefined && previous.trim() !== "") yield* parseConfig(path, previous);
+    if (previous !== undefined && previous.trim() !== "") yield* Effect.fromResult(parseConfig(path, previous));
     const text = patchConfig(previous ?? "", rows, scope, section);
     yield* Effect.tryPromise({
       try: () => writeConfig(path, text),
@@ -313,37 +313,37 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
       trustedProjects: [],
       diagnostics,
     });
-    const text = yield* Effect.tryPromise({ try: () => readFile(path, "utf8"), catch: (cause) => cause as NodeJS.ErrnoException }).pipe(Effect.either);
-    if (Either.isLeft(text)) {
-      if (text.left.code === "ENOENT") return empty(false);
+    const text = yield* Effect.tryPromise({ try: () => readFile(path, "utf8"), catch: (cause) => cause as NodeJS.ErrnoException }).pipe(Effect.result);
+    if (Result.isFailure(text)) {
+      if (text.failure.code === "ENOENT") return empty(false);
       return empty(true, [
         new Diagnostic({
           severity: "error",
-          message: `${path}: cannot read config: ${text.left.message}`,
+          message: `${path}: cannot read config: ${text.failure.message}`,
           suggestion: "Fix the file's permissions or remove it",
         }),
       ]);
     }
-    const parsed = parseConfig(path, text.right);
-    if (Either.isLeft(parsed)) return empty(true, [parsed.left]);
+    const parsed = parseConfig(path, text.success);
+    if (Result.isFailure(parsed)) return empty(true, [parsed.failure]);
     return {
       path,
       found: true,
-      plugins: parsed.right.plugins ?? {},
-      ui: parsed.right.ui ?? {},
-      trustedProjects: parsed.right.trustedProjects ?? [],
+      plugins: parsed.success.plugins ?? {},
+      ui: parsed.success.ui ?? {},
+      trustedProjects: parsed.success.trustedProjects ?? [],
       diagnostics: [],
     };
   });
 
 /** JSONC with comments and trailing commas; anything else the parser recovers from is still an error here. */
-function parseConfig(path: string, text: string): Either.Either<ConfigFile, Diagnostic> {
+function parseConfig(path: string, text: string): Result.Result<ConfigFile, Diagnostic> {
   const errors: ParseError[] = [];
   const value: unknown = parseJsonc(text, errors, { allowTrailingComma: true, disallowComments: false });
   if (errors.length) {
     const first = errors[0]!;
     const { line, column } = position(text, first.offset);
-    return Either.left(
+    return Result.fail(
       new Diagnostic({
         severity: "error",
         message: `${path}:${line}:${column}: ${printParseErrorCode(first.error)}`,
@@ -351,21 +351,21 @@ function parseConfig(path: string, text: string): Either.Either<ConfigFile, Diag
       }),
     );
   }
-  const decoded = Schema.decodeUnknownEither(ConfigFile)(value);
-  if (Either.isLeft(decoded)) {
-    const issue = ParseResult.ArrayFormatter.formatErrorSync(decoded.left)[0];
-    const at = issue?.path.filter((segment): segment is string | number => typeof segment !== "symbol") ?? [];
-    return Either.left(
+  const decoded = Schema.decodeUnknownResult(ConfigFile)(value);
+  if (Result.isFailure(decoded)) {
+    const issue = SchemaIssue.makeFormatterStandardSchemaV1()(decoded.failure.issue).issues[0];
+    const at = issue?.path?.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number") ?? [];
+    return Result.fail(
       new Diagnostic({
         severity: "error",
         ...(typeof at[1] === "string" ? { pluginId: at[1] } : {}),
         path: at,
-        message: `${path}: invalid config at ${at.length ? at.join(".") : "root"}: ${issue?.message ?? ParseResult.TreeFormatter.formatErrorSync(decoded.left)}`,
+        message: `${path}: invalid config at ${at.length ? at.join(".") : "root"}: ${issue?.message ?? decoded.failure.message}`,
         suggestion: `Expected { "trustedProjects"?: string[], "plugins"?: { "<id>": { "enabled"?: boolean, "config"?: unknown } }, "ui"?: { "<id>": { … } } }`,
       }),
     );
   }
-  return Either.right(decoded.right);
+  return Result.succeed(decoded.success);
 }
 
 function position(text: string, offset: number): { line: number; column: number } {

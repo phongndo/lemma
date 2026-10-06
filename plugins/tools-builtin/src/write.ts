@@ -5,8 +5,8 @@ import type { Tool } from "@lemma/contracts";
 import { fsMessage, resolveToCwd, text, throwIfAborted, withFileLock } from "./files.ts";
 
 export const WriteInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Path to the file to write (relative or absolute)" }),
-  content: Schema.String.annotations({ description: "Content to write to the file" }),
+  path: Schema.String.annotate({ description: "Path to the file to write (relative or absolute)" }),
+  content: Schema.String.annotate({ description: "Content to write to the file" }),
 });
 export type WriteInput = typeof WriteInput.Type;
 

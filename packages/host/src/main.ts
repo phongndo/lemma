@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { join } from "node:path";
-import { Cause, Deferred, Duration, Effect, Either, Exit, Option, ParseResult, Schema, Stream } from "effect";
+import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
 import { appUrl, describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
@@ -172,7 +172,7 @@ const describe = (report: ReloadReport): string => {
   return parts.length ? parts.join("; ") : "nothing changed";
 };
 
-const untilSignal = Effect.async<void>((resume) => {
+const untilSignal = Effect.callback<void>((resume) => {
   const done = () => resume(Effect.void);
   process.once("SIGINT", done);
   process.once("SIGTERM", done);
@@ -213,10 +213,10 @@ const checkConfigs = (next: Loaded, ids: readonly string[]): Effect.Effect<void,
     const plugin = next.known.find((entry) => entry.plugin.id === id)?.plugin;
     const entry = next.resolved.composition.plugins[id];
     if (plugin?.config === undefined || entry === undefined) continue;
-    const decoded = Schema.decodeUnknownEither(plugin.config)(entry.config ?? {});
-    if (Either.isRight(decoded)) continue;
-    const issue = ParseResult.ArrayFormatter.formatErrorSync(decoded.left)[0];
-    const at = issue?.path.filter((segment): segment is string | number => typeof segment !== "symbol") ?? [];
+    const decoded = Schema.decodeUnknownResult(plugin.config)(entry.config ?? {});
+    if (Result.isSuccess(decoded)) continue;
+    const issue = SchemaIssue.makeFormatterStandardSchemaV1()(decoded.failure.issue).issues[0];
+    const at = issue?.path?.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number") ?? [];
     diagnostics.push(
       new Diagnostic({
         severity: "error",
@@ -233,7 +233,7 @@ const program = Effect.gen(function* () {
   const programScope = yield* Effect.scope;
   // The host plugin activates inside makeLoader, so its handle binds to the loader once it exists.
   const ready = yield* Deferred.make<Loader>();
-  const reloading = yield* Effect.makeSemaphore(1);
+  const reloading = yield* Semaphore.make(1);
   const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
   let host: Plugin;
   const publish = <P>(loader: Loader, event: Event<P>, payload: P) => loader.core.run(Effect.flatMap(Events, (events) => events.publish(event, payload)));
@@ -299,12 +299,12 @@ const program = Effect.gen(function* () {
           Effect.matchEffect({
             onSuccess: (report) =>
               log(`applied a config change: ${describe(report)}`).pipe(
-                Effect.zipRight(Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins }))),
+                Effect.andThen(Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins }))),
               ),
             onFailure: (error) =>
               restore.pipe(
-                Effect.zipRight(printDiagnostics(error.diagnostics)),
-                Effect.zipRight(
+                Effect.andThen(printDiagnostics(error.diagnostics)),
+                Effect.andThen(
                   publish(loader, Notice, {
                     level: "error",
                     source: HOST_PLUGIN_ID,
@@ -516,9 +516,9 @@ const program = Effect.gen(function* () {
         if (changed.length === 0) return;
         for (const [path, text] of current) seenConfig.set(path, text);
         yield* log(`${changed.length === 1 ? changed[0] : changed.join(" and ")} changed; reloading`).pipe(
-          Effect.zipRight(control.reload),
+          Effect.andThen(control.reload),
           Effect.matchEffect({
-            onFailure: (error) => printDiagnostics(error.diagnostics).pipe(Effect.zipRight(log("reload rejected; the running composition is unchanged"))),
+            onFailure: (error) => printDiagnostics(error.diagnostics).pipe(Effect.andThen(log("reload rejected; the running composition is unchanged"))),
             onSuccess: (report) => log(`reloaded: ${describe(report)}`),
           }),
         );
@@ -553,12 +553,12 @@ const program = Effect.gen(function* () {
 
 const exit = await Effect.runPromiseExit(Effect.scoped(program));
 if (Exit.isFailure(exit)) {
-  const failure = Cause.failureOption(exit.cause);
+  const failure = Cause.findErrorOption(exit.cause);
   if (Option.isSome(failure) && failure.value instanceof ReloadError) {
     await Effect.runPromise(printDiagnostics(failure.value.diagnostics));
     console.error("lemma: cannot start with this composition");
     if (!safe) console.error("lemma: --safe starts the bundled plugins as shipped, reading no config file or plugin file, while you fix it");
-  } else if (!Cause.isInterruptedOnly(exit.cause)) {
+  } else if (!Cause.hasInterruptsOnly(exit.cause)) {
     console.error(Cause.pretty(exit.cause));
   }
   process.exit(1);

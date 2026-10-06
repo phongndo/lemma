@@ -145,11 +145,12 @@ interface CatalogInput {
 const forms = new WeakMap<object, ConfigField[]>();
 /** A plugin's settings form, projected once per config Schema. */
 const formOf = (plugin: Plugin): ConfigField[] | undefined => {
-  if (plugin.config === undefined) return undefined;
-  let fields = forms.get(plugin.config);
+  const schema = plugin.config;
+  if (schema === undefined) return undefined;
+  let fields = forms.get(schema);
   if (fields === undefined) {
-    fields = describeConfig(plugin.config);
-    forms.set(plugin.config, fields);
+    fields = describeConfig(schema);
+    forms.set(schema, fields);
   }
   return fields;
 };

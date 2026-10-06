@@ -67,7 +67,7 @@ await measure(
     for (let n = 0; n < iterations; n++) sink = increment(sink);
   }),
 );
-class Increment extends Context.Tag("bench/Increment")<Increment, typeof increment>() {}
+class Increment extends Context.Service<Increment, typeof increment>()("bench/Increment") {}
 await Effect.runPromise(
   Effect.scoped(
     Effect.gen(function* () {

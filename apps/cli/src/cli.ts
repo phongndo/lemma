@@ -223,7 +223,7 @@ const openCommand =
   (sessionId: string | undefined, view: string | undefined, options: Options): Command =>
   ({ target, rpc }) =>
     Effect.gen(function* () {
-      if (sessionId !== undefined) yield* rpc.Session.Get({ sessionId });
+      if (sessionId !== undefined) yield* rpc["Session.Get"]({ sessionId });
       const path = sessionId === undefined ? NewThreadRoute.href({}) : ThreadRoute.href({ id: sessionId, ...(view === undefined ? {} : { view }) });
       const url = appUrl(target.url, path, target.token);
       if (!options.json) yield* openBrowser(url);
@@ -238,7 +238,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return (
         extra(1) ??
         (({ target, rpc }) =>
-          Effect.all([rpc.Host.Info(), rpc.Host.Plugins(), rpc.Agent.Running()], { concurrency: "unbounded" }).pipe(
+          Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"](), rpc["Agent.Running"]()], { concurrency: "unbounded" }).pipe(
             Effect.map(([info, plugins, running]) => ({
               json: { url: target.url, source: target.source, pid: target.pid, startedAt: target.startedAt, info, plugins, running },
               text: formatStatus(target, info, plugins, running),
@@ -252,7 +252,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "plugins":
       if (sub === undefined || sub === "list") {
         return (
-          extra(sub === undefined ? 1 : 2) ?? (({ rpc }) => Effect.map(rpc.Host.Plugins(), (plugins) => ({ json: plugins, text: formatPlugins(plugins) })))
+          extra(sub === undefined ? 1 : 2) ?? (({ rpc }) => Effect.map(rpc["Host.Plugins"](), (plugins) => ({ json: plugins, text: formatPlugins(plugins) })))
         );
       }
       if (sub === "restart") {
@@ -260,7 +260,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         return (
           extra(3) ??
           (({ rpc }) =>
-            Effect.as(rpc.Host.RestartPlugin(options.force ? { pluginId: arg, force: true } : { pluginId: arg }), {
+            Effect.as(rpc["Host.RestartPlugin"](options.force ? { pluginId: arg, force: true } : { pluginId: arg }), {
               json: { restarted: arg },
               text: `restarted ${arg}`,
             }))
@@ -272,7 +272,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         return (
           extra(3) ??
           (({ rpc }) =>
-            Effect.map(rpc.Host.Configure({ plugins: { [arg]: { enabled } }, ...(options.project ? { scope: "project" as const } : {}) }), (report) => ({
+            Effect.map(rpc["Host.Configure"]({ plugins: { [arg]: { enabled } }, ...(options.project ? { scope: "project" as const } : {}) }), (report) => ({
               json: { [enabled ? "enabled" : "disabled"]: arg, ...report },
               text: `${enabled ? "enabled" : "disabled"} ${arg}: ${formatReload(report)}`,
             })))
@@ -283,7 +283,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         return (
           extra(3) ??
           (({ rpc }) =>
-            Effect.flatMap(rpc.Host.Plugins(), (plugins) => {
+            Effect.flatMap(rpc["Host.Plugins"](), (plugins) => {
               const plugin = plugins.find((candidate) => candidate.id === arg);
               return plugin === undefined
                 ? Effect.fail(new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg }))
@@ -297,7 +297,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         if (more.length) return usage(`Unexpected argument "${more[0]}"`);
         if (key === undefined) {
           return ({ rpc }) =>
-            Effect.flatMap(rpc.Host.Plugins(), (plugins) => {
+            Effect.flatMap(rpc["Host.Plugins"](), (plugins) => {
               const plugin = plugins.find((candidate) => candidate.id === arg);
               return plugin === undefined
                 ? Effect.fail(new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg }))
@@ -307,7 +307,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         if ((value === undefined) === !options.unset) return usage("plugins config <id> <key> needs a value, or --unset");
         return ({ rpc }) =>
           Effect.gen(function* () {
-            const plugin = (yield* rpc.Host.Plugins()).find((candidate) => candidate.id === arg);
+            const plugin = (yield* rpc["Host.Plugins"]()).find((candidate) => candidate.id === arg);
             if (plugin === undefined) return yield* new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg });
             const field = plugin.configFields?.find((candidate) => candidate.key === key);
             if (field === undefined) {
@@ -322,7 +322,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
             if ("error" in parsed) return yield* new HostError({ code: "Usage", message: parsed.error, subject: arg });
             const scope: ConfigScope = options.project ? "project" : (plugin.configScope ?? "user");
             const change: PluginChange = { values: { [key]: parsed.value } };
-            const report = yield* rpc.Host.Configure({ plugins: { [arg]: change }, ...(scope === "project" ? { scope } : {}) });
+            const report = yield* rpc["Host.Configure"]({ plugins: { [arg]: change }, ...(scope === "project" ? { scope } : {}) });
             return {
               json: { id: arg, key, ...(options.unset ? { unset: true } : { value: parsed.value }), scope, ...report },
               text: `${options.unset ? `unset ${arg}.${key}` : `set ${arg}.${key} = ${JSON.stringify(parsed.value)}`} in the ${scope} config: ${formatReload(report)}`,
@@ -333,7 +333,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "ui":
       return uiCommand(sub, arg, rest, options);
     case "reload":
-      return extra(1) ?? (({ rpc }) => Effect.map(rpc.Host.Reload(), (report) => ({ json: report, text: formatReload(report) })));
+      return extra(1) ?? (({ rpc }) => Effect.map(rpc["Host.Reload"](), (report) => ({ json: report, text: formatReload(report) })));
     case "events":
       return extra(1) ?? eventsCommand;
     case "session":
@@ -383,7 +383,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return (
         extra(2) ??
         (({ rpc }) =>
-          Effect.map(rpc.Host.Plugins(), (plugins) => {
+          Effect.map(rpc["Host.Plugins"](), (plugins) => {
             const kernel = kernelOf(plugins);
             const key = view as keyof typeof views;
             return { json: kernel[key], text: views[key](kernel) };
@@ -392,8 +392,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     }
     case "inspectors":
       if (sub === undefined)
-        return extra(1) ?? (({ rpc }) => Effect.map(rpc.Host.Inspectors(), (inspectors) => ({ json: inspectors, text: formatInspectors(inspectors) })));
-      return extra(2) ?? (({ rpc }) => Effect.map(rpc.Host.Inspect({ id: sub }), (snapshot) => ({ json: snapshot, text: formatSnapshot(snapshot) })));
+        return extra(1) ?? (({ rpc }) => Effect.map(rpc["Host.Inspectors"](), (inspectors) => ({ json: inspectors, text: formatInspectors(inspectors) })));
+      return extra(2) ?? (({ rpc }) => Effect.map(rpc["Host.Inspect"]({ id: sub }), (snapshot) => ({ json: snapshot, text: formatSnapshot(snapshot) })));
     case "inspect":
       if (sub === undefined) return usage("inspect needs a session id");
       return extra(2) ?? inspectCommand(sub, options);
@@ -411,14 +411,14 @@ const uiCommand = (sub: string | undefined, arg: string | undefined, rest: reado
     case undefined:
     case "list":
       if (arg !== undefined) return usage(`Unexpected argument "${arg}"`);
-      return ({ rpc }) => Effect.map(rpc.Ui.Composition(), (ui) => ({ json: ui, text: formatUi(ui) }));
+      return ({ rpc }) => Effect.map(rpc["Ui.Composition"](), (ui) => ({ json: ui, text: formatUi(ui) }));
     case "enable":
     case "disable": {
       if (arg === undefined) return usage(`ui ${sub} needs a plugin id`);
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
       const enabled = sub === "enable";
       return ({ rpc }) =>
-        Effect.map(rpc.Ui.Configure({ plugins: { [arg]: { enabled } }, ...scope }), (ui) => ({
+        Effect.map(rpc["Ui.Configure"]({ plugins: { [arg]: { enabled } }, ...scope }), (ui) => ({
           json: ui,
           text: `${enabled ? "enabled" : "disabled"} ${arg} in the ${options.project ? "project" : "user"} config; open web apps apply it`,
         }));
@@ -432,7 +432,7 @@ const uiCommand = (sub: string | undefined, arg: string | undefined, rest: reado
       const parsed = options.unset ? { value: null } : parseConfigValue(undefined, value!);
       if ("error" in parsed) return usage(parsed.error);
       return ({ rpc }) =>
-        Effect.map(rpc.Ui.Configure({ plugins: { [arg]: { values: { [key]: parsed.value } } }, ...scope }), (ui) => ({
+        Effect.map(rpc["Ui.Configure"]({ plugins: { [arg]: { values: { [key]: parsed.value } } }, ...scope }), (ui) => ({
           json: ui,
           text: `${options.unset ? `unset ${arg}.${key}` : `set ${arg}.${key} = ${JSON.stringify(parsed.value)}`}; open web apps apply it`,
         }));
@@ -449,7 +449,7 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (options.all && options.cwd !== undefined) return usage("Use either --all or --cwd");
       const cwd = options.all ? undefined : resolve(io.cwd, options.cwd ?? ".");
       return ({ rpc }) =>
-        Effect.map(rpc.Session.List(cwd === undefined ? {} : { cwd }), (sessions) => ({
+        Effect.map(rpc["Session.List"](cwd === undefined ? {} : { cwd }), (sessions) => ({
           json: sessions,
           text: sessions.length ? formatSessions(sessions, cwd === undefined) : `No sessions${cwd === undefined ? "" : ` in ${cwd}`}.`,
         }));
@@ -459,17 +459,19 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
       return ({ rpc }) =>
         Effect.gen(function* () {
-          const [info, events] = yield* Effect.all([rpc.Session.Get({ sessionId: arg }), rpc.Session.Events({ sessionId: arg })], { concurrency: "unbounded" });
+          const [info, events] = yield* Effect.all([rpc["Session.Get"]({ sessionId: arg }), rpc["Session.Events"]({ sessionId: arg })], {
+            concurrency: "unbounded",
+          });
           const branch = branchOf(events, info.leaf);
           return { json: { info, branch }, text: formatSession(info, branch) };
         });
     case "new":
       if (arg !== undefined) return usage(`Unexpected argument "${arg}"`);
-      return ({ rpc }) => Effect.map(rpc.Session.Create({ cwd: resolve(io.cwd, options.cwd ?? ".") }), (info) => ({ json: info, text: info.id }));
+      return ({ rpc }) => Effect.map(rpc["Session.Create"]({ cwd: resolve(io.cwd, options.cwd ?? ".") }), (info) => ({ json: info, text: info.id }));
     case "title": {
       const title = rest.join(" ").trim();
       if (arg === undefined || title === "") return usage("session title needs a session id and a title");
-      return ({ rpc }) => Effect.map(rpc.Session.SetTitle({ sessionId: arg, title }), (info) => ({ json: info, text: `${info.id}  ${info.title ?? ""}` }));
+      return ({ rpc }) => Effect.map(rpc["Session.SetTitle"]({ sessionId: arg, title }), (info) => ({ json: info, text: `${info.id}  ${info.title ?? ""}` }));
     }
     case "pin":
     case "unpin":
@@ -479,18 +481,18 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
       const marks = sub === "pin" || sub === "unpin" ? { pinned: sub === "pin" } : { archived: sub === "archive" };
       const done = { pin: "pinned", unpin: "unpinned", archive: "archived", unarchive: "unarchived" }[sub];
-      return ({ rpc }) => Effect.map(rpc.Session.Mark({ sessionId: arg, ...marks }), (info) => ({ json: info, text: `${info.id}  ${done}` }));
+      return ({ rpc }) => Effect.map(rpc["Session.Mark"]({ sessionId: arg, ...marks }), (info) => ({ json: info, text: `${info.id}  ${done}` }));
     }
     case "delete":
       if (arg === undefined) return usage("session delete needs a session id");
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
-      return ({ rpc }) => Effect.map(rpc.Session.Delete({ sessionId: arg }), () => ({ json: { id: arg, deleted: true }, text: `${arg}  deleted` }));
+      return ({ rpc }) => Effect.map(rpc["Session.Delete"]({ sessionId: arg }), () => ({ json: { id: arg, deleted: true }, text: `${arg}  deleted` }));
     case "checkout": {
       const eventId = rest[0];
       if (arg === undefined || eventId === undefined) return usage("session checkout needs a session id and an event id");
       if (rest.length > 1) return usage(`Unexpected argument "${rest[1]}"`);
       return ({ rpc }) =>
-        Effect.map(rpc.Session.Checkout({ sessionId: arg, eventId }), (info) => ({
+        Effect.map(rpc["Session.Checkout"]({ sessionId: arg, eventId }), (info) => ({
           json: info,
           text: `${info.id} now continues from ${eventId}; the next prompt starts a new branch there`,
         }));
@@ -523,7 +525,7 @@ const inspectCommand = (sessionId: string, options: Options): Command | CliError
   }
   return ({ rpc }) =>
     Effect.gen(function* () {
-      const [info, events] = yield* Effect.all([rpc.Session.Get({ sessionId }), rpc.Session.Events({ sessionId })], { concurrency: "unbounded" });
+      const [info, events] = yield* Effect.all([rpc["Session.Get"]({ sessionId }), rpc["Session.Events"]({ sessionId })], { concurrency: "unbounded" });
       const branch = branchOf(events, info.leaf);
       const turns = trajectory(branch);
       if (listing) {
@@ -632,7 +634,7 @@ const toCliError = (error: Failure, target?: Target): CliError => {
       exit: ExitCode.unavailable,
     });
   }
-  return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${error.message}`, exit: ExitCode.unavailable });
+  return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${reasonOf(error)}`, exit: ExitCode.unavailable });
 };
 
 const report = (io: Io, json: boolean, error: CliError): number => {
@@ -752,9 +754,9 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     typeof command === "function"
       ? Effect.flatMap(connect(io), (connection) => command(connection, io, options).pipe(Effect.mapError((error) => toCliError(error, connection.target))))
       : command.unattached;
-  const result = await Effect.runPromise(Effect.scoped(program).pipe(Effect.either));
-  if (result._tag === "Left") return report(io, options.json, toCliError(result.left));
-  const output = result.right;
+  const result = await Effect.runPromise(Effect.scoped(program).pipe(Effect.result));
+  if (result._tag === "Failure") return report(io, options.json, toCliError(result.failure));
+  const output = result.success;
   if (output === undefined) return ExitCode.ok;
   io.out(options.json ? JSON.stringify(output.json, null, output.compact ? undefined : 2) : output.text);
   return output.exit ?? ExitCode.ok;

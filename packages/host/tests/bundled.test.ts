@@ -5,7 +5,7 @@ import type { PluginRow } from "@lemma/contracts";
 import { planComposition } from "@lemma/plugin-host";
 import { appDefaults, cliCommand, webDist } from "../src/bundled.ts";
 
-const plugin = (id: string) => definePlugin({ id, config: Schema.Record({ key: Schema.String, value: Schema.Unknown }), layer: Layer.empty });
+const plugin = (id: string) => definePlugin({ id, config: Schema.Record(Schema.String, Schema.Unknown), layer: Layer.empty });
 const bundled = [plugin("agent"), plugin("transport"), plugin("tools")];
 const entries = (rows: Readonly<Record<string, PluginRow>> = {}) => planComposition({ bundled, local: [], rows, defaults: appDefaults }).composition.plugins;
 

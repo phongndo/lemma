@@ -1,7 +1,7 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Semaphore } from "effect";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, definePlugin, makeCore } from "@lemma/core";
 import type { Events } from "@lemma/core";
@@ -11,7 +11,7 @@ import type { ConfigScope, Credential, InteractionError, Llm, NoticePayload, Plu
 
 export function fakeCredentials(initial: Record<string, Credential> = {}) {
   const store = new Map<string, Credential>(Object.entries(initial));
-  const lock = Effect.unsafeMakeSemaphore(1);
+  const lock = Semaphore.makeUnsafe(1);
   const service: typeof Credentials.Service = {
     read: (provider) => Effect.sync(() => store.get(provider)),
     list: Effect.sync(() => [...store].map(([provider, credential]) => ({ provider, type: credential.type }))),

@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { FileEntry } from "@lemma/contracts";
 import { FILE_SEARCH_LIMIT, HostError } from "@lemma/contracts";
 import { fileView, mentionPath } from "../model/completion.ts";
@@ -8,15 +8,18 @@ import { defineUiPlugin } from "../ui/define.ts";
 import { FileTypeIcon } from "../ui/parts.tsx";
 
 const FileMentionsConfig = Schema.Struct({
-  trigger: Schema.optionalWith(Schema.String.pipe(Schema.minLength(1)), { default: () => "@" }).annotations({
+  trigger: Schema.String.pipe(Schema.check(Schema.isMinLength(1)), Schema.withDecodingDefaultType(Effect.sync(() => "@"))).annotate({
     title: "Trigger",
     description: "Typed at the start of a word, offers the project's files; picking one writes it after the trigger (@src/app.ts).",
   }),
-  limit: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(1, FILE_SEARCH_LIMIT)), { default: () => 50 }).annotations({
+  limit: Schema.Number.pipe(
+    Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: FILE_SEARCH_LIMIT })),
+    Schema.withDecodingDefaultType(Effect.sync(() => 50)),
+  ).annotate({
     title: "Suggestions",
     description: "At most this many in the menu.",
   }),
-  folders: Schema.optionalWith(Schema.Boolean, { default: () => true }).annotations({
+  folders: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
     title: "Offer folders",
     description: "Folders among the files; picking one goes on completing inside it.",
   }),

@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Scope } from "effect";
+import { Cause, Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, References, Result, Schema, Scope } from "effect";
 import { PluginFault, CapabilityMismatch, CompositionError, CoreClosed, definePlugin, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
 import type { Core, Plugin } from "../src/index.ts";
 import { failure, run } from "./support.ts";
 
-class Prefix extends Context.Tag("test/Prefix")<Prefix, string>() {}
-class Format extends Context.Tag("test/Format")<Format, (text: string) => string>() {}
+class Prefix extends Context.Service<Prefix, string>()("test/Prefix") {}
+class Format extends Context.Service<Format, (text: string) => string>()("test/Format") {}
 
 const prefix = (text = "hello ") =>
   definePlugin({
@@ -88,7 +88,7 @@ describe("composition", () => {
   });
 
   test("preserves caller requirements not supplied by the core", async () => {
-    class Request extends Context.Tag("test/Request")<Request, string>() {}
+    class Request extends Context.Service<Request, string>()("test/Request") {}
     await run(
       Effect.gen(function* () {
         const core = yield* makeCore([prefix()]);
@@ -143,10 +143,52 @@ describe("composition", () => {
     if (error instanceof PluginFault) expect(Cause.pretty(error.cause)).toContain(Prefix.key);
   });
 
+  test("activation sees the caller's runtime settings, not its services, Effect's own included", async () => {
+    class Ambient extends Context.Service<Ambient, string>()("test/Ambient") {}
+    let seen: { readonly ambient: Option.Option<string>; readonly files: boolean; readonly level: string } | undefined;
+    const probe = definePlugin({
+      id: "probe",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          seen = {
+            ambient: yield* Effect.serviceOption(Ambient),
+            files: Option.isSome(yield* Effect.serviceOption(FileSystem.FileSystem)),
+            level: yield* References.MinimumLogLevel,
+          };
+        }),
+      ),
+    });
+    await run(
+      makeCore([probe]).pipe(
+        Effect.provideService(Ambient, "host"),
+        Effect.provideService(FileSystem.FileSystem, {} as FileSystem.FileSystem),
+        Effect.provideService(References.MinimumLogLevel, "Debug"),
+      ),
+    );
+    expect(seen).toEqual({ ambient: Option.none(), files: false, level: "Debug" });
+  });
+
+  test("a hook handler runs with its invoker's runtime settings, not those it was registered under", async () => {
+    const point = Hook.make<number, string>("test/settings");
+    const handler = definePlugin({
+      id: "handler",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(point, () => References.MinimumLogLevel))),
+    });
+    const level = await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([handler]).pipe(Effect.provideService(References.MinimumLogLevel, "Debug"));
+        return yield* core
+          .run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(point, 1, () => Effect.succeed("terminal"))))
+          .pipe(Effect.provideService(References.MinimumLogLevel, "Error"));
+      }),
+    );
+    expect(level).toBe("Error");
+  });
+
   test("validates actual exports and cleans up malformed Layers", async () => {
     for (const extra of [false, true]) {
       let released = false;
-      const layer = Layer.scopedContext(
+      const layer = Layer.effectContext(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
@@ -160,7 +202,7 @@ describe("composition", () => {
       const error = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([invalid]))));
       expect(error).toBeInstanceOf(PluginFault);
       if (error instanceof PluginFault) {
-        const mismatch = Option.getOrThrow(Cause.failureOption(error.cause));
+        const mismatch = Option.getOrThrow(Cause.findErrorOption(error.cause));
         expect(mismatch).toBeInstanceOf(CapabilityMismatch);
         expect(mismatch).toMatchObject(extra ? { undeclared: [Prefix.key] } : { missing: [Prefix.key] });
       }
@@ -175,7 +217,7 @@ describe("lifetimes", () => {
     const base = definePlugin({
       id: "base",
       provides: [Prefix],
-      layer: Layer.scoped(
+      layer: Layer.effect(
         Prefix,
         Effect.acquireRelease(
           Effect.sync(() => {
@@ -192,7 +234,7 @@ describe("lifetimes", () => {
     const consumer = definePlugin({
       id: "consumer",
       requires: [Prefix],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.acquireRelease(
           Effect.map(Prefix, () => {
             events.push("consumer+");
@@ -221,7 +263,7 @@ describe("lifetimes", () => {
     const base = definePlugin({
       id: "base",
       provides: [Prefix],
-      layer: Layer.scoped(
+      layer: Layer.effect(
         Prefix,
         Effect.acquireRelease(Effect.succeed("x"), () =>
           Effect.sync(() => {
@@ -233,7 +275,7 @@ describe("lifetimes", () => {
     const broken = definePlugin({
       id: "broken",
       requires: [Prefix],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.gen(function* () {
           yield* Effect.addFinalizer(() =>
             Effect.sync(() => {
@@ -249,7 +291,7 @@ describe("lifetimes", () => {
         const exit = yield* Effect.exit(makeCore([broken, base]));
         const error = failure(exit);
         expect(error).toBeInstanceOf(PluginFault);
-        if (error instanceof PluginFault) expect(Option.getOrThrow(Cause.failureOption(error.cause))).toEqual(boom);
+        if (error instanceof PluginFault) expect(Option.getOrThrow(Cause.findErrorOption(error.cause))).toEqual(boom);
         // We are still inside the caller's scope, but all failed activation resources are gone.
         expect(events).toEqual(["broken-", "base-"]);
       }),
@@ -262,7 +304,7 @@ describe("lifetimes", () => {
     const plugin = definePlugin({ id: "broken", layer: Layer.effectDiscard(Effect.die(defect)) });
     const error = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([plugin]))));
     expect(error).toBeInstanceOf(PluginFault);
-    if (error instanceof PluginFault) expect(Option.getOrThrow(Cause.dieOption(error.cause))).toMatchObject({ message: defect.message, stack: defect.stack });
+    if (error instanceof PluginFault) expect(Result.getOrThrow(Cause.findDefect(error.cause))).toMatchObject({ message: defect.message, stack: defect.stack });
   });
 
   test("interrupted activation unwinds resources without converting cancellation to failure", async () => {
@@ -272,7 +314,7 @@ describe("lifetimes", () => {
         const entered = yield* Deferred.make<void>();
         const plugin = definePlugin({
           id: "waiting",
-          layer: Layer.scopedDiscard(
+          layer: Layer.effectDiscard(
             Effect.gen(function* () {
               yield* Effect.addFinalizer(() =>
                 Effect.sync(() => {
@@ -284,10 +326,11 @@ describe("lifetimes", () => {
             }),
           ),
         });
-        const fiber = yield* Effect.fork(makeCore([plugin]));
+        const fiber = yield* Effect.forkChild(makeCore([plugin]));
         yield* Deferred.await(entered);
-        const result = yield* Fiber.interrupt(fiber);
-        expect(Exit.isFailure(result) && Cause.isInterruptedOnly(result.cause)).toBe(true);
+        yield* Fiber.interrupt(fiber);
+        const result = yield* Fiber.await(fiber);
+        expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true);
         expect(released).toBe(true);
       }),
     );
@@ -302,7 +345,7 @@ describe("lifetimes", () => {
         const plugin = definePlugin({
           id: "resource",
           provides: [Prefix],
-          layer: Layer.scoped(
+          layer: Layer.effect(
             Prefix,
             Effect.acquireRelease(Effect.succeed("x"), () =>
               Effect.sync(() => {
@@ -311,7 +354,7 @@ describe("lifetimes", () => {
             ),
           ),
         });
-        const core = yield* Scope.extend(makeCore([plugin]), scope);
+        const core = yield* Scope.provide(makeCore([plugin]), scope);
         const task = Effect.gen(function* () {
           yield* Deferred.succeed(started, undefined);
           yield* Effect.never;
@@ -322,12 +365,12 @@ describe("lifetimes", () => {
             }),
           ),
         );
-        const fiber = yield* Effect.fork(core.run(task));
+        const fiber = yield* Effect.forkChild(core.run(task));
         yield* Deferred.await(started);
         yield* Scope.close(scope, Exit.void);
         expect(events).toEqual(["work-", "resource-"]);
         const result = yield* Fiber.await(fiber);
-        expect(Exit.isFailure(result) && Cause.isInterruptedOnly(result.cause)).toBe(true);
+        expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true);
         expect((yield* core.inspect).state).toBe("closed");
       }),
     );
@@ -339,10 +382,10 @@ describe("lifetimes", () => {
         const core = yield* makeCore([]);
         const entered = yield* Deferred.make<void>();
         let cleaned = false;
-        const fiber = yield* Effect.fork(
+        const fiber = yield* Effect.forkChild(
           core.run(
             Deferred.succeed(entered, undefined).pipe(
-              Effect.zipRight(Effect.never),
+              Effect.andThen(Effect.never),
               Effect.ensuring(
                 Effect.sync(() => {
                   cleaned = true;
@@ -367,7 +410,7 @@ describe("lifetimes", () => {
         const entered = yield* Deferred.make<void>();
         const waiting = definePlugin({
           id: "waiting",
-          layer: Layer.scopedDiscard(
+          layer: Layer.effectDiscard(
             Effect.gen(function* () {
               yield* Effect.addFinalizer(() =>
                 Effect.sync(() => {
@@ -379,14 +422,14 @@ describe("lifetimes", () => {
             }),
           ),
         });
-        const fiber = yield* Effect.fork(Scope.extend(makeCore([waiting]), scope));
+        const fiber = yield* Effect.forkChild(Scope.provide(makeCore([waiting]), scope));
         yield* Deferred.await(entered);
         yield* Scope.close(scope, Exit.void);
         const result = yield* Fiber.await(fiber);
-        expect(Exit.isFailure(result) && Cause.isInterruptedOnly(result.cause)).toBe(true);
+        expect(Exit.isFailure(result) && Cause.hasInterruptsOnly(result.cause)).toBe(true);
         expect(released).toBe(true);
-        const late = yield* Effect.exit(Scope.extend(makeCore([]), scope));
-        expect(Exit.isFailure(late) && Cause.isInterruptedOnly(late.cause)).toBe(true);
+        const late = yield* Effect.exit(Scope.provide(makeCore([]), scope));
+        expect(Exit.isFailure(late) && Cause.hasInterruptsOnly(late.cause)).toBe(true);
       }),
     );
   });
@@ -398,11 +441,11 @@ describe("lifetimes", () => {
         const started = yield* Deferred.make<void>();
         const worker = definePlugin({
           id: "worker",
-          layer: Layer.scopedDiscard(
+          layer: Layer.effectDiscard(
             Effect.gen(function* () {
               yield* Effect.forkScoped(
                 Deferred.succeed(started, undefined).pipe(
-                  Effect.zipRight(Effect.never),
+                  Effect.andThen(Effect.never),
                   Effect.ensuring(
                     Effect.sync(() => {
                       cleaned = true;
@@ -426,7 +469,7 @@ describe("lifetimes", () => {
     const a = definePlugin({
       id: "a",
       provides: [Prefix],
-      layer: Layer.scoped(
+      layer: Layer.effect(
         Prefix,
         Effect.acquireRelease(Effect.succeed("x"), () =>
           Effect.sync(() => {
@@ -438,11 +481,11 @@ describe("lifetimes", () => {
     const b = definePlugin({
       id: "b",
       requires: [Prefix],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.addFinalizer(() =>
           Effect.sync(() => {
             cleaned.push("b");
-          }).pipe(Effect.zipRight(Effect.die("cleanup"))),
+          }).pipe(Effect.andThen(Effect.die("cleanup"))),
         ),
       ),
     });
@@ -456,7 +499,7 @@ describe("lifetimes", () => {
     const point = Hook.make<string, string>("echo");
     const plugin = definePlugin({
       id: "echo",
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.gen(function* () {
           yield* Effect.acquireRelease(
             Effect.sync(() => {

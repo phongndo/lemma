@@ -37,7 +37,7 @@ describe("plugins", () => {
     const myBash = definePlugin({
       id: "my-bash",
       requires: [Tools],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.flatMap(Tools, (registry) =>
           registry.register({
             name: "bash",

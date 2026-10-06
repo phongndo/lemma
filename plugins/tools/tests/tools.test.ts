@@ -1,4 +1,4 @@
-import { Cause, Chunk, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
@@ -13,7 +13,7 @@ const textOf = (result: ToolResult) => result.content.map((part) => (part.type =
 const echo: Tool<{ readonly text: string }> = {
   name: "echo",
   description: "Echoes text.",
-  input: Schema.Struct({ text: Schema.String.annotations({ description: "What to say" }) }),
+  input: Schema.Struct({ text: Schema.String.annotate({ description: "What to say" }) }),
   execute: async ({ text }) => ok(text),
 };
 
@@ -21,7 +21,7 @@ const contributor = (id: string, contributed: readonly Tool<any>[], guards: read
   definePlugin({
     id,
     requires: [Tools],
-    layer: Layer.scopedDiscard(
+    layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const registry = yield* Tools;
         for (const tool of contributed) yield* registry.register(tool);
@@ -60,12 +60,12 @@ describe("registry", () => {
   });
 
   it("lists tools by name with the registering plugin as source and clean schemas", async () => {
-    const Point = Schema.Struct({ x: Schema.Number }).annotations({ identifier: "Point" });
+    const Point = Schema.Struct({ x: Schema.Number }).annotate({ identifier: "Point" });
     const shapes: Tool<any> = {
       name: "shapes",
       description: "d",
       input: Schema.Struct({
-        count: Schema.optional(Schema.Int.pipe(Schema.positive()).annotations({ description: "How many" })),
+        count: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0)).annotate({ description: "How many" })),
         points: Schema.Array(Point),
       }),
       replay: "safe",
@@ -108,7 +108,7 @@ describe("registry", () => {
 
   it("removes a tool when its registering scope closes", async () => {
     // A tool is attributed to the plugin registering it: this one lends its context to the test.
-    let captured: PluginContext["Type"] | undefined;
+    let captured: Context.Service.Shape<typeof PluginContext> | undefined;
     const lender = definePlugin({
       id: "temp",
       layer: Layer.effectDiscard(
@@ -122,7 +122,7 @@ describe("registry", () => {
       Effect.gen(function* () {
         const registry = yield* Tools;
         const scope = yield* Scope.make();
-        yield* registry.register(echo).pipe(Effect.provideService(PluginContext, captured!), Scope.extend(scope));
+        yield* registry.register(echo).pipe(Effect.provideService(PluginContext, captured!), Scope.provide(scope));
         expect((yield* registry.list).map((tool) => tool.source)).toEqual(["temp"]);
         yield* Scope.close(scope, { _tag: "Success", value: undefined } as never);
         expect(yield* registry.list).toEqual([]);
@@ -131,7 +131,7 @@ describe("registry", () => {
   });
 
   it("lifts a guard when its installing scope closes", async () => {
-    let captured: PluginContext["Type"] | undefined;
+    let captured: Context.Service.Shape<typeof PluginContext> | undefined;
     const lender = definePlugin({
       id: "plan-mode",
       layer: Layer.effectDiscard(
@@ -147,7 +147,7 @@ describe("registry", () => {
         const scope = yield* Scope.make();
         yield* registry
           .guard("echo", () => Effect.succeed({ _tag: "deny", reason: "plan mode" }))
-          .pipe(Effect.provideService(PluginContext, captured!), Scope.extend(scope));
+          .pipe(Effect.provideService(PluginContext, captured!), Scope.provide(scope));
         expect(textOf(yield* call("echo", { text: "hi" }))).toBe("Tool call denied: plan mode");
         yield* Scope.close(scope, { _tag: "Success", value: undefined } as never);
         expect(textOf(yield* call("echo", { text: "hi" }))).toBe("hi");
@@ -264,7 +264,7 @@ describe("execute", () => {
       [contributor("p", [echo]), closing],
       Effect.gen(function* () {
         const exit = yield* Effect.exit(call("echo", { text: "fine" }));
-        expect(Exit.isFailure(exit) && Cause.isDie(exit.cause) && Cause.squash(exit.cause)).toBeInstanceOf(CoreClosed);
+        expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause) && Cause.squash(exit.cause)).toBeInstanceOf(CoreClosed);
       }),
     );
   });
@@ -301,7 +301,7 @@ describe("execute", () => {
       Effect.gen(function* () {
         for (const name of ["slow-promise", "slow-effect"]) {
           const controller = new AbortController();
-          const fiber = yield* Effect.fork(call(name, {}, controller.signal));
+          const fiber = yield* Effect.forkChild(call(name, {}, controller.signal));
           yield* Effect.sleep(10);
           controller.abort();
           const error = yield* Effect.flip(Fiber.join(fiber));
@@ -322,11 +322,11 @@ describe("execute", () => {
           yield* core.run(
             Effect.gen(function* () {
               const events = yield* Events;
-              const executed = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(ToolExecuted), 1)));
-              yield* Effect.yieldNow();
+              const executed = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(ToolExecuted), 1)));
+              yield* Effect.yieldNow;
               const result = yield* call("long", {});
               expect(textOf(result)).toBe(`${"x".repeat(10)}\n\n[Output truncated: showing 10 of 50 characters]`);
-              const [payload] = Chunk.toArray(yield* Fiber.join(executed));
+              const [payload] = Array.from(yield* Fiber.join(executed));
               expect(payload!.invocation.name).toBe("long");
               expect(payload!.result).toEqual(result);
             }),
@@ -353,10 +353,10 @@ describe("execute", () => {
       [contributor("p", [chatty])],
       Effect.gen(function* () {
         const events = yield* Events;
-        const outputs = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(ToolOutput), 2)));
-        yield* Effect.yieldNow();
+        const outputs = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(ToolOutput), 2)));
+        yield* Effect.yieldNow;
         expect(textOf(yield* call("chatty", {}))).toBe("done");
-        const chunks = Chunk.toArray(yield* Fiber.join(outputs));
+        const chunks = Array.from(yield* Fiber.join(outputs));
         expect(chunks.map((payload) => payload.chunk)).toEqual(["one\ntwo\n", "three\n"]);
         expect(chunks.map((payload) => payload.offset)).toEqual([0, 8]);
         expect(chunks[0]).toMatchObject({ sessionId: "s", toolCallId: "c1" });
@@ -404,8 +404,8 @@ describe("execute", () => {
       Effect.gen(function* () {
         const events = yield* Events;
         const published: unknown[] = [];
-        const watching = yield* Effect.fork(Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => published.push(payload))));
-        yield* Effect.yieldNow();
+        const watching = yield* Effect.forkChild(Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => published.push(payload))));
+        yield* Effect.yieldNow;
         const received: string[] = [];
         const registry = yield* Tools;
         const result = yield* registry.execute(

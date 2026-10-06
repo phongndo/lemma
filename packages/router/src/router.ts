@@ -1,4 +1,5 @@
-import { Either, Order } from "effect";
+import { Order, Result, SchemaRepresentation } from "effect";
+import type { Schema } from "effect";
 import { BASE, split } from "./history.ts";
 import type { HistoryAction, HistoryLocation, RouterHistory } from "./history.ts";
 import { compareScores, matchPattern, splitPath } from "./path.ts";
@@ -192,25 +193,25 @@ export const resolve = <E extends RouteEntry>(location: HistoryLocation, table: 
     }
     // Params that do not decode (an id of the wrong shape) mean this route does not match; the next may.
     const params = candidate.route.decodeParams(candidate.raw);
-    if (Either.isLeft(params)) {
-      verdict(candidate.route, "rejected", `its params do not decode: ${params.left}`);
+    if (Result.isFailure(params)) {
+      verdict(candidate.route, "rejected", `its params do not decode: ${params.failure}`);
       continue;
     }
     // A search that does not decode falls back to the route's defaults rather than refusing the page.
     const decoded = candidate.route.decodeSearch(rawSearch);
-    const search = Either.isRight(decoded) ? decoded.right : candidate.route.defaults;
+    const search = Result.isSuccess(decoded) ? decoded.success : candidate.route.defaults;
     if (search === undefined) {
-      verdict(candidate.route, "rejected", `its search does not decode, and it has no defaults: ${Either.isLeft(decoded) ? decoded.left : ""}`);
+      verdict(candidate.route, "rejected", `its search does not decode, and it has no defaults: ${Result.isFailure(decoded) ? decoded.failure : ""}`);
       continue;
     }
     const entry = table.entryOf.get(candidate.route.id);
     const match: Match<E> =
       entry === undefined
-        ? { status: "unavailable", route: candidate.route, params: params.right, search, location, signal }
-        : { status: "matched", route: candidate.route, entry, params: params.right, search, location, signal };
+        ? { status: "unavailable", route: candidate.route, params: params.success, search, location, signal }
+        : { status: "matched", route: candidate.route, entry, params: params.success, search, location, signal };
     if (trace === undefined) return match;
     chosen = { match, candidate };
-    const fallback = Either.isLeft(decoded) ? `; its search did not decode (${decoded.left}), so it uses the defaults` : "";
+    const fallback = Result.isFailure(decoded) ? `; its search did not decode (${decoded.failure}), so it uses the defaults` : "";
     verdict(
       candidate.route,
       entry === undefined ? "unavailable" : "shown",
@@ -238,7 +239,7 @@ const outranked = (loser: Candidate, winner: Candidate) => {
   return `as specific as "${winner.route.id}", which comes first by id`;
 };
 
-const byId = Order.mapInput(Order.string, (route: AnyRoute) => route.id);
+const byId = Order.mapInput(Order.String, (route: AnyRoute) => route.id);
 const byPreference = (a: Candidate, b: Candidate) =>
   compareScores(a.score, b.score) || a.route.pattern.segments.length - b.route.pattern.segments.length || byId(a.route, b.route);
 
@@ -249,12 +250,26 @@ const byPreference = (a: Candidate, b: Candidate) =>
  * Different Schemas are a fallback (`/n/:id` as a number, else as a name).
  */
 const sameShape = (a: AnyRoute, b: AnyRoute) =>
-  (a.params === b.params || String(a.params.ast) === String(b.params.ast)) &&
+  (a.params === b.params || (describe(a.params) ?? a) === (describe(b.params) ?? b)) &&
   a.pattern.segments.length === b.pattern.segments.length &&
   a.pattern.segments.every((segment, index) => {
     const other = b.pattern.segments[index]!;
     return segment.kind === other.kind && (segment.kind !== "static" || (other.kind === "static" && segment.value === other.value));
   });
+
+const descriptions = new WeakMap<Schema.Top, string | undefined>();
+/** A Schema's structure as text, once per Schema; undefined (never equal) for one that cannot be described, such as a declared type. */
+const describe = (schema: Schema.Top): string | undefined => {
+  if (descriptions.has(schema)) return descriptions.get(schema);
+  let description: string | undefined;
+  try {
+    description = JSON.stringify(SchemaRepresentation.toRepresentation(schema.ast));
+  } catch {
+    description = undefined;
+  }
+  descriptions.set(schema, description);
+  return description;
+};
 
 /** The conflicts among `entries` and `known` (see `RouteIssue`). */
 export const findIssues = (entries: readonly RouteEntry[], known: readonly AnyRoute[]): RouteIssue[] => {
@@ -564,7 +579,7 @@ export const createRouter = <E extends RouteEntry = RouteEntry>(options: RouterO
       return {
         location: history.location(),
         match: describe(current),
-        routes: [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => Order.string(a.path, b.path)),
+        routes: [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => Order.String(a.path, b.path)),
         issues: issues.map((issue) => ({ kind: issue.kind, message: issue.message, routes: issue.routes.map((route) => route.id) })),
         blockers: [...blockers.values()],
         retain,

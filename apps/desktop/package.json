@@ -14,7 +14,7 @@
     "@lemma/host": "workspace:*",
     "@lemma/plugin-host": "workspace:*",
     "@lemma/plugin-transport": "workspace:*",
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

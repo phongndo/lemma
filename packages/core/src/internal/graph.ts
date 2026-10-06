@@ -1,4 +1,4 @@
-import { Either, Order, ParseResult, Schema, Scope } from "effect";
+import { Order, Result, Schema, SchemaIssue, Scope } from "effect";
 import { CompositionError } from "../errors.ts";
 import { Events } from "../events.ts";
 import { Hooks, PluginContext } from "../hooks.ts";
@@ -25,7 +25,7 @@ interface Planned {
 export function plan(
   plugins: readonly Plugin[],
   rawConfigs: (id: string) => unknown,
-): Either.Either<Planned, readonly [CompositionError, ...CompositionError[]]> {
+): Result.Result<Planned, readonly [CompositionError, ...CompositionError[]]> {
   const errors: CompositionError[] = [];
   const byId = new Map<string, Plugin>();
   const providers = new Map<string, Plugin>();
@@ -84,21 +84,21 @@ export function plan(
   for (const plugin of byId.values()) {
     if (!plugin.config) continue;
     // Absent config decodes as an empty object so all-optional schemas need no row.
-    const result = Schema.decodeUnknownEither(plugin.config)(rawConfigs(plugin.id) ?? {});
-    if (Either.isLeft(result)) {
-      const path = ParseResult.ArrayFormatter.formatErrorSync(result.left)[0]?.path.filter(
-        (segment): segment is string | number => typeof segment !== "symbol",
+    const result = Schema.decodeUnknownResult(plugin.config)(rawConfigs(plugin.id) ?? {});
+    if (Result.isFailure(result)) {
+      const path = SchemaIssue.makeFormatterStandardSchemaV1()(result.failure.issue).issues[0]?.path?.filter(
+        (segment): segment is string | number => typeof segment === "string" || typeof segment === "number",
       );
       errors.push(
         new CompositionError({
           reason: "InvalidConfig",
-          message: `Invalid config for plugin "${plugin.id}":\n${ParseResult.TreeFormatter.formatErrorSync(result.left)}`,
+          message: `Invalid config for plugin "${plugin.id}":\n${result.failure.message}`,
           plugins: [plugin.id],
           ...(path === undefined ? {} : { path }),
         }),
       );
     } else {
-      configs.set(plugin.id, result.right);
+      configs.set(plugin.id, result.success);
     }
   }
 
@@ -162,12 +162,12 @@ export function plan(
     }
   }
 
-  if (errors.length) return Either.left(errors as [CompositionError, ...CompositionError[]]);
-  return Either.right({
+  if (errors.length) return Result.fail(errors as [CompositionError, ...CompositionError[]]);
+  return Result.succeed({
     ordered,
     configs,
     providers: new Map([...providers].map(([key, plugin]) => [key, plugin.id])),
   });
 }
 
-const byPluginId = Order.mapInput(Order.string, (plugin: Plugin) => plugin.id);
+const byPluginId = Order.mapInput(Order.String, (plugin: Plugin) => plugin.id);

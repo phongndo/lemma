@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import type { Duration, Scope, Stream } from "effect";
 import type { CompositionError, CoreClosed, PluginFault, ReloadError, ReportedFault, ShutdownTimeout } from "./errors.ts";
 import type { Events } from "./events.ts";
@@ -50,7 +50,7 @@ export interface CoreOptions {
   /** Applied to plugins that declare none. Defaults: activate 30s, dispose 10s. */
   readonly deadlines?: Deadlines;
   /** Total closing-caller wait; defaults to the core dispose deadline (10s). Cleanup continues on timeout. */
-  readonly shutdownTimeout?: Duration.DurationInput;
+  readonly shutdownTimeout?: Duration.Input;
 }
 
 export interface RestartOptions {
@@ -103,8 +103,8 @@ export function makeCore<const Plugins extends readonly Plugin[]>(
  * plan. An application decides from it what to leave out before starting.
  */
 export function checkComposition(plugins: readonly Plugin[], configs: Readonly<Record<string, unknown>> = {}): readonly CompositionError[] {
-  return Either.match(
+  return Result.match(
     plan(plugins, (id) => configs[id]),
-    { onLeft: (errors) => errors, onRight: () => [] },
+    { onFailure: (errors) => errors, onSuccess: () => [] },
   );
 }

@@ -1,4 +1,4 @@
-import { Either, Schema, SchemaAST } from "effect";
+import { Result, Schema, SchemaAST } from "effect";
 import { buildPath, parsePattern } from "./path.ts";
 import type { Pattern, RawParams } from "./path.ts";
 import { stringifySearch } from "./search.ts";
@@ -46,14 +46,14 @@ export interface Route<Params = unknown, Search = unknown> {
   readonly id: string;
   readonly path: string;
   readonly pattern: Pattern;
-  readonly params: Schema.Schema<Params, any>;
-  readonly search: Schema.Schema<Search, any>;
+  readonly params: Schema.Codec<Params, any>;
+  readonly search: Schema.Codec<Search, any>;
   /** The search a URL without one decodes to, when every key has a default or is optional. */
   readonly defaults: Search | undefined;
-  /** Typed params from the URL's; Left with the reason when they do not decode. */
-  readonly decodeParams: (raw: RawParams) => Either.Either<Params, string>;
-  /** Typed search from the URL's; Left with the reason when it does not decode. */
-  readonly decodeSearch: (raw: RawSearch) => Either.Either<Search, string>;
+  /** Typed params from the URL's; a failure with the reason when they do not decode. */
+  readonly decodeParams: (raw: RawParams) => Result.Result<Params, string>;
+  /** Typed search from the URL's; a failure with the reason when it does not decode. */
+  readonly decodeSearch: (raw: RawSearch) => Result.Result<Search, string>;
   /** `/path?search` for these values. Search keys equal to their defaults are left out. Throws a `RouteError` when a value does not encode. */
   readonly href: (params: Params, search?: Partial<Search>) => string;
 }
@@ -66,9 +66,9 @@ export interface RouteOptions<P extends string, Params, ParamsEncoded extends En
   /** `/users/:id/:tab?`; see `parsePattern`. */
   readonly path: P;
   /** Decodes the path's params from their strings; its fields are the path's names. Without one they are the strings. */
-  readonly params?: Schema.Schema<Params, ParamsEncoded> & CheckParams<P, ParamsEncoded>;
+  readonly params?: Schema.Codec<Params, ParamsEncoded> & CheckParams<P, ParamsEncoded>;
   /** Decodes the query string from its strings; without one the route takes none. Unknown keys are ignored. */
-  readonly search?: Schema.Schema<Search, SearchEncoded>;
+  readonly search?: Schema.Codec<Search, SearchEncoded>;
 }
 
 /** A route defined wrongly, or values its Schemas do not encode: a mistake in the code, named by the route's id. */
@@ -83,17 +83,17 @@ export class RouteError extends Error {
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-const strings = Schema.Record({ key: Schema.String, value: Schema.String });
+const strings = Schema.Record(Schema.String, Schema.String);
 
 /** The URL side's fields of a Struct-like Schema, or undefined for any other (a record takes any names). */
-const fieldsOf = (schema: Schema.Schema<any, any>): readonly { readonly name: string; readonly optional: boolean }[] | undefined => {
-  const ast = Schema.encodedSchema(schema).ast;
-  if (!SchemaAST.isTypeLiteral(ast) || ast.indexSignatures.length > 0) return undefined;
-  return ast.propertySignatures.map((field) => ({ name: String(field.name), optional: field.isOptional }));
+const fieldsOf = (schema: Schema.Codec<any, any>): readonly { readonly name: string; readonly optional: boolean }[] | undefined => {
+  const ast = Schema.toEncoded(schema).ast;
+  if (!SchemaAST.isObjects(ast) || ast.indexSignatures.length > 0) return undefined;
+  return ast.propertySignatures.map((field) => ({ name: String(field.name), optional: SchemaAST.isOptional(field.type) }));
 };
 
 /** The checks the types make, again at runtime, for routes whose path is only known as a `string`. */
-const checkParams = (id: string, pattern: Pattern, schema: Schema.Schema<any, any>) => {
+const checkParams = (id: string, pattern: Pattern, schema: Schema.Codec<any, any>) => {
   const fields = fieldsOf(schema);
   if (fields === undefined) return;
   const named = new Map(pattern.segments.flatMap((segment) => (segment.kind === "static" ? [] : [[segment.name, segment.kind] as const])));
@@ -127,20 +127,20 @@ export function defineRoute<
   } catch (error) {
     throw new RouteError(id, message(error));
   }
-  const params = (options.params ?? strings) as Schema.Schema<Params, any>;
-  const search = (options.search ?? Schema.Struct({})) as Schema.Schema<Search, any>;
+  const params = (options.params ?? strings) as Schema.Codec<Params, any>;
+  const search = (options.search ?? Schema.Struct({})) as Schema.Codec<Search, any>;
   checkParams(id, pattern, params);
-  const decodeParams = Schema.decodeUnknownEither(params);
-  const encodeParams = Schema.encodeEither(params);
-  const decodeSearch = Schema.decodeUnknownEither(search);
-  const encodeSearch = Schema.encodeEither(search);
-  const defaults = Either.getOrUndefined(decodeSearch({}));
-  const encodedDefaults: Encoded = defaults === undefined ? {} : Either.getOrElse(encodeSearch(defaults), () => ({}));
+  const decodeParams = Schema.decodeUnknownResult(params);
+  const encodeParams = Schema.encodeResult(params);
+  const decodeSearch = Schema.decodeUnknownResult(search);
+  const encodeSearch = Schema.encodeResult(search);
+  const defaults = Result.getOrUndefined(decodeSearch({}));
+  const encodedDefaults: Encoded = defaults === undefined ? {} : Result.getOrElse(encodeSearch(defaults), () => ({}));
 
   const href = (values: Params, partial?: Partial<Search>): string => {
-    const rawParams = encodeParams(values).pipe(Either.getOrThrowWith((error) => new RouteError(id, `params do not encode: ${error.message}`)));
+    const rawParams = encodeParams(values).pipe(Result.getOrThrowWith((error) => new RouteError(id, `params do not encode: ${error.message}`)));
     const full = { ...defaults, ...partial } as Search;
-    const rawSearch = encodeSearch(full).pipe(Either.getOrThrowWith((error) => new RouteError(id, `search does not encode: ${error.message}`))) as Encoded;
+    const rawSearch = encodeSearch(full).pipe(Result.getOrThrowWith((error) => new RouteError(id, `search does not encode: ${error.message}`))) as Encoded;
     const kept: Record<string, string> = {};
     for (const [key, value] of Object.entries(rawSearch)) {
       if (value !== undefined && value !== encodedDefaults[key]) kept[key] = value;
@@ -161,8 +161,8 @@ export function defineRoute<
     params,
     search,
     defaults,
-    decodeParams: (raw) => Either.mapLeft(decodeParams(raw), message),
-    decodeSearch: (raw) => Either.mapLeft(decodeSearch(raw), message),
+    decodeParams: (raw) => Result.mapError(decodeParams(raw), message),
+    decodeSearch: (raw) => Result.mapError(decodeSearch(raw), message),
     href,
   };
 }

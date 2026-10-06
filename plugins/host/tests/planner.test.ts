@@ -1,34 +1,34 @@
 import { describe, expect, test } from "vitest";
-import { Context, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema } from "effect";
 import { HostApi } from "@lemma/contracts";
 import { definePlugin } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { planComposition } from "../src/index.ts";
 import type { Plan, PlanInput } from "../src/index.ts";
 
-class Llm extends Context.Tag("test/Llm")<Llm, string>() {}
-class Agent extends Context.Tag("test/Agent")<Agent, string>() {}
-class Server extends Context.Tag("test/Server")<Server, string>() {}
+class Llm extends Context.Service<Llm, string>()("test/Llm") {}
+class Agent extends Context.Service<Agent, string>()("test/Agent") {}
+class Server extends Context.Service<Server, string>()("test/Server") {}
 
 const host = definePlugin({ id: "host", provides: [HostApi(1)], layer: Layer.succeed(HostApi(1), 1) });
 const llm = definePlugin({
   id: "llm",
   provides: [Llm],
-  config: Schema.Struct({ model: Schema.optionalWith(Schema.String, { default: () => "small" }) }),
+  config: Schema.Struct({ model: Schema.String.pipe(Schema.withDecodingDefaultType(Effect.sync(() => "small"))) }),
   layer: Layer.succeed(Llm, "llm"),
 });
 const agent = definePlugin({
   id: "agent",
   provides: [Agent],
   requires: [Llm],
-  config: Schema.Struct({ maxSteps: Schema.optionalWith(Schema.Int, { default: () => 10 }), cli: Schema.optional(Schema.String) }),
+  config: Schema.Struct({ maxSteps: Schema.Int.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 10))), cli: Schema.optional(Schema.String) }),
   layer: Layer.succeed(Agent, "agent"),
 });
 const compaction = definePlugin({ id: "compaction", requires: [Agent], layer: Layer.empty });
 const transport = definePlugin({
   id: "transport",
   provides: [Server],
-  config: Schema.Struct({ port: Schema.optionalWith(Schema.Int, { default: () => 7433 }), staticDir: Schema.optional(Schema.String) }),
+  config: Schema.Struct({ port: Schema.Int.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 7433))), staticDir: Schema.optional(Schema.String) }),
   layer: Layer.succeed(Server, "server"),
 });
 const bundled: readonly Plugin[] = [host, llm, agent, compaction, transport];
@@ -97,8 +97,8 @@ describe("planComposition", () => {
     const mine = definePlugin({ id: "my-agent", requires: [Llm], provides: [Agent], layer: Layer.succeed(Agent, "mine") });
     expect(suggestion(plan({ local: [{ plugin: mine, source: "user" }], rows: { agent: { required: true } } }), "my-agent")).toBe("Turn one of them off");
     // A cycle through "canvas" reads "canvas -> paint", with the "as " the duplicate's "as … both do" has.
-    class Canvas extends Context.Tag("test/Canvas")<Canvas, string>() {}
-    class Paint extends Context.Tag("test/Paint")<Paint, string>() {}
+    class Canvas extends Context.Service<Canvas, string>()("test/Canvas") {}
+    class Paint extends Context.Service<Paint, string>()("test/Paint") {}
     const canvas = definePlugin({ id: "canvas", requires: [Paint], provides: [Canvas], layer: Layer.succeed(Canvas, "canvas") });
     const paint = definePlugin({ id: "paint", requires: [Canvas], provides: [Paint], layer: Layer.succeed(Paint, "paint") });
     const planned = plan({ local: [canvas, paint].map((plugin) => ({ plugin, source: "user" as const })) });

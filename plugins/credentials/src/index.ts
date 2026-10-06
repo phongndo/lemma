@@ -1,4 +1,4 @@
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Semaphore } from "effect";
 import { CredentialError, Credentials, Paths } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
 import { definePlugin } from "@lemma/core";
@@ -24,7 +24,7 @@ export default definePlugin({
       const path = (yield* Paths).auth;
       // The file lock is the whole file's, and waits only `waitMs` for its holder: this process's writers queue
       // here instead, however long the one before them takes.
-      const writing = yield* Effect.makeSemaphore(1);
+      const writing = yield* Semaphore.make(1);
       const serialized = <A, E>(body: Effect.Effect<A, E>): Effect.Effect<A, E | CredentialError> => writing.withPermits(1)(withFileLock(path, body));
 
       const withProvider = (provider: string) => (error: CredentialError) =>

@@ -12,7 +12,7 @@ import type { Composition, PluginIdentity } from "@lemma/core";
  */
 export function compositionInfo(composition: Composition, plugins: readonly PluginIdentity[]): CompositionInfo {
   const members = [...plugins]
-    .sort((a, b) => Order.string(a.id, b.id))
+    .sort((a, b) => Order.String(a.id, b.id))
     .map((plugin) => ({ id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }) }));
   const hash = createHash("sha256");
   for (const member of members) {
@@ -27,7 +27,7 @@ function canonicalJson(value: unknown): string {
   if (value !== null && typeof value === "object") {
     const entries = Object.entries(value)
       .filter(([, item]) => item !== undefined)
-      .sort(([a], [b]) => Order.string(a, b));
+      .sort(([a], [b]) => Order.String(a, b));
     return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${canonicalJson(item)}`).join(",")}}`;
   }
   return JSON.stringify(value) ?? "null";

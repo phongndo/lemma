@@ -1,6 +1,6 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { Duration, Effect, Either, Option, ParseResult, Schedule, Schema } from "effect";
+import { Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
 import { Events, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
@@ -14,7 +14,7 @@ import type { Header, Line } from "./format.ts";
 import { readIndex, writeIndex } from "./listing.ts";
 import { acquireLock, REFRESH_MS, refreshLock, releaseLock } from "./lock.ts";
 
-type Service = Context.Tag.Service<typeof Sessions>;
+type Service = Context.Service.Shape<typeof Sessions>;
 
 /** A session opened for reading or writing: the whole tree in memory, authoritative for this process. */
 interface Open {
@@ -38,7 +38,7 @@ interface Entry {
   readonly id: string;
   readonly file: string;
   /** Serializes loading, appends, checkouts, and unloading. */
-  readonly lock: Effect.Semaphore;
+  readonly lock: Semaphore.Semaphore;
   info: SessionInfo;
   scanned?: Scanned;
   open?: Open;
@@ -46,7 +46,8 @@ interface Entry {
   lastUsed: number;
 }
 
-const decodeEvent = Schema.decodeUnknownEither(SessionEvent, { onExcessProperty: "error" });
+const decodeEvent = Schema.decodeUnknownResult(SessionEvent, { onExcessProperty: "error" });
+const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1();
 
 /**
  * The event as reading its line back will give it, or why it cannot be written. JSON
@@ -54,16 +55,16 @@ const decodeEvent = Schema.decodeUnknownEither(SessionEvent, { onExcessProperty:
  * the schema lacks would be dropped on reading: either way memory and a reload would
  * disagree, or the line would not read back at all.
  */
-const asRead = (event: SessionEvent): Either.Either<SessionEvent, string> => {
+const asRead = (event: SessionEvent): Result.Result<SessionEvent, string> => {
   let json: unknown;
   try {
     json = JSON.parse(JSON.stringify(event));
   } catch (cause) {
-    return Either.left(cause instanceof Error ? cause.message : String(cause));
+    return Result.fail(cause instanceof Error ? cause.message : String(cause));
   }
-  return Either.mapLeft(decodeEvent(json), (error) => {
-    const [issue] = ParseResult.ArrayFormatter.formatErrorSync(error);
-    return issue === undefined ? (error.message.split("\n")[0] ?? error.message) : `${issue.path.join(".")}: ${issue.message}`;
+  return Result.mapError(decodeEvent(json), (error) => {
+    const [issue] = formatIssues(error.issue).issues;
+    return issue === undefined ? (error.message.split("\n")[0] ?? error.message) : `${issue.path?.join(".") ?? ""}: ${issue.message}`;
   });
 };
 
@@ -116,7 +117,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
     // A failed write's leftover bytes are cut first: the next start would read them as appended. Each open
     // session is then indexed from memory, so the next start reads none of them.
     yield* Effect.addFinalizer(() =>
-      Effect.zipRight(
+      Effect.andThen(
         Effect.forEach(
           entries.values(),
           (entry) => {
@@ -126,7 +127,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
               if (open.writer !== undefined) yield* open.writer.settle;
               record(entry, scannedOf(open, yield* stat(entry.file)));
             });
-            return Effect.zipRight(Effect.ignore(indexed), open.writer?.close ?? Effect.void);
+            return Effect.andThen(Effect.ignore(indexed), open.writer?.close ?? Effect.void);
           },
           { discard: true },
         ),
@@ -138,7 +139,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
     const changed = (entry: Entry) => events.publish(SessionChanged, { info: entry.info });
 
     const remember = (id: string, file: string, info: SessionInfo, scanned?: Scanned) =>
-      Effect.map(Effect.makeSemaphore(1), (lock) => {
+      Effect.map(Semaphore.make(1), (lock) => {
         const existing = entries.get(id);
         if (existing !== undefined) return existing;
         const entry: Entry = { id, file, lock, info, ...(scanned === undefined ? {} : { scanned }), lastUsed: Date.now() };
@@ -318,10 +319,10 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
             while (open.byId.has(id)) id = eventId();
             // A line that does not read back as it was written would make memory and a reload disagree, or the session unreadable.
             const read = asRead({ seq: open.events.length + 1, id, parent, at: Date.now(), data });
-            if (Either.isLeft(read)) {
-              return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.left}` });
+            if (Result.isFailure(read)) {
+              return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.failure}` });
             }
-            const event = read.right;
+            const event = read.success;
             yield* commit(entry, open, event, () => {
               open.events.push(event);
               open.byId.set(id, event);
@@ -412,7 +413,7 @@ export const make = ({ unloadAfter }: Options): Effect.Effect<Service, SessionEr
             refresh(id, file).pipe(
               Effect.map((entry) => Option.some(entry.info)),
               // One unreadable file is reported, not fatal to the listing.
-              Effect.catchAll((error) => Effect.as(warn(error.message), Option.none<SessionInfo>())),
+              Effect.catch((error) => Effect.as(warn(error.message), Option.none<SessionInfo>())),
             ),
           { concurrency: 16 },
         );

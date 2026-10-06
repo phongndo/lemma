@@ -1,4 +1,4 @@
-import { Either, ParseResult, Predicate, Schema } from "effect";
+import { Predicate, Result, Schema, SchemaIssue } from "effect";
 import type { PluginRow } from "@lemma/contracts";
 import { checkComposition, Diagnostic } from "@lemma/core";
 import type { Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
@@ -233,7 +233,7 @@ function entryOf(entry: PluginEntry, row: PluginRow, base: Readonly<Record<strin
   const { required: _, ...rest } = row;
   // JSON cannot express undefined, so a decoded row carries only the keys its file wrote.
   const merged = { ...entry, ...rest } as PluginEntry;
-  return base !== undefined && Predicate.isRecord(row.config) ? { ...merged, config: { ...base, ...row.config } } : merged;
+  return base !== undefined && Predicate.isObject(row.config) ? { ...merged, config: { ...base, ...row.config } } : merged;
 }
 
 const isRunning = (composition: Composition, id: string) => composition.plugins[id] !== undefined && composition.plugins[id]?.enabled !== false;
@@ -286,9 +286,10 @@ function describe(error: CompositionError, running: readonly Plugin[], configs: 
   switch (error.reason) {
     case "InvalidConfig": {
       const plugin = running.find((candidate) => candidate.id === error.plugins[0]);
-      const decoded = plugin?.config === undefined ? undefined : Schema.decodeUnknownEither(plugin.config)(configs[plugin.id] ?? {});
-      const issue = decoded !== undefined && Either.isLeft(decoded) ? ParseResult.ArrayFormatter.formatErrorSync(decoded.left)[0] : undefined;
-      const at = issue?.path.filter((segment): segment is string | number => typeof segment !== "symbol") ?? [];
+      const decoded = plugin?.config === undefined ? undefined : Schema.decodeUnknownResult(plugin.config)(configs[plugin.id] ?? {});
+      const issue =
+        decoded !== undefined && Result.isFailure(decoded) ? SchemaIssue.makeFormatterStandardSchemaV1()(decoded.failure.issue).issues[0] : undefined;
+      const at = issue?.path?.filter((segment): segment is string | number => typeof segment === "string" || typeof segment === "number") ?? [];
       return `its config is invalid${at.length ? ` at ${at.join(".")}` : ""}: ${issue?.message ?? error.message}`;
     }
     case "MissingCapability": {
@@ -328,11 +329,27 @@ function rootOf(resolved: Resolved, id: string): string {
 }
 
 /** Keys `config` sets that `schema` does not read: a setting renamed or removed since the row was written. */
-function unusedKeys(schema: Schema.Schema<any, any, never>, config: unknown): string[] {
-  if (!Predicate.isRecord(config) || Either.isLeft(Schema.decodeUnknownEither(schema)(config))) return [];
-  const strict = Schema.decodeUnknownEither(schema, { onExcessProperty: "error", errors: "all" })(config);
-  if (Either.isRight(strict)) return [];
-  return ParseResult.ArrayFormatter.formatErrorSync(strict.left)
-    .filter((issue) => issue._tag === "Unexpected")
-    .map((issue) => issue.path.map(String).join("."));
+function unusedKeys(schema: Schema.Decoder<unknown>, config: unknown): string[] {
+  if (!Predicate.isObject(config) || Result.isFailure(Schema.decodeUnknownResult(schema)(config))) return [];
+  const strict = Schema.decodeUnknownResult(schema, { onExcessProperty: "error", errors: "all" })(config);
+  if (Result.isSuccess(strict)) return [];
+  return unexpectedKeys(strict.failure.issue);
+}
+
+/** The paths an issue reports as excess properties. */
+function unexpectedKeys(issue: SchemaIssue.Issue, path: readonly PropertyKey[] = []): string[] {
+  switch (issue._tag) {
+    case "UnexpectedKey":
+      return [path.map(String).join(".")];
+    case "Pointer":
+      return unexpectedKeys(issue.issue, [...path, ...issue.path]);
+    case "Filter":
+    case "Encoding":
+      return unexpectedKeys(issue.issue, path);
+    case "Composite":
+    case "AnyOf":
+      return issue.issues.flatMap((inner) => unexpectedKeys(inner, path));
+    default:
+      return [];
+  }
 }

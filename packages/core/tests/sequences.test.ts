@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { Context, Deferred, Duration, Effect, Either, FastCheck as fc, Layer, Schema, Stream } from "effect";
+import { Context, Deferred, Duration, Effect, Layer, Result, Schema, Stream } from "effect";
+import fc from "fast-check";
 import { Diagnostic, Event, Hook, makeLoader, PluginContext } from "../src/index.ts";
 import type { Composition, CoreSnapshot, Loader, Plugin, PluginFault } from "../src/index.ts";
 import { waitFor } from "./support.ts";
@@ -11,8 +12,8 @@ import { waitFor } from "./support.ts";
  * activation or disposal fail. Random command sequences must keep the invariants
  * in `check` true after every step; fast-check shrinks any counterexample.
  */
-class A extends Context.Tag("seq/A")<A, string>() {}
-class B extends Context.Tag("seq/B")<B, string>() {}
+class A extends Context.Service<A, string>()("seq/A") {}
+class B extends Context.Service<B, string>()("seq/B") {}
 const Ping = Hook.make<number, number>("seq/ping");
 const Tick = Event.make<number>("seq/tick");
 const ids = ["a", "b", "c", "d"] as const;
@@ -31,14 +32,14 @@ const Config = Schema.Struct({ version: Schema.Number });
 
 function fixtures(world: World): Record<Id, Plugin> {
   // Raw manifests model the untyped package seam; the runtime validates exports and inputs.
-  const make = (id: Id, provides: readonly Context.Tag<any, string>[], needs: readonly Context.Tag<any, string>[]): Plugin => ({
+  const make = (id: Id, provides: readonly Context.Key<any, string>[], needs: readonly Context.Key<any, string>[]): Plugin => ({
     id,
     provides,
     requires: needs,
     config: Config,
     exclusive: false,
     layer: (raw) =>
-      Layer.scopedContext(
+      Layer.effectContext(
         Effect.gen(function* () {
           const config = raw as typeof Config.Type;
           const key = `${id}#${++world.generation}`;
@@ -55,7 +56,7 @@ function fixtures(world: World): Record<Id, Plugin> {
           yield* owner.observe(Tick, () => Effect.void);
           const trigger = yield* Deferred.make<void>();
           world.triggers.set(key, trigger);
-          yield* owner.background("poll", Deferred.await(trigger).pipe(Effect.zipRight(Effect.fail(`${id} lost connection`))), { required: true });
+          yield* owner.background("poll", Deferred.await(trigger).pipe(Effect.andThen(Effect.fail(`${id} lost connection`))), { required: true });
           for (const tag of needs) yield* tag;
           const value = `${key}@${config.version}`;
           return provides.length ? Context.make(provides[0]!, value) : Context.empty();
@@ -164,19 +165,19 @@ describe("command sequences", () => {
                         const dependency = requires[id];
                         if (applied.get(id) !== command.version || (dependency !== undefined && changed.has(dependency))) changed.add(id);
                       }
-                      const result = yield* Effect.either(loader.apply(composition(subset, command.version)));
+                      const result = yield* Effect.result(loader.apply(composition(subset, command.version)));
                       const after = yield* loader.core.inspect;
-                      if (Either.isRight(result)) {
+                      if (Result.isSuccess(result)) {
                         // A successful change activates every changed plugin; unchanged ones keep their state (no automatic restarts).
                         const expectedActive = subset.filter((id) => changed.has(id) || before.plugins.find((p) => p.id === id)?.state === "active");
                         expect(after.plugins.filter((p) => p.state === "active").map((p) => p.id)).toEqual(expectedActive);
-                        expect([...result.right.started, ...result.right.restarted].sort()).toEqual([...changed].sort());
-                        expect([...result.right.unchanged].sort()).toEqual(subset.filter((id) => !changed.has(id)).sort());
-                        for (const fault of result.right.faults) expect(fault.phase).toBe("dispose");
+                        expect([...result.success.started, ...result.success.restarted].sort()).toEqual([...changed].sort());
+                        expect([...result.success.unchanged].sort()).toEqual(subset.filter((id) => !changed.has(id)).sort());
+                        for (const fault of result.success.faults) expect(fault.phase).toBe("dispose");
                         applied = new Map(subset.map((id) => [id, command.version]));
                       } else {
                         // A failed change reports the injected fault and leaves the running composition as it was.
-                        expect(result.left.diagnostics.length).toBeGreaterThan(0);
+                        expect(result.failure.diagnostics.length).toBeGreaterThan(0);
                         expect(after.plugins.map((p) => [p.id, p.state])).toEqual(before.plugins.map((p) => [p.id, p.state]));
                       }
                       break;
@@ -201,10 +202,10 @@ describe("command sequences", () => {
                     }
                     case "restart": {
                       const target = before.plugins.find((p) => p.id === command.id);
-                      const result = yield* Effect.either(loader.core.restart(command.id));
+                      const result = yield* Effect.result(loader.core.restart(command.id));
                       const after = yield* loader.core.inspect;
                       if (!target) {
-                        expect(Either.isLeft(result)).toBe(true);
+                        expect(Result.isFailure(result)).toBe(true);
                         break;
                       }
                       if (target.state === "active") {
@@ -215,7 +216,7 @@ describe("command sequences", () => {
                       const dependencyActive = dependency === undefined || before.plugins.find((p) => p.id === dependency)?.state === "active";
                       if (!dependencyActive || world.faults.activate.has(command.id)) {
                         // The forced plugin itself cannot come back: nothing changes.
-                        expect(Either.isLeft(result)).toBe(true);
+                        expect(Result.isFailure(result)).toBe(true);
                         expect(after.plugins.map((p) => [p.id, p.state])).toEqual(before.plugins.map((p) => [p.id, p.state]));
                         break;
                       }
@@ -244,7 +245,7 @@ describe("command sequences", () => {
                   }
                 });
                 yield* step.pipe(
-                  Effect.timeoutFail({ duration: Duration.seconds(3), onTimeout: () => new Error(`command ${index} (${command.kind}) hung`) }),
+                  Effect.timeoutOrElse({ duration: Duration.seconds(3), orElse: () => Effect.fail(new Error(`command ${index} (${command.kind}) hung`)) }),
                   Effect.orDie,
                 );
                 yield* settle(loader);
@@ -252,7 +253,7 @@ describe("command sequences", () => {
               }
             }),
           ).pipe(
-            Effect.catchAllDefect((defect) =>
+            Effect.catchDefect((defect) =>
               Effect.sync(() => {
                 // Shutdown surfaces injected dispose faults as defects; the resource ledger must still be empty.
                 expect(String(defect)).toContain("cannot dispose");

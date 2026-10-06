@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Effect, FiberRef, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
 import { definePlugin, Hooks } from "@lemma/core";
@@ -22,7 +22,7 @@ export default definePlugin({
       const hooks = yield* Hooks;
 
       const request = <T extends InteractionRequest["type"]>(request: Extract<InteractionRequest, { type: T }>): Effect.Effect<Answer<T>, InteractionError> =>
-        FiberRef.get(InteractionOrigin).pipe(
+        InteractionOrigin.pipe(
           Effect.flatMap((origin) => hooks.invoke(InteractionHook, origin === undefined ? request : { ...request, origin }, unavailable)),
           // An answerer that breaks the protocol is no usable answerer: callers recover as if nobody were attached.
           Effect.flatMap((answer) =>

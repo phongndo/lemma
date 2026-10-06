@@ -6,7 +6,7 @@ import type { AuthType, Llm, LlmError } from "@lemma/contracts";
 interface Running {
   readonly type: AuthType;
   /** Set right after the fork, so the entry exists before the login can end. */
-  readonly fiber: Deferred.Deferred<Fiber.RuntimeFiber<void, LlmError>>;
+  readonly fiber: Deferred.Deferred<Fiber.Fiber<void, LlmError>>;
 }
 
 /**
@@ -15,7 +15,7 @@ interface Running {
  * the interaction grace period and are replayed when the client returns. One
  * login per provider; a second call of the same type waits for the first.
  */
-export const makeLogins = (llm: Context.Tag.Service<Llm>, scope: Scope.Scope) => {
+export const makeLogins = (llm: Context.Service.Shape<typeof Llm>, scope: Scope.Scope) => {
   const running = new Map<string, Running>();
   return (provider: string, type: AuthType): Effect.Effect<void, HostError | LlmError> =>
     Effect.gen(function* () {
@@ -29,10 +29,10 @@ export const makeLogins = (llm: Context.Tag.Service<Llm>, scope: Scope.Scope) =>
             }
             return current.fiber;
           }
-          const entry: Running = { type, fiber: yield* Deferred.make<Fiber.RuntimeFiber<void, LlmError>>() };
+          const entry: Running = { type, fiber: yield* Deferred.make<Fiber.Fiber<void, LlmError>>() };
           running.set(provider, entry);
           const forked = yield* Effect.forkIn(
-            Effect.interruptible(Effect.locally(llm.login(provider, type), InteractionOrigin, `login:${provider}`)).pipe(
+            Effect.interruptible(Effect.provideService(llm.login(provider, type), InteractionOrigin, `login:${provider}`)).pipe(
               Effect.ensuring(
                 Effect.sync(() => {
                   if (running.get(provider) === entry) running.delete(provider);

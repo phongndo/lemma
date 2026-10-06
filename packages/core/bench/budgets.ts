@@ -2,26 +2,27 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { cpus } from "node:os";
 import { join } from "node:path";
 
-// Initial engineering guardrails, not application SLAs. Reference: Linux x64,
-// Ryzen 9 9950X, Node 24.19.0, 2026-09-27. Warm baseline: core.run 9.679us,
-// 32 traced handlers 259.812us, reload 150.342us, mount/dispose 2785us.
+// Engineering guardrails, not application SLAs. Reference: Linux x64, Ryzen 9
+// 9950X, Node 24.20.0, Effect 4.0.1, 2026-10-05. Warm baseline: core.run
+// 3.73us, 32 traced handlers 77.7us, reload 76.9us, mount/dispose 1308us
+// (Effect 3.22 took 9.8, 286, 163, and 2828: scripts/bench-compare.ts).
 // Allow roughly 50% headroom for host noise and added lifecycle bookkeeping.
 // New workload/bundle limits bound regression risk; they do not prove optimality.
 export const budgets = {
-  "Hook / 32 handlers / spans on": 320,
-  "core.run entry": 15,
-  "Mount + dispose / 32 plugins": 6000,
-  "Reload one of 32 plugins": 400,
+  "Hook / 32 handlers / spans on": 120,
+  "core.run entry": 6,
+  "Mount + dispose / 32 plugins": 2000,
+  "Reload one of 32 plugins": 120,
   coldStartupMs: 500,
   operationP95Us: 1000,
   operationP99Us: 2000,
   heapGrowthBytes: 16 * 1024 * 1024,
   rssGrowthBytes: 64 * 1024 * 1024,
   // Packed UI fixture including Effect and application code, bundled by esbuild:
-  // 596KB / 185KB gzip. These caps allow about 10-15% dependency/bundler variation,
-  // and fail CI when exceeded.
-  browserBundleBytes: 660_000,
-  browserBundleGzipBytes: 210_000,
+  // 435KB / 137KB gzip (596KB / 185KB on Effect 3). These caps allow about 10%
+  // dependency/bundler variation, and fail CI when exceeded.
+  browserBundleBytes: 480_000,
+  browserBundleGzipBytes: 152_000,
   httpP99Ms: 25,
 } as const;
 

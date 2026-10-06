@@ -1,7 +1,7 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Cause, Chunk, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
@@ -197,11 +197,11 @@ describe("sessions", () => {
       Effect.gen(function* () {
         const store = yield* Sessions;
         const events = yield* Events;
-        const notices = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
-        yield* Effect.yieldNow();
+        const notices = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
+        yield* Effect.yieldNow;
         const listed = yield* store.list();
         expect(listed.length).toBe(1);
-        expect(Chunk.toArray(yield* Fiber.join(notices))[0]!.message).toContain("line 2");
+        expect(Array.from(yield* Fiber.join(notices))[0]!.message).toContain("line 2");
         expect((yield* Effect.flip(store.events(badId))).reason).toBe("Corrupt");
       }),
     );
@@ -233,9 +233,9 @@ describe("sessions", () => {
       Effect.gen(function* () {
         const store = yield* Sessions;
         const { id } = yield* store.create();
-        const first = yield* Effect.fork(store.append(id, title("first")));
+        const first = yield* Effect.forkChild(store.append(id, title("first")));
         // Let the append reach the file write, then interrupt it there.
-        for (let i = 0; i < 5; i++) yield* Effect.yieldNow();
+        for (let i = 0; i < 5; i++) yield* Effect.yieldNow;
         yield* Fiber.interrupt(first);
         const next = yield* store.append(id, title("second"));
         const all = yield* store.events(id);
@@ -290,9 +290,9 @@ describe("sessions", () => {
         const store = yield* Sessions;
         const events = yield* Events;
         const { id } = yield* store.create();
-        const appended = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(SessionAppended), 20)));
-        const changed = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(SessionChanged), 20)));
-        yield* Effect.yieldNow();
+        const appended = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(SessionAppended), 20)));
+        const changed = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(SessionChanged), 20)));
+        yield* Effect.yieldNow;
         yield* Effect.forEach(
           Array.from({ length: 20 }, (_, i) => i),
           (i) => store.append(id, custom(i)),
@@ -302,8 +302,8 @@ describe("sessions", () => {
         expect(all.map((event) => event.seq)).toEqual(Array.from({ length: 20 }, (_, i) => i + 1));
         // Every event's parent is its predecessor: no two appends raced for the same leaf.
         all.slice(1).forEach((event, i) => expect(event.parent).toBe(all[i]!.id));
-        expect(Chunk.toArray(yield* Fiber.join(appended)).map((payload) => payload.event.seq)).toEqual(all.map((event) => event.seq));
-        expect(Chunk.toArray(yield* Fiber.join(changed)).at(-1)!.info.lastSeq).toBe(20);
+        expect(Array.from(yield* Fiber.join(appended)).map((payload) => payload.event.seq)).toEqual(all.map((event) => event.seq));
+        expect(Array.from(yield* Fiber.join(changed)).at(-1)!.info.lastSeq).toBe(20);
       }),
     );
   });
@@ -374,16 +374,16 @@ describe("sessions", () => {
       Effect.gen(function* () {
         const store = yield* Sessions;
         const events = yield* Events;
-        const removed = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(SessionRemoved), 1)));
-        yield* Effect.yieldNow();
+        const removed = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(SessionRemoved), 1)));
+        yield* Effect.yieldNow;
         const keep = yield* store.create();
         const gone = yield* store.create();
         yield* store.append(gone.id, custom(1));
         yield* store.remove(gone.id);
-        expect(Chunk.toReadonlyArray(yield* Fiber.join(removed))).toEqual([{ sessionId: gone.id }]);
+        expect(yield* Fiber.join(removed)).toEqual([{ sessionId: gone.id }]);
         expect((yield* store.list()).map((info) => info.id)).toEqual([keep.id]);
-        expect((yield* Effect.either(store.get(gone.id)))._tag).toBe("Left");
-        expect((yield* Effect.either(store.remove(gone.id)))._tag).toBe("Left");
+        expect((yield* Effect.result(store.get(gone.id)))._tag).toBe("Failure");
+        expect((yield* Effect.result(store.remove(gone.id)))._tag).toBe("Failure");
       }),
     );
     expect((await sessionFiles()).map(idOfFile)).toHaveLength(1);
@@ -395,10 +395,10 @@ describe("sessions", () => {
         const store = yield* Sessions;
         const { id } = yield* store.create();
         const [removed, marked, appended] = yield* Effect.all(
-          [Effect.either(store.remove(id)), Effect.either(store.mark(id, { pinned: true })), Effect.either(store.append(id, custom(1)))],
+          [Effect.result(store.remove(id)), Effect.result(store.mark(id, { pinned: true })), Effect.result(store.append(id, custom(1)))],
           { concurrency: "unbounded" },
         );
-        expect([removed._tag, marked._tag, appended._tag]).toEqual(["Right", "Left", "Left"]);
+        expect([removed._tag, marked._tag, appended._tag]).toEqual(["Success", "Failure", "Failure"]);
       }),
     );
     expect(await sessionFiles()).toEqual([]);
@@ -411,7 +411,7 @@ describe("sessions", () => {
         const { id } = yield* store.create();
         yield* store.append(id, custom(1));
         vi.spyOn(fs, "rm").mockRejectedValueOnce(Object.assign(new Error("denied"), { code: "EPERM" }));
-        expect((yield* Effect.either(store.remove(id)))._tag).toBe("Left");
+        expect((yield* Effect.result(store.remove(id)))._tag).toBe("Failure");
         yield* store.append(id, custom(2));
         return id;
       }),
@@ -448,7 +448,7 @@ describe("sessions", () => {
           // An operation the old instance admitted, still going when the reload begins.
           const ready = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
-          const old = yield* Effect.fork(
+          const old = yield* Effect.forkChild(
             core.run(
               Effect.gen(function* () {
                 const store = yield* Sessions;
@@ -460,10 +460,10 @@ describe("sessions", () => {
             ),
           );
           yield* Deferred.await(ready);
-          const restarting = yield* Effect.fork(core.restart("sessions", { force: true }));
+          const restarting = yield* Effect.forkChild(core.restart("sessions", { force: true }));
           yield* Effect.sleep(50);
           // A write made meanwhile: a replacement running beside the old instance would take it first.
-          const meanwhile = yield* Effect.fork(core.run(Effect.flatMap(Sessions, (store) => store.append(id, title("meanwhile")))));
+          const meanwhile = yield* Effect.forkChild(core.run(Effect.flatMap(Sessions, (store) => store.append(id, title("meanwhile")))));
           yield* Effect.sleep(50);
           yield* Deferred.succeed(release, undefined);
           yield* Fiber.await(old);
@@ -500,8 +500,8 @@ describe("sessions", () => {
             source: { resolve: (id) => Effect.succeed(plugins[id]!) },
             composition: { plugins: { paths: {}, sessions: {}, flaky: {} } },
           });
-          const applied = yield* Effect.either(loader.apply({ plugins: { paths: {}, sessions: { config: { unloadAfter: 100 } }, flaky: {} } }));
-          expect(applied._tag).toBe("Left");
+          const applied = yield* Effect.result(loader.apply({ plugins: { paths: {}, sessions: { config: { unloadAfter: 100 } }, flaky: {} } }));
+          expect(applied._tag).toBe("Failure");
           const locked = yield* Effect.promise(() =>
             fs.stat(lockPath()).then(
               () => true,
@@ -643,10 +643,10 @@ describe("the session file", () => {
         const store = yield* Sessions;
         const events = yield* Events;
         expect((yield* store.list()).map((info) => info.lastSeq)).toEqual([1]);
-        const notices = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
-        yield* Effect.yieldNow();
+        const notices = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
+        yield* Effect.yieldNow;
         expect((yield* store.events(id)).length).toBe(1);
-        expect(Chunk.toArray(yield* Fiber.join(notices))[0]!.message).toContain("ignored the last 41 bytes");
+        expect(Array.from(yield* Fiber.join(notices))[0]!.message).toContain("ignored the last 41 bytes");
         expect((yield* store.append(id, custom(2))).seq).toBe(2);
       }),
     );
@@ -666,7 +666,7 @@ describe("the session file", () => {
         const { id } = yield* store.create();
         const error = yield* Effect.flip(store.append(id, { ...title("x"), note: "lost on reload" } as unknown as EventData));
         expect(error.reason).toBe("Corrupt");
-        expect(error.message).toContain("data.note: is unexpected");
+        expect(error.message).toContain("data.note: Expected no excess property");
         expect((yield* store.get(id)).lastSeq).toBe(0);
       }),
     );
@@ -819,17 +819,17 @@ describe("the session file", () => {
             return rm(target, options);
           });
         });
-        const removal = yield* Effect.fork(store.remove(id));
+        const removal = yield* Effect.forkChild(store.remove(id));
         yield* Effect.promise(() => deleting);
-        const interrupting = yield* Effect.fork(Fiber.interrupt(removal));
+        const interrupting = yield* Effect.forkChild(Fiber.interrupt(removal));
         resume!();
         yield* Fiber.join(interrupting);
         vi.restoreAllMocks();
         expect(yield* store.list()).toEqual([]);
         expect((yield* Effect.flip(store.get(id))).reason).toBe("NotFound");
         // Interrupting a creation leaves a session that can be written, or none.
-        const creating = yield* Effect.fork(store.create());
-        yield* Effect.yieldNow();
+        const creating = yield* Effect.forkChild(store.create());
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(creating);
         for (const info of yield* store.list()) yield* store.append(info.id, custom(1));
       }),

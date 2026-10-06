@@ -5,7 +5,7 @@ import { ActionIds, Actions, Dialogs, Interactions, Slots } from "../ui/contract
 import { defineUiPlugin } from "../ui/define.ts";
 
 const KeymapConfig = Schema.Struct({
-  bindings: Schema.optional(Schema.Array(Schema.String)).annotations({
+  bindings: Schema.optional(Schema.Array(Schema.String)).annotate({
     title: "Shortcuts",
     description:
       "One line per action, replacing its own keys: `shell.toggle-sidebar = mod+b, mod+k` (nothing after = unbinds it). Settings › Keyboard writes these.",

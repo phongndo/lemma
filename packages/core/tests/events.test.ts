@@ -29,7 +29,7 @@ describe("events", () => {
           ),
         });
         const core = yield* makeCore([good, broken]);
-        const faults = yield* Effect.fork(Stream.runHead(core.faults));
+        const faults = yield* Effect.forkChild(Stream.runHead(core.faults));
         yield* Effect.sleep(Duration.millis(5));
         yield* core.run(
           Effect.gen(function* () {
@@ -39,7 +39,7 @@ describe("events", () => {
         );
         yield* waitFor(Ref.get(seen), (list) => list.length === 3);
         expect(yield* Ref.get(seen)).toEqual(["good:1", "good:2", "good:3"]);
-        const fault = yield* faults.await;
+        const fault = yield* Fiber.await(faults);
         expect(Exit.isSuccess(fault) && fault.value._tag === "Some" && fault.value.value).toMatchObject({
           pluginId: "broken",
           phase: "observe",
@@ -79,6 +79,7 @@ describe("events", () => {
     await run(
       Effect.gen(function* () {
         const gate = yield* Deferred.make<void>();
+        const entered = yield* Deferred.make<void>();
         const received: number[] = [];
         const slow = definePlugin({
           id: "slow",
@@ -89,6 +90,7 @@ describe("events", () => {
                 Tick,
                 (n) =>
                   Effect.gen(function* () {
+                    yield* Deferred.succeed(entered, undefined);
                     yield* Deferred.await(gate);
                     received.push(n);
                   }),
@@ -101,7 +103,9 @@ describe("events", () => {
         yield* core.run(
           Effect.gen(function* () {
             const events = yield* Events;
-            for (let n = 0; n < 10; n++) yield* events.publish(Tick, n);
+            yield* events.publish(Tick, 0);
+            yield* Deferred.await(entered);
+            for (let n = 1; n < 10; n++) yield* events.publish(Tick, n);
           }),
         );
         yield* Deferred.succeed(gate, undefined);
@@ -110,7 +114,7 @@ describe("events", () => {
           (length) => length === 3,
         );
         yield* Effect.sleep(Duration.millis(5));
-        // One payload was taken by the consumer before the gate; the buffer kept the two newest.
+        // The observer held one payload while the rest arrived; the buffer kept the two newest.
         expect(received).toEqual([0, 8, 9]);
       }),
     );
@@ -122,20 +126,20 @@ describe("events", () => {
         const core = yield* makeCore([]);
         const events = yield* core.run(Events);
         const publish = (n: number) => events.publish(Tick, n);
-        const consumed = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(Tick, { buffer: 1, overflow: "suspend" }), 1)));
+        const consumed = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(Tick, { buffer: 1, overflow: "suspend" }), 1)));
         yield* Effect.sleep(Duration.millis(5));
         yield* publish(1);
-        const first = yield* consumed.await;
+        const first = yield* Fiber.await(consumed);
         expect(Exit.isSuccess(first) && Array.from(first.value)).toEqual([1]);
 
         // A subscriber that never consumes: the second publish fills the buffer, the third suspends until it goes away.
-        const stalled = yield* Effect.fork(Stream.runDrain(events.stream(Tick, { buffer: 1, overflow: "suspend" }).pipe(Stream.tap(() => Effect.never))));
+        const stalled = yield* Effect.forkChild(Stream.runDrain(events.stream(Tick, { buffer: 1, overflow: "suspend" }).pipe(Stream.tap(() => Effect.never))));
         yield* Effect.sleep(Duration.millis(5));
-        const second = yield* Effect.fork(publish(2).pipe(Effect.zipRight(publish(3)), Effect.zipRight(publish(4))));
+        const second = yield* Effect.forkChild(publish(2).pipe(Effect.andThen(publish(3)), Effect.andThen(publish(4))));
         yield* Effect.sleep(Duration.millis(20));
-        expect((yield* second.poll)._tag).toBe("None");
+        expect(second.pollUnsafe()).toBeUndefined();
         yield* Fiber.interrupt(stalled);
-        yield* second.await;
+        yield* Fiber.await(second);
       }),
     );
   });
@@ -149,10 +153,10 @@ describe("events", () => {
         });
         const core = yield* makeCore([observer]);
         const events = yield* core.run(Events);
-        const collected = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(Tick), 2)));
+        const collected = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(Tick), 2)));
         // Keep publishing until the subscription has taken two values.
-        const publisher = yield* Effect.fork(Effect.repeat(events.publish(Tick, 7), Schedule.spaced(Duration.millis(1))));
-        const result = yield* collected.await;
+        const publisher = yield* Effect.forkChild(Effect.repeat(events.publish(Tick, 7), Schedule.spaced(Duration.millis(1))));
+        const result = yield* Fiber.await(collected);
         yield* Fiber.interrupt(publisher);
         expect(Exit.isSuccess(result) && Array.from(result.value)).toEqual([7, 7]);
         expect((yield* core.inspect).events).toEqual([{ name: "test/tick", observers: ["observer"] }]);

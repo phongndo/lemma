@@ -29,7 +29,7 @@
     "@lemma/plugin-tools-builtin": "workspace:*",
     "@lemma/plugin-transport": "workspace:*",
     "@lemma/plugin-workspace": "workspace:*",
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

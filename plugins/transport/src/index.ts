@@ -18,22 +18,26 @@ export type { Target } from "./target.ts";
 const VERSION = "0.1.0";
 
 const TransportConfig = Schema.Struct({
-  host: Schema.optionalWith(Schema.String, { default: () => "127.0.0.1" }).annotations({
+  host: Schema.String.pipe(Schema.withDecodingDefaultType(Effect.sync(() => "127.0.0.1"))).annotate({
     description: "Loopback by default; set explicitly to expose the host beyond this machine.",
   }),
-  port: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 65535)), { default: () => 7433 }).annotations({
-    description: "0 asks the OS for a free port; the chosen one lands in transport.json.",
-  }),
-  token: Schema.optional(Schema.NonEmptyString).annotations({
+  port: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 65535 }))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 7433)))
+    .annotate({
+      description: "0 asks the OS for a free port; the chosen one lands in transport.json.",
+    }),
+  token: Schema.optional(Schema.NonEmptyString).annotate({
     ...secret,
     description: "When absent, read from <home>/token, which the first start creates with a random token; delete that file to rotate it.",
   }),
-  staticDir: Schema.optional(Schema.String).annotations({
+  staticDir: Schema.optional(Schema.String).annotate({
     description: "A built web app served at /, with index.html as the fallback for client-side routes.",
   }),
-  interactionGraceMs: Schema.optionalWith(Schema.Number.pipe(Schema.nonNegative()), { default: () => 15_000 }).annotations({
-    description: "How long an open interaction waits for a client to (re)connect before failing Unavailable.",
-  }),
+  interactionGraceMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 15_000)))
+    .annotate({
+      description: "How long an open interaction waits for a client to (re)connect before failing Unavailable.",
+    }),
 });
 type TransportConfig = typeof TransportConfig.Type;
 
@@ -52,7 +56,7 @@ export default definePlugin({
   // Owns the listening port: a reload stops this instance before starting its replacement.
   exclusive: true,
   layer: (config) =>
-    Layer.scopedDiscard(
+    Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
         const events = yield* Events;

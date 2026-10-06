@@ -4,7 +4,7 @@ import { definePlugin, Event, Events, makeCore, makeLoader, PluginContext } from
 import type { Loader } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
-class Value extends Context.Tag("regression/Value")<Value, number>() {}
+class Value extends Context.Service<Value, number>()("regression/Value") {}
 const value = definePlugin({ id: "value", provides: [Value], config: Schema.Struct({ n: Schema.Number }), layer: ({ n }) => Layer.succeed(Value, n) });
 const composition = (n: number, transport = false) => ({ plugins: { value: { config: { n } }, ...(transport ? { transport: {} } : {}) } });
 
@@ -33,7 +33,7 @@ test("a reload survives disposing the exclusive plugin that requested it", async
         id: "transport",
         requires: [Value],
         exclusive: true,
-        layer: Layer.scopedDiscard(
+        layer: Layer.effectDiscard(
           Effect.gen(function* () {
             starts++;
             const owner = yield* PluginContext;
@@ -51,7 +51,13 @@ test("a reload survives disposing the exclusive plugin that requested it", async
         deadlines: { dispose: Duration.millis(20) },
       });
       yield* Deferred.succeed(ready, loader);
-      yield* waitFor(loader.core.inspect, (s) => starts === 2 && s.plugins.every((p) => p.state === "active"));
+      // Done when the loader records the new composition, which it does after the old instances are disposed;
+      // the new ones are active before that.
+      yield* waitFor(
+        Effect.all([loader.core.inspect, loader.composition]),
+        ([s, composition]) =>
+          starts === 2 && s.plugins.every((p) => p.state === "active") && (composition.plugins.value?.config as { n?: number } | undefined)?.n === 2,
+      );
       expect(yield* loader.core.run(Value)).toBe(2);
       expect((yield* loader.composition).plugins.value?.config).toEqual({ n: 2 });
     }),
@@ -79,12 +85,12 @@ test("core close ends event streams owned by an external scope", async () => {
   await run(
     Effect.gen(function* () {
       const owner = yield* Scope.make();
-      const core = yield* Scope.extend(makeCore([]), owner);
+      const core = yield* Scope.provide(makeCore([]), owner);
       const events = yield* core.run(Events);
       const subscribed = yield* Deferred.make<void>();
       const tick = Event.make<number>("regression/close");
-      const consumer = yield* Effect.fork(Stream.runDrain(events.stream(tick).pipe(Stream.tap(() => Deferred.succeed(subscribed, undefined)))));
-      const publisher = yield* Effect.fork(Effect.repeat(events.publish(tick, 1), Schedule.spaced("1 millis")));
+      const consumer = yield* Effect.forkChild(Stream.runDrain(events.stream(tick).pipe(Stream.tap(() => Deferred.succeed(subscribed, undefined)))));
+      const publisher = yield* Effect.forkChild(Effect.repeat(events.publish(tick, 1), Schedule.spaced("1 millis")));
       yield* Deferred.await(subscribed);
       yield* Fiber.interrupt(publisher);
       yield* Scope.close(owner, Exit.void);
@@ -101,11 +107,11 @@ test("explicit restart invalidates the pending automatic restart", async () => {
       const plugin = definePlugin({
         id: "scheduled",
         restart: Schedule.spaced("100 millis"),
-        layer: Layer.scopedDiscard(
+        layer: Layer.effectDiscard(
           Effect.gen(function* () {
             starts++;
             const owner = yield* PluginContext;
-            if (starts === 1) yield* owner.background("fail", Deferred.await(trigger).pipe(Effect.zipRight(Effect.fail("down"))), { required: true });
+            if (starts === 1) yield* owner.background("fail", Deferred.await(trigger).pipe(Effect.andThen(Effect.fail("down"))), { required: true });
           }),
         ),
       });
@@ -127,14 +133,14 @@ test("a failed plugin does not interrupt work using only an unrelated capability
       const release = yield* Deferred.make<void>();
       const broken = definePlugin({
         id: "broken",
-        layer: Layer.scopedDiscard(
+        layer: Layer.effectDiscard(
           Effect.flatMap(PluginContext, (owner) =>
-            owner.background("crash", Deferred.await(crash).pipe(Effect.zipRight(Effect.fail("down"))), { required: true }),
+            owner.background("crash", Deferred.await(crash).pipe(Effect.andThen(Effect.fail("down"))), { required: true }),
           ),
         ),
       });
       const core = yield* makeCore([value, broken], { configs: { value: { n: 7 } }, deadlines: { dispose: Duration.millis(20) } });
-      const work = yield* Effect.fork(
+      const work = yield* Effect.forkChild(
         core.run(
           Effect.gen(function* () {
             const n = yield* Value;
@@ -162,17 +168,17 @@ test("failure interrupts resolved capabilities and revokes them from waiting tas
       const broken = definePlugin({
         id: "broken",
         provides: [Value],
-        layer: Layer.scoped(
+        layer: Layer.effect(
           Value,
           Effect.gen(function* () {
             const owner = yield* PluginContext;
-            yield* owner.background("crash", Deferred.await(crash).pipe(Effect.zipRight(Effect.fail("down"))), { required: true });
+            yield* owner.background("crash", Deferred.await(crash).pipe(Effect.andThen(Effect.fail("down"))), { required: true });
             return 7;
           }),
         ),
       });
       const core = yield* makeCore([broken], { deadlines: { dispose: Duration.millis(20) } });
-      const affected = yield* Effect.fork(
+      const affected = yield* Effect.forkChild(
         core.run(
           Effect.gen(function* () {
             yield* Value;
@@ -182,7 +188,7 @@ test("failure interrupts resolved capabilities and revokes them from waiting tas
         ),
       );
       yield* Deferred.await(entered);
-      const late = yield* Effect.fork(core.run(Deferred.await(release).pipe(Effect.zipRight(Value))));
+      const late = yield* Effect.forkChild(core.run(Deferred.await(release).pipe(Effect.andThen(Value))));
       yield* Deferred.succeed(crash, undefined);
       yield* waitFor(core.inspect, (s) => s.plugins[0]?.state === "failed");
       expect(Exit.isFailure(yield* Fiber.await(affected))).toBe(true);

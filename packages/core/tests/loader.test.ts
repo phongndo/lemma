@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
-import { Context, Deferred, Duration, Effect, Exit, Layer, Schema, Scope } from "effect";
+import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { checkComposition, definePlugin, Diagnostic, Hook, Hooks, makeLoader, PluginContext } from "../src/index.ts";
 import type { Composition, Plugin, PluginSource } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
-class Db extends Context.Tag("test/Db")<Db, { readonly name: string; readonly generation: number }>() {}
-class Api extends Context.Tag("test/Api")<Api, () => string>() {}
+class Db extends Context.Service<Db, { readonly name: string; readonly generation: number }>()("test/Db") {}
+class Api extends Context.Service<Api, () => string>()("test/Api") {}
 const Greet = Hook.make<string, string>("test/greet");
 
 function fixtures(log: string[]) {
@@ -15,7 +15,7 @@ function fixtures(log: string[]) {
     provides: [Db],
     config: Schema.Struct({ name: Schema.String }),
     layer: (config) =>
-      Layer.scoped(
+      Layer.effect(
         Db,
         Effect.gen(function* () {
           const self = { name: config.name, generation: ++generation };
@@ -33,7 +33,7 @@ function fixtures(log: string[]) {
     id: "api",
     requires: [Db],
     provides: [Api],
-    layer: Layer.scoped(
+    layer: Layer.effect(
       Api,
       Effect.gen(function* () {
         const db = yield* Db;
@@ -55,7 +55,7 @@ function fixtures(log: string[]) {
   });
   const bystander = definePlugin({
     id: "bystander",
-    layer: Layer.scopedDiscard(
+    layer: Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.sync(() => {
           log.push("bystander+");
@@ -165,7 +165,7 @@ describe("loader", () => {
         const loader = yield* makeLoader({ source, composition: composition({ db: { config: { name: "main" } }, api: {} }) });
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const slow = yield* Effect.fork(
+        const slow = yield* Effect.forkChild(
           loader.core.run(
             Effect.gen(function* () {
               const api = yield* Api;
@@ -176,13 +176,13 @@ describe("loader", () => {
           ),
         );
         yield* Deferred.await(entered);
-        const reload = yield* Effect.fork(loader.apply(composition({ db: { config: { name: "next" } }, api: {} })));
+        const reload = yield* Effect.forkChild(loader.apply(composition({ db: { config: { name: "next" } }, api: {} })));
         // The swap happens for new callers while the old work is still running.
         yield* waitFor(loader.core.run(Effect.map(Api, (api) => api())), (value) => value === "next#2");
         expect(log).toEqual(["db+1", "api+1", "db+2", "api+2"]);
         yield* Deferred.succeed(release, undefined);
-        expect(yield* slow.await.pipe(Effect.map((exit) => Exit.isSuccess(exit) && exit.value))).toBe("main#1");
-        const report = yield* reload.await.pipe(Effect.flatten);
+        expect(yield* Fiber.await(slow).pipe(Effect.map((exit) => Exit.isSuccess(exit) && exit.value))).toBe("main#1");
+        const report = yield* Fiber.await(reload).pipe(Effect.flatten);
         expect(report.interrupted).toBe(0);
         expect(log).toEqual(["db+1", "api+1", "db+2", "api+2", "api-1", "db-1"]);
       }),
@@ -201,10 +201,10 @@ describe("loader", () => {
         });
         const entered = yield* Deferred.make<void>();
         let interrupted = false;
-        const stuck = yield* Effect.fork(
+        const stuck = yield* Effect.forkChild(
           loader.core.run(
             Deferred.succeed(entered, undefined).pipe(
-              Effect.zipRight(Effect.never),
+              Effect.andThen(Effect.never),
               Effect.onInterrupt(() =>
                 Effect.sync(() => {
                   interrupted = true;
@@ -217,7 +217,7 @@ describe("loader", () => {
         const report = yield* loader.apply(composition({ db: { config: { name: "next" } }, api: {} }));
         expect(report.interrupted).toBe(1);
         expect(interrupted).toBe(true);
-        expect(Exit.isInterrupted(yield* stuck.await)).toBe(true);
+        expect(Exit.hasInterrupts(yield* Fiber.await(stuck))).toBe(true);
       }),
     );
   });
@@ -233,7 +233,7 @@ describe("loader", () => {
           exclusive: true,
           config: Schema.Struct({ name: Schema.String }),
           layer: (config) =>
-            Layer.scoped(
+            Layer.effect(
               Db,
               Effect.gen(function* () {
                 const self = { name: config.name, generation: ++generation };
@@ -257,13 +257,13 @@ describe("loader", () => {
   });
 
   test("exclusive contributors replace unique registrations in a retained registry", async () => {
-    class Registry extends Context.Tag("test/Registry")<
+    class Registry extends Context.Service<
       Registry,
       {
         readonly entries: ReadonlyMap<string, string>;
         readonly register: (name: string, value: string) => Effect.Effect<void, Error, Scope.Scope>;
       }
-    >() {}
+    >()("test/Registry") {}
     const entries = new Map<string, string>();
     const registrations: string[] = [];
     let activations = 0;
@@ -295,7 +295,7 @@ describe("loader", () => {
       requires: [Registry],
       exclusive: true,
       config: Schema.Struct({ value: Schema.String }),
-      layer: ({ value }) => Layer.scopedDiscard(Effect.flatMap(Registry, (registry) => registry.register("shared-name", value))),
+      layer: ({ value }) => Layer.effectDiscard(Effect.flatMap(Registry, (registry) => registry.register("shared-name", value))),
     });
     await run(
       Effect.gen(function* () {
@@ -323,7 +323,7 @@ describe("loader", () => {
     const { source } = fixtures(log);
     const scope = await Effect.runPromise(Scope.make());
     const error = await Effect.runPromise(
-      Effect.flip(Scope.extend(makeLoader({ source, composition: composition({ db: { config: { name: "main" } }, broken: {} }) }), scope)),
+      Effect.flip(Scope.provide(makeLoader({ source, composition: composition({ db: { config: { name: "main" } }, broken: {} }) }), scope)),
     );
     expect(error.diagnostics[0]?.pluginId).toBe("broken");
     expect(log).toEqual(["db+1", "db-1"]);
@@ -344,7 +344,7 @@ describe("loader", () => {
   });
 
   test("a partial start leaves a plugin that cannot start failed, halts its dependents, and runs the rest", async () => {
-    class Flaky extends Context.Tag("test/Flaky")<Flaky, string>() {}
+    class Flaky extends Context.Service<Flaky, string>()("test/Flaky") {}
     let attempts = 0;
     const flaky = definePlugin({
       id: "flaky",
@@ -380,12 +380,12 @@ describe("loader", () => {
     for (const required of ["broken", "api"]) {
       const log: string[] = [];
       const { all } = fixtures(log);
-      const failingDb = definePlugin({ ...all.db!, id: "db", layer: () => Layer.fail("db is down") as never });
+      const failingDb = definePlugin({ ...all.db!, id: "db", layer: () => Layer.effectDiscard(Effect.fail("db is down")) as never });
       const plugins: Record<string, Plugin> = { ...all, db: required === "api" ? failingDb : all.db! };
       const scope = await Effect.runPromise(Scope.make());
       const error = await Effect.runPromise(
         Effect.flip(
-          Scope.extend(
+          Scope.provide(
             makeLoader({
               source: { resolve: (id) => Effect.succeed(plugins[id]!) },
               composition: composition({ db: { config: { name: "main" } }, api: {}, broken: {}, bystander: {} }),

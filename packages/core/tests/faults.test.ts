@@ -38,7 +38,7 @@ test("fault delivery is bounded, ordered, and exposes loss without slowing other
             }),
           ),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* owner.background("first", Effect.fail(0));
         yield* Deferred.await(entered);
         for (let n = 1; n <= 300; n++) yield* owner.background("storm", Effect.fail(n));
@@ -55,14 +55,14 @@ test("fault delivery is bounded, ordered, and exposes loss without slowing other
         expect(slow.map((fault) => fault.sequence)).toEqual([1, ...Array.from({ length: 256 }, (_, i) => i + 46)]);
         expect(fast.map((fault) => fault.sequence)).toEqual(Array.from({ length: 301 }, (_, i) => i + 1));
         expect((yield* core.inspect).plugins[0]?.fault).toBe(fast.at(-1));
-        const publishing = yield* Effect.fork(
+        const publishing = yield* Effect.forkChild(
           Effect.forEach(
             Array.from({ length: 100 }, (_, i) => i),
             (n) => owner.background("during unsubscribe", Effect.fail(n)),
             { discard: true },
           ),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* Fiber.interrupt(consumer);
         yield* Fiber.join(publishing);
         yield* waitFor(core.inspect, (snapshot) => snapshot.faultSequence === 401);

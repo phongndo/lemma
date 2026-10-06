@@ -49,10 +49,10 @@ describe("queue", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("one")));
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
         const before = (yield* a.view(id)).queueRevision;
-        const second = yield* Effect.fork(a.prompt(id, text("two")));
+        const second = yield* Effect.forkChild(a.prompt(id, text("two")));
         const [queued] = yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         // Every change to the queue moves its revision on, so a client keeps the newest of what it hears.
         expect((yield* a.view(id)).queueRevision).toBeGreaterThan(before);
@@ -77,9 +77,9 @@ describe("queue", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("one")));
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        const steer = yield* Effect.fork(a.prompt(id, text("also this"), { whenBusy: "steer", requestId: "s1" }));
+        const steer = yield* Effect.forkChild(a.prompt(id, text("also this"), { whenBusy: "steer", requestId: "s1" }));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(first);
@@ -116,9 +116,9 @@ describe("queue", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("hello"), { requestId: "r1" }));
+        const first = yield* Effect.forkChild(a.prompt(id, text("hello"), { requestId: "r1" }));
         yield* waitFor(a.busy(id), (busy) => busy);
-        const retry = yield* Effect.fork(a.prompt(id, text("hello"), { requestId: "r1" }));
+        const retry = yield* Effect.forkChild(a.prompt(id, text("hello"), { requestId: "r1" }));
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(first);
         yield* Fiber.join(retry);
@@ -136,9 +136,9 @@ describe("queue", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("one")));
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        const second = yield* Effect.fork(a.prompt(id, text("two"), { requestId: "w" }));
+        const second = yield* Effect.forkChild(a.prompt(id, text("two"), { requestId: "w" }));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         expect(yield* a.withdraw(id, "w")).toBe(true);
         expect((yield* Effect.flip(Fiber.join(second))).reason).toBe("Withdrawn");
@@ -156,9 +156,9 @@ describe("queue", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("one")));
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        const second = yield* Effect.fork(a.prompt(id, text("two")));
+        const second = yield* Effect.forkChild(a.prompt(id, text("two")));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(first);
@@ -196,9 +196,9 @@ describe("queue races", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("one")));
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        yield* Effect.fork(a.prompt(id, text("also this"), { whenBusy: "steer", requestId: "s1" }));
+        yield* Effect.forkChild(a.prompt(id, text("also this"), { whenBusy: "steer", requestId: "s1" }));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(first);
@@ -216,9 +216,9 @@ describe("queue races", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        const first = yield* Effect.fork(a.prompt(id, text("one")));
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        yield* Effect.fork(a.prompt(id, text("two"), { requestId: "r1" }));
+        yield* Effect.forkChild(a.prompt(id, text("two"), { requestId: "r1" }));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(first);
@@ -239,7 +239,7 @@ describe("view", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         const view = yield* waitFor(a.view(id), (current) => (current.draft?.blocks.length ?? 0) > 0);
         expect(view.turnId).toBeDefined();
         expect(view.draft).toMatchObject({ seq: 2, blocks: [{ index: 0, block: { type: "text", text: "partial text" } }] });
@@ -258,7 +258,7 @@ describe("resume", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(a.view(id), (view) => (view.draft?.blocks.length ?? 0) > 0);
         return id;
       }),
@@ -310,7 +310,7 @@ describe("resume", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(a.view(id), (view) => view.output.some((entry) => entry.output.includes("step 1 done")));
         return id;
       }),
@@ -339,7 +339,7 @@ describe("resume", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(log(id), (events) => types(events).includes("request"));
         const store = yield* Sessions;
         for (const title of ["one", "two", "three"]) yield* store.append(id, { type: "title", title });
@@ -366,7 +366,7 @@ describe("resume", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(a.view(id), (view) => (view.draft?.blocks.length ?? 0) > 0);
         return id;
       }),
@@ -386,7 +386,7 @@ describe("resume", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(a.view(id), (view) => (view.draft?.blocks.length ?? 0) > 0);
         return id;
       }),
@@ -429,9 +429,9 @@ describe("resume", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("one")));
+        yield* Effect.forkChild(a.prompt(id, text("one")));
         yield* waitFor(a.busy(id), (busy) => busy);
-        yield* Effect.fork(a.prompt(id, text("two"), { requestId: "next" }));
+        yield* Effect.forkChild(a.prompt(id, text("two"), { requestId: "next" }));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         return id;
       }),

@@ -1,5 +1,5 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { HostError, configValues, describeConfig, emptyUsage, providerOf, secret } from "@lemma/contracts";
 import { fuzzy } from "./model/palette.ts";
 import type {
@@ -267,32 +267,35 @@ export const createMockHost = (): Host => {
   });
   const needed = "Needed by transport";
   // Mirrors of real config Schemas, so the Plugins page shows settings forms.
-  const configs: Record<string, Schema.Schema.AnyNoContext> = {
+  const configs: Record<string, Schema.Codec<any, any>> = {
     agent: Schema.Struct({
-      defaultModel: Schema.optional(Schema.String).annotations({
+      defaultModel: Schema.optional(Schema.String).annotate({
         description: "<provider>/<model> for turns that name none. Absent: the first available model.",
       }),
-      systemPrompt: Schema.optional(Schema.String).annotations({ description: "Replaces the default base prompt; the environment section is still added." }),
-      maxSteps: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 200 }).annotations({
+      systemPrompt: Schema.optional(Schema.String).annotate({ description: "Replaces the default base prompt; the environment section is still added." }),
+      maxSteps: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 200))).annotate({
         description: "Model calls allowed in one turn before it ends with max-steps.",
       }),
     }),
     tools: Schema.Struct({
-      maxResultChars: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 100_000 }).annotations({
+      maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 100_000))).annotate({
         description: "Total text characters one result may carry to the model.",
       }),
     }),
     "file-search": Schema.Struct({
-      idleMinutes: Schema.optionalWith(Schema.Number.pipe(Schema.positive()), { default: () => 15 }).annotations({
+      idleMinutes: Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 15))).annotate({
         title: "Keep an index for",
         description: "Minutes a directory's index stays in memory after its last search; the next search opens it again.",
       }),
     }),
     transport: Schema.Struct({
-      port: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 65535)), { default: () => 7433 }).annotations({
+      port: Schema.Number.pipe(
+        Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 65535 })),
+        Schema.withDecodingDefaultType(Effect.sync(() => 7433)),
+      ).annotate({
         description: "0 asks the OS for a free port.",
       }),
-      token: Schema.optional(Schema.NonEmptyString).annotations({ ...secret, description: "When absent, read from <home>/token, created at the first start." }),
+      token: Schema.optional(Schema.NonEmptyString).annotate({ ...secret, description: "When absent, read from <home>/token, created at the first start." }),
     }),
   };
   const configRows: Record<string, Record<string, unknown>> = { transport: { token: "mock-token" } };

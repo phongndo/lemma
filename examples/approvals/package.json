@@ -11,7 +11,7 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/plugin-tools-builtin": "workspace:*",
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@lemma/cli": "workspace:*",

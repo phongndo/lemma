@@ -13,7 +13,7 @@ const Thread = defineRoute("thread", {
 });
 const Settings = defineRoute("settings", { path: "/settings/:section?", params: Schema.Struct({ section: Schema.optional(Schema.String) }) });
 const Plugins = defineRoute("settings.plugins", { path: "/settings/plugins" });
-const Numbered = defineRoute("numbered", { path: "/threads/:id", params: Schema.Struct({ id: Schema.NumberFromString }) });
+const Numbered = defineRoute("numbered", { path: "/threads/:id", params: Schema.Struct({ id: Schema.FiniteFromString }) });
 
 interface Entry {
   readonly route: AnyRoute;

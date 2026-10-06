@@ -1,4 +1,4 @@
-import { Context, Data, FiberRef, Schema } from "effect";
+import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
 import { Hook } from "@lemma/core";
 
@@ -7,7 +7,9 @@ import { Hook } from "@lemma/core";
  * inside a turn, `login:<provider>` during a login, or the `origin` a client
  * passed with `Command.Run`. `Interaction` copies it onto each request.
  */
-export const InteractionOrigin: FiberRef.FiberRef<string | undefined> = FiberRef.unsafeMake<string | undefined>(undefined);
+export const InteractionOrigin: Context.Reference<string | undefined> = Context.Reference<string | undefined>("lemma/InteractionOrigin", {
+  defaultValue: () => undefined,
+});
 
 /**
  * Questions for the human, answered by whichever client is attached. The
@@ -15,7 +17,7 @@ export const InteractionOrigin: FiberRef.FiberRef<string | undefined> = FiberRef
  * plugins answer by handling it. Interrupting the asking fiber withdraws the
  * question (a login callback that arrives first cancels a paste-the-code prompt).
  */
-export const InteractionRequest = Schema.Union(
+export const InteractionRequest = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("confirm"),
     id: Schema.String,
@@ -40,14 +42,14 @@ export const InteractionRequest = Schema.Union(
     detail: Schema.optional(Schema.String),
     options: Schema.Array(Schema.Struct({ value: Schema.String, label: Schema.String, description: Schema.optional(Schema.String) })),
   }),
-);
+]);
 export type InteractionRequest = typeof InteractionRequest.Type;
 
-export const InteractionAnswer = Schema.Union(
+export const InteractionAnswer = Schema.Union([
   Schema.Struct({ type: Schema.Literal("confirm"), value: Schema.Boolean }),
   Schema.Struct({ type: Schema.Literal("ask"), value: Schema.String }),
   Schema.Struct({ type: Schema.Literal("select"), value: Schema.String }),
-);
+]);
 export type InteractionAnswer = typeof InteractionAnswer.Type;
 
 export class InteractionError extends Data.TaggedError("InteractionError")<{
@@ -57,7 +59,7 @@ export class InteractionError extends Data.TaggedError("InteractionError")<{
 
 export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, InteractionError>("lemma/interaction.request");
 
-export class Interaction extends Context.Tag("lemma/Interaction")<
+export class Interaction extends Context.Service<
   Interaction,
   {
     readonly confirm: (title: string, detail?: string) => Effect.Effect<boolean, InteractionError>;
@@ -68,4 +70,4 @@ export class Interaction extends Context.Tag("lemma/Interaction")<
       detail?: string,
     ) => Effect.Effect<V, InteractionError>;
   }
->() {}
+>()("lemma/Interaction") {}

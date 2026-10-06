@@ -42,7 +42,7 @@ export interface Contribution<Item> {
 }
 
 /** Reading registries; contributing goes through `PluginContext.add`. */
-export class Registries extends Context.Tag("@lemma/core/Registries")<
+export class Registries extends Context.Service<
   Registries,
   {
     /** The visible items, in order. A plugin's items appear when it is published and leave when it is retired. */
@@ -50,4 +50,4 @@ export class Registries extends Context.Tag("@lemma/core/Registries")<
     /** The visible items now, then again after each change; a slow reader sees the latest, never a backlog. */
     readonly changes: <I>(registry: Registry<I>) => Stream.Stream<readonly Contribution<I>[]>;
   }
->() {}
+>()("@lemma/core/Registries") {}

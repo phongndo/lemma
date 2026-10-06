@@ -5,7 +5,7 @@ import { definePlugin, makeLoader, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { finish, record } from "./budgets.js";
 
-class Greeting extends Context.Tag("http/Greeting")<Greeting, string>() {}
+class Greeting extends Context.Service<Greeting, string>()("http/Greeting") {}
 let dispatch: (path: string) => Promise<string>;
 let address = "";
 let listenerClosed = false;
@@ -21,19 +21,19 @@ await Effect.runPromise(
         provides: [Greeting],
         config: Schema.Struct({ value: Schema.String }),
         layer: ({ value }) =>
-          Layer.scoped(
+          Layer.effect(
             Greeting,
             Effect.gen(function* () {
               const owner = yield* PluginContext;
               crash = yield* Deferred.make<void>();
-              yield* owner.background("connection", Deferred.await(crash).pipe(Effect.zipRight(Effect.fail("connection lost"))), { required: true });
+              yield* owner.background("connection", Deferred.await(crash).pipe(Effect.andThen(Effect.fail("connection lost"))), { required: true });
               return value;
             }),
           ),
       });
       const http = definePlugin({
         id: "http",
-        layer: Layer.scopedDiscard(
+        layer: Layer.effectDiscard(
           Effect.acquireRelease(
             Effect.promise(
               () =>
@@ -92,9 +92,9 @@ await Effect.runPromise(
           const response = await fetch(address + path);
           return { status: response.status, body: await response.text() };
         });
-      const held = yield* Effect.fork(request("/hold"));
+      const held = yield* Effect.forkChild(request("/hold"));
       yield* Deferred.await(entered);
-      const reload = yield* Effect.fork(loader.apply(composition("new")));
+      const reload = yield* Effect.forkChild(loader.apply(composition("new")));
       // Probe new requests while the previous request keeps its old capability.
       yield* request().pipe(Effect.repeat({ until: (result) => result.body === "new" }), Effect.timeout("2 seconds"));
       yield* Deferred.succeed(release, undefined);

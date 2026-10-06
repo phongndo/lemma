@@ -55,7 +55,7 @@ export interface Command extends Omit<CommandInfo, "source"> {
 /** Published whenever a command is registered or removed. */
 export const CommandsChanged = Event.make<{ readonly commands: readonly CommandInfo[] }>("lemma/commands.changed");
 
-export class Commands extends Context.Tag("lemma/Commands")<
+export class Commands extends Context.Service<
   Commands,
   {
     /**
@@ -69,4 +69,4 @@ export class Commands extends Context.Tag("lemma/Commands")<
     /** Interruption stays interruption; every failure becomes a `CommandError`. */
     readonly run: (id: string, context: CommandContext) => Effect.Effect<CommandResult, CommandError>;
   }
->() {}
+>()("lemma/Commands") {}

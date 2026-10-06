@@ -84,7 +84,7 @@ import type { Region, SlotItem, SlotsService } from "./slots.ts";
 // ------------------------------------------------------------------ slots
 
 /** The contribution registry every slot lives in. */
-export class Slots extends Context.Tag("lemma-ui/Slots")<Slots, SlotsService>() {}
+export class Slots extends Context.Service<Slots, SlotsService>()("lemma-ui/Slots") {}
 
 // ------------------------------------------------------------------ host models
 
@@ -103,7 +103,7 @@ export interface ClientService {
    */
   readonly onConnect: (sync: () => void) => () => void;
 }
-export class Client extends Context.Tag("lemma-ui/Client")<Client, ClientService>() {}
+export class Client extends Context.Service<Client, ClientService>()("lemma-ui/Client") {}
 
 export interface Toast {
   readonly id: number;
@@ -124,7 +124,7 @@ export interface NotifyService {
   /** Shows a failure; `context` says what failed. */
   readonly report: (error: unknown, context?: string) => void;
 }
-export class Notify extends Context.Tag("lemma-ui/Notify")<Notify, NotifyService>() {}
+export class Notify extends Context.Service<Notify, NotifyService>()("lemma-ui/Notify") {}
 
 export interface LogState {
   readonly loaded: boolean;
@@ -185,7 +185,7 @@ export interface ThreadsService {
   /** Moves the active session's leaf: the next prompt branches from `eventId`. */
   readonly checkout: (eventId: string) => Promise<void>;
 }
-export class Threads extends Context.Tag("lemma-ui/Threads")<Threads, ThreadsService>() {}
+export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-ui/Threads") {}
 
 export interface ModelsService {
   readonly providers: Accessor<readonly ProviderInfo[]>;
@@ -222,7 +222,7 @@ export interface ModelsService {
   readonly setLogo: (provider: ProviderInfo, svg: string | undefined) => Promise<void>;
   readonly refresh: () => Promise<void>;
 }
-export class Models extends Context.Tag("lemma-ui/Models")<Models, ModelsService>() {}
+export class Models extends Context.Service<Models, ModelsService>()("lemma-ui/Models") {}
 
 export interface WorktreeDraft {
   readonly enabled: boolean;
@@ -265,7 +265,7 @@ export interface WorkspaceService {
   /** Where a new chat's session goes: a fresh worktree named from `text` when one is chosen, else undefined. Throws when git refuses. */
   readonly newChatDir: (text: string) => Promise<string | undefined>;
 }
-export class Workspace extends Context.Tag("lemma-ui/Workspace")<Workspace, WorkspaceService>() {}
+export class Workspace extends Context.Service<Workspace, WorkspaceService>()("lemma-ui/Workspace") {}
 
 /** Plugins and the changes the Plugins page makes. Changes reject when refused; whoever asked reports it. */
 export interface PluginsService {
@@ -283,7 +283,7 @@ export interface HostPluginsService extends PluginsService {
   readonly edit: (plugin: PluginStatus, change: Pick<PluginChange, "add" | "remove">) => Promise<ReloadResult>;
 }
 /** The host's plugins. */
-export class HostPlugins extends Context.Tag("lemma-ui/HostPlugins")<HostPlugins, HostPluginsService>() {}
+export class HostPlugins extends Context.Service<HostPlugins, HostPluginsService>()("lemma-ui/HostPlugins") {}
 
 export interface UiPluginsService extends PluginsService {
   /** Files loaded from `~/.lemma/ui` and a trusted project's `.lemma/ui`. */
@@ -296,7 +296,7 @@ export interface UiPluginsService extends PluginsService {
   readonly safe: boolean;
 }
 /** The web app's own plugins, which this page runs. */
-export class UiPlugins extends Context.Tag("lemma-ui/UiPlugins")<UiPlugins, UiPluginsService>() {}
+export class UiPlugins extends Context.Service<UiPlugins, UiPluginsService>()("lemma-ui/UiPlugins") {}
 
 /**
  * The version of these contracts: a major number that changes when one of
@@ -308,7 +308,7 @@ export class UiPlugins extends Context.Tag("lemma-ui/UiPlugins")<UiPlugins, UiPl
  */
 export const UI_API = 1;
 /** Required by a plugin written for version `version` of these contracts (see `UI_API`). */
-export const UiApi = (version: number): Context.Tag<`lemma-ui/api@${number}`, number> => Context.GenericTag(`lemma-ui/api@${version}`);
+export const UiApi = (version: number): Context.Key<`lemma-ui/api@${number}`, number> => Context.Service(`lemma-ui/api@${version}`);
 
 export interface CommandsService {
   /** What host plugins offer to run (`lemma do`). */
@@ -316,7 +316,7 @@ export interface CommandsService {
   /** Runs one in the working directory and reports how it went; resolves true when it succeeded. */
   readonly run: (command: CommandInfo) => Promise<boolean>;
 }
-export class Commands extends Context.Tag("lemma-ui/Commands")<Commands, CommandsService>() {}
+export class Commands extends Context.Service<Commands, CommandsService>()("lemma-ui/Commands") {}
 
 export interface InteractionsService {
   /** Questions the host is waiting on, oldest first. */
@@ -332,7 +332,7 @@ export interface InteractionsService {
   /** Some view shows this question itself. */
   readonly claimed: (request: InteractionRequest) => boolean;
 }
-export class Interactions extends Context.Tag("lemma-ui/Interactions")<Interactions, InteractionsService>() {}
+export class Interactions extends Context.Service<Interactions, InteractionsService>()("lemma-ui/Interactions") {}
 
 // ------------------------------------------------------------------ screen state
 
@@ -341,7 +341,7 @@ export interface DialogsService {
   readonly current: Accessor<string | undefined>;
   readonly open: (id: string | undefined) => void;
 }
-export class Dialogs extends Context.Tag("lemma-ui/Dialogs")<Dialogs, DialogsService>() {}
+export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-ui/Dialogs") {}
 
 export interface SettingsService {
   /** The open section's id; undefined while settings are not the page shown. */
@@ -357,14 +357,14 @@ export interface SettingsService {
   /** Changes some of them in place (no new history entry); undefined removes one. */
   readonly setParams: (patch: Readonly<Record<string, string | undefined>>) => void;
 }
-export class Settings extends Context.Tag("lemma-ui/Settings")<Settings, SettingsService>() {}
+export class Settings extends Context.Service<Settings, SettingsService>()("lemma-ui/Settings") {}
 
 export interface LayoutService {
   readonly toggleSidebar: () => void;
   /** On a narrow screen the sidebar is a drawer; picking something in it closes it. */
   readonly closeDrawer: () => void;
 }
-export class Layout extends Context.Tag("lemma-ui/Layout")<Layout, LayoutService>() {}
+export class Layout extends Context.Service<Layout, LayoutService>()("lemma-ui/Layout") {}
 
 // ------------------------------------------------------------------ addresses
 
@@ -437,7 +437,7 @@ export interface RouterService {
   /** The state kept with history entries, by entry key (see `entry`). Reactive. */
   readonly entryStates: Accessor<Readonly<Record<string, Readonly<Record<string, unknown>>>>>;
 }
-export class Router extends Context.Tag("lemma-ui/Router")<Router, RouterService>() {}
+export class Router extends Context.Service<Router, RouterService>()("lemma-ui/Router") {}
 
 // ------------------------------------------------------------------ devtools
 
@@ -470,7 +470,7 @@ export interface DevtoolsService {
   /** Every panel's `snapshot`, by panel id. */
   readonly snapshot: () => Readonly<Record<string, unknown>>;
 }
-export class Devtools extends Context.Tag("lemma-ui/Devtools")<Devtools, DevtoolsService>() {}
+export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemma-ui/Devtools") {}
 
 // ------------------------------------------------------------------ regions
 

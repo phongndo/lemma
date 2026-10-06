@@ -11,12 +11,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@effect/platform": "0.97.2",
-    "@effect/platform-node": "0.108.2",
-    "@effect/rpc": "0.76.2",
+    "@effect/platform-node": "4.0.1",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "effect": "3.22.2"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@lemma/plugin-commands": "workspace:*",

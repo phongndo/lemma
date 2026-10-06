@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeLoader, Registries } from "@lemma/core";
 import { FileSearchError, searchFiles } from "@lemma/contracts";
@@ -40,22 +40,22 @@ const project = async () => {
 
 /** Runs `body` with a search over real fff, closed afterwards. */
 const withSearch = <A>(
-  body: (search: (cwd: string, query: string, options?: FileSearchOptions) => Promise<Either.Either<unknown, FileSearchError>>) => Promise<A>,
+  body: (search: (cwd: string, query: string, options?: FileSearchOptions) => Promise<Result.Result<unknown, FileSearchError>>) => Promise<A>,
 ) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const { service } = yield* makeFileSearch({ idleMs: 60_000 });
-        return yield* Effect.promise(() => body((cwd, query, options) => Effect.runPromise(Effect.either(service.search(cwd, query, options)))));
+        return yield* Effect.promise(() => body((cwd, query, options) => Effect.runPromise(Effect.result(service.search(cwd, query, options)))));
       }),
     ),
   );
 
-const value = <A>(result: Either.Either<A, FileSearchError>): A => {
-  if (Either.isLeft(result)) throw new Error(`search failed: ${result.left.message}`);
-  return result.right;
+const value = <A>(result: Result.Result<A, FileSearchError>): A => {
+  if (Result.isFailure(result)) throw new Error(`search failed: ${result.failure.message}`);
+  return result.success;
 };
-const paths = (result: Either.Either<unknown, FileSearchError>) =>
+const paths = (result: Result.Result<unknown, FileSearchError>) =>
   (value(result) as { entries: readonly { path: string; kind: string }[] }).entries.map((entry) => `${entry.kind}:${entry.path}`);
 
 describe("search with fff", () => {
@@ -100,7 +100,7 @@ describe("search with fff", () => {
       expect(paths(await search(dir, "comp", { within: "src/", kind: "file" }))[0]).toBe("file:src/components/Composer.tsx");
       for (const within of ["missing", "../elsewhere", "/etc", "README.md"]) {
         const result = await search(dir, "", { within });
-        expect(Either.isLeft(result) && result.left.reason).toBe("NotFound");
+        expect(Result.isFailure(result) && result.failure.reason).toBe("NotFound");
       }
     });
   });
@@ -152,7 +152,7 @@ describe("search with fff", () => {
     await withSearch(async (search) => {
       for (const target of [path.join(dir, "missing"), path.join(dir, "README.md"), "relative/path"]) {
         const result = await search(target, "");
-        expect(Either.isLeft(result) && result.left.reason).toBe("NotFound");
+        expect(Result.isFailure(result) && result.failure.reason).toBe("NotFound");
       }
     });
   });

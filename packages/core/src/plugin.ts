@@ -6,20 +6,20 @@ import type { Hooks, PluginContext } from "./hooks.ts";
 import type { Registries } from "./registries.ts";
 
 // Tags are existential here; their concrete identifiers are retained by definePlugin.
-export type Capability = Context.Tag<any, any>;
-export type Identifiers<Tags extends readonly Capability[]> = Context.Tag.Identifier<Tags[number]>;
+export type Capability = Context.Key<any, any>;
+export type Identifiers<Tags extends readonly Capability[]> = Context.Service.Identifier<Tags[number]>;
 
 /** Time limits for lifecycle steps. Exceeding one produces a `PluginFault` with `deadline: true`. */
 export interface Deadlines {
-  readonly activate?: Duration.DurationInput;
-  readonly dispose?: Duration.DurationInput;
+  readonly activate?: Duration.Input;
+  readonly dispose?: Duration.Input;
 }
 
 export interface Plugin<Provides extends readonly Capability[] = readonly Capability[]> {
   readonly id: string;
   readonly version?: string;
-  /** Validates the config supplied for this plugin. Absent: the plugin takes none. */
-  readonly config?: Schema.Schema<any, any, never>;
+  /** Validates the config supplied for this plugin, and encodes it back (a settings form shows defaults). Absent: the plugin takes none. */
+  readonly config?: Schema.Codec<any, any>;
   readonly provides: Provides;
   readonly requires: readonly Capability[];
   /** Owns something that cannot exist twice (a port, a lock). Reload stops it before starting its replacement. */
@@ -50,7 +50,7 @@ export function definePlugin<
 >(definition: {
   readonly id: string;
   readonly version?: string;
-  readonly config?: Schema.Schema<Config, any, never>;
+  readonly config?: Schema.Codec<Config, any>;
   readonly provides?: Provides;
   readonly requires?: Requires;
   readonly exclusive?: boolean;

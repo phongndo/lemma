@@ -16,7 +16,7 @@ describe("watchConfig", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const seen = yield* Effect.fork(Stream.runCollect(Stream.take(watchConfig(paths, { debounceMs: 50 }), 2)));
+            const seen = yield* Effect.forkChild(Stream.runCollect(Stream.take(watchConfig(paths, { debounceMs: 50 }), 2)));
             // Let the watchers attach before writing.
             yield* Effect.sleep(Duration.millis(50));
             yield* Effect.promise(() => writeFile(paths.projectConfig, `{ "plugins": {} }`));
@@ -42,7 +42,7 @@ describe("watchUi", () => {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const seen = yield* Effect.fork(Stream.runCollect(Stream.take(watchUi(paths, { debounceMs: 50 }), 2)));
+            const seen = yield* Effect.forkChild(Stream.runCollect(Stream.take(watchUi(paths, { debounceMs: 50 }), 2)));
             yield* Effect.sleep(Duration.millis(50));
             yield* Effect.promise(() => mkdir(userUiDir(paths)));
             yield* Effect.sleep(Duration.millis(150));
@@ -68,7 +68,7 @@ test("watchUi keeps watching a ui directory that is removed and created again", 
       Effect.scoped(
         Effect.gen(function* () {
           const seen: number[] = [];
-          yield* Effect.fork(Stream.runForEach(watchUi(paths, { debounceMs: 50 }), () => Effect.sync(() => seen.push(Date.now()))));
+          yield* Effect.forkChild(Stream.runForEach(watchUi(paths, { debounceMs: 50 }), () => Effect.sync(() => seen.push(Date.now()))));
           yield* Effect.sleep(Duration.millis(50));
           yield* Effect.promise(() => rmdir(userUiDir(paths)));
           yield* settle;

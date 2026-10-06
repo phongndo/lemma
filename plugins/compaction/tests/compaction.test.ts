@@ -106,7 +106,7 @@ const twoTurns = (summary: Script, second: readonly Script[] = [reply("b")]) => 
             const store = yield* Sessions;
             const notices: NoticePayload[] = [];
             yield* Effect.forkScoped(Stream.runForEach((yield* Events).stream(Notice), (notice) => Effect.sync(() => notices.push(notice))));
-            yield* Effect.yieldNow();
+            yield* Effect.yieldNow;
             const { id } = yield* store.create();
             const turns = yield* Agent;
             yield* turns.prompt(id, long("x"));

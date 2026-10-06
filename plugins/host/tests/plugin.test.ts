@@ -62,7 +62,7 @@ describe("host plugin", () => {
           const { loader, control, events, configured } = yield* start;
           expect(yield* loader.core.run(Paths)).toEqual(paths);
           expect((yield* control.composition).plugins).toEqual([{ id: "host", version: "0.1.0" }]);
-          const changes = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 2)));
+          const changes = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 2)));
           const report = yield* control.reload;
           expect(report.unchanged).toEqual(["host"]);
           yield* control.configure({ flaky: { enabled: false } }, { scope: "project" });
@@ -82,8 +82,8 @@ describe("host plugin", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const { loader, control, events } = yield* start;
-          const changes = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 1)));
-          const notices = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
+          const changes = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 1)));
+          const notices = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
           // Applied directly, not through HostControl, so the only publication comes from the fault.
           yield* loader.apply({ plugins: { host: { config: paths }, flaky: {} } });
           expect([...(yield* Fiber.join(changes))]).toHaveLength(1);
@@ -96,7 +96,7 @@ describe("host plugin", () => {
             Effect.timeout(Duration.seconds(5)),
           );
 
-          const afterRestart = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 1)));
+          const afterRestart = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(PluginsChanged), 1)));
           // Activation succeeds and the task fails again afterwards; PluginsChanged is published either way.
           yield* control.restart("flaky");
           expect([...(yield* Fiber.join(afterRestart))]).toHaveLength(1);

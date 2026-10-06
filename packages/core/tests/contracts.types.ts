@@ -2,8 +2,8 @@
 import { Context, Effect, Layer, Schema } from "effect";
 import { definePlugin, Event, Events, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
 
-class Value extends Context.Tag("types/Value")<Value, string>() {}
-class Other extends Context.Tag("types/Other")<Other, number>() {}
+class Value extends Context.Service<Value, string>()("types/Value") {}
+class Other extends Context.Service<Other, number>()("types/Other") {}
 
 export function contracts() {
   const provider = definePlugin({ id: "value", provides: [Value], layer: Layer.succeed(Value, "value") });

@@ -108,8 +108,12 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletio
 ```
 
 `setup` runs in its own Solid root. What it adds to slots leaves when it stops;
-release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A `config` Schema (from `api.Schema`) becomes the plugin's
-settings form, and `styles` apply while it runs. `api: 1` says which version of
+release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
+`config` Schema (from `api.Schema`, Effect 4's Schema with Effect 3's `Literal`,
+`Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
+`propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps
+working) becomes the plugin's settings form. `styles` apply while it runs.
+`api: 1` says which version of
 the contracts it is written for (`contracts.UI_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while

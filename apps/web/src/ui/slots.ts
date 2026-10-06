@@ -3,7 +3,7 @@ import type { Accessor, Component, Setter } from "solid-js";
 import { Registry } from "@lemma/core";
 import type { Contribution, PluginContext, Registries } from "@lemma/core";
 import { Cause, Effect } from "effect";
-import type { Stream } from "effect";
+import type { Context, Stream } from "effect";
 
 /**
  * A named place plugins contribute to: a region of the screen (items carry a
@@ -63,7 +63,7 @@ export const DEFAULT_PART_ORDER = 100;
  */
 export type SlotItem<T> = T & { readonly id: string; readonly order?: number };
 
-type Contributor = PluginContext["Type"];
+type Contributor = Context.Service.Shape<typeof PluginContext>;
 
 export interface SlotsService {
   /** Adds an item as this plugin's; returns its removal. It also leaves when the plugin stops, and an add once it is stopping does nothing. */
@@ -109,7 +109,7 @@ export type RunSync = <A, E>(effect: Effect.Effect<A, E>) => A;
  * `watch` runs for as long as the slots' plugin does.
  */
 export function createSlots(
-  registries: Registries["Type"],
+  registries: Context.Service.Shape<typeof Registries>,
   contributor: Contributor,
   run: RunSync,
   watch: (name: string, changes: Stream.Stream<readonly Contribution<unknown>[]>, apply: (items: readonly Contribution<unknown>[]) => void) => void,

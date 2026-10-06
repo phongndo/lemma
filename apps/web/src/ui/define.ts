@@ -10,7 +10,7 @@ import type { SlotsService } from "./slots.ts";
 /** Named capabilities: a plugin's `requires` or `provides`. */
 export type Capabilities = Readonly<Record<string, Capability>>;
 /** The services behind named capabilities. */
-export type Services<C extends Capabilities> = { readonly [K in keyof C]: Context.Tag.Service<C[K]> };
+export type Services<C extends Capabilities> = { readonly [K in keyof C]: Context.Service.Shape<C[K]> };
 
 export interface UiPluginContext<Config> {
   readonly id: string;
@@ -23,7 +23,7 @@ export interface UiPluginContext<Config> {
 export interface UiPluginDefinition<Requires extends Capabilities, Provides extends Capabilities, Config> {
   readonly id: string;
   readonly version?: string;
-  readonly config?: Schema.Schema<Config, any, never>;
+  readonly config?: Schema.Codec<Config, any>;
   /**
    * Its stylesheet: applied while it runs (in the `plugins` cascade layer,
    * above the foundation and under stylesheets from `~/.lemma/ui`) and removed
@@ -92,7 +92,7 @@ export function defineUiPlugin<const Requires extends Capabilities = {}, const P
   const requires = Object.entries(definition.requires ?? {});
   const provides = Object.entries(definition.provides ?? {});
   const layer = (config: Config) =>
-    Layer.scopedContext(
+    Layer.effectContext(
       Effect.gen(function* () {
         const use: Record<string, unknown> = {};
         const owner = yield* PluginContext;

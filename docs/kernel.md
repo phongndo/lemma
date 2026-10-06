@@ -22,7 +22,7 @@ holds the rationale and constraints.
 
 | Primitive       | Declared by                | Contract                                                                                                                                                                          |
 | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capability      | `Context.Tag`              | A named, replaceable service. One provider per composition.                                                                                                                       |
+| Capability      | `Context.Service`          | A named, replaceable service. One provider per composition.                                                                                                                       |
 | Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `restart`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`. |
 | Hook            | `Hook.make`                | Around middleware on the critical path. Sequential, ordered, awaited. A handler may call `next` at most once. A handler failure fails the operation.                              |
 | Event           | `Event.make`               | Notification with isolated observer failures. Bounded queue, default drop-oldest without waiting; explicit `suspend` applies backpressure.                                        |

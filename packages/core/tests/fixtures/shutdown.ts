@@ -6,8 +6,8 @@ import { definePlugin, makeCore } from "../../src/index.ts";
 await Effect.runPromise(
   Effect.gen(function* () {
     const scope = yield* Scope.make();
-    const plugin = definePlugin({ id: "stuck", layer: Layer.scopedDiscard(Effect.addFinalizer(() => Effect.never)) });
-    const core = yield* Scope.extend(
+    const plugin = definePlugin({ id: "stuck", layer: Layer.effectDiscard(Effect.addFinalizer(() => Effect.never)) });
+    const core = yield* Scope.provide(
       makeCore(process.argv[2] === "plugin" ? [plugin] : [], {
         shutdownTimeout: "40 millis",
         deadlines: { dispose: "20 millis" },
@@ -16,7 +16,7 @@ await Effect.runPromise(
     );
     if (process.argv[2] === "task") {
       const entered = yield* Deferred.make<void>();
-      yield* Effect.forkDaemon(core.run(Deferred.succeed(entered, undefined).pipe(Effect.zipRight(Effect.never), Effect.ensuring(Effect.never))));
+      yield* Effect.forkDetach(core.run(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never), Effect.ensuring(Effect.never))));
       yield* Deferred.await(entered);
     }
     const exit = yield* Effect.exit(Effect.uninterruptible(Scope.close(scope, Exit.void)));

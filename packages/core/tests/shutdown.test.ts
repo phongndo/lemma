@@ -21,7 +21,7 @@ test("timed-out work retains resources until it finishes and cleanup runs exactl
       let disposed = 0;
       const plugin = definePlugin({
         id: "resource",
-        layer: Layer.scopedDiscard(
+        layer: Layer.effectDiscard(
           Effect.addFinalizer(() =>
             Effect.sync(() => {
               disposed++;
@@ -30,11 +30,11 @@ test("timed-out work retains resources until it finishes and cleanup runs exactl
         ),
       });
       const scope = yield* Scope.make();
-      const core = yield* Scope.extend(makeCore([plugin], { shutdownTimeout: "20 millis" }), scope);
+      const core = yield* Scope.provide(makeCore([plugin], { shutdownTimeout: "20 millis" }), scope);
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const work = yield* Effect.forkDaemon(
-        core.run(Deferred.succeed(entered, undefined).pipe(Effect.zipRight(Effect.never), Effect.ensuring(Deferred.await(release)))),
+      const work = yield* Effect.forkDetach(
+        core.run(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never), Effect.ensuring(Deferred.await(release)))),
       );
       yield* Deferred.await(entered);
       const result = yield* Effect.exit(Scope.close(scope, Exit.void));
@@ -53,7 +53,7 @@ test("timed-out work retains resources until it finishes and cleanup runs exactl
 });
 
 test("a dependent's disposal deadline retains its provider until actual cleanup finishes", async () => {
-  class Resource extends Context.Tag("shutdown/Resource")<Resource, string>() {}
+  class Resource extends Context.Service<Resource, string>()("shutdown/Resource") {}
   await Effect.runPromise(
     Effect.gen(function* () {
       const scope = yield* Scope.make();
@@ -62,7 +62,7 @@ test("a dependent's disposal deadline retains its provider until actual cleanup 
       const provider = definePlugin({
         id: "provider",
         provides: [Resource],
-        layer: Layer.scoped(
+        layer: Layer.effect(
           Resource,
           Effect.acquireRelease(Effect.succeed("resource"), () =>
             Effect.sync(() => {
@@ -74,12 +74,12 @@ test("a dependent's disposal deadline retains its provider until actual cleanup 
       const dependent = definePlugin({
         id: "dependent",
         requires: [Resource],
-        layer: Layer.scopedDiscard(
+        layer: Layer.effectDiscard(
           Effect.gen(function* () {
             yield* Resource;
             yield* Effect.addFinalizer(() =>
               Deferred.await(release).pipe(
-                Effect.zipRight(
+                Effect.andThen(
                   Effect.sync(() => {
                     disposed.push("dependent");
                   }),
@@ -89,7 +89,7 @@ test("a dependent's disposal deadline retains its provider until actual cleanup 
           }),
         ),
       });
-      const core = yield* Scope.extend(makeCore([provider, dependent], { deadlines: { dispose: "20 millis" }, shutdownTimeout: "1 second" }), scope);
+      const core = yield* Scope.provide(makeCore([provider, dependent], { deadlines: { dispose: "20 millis" }, shutdownTimeout: "1 second" }), scope);
       expect(Exit.isFailure(yield* Effect.exit(Scope.close(scope, Exit.void)))).toBe(true);
       expect((yield* core.inspect).plugins.find((p) => p.id === "dependent")?.fault).toMatchObject({ phase: "dispose", deadline: true });
       expect((yield* core.inspect).state).toBe("closing");

@@ -14,11 +14,11 @@ interface ToolDetails {
 }
 
 export const readDetails = (details: unknown): ToolDetails => {
-  if (!Predicate.isRecord(details)) return {};
+  if (!Predicate.isObject(details)) return {};
   const diff = typeof details.diff === "string" ? details.diff : typeof details.patch === "string" ? details.patch : undefined;
   const exit = details.exitCode ?? details.exit_code ?? details.code;
   const truncation = details.truncation;
-  const truncated = details.truncated === true || (Predicate.isRecord(truncation) && truncation.truncated !== false);
+  const truncated = details.truncated === true || (Predicate.isObject(truncation) && truncation.truncated !== false);
   const fullOutputPath = typeof details.fullOutputPath === "string" ? details.fullOutputPath : undefined;
   return {
     ...(diff === undefined || diff === "" ? {} : { diff }),

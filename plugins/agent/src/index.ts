@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Either, ExecutionStrategy, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope, Semaphore } from "effect";
 import { definePlugin, Events, Hooks, PluginContext } from "@lemma/core";
 import {
   Agent,
@@ -26,30 +26,42 @@ import { failedAs, newId, runTurn } from "./turn.ts";
 import type { TurnOutcome, TurnResume } from "./turn.ts";
 
 const AgentConfig = Schema.Struct({
-  defaultModel: Schema.optional(Schema.String).annotations({ description: "<provider>/<model> for turns that name none. Absent: the first available model." }),
-  systemPrompt: Schema.optional(Schema.String).annotations({ description: "Replaces the default base prompt; the environment section is still added." }),
-  cli: Schema.optional(Schema.String).annotations({
+  defaultModel: Schema.optional(Schema.String).annotate({ description: "<provider>/<model> for turns that name none. Absent: the first available model." }),
+  systemPrompt: Schema.optional(Schema.String).annotate({ description: "Replaces the default base prompt; the environment section is still added." }),
+  cli: Schema.optional(Schema.String).annotate({
     description: "Shell command that runs the lemma CLI; named in the environment section so the agent can inspect itself.",
   }),
-  maxSteps: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 200 }).annotations({
-    description: "Model calls allowed in one turn before it ends with max-steps.",
-  }),
-  retries: Schema.optionalWith(Schema.Int.pipe(Schema.nonNegative()), { default: () => 10 }).annotations({
-    description: "Failed model calls asked again in a row (provider errors, rate limits, stalls) before the turn ends in error.",
-  }),
-  retryDelay: Schema.optionalWith(Schema.Number.pipe(Schema.positive()), { default: () => 2 }).annotations({
-    description: "Seconds before the first retry; each later one waits twice as long, up to maxRetryDelay, unless the provider names its own delay.",
-  }),
-  maxRetryDelay: Schema.optionalWith(Schema.Number.pipe(Schema.positive()), { default: () => 60 }).annotations({
-    description: "Seconds the wait between retries grows to, at most.",
-  }),
-  stopGrace: Schema.optionalWith(Schema.Number.pipe(Schema.between(0, 20)), { default: () => 5 }).annotations({
-    description:
-      "Seconds a stopping agent (the host stopping, or a reload) lets running tool calls and model calls finish before cutting them off. Turns resume when it starts again.",
-  }),
-  maxRunning: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 16 }).annotations({
-    description: "Turns running at once, across sessions; another waits for one to end.",
-  }),
+  maxSteps: Schema.Int.check(Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 200)))
+    .annotate({
+      description: "Model calls allowed in one turn before it ends with max-steps.",
+    }),
+  retries: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 10)))
+    .annotate({
+      description: "Failed model calls asked again in a row (provider errors, rate limits, stalls) before the turn ends in error.",
+    }),
+  retryDelay: Schema.Number.check(Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 2)))
+    .annotate({
+      description: "Seconds before the first retry; each later one waits twice as long, up to maxRetryDelay, unless the provider names its own delay.",
+    }),
+  maxRetryDelay: Schema.Number.check(Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 60)))
+    .annotate({
+      description: "Seconds the wait between retries grows to, at most.",
+    }),
+  stopGrace: Schema.Number.check(Schema.isBetween({ minimum: 0, maximum: 20 }))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 5)))
+    .annotate({
+      description:
+        "Seconds a stopping agent (the host stopping, or a reload) lets running tool calls and model calls finish before cutting them off. Turns resume when it starts again.",
+    }),
+  maxRunning: Schema.Int.check(Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 16)))
+    .annotate({
+      description: "Turns running at once, across sessions; another waits for one to end.",
+    }),
 });
 type AgentConfig = typeof AgentConfig.Type;
 
@@ -68,7 +80,7 @@ interface Running extends SlotHolder {
   /** Epoch ms the turn started (or resumed), for the inspector. */
   readonly startedAt: number;
   /** Set right after the fork; `cancel` waits for it so an early cancel cannot miss the turn. */
-  readonly fiber: Deferred.Deferred<Fiber.RuntimeFiber<TurnOutcome, AgentError>>;
+  readonly fiber: Deferred.Deferred<Fiber.Fiber<TurnOutcome, AgentError>>;
   /** Completes on `cancel`: a turn waiting for a slot (or a resumed one for the composition) stops waiting. */
   readonly cancelled: Deferred.Deferred<void>;
   /** Settles when the turn ends, however it ends. */
@@ -108,7 +120,7 @@ export default definePlugin({
   // Room for `stopGrace` (at most 20 seconds) and for cutting off what is still running after it.
   deadlines: { dispose: "30 seconds" },
   layer: (config) =>
-    Layer.scoped(
+    Layer.effect(
       Agent,
       Effect.gen(function* () {
         const owner = yield* PluginContext;
@@ -134,7 +146,7 @@ export default definePlugin({
 
         // Turns belong to the plugin, not the caller: they outlive an interrupted `prompt`. They run in their own scope,
         // and closing the plugin first marks them suspended, so they stay open in the log and resume in the next instance.
-        const turns = yield* Scope.fork(yield* Effect.scope, ExecutionStrategy.parallel);
+        const turns = yield* Scope.fork(yield* Effect.scope, "parallel");
         let suspending = false;
         /** Completes when the agent starts stopping: turns waiting to ask the model again suspend at once. */
         const stopping = yield* Deferred.make<void>();
@@ -166,11 +178,14 @@ export default definePlugin({
             taken || !suspending ? Effect.void : Effect.interrupt,
           );
         const inSlot = <A, E, R>(entry: Running, body: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-          Effect.ensuring(Effect.zipRight(takeSlot(entry), body), slots.release(entry));
+          Effect.ensuring(Effect.andThen(takeSlot(entry), body), slots.release(entry));
         const idle =
           (entry: Running) =>
           <A, E, R>(wait: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
-            Effect.zipRight(slots.release(entry), Effect.zipLeft(wait, takeSlot(entry)));
+            Effect.andThen(
+              slots.release(entry),
+              Effect.tap(wait, () => takeSlot(entry)),
+            );
 
         const requests = makeRequestIndex(sessions);
         /** The session has no turn and nothing queued: what is kept for it goes (its queue revision stays, to keep growing). */
@@ -187,9 +202,9 @@ export default definePlugin({
           return state;
         };
         /** Serializes queue and turn changes: admission, placement, a turn ending and the next starting. */
-        const admit = yield* Effect.makeSemaphore(1);
+        const admit = yield* Semaphore.make(1);
         /** Serializes journal writes, so the last one written is the latest state. */
-        const writing = yield* Effect.makeSemaphore(1);
+        const writing = yield* Semaphore.make(1);
 
         const journalOf = (state: SessionState): Journal => ({
           ...(state.turn === undefined
@@ -289,7 +304,7 @@ export default definePlugin({
          */
         const keepLive = (sessionId: string, live: LiveTurn) =>
           Effect.forever(
-            Effect.zipRight(
+            Effect.andThen(
               Effect.sleep(LIVE_INTERVAL_MS),
               Effect.uninterruptible(
                 Effect.suspend(() => {
@@ -361,7 +376,7 @@ export default definePlugin({
             const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
             // The model it ran on, if it still exists; else the default, as a new turn would get.
             const model =
-              plan.model === undefined ? yield* resolveModel(sessionId) : yield* llm.model(plan.model).pipe(Effect.orElse(() => resolveModel(sessionId)));
+              plan.model === undefined ? yield* resolveModel(sessionId) : yield* llm.model(plan.model).pipe(Effect.catch(() => resolveModel(sessionId)));
             const restored = yield* readLive(home, sessionId);
             const turnResume: TurnResume = {
               plan,
@@ -394,7 +409,7 @@ export default definePlugin({
               turnId,
               controller: new AbortController(),
               startedAt: Date.now(),
-              fiber: yield* Deferred.make<Fiber.RuntimeFiber<TurnOutcome, AgentError>>(),
+              fiber: yield* Deferred.make<Fiber.Fiber<TurnOutcome, AgentError>>(),
               cancelled: yield* Deferred.make<void>(),
               ended: yield* Deferred.make<void, AgentError>(),
               live: new LiveTurn(turnId),
@@ -411,9 +426,9 @@ export default definePlugin({
             const body = owner.trace("agent.turn", inSlot(entry, options.resume === true ? resumed(sessionId, entry) : fresh(sessionId, entry)));
             const fiber = yield* Effect.forkIn(
               Effect.interruptible(
-                Effect.locally(
+                Effect.provideService(
                   Effect.gen(function* () {
-                    const writer = yield* Effect.fork(keepLive(sessionId, entry.live));
+                    const writer = yield* Effect.forkChild(keepLive(sessionId, entry.live));
                     return yield* body.pipe(Effect.ensuring(Fiber.interrupt(writer)));
                   }),
                   InteractionOrigin,
@@ -421,6 +436,8 @@ export default definePlugin({
                 ),
               ).pipe(Effect.onExit((exit) => ended(sessionId, entry, exit))),
               turns,
+              // Uninterruptible until the body begins, so `ended` runs however early the turn is cut off.
+              { uninterruptible: true },
             );
             yield* Deferred.succeed(entry.fiber, fiber);
             return entry;
@@ -437,10 +454,10 @@ export default definePlugin({
             Effect.gen(function* () {
               const state = stateOf(sessionId);
               if (state.turn === entry) state.turn = undefined;
-              const interrupted = Exit.isFailure(exit) && Cause.isInterruptedOnly(exit.cause);
+              const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
               const answer: Exit.Exit<void, AgentError> = Exit.isSuccess(exit) || interrupted ? Exit.void : Exit.asVoid(exit);
               const settle = Effect.forEach([...entry.items.values()], (item) => Deferred.done(item.done, answer), { discard: true }).pipe(
-                Effect.zipRight(Deferred.done(entry.ended, answer)),
+                Effect.andThen(Deferred.done(entry.ended, answer)),
               );
               if ((interrupted && suspending) || (Exit.isSuccess(exit) && exit.value === "suspended")) {
                 yield* writeLive(home, sessionId, entry.live.file());
@@ -596,8 +613,8 @@ export default definePlugin({
         // What the last instance left: turns to resume, and queues to run on. Prompts the log already has were placed
         // before it stopped, whatever the journal says.
         for (const [sessionId, journal] of yield* readJournals(home)) {
-          const exists = yield* Effect.either(sessions.get(sessionId));
-          if (Either.isLeft(exists)) {
+          const exists = yield* Effect.result(sessions.get(sessionId));
+          if (Result.isFailure(exists)) {
             yield* removeState(home, sessionId);
             continue;
           }

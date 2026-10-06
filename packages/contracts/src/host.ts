@@ -8,7 +8,7 @@ import type { PluginStatus } from "./rpc.ts";
  * Locations the host resolves once. Plugins never compute paths themselves.
  * Defaults: `~/.lemma` for user data; `<cwd>/.lemma` for project data.
  */
-export class Paths extends Context.Tag("lemma/Paths")<
+export class Paths extends Context.Service<
   Paths,
   {
     /** `~/.lemma` (or `$LEMMA_HOME`). */
@@ -24,7 +24,7 @@ export class Paths extends Context.Tag("lemma/Paths")<
     /** Working directory the host was started in; the default for new sessions. */
     readonly cwd: string;
   }
->() {}
+>()("lemma/Paths") {}
 
 /**
  * One plugin's row in a config file: whether it runs, with what config, and
@@ -52,14 +52,14 @@ export type PluginRow = typeof PluginRow.Type;
 export const PluginChange = Schema.Struct({
   enabled: Schema.optional(Schema.Boolean),
   config: Schema.optional(Schema.Unknown),
-  values: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Unknown })),
-  add: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Array(Schema.Record({ key: Schema.String, value: Schema.Unknown })) })),
-  remove: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.Array(Schema.String) })),
+  values: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  add: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.Record(Schema.String, Schema.Unknown)))),
+  remove: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
 });
 export type PluginChange = typeof PluginChange.Type;
 
 /** Which config file a change is written to. The project file needs the project to be trusted. */
-export const ConfigScope = Schema.Literal("user", "project");
+export const ConfigScope = Schema.Literals(["user", "project"]);
 export type ConfigScope = typeof ConfigScope.Type;
 
 /**
@@ -72,13 +72,13 @@ export type ConfigScope = typeof ConfigScope.Type;
 export const ConfigFile = Schema.Struct({
   /** User file only: absolute directories whose projects (and their subdirectories) may configure the host and load plugins. */
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
-  plugins: Schema.optional(Schema.Record({ key: Schema.String, value: PluginRow })),
-  ui: Schema.optional(Schema.Record({ key: Schema.String, value: PluginRow })),
+  plugins: Schema.optional(Schema.Record(Schema.String, PluginRow)),
+  ui: Schema.optional(Schema.Record(Schema.String, PluginRow)),
 });
 export type ConfigFile = typeof ConfigFile.Type;
 
 /** Where a plugin's definition came from: the app, `<home>/plugins`, or a trusted project's `.lemma/plugins`. */
-export const PluginSource = Schema.Literal("bundled", "user", "project");
+export const PluginSource = Schema.Literals(["bundled", "user", "project"]);
 export type PluginSource = typeof PluginSource.Type;
 
 /** A hook a plugin intercepts, with its handler's order (lower runs first). */
@@ -130,7 +130,7 @@ export type CompositionInfo = typeof CompositionInfo.Type;
  * device code to enter, a URL to open, a plugin fault, a reload outcome.
  */
 export const NoticePayload = Schema.Struct({
-  level: Schema.Literal("info", "warning", "error"),
+  level: Schema.Literals(["info", "warning", "error"]),
   message: Schema.String,
   source: Schema.optional(Schema.String),
   links: Schema.optional(Schema.Array(Schema.Struct({ url: Schema.String, label: Schema.optional(Schema.String) }))),
@@ -161,14 +161,14 @@ export interface ConfigureReport extends ReloadReport {
  */
 export const HOST_API = 1;
 /** A plugin written for host API `version` requires this; the host plugin provides the versions it supports. */
-export const HostApi = (version: number): Context.Tag<`lemma/api@${number}`, number> => Context.GenericTag(`lemma/api@${version}`);
+export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, number> => Context.Service<`lemma/api@${number}`, number>(`lemma/api@${version}`);
 
 /**
  * Handle on the loader, provided by the host application (which owns it) so
  * transports and UIs can inspect and change the running composition without
  * reaching into the kernel.
  */
-export class HostControl extends Context.Tag("lemma/HostControl")<
+export class HostControl extends Context.Service<
   HostControl,
   {
     /** Every known plugin, enabled or not. */
@@ -195,7 +195,7 @@ export class HostControl extends Context.Tag("lemma/HostControl")<
       options?: { readonly scope?: ConfigScope },
     ) => Effect.Effect<UiComposition, ReloadError>;
   }
->() {}
+>()("lemma/HostControl") {}
 
 /**
  * A file in `<home>/ui` or a trusted project's `.lemma/ui` that the web app
@@ -204,8 +204,8 @@ export class HostControl extends Context.Tag("lemma/HostControl")<
  */
 export const UiFile = Schema.Struct({
   name: Schema.String,
-  source: Schema.Literal("user", "project"),
-  kind: Schema.Literal("script", "style"),
+  source: Schema.Literals(["user", "project"]),
+  kind: Schema.Literals(["script", "style"]),
   /** Where it is on the host. */
   path: Schema.String,
   /** Served by the transport under `/api` (it needs the token); changes when the file does. */
@@ -215,11 +215,11 @@ export type UiFile = typeof UiFile.Type;
 
 /** What the web app needs to plan its own composition: the `ui` rows of both config files, and the files to load. */
 export const UiComposition = Schema.Struct({
-  plugins: Schema.Record({ key: Schema.String, value: PluginRow }),
+  plugins: Schema.Record(Schema.String, PluginRow),
   /** Per plugin id, the file whose row sets `enabled` (the project's wins). */
-  enabledIn: Schema.Record({ key: Schema.String, value: ConfigScope }),
+  enabledIn: Schema.Record(Schema.String, ConfigScope),
   /** Per plugin id, the file whose row sets `config`. */
-  configIn: Schema.Record({ key: Schema.String, value: ConfigScope }),
+  configIn: Schema.Record(Schema.String, ConfigScope),
   files: Schema.Array(UiFile),
 });
 export type UiComposition = typeof UiComposition.Type;

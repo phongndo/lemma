@@ -4,7 +4,7 @@ import { Schema } from "effect";
 import type { Context } from "effect";
 import type { Paths } from "@lemma/contracts";
 
-export type PathsService = Context.Tag.Service<Paths>;
+export type PathsService = Context.Service.Shape<typeof Paths>;
 
 /** The host plugin's config: the resolved locations, so the composition data records them. */
 export const PathsSchema = Schema.Struct({

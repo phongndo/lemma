@@ -5,7 +5,7 @@ import type { PluginContext } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "./llm.ts";
 
 export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
-  content: Schema.Array(Schema.Union(TextContent, ImageContent)),
+  content: Schema.Array(Schema.Union([TextContent, ImageContent])),
   isError: Schema.optional(Schema.Boolean),
   /** Structured data for UIs (diffs, exit codes); logged, never sent to the model. */
   details: Schema.optional(Schema.Unknown),
@@ -44,7 +44,7 @@ export interface Tool<Input = any> {
   readonly name: string;
   /** Model-facing description. */
   readonly description: string;
-  readonly input: Schema.Schema<Input, any, never>;
+  readonly input: Schema.Codec<Input, any>;
   /**
    * `safe`: running it again with the same input does no harm (it only reads), so a call cut off by a host restart is
    * run again. Absent: a cut-off call is not repeated, and the model is told it was interrupted, with its output so far.
@@ -121,7 +121,7 @@ export interface ExecuteOptions {
   readonly update?: (chunk: string) => void;
 }
 
-export class Tools extends Context.Tag("lemma/Tools")<
+export class Tools extends Context.Service<
   Tools,
   {
     /**
@@ -140,4 +140,4 @@ export class Tools extends Context.Tag("lemma/Tools")<
      */
     readonly execute: (invocation: ToolInvocation, signal: AbortSignal, options?: ExecuteOptions) => Effect.Effect<ToolResult, ToolError>;
   }
->() {}
+>()("lemma/Tools") {}

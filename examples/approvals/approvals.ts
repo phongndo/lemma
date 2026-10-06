@@ -1,6 +1,6 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Result, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Interaction, Tools } from "@lemma/contracts";
 import type { GuardDecision, ToolInvocation } from "@lemma/contracts";
@@ -18,14 +18,18 @@ import { resolveToCwd } from "@lemma/plugin-tools-builtin";
  */
 
 const Config = Schema.Struct({
-  ask: Schema.optionalWith(Schema.Array(Schema.String), { default: () => ["bash"] }).annotations({
-    title: "Always ask for",
-    description: "Tools that need approval for every call.",
-  }),
-  outsideProject: Schema.optionalWith(Schema.Array(Schema.String), { default: () => ["write", "edit"] }).annotations({
-    title: "Ask outside the project for",
-    description: "Tools that need approval when the path they are given is outside the session's directory.",
-  }),
+  ask: Schema.Array(Schema.String)
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => ["bash"])))
+    .annotate({
+      title: "Always ask for",
+      description: "Tools that need approval for every call.",
+    }),
+  outsideProject: Schema.Array(Schema.String)
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => ["write", "edit"])))
+    .annotate({
+      title: "Ask outside the project for",
+      description: "Tools that need approval when the path they are given is outside the session's directory.",
+    }),
 });
 
 /** A question for one call: what to show, or nothing when the call needs no approval. */
@@ -80,7 +84,7 @@ export default definePlugin({
   config: Config,
   requires: [Tools, Interaction],
   layer: (config: typeof Config.Type) =>
-    Layer.scopedDiscard(
+    Layer.effectDiscard(
       Effect.gen(function* () {
         const tools = yield* Tools;
         const interaction = yield* Interaction;
@@ -101,13 +105,13 @@ export default definePlugin({
                 ],
                 asked.detail,
               )
-              .pipe(Effect.either);
-            if (choice._tag === "Left") {
-              const reason = choice.left.reason === "Dismissed" ? "the user dismissed the approval" : `nobody could approve it (${choice.left.message})`;
+              .pipe(Effect.result);
+            if (Result.isFailure(choice)) {
+              const reason = choice.failure.reason === "Dismissed" ? "the user dismissed the approval" : `nobody could approve it (${choice.failure.message})`;
               return { _tag: "deny", reason } satisfies GuardDecision;
             }
-            if (choice.right === "deny") return { _tag: "deny", reason: "the user declined" } satisfies GuardDecision;
-            if (choice.right === "session") allowed.set(call.sessionId, new Set([...(allowed.get(call.sessionId) ?? []), call.name]));
+            if (choice.success === "deny") return { _tag: "deny", reason: "the user declined" } satisfies GuardDecision;
+            if (choice.success === "session") allowed.set(call.sessionId, new Set([...(allowed.get(call.sessionId) ?? []), call.name]));
             return { _tag: "allow" } satisfies GuardDecision;
           }),
         );

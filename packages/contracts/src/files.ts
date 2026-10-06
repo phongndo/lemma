@@ -7,7 +7,7 @@ import type { Registries } from "@lemma/core";
 export const FILE_SEARCH_LIMIT = 200;
 
 /** What a search looks for: files, directories, or both (the default), ranked together. */
-export const FileKind = Schema.Literal("file", "directory");
+export const FileKind = Schema.Literals(["file", "directory"]);
 export type FileKind = typeof FileKind.Type;
 
 export const FileEntry = Schema.Struct({
@@ -19,7 +19,7 @@ export type FileEntry = typeof FileEntry.Type;
 
 export const FileSearchOptions = Schema.Struct({
   /** At most this many entries, up to `FILE_SEARCH_LIMIT`; default 50. */
-  limit: Schema.optional(Schema.Number.pipe(Schema.int(), Schema.between(1, FILE_SEARCH_LIMIT))),
+  limit: Schema.optional(Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: FILE_SEARCH_LIMIT }))),
   /** Only files or only directories; both when absent. */
   kind: Schema.optional(FileKind),
   /**
@@ -77,7 +77,7 @@ export const FileSearchers = Registry.make<FileSearcher>("lemma/file-searchers",
 
 /** Searches with the first of `FileSearchers`; `Unavailable` when no plugin contributes one. */
 export const searchFiles = (
-  registries: Context.Tag.Service<Registries>,
+  registries: Context.Service.Shape<typeof Registries>,
   cwd: string,
   query: string,
   options?: FileSearchOptions,

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rm, utimes } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
-import { Duration, Effect, Either, Schedule, Schema } from "effect";
+import { Duration, Effect, Result, Schedule, Schema } from "effect";
 import { Credential, CredentialError } from "@lemma/contracts";
 import { errorCode, isAlive, writeFileAtomic } from "@lemma/contracts/fs";
 
@@ -30,15 +30,15 @@ export function readStore(path: string): Effect.Effect<RawStore, CredentialError
       onFailure: (cause) => (errorCode(cause) === "ENOENT" ? Effect.succeed({}) : Effect.fail(io(`Cannot read ${path}`, cause))),
       onSuccess: (text) => {
         if (text.trim() === "") return Effect.succeed({});
-        const parsed = Either.try(() => JSON.parse(text) as unknown);
-        if (Either.isRight(parsed) && typeof parsed.right === "object" && parsed.right !== null && !Array.isArray(parsed.right)) {
-          return Effect.succeed(parsed.right as RawStore);
+        const parsed = Result.try(() => JSON.parse(text) as unknown);
+        if (Result.isSuccess(parsed) && typeof parsed.success === "object" && parsed.success !== null && !Array.isArray(parsed.success)) {
+          return Effect.succeed(parsed.success as RawStore);
         }
         return Effect.fail(
           new CredentialError({
             reason: "Corrupt",
             message: `${path} is not a JSON object of credentials; fix or remove it`,
-            ...(Either.isLeft(parsed) ? { cause: parsed.left } : {}),
+            ...(Result.isFailure(parsed) ? { cause: parsed.failure } : {}),
           }),
         );
       },
@@ -46,19 +46,19 @@ export function readStore(path: string): Effect.Effect<RawStore, CredentialError
   );
 }
 
-const decodeCredential = Schema.decodeUnknownEither(Credential);
+const decodeCredential = Schema.decodeUnknownResult(Credential);
 
 export function decodeEntry(path: string, store: RawStore, provider: string): Effect.Effect<Credential | undefined, CredentialError> {
   if (!Object.hasOwn(store, provider)) return Effect.succeed(undefined);
   const decoded = decodeCredential(store[provider]);
-  return Either.isRight(decoded)
-    ? Effect.succeed(decoded.right)
+  return Result.isSuccess(decoded)
+    ? Effect.succeed(decoded.success)
     : Effect.fail(
         new CredentialError({
           provider,
           reason: "Corrupt",
-          message: `${path}: invalid credential for "${provider}": ${decoded.left.message}`,
-          cause: decoded.left,
+          message: `${path}: invalid credential for "${provider}": ${decoded.failure.message}`,
+          cause: decoded.failure,
         }),
       );
 }
@@ -103,7 +103,7 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
       }
     },
     catch: (cause) => cause,
-  }).pipe(Effect.either);
+  }).pipe(Effect.result);
 
   /**
    * The current holder's text if it is abandoned (stale, or a dead local pid),
@@ -117,7 +117,7 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
       try {
         const [info, text] = await Promise.all([handle.stat(), handle.readFile("utf8")]);
         if (Date.now() - info.mtimeMs > staleMs) return { text };
-        const holder = Either.getOrUndefined(Either.try(() => JSON.parse(text) as Partial<LockOwner>));
+        const holder = Result.getOrUndefined(Result.try(() => JSON.parse(text) as Partial<LockOwner>));
         if (holder?.host === owner.host && typeof holder.pid === "number" && !isAlive(holder.pid)) return { text };
         return undefined;
       } finally {
@@ -143,8 +143,8 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
     const deadline = Date.now() + waitMs;
     while (true) {
       const created = yield* tryCreate;
-      if (Either.isRight(created)) return;
-      if (errorCode(created.left) !== "EEXIST") return yield* io(`Cannot create ${lock}`, created.left);
+      if (Result.isSuccess(created)) return;
+      if (errorCode(created.failure) !== "EEXIST") return yield* io(`Cannot create ${lock}`, created.failure);
       const stale = yield* abandoned;
       if (stale === "vanished") continue;
       if (stale !== undefined) yield* removeIfUnchanged(stale.text);
@@ -169,8 +169,8 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
   return Effect.scoped(
     Effect.gen(function* () {
       yield* Effect.acquireRelease(acquire, () => release);
-      // Interruptible even when the body is not (a token refresh that must not lose its rotated token): a fiber
-      // forked in an uninterruptible region inherits it, and closing the scope would wait on this one forever.
+      // Interruptible even when the body is not (a token refresh that must not lose its rotated token): closing the
+      // scope interrupts this fiber and waits for it, so it must never run uninterruptibly.
       yield* Effect.forkScoped(Effect.interruptible(heartbeat));
       return yield* body;
     }),

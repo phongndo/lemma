@@ -10,7 +10,7 @@ register during activation. A command that needs input asks for it with
 const greet = definePlugin({
   id: "greet",
   requires: [Commands, Interaction],
-  layer: Layer.scopedDiscard(
+  layer: Layer.effectDiscard(
     Effect.gen(function* () {
       const [commands, ask] = yield* Effect.all([Commands, Interaction]);
       yield* commands.register({

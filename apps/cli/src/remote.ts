@@ -1,5 +1,5 @@
 import { Duration, Effect } from "effect";
-import type { RpcClientError } from "@effect/rpc";
+import type { RpcClientError } from "effect/rpc";
 import { makeHostRpcHttp } from "@lemma/client";
 import { resolvePaths } from "@lemma/plugin-host";
 import { clearRemote, discoveryPath, findTarget as resolveTarget, normalizeUrl, readDiscovery, remotePath, writeRemote } from "@lemma/plugin-transport";
@@ -19,13 +19,21 @@ const SET_TIMEOUT = Duration.seconds(10);
 
 /** The HTTP status behind a failed call, when there was a response: `filterStatusOk` turns a `401` into a failed send. */
 export const statusOf = (error: RpcClientError.RpcClientError): unknown =>
-  (error.cause as { readonly response?: { readonly status?: unknown } } | undefined)?.response?.status;
+  error.reason._tag === "HttpError" ? (error.reason.cause as { readonly response?: { readonly status?: unknown } } | undefined)?.response?.status : undefined;
 
-/** Why a call failed: the innermost cause (`getaddrinfo ENOTFOUND …`, `connect ECONNREFUSED …`), not `Failed to send HTTP request`. */
+/**
+ * Why a call failed: the innermost cause (`getaddrinfo ENOTFOUND …`, `connect ECONNREFUSED …`), not `HttpError` or
+ * `Transport error`. An `RpcClientError` holds it in its `reason`, and that in its `cause`.
+ */
 export const reasonOf = (error: Error): string => {
   let inner: unknown = error;
-  while (inner instanceof Error && inner.cause instanceof Error) inner = inner.cause;
-  return inner instanceof Error ? inner.message : error.message;
+  for (;;) {
+    const next: unknown =
+      (inner as { readonly reason?: unknown }).reason instanceof Error ? (inner as { readonly reason: Error }).reason : (inner as Error).cause;
+    if (!(next instanceof Error)) break;
+    inner = next;
+  }
+  return inner instanceof Error && inner.message !== "" ? inner.message : error.message;
 };
 
 export const noLocalHost = (home: string) =>
@@ -51,15 +59,17 @@ const envNote = (io: Io) => (envUrl(io) === undefined ? "" : ` (LEMMA_URL is set
 
 /** Calls `Host.Info` at `url` with `token`: proof that the pair works, before it is saved. */
 const verify = (url: string, token: string) =>
-  Effect.flatMap(makeHostRpcHttp(url, token), (rpc) => rpc.Host.Info()).pipe(
-    Effect.timeoutFail({
+  Effect.flatMap(makeHostRpcHttp(url, token), (rpc) => rpc["Host.Info"]()).pipe(
+    Effect.timeoutOrElse({
       duration: SET_TIMEOUT,
-      onTimeout: () =>
-        new CliError({
-          code: "Unreachable",
-          message: `${url} did not answer within ${Duration.toSeconds(SET_TIMEOUT)}s; nothing was written`,
-          exit: ExitCode.unavailable,
-        }),
+      orElse: () =>
+        Effect.fail(
+          new CliError({
+            code: "Unreachable",
+            message: `${url} did not answer within ${Duration.toSeconds(SET_TIMEOUT)}s; nothing was written`,
+            exit: ExitCode.unavailable,
+          }),
+        ),
     }),
     Effect.catchTag("RpcClientError", (error) =>
       Effect.fail(

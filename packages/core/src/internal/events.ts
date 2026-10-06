@@ -2,7 +2,8 @@ import { Cause, Context, Deferred, Effect, Order, Queue, Scope, Stream } from "e
 import { CoreClosed, EventError, PluginFault } from "../errors.ts";
 import type { Event, Events, Observer, ObserveOptions } from "../events.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
-import { attributes, withoutParent } from "./hooks.ts";
+import { attributes } from "./hooks.ts";
+import { servicesOf } from "./settings.ts";
 
 interface Entry {
   readonly token: object;
@@ -14,7 +15,8 @@ interface Entry {
 
 interface Subscription {
   readonly owner: Owner | undefined;
-  readonly queue: Queue.Queue<unknown>;
+  /** Ended (not shut down) on close, so a stream reading it finishes instead of being interrupted. */
+  readonly queue: Queue.Queue<unknown, Cause.Done>;
   readonly suspend: boolean;
   /** Completed when unsubscribed, so a suspended publisher never waits on a dead observer. */
   readonly closed: Deferred.Deferred<void>;
@@ -33,7 +35,7 @@ export interface EventSnapshot {
 }
 
 export interface ObserverHandle {
-  readonly observe: Context.Tag.Service<PluginContext>["observe"];
+  readonly observe: Context.Service.Shape<typeof PluginContext>["observe"];
   readonly publish: () => void;
   readonly retire: () => void;
 }
@@ -45,7 +47,7 @@ const DEFAULT_BUFFER = 64;
  * queue and never fails; an observer runs on its owner's scope and its failures
  * are reported as faults, never propagated.
  */
-export class EventBus implements Context.Tag.Service<Events> {
+export class EventBus implements Context.Service.Shape<typeof Events> {
   private readonly entries = new Map<string, Entry>();
   private closed = false;
 
@@ -60,7 +62,7 @@ export class EventBus implements Context.Tag.Service<Events> {
           Effect.gen(function* () {
             subscription.done = true;
             yield* Deferred.succeed(subscription.closed, undefined);
-            yield* Queue.shutdown(subscription.queue);
+            yield* Queue.end(subscription.queue);
           }),
         { discard: true },
       );
@@ -70,7 +72,7 @@ export class EventBus implements Context.Tag.Service<Events> {
   inspect(): readonly EventSnapshot[] {
     return [...this.entries.values()]
       .filter((entry) => entry.subscriptions.some((subscription) => subscription.owner))
-      .sort((a, b) => Order.string(a.name, b.name))
+      .sort((a, b) => Order.String(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
         observers: entry.subscriptions.flatMap((subscription) => (subscription.owner ? [subscription.owner.identity.id] : [])),
@@ -82,31 +84,29 @@ export class EventBus implements Context.Tag.Service<Events> {
     const owned = new Set<Entry>();
     const observe = <P, R>(event: Event<P>, observer: Observer<P, R>, options: ObserveOptions = {}) =>
       Effect.uninterruptible(
-        Effect.gen(this, function* () {
+        Effect.gen({ self: this }, function* () {
           if (this.closed || !owner.accepting) return yield* new CoreClosed();
           const entry = yield* this.entry(event);
-          const environment = withoutParent(yield* Effect.context<R>());
+          const environment = servicesOf(yield* Effect.context<R>());
           const subscription = yield* this.subscribe(entry, owner, options, scope);
           owned.add(entry);
           const consume = Queue.take(subscription.queue).pipe(
             Effect.flatMap((payload) =>
               Effect.suspend(() => observer(payload as P)).pipe(
                 Effect.provide(environment),
-                Effect.withSpan("core.observe", {
-                  captureStackTrace: false,
-                  attributes: { ...attributes(identity), "event.name": event.name },
-                }),
-                Effect.catchAllCause((cause) =>
-                  Cause.isInterruptedOnly(cause)
+                Effect.withSpan("core.observe", { attributes: { ...attributes(identity), "event.name": event.name } }, { captureStackTrace: false }),
+                Effect.catchCause((cause) =>
+                  Cause.hasInterruptsOnly(cause)
                     ? Effect.failCause(cause)
                     : report(new PluginFault({ pluginId: identity.id, phase: "observe", operation: event.name, cause })),
                 ),
               ),
             ),
             Effect.forever,
+            Effect.catchIf(Cause.isDone, () => Effect.void),
           );
-          // Forked fibers inherit interruptibility; the consumer must stop when the scope closes.
-          yield* Effect.forkIn(Effect.interruptible(consume), scope);
+          // Listening before observe returns; interruptible, so it stops when the scope closes.
+          yield* Effect.forkIn(Effect.interruptible(consume), scope, { startImmediately: true });
         }).pipe(Effect.asVoid),
       );
     const each = () => {
@@ -140,7 +140,7 @@ export class EventBus implements Context.Tag.Service<Events> {
             if (subscription.done) return Effect.void;
             const offer = Queue.offer(subscription.queue, payload);
             return (subscription.suspend ? Effect.race(offer, Deferred.await(subscription.closed)) : offer).pipe(
-              Effect.catchAllCause((cause) => (subscription.done ? Effect.void : Effect.failCause(cause))),
+              Effect.catchCause((cause) => (subscription.done ? Effect.void : Effect.failCause(cause))),
             );
           }),
         { concurrency: subscriptions.some((subscription) => subscription.suspend) ? "unbounded" : 1, discard: true },
@@ -148,8 +148,8 @@ export class EventBus implements Context.Tag.Service<Events> {
     });
 
   readonly stream = <P>(event: Event<P>, options: ObserveOptions = {}): Stream.Stream<P> =>
-    Stream.unwrapScoped(
-      Effect.gen(this, function* () {
+    Stream.unwrap(
+      Effect.gen({ self: this }, function* () {
         if (this.closed) return Stream.empty;
         const entry = yield* this.entry(event).pipe(Effect.orDie);
         const scope = yield* Effect.scope;
@@ -159,17 +159,17 @@ export class EventBus implements Context.Tag.Service<Events> {
     );
 
   private subscribe(entry: Entry, owner: Owner | undefined, options: ObserveOptions, scope: Scope.Scope) {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       const buffer = options.buffer ?? DEFAULT_BUFFER;
       if (!Number.isInteger(buffer) || buffer < 1) {
         return yield* new EventError({ reason: "InvalidBuffer", event: entry.name, message: "Observer buffer must be a positive integer" });
       }
       const overflow = options.overflow ?? "dropOldest";
       const queue = yield* overflow === "dropOldest"
-        ? Queue.sliding<unknown>(buffer)
+        ? Queue.sliding<unknown, Cause.Done>(buffer)
         : overflow === "dropNewest"
-          ? Queue.dropping<unknown>(buffer)
-          : Queue.bounded<unknown>(buffer);
+          ? Queue.dropping<unknown, Cause.Done>(buffer)
+          : Queue.bounded<unknown, Cause.Done>(buffer);
       const subscription: Subscription = { owner, queue, suspend: overflow === "suspend", closed: yield* Deferred.make<void>(), done: false };
       entry.all.push(subscription);
       rebuild(entry);
@@ -180,7 +180,7 @@ export class EventBus implements Context.Tag.Service<Events> {
           entry.all = entry.all.filter((candidate) => candidate !== subscription);
           rebuild(entry);
           yield* Deferred.succeed(subscription.closed, undefined);
-          yield* Queue.shutdown(queue);
+          yield* Queue.end(queue);
         }),
       );
       return subscription;

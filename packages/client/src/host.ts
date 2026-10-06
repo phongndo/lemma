@@ -1,5 +1,7 @@
-import { Cause, Duration, Effect, Exit, Fiber, Scope, Stream } from "effect";
-import { HostError } from "@lemma/contracts";
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Scope, Stream } from "effect";
+import type { Layer } from "effect";
+import type { Socket } from "effect/socket";
+import { HostError, SUBSCRIBED_HEADER } from "@lemma/contracts";
 import type {
   AgentView,
   AuthType,
@@ -153,6 +155,8 @@ export interface ConnectOptions {
   readonly backoff?: (attempt: number) => number;
   /** How long a connect probe may take before the attempt counts as failed. Default 8s. */
   readonly probeTimeoutMs?: number;
+  /** The WebSocket implementation; default the platform's (tests script one). */
+  readonly webSocket?: Layer.Layer<Socket.WebSocketConstructor>;
 }
 
 export const defaultBackoff = (attempt: number): number => Math.min(5_000, 250 * 2 ** Math.max(0, attempt - 1));
@@ -175,12 +179,15 @@ export const describeError = (error: unknown): string => {
 
 /**
  * Opens the connection and keeps a `Host.Events` subscription alive with
- * backoff. Each (re)connect is confirmed with `Host.Info` before the status
- * turns `connected`, so `generation` changes only when calls can succeed.
+ * backoff. Each (re)connect is confirmed with `Host.Info`, and by the host's
+ * `subscribed` (not passed to listeners), before the status turns `connected`,
+ * so `generation` changes only when calls can succeed and events arrive. A host
+ * from before `subscribed` sends none: the wait for it then ends at the probe's
+ * timeout.
  */
 export const connect = async (options: ConnectOptions): Promise<Host> => {
   const scope = await runPromise(Scope.make());
-  const rpc: HostRpcClient = await runPromise(Scope.extend(makeHostRpc(rpcUrl(options.url, options.token)), scope));
+  const rpc: HostRpcClient = await runPromise(Scope.provide(makeHostRpc(rpcUrl(options.url, options.token), options.webSocket), scope));
   const backoff = options.backoff ?? defaultBackoff;
   const probeTimeout = Duration.millis(options.probeTimeoutMs ?? 8_000);
 
@@ -203,14 +210,28 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
 
   const attempt = Effect.gen(function* () {
     // Subscribe first so nothing published after the probe is missed.
-    const events = yield* rpc.Host.Events().pipe(
-      Stream.runForEach((event) => Effect.sync(() => emit(event))),
-      Effect.fork,
+    const subscribed = yield* Deferred.make<void>();
+    const events = yield* rpc["Host.Events"](undefined, { headers: { [SUBSCRIBED_HEADER]: "1" } }).pipe(
+      Stream.runForEach((event) => (event.type === "subscribed" ? Deferred.succeed(subscribed, undefined) : Effect.sync(() => emit(event)))),
+      Effect.forkChild({ startImmediately: true }),
     );
-    const probe = yield* rpc.Host.Info().pipe(Effect.timeoutFail({ duration: probeTimeout, onTimeout: () => new Error("Timed out") }), Effect.either);
-    if (probe._tag === "Left") {
+    const probe = yield* rpc["Host.Info"]().pipe(
+      Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.fail(new Error("Timed out")) }),
+      Effect.result,
+    );
+    if (probe._tag === "Failure") {
       yield* Fiber.interrupt(events);
-      return describeError(toError(probe.left));
+      return describeError(toError(probe.failure));
+    }
+    // Connected once `subscribed` arrives, not on a subscription that ended before it did.
+    const ready = yield* Effect.raceFirst(
+      Deferred.await(subscribed).pipe(Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.void }), Effect.as(true)),
+      Effect.as(Fiber.await(events), false),
+    );
+    // The acknowledgement may have come before the subscription ended: connected only while it still runs.
+    if (!ready || events.pollUnsafe() !== undefined) {
+      const exit = yield* Fiber.await(events);
+      return Exit.isFailure(exit) ? describeError(toError(Cause.squash(exit.cause))) : "Event stream ended";
     }
     setStatus({ state: "connected", generation: status.generation + 1, attempts: 0 });
     const exit = yield* Fiber.await(events);
@@ -238,19 +259,19 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
 
   return {
     session: {
-      list: (cwd) => runPromise(rpc.Session.List(cwd === undefined ? {} : { cwd })),
-      get: (sessionId) => runPromise(rpc.Session.Get({ sessionId })),
-      create: (cwd) => runPromise(rpc.Session.Create(cwd === undefined ? {} : { cwd })),
-      events: (sessionId, after) => runPromise(rpc.Session.Events(after === undefined ? { sessionId } : { sessionId, after })),
-      checkout: (sessionId, eventId) => runPromise(rpc.Session.Checkout({ sessionId, eventId })),
-      setTitle: (sessionId, title) => runPromise(rpc.Session.SetTitle({ sessionId, title })),
-      mark: (sessionId, marks) => runPromise(rpc.Session.Mark({ sessionId, ...marks })),
-      remove: (sessionId) => unit(rpc.Session.Delete({ sessionId })),
+      list: (cwd) => runPromise(rpc["Session.List"](cwd === undefined ? {} : { cwd })),
+      get: (sessionId) => runPromise(rpc["Session.Get"]({ sessionId })),
+      create: (cwd) => runPromise(rpc["Session.Create"](cwd === undefined ? {} : { cwd })),
+      events: (sessionId, after) => runPromise(rpc["Session.Events"](after === undefined ? { sessionId } : { sessionId, after })),
+      checkout: (sessionId, eventId) => runPromise(rpc["Session.Checkout"]({ sessionId, eventId })),
+      setTitle: (sessionId, title) => runPromise(rpc["Session.SetTitle"]({ sessionId, title })),
+      mark: (sessionId, marks) => runPromise(rpc["Session.Mark"]({ sessionId, ...marks })),
+      remove: (sessionId) => unit(rpc["Session.Delete"]({ sessionId })),
     },
     agent: {
       prompt: (sessionId, content, turn, submit) =>
         unit(
-          rpc.Agent.Prompt({
+          rpc["Agent.Prompt"]({
             sessionId,
             content,
             ...(turn === undefined ? {} : { options: turn }),
@@ -258,46 +279,46 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
             ...(submit?.whenBusy === undefined ? {} : { whenBusy: submit.whenBusy }),
           }),
         ),
-      cancel: (sessionId) => unit(rpc.Agent.Cancel({ sessionId })),
-      running: () => runPromise(rpc.Agent.Running()),
-      queue: (sessionId) => runPromise(rpc.Agent.Queue({ sessionId })),
-      withdraw: (sessionId, requestId) => runPromise(rpc.Agent.Withdraw({ sessionId, requestId })),
-      view: (sessionId) => runPromise(rpc.Agent.View({ sessionId })),
+      cancel: (sessionId) => unit(rpc["Agent.Cancel"]({ sessionId })),
+      running: () => runPromise(rpc["Agent.Running"]()),
+      queue: (sessionId) => runPromise(rpc["Agent.Queue"]({ sessionId })),
+      withdraw: (sessionId, requestId) => runPromise(rpc["Agent.Withdraw"]({ sessionId, requestId })),
+      view: (sessionId) => runPromise(rpc["Agent.View"]({ sessionId })),
     },
     llm: {
-      providers: () => runPromise(rpc.Llm.Providers()),
-      models: (available) => runPromise(rpc.Llm.Models(available === undefined ? {} : { available })),
-      login: (provider, type) => unit(rpc.Llm.Login({ provider, type })),
-      logout: (provider) => unit(rpc.Llm.Logout({ provider })),
-      addCustom: (spec) => runPromise(rpc.Llm.AddCustom({ spec })),
-      removeCustom: (provider) => unit(rpc.Llm.RemoveCustom({ provider })),
-      setLogo: (provider, svg) => unit(rpc.Llm.SetLogo({ provider, ...(svg === undefined ? {} : { svg }) })),
+      providers: () => runPromise(rpc["Llm.Providers"]()),
+      models: (available) => runPromise(rpc["Llm.Models"](available === undefined ? {} : { available })),
+      login: (provider, type) => unit(rpc["Llm.Login"]({ provider, type })),
+      logout: (provider) => unit(rpc["Llm.Logout"]({ provider })),
+      addCustom: (spec) => runPromise(rpc["Llm.AddCustom"]({ spec })),
+      removeCustom: (provider) => unit(rpc["Llm.RemoveCustom"]({ provider })),
+      setLogo: (provider, svg) => unit(rpc["Llm.SetLogo"]({ provider, ...(svg === undefined ? {} : { svg }) })),
     },
     interaction: {
-      list: () => runPromise(rpc.Interaction.List()),
-      answer: (id, answer) => unit(rpc.Interaction.Answer({ id, answer })),
-      dismiss: (id) => unit(rpc.Interaction.Dismiss({ id })),
+      list: () => runPromise(rpc["Interaction.List"]()),
+      answer: (id, answer) => unit(rpc["Interaction.Answer"]({ id, answer })),
+      dismiss: (id) => unit(rpc["Interaction.Dismiss"]({ id })),
     },
     workspace: {
-      status: (path) => runPromise(rpc.Workspace.Status({ path })),
-      browse: (partialPath) => runPromise(rpc.Workspace.Browse({ partialPath })),
-      createDirectory: (path) => runPromise(rpc.Workspace.CreateDirectory({ path })),
+      status: (path) => runPromise(rpc["Workspace.Status"]({ path })),
+      browse: (partialPath) => runPromise(rpc["Workspace.Browse"]({ partialPath })),
+      createDirectory: (path) => runPromise(rpc["Workspace.CreateDirectory"]({ path })),
       createWorktree: (path, options) =>
         runPromise(
-          rpc.Workspace.CreateWorktree(options.base === undefined ? { path, branch: options.branch } : { path, branch: options.branch, base: options.base }),
+          rpc["Workspace.CreateWorktree"](options.base === undefined ? { path, branch: options.branch } : { path, branch: options.branch, base: options.base }),
         ),
-      branches: (path) => runPromise(rpc.Workspace.Branches({ path })),
+      branches: (path) => runPromise(rpc["Workspace.Branches"]({ path })),
       checkout: (path, branch, options) =>
-        runPromise(rpc.Workspace.Checkout(options?.create === undefined ? { path, branch } : { path, branch, create: options.create })),
+        runPromise(rpc["Workspace.Checkout"](options?.create === undefined ? { path, branch } : { path, branch, create: options.create })),
     },
     files: {
-      search: (cwd, query, options) => runPromise(rpc.Files.Search({ cwd, query, ...options })),
+      search: (cwd, query, options) => runPromise(rpc["Files.Search"]({ cwd, query, ...options })),
     },
     commands: {
-      list: () => runPromise(rpc.Command.List()),
+      list: () => runPromise(rpc["Command.List"]()),
       run: (id, context) =>
         runPromise(
-          rpc.Command.Run({
+          rpc["Command.Run"]({
             id,
             ...(context?.cwd === undefined ? {} : { cwd: context.cwd }),
             ...(context?.sessionId === undefined ? {} : { sessionId: context.sessionId }),
@@ -305,17 +326,17 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
         ),
     },
     host: {
-      info: () => runPromise(rpc.Host.Info()),
-      plugins: () => runPromise(rpc.Host.Plugins()),
-      inspectors: () => runPromise(rpc.Host.Inspectors()),
-      inspect: (id) => runPromise(rpc.Host.Inspect({ id })),
-      restartPlugin: (pluginId, options) => unit(rpc.Host.RestartPlugin(options?.force === undefined ? { pluginId } : { pluginId, force: options.force })),
-      reload: () => runPromise(rpc.Host.Reload()),
-      configure: (plugins, options) => runPromise(rpc.Host.Configure(options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
+      info: () => runPromise(rpc["Host.Info"]()),
+      plugins: () => runPromise(rpc["Host.Plugins"]()),
+      inspectors: () => runPromise(rpc["Host.Inspectors"]()),
+      inspect: (id) => runPromise(rpc["Host.Inspect"]({ id })),
+      restartPlugin: (pluginId, options) => unit(rpc["Host.RestartPlugin"](options?.force === undefined ? { pluginId } : { pluginId, force: options.force })),
+      reload: () => runPromise(rpc["Host.Reload"]()),
+      configure: (plugins, options) => runPromise(rpc["Host.Configure"](options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
     ui: {
-      composition: () => runPromise(rpc.Ui.Composition()),
-      configure: (plugins, options) => runPromise(rpc.Ui.Configure(options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
+      composition: () => runPromise(rpc["Ui.Composition"]()),
+      configure: (plugins, options) => runPromise(rpc["Ui.Configure"](options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
     status: () => status,
     onStatus: (listener) => {

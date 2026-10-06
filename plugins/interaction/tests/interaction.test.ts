@@ -72,7 +72,7 @@ describe("interaction", () => {
       Effect.gen(function* () {
         const ask = yield* Interaction;
         yield* ask.confirm("Unattributed?");
-        yield* Effect.locally(ask.confirm("From the turn?"), InteractionOrigin, "session:s1");
+        yield* Effect.provideService(ask.confirm("From the turn?"), InteractionOrigin, "session:s1");
       }),
     );
     expect(ui.seen[0]).not.toHaveProperty("origin");
@@ -111,7 +111,7 @@ describe("interaction", () => {
     const asked = Effect.runSync(Deferred.make<void>());
     const ui = answerer(() =>
       Deferred.succeed(asked, undefined).pipe(
-        Effect.zipRight(Effect.never),
+        Effect.andThen(Effect.never),
         Effect.onInterrupt(() => Deferred.succeed(withdrawn, undefined)),
       ),
     );
@@ -119,9 +119,10 @@ describe("interaction", () => {
       [interaction, ui.plugin],
       Effect.gen(function* () {
         const ask = yield* Interaction;
-        const fiber = yield* Effect.fork(ask.ask("Paste the code"));
+        const fiber = yield* Effect.forkChild(ask.ask("Paste the code"));
         yield* Deferred.await(asked);
-        expect(Exit.isInterrupted(yield* Fiber.interrupt(fiber))).toBe(true);
+        yield* Fiber.interrupt(fiber);
+        expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
         yield* Deferred.await(withdrawn);
       }),
     );

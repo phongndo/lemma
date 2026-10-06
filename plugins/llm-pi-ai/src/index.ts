@@ -25,25 +25,31 @@ import { identityHeaders } from "./identity.ts";
 import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
 const Config = Schema.Struct({
-  include: Schema.optional(Schema.Array(Schema.String)).annotations({ description: "Built-in provider ids to register; default all." }),
-  exclude: Schema.optionalWith(Schema.Array(Schema.String), { default: () => ["openai-codex"] }).annotations({
-    description: "Built-in provider ids to leave out. Default: the legacy openai-codex, whose ChatGPT sign-in openai now offers.",
-  }),
-  providers: Schema.optional(Schema.Array(CustomProvider)).annotations({
+  include: Schema.optional(Schema.Array(Schema.String)).annotate({ description: "Built-in provider ids to register; default all." }),
+  exclude: Schema.Array(Schema.String)
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => ["openai-codex"])))
+    .annotate({
+      description: "Built-in provider ids to leave out. Default: the legacy openai-codex, whose ChatGPT sign-in openai now offers.",
+    }),
+  providers: Schema.optional(Schema.Array(CustomProvider)).annotate({
     description: "Providers on a known wire API (OpenAI-compatible servers, proxies). Replace a built-in with the same id.",
   }),
-  liveCatalogs: Schema.optionalWith(Schema.Boolean, { default: () => true }).annotations({
+  liveCatalogs: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
     title: "Live model catalogs",
     description: "Add the models a built-in provider serves now (its model list, described by models.dev) to the ones this version knows.",
   }),
-  streamTimeout: Schema.optionalWith(Schema.Number.pipe(Schema.nonNegative()), { default: () => 300 }).annotations({
-    title: "Stream timeout",
-    description: "Seconds a model response may go without sending anything (its first event, or the next) before it fails as stalled. 0: wait forever.",
-  }),
-  cacheRetention: Schema.optionalWith(Schema.Literal("short", "long"), { default: () => "short" as const }).annotations({
-    title: "Prompt cache retention",
-    description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
-  }),
+  streamTimeout: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 300)))
+    .annotate({
+      title: "Stream timeout",
+      description: "Seconds a model response may go without sending anything (its first event, or the next) before it fails as stalled. 0: wait forever.",
+    }),
+  cacheRetention: Schema.Literals(["short", "long"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "short" as const)))
+    .annotate({
+      title: "Prompt cache retention",
+      description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
+    }),
 });
 type Config = typeof Config.Type;
 
@@ -101,7 +107,7 @@ export function makeLlmPlugin(options: Options = {}) {
     provides: [Llm],
     requires: [Credentials, Interaction, HostControl, Paths],
     layer: (config: Config) =>
-      Layer.scoped(
+      Layer.effect(
         Llm,
         Effect.gen(function* () {
           const plugin = yield* PluginContext;
@@ -111,7 +117,7 @@ export function makeLlmPlugin(options: Options = {}) {
           const interaction = yield* Interaction;
           const host = yield* HostControl;
           const { home } = yield* Paths;
-          const run = runner(yield* Effect.runtime<never>());
+          const run = runner(yield* Effect.context<never>());
 
           const models = createModels({
             credentials: credentialStore(credentials, run),
@@ -210,71 +216,69 @@ export function makeLlmPlugin(options: Options = {}) {
               if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
               const reasoning = reasoningFor(model, request.thinking);
               const headers = identityHeaders(model);
-              return Stream.asyncPush<StreamEvent>(
-                (emit) =>
-                  Effect.acquireRelease(
-                    Effect.sync(() => {
-                      const controller = new AbortController();
-                      const streamOptions: SimpleStreamOptions = {
-                        signal: controller.signal,
-                        cacheRetention: config.cacheRetention,
-                        maxRetries: SDK_RETRIES,
-                        ...(headers === undefined ? {} : { headers }),
-                        ...(reasoning === undefined ? {} : { reasoning }),
-                        ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
-                        ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
-                      };
-                      const mapper = makeEventMapper(model, provider);
-                      let closed = false;
-                      const send = (out: StreamEvent[]) => !closed && out.length > 0 && emit.array(out);
-                      const close = (out: StreamEvent[]) => {
-                        send(out);
-                        if (!closed) emit.end();
-                        closed = true;
-                      };
-                      // A response that sends nothing for `streamTimeout` ends at once as a transient failure, and the
-                      // request is aborted: a half-open connection would otherwise hold the turn forever.
-                      const idleMs = config.streamTimeout * 1000;
-                      let stalled = false;
-                      let timer: ReturnType<typeof setTimeout> | undefined;
-                      const arm = () => {
-                        if (idleMs <= 0) return;
-                        clearTimeout(timer);
-                        timer = setTimeout(() => {
-                          stalled = true;
-                          close(
-                            mapper.end(new Error(`The model sent nothing for ${config.streamTimeout} seconds; the request was cut off as stalled`), {
-                              kind: "transient",
-                            }),
-                          );
-                          controller.abort();
-                        }, idleMs);
-                      };
-                      void (async () => {
-                        arm();
-                        try {
-                          for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
-                            if (stalled) break;
-                            arm();
-                            send(mapper.push(event));
-                            if (mapper.finished) break;
-                          }
-                          close(mapper.end());
-                        } catch (error) {
-                          close(mapper.end(error));
-                        } finally {
-                          clearTimeout(timer);
-                        }
-                      })();
-                      return () => {
-                        clearTimeout(timer);
+              return Stream.callback<StreamEvent>((queue) =>
+                Effect.acquireRelease(
+                  Effect.sync(() => {
+                    const controller = new AbortController();
+                    const streamOptions: SimpleStreamOptions = {
+                      signal: controller.signal,
+                      cacheRetention: config.cacheRetention,
+                      maxRetries: SDK_RETRIES,
+                      ...(headers === undefined ? {} : { headers }),
+                      ...(reasoning === undefined ? {} : { reasoning }),
+                      ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
+                      ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+                    };
+                    const mapper = makeEventMapper(model, provider);
+                    let closed = false;
+                    const send = (out: StreamEvent[]) => !closed && out.length > 0 && Queue.offerAllUnsafe(queue, out);
+                    const close = (out: StreamEvent[]) => {
+                      send(out);
+                      if (!closed) Queue.endUnsafe(queue);
+                      closed = true;
+                    };
+                    // A response that sends nothing for `streamTimeout` ends at once as a transient failure, and the
+                    // request is aborted: a half-open connection would otherwise hold the turn forever.
+                    const idleMs = config.streamTimeout * 1000;
+                    let stalled = false;
+                    let timer: ReturnType<typeof setTimeout> | undefined;
+                    const arm = () => {
+                      if (idleMs <= 0) return;
+                      clearTimeout(timer);
+                      timer = setTimeout(() => {
+                        stalled = true;
+                        close(
+                          mapper.end(new Error(`The model sent nothing for ${config.streamTimeout} seconds; the request was cut off as stalled`), {
+                            kind: "transient",
+                          }),
+                        );
                         controller.abort();
-                      };
-                    }),
-                    // Interrupting the consumer aborts the provider request.
-                    (stop) => Effect.sync(stop),
-                  ),
-                { bufferSize: "unbounded" },
+                      }, idleMs);
+                    };
+                    void (async () => {
+                      arm();
+                      try {
+                        for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
+                          if (stalled) break;
+                          arm();
+                          send(mapper.push(event));
+                          if (mapper.finished) break;
+                        }
+                        close(mapper.end());
+                      } catch (error) {
+                        close(mapper.end(error));
+                      } finally {
+                        clearTimeout(timer);
+                      }
+                    })();
+                    return () => {
+                      clearTimeout(timer);
+                      controller.abort();
+                    };
+                  }),
+                  // Interrupting the consumer aborts the provider request.
+                  (stop) => Effect.sync(stop),
+                ),
               );
             });
 
@@ -307,7 +311,7 @@ export function makeLlmPlugin(options: Options = {}) {
               Stream.unwrap(
                 hooks.invoke(LlmRequestHook, request, terminal).pipe(
                   // Hook misuse and a closing core are defects here: the contract's error channel is LlmError.
-                  Effect.catchAll((error) => (error._tag === "LlmError" ? Effect.fail(error) : Effect.die(error))),
+                  Effect.catch((error) => (error._tag === "LlmError" ? Effect.fail(error) : Effect.die(error))),
                 ),
               ),
 
@@ -329,21 +333,21 @@ export function makeLlmPlugin(options: Options = {}) {
                   Effect.flatMap((notice) =>
                     notice === undefined
                       ? Effect.void
-                      : Effect.zipRight(
+                      : Effect.andThen(
                           events.publish(Notice, notice),
                           Effect.suspend(() => publishAll),
                         ),
                   ),
                 );
-                const publisher = yield* Effect.fork(publishAll);
-                const flush = Effect.zipRight(Queue.offer(notices, undefined), Fiber.join(publisher));
+                const publisher = yield* Effect.forkChild(publishAll);
+                const flush = Effect.andThen(Queue.offer(notices, undefined), Fiber.join(publisher));
                 yield* Effect.tryPromise({
                   try: (signal) =>
                     models.login(
                       providerId,
                       type,
                       authInteraction(interaction, run, signal, (event) => {
-                        Queue.unsafeOffer(notices, toNotice(event, provider.name));
+                        Queue.offerUnsafe(notices, toNotice(event, provider.name));
                       }),
                       { getDeviceId: () => deviceId(home) },
                     ),
@@ -376,7 +380,7 @@ export function makeLlmPlugin(options: Options = {}) {
                 return entry.id;
               }),
 
-            removeCustom: (providerId) => Effect.zipRight(customOf(providerId), saveProviders({ remove: [providerId] })),
+            removeCustom: (providerId) => Effect.andThen(customOf(providerId), saveProviders({ remove: [providerId] })),
 
             setLogo: (providerId, svg) =>
               Effect.flatMap(customOf(providerId), ({ logo: _logo, ...entry }) =>

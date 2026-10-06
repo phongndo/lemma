@@ -153,7 +153,7 @@ export function testTools(extra: readonly Tool<any>[] = []) {
   const plugin: Plugin = definePlugin({
     id: "test-tools",
     requires: [Tools],
-    layer: Layer.scopedDiscard(
+    layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const registry = yield* Tools;
         for (const tool of [echo, ...extra]) yield* registry.register(tool);
@@ -200,7 +200,7 @@ export function recorder() {
 /** Polls until the predicate holds; dies after five seconds so a wrong expectation fails fast. */
 export function waitFor<A, E, R>(effect: Effect.Effect<A, E, R>, predicate: (value: A) => boolean): Effect.Effect<A, E, R> {
   const poll: Effect.Effect<A, E, R> = Effect.flatMap(effect, (value) =>
-    predicate(value) ? Effect.succeed(value) : Effect.zipRight(Effect.sleep(Duration.millis(5)), poll),
+    predicate(value) ? Effect.succeed(value) : Effect.andThen(Effect.sleep(Duration.millis(5)), poll),
   );
   return poll.pipe(Effect.timeout(Duration.seconds(5)), Effect.orDie);
 }

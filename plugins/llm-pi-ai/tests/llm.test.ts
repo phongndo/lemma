@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Chunk, Effect, Fiber, Layer, Runtime, Schema, Stream } from "effect";
+import { Context, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
@@ -34,7 +34,7 @@ function setup(options: { providers?: () => readonly Provider[]; env?: Record<st
   return { faux, credentials, interaction, plugins: [credentials.plugin, interaction.plugin, llm] as const };
 }
 
-const collect = (request: LlmRequest) => Effect.flatMap(Llm, (llm) => Stream.runCollect(llm.stream(request))).pipe(Effect.map(Chunk.toArray));
+const collect = (request: LlmRequest) => Effect.flatMap(Llm, (llm) => Stream.runCollect(llm.stream(request)));
 
 describe("stream", () => {
   it("maps text and tool calls to schema-conformant events", async () => {
@@ -121,7 +121,7 @@ describe("stream", () => {
       ),
     );
 
-    expect(Chunk.size(events)).toBe(2);
+    expect(events).toHaveLength(2);
     expect(signal?.aborted).toBe(true);
   });
 
@@ -389,8 +389,8 @@ describe("model catalogs", () => {
         const events = yield* Events;
         const llm = yield* Llm;
         yield* Effect.sleep("50 millis");
-        const heard = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(ModelsChanged), 1)));
-        yield* Effect.yieldNow();
+        const heard = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(ModelsChanged), 1)));
+        yield* Effect.yieldNow;
         // Logging out refreshes the provider's catalog, which grows this time.
         yield* llm.logout("grow");
         yield* Fiber.join(heard);
@@ -529,7 +529,7 @@ describe("login", () => {
 describe("credential store adapter", () => {
   it("round-trips through the Credentials capability", async () => {
     const { service, store } = fakeCredentials();
-    const adapter = credentialStore(service, runner(Runtime.defaultRuntime));
+    const adapter = credentialStore(service, runner(Context.empty()));
     const oauth: Credential = { type: "oauth", access: "a", refresh: "r", expires: 1, extra: "kept" };
 
     expect(await adapter.modify("x", async (current) => (current === undefined ? { ...oauth } : undefined) as never)).toEqual(oauth);

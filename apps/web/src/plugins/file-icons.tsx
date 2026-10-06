@@ -10,7 +10,7 @@ import { Icon } from "../ui/parts.tsx";
 import styles from "./file-icons.css?inline";
 
 const FileIconsConfig = Schema.Struct({
-  rules: Schema.optional(Schema.Array(Schema.String)).annotations({
+  rules: Schema.optional(Schema.Array(Schema.String)).annotate({
     title: "Types",
     description:
       "One line per match, before the built-in ones: `.mdc = markdown` for an extension, `Justfile = bash` for a whole name. A type is an icon's name: typescript, react, javascript, rust, python, go, nix, markdown, json, yml, toml, docker, bash, image, text, default, …",

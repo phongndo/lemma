@@ -251,7 +251,7 @@ export const fakeInteraction = definePlugin({
 export const fakeGreeter = definePlugin({
   id: "greeter",
   requires: [Commands, Interaction],
-  layer: Layer.scopedDiscard(
+  layer: Layer.effectDiscard(
     Effect.gen(function* () {
       const [commands, interaction] = yield* Effect.all([Commands, Interaction]);
       yield* commands.register({
@@ -284,7 +284,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
       HostControl,
       Effect.gen(function* () {
         const events = yield* Events;
-        const core = Effect.suspend(() => (holder.core === undefined ? Effect.dieMessage("core not attached") : Effect.succeed(holder.core)));
+        const core = Effect.suspend(() => (holder.core === undefined ? Effect.die(new Error("core not attached")) : Effect.succeed(holder.core)));
         // Every running plugin as a bundled catalog entry; one `configure` turned off is reported disabled (it keeps running here).
         const plugins = Effect.flatMap(core, (core) =>
           Effect.map(core.inspect, (snapshot): PluginInfo[] =>
@@ -398,7 +398,7 @@ export const fakeWorkspace = definePlugin({
 /** `/work` holds `src/app.ts` and `src/`; any other path is not a directory. */
 export const fakeFileSearch = definePlugin({
   id: "file-search",
-  layer: Layer.scopedDiscard(
+  layer: Layer.effectDiscard(
     Effect.flatMap(PluginContext, (owner) =>
       owner
         .add(FileSearchers, {

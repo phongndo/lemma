@@ -28,7 +28,7 @@ export type Timing = typeof Timing.Type;
 /** Who put a piece of the request there. `source` is a plugin id. */
 export const Contribution = Schema.Struct({
   source: Schema.String,
-  kind: Schema.Literal("system", "tool"),
+  kind: Schema.Literals(["system", "tool"]),
   /** Section id or tool name. */
   label: Schema.String,
   chars: Schema.Number,
@@ -36,10 +36,10 @@ export const Contribution = Schema.Struct({
 export type Contribution = typeof Contribution.Type;
 
 /** Why a turn ended: it finished, was cancelled, failed, or ran out of steps. */
-export const TurnEndReason = Schema.Literal("done", "cancelled", "error", "max-steps");
+export const TurnEndReason = Schema.Literals(["done", "cancelled", "error", "max-steps"]);
 export type TurnEndReason = typeof TurnEndReason.Type;
 
-export const EventData = Schema.Union(
+export const EventData = Schema.Union([
   /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
   Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
   Schema.Struct({
@@ -94,7 +94,7 @@ export const EventData = Schema.Union(
      * since the model last answered; or because a host `restart` cut the call off (`attempt` is then 1: a restart
      * counts no failure).
      */
-    retry: Schema.optional(Schema.Struct({ reason: Schema.Literal("failure", "restart"), attempt: Schema.Number, at: Schema.Number })),
+    retry: Schema.optional(Schema.Struct({ reason: Schema.Literals(["failure", "restart"]), attempt: Schema.Number, at: Schema.Number })),
   }),
   /** Replaces the history before `firstKeptId` with `summary` in the model's view; the originals stay in the log. */
   Schema.Struct({
@@ -111,7 +111,7 @@ export const EventData = Schema.Union(
   Schema.Struct({ type: Schema.Literal("title"), title: Schema.String }),
   /** Plugin-owned data; `kind` is namespaced by the plugin id. Not model-visible. */
   Schema.Struct({ type: Schema.Literal("custom"), kind: Schema.String, data: Schema.Unknown }),
-);
+]);
 export type EventData = typeof EventData.Type;
 
 export const SessionEvent = Schema.Struct({
@@ -158,7 +158,7 @@ export interface SessionMarks {
   readonly archived?: boolean;
 }
 
-export class Sessions extends Context.Tag("lemma/Sessions")<
+export class Sessions extends Context.Service<
   Sessions,
   {
     readonly create: (options?: { readonly cwd?: string }) => Effect.Effect<SessionInfo, SessionError>;
@@ -181,4 +181,4 @@ export class Sessions extends Context.Tag("lemma/Sessions")<
     /** Deletes it from disk, for good. */
     readonly remove: (sessionId: string) => Effect.Effect<void, SessionError>;
   }
->() {}
+>()("lemma/Sessions") {}

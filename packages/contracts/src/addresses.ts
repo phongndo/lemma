@@ -15,7 +15,7 @@ export const ThreadRoute = defineRoute("thread", { path: "/threads/:id/:view?" }
 /** A settings section (General when absent); its search is the section's own state, as strings. */
 export const SettingsRoute = defineRoute("settings", {
   path: "/settings/:section?",
-  search: Schema.Record({ key: Schema.String, value: Schema.String }),
+  search: Schema.Record(Schema.String, Schema.String),
 });
 
 /** The scheme of desktop deep links: `lemma://threads/<id>` opens that address in the app. */

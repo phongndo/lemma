@@ -7,15 +7,19 @@ import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript } from "./compact
 export { chooseCut, estimateTokens, transcript } from "./compact.ts";
 
 const Config = Schema.Struct({
-  at: Schema.optionalWith(Schema.Number.pipe(Schema.greaterThan(0), Schema.lessThan(1)), { default: () => 0.8 }).annotations({
-    title: "Summarize at",
-    description: "Share of the model's context window the conversation may fill before its older part is summarized (0.8 is 80%).",
-  }),
-  keepRecent: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.positive()), { default: () => 20_000 }).annotations({
-    title: "Keep recent",
-    description: "Tokens of the latest conversation kept word for word, at most 30% of the window.",
-  }),
-  model: Schema.optional(Schema.String).annotations({
+  at: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThan(1))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 0.8)))
+    .annotate({
+      title: "Summarize at",
+      description: "Share of the model's context window the conversation may fill before its older part is summarized (0.8 is 80%).",
+    }),
+  keepRecent: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 20_000)))
+    .annotate({
+      title: "Keep recent",
+      description: "Tokens of the latest conversation kept word for word, at most 30% of the window.",
+    }),
+  model: Schema.optional(Schema.String).annotate({
     title: "Summary model",
     description: "The model that writes summaries, as provider/model; the turn's model when unset.",
   }),
@@ -64,8 +68,9 @@ export default definePlugin({
               }),
             )
             .pipe(
-              Stream.runFold(undefined as Extract<StreamEvent, { type: "done" | "error" }> | undefined, (last, event) =>
-                event.type === "done" || event.type === "error" ? event : last,
+              Stream.runFold(
+                (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
+                (last, event) => (event.type === "done" || event.type === "error" ? event : last),
               ),
               Effect.flatMap((settled) => {
                 if (settled?.type !== "done") return Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" }));
@@ -127,8 +132,8 @@ export default definePlugin({
             Effect.gen(function* () {
               if (draft.overflow === true || failedIn.get(draft.sessionId) !== draft.turnId) {
                 yield* compact(draft).pipe(
-                  Effect.catchAll((error) =>
-                    Effect.zipRight(
+                  Effect.catch((error) =>
+                    Effect.andThen(
                       Effect.sync(() => failedIn.set(draft.sessionId, draft.turnId)),
                       events.publish(Notice, { level: "warning", source: owner.id, message: `Could not summarize the earlier conversation: ${error.message}` }),
                     ),

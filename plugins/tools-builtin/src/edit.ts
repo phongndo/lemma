@@ -1,21 +1,21 @@
 import { constants } from "node:fs";
 import { access, readFile, writeFile } from "node:fs/promises";
-import { JSONSchema, Schema } from "effect";
+import { Schema, SchemaTransformation } from "effect";
 import type { Tool } from "@lemma/contracts";
 import { unifiedPatch } from "./diff.ts";
 import { fsMessage, resolveToCwd, text, throwIfAborted, withFileLock } from "./files.ts";
 
 const Replacement = Schema.Struct({
-  oldText: Schema.String.annotations({
+  oldText: Schema.String.annotate({
     description:
       "Exact text for one targeted replacement. It must be unique in the original file and must not overlap with any other edits[].oldText in the same call.",
   }),
-  newText: Schema.String.annotations({ description: "Replacement text for this targeted edit." }),
+  newText: Schema.String.annotate({ description: "Replacement text for this targeted edit." }),
 });
 
 const EditFields = Schema.Struct({
-  path: Schema.String.annotations({ description: "Path to the file to edit (relative or absolute)" }),
-  edits: Schema.Array(Replacement).annotations({
+  path: Schema.String.annotate({ description: "Path to the file to edit (relative or absolute)" }),
+  edits: Schema.Array(Replacement).annotate({
     description:
       "One or more targeted replacements. Each edit is matched against the original file, not incrementally. Do not include overlapping or nested edits. If two changes touch the same block or nearby lines, merge them into one edit instead.",
   }),
@@ -56,10 +56,15 @@ function prepare(input: unknown): unknown {
   return args;
 }
 
-/** Accepts the repaired shapes; the model is shown only the canonical `{ path, edits }` schema. */
-export const EditInput = Schema.transform(Schema.Unknown, EditFields, { strict: false, decode: prepare, encode: (value) => value }).annotations({
-  jsonSchema: JSONSchema.make(EditFields),
-});
+/**
+ * Accepts the repaired shapes; the model is shown only the canonical `{ path, edits }` schema, which a
+ * check that passes everything carries to JSON Schema on the otherwise unconstrained encoded side.
+ */
+export const EditInput = Schema.Unknown.check(
+  Schema.makeFilter(() => true, { toJsonSchema: () => Schema.toJsonSchemaDocument(EditFields, { onExcessProperty: "error" }).schema }),
+).pipe(
+  Schema.decodeTo(EditFields, SchemaTransformation.transform({ decode: (input) => prepare(input) as typeof EditFields.Encoded, encode: (value) => value })),
+);
 export type EditInput = typeof EditFields.Type;
 
 export interface EditDetails {

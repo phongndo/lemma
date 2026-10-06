@@ -1,4 +1,4 @@
-import { Effect, Order, Scope, Stream } from "effect";
+import { Effect, Order, Queue, Scope, Stream } from "effect";
 import type { Context } from "effect";
 import { CoreClosed, RegistryError } from "../errors.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
@@ -42,14 +42,14 @@ export interface RegistrySnapshot {
 
 /** One plugin instance's contributions; the same lifecycle as its hook handlers (see `OwnerHandle` in hooks.ts). */
 export interface ContributorHandle {
-  readonly add: Context.Tag.Service<PluginContext>["add"];
+  readonly add: Context.Service.Shape<typeof PluginContext>["add"];
   readonly publish: () => void;
   readonly retire: () => void;
   readonly stop: () => void;
 }
 
 /** Contributions change only when plugins add, remove, or change lifecycle; readers get immutable arrays. */
-export class RegistryStore implements Context.Tag.Service<Registries> {
+export class RegistryStore implements Context.Service.Shape<typeof Registries> {
   private readonly entries = new Map<string, Entry>();
   private sequence = 0;
   private closed = false;
@@ -66,7 +66,7 @@ export class RegistryStore implements Context.Tag.Service<Registries> {
   inspect(): readonly RegistrySnapshot[] {
     return [...this.entries.values()]
       .filter((entry) => entry.visible.length > 0)
-      .sort((a, b) => Order.string(a.name, b.name))
+      .sort((a, b) => Order.String(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
         items: entry.all
@@ -95,7 +95,7 @@ export class RegistryStore implements Context.Tag.Service<Registries> {
     });
     const add = <I>(registry: Registry<I>, value: I, options: ContributeOptions = {}) =>
       Effect.uninterruptible(
-        Effect.gen(this, function* () {
+        Effect.gen({ self: this }, function* () {
           if (this.closed) return yield* new CoreClosed();
           if (!owner.accepting) return yield* ownerClosed(registry.name, identity.id);
           const order = options.order ?? 0;
@@ -182,15 +182,15 @@ export class RegistryStore implements Context.Tag.Service<Registries> {
     );
 
   readonly changes = <I>(registry: Registry<I>): Stream.Stream<readonly Contribution<I>[]> =>
-    Stream.unwrapScoped(
-      Effect.gen(this, function* () {
+    Stream.unwrap(
+      Effect.gen({ self: this }, function* () {
         if (this.closed) return Stream.make([] as readonly Contribution<I>[]);
         const entry = yield* Effect.orDie(this.entry(registry));
-        return Stream.asyncPush<readonly Contribution<I>[]>(
-          (emit) =>
+        return Stream.callback<readonly Contribution<I>[]>(
+          (queue) =>
             Effect.acquireRelease(
               Effect.sync(() => {
-                const listener = (items: readonly Contribution<unknown>[]) => void emit.single(items as readonly Contribution<I>[]);
+                const listener = (items: readonly Contribution<unknown>[]) => void Queue.offerUnsafe(queue, items as readonly Contribution<I>[]);
                 entry.listeners.add(listener);
                 listener(entry.visible);
                 return listener;
@@ -239,7 +239,7 @@ export class RegistryStore implements Context.Tag.Service<Registries> {
 }
 
 const byOrder = (a: Item, b: Item) =>
-  a.contribution.order - b.contribution.order || Order.string(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence;
+  a.contribution.order - b.contribution.order || Order.String(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence;
 
 /** Recomputes the visible array and tells readers, only when what they see changed. */
 function update(entry: Entry): void {

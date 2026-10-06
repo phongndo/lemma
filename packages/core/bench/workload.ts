@@ -10,7 +10,7 @@ const gc = () => {
   if (!globalThis.gc) throw new Error("Run Node with --expose-gc");
   globalThis.gc();
 };
-class Value extends Context.Tag("stress/Value")<Value, number>() {}
+class Value extends Context.Service<Value, number>()("stress/Value") {}
 const Point = Hook.make<number, number>("stress/operation");
 const live = new Set<object>();
 let crash!: Deferred.Deferred<void>;
@@ -20,7 +20,7 @@ const plugin = definePlugin({
   provides: [Value],
   config: Schema.Struct({ value: Schema.Number }),
   layer: ({ value }) =>
-    Layer.scoped(
+    Layer.effect(
       Value,
       Effect.gen(function* () {
         const resource = {};
@@ -33,7 +33,7 @@ const plugin = definePlugin({
         owner = yield* PluginContext;
         yield* owner.on(Point, (input, next) => next(input + value));
         crash = yield* Deferred.make<void>();
-        yield* owner.background("connection", Deferred.await(crash).pipe(Effect.zipRight(Effect.fail("lost"))), { required: true });
+        yield* owner.background("connection", Deferred.await(crash).pipe(Effect.andThen(Effect.fail("lost"))), { required: true });
         return value;
       }),
     ),
@@ -48,7 +48,7 @@ async function cycle(measure: boolean) {
         const loader = yield* makeLoader({ source: { resolve: () => Effect.succeed(plugin) }, composition: composition(0) });
         // A diagnostic subscriber that never advances exercises bounded retention.
         yield* Effect.forkScoped(Stream.runForEach(loader.core.faults, () => Effect.never));
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         for (let n = 0; n < 300; n++) yield* owner.background("noise", Effect.fail(n));
         for (let version = 1; version <= 3; version++) {
           yield* loader.apply(composition(version));

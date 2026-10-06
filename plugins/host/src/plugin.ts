@@ -6,7 +6,7 @@ import type { Plugin, PluginFault } from "@lemma/core";
 import { HOST_PLUGIN_ID } from "./config.ts";
 import { PathsSchema } from "./paths.ts";
 
-export type HostControlService = Context.Tag.Service<HostControl>;
+export type HostControlService = Context.Service.Shape<typeof HostControl>;
 
 interface HostPluginOptions {
   /** The app owns the loader; it hands the plugin a handle rather than the loader itself. */
@@ -46,7 +46,7 @@ export function hostPlugin(options: HostPluginOptions): Plugin<readonly [typeof 
               Stream.runForEach(options.faults, (fault) =>
                 events
                   .publish(Notice, { level: "error", source: fault.pluginId, message: `${fault.message}: ${Cause.pretty(fault.cause)}` })
-                  .pipe(Effect.zipRight(changed)),
+                  .pipe(Effect.andThen(changed)),
               ),
             );
             return {

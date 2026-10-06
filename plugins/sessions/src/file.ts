@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants, promises as fs } from "node:fs";
 import * as path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { SessionError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
 import { decodeRecord, encodeLine } from "./format.ts";
@@ -208,14 +208,14 @@ export function load(file: string, sessionId: string): Effect.Effect<Loaded, Ses
     const visit = (json: unknown, n: number): string | undefined => {
       if (header === undefined) {
         const decoded = decodeRecord(json, true);
-        if (Either.isLeft(decoded)) return `unreadable header (${decoded.left})`;
-        header = decoded.right as Header;
+        if (Result.isFailure(decoded)) return `unreadable header (${decoded.failure})`;
+        header = decoded.success as Header;
         updatedAt = header.createdAt;
         return undefined;
       }
       const decoded = decodeRecord(json, false);
-      if (Either.isLeft(decoded)) return `line ${n}: ${decoded.left}`;
-      const line = decoded.right as Exclude<Line, Header>;
+      if (Result.isFailure(decoded)) return `line ${n}: ${decoded.failure}`;
+      const line = decoded.success as Exclude<Line, Header>;
       if ("type" in line && line.type === "marks") {
         marks = applyMarks(marks, line);
         return undefined;
@@ -288,8 +288,8 @@ async function scanFrom(file: string, from: Scanned | undefined): Promise<Scanne
   const visit = (json: unknown, n: number): string | undefined => {
     if (header === undefined) {
       const decoded = decodeRecord(json, true);
-      if (Either.isLeft(decoded)) return `unreadable header (${decoded.left})`;
-      header = decoded.right as Header;
+      if (Result.isFailure(decoded)) return `unreadable header (${decoded.failure})`;
+      header = decoded.success as Header;
       updatedAt = header.createdAt;
       return undefined;
     }

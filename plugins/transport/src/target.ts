@@ -1,6 +1,6 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Data, Effect, Either, Schema } from "effect";
+import { Data, Effect, Result, Schema } from "effect";
 import { writeFileAtomic } from "@lemma/contracts/fs";
 import { discoveryPath, readDiscovery } from "./discovery.ts";
 
@@ -36,7 +36,7 @@ class TargetError extends Data.TaggedError("TargetError")<{
 
 const Remote = Schema.Struct({ url: Schema.String, token: Schema.String });
 type Remote = typeof Remote.Type;
-const decode = Schema.decodeUnknownEither(Schema.parseJson(Remote));
+const decode = Schema.decodeUnknownResult(Schema.fromJsonString(Remote));
 
 export const remotePath = (home: string): string => join(home, "remote.json");
 
@@ -68,7 +68,7 @@ const readRemote = (home: string): Effect.Effect<Remote | undefined, TargetError
   }).pipe(
     Effect.flatMap((text) => {
       if (text === undefined) return Effect.succeed(undefined);
-      const entry = Either.getOrUndefined(decode(text));
+      const entry = Result.getOrUndefined(decode(text));
       const url = entry === undefined ? undefined : normalizeUrl(entry.url);
       const token = entry?.token.trim() ?? "";
       return url === undefined || token === "" ? Effect.fail(unusable(path, 'it is not {"url": "http(s)://…", "token": "…"}')) : Effect.succeed({ url, token });

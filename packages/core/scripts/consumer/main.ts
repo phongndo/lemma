@@ -12,7 +12,7 @@ const provider = (id: string, format: (text: string) => string) =>
   definePlugin({
     id,
     provides: [Formatter],
-    layer: Layer.scoped(
+    layer: Layer.effect(
       Formatter,
       Effect.gen(function* () {
         active.add(id);
@@ -32,7 +32,7 @@ const consumer = definePlugin({
   id: "consumer",
   requires: [Formatter],
   provides: [Message],
-  layer: Layer.scoped(
+  layer: Layer.effect(
     Message,
     Effect.gen(function* () {
       const formatter = yield* Formatter;

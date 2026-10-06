@@ -10,7 +10,7 @@ import { failedAs } from "./turn.ts";
  * Dropped when the session goes idle, so a long-running host keeps none for
  * idle sessions.
  */
-export const makeRequestIndex = (sessions: Context.Tag.Service<typeof Sessions>) => {
+export const makeRequestIndex = (sessions: Context.Service.Shape<typeof Sessions>) => {
   const placed = new Map<string, Map<string, string | undefined>>();
   const loaded = new Set<string>();
   /** The session's request ids, each with the turn that placed it. */

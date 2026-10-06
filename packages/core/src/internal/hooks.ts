@@ -1,5 +1,6 @@
-import { Context, Effect, Order, Scope, Tracer } from "effect";
+import { Context, Effect, Order, Scope } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
+import { servicesOf } from "./settings.ts";
 import type { Handler, Hook, HookOptions, Hooks, Next, PluginContext, PluginIdentity } from "../hooks.ts";
 
 interface Entry {
@@ -42,14 +43,14 @@ export interface HookSnapshot {
  * any dispatch that still reaches them.
  */
 export interface OwnerHandle {
-  readonly on: Context.Tag.Service<PluginContext>["on"];
+  readonly on: Context.Service.Shape<typeof PluginContext>["on"];
   readonly publish: () => void;
   readonly retire: () => void;
   readonly stop: () => void;
 }
 
 /** Registrations change only on lifecycle steps; dispatch uses immutable arrays. */
-export class HookRegistry implements Context.Tag.Service<Hooks> {
+export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
   private readonly entries = new Map<string, Entry>();
   private sequence = 0;
   private closed = false;
@@ -62,7 +63,7 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
   inspect(): readonly HookSnapshot[] {
     return [...this.entries.values()]
       .filter((entry) => entry.handlers.length > 0)
-      .sort((a, b) => Order.string(a.name, b.name))
+      .sort((a, b) => Order.String(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
         handlers: entry.handlers.map(({ owner, order }) => ({ pluginId: owner.identity.id, order })),
@@ -74,7 +75,7 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
     const owned = new Set<Registration>();
     const on = <I, O, E, R>(hook: Hook<I, O, E>, handler: Handler<I, O, E, R>, options: HookOptions = {}) =>
       Effect.uninterruptible(
-        Effect.gen(this, function* () {
+        Effect.gen({ self: this }, function* () {
           if (this.closed) return yield* new CoreClosed();
           if (!owner.accepting) return yield* ownerClosed(hook.name, identity.id);
           const order = options.order ?? 0;
@@ -82,7 +83,7 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
             return yield* new HookError({ reason: "InvalidOrder", hook: hook.name, pluginId: identity.id, message: "Hook order must be finite" });
           }
           const entry = yield* this.entry(hook);
-          const environment = withoutParent(yield* Effect.context<R>());
+          const environment = servicesOf(yield* Effect.context<R>());
           const registration: Registration = {
             owner,
             entry,
@@ -142,12 +143,12 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
     input: I,
     terminal: (input: I) => Effect.Effect<O, E, R>,
   ): Effect.Effect<O, E | HookError | CoreClosed, R> => {
-    return Effect.gen(this, function* () {
+    return Effect.gen({ self: this }, function* () {
       if (this.closed) return yield* new CoreClosed();
       const entry = yield* this.entry(hook);
       const handlers = entry.handlers;
       if (handlers.length === 0) return yield* Effect.suspend(() => terminal(input));
-      const caller = withoutParent(yield* Effect.context<R>());
+      const caller = servicesOf(yield* Effect.context<R>());
       const dispatch = (index: number, value: I): Effect.Effect<O, E | HookError | CoreClosed> =>
         Effect.suspend(() => {
           if (this.closed) return Effect.fail(new CoreClosed());
@@ -182,12 +183,13 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
                 alive = false;
               }),
             ),
-            Effect.withSpan("core.hook", {
+            Effect.withSpan(
+              "core.hook",
+              { attributes: { ...attributes(registration.owner.identity), "hook.name": hook.name, "hook.order": registration.order } },
               // This frame is always the dispatcher, not plugin code. Keep attribution
               // and failure stacks without capturing a redundant stack on every call.
-              captureStackTrace: false,
-              attributes: { ...attributes(registration.owner.identity), "hook.name": hook.name, "hook.order": registration.order },
-            }),
+              { captureStackTrace: false },
+            ),
           );
         });
       return yield* dispatch(0, input);
@@ -219,7 +221,7 @@ export class HookRegistry implements Context.Tag.Service<Hooks> {
 function rebuild(entry: Entry): void {
   entry.handlers = entry.all
     .filter((registration) => registration.active && registration.owner.visible)
-    .sort((a, b) => a.order - b.order || Order.string(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence);
+    .sort((a, b) => a.order - b.order || Order.String(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence);
 }
 
 export function attributes(identity: PluginIdentity): Record<string, string> {
@@ -227,14 +229,6 @@ export function attributes(identity: PluginIdentity): Record<string, string> {
     "plugin.id": identity.id,
     ...(identity.version === undefined ? {} : { "plugin.version": identity.version }),
   };
-}
-
-// Dependencies belong to the registration/caller; trace ancestry belongs to this invocation.
-export function withoutParent<R>(context: Context.Context<R>): Context.Context<R> {
-  if (!context.unsafeMap.has(Tracer.ParentSpan.key)) return context;
-  const values = new Map(context.unsafeMap);
-  values.delete(Tracer.ParentSpan.key);
-  return Context.unsafeMake<R>(values);
 }
 
 function ownerClosed(hook: string, pluginId: string): HookError {

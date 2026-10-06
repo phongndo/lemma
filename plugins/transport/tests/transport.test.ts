@@ -1,16 +1,16 @@
-import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { Duration, Effect, Exit, Fiber, Layer, Schedule, Scope, Stream } from "effect";
-import type { Mailbox } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest, Socket } from "@effect/platform";
-import { RpcClient, RpcSerialization } from "@effect/rpc";
-import type { RpcClientError, RpcGroup } from "@effect/rpc";
-import { CommandsChanged, HostError, HostRpcs, Inspectors, Interaction, InteractionError, Notice } from "@lemma/contracts";
+import { Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schedule, Scope, Stream } from "effect";
+import type { Cause } from "effect";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { RpcClient, RpcSerialization } from "effect/rpc";
+import type { RpcClientError, RpcGroup } from "effect/rpc";
+import { Socket } from "effect/socket";
+import { CommandsChanged, HostError, HostRpcs, Inspectors, Interaction, InteractionError, Notice, SUBSCRIBED_HEADER } from "@lemma/contracts";
 import type { HostEvent } from "@lemma/contracts";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Core, Plugin } from "@lemma/core";
@@ -32,7 +32,7 @@ import {
 import type { ControlHolder } from "./fakes.ts";
 
 type Client = RpcClient.RpcClient<RpcGroup.Rpcs<typeof HostRpcs>, RpcClientError.RpcClientError>;
-type EventBox = Mailbox.ReadonlyMailbox<HostEvent, RpcClientError.RpcClientError>;
+type EventBox = Queue.Dequeue<HostEvent, RpcClientError.RpcClientError | Cause.Done>;
 type Kind = "websocket" | "http";
 
 interface Host {
@@ -53,7 +53,8 @@ const connect = (url: string, token: string, kind: Kind): Effect.Effect<Client, 
             Layer.provide(Socket.layerWebSocketConstructorGlobal),
             Layer.provide(RpcSerialization.layerJson),
           )
-        : RpcClient.layerProtocolHttp({ url: `${url}/rpc/http` }).pipe(
+        : // As `makeHostRpcHttp` does: the protocol would post to `<url>/`, which the host does not route.
+          RpcClient.layerProtocolHttp({ url: `${url}/rpc/http`, transformClient: HttpClient.mapRequest(HttpClientRequest.setUrl(`${url}/rpc/http`)) }).pipe(
             // Without filterStatusOk the client parses a 401 body as NDJSON and waits forever.
             Layer.provide(
               Layer.effect(
@@ -105,7 +106,7 @@ const withHost = <A, E>(
         );
         holder.core = core;
         const found = yield* readDiscovery(home);
-        if (found === undefined) return yield* Effect.dieMessage("no discovery file");
+        if (found === undefined) return yield* Effect.die(new Error("no discovery file"));
         return yield* body({ core, url: found.url, token: found.token, home, holder, connect: (kind, token = found.token) => connect(found.url, token, kind) });
       }).pipe(Effect.timeout(Duration.seconds(20))),
     ),
@@ -114,33 +115,30 @@ const withHost = <A, E>(
 /** Takes events until one satisfies the predicate (inclusive). */
 const waitFor = (events: EventBox, done: (event: HostEvent) => boolean) => {
   const loop = (seen: HostEvent[]): Effect.Effect<HostEvent[]> =>
-    Effect.flatMap(Effect.orDie(events.take), (event) => (done(event) ? Effect.succeed([...seen, event]) : loop([...seen, event])));
+    Effect.flatMap(Effect.orDie(Queue.take(events)), (event) => (done(event) ? Effect.succeed([...seen, event]) : loop([...seen, event])));
   return loop([]).pipe(Effect.timeout(Duration.seconds(5)), Effect.orDie);
 };
 
-/**
- * The RPC client sends a stream request asynchronously, so a subscription is
- * live only once something published after it arrives. Publishes marker
- * notices until one does.
- */
-const subscribe = (host: Host, client: Client) =>
+/** Subscribes and waits for the host's `subscribed`: from then on the subscription receives everything. */
+const subscribe = (client: Client) =>
   Effect.gen(function* () {
-    const events = yield* client.Host.Events(undefined, { asMailbox: true });
-    const marker = randomUUID();
-    const ping = host.core.run(Effect.flatMap(Events, (bus) => bus.publish(Notice, { level: "info", message: marker })));
-    const pinger = yield* Effect.fork(Effect.repeat(ping, Schedule.spaced(Duration.millis(20))));
-    yield* waitFor(events, (event) => event.type === "notice" && event.notice.message === marker);
-    yield* Fiber.interrupt(pinger);
+    const events = yield* client["Host.Events"](undefined, { asQueue: true, headers: { [SUBSCRIBED_HEADER]: "1" } });
+    yield* waitFor(events, (event) => event.type === "subscribed");
     return events;
   });
 
+/** The exit's typed failure, if it failed with one. */
+const failure = (exit: Exit.Exit<unknown, unknown>): unknown => Option.getOrUndefined(Exit.findErrorOption(exit));
+
 const hostError = (exit: Exit.Exit<unknown, unknown>): HostError => {
-  if (Exit.isFailure(exit) && exit.cause._tag === "Fail" && exit.cause.error instanceof HostError) return exit.cause.error;
+  const error = failure(exit);
+  if (error instanceof HostError) return error;
   throw new Error(`Expected a HostError, got ${String(exit)}`);
 };
 
 const interactionError = (exit: Exit.Exit<unknown, unknown>): InteractionError => {
-  if (Exit.isFailure(exit) && exit.cause._tag === "Fail" && exit.cause.error instanceof InteractionError) return exit.cause.error;
+  const error = failure(exit);
+  if (error instanceof InteractionError) return error;
   throw new Error(`Expected an InteractionError, got ${String(exit)}`);
 };
 
@@ -162,12 +160,12 @@ describe("transport", () => {
         expect((yield* get("/")).status).toBe(404);
 
         const client = yield* host.connect("http", "wrong");
-        const exit = yield* Effect.exit(client.Session.List({}));
-        expect(Exit.isFailure(exit) && exit.cause._tag === "Fail" && exit.cause.error._tag).toBe("RpcClientError");
+        const exit = yield* Effect.exit(client["Session.List"]({}));
+        expect(Option.getOrUndefined(Exit.findErrorOption(exit))?._tag).toBe("RpcClientError");
 
         // The WebSocket upgrade itself is refused; the RPC client would only keep retrying.
         const socket = (token: string) =>
-          Effect.async<"open" | "refused">((resume) => {
+          Effect.callback<"open" | "refused">((resume) => {
             const ws = new WebSocket(`${host.url.replace(/^http/, "ws")}/rpc?token=${encodeURIComponent(token)}`);
             ws.onopen = () => {
               ws.close();
@@ -203,9 +201,9 @@ describe("transport", () => {
         expect((yield* get(`/api/ui/user/..%2Fconfig.jsonc?${token}`)).status).toBe(404);
 
         const client = yield* host.connect("websocket");
-        const events = yield* subscribe(host, client);
-        expect((yield* client.Ui.Composition()).files.map((file) => file.name)).toEqual(["panel.js"]);
-        const written = yield* client.Ui.Configure({ plugins: { composer: { enabled: false } } });
+        const events = yield* subscribe(client);
+        expect((yield* client["Ui.Composition"]()).files.map((file) => file.name)).toEqual(["panel.js"]);
+        const written = yield* client["Ui.Configure"]({ plugins: { composer: { enabled: false } } });
         expect(written.plugins).toEqual({ composer: { enabled: false } });
         const [changed] = (yield* waitFor(events, (event) => event.type === "ui-changed")).slice(-1);
         expect(changed?.type === "ui-changed" && changed.ui.plugins).toEqual({ composer: { enabled: false } });
@@ -216,16 +214,16 @@ describe("transport", () => {
     withHost((host) =>
       Effect.gen(function* () {
         const client = yield* host.connect("websocket");
-        const events = yield* subscribe(host, client);
-        const session = yield* client.Session.Create({});
-        expect(yield* client.Session.Mark({ sessionId: session.id, pinned: true })).toMatchObject({ id: session.id, pinned: true });
-        const archived = yield* client.Session.Mark({ sessionId: session.id, archived: true });
+        const events = yield* subscribe(client);
+        const session = yield* client["Session.Create"]({});
+        expect(yield* client["Session.Mark"]({ sessionId: session.id, pinned: true })).toMatchObject({ id: session.id, pinned: true });
+        const archived = yield* client["Session.Mark"]({ sessionId: session.id, archived: true });
         expect(archived).toMatchObject({ pinned: true, archived: true });
         yield* waitFor(events, (event) => event.type === "session-changed" && event.info.archived === true);
-        yield* client.Session.Delete({ sessionId: session.id });
+        yield* client["Session.Delete"]({ sessionId: session.id });
         yield* waitFor(events, (event) => event.type === "session-removed" && event.sessionId === session.id);
-        expect(yield* client.Session.List({})).toEqual([]);
-        const missing = yield* Effect.flip(client.Session.Delete({ sessionId: session.id }));
+        expect(yield* client["Session.List"]({})).toEqual([]);
+        const missing = yield* Effect.flip(client["Session.Delete"]({ sessionId: session.id }));
         expect(missing).toMatchObject({ _tag: "HostError", code: "NotFound" });
       }),
     ));
@@ -236,15 +234,15 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          const events = yield* subscribe(host, client);
+          const events = yield* subscribe(client);
 
-          const session = yield* client.Session.Create({});
+          const session = yield* client["Session.Create"]({});
           expect(session.cwd).toBe("/work");
           yield* waitFor(events, (event) => event.type === "session-changed" && event.info.id === session.id);
-          expect((yield* client.Session.List({})).map((info) => info.id)).toEqual([session.id]);
-          expect(yield* client.Session.List({ cwd: "/elsewhere" })).toEqual([]);
+          expect((yield* client["Session.List"]({})).map((info) => info.id)).toEqual([session.id]);
+          expect(yield* client["Session.List"]({ cwd: "/elsewhere" })).toEqual([]);
 
-          yield* client.Agent.Prompt({ sessionId: session.id, content: text("hi"), requestId: "r1", whenBusy: "steer" });
+          yield* client["Agent.Prompt"]({ sessionId: session.id, content: text("hi"), requestId: "r1", whenBusy: "steer" });
           expect(prompted.at(-1)).toEqual({ requestId: "r1", whenBusy: "steer" });
           // Kinds are observed independently, so `turn-ended` may overtake the last delta: wait for both.
           let ended = false;
@@ -257,39 +255,39 @@ describe("transport", () => {
           expect(turn.some((event) => event.type === "turn-started" && event.sessionId === session.id)).toBe(true);
           // Deltas carry their number in the step, so a client seeded from `Agent.View` can skip what it already shows.
           expect(turn.flatMap((event) => (event.type === "delta" ? [event.seq] : []))).toEqual([1, 2]);
-          expect(yield* client.Agent.Running()).toEqual([]);
-          expect(yield* client.Agent.View({ sessionId: session.id })).toEqual({ output: [], queue: [], queueRevision: 0 });
-          expect(yield* client.Agent.Queue({ sessionId: session.id })).toEqual([]);
-          expect(yield* client.Agent.Withdraw({ sessionId: session.id, requestId: "r1" })).toBe(false);
+          expect(yield* client["Agent.Running"]()).toEqual([]);
+          expect(yield* client["Agent.View"]({ sessionId: session.id })).toEqual({ output: [], queue: [], queueRevision: 0 });
+          expect(yield* client["Agent.Queue"]({ sessionId: session.id })).toEqual([]);
+          expect(yield* client["Agent.Withdraw"]({ sessionId: session.id, requestId: "r1" })).toBe(false);
 
-          const logged = yield* client.Session.Events({ sessionId: session.id });
+          const logged = yield* client["Session.Events"]({ sessionId: session.id });
           expect(logged.map((event) => (event.data.type === "message" ? event.data.message.role : event.data.type))).toEqual(["user", "assistant"]);
-          expect((yield* client.Session.Events({ sessionId: session.id, after: 1 })).map((event) => event.seq)).toEqual([2]);
+          expect((yield* client["Session.Events"]({ sessionId: session.id, after: 1 })).map((event) => event.seq)).toEqual([2]);
 
-          const titled = yield* client.Session.SetTitle({ sessionId: session.id, title: "Hello" });
+          const titled = yield* client["Session.SetTitle"]({ sessionId: session.id, title: "Hello" });
           expect(titled).toMatchObject({ id: session.id, title: "Hello", lastSeq: 3 });
           yield* waitFor(events, (event) => event.type === "session-appended" && event.event.data.type === "title");
-          expect((yield* client.Session.Checkout({ sessionId: session.id, eventId: logged[0]!.id })).leaf).toBe(logged[0]!.id);
+          expect((yield* client["Session.Checkout"]({ sessionId: session.id, eventId: logged[0]!.id })).leaf).toBe(logged[0]!.id);
 
-          const missing = hostError(yield* Effect.exit(client.Session.Get({ sessionId: "missing" })));
+          const missing = hostError(yield* Effect.exit(client["Session.Get"]({ sessionId: "missing" })));
           expect(missing).toMatchObject({ code: "NotFound", subject: "missing" });
-          expect(hostError(yield* Effect.exit(client.Agent.Prompt({ sessionId: "missing", content: text("x") })))).toMatchObject({
+          expect(hostError(yield* Effect.exit(client["Agent.Prompt"]({ sessionId: "missing", content: text("x") })))).toMatchObject({
             code: "Session",
             subject: "missing",
           });
 
-          expect((yield* client.Llm.Models({})).map((model) => model.ref)).toEqual(["fake/echo"]);
-          expect(yield* client.Llm.Models({ available: false })).toEqual([]);
-          expect((yield* client.Llm.Providers()).map((provider) => provider.id)).toEqual(["fake"]);
-          expect(hostError(yield* Effect.exit(client.Llm.Login({ provider: "nope", type: "api_key" })))).toMatchObject({ code: "UnknownProvider" });
+          expect((yield* client["Llm.Models"]({})).map((model) => model.ref)).toEqual(["fake/echo"]);
+          expect(yield* client["Llm.Models"]({ available: false })).toEqual([]);
+          expect((yield* client["Llm.Providers"]()).map((provider) => provider.id)).toEqual(["fake"]);
+          expect(hostError(yield* Effect.exit(client["Llm.Login"]({ provider: "nope", type: "api_key" })))).toMatchObject({ code: "UnknownProvider" });
 
-          expect(yield* client.Host.Info()).toEqual({
+          expect(yield* client["Host.Info"]()).toEqual({
             version: "0.1.0",
             cwd: "/work",
             home: host.home,
             composition: { id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] },
           });
-          const plugins = yield* client.Host.Plugins();
+          const plugins = yield* client["Host.Plugins"]();
           expect(plugins.find((plugin) => plugin.id === "transport")).toEqual({
             id: "transport",
             version: "0.1.0",
@@ -299,27 +297,27 @@ describe("transport", () => {
             provides: [],
             requires: ["lemma/Paths", "lemma/Sessions", "lemma/Agent", "lemma/Llm", "lemma/HostControl", "lemma/Workspace", "lemma/Commands"],
           });
-          yield* client.Host.RestartPlugin({ pluginId: "llm" });
-          yield* client.Host.RestartPlugin({ pluginId: "llm", force: true });
+          yield* client["Host.RestartPlugin"]({ pluginId: "llm" });
+          yield* client["Host.RestartPlugin"]({ pluginId: "llm", force: true });
           expect(host.holder.restarted).toEqual(["llm", "llm!"]);
           const [changed] = (yield* waitFor(events, (event) => event.type === "plugins-changed")).slice(-1);
           expect(changed?.type === "plugins-changed" && changed.plugins.some((plugin) => plugin.id === "llm")).toBe(true);
-          const unknown = hostError(yield* Effect.exit(client.Host.RestartPlugin({ pluginId: "nope" })));
+          const unknown = hostError(yield* Effect.exit(client["Host.RestartPlugin"]({ pluginId: "nope" })));
           expect(unknown.code).toBe("ReloadError");
           expect(unknown.subject).toBe("nope");
           expect(unknown.message).toContain('error [nope]: No plugin "nope" (Check the id)');
-          expect(yield* client.Host.Reload()).toEqual({ started: ["x"], restarted: [], stopped: [] });
+          expect(yield* client["Host.Reload"]()).toEqual({ started: ["x"], restarted: [], stopped: [] });
 
           // Configure writes rows and reports the change; a disabled plugin stays in the list as "disabled".
-          expect(yield* client.Host.Configure({ plugins: { greeter: { enabled: false } }, scope: "project" })).toEqual({
+          expect(yield* client["Host.Configure"]({ plugins: { greeter: { enabled: false } }, scope: "project" })).toEqual({
             started: [],
             restarted: [],
             stopped: ["greeter"],
           });
           expect(host.holder.off).toEqual({ greeter: "project" });
-          const afterConfigure = yield* client.Host.Plugins();
+          const afterConfigure = yield* client["Host.Plugins"]();
           expect(afterConfigure.find((plugin) => plugin.id === "greeter")).toMatchObject({ enabled: false, state: "disabled", scope: "project" });
-          const pinnedOff = hostError(yield* Effect.exit(client.Host.Configure({ plugins: { transport: { enabled: false } } })));
+          const pinnedOff = hostError(yield* Effect.exit(client["Host.Configure"]({ plugins: { transport: { enabled: false } } })));
           expect(pinnedOff).toMatchObject({ code: "ReloadError", subject: "transport" });
         }),
       ),
@@ -330,7 +328,7 @@ describe("transport", () => {
     // Adds inspectors without requiring anything: a registry contribution, as any plugin may make.
     const inspected = definePlugin({
       id: "inspected",
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.flatMap(PluginContext, (owner) =>
           Effect.all([
             owner.add(Inspectors, { id: "inspected.state", title: "State", snapshot: Effect.succeed([{ key: "a", value: 1 }]) }),
@@ -343,21 +341,21 @@ describe("transport", () => {
       (host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          const listed = yield* client.Host.Inspectors();
+          const listed = yield* client["Host.Inspectors"]();
           expect(listed).toEqual(
             expect.arrayContaining([
               expect.objectContaining({ id: "commands.registered", title: "Commands", source: "commands" }),
               { id: "inspected.state", title: "State", source: "inspected" },
             ]),
           );
-          expect(yield* client.Host.Inspect({ id: "inspected.state" })).toEqual([{ key: "a", value: 1 }]);
-          expect(yield* client.Host.Inspect({ id: "commands.registered" })).toEqual(
+          expect(yield* client["Host.Inspect"]({ id: "inspected.state" })).toEqual([{ key: "a", value: 1 }]);
+          expect(yield* client["Host.Inspect"]({ id: "commands.registered" })).toEqual(
             expect.arrayContaining([expect.objectContaining({ id: "test.greet", plugin: "greeter" })]),
           );
-          expect(hostError(yield* Effect.exit(client.Host.Inspect({ id: "inspected.broken" })))).toMatchObject({ code: "Failed", message: "no state here" });
-          expect(hostError(yield* Effect.exit(client.Host.Inspect({ id: "nothing" })))).toMatchObject({ code: "NotFound" });
+          expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "inspected.broken" })))).toMatchObject({ code: "Failed", message: "no state here" });
+          expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "nothing" })))).toMatchObject({ code: "NotFound" });
           // The transport is still serving.
-          expect((yield* client.Host.Info()).version).toBeDefined();
+          expect((yield* client["Host.Info"]()).version).toBeDefined();
         }),
       {},
       undefined,
@@ -371,13 +369,13 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("http");
-          const events = yield* subscribe(host, client);
-          const session = yield* client.Session.Create({ cwd: "/elsewhere" });
+          const events = yield* subscribe(client);
+          const session = yield* client["Session.Create"]({ cwd: "/elsewhere" });
           expect(session.cwd).toBe("/elsewhere");
-          yield* client.Agent.Prompt({ sessionId: session.id, content: text("yo") });
+          yield* client["Agent.Prompt"]({ sessionId: session.id, content: text("yo") });
           yield* waitFor(events, (event) => event.type === "turn-ended" && event.sessionId === session.id);
-          expect((yield* client.Session.Events({ sessionId: session.id })).length).toBe(2);
-          expect(hostError(yield* Effect.exit(client.Session.Get({ sessionId: "missing" })))).toMatchObject({ code: "NotFound" });
+          expect((yield* client["Session.Events"]({ sessionId: session.id })).length).toBe(2);
+          expect(hostError(yield* Effect.exit(client["Session.Get"]({ sessionId: "missing" })))).toMatchObject({ code: "NotFound" });
         }),
       ),
     30_000,
@@ -389,18 +387,18 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          expect(yield* client.Workspace.Status({ path: "/elsewhere" })).toEqual({ path: "/elsewhere", exists: true });
-          expect((yield* client.Workspace.Branches({ path: "/work" })).map((branch) => [branch.name, branch.current])).toEqual([
+          expect(yield* client["Workspace.Status"]({ path: "/elsewhere" })).toEqual({ path: "/elsewhere", exists: true });
+          expect((yield* client["Workspace.Branches"]({ path: "/work" })).map((branch) => [branch.name, branch.current])).toEqual([
             ["main", true],
             ["dev", false],
           ]);
-          expect((yield* client.Workspace.Checkout({ path: "/work", branch: "dev" })).git?.branch).toBe("dev");
-          expect((yield* client.Workspace.Checkout({ path: "/work", branch: "topic", create: true })).git?.branch).toBe("topic");
-          expect(hostError(yield* Effect.exit(client.Workspace.Branches({ path: "/elsewhere" })))).toMatchObject({
+          expect((yield* client["Workspace.Checkout"]({ path: "/work", branch: "dev" })).git?.branch).toBe("dev");
+          expect((yield* client["Workspace.Checkout"]({ path: "/work", branch: "topic", create: true })).git?.branch).toBe("topic");
+          expect(hostError(yield* Effect.exit(client["Workspace.Branches"]({ path: "/elsewhere" })))).toMatchObject({
             code: "NotRepository",
             subject: "/elsewhere",
           });
-          expect(hostError(yield* Effect.exit(client.Workspace.Checkout({ path: "/work", branch: "nope" })))).toEqual(
+          expect(hostError(yield* Effect.exit(client["Workspace.Checkout"]({ path: "/work", branch: "nope" })))).toEqual(
             new HostError({ code: "Failed", message: "fatal: invalid reference: nope", subject: "/work" }),
           );
         }),
@@ -415,7 +413,7 @@ describe("transport", () => {
         (host) =>
           Effect.gen(function* () {
             const client = yield* host.connect("websocket");
-            expect(yield* client.Files.Search({ cwd: "/work", query: "src" })).toEqual({
+            expect(yield* client["Files.Search"]({ cwd: "/work", query: "src" })).toEqual({
               root: "/work",
               entries: [
                 { path: "src/app.ts", kind: "file" },
@@ -423,15 +421,15 @@ describe("transport", () => {
               ],
               truncated: false,
             });
-            expect(yield* client.Files.Search({ cwd: "/work", query: "src", limit: 1, kind: "directory" })).toEqual({
+            expect(yield* client["Files.Search"]({ cwd: "/work", query: "src", limit: 1, kind: "directory" })).toEqual({
               root: "/work",
               entries: [{ path: "src", kind: "directory" }],
               truncated: false,
             });
-            expect(hostError(yield* Effect.exit(client.Files.Search({ cwd: "/elsewhere", query: "" })))).toEqual(
+            expect(hostError(yield* Effect.exit(client["Files.Search"]({ cwd: "/elsewhere", query: "" })))).toEqual(
               new HostError({ code: "NotFound", message: '"/elsewhere" is not a directory', subject: "/elsewhere" }),
             );
-            expect((yield* client.Files.Search({ cwd: "/work", query: "", within: "src" })).entries).toEqual([{ path: "src/app.ts", kind: "file" }]);
+            expect((yield* client["Files.Search"]({ cwd: "/work", query: "", within: "src" })).entries).toEqual([{ path: "src/app.ts", kind: "file" }]);
           }),
         {},
         undefined,
@@ -446,8 +444,8 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          expect(hostError(yield* Effect.exit(client.Files.Search({ cwd: "/work", query: "" })))).toMatchObject({ code: "Unavailable", subject: "/work" });
-          expect((yield* client.Workspace.Status({ path: "/work" })).exists).toBe(true);
+          expect(hostError(yield* Effect.exit(client["Files.Search"]({ cwd: "/work", query: "" })))).toMatchObject({ code: "Unavailable", subject: "/work" });
+          expect((yield* client["Workspace.Status"]({ path: "/work" })).exists).toBe(true);
         }),
       ),
     30_000,
@@ -459,40 +457,58 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          const events = yield* subscribe(host, client);
+          const events = yield* subscribe(client);
           const interaction = yield* host.core.run(Interaction);
 
-          const confirm = yield* Effect.fork(host.core.run(interaction.confirm("Proceed?", "details")));
+          const confirm = yield* Effect.forkChild(host.core.run(interaction.confirm("Proceed?", "details")));
           const [request] = (yield* waitFor(events, (event) => event.type === "interaction")).slice(-1);
           expect(request).toEqual({ type: "interaction", request: { type: "confirm", id: "i1", title: "Proceed?", detail: "details" } });
           // A client that was not listening when it was asked can still read it.
-          expect(yield* client.Interaction.List()).toEqual([{ type: "confirm", id: "i1", title: "Proceed?", detail: "details" }]);
+          expect(yield* client["Interaction.List"]()).toEqual([{ type: "confirm", id: "i1", title: "Proceed?", detail: "details" }]);
 
-          expect(hostError(yield* Effect.exit(client.Interaction.Answer({ id: "i1", answer: { type: "ask", value: "x" } })))).toMatchObject({
+          expect(hostError(yield* Effect.exit(client["Interaction.Answer"]({ id: "i1", answer: { type: "ask", value: "x" } })))).toMatchObject({
             code: "Mismatch",
             subject: "i1",
           });
-          expect(hostError(yield* Effect.exit(client.Interaction.Answer({ id: "zzz", answer: { type: "confirm", value: true } })))).toMatchObject({
+          expect(hostError(yield* Effect.exit(client["Interaction.Answer"]({ id: "zzz", answer: { type: "confirm", value: true } })))).toMatchObject({
             code: "NotFound",
           });
-          yield* client.Interaction.Answer({ id: "i1", answer: { type: "confirm", value: true } });
+          yield* client["Interaction.Answer"]({ id: "i1", answer: { type: "confirm", value: true } });
           expect(yield* Fiber.join(confirm)).toBe(true);
-          expect(yield* client.Interaction.List()).toEqual([]);
+          expect(yield* client["Interaction.List"]()).toEqual([]);
           yield* waitFor(events, (event) => event.type === "interaction-closed" && event.id === "i1");
-          expect(hostError(yield* Effect.exit(client.Interaction.Answer({ id: "i1", answer: { type: "confirm", value: false } })))).toMatchObject({
+          expect(hostError(yield* Effect.exit(client["Interaction.Answer"]({ id: "i1", answer: { type: "confirm", value: false } })))).toMatchObject({
             code: "NotFound",
           });
 
-          const ask = yield* Effect.fork(host.core.run(interaction.ask("Name?")));
+          const ask = yield* Effect.forkChild(host.core.run(interaction.ask("Name?")));
           yield* waitFor(events, (event) => event.type === "interaction" && event.request.id === "i2");
-          yield* client.Interaction.Dismiss({ id: "i2" });
+          yield* client["Interaction.Dismiss"]({ id: "i2" });
           expect(interactionError(yield* Fiber.await(ask))).toMatchObject({ reason: "Dismissed" });
 
           // Interrupting the asker withdraws the question from every client.
-          const withdrawn = yield* Effect.fork(host.core.run(interaction.confirm("Still?")));
+          const withdrawn = yield* Effect.forkChild(host.core.run(interaction.confirm("Still?")));
           yield* waitFor(events, (event) => event.type === "interaction" && event.request.id === "i3");
           yield* Fiber.interrupt(withdrawn);
           yield* waitFor(events, (event) => event.type === "interaction-closed" && event.id === "i3");
+        }),
+      ),
+    30_000,
+  );
+
+  test(
+    "sends subscribed only to a subscriber that asks for it, so a client from before it is unaffected",
+    () =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          yield* subscribe(yield* host.connect("websocket"));
+          const older = yield* (yield* host.connect("websocket"))["Host.Events"](undefined, { asQueue: true });
+          // Published until the subscriber that did not ask sees one, so it has joined.
+          const publish = host.core.run(Effect.flatMap(Events, (bus) => bus.publish(Notice, { level: "info", message: "hello" })));
+          const pinger = yield* Effect.forkChild(Effect.repeat(publish, Schedule.spaced(Duration.millis(20))));
+          const seen = yield* waitFor(older, (event) => event.type === "notice");
+          yield* Fiber.interrupt(pinger);
+          expect(seen.map((event) => event.type)).not.toContain("subscribed");
         }),
       ),
     30_000,
@@ -503,9 +519,9 @@ describe("transport", () => {
     () =>
       withHost((host) =>
         Effect.gen(function* () {
-          const first = yield* subscribe(host, yield* host.connect("websocket"));
+          const first = yield* subscribe(yield* host.connect("websocket"));
           const interaction = yield* host.core.run(Interaction);
-          const select = yield* Effect.fork(
+          const select = yield* Effect.forkChild(
             host.core.run(
               interaction.select("Model?", [
                 { value: "a", label: "A" },
@@ -515,13 +531,15 @@ describe("transport", () => {
           );
           yield* waitFor(first, (event) => event.type === "interaction");
           const second = yield* host.connect("websocket");
-          const secondEvents = yield* second.Host.Events(undefined, { asMailbox: true });
-          const [replayed] = yield* waitFor(secondEvents, (event) => event.type === "interaction");
+          const secondEvents = yield* second["Host.Events"](undefined, { asQueue: true, headers: { [SUBSCRIBED_HEADER]: "1" } });
+          const [subscribed, replayed] = yield* waitFor(secondEvents, (event) => event.type === "interaction");
+          // A subscription opens with `subscribed`; the question open before it is replayed next.
+          expect(subscribed).toEqual({ type: "subscribed" });
           expect(replayed).toMatchObject({ type: "interaction", request: { type: "select", id: "i1" } });
-          expect(hostError(yield* Effect.exit(second.Interaction.Answer({ id: "i1", answer: { type: "select", value: "z" } })))).toMatchObject({
+          expect(hostError(yield* Effect.exit(second["Interaction.Answer"]({ id: "i1", answer: { type: "select", value: "z" } })))).toMatchObject({
             code: "Mismatch",
           });
-          yield* second.Interaction.Answer({ id: "i1", answer: { type: "select", value: "b" } });
+          yield* second["Interaction.Answer"]({ id: "i1", answer: { type: "select", value: "b" } });
           expect(yield* Fiber.join(select)).toBe("b");
         }),
       ),
@@ -534,22 +552,22 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          const events = yield* subscribe(host, client);
-          expect(yield* client.Command.List()).toEqual([{ id: "test.greet", title: "Greet…", category: "Test", source: "greeter" }]);
+          const events = yield* subscribe(client);
+          expect(yield* client["Command.List"]()).toEqual([{ id: "test.greet", title: "Greet…", category: "Test", source: "greeter" }]);
 
-          const answered = yield* Effect.fork(client.Command.Run({ id: "test.greet", cwd: "/project", sessionId: "s1" }));
+          const answered = yield* Effect.forkChild(client["Command.Run"]({ id: "test.greet", cwd: "/project", sessionId: "s1" }));
           const [asked] = (yield* waitFor(events, (event) => event.type === "interaction")).slice(-1);
           if (asked?.type !== "interaction") throw new Error("expected an interaction");
-          yield* client.Interaction.Answer({ id: asked.request.id, answer: { type: "ask", value: "Ada" } });
+          yield* client["Interaction.Answer"]({ id: asked.request.id, answer: { type: "ask", value: "Ada" } });
           expect(yield* Fiber.join(answered)).toEqual({ message: "Hello, Ada, in /project (s1)" });
 
-          const dismissed = yield* Effect.fork(client.Command.Run({ id: "test.greet" }));
+          const dismissed = yield* Effect.forkChild(client["Command.Run"]({ id: "test.greet" }));
           const [again] = (yield* waitFor(events, (event) => event.type === "interaction")).slice(-1);
           if (again?.type !== "interaction") throw new Error("expected an interaction");
-          yield* client.Interaction.Dismiss({ id: again.request.id });
+          yield* client["Interaction.Dismiss"]({ id: again.request.id });
           expect(hostError(yield* Fiber.await(dismissed))).toMatchObject({ code: "Cancelled", subject: "test.greet" });
 
-          expect(hostError(yield* Effect.exit(client.Command.Run({ id: "nope" })))).toMatchObject({ code: "NotFound", subject: "nope" });
+          expect(hostError(yield* Effect.exit(client["Command.Run"]({ id: "nope" })))).toMatchObject({ code: "NotFound", subject: "nope" });
 
           yield* host.core.run(Effect.flatMap(Events, (bus) => bus.publish(CommandsChanged, { commands: [] })));
           yield* waitFor(events, (event) => event.type === "commands-changed" && event.commands.length === 0);
@@ -564,11 +582,11 @@ describe("transport", () => {
       withHost((host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          const events = yield* subscribe(host, client);
-          const login = yield* Effect.fork(client.Llm.Login({ provider: "fake", type: "api_key" }));
+          const events = yield* subscribe(client);
+          const login = yield* Effect.forkChild(client["Llm.Login"]({ provider: "fake", type: "api_key" }));
           const [asked] = (yield* waitFor(events, (event) => event.type === "interaction")).slice(-1);
           if (asked?.type !== "interaction") throw new Error("expected an interaction");
-          yield* client.Interaction.Answer({ id: asked.request.id, answer: { type: "ask", value: "good" } });
+          yield* client["Interaction.Answer"]({ id: asked.request.id, answer: { type: "ask", value: "good" } });
           expect(Exit.isSuccess(yield* Fiber.await(login))).toBe(true);
         }),
       ),
@@ -584,20 +602,20 @@ describe("transport", () => {
             yield* Effect.scoped(
               Effect.gen(function* () {
                 const client = yield* host.connect("websocket");
-                const events = yield* subscribe(host, client);
-                yield* Effect.fork(client.Llm.Login({ provider: "fake", type: "api_key" }));
+                const events = yield* subscribe(client);
+                yield* Effect.forkChild(client["Llm.Login"]({ provider: "fake", type: "api_key" }));
                 yield* waitFor(events, (event) => event.type === "interaction");
               }),
             );
             // The page reloaded: the old socket is gone, but the question is still open.
             const client = yield* host.connect("websocket");
-            const events = yield* client.Host.Events(undefined, { asMailbox: true });
-            const [replayed] = yield* waitFor(events, (event) => event.type === "interaction");
+            const events = yield* client["Host.Events"](undefined, { asQueue: true });
+            const replayed = (yield* waitFor(events, (event) => event.type === "interaction")).at(-1);
             if (replayed?.type !== "interaction") throw new Error("expected an interaction");
             // Retrying joins the login in flight instead of starting another; a different method is refused.
-            const retry = yield* Effect.fork(client.Llm.Login({ provider: "fake", type: "api_key" }));
-            expect(hostError(yield* Effect.exit(client.Llm.Login({ provider: "fake", type: "oauth" })))).toMatchObject({ code: "Busy", subject: "fake" });
-            yield* client.Interaction.Answer({ id: replayed.request.id, answer: { type: "ask", value: "good" } });
+            const retry = yield* Effect.forkChild(client["Llm.Login"]({ provider: "fake", type: "api_key" }));
+            expect(hostError(yield* Effect.exit(client["Llm.Login"]({ provider: "fake", type: "oauth" })))).toMatchObject({ code: "Busy", subject: "fake" });
+            yield* client["Interaction.Answer"]({ id: replayed.request.id, answer: { type: "ask", value: "good" } });
             expect(Exit.isSuccess(yield* Fiber.await(retry))).toBe(true);
             yield* waitFor(events, (event) => event.type === "interaction-closed" && event.id === replayed.request.id);
           }),
@@ -653,7 +671,7 @@ describe("transport", () => {
       expect((await stat(home)).mode & 0o777).toBe(0o700);
       await writeFile(join(home, "token"), "  \n");
       const exit = await Effect.runPromiseExit(loadToken(home));
-      expect(Exit.isFailure(exit) && exit.cause._tag === "Fail" && exit.cause.error.message).toBe(
+      expect(Option.getOrUndefined(Exit.findErrorOption(exit))?.message).toBe(
         `${join(home, "token")} is empty; delete it and restart the host to generate a new token`,
       );
     } finally {
@@ -677,8 +695,8 @@ describe("transport", () => {
           const interaction = yield* host.core.run(Interaction);
           const confirm = yield* Effect.scoped(
             Effect.gen(function* () {
-              const events = yield* subscribe(host, yield* host.connect("websocket"));
-              const confirm = yield* Effect.fork(host.core.run(interaction.confirm("Still there?")));
+              const events = yield* subscribe(yield* host.connect("websocket"));
+              const confirm = yield* Effect.forkChild(host.core.run(interaction.confirm("Still there?")));
               yield* waitFor(events, (event) => event.type === "interaction");
               return confirm;
             }),
@@ -732,7 +750,7 @@ describe("transport", () => {
       const url = await withHost(
         (host) =>
           Effect.gen(function* () {
-            yield* subscribe(host, yield* host.connect("websocket"));
+            yield* subscribe(yield* host.connect("websocket"));
             expect(yield* readDiscovery(host.home)).toMatchObject({ url: host.url, token: host.token, pid: process.pid });
             expect((yield* Effect.promise(() => stat(join(host.home, "transport.json")))).mode & 0o777).toBe(0o600);
             return host.url;
@@ -760,9 +778,9 @@ describe("transport", () => {
       const started = Date.now();
       const url = await withHost((host) =>
         Effect.gen(function* () {
-          const client = yield* Scope.extend(host.connect("websocket"), clientScope);
-          yield* Effect.forkIn(Stream.runDrain(client.Host.Events()), clientScope);
-          yield* client.Host.Info();
+          const client = yield* Scope.provide(host.connect("websocket"), clientScope);
+          yield* Effect.forkIn(Stream.runDrain(client["Host.Events"]()), clientScope);
+          yield* client["Host.Info"]();
           return host.url;
         }),
       );

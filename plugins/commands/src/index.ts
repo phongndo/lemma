@@ -4,7 +4,7 @@ import { definePlugin, Events, PluginContext, Registries, Registry } from "@lemm
 import { CommandError, Commands, CommandsChanged, Inspectors, InteractionError } from "@lemma/contracts";
 import type { Command, CommandInfo } from "@lemma/contracts";
 
-type Service = Context.Tag.Service<typeof Commands>;
+type Service = Context.Service.Shape<typeof Commands>;
 
 /**
  * What plugins register, in the core's registry: each command belongs to its
@@ -66,8 +66,8 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
           return yield* new CommandError({ command: id, reason: "NotFound", message: `No command "${id}"` });
         }
         const result = yield* Effect.suspend(() => entry.run(context)).pipe(
-          Effect.catchAllCause((cause) => {
-            if (Cause.isInterruptedOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
             const error = Cause.squash(cause);
             const dismissed = error instanceof InteractionError && error.reason === "Dismissed";
             return Effect.fail(

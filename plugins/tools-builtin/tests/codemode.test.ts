@@ -1,6 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Effect, FiberRef, Fiber, Layer, Schema, Stream } from "effect";
+import { Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { Events, definePlugin, makeCore } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
@@ -44,8 +44,10 @@ const call = (
         return yield* core.run(
           Effect.gen(function* () {
             const events = yield* Events;
-            const watching = yield* Effect.fork(Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => options.published?.push(payload))));
-            yield* Effect.yieldNow();
+            const watching = yield* Effect.forkChild(
+              Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => options.published?.push(payload))),
+            );
+            yield* Effect.yieldNow;
             const registry = yield* Tools;
             const invocation = new ToolInvocation({
               sessionId: "s",
@@ -55,7 +57,7 @@ const call = (
               cwd: process.cwd(),
               ...(options.offered === undefined ? {} : { offered: options.offered }),
             });
-            const result = yield* Effect.locally(
+            const result = yield* Effect.provideService(
               registry.execute(invocation, new AbortController().signal, options.update === undefined ? undefined : { update: options.update }),
               InteractionOrigin,
               options.origin,
@@ -114,7 +116,7 @@ describe("pi codemode", () => {
     const guard = definePlugin({
       id: "test-guard",
       requires: [Tools],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.flatMap(Tools, (registry) =>
           registry.guard("bash", (call) => Effect.succeed(call.name === "bash" ? { _tag: "deny", reason: "shell denied" } : { _tag: "allow" })),
         ),
@@ -148,7 +150,7 @@ describe("pi codemode", () => {
     const slow = definePlugin({
       id: "slow",
       requires: [Tools],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.flatMap(Tools, (registry) =>
           registry.register({
             name: "slow",
@@ -193,13 +195,13 @@ describe("pi codemode", () => {
     const origin = definePlugin({
       id: "origin",
       requires: [Tools],
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.flatMap(Tools, (registry) =>
           registry.register({
             name: "origin",
             description: "the caller's interaction origin",
             input: Schema.Struct({}),
-            execute: () => Effect.map(FiberRef.get(InteractionOrigin), (value) => new ToolResult({ content: [{ type: "text", text: String(value) }] })),
+            execute: () => Effect.map(Effect.service(InteractionOrigin), (value) => new ToolResult({ content: [{ type: "text", text: String(value) }] })),
           }),
         ),
       ),

@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, toPluginStatus } from "@lemma/contracts";
+import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
 import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
 import { toHostError } from "./errors.ts";
 import type { Hub } from "./hub.ts";
@@ -12,15 +12,15 @@ interface HandlerServices {
   readonly version: string;
   readonly hub: Hub;
   readonly interactions: Interactions;
-  readonly paths: Context.Tag.Service<Paths>;
-  readonly sessions: Context.Tag.Service<Sessions>;
-  readonly agent: Context.Tag.Service<Agent>;
-  readonly llm: Context.Tag.Service<Llm>;
-  readonly control: Context.Tag.Service<HostControl>;
-  readonly workspace: Context.Tag.Service<Workspace>;
-  readonly commands: Context.Tag.Service<Commands>;
+  readonly paths: Context.Service.Shape<typeof Paths>;
+  readonly sessions: Context.Service.Shape<typeof Sessions>;
+  readonly agent: Context.Service.Shape<typeof Agent>;
+  readonly llm: Context.Service.Shape<typeof Llm>;
+  readonly control: Context.Service.Shape<typeof HostControl>;
+  readonly workspace: Context.Service.Shape<typeof Workspace>;
+  readonly commands: Context.Service.Shape<typeof Commands>;
   /** The core's registries: host plugins' `Inspectors` and `FileSearchers` are read from them. */
-  readonly registries: Context.Tag.Service<Registries>;
+  readonly registries: Context.Service.Shape<typeof Registries>;
   /** Runs `Llm.login` in the plugin's scope; see `makeLogins`. */
   readonly login: ReturnType<typeof makeLogins>;
 }
@@ -36,7 +36,7 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Session.Events": ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after }).pipe(Effect.mapError(toHostError)),
     "Session.Checkout": ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId).pipe(Effect.mapError(toHostError)),
     "Session.SetTitle": ({ sessionId, title }) =>
-      sessions.append(sessionId, { type: "title", title }).pipe(Effect.zipRight(sessions.get(sessionId)), Effect.mapError(toHostError)),
+      sessions.append(sessionId, { type: "title", title }).pipe(Effect.andThen(sessions.get(sessionId)), Effect.mapError(toHostError)),
     "Session.Mark": ({ sessionId, pinned, archived }) =>
       sessions
         .mark(sessionId, { ...(pinned === undefined ? {} : { pinned }), ...(archived === undefined ? {} : { archived }) })
@@ -98,10 +98,10 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Command.Run": ({ id, cwd, sessionId, origin }) =>
       commands
         .run(id, { cwd: cwd ?? paths.cwd, ...(sessionId === undefined ? {} : { sessionId }) })
-        .pipe((run) => (origin === undefined ? run : Effect.locally(run, InteractionOrigin, origin)), Effect.mapError(toHostError)),
+        .pipe((run) => (origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin)), Effect.mapError(toHostError)),
 
     "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition })),
-    "Host.Events": () => hub.events,
+    "Host.Events": (_, { headers }) => hub.events(headers[SUBSCRIBED_HEADER] !== undefined),
     "Host.Plugins": () => Effect.map(control.plugins, (plugins) => plugins.map(toPluginStatus)),
     "Host.Inspectors": () =>
       Effect.map(registries.items(Inspectors), (items) =>
@@ -118,7 +118,7 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
         if (found === undefined) return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `No inspector "${id}"` }));
         // An inspector that fails or dies says so; it never takes the transport with it.
         return found.snapshot.pipe(
-          Effect.catchAllCause((cause) => {
+          Effect.catchCause((cause) => {
             const error = Cause.squash(cause);
             return Effect.fail(new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) }));
           }),

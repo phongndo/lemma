@@ -40,7 +40,7 @@ export const ToolCall = Schema.Struct({
   type: Schema.Literal("toolCall"),
   id: Schema.String,
   name: Schema.String,
-  arguments: Schema.Record({ key: Schema.String, value: Schema.Unknown }),
+  arguments: Schema.Record(Schema.String, Schema.Unknown),
   thoughtSignature: Schema.optional(Schema.String),
   namespace: Schema.optional(Schema.String),
 });
@@ -90,19 +90,19 @@ export const addUsage = (a: Usage, b: Usage): Usage => ({
   },
 });
 
-export const StopReason = Schema.Literal("stop", "length", "toolUse", "error", "aborted");
+export const StopReason = Schema.Literals(["stop", "length", "toolUse", "error", "aborted"]);
 export type StopReason = typeof StopReason.Type;
 
 export const UserMessage = Schema.Struct({
   role: Schema.Literal("user"),
-  content: Schema.Array(Schema.Union(TextContent, ImageContent)),
+  content: Schema.Array(Schema.Union([TextContent, ImageContent])),
   timestamp: Schema.Number,
 });
 export type UserMessage = typeof UserMessage.Type;
 
 export const AssistantMessage = Schema.Struct({
   role: Schema.Literal("assistant"),
-  content: Schema.Array(Schema.Union(TextContent, ThinkingContent, ToolCall)),
+  content: Schema.Array(Schema.Union([TextContent, ThinkingContent, ToolCall])),
   /** Wire API that produced the message, e.g. `openai-responses`. */
   api: Schema.String,
   provider: Schema.String,
@@ -119,17 +119,17 @@ export const ToolResultMessage = Schema.Struct({
   role: Schema.Literal("toolResult"),
   toolCallId: Schema.String,
   toolName: Schema.String,
-  content: Schema.Array(Schema.Union(TextContent, ImageContent)),
+  content: Schema.Array(Schema.Union([TextContent, ImageContent])),
   isError: Schema.Boolean,
   timestamp: Schema.Number,
 });
 export type ToolResultMessage = typeof ToolResultMessage.Type;
 
-export const Message = Schema.Union(UserMessage, AssistantMessage, ToolResultMessage);
+export const Message = Schema.Union([UserMessage, AssistantMessage, ToolResultMessage]);
 export type Message = typeof Message.Type;
 
 /** JSON Schema object describing a tool's input. */
-export const JsonSchema = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+export const JsonSchema = Schema.Record(Schema.String, Schema.Unknown);
 export type JsonSchema = typeof JsonSchema.Type;
 
 export const ToolSpec = Schema.Struct({
@@ -139,7 +139,7 @@ export const ToolSpec = Schema.Struct({
 });
 export type ToolSpec = typeof ToolSpec.Type;
 
-export const ThinkingLevel = Schema.Literal("off", "minimal", "low", "medium", "high", "xhigh", "max");
+export const ThinkingLevel = Schema.Literals(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
 export type ThinkingLevel = typeof ThinkingLevel.Type;
 
 /**
@@ -164,7 +164,7 @@ export const ModelInfo = Schema.Struct({
   api: Schema.String,
   reasoning: Schema.Boolean,
   thinkingLevels: Schema.Array(ThinkingLevel),
-  input: Schema.Array(Schema.Literal("text", "image")),
+  input: Schema.Array(Schema.Literals(["text", "image"])),
   contextWindow: Schema.Number,
   maxTokens: Schema.Number,
   /** USD per million tokens. */
@@ -172,7 +172,7 @@ export const ModelInfo = Schema.Struct({
 });
 export type ModelInfo = typeof ModelInfo.Type;
 
-export const AuthType = Schema.Literal("api_key", "oauth");
+export const AuthType = Schema.Literals(["api_key", "oauth"]);
 export type AuthType = typeof AuthType.Type;
 
 export const ProviderInfo = Schema.Struct({
@@ -227,7 +227,7 @@ export class LlmRequest extends Schema.Class<LlmRequest>("lemma/LlmRequest")({
  * succeed as asked (authentication, quota, an invalid request).
  */
 export const LlmFailure = Schema.Struct({
-  kind: Schema.Literal("transient", "rate-limit", "overflow", "fatal"),
+  kind: Schema.Literals(["transient", "rate-limit", "overflow", "fatal"]),
   retryAfterMs: Schema.optional(Schema.Number),
 });
 export type LlmFailure = typeof LlmFailure.Type;
@@ -238,7 +238,7 @@ export type LlmFailure = typeof LlmFailure.Type;
  * attempt can be logged with whatever it produced. `index` is the content
  * block index in that message.
  */
-export const StreamEvent = Schema.Union(
+export const StreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("start") }),
   Schema.Struct({ type: Schema.Literal("text-delta"), index: Schema.Number, delta: Schema.String }),
   Schema.Struct({ type: Schema.Literal("thinking-delta"), index: Schema.Number, delta: Schema.String }),
@@ -251,7 +251,7 @@ export const StreamEvent = Schema.Union(
    * An error without `failure` is one the caller cannot tell will pass: the agent ends the turn rather than ask again.
    */
   Schema.Struct({ type: Schema.Literal("error"), message: AssistantMessage, failure: Schema.optional(LlmFailure) }),
-);
+]);
 export type StreamEvent = typeof StreamEvent.Type;
 
 /** A request that cannot start: unknown model or provider. Provider failures arrive as an `error` event instead. */
@@ -267,7 +267,7 @@ export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, L
 /** The models `Llm.models` lists changed (a provider's catalog refreshed, a login or logout); clients list them again. */
 export const ModelsChanged = Event.make<Record<string, never>>("lemma/llm.models.changed");
 
-export class Llm extends Context.Tag("lemma/Llm")<
+export class Llm extends Context.Service<
   Llm,
   {
     readonly providers: Effect.Effect<readonly ProviderInfo[]>;
@@ -290,4 +290,4 @@ export class Llm extends Context.Tag("lemma/Llm")<
     /** Sets or clears a custom provider's logo (SVG markup; the caller checks it is safe to show). */
     readonly setLogo: (provider: string, svg: string | undefined) => Effect.Effect<void, LlmError>;
   }
->() {}
+>()("lemma/Llm") {}

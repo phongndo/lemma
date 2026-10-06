@@ -83,7 +83,7 @@ const shell: Tool<{ readonly command: string }> = {
   input: Schema.Struct({ command: Schema.String }),
   execute: async ({ command }) => new ToolResult({ content: [{ type: "text", text: `ran ${command}` }] }),
 };
-const shellPlugin = definePlugin({ id: "shell", requires: [Tools], layer: Layer.scopedDiscard(Effect.flatMap(Tools, (registry) => registry.register(shell))) });
+const shellPlugin = definePlugin({ id: "shell", requires: [Tools], layer: Layer.effectDiscard(Effect.flatMap(Tools, (registry) => registry.register(shell))) });
 
 const run = (plugins: readonly Plugin[], calls: readonly ToolInvocation[]) =>
   Effect.runPromise(

@@ -8,9 +8,9 @@ import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "
 import type { Truncation } from "./truncate.ts";
 
 export const ReadInput = Schema.Struct({
-  path: Schema.String.annotations({ description: "Path to the file to read (relative or absolute)" }),
-  offset: Schema.optional(Schema.Number.annotations({ description: "Line number to start reading from (1-indexed)" })),
-  limit: Schema.optional(Schema.Number.annotations({ description: "Maximum number of lines to read" })),
+  path: Schema.String.annotate({ description: "Path to the file to read (relative or absolute)" }),
+  offset: Schema.optional(Schema.Number.annotate({ description: "Line number to start reading from (1-indexed)" })),
+  limit: Schema.optional(Schema.Number.annotate({ description: "Maximum number of lines to read" })),
 });
 export type ReadInput = typeof ReadInput.Type;
 

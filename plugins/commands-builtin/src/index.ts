@@ -4,12 +4,12 @@ import { definePlugin } from "@lemma/core";
 import { CommandError, Commands, describeReload, HostControl, Interaction, Llm, recoverable, Workspace } from "@lemma/contracts";
 import type { Command } from "@lemma/contracts";
 
-type Ask = Context.Tag.Service<typeof Interaction>;
+type Ask = Context.Service.Shape<typeof Interaction>;
 
 /** A command's own dead end: nothing to choose from. Reported like any failure. */
 const nothing = (command: string, message: string) => new CommandError({ command, reason: "Failed", message });
 
-export const hostCommands = (control: Context.Tag.Service<typeof HostControl>, ask: Ask): readonly Command[] => [
+export const hostCommands = (control: Context.Service.Shape<typeof HostControl>, ask: Ask): readonly Command[] => [
   {
     id: "host.reload",
     title: "Reload config",
@@ -74,7 +74,7 @@ export const hostCommands = (control: Context.Tag.Service<typeof HostControl>, a
   },
 ];
 
-export const llmCommands = (llm: Context.Tag.Service<typeof Llm>, ask: Ask): readonly Command[] => [
+export const llmCommands = (llm: Context.Service.Shape<typeof Llm>, ask: Ask): readonly Command[] => [
   {
     id: "llm.logout",
     title: "Log out of a provider…",
@@ -98,7 +98,7 @@ export const llmCommands = (llm: Context.Tag.Service<typeof Llm>, ask: Ask): rea
   },
 ];
 
-export const workspaceCommands = (workspace: Context.Tag.Service<typeof Workspace>, ask: Ask): readonly Command[] => [
+export const workspaceCommands = (workspace: Context.Service.Shape<typeof Workspace>, ask: Ask): readonly Command[] => [
   {
     id: "workspace.checkout",
     title: "Switch branch…",
@@ -139,12 +139,12 @@ export const workspaceCommands = (workspace: Context.Tag.Service<typeof Workspac
  * host and git commands. A reload swaps in the new commands without a gap: the
  * registry lets a plugin's replacement take over its ids.
  */
-const commandsPlugin = <I, S>(id: string, service: Context.Tag<I, S>, commands: (service: S, ask: Ask) => readonly Command[]) =>
+const commandsPlugin = <I, S>(id: string, service: Context.Key<I, S>, commands: (service: S, ask: Ask) => readonly Command[]) =>
   definePlugin({
     id,
     version: "0.1.0",
     requires: [Commands, Interaction, service],
-    layer: Layer.scopedDiscard(
+    layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const [registry, ask, dependency] = yield* Effect.all([Commands, Interaction, service]);
         yield* Effect.forEach(commands(dependency, ask), registry.register, { discard: true });

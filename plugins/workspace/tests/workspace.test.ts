@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { makeCore } from "@lemma/core";
 import { Workspace, WorkspaceError } from "@lemma/contracts";
@@ -52,9 +52,9 @@ const commit = async (root: string, file: string, content: string, message: stri
 const ws = makeWorkspace({ home: "/nonexistent-home", worktrees: "/nonexistent-home/worktrees" });
 const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect);
 const failure = async <A>(effect: Effect.Effect<A, WorkspaceError>): Promise<WorkspaceError> => {
-  const result = await Effect.runPromise(Effect.either(effect));
-  if (Either.isRight(result)) throw new Error("expected a WorkspaceError");
-  return result.left;
+  const result = await Effect.runPromise(Effect.result(effect));
+  if (Result.isSuccess(result)) throw new Error("expected a WorkspaceError");
+  return result.failure;
 };
 
 describe("status", () => {

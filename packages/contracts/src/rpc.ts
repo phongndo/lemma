@@ -1,4 +1,4 @@
-import { Rpc, RpcGroup } from "@effect/rpc";
+import { Rpc, RpcGroup } from "effect/rpc";
 import { Schema } from "effect";
 import { AgentView, PromptContent, QueuedPrompt, TurnOptions, WhenBusy } from "./agent.ts";
 import { CommandInfo, CommandResult } from "./commands.ts";
@@ -56,7 +56,7 @@ export const PluginStatus = Schema.Struct({
   /** Capability keys. */
   provides: Schema.Array(Schema.String),
   requires: Schema.Array(Schema.String),
-  state: Schema.Literal("pending", "activating", "active", "draining", "closed", "failed", "disabled"),
+  state: Schema.Literals(["pending", "activating", "active", "draining", "closed", "failed", "disabled"]),
   fault: Schema.optional(Schema.Struct({ phase: Schema.String, operation: Schema.optional(Schema.String), message: Schema.String })),
   /** The plugin whose failure or absence keeps this one from running. */
   haltedBy: Schema.optional(Schema.String),
@@ -121,8 +121,17 @@ export const describeReload = (result: Pick<ReloadResult, "started" | "restarted
   return parts.length > 0 ? parts.join("; ") : undefined;
 };
 
+/** Sent with `Host.Events` to receive `{ type: "subscribed" }` first. */
+export const SUBSCRIBED_HEADER = "lemma-subscribed";
+
 /** Everything a client reacts to, multiplexed on one subscription. Losable: clients repair gaps from `Session.Events`. */
-export const HostEvent = Schema.Union(
+export const HostEvent = Schema.Union([
+  /**
+   * The first event of a subscription that asked for it with the `SUBSCRIBED_HEADER` header: from here on it
+   * receives everything, interaction requests included. A client waits for it before acting on what the subscription
+   * should see (an answer a command's question needs). Opt-in, so a client from before it never receives it.
+   */
+  Schema.Struct({ type: Schema.Literal("subscribed") }),
   Schema.Struct({ type: Schema.Literal("session-appended"), sessionId: Schema.String, event: SessionEvent }),
   Schema.Struct({ type: Schema.Literal("session-changed"), info: SessionInfo }),
   Schema.Struct({ type: Schema.Literal("session-removed"), sessionId: Schema.String }),
@@ -157,7 +166,7 @@ export const HostEvent = Schema.Union(
   Schema.Struct({ type: Schema.Literal("commands-changed"), commands: Schema.Array(CommandInfo) }),
   Schema.Struct({ type: Schema.Literal("models-changed") }),
   Schema.Struct({ type: Schema.Literal("ui-changed"), ui: UiComposition }),
-);
+]);
 export type HostEvent = typeof HostEvent.Type;
 
 export const HostInfo = Schema.Struct({
@@ -267,7 +276,7 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Host.Reload", { success: ReloadResult, error: HostError }),
   /** Write plugin rows (`enabled`, `config`, `values`) into the user or project config file and apply; a rejected change is undone. */
   Rpc.make("Host.Configure", {
-    payload: { plugins: Schema.Record({ key: Schema.String, value: PluginChange }), scope: Schema.optional(ConfigScope) },
+    payload: { plugins: Schema.Record(Schema.String, PluginChange), scope: Schema.optional(ConfigScope) },
     success: ReloadResult,
     error: HostError,
   }),
@@ -276,7 +285,7 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Ui.Composition", { success: UiComposition }),
   /** Write `ui` rows into the user or project config file; clients apply them on `ui-changed`. */
   Rpc.make("Ui.Configure", {
-    payload: { plugins: Schema.Record({ key: Schema.String, value: PluginChange }), scope: Schema.optional(ConfigScope) },
+    payload: { plugins: Schema.Record(Schema.String, PluginChange), scope: Schema.optional(ConfigScope) },
     success: UiComposition,
     error: HostError,
   }),

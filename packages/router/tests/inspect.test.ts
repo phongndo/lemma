@@ -9,7 +9,7 @@ const Home = defineRoute("home", { path: "/" });
 const Item = defineRoute("item", { path: "/items/:id/:tab?" });
 const New = defineRoute("item.new", { path: "/items/new" });
 // Equally specific, so tried by id: digits first, and a word falls through to the next.
-const Numbered = defineRoute("n.digits", { path: "/n/:id", params: Schema.Struct({ id: Schema.NumberFromString }) });
+const Numbered = defineRoute("n.digits", { path: "/n/:id", params: Schema.Struct({ id: Schema.FiniteFromString }) });
 const Named = defineRoute("n.word", { path: "/n/:name" });
 const Files = defineRoute("files", { path: "/files/*rest" });
 const Off = defineRoute("off", { path: "/off" });

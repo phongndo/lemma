@@ -30,7 +30,7 @@ const UNREADABLE_GRACE_MS = 10_000;
 const Holder = Schema.Struct({ pid: Schema.Number, hostname: Schema.String, token: Schema.String, startedAt: Schema.Number });
 type Holder = typeof Holder.Type;
 
-const decodeHolder = Schema.decodeUnknownOption(Schema.parseJson(Holder));
+const decodeHolder = Schema.decodeUnknownOption(Schema.fromJsonString(Holder));
 
 /** The process taking the lock. Tests stand in for other processes. */
 export interface Claimant {

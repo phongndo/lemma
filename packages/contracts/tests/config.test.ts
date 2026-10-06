@@ -1,15 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { Either, Schema } from "effect";
+import { Effect, Result, Schema, Struct } from "effect";
 import { configValues, describeConfig, migrateConfig, parseConfigValue, secret } from "../src/config.ts";
 
 const Config = Schema.Struct({
-  defaultModel: Schema.optional(Schema.String).annotations({ description: "Model for turns that name none" }),
-  maxSteps: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 200 }).annotations({ description: "Model calls per turn" }),
-  port: Schema.optionalWith(Schema.Number.pipe(Schema.int(), Schema.between(0, 65535)), { default: () => 7433 }),
+  defaultModel: Schema.optional(Schema.String).annotate({ description: "Model for turns that name none" }),
+  maxSteps: Schema.Int.check(Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 200)))
+    .annotate({ description: "Model calls per turn" }),
+  port: Schema.Number.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 65535 })).pipe(Schema.withDecodingDefaultType(Effect.sync(() => 7433))),
   ratio: Schema.optional(Schema.Number),
-  theme: Schema.optionalWith(Schema.Literal("system", "light", "dark"), { default: () => "system" as const }),
-  token: Schema.optional(Schema.NonEmptyString).annotations({ ...secret, description: "Clients must present it" }),
-  verbose: Schema.optionalWith(Schema.Boolean, { default: () => false }),
+  theme: Schema.Literals(["system", "light", "dark"]).pipe(Schema.withDecodingDefaultType(Effect.sync(() => "system" as const))),
+  token: Schema.optional(Schema.NonEmptyString).annotate({ ...secret, description: "Clients must present it" }),
+  verbose: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))),
   include: Schema.optional(Schema.Array(Schema.String)),
   providers: Schema.optional(Schema.Array(Schema.Struct({ id: Schema.String, apiKey: Schema.optional(Schema.String) }))),
   baseUrl: Schema.String,
@@ -59,7 +61,7 @@ describe("describeConfig", () => {
 
   it("finds defaults only when an empty config is valid", () => {
     expect(field("maxSteps").default).toBeUndefined();
-    const optionalOnly = describeConfig(Config.pipe(Schema.omit("baseUrl")));
+    const optionalOnly = describeConfig(Config.mapFields(Struct.omit(["baseUrl"])));
     expect(optionalOnly.find((candidate) => candidate.key === "maxSteps")?.default).toBe(200);
     expect(optionalOnly.find((candidate) => candidate.key === "theme")?.default).toBe("system");
   });
@@ -85,20 +87,22 @@ describe("configValues", () => {
 
 describe("migrateConfig", () => {
   const Current = Schema.Struct({
-    maxSteps: Schema.optionalWith(Schema.Int.pipe(Schema.positive()), { default: () => 200 }).annotations({ description: "Model calls per turn" }),
+    maxSteps: Schema.Int.check(Schema.isGreaterThan(0))
+      .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 200)))
+      .annotate({ description: "Model calls per turn" }),
     model: Schema.optional(Schema.String),
   });
   // An earlier version called it `steps`.
   const Migrated = migrateConfig(Current, ({ steps, ...rest }) => (steps === undefined ? rest : { maxSteps: steps, ...rest }));
-  const decode = Schema.decodeUnknownEither(Migrated, { onExcessProperty: "error" });
+  const decode = Schema.decodeUnknownResult(Migrated, { onExcessProperty: "error" });
 
   it("reads rows an earlier version wrote, and current ones as they are", () => {
-    expect(decode({ steps: 50, model: "m" })).toEqual(Either.right({ maxSteps: 50, model: "m" }));
-    expect(decode({ maxSteps: 70 })).toEqual(Either.right({ maxSteps: 70 }));
-    expect(decode({})).toEqual(Either.right({ maxSteps: 200 }));
+    expect(decode({ steps: 50, model: "m" })).toEqual(Result.succeed({ maxSteps: 50, model: "m" }));
+    expect(decode({ maxSteps: 70 })).toEqual(Result.succeed({ maxSteps: 70 }));
+    expect(decode({})).toEqual(Result.succeed({ maxSteps: 200 }));
     // The current key wins when a row has both.
-    expect(decode({ steps: 50, maxSteps: 70 })).toEqual(Either.right({ maxSteps: 70 }));
-    expect(Either.isLeft(decode({ steps: -1 }))).toBe(true);
+    expect(decode({ steps: 50, maxSteps: 70 })).toEqual(Result.succeed({ maxSteps: 70 }));
+    expect(Result.isFailure(decode({ steps: -1 }))).toBe(true);
   });
 
   it("keeps the current Schema's form and values", () => {

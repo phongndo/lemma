@@ -4,12 +4,12 @@ import type { CoreClosed, HookError } from "@lemma/core";
 
 // These contracts belong to plugins, not to the core.
 const Greeting = Hook.make<string, string>("example/greeting");
-class Greeter extends Context.Tag("example/Greeter")<
+class Greeter extends Context.Service<
   Greeter,
   {
     readonly greet: (name: string) => Effect.Effect<string, CoreClosed | HookError>;
   }
->() {}
+>()("example/Greeter") {}
 
 const greeter = definePlugin({
   id: "greeter",

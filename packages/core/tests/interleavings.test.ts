@@ -17,7 +17,7 @@ test("shutdown interrupts staged reload and releases both generations exactly on
         id: "p",
         config: Config,
         layer: ({ generation }) =>
-          Layer.scopedDiscard(
+          Layer.effectDiscard(
             Effect.gen(function* () {
               live.add(generation);
               yield* Effect.addFinalizer(() =>
@@ -33,8 +33,8 @@ test("shutdown interrupts staged reload and releases both generations exactly on
             }),
           ),
       });
-      const loader = yield* Scope.extend(makeLoader({ source: { resolve: () => Effect.succeed(plugin) }, composition: composition(0) }), scope);
-      const apply = yield* Effect.forkDaemon(loader.apply(composition(1)));
+      const loader = yield* Scope.provide(makeLoader({ source: { resolve: () => Effect.succeed(plugin) }, composition: composition(0) }), scope);
+      const apply = yield* Effect.forkDetach(loader.apply(composition(1)));
       yield* Deferred.await(entered);
       yield* Effect.all([Scope.close(scope, Exit.void), Scope.close(scope, Exit.void)], { concurrency: "unbounded" });
       expect(Exit.isFailure(yield* Fiber.await(apply))).toBe(true);
@@ -54,11 +54,11 @@ test("a retired generation's late required-task failure cannot poison its replac
           id: "p",
           config: Config,
           layer: ({ generation }) =>
-            Layer.scopedDiscard(
+            Layer.effectDiscard(
               Effect.gen(function* () {
                 const owner = yield* PluginContext;
                 if (generation === 0)
-                  yield* owner.background("old", Effect.uninterruptible(Deferred.await(release).pipe(Effect.zipRight(Effect.fail("old failure")))), {
+                  yield* owner.background("old", Effect.uninterruptible(Deferred.await(release).pipe(Effect.andThen(Effect.fail("old failure")))), {
                     required: true,
                   });
               }),
@@ -77,7 +77,7 @@ test("a retired generation's late required-task failure cannot poison its replac
             }),
           ),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         yield* loader.apply(composition(1));
         expect((yield* loader.core.inspect).plugins[0]?.fault).toBeUndefined();
         yield* Deferred.succeed(release, undefined);
@@ -101,7 +101,7 @@ test("failed staging reports its faults while preserving the running instance's 
           id: "p",
           config: Config,
           layer: ({ generation }) =>
-            Layer.scopedDiscard(
+            Layer.effectDiscard(
               Effect.gen(function* () {
                 if (generation === 0) return;
                 const owner = yield* PluginContext;
@@ -115,7 +115,7 @@ test("failed staging reports its faults while preserving the running instance's 
         yield* Effect.forkScoped(
           Stream.runForEach(loader.core.faults, (fault) => (fault.operation === "staged" ? Deferred.succeed(reported, undefined) : Effect.void)),
         );
-        yield* Effect.yieldNow();
+        yield* Effect.yieldNow;
         expect(Exit.isFailure(yield* Effect.exit(loader.apply(composition(1))))).toBe(true);
         expect((yield* loader.core.inspect).plugins[0]).toMatchObject({ state: "active" });
         expect((yield* loader.core.inspect).plugins[0]?.fault).toBeUndefined();

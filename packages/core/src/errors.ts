@@ -79,7 +79,7 @@ export class RegistryError extends Data.TaggedError("RegistryError")<{
 }> {}
 
 /** Where in a plugin's life a failure was observed. */
-export const FaultPhase = Schema.Literal("activate", "service", "observe", "background", "dispose");
+export const FaultPhase = Schema.Literals(["activate", "service", "observe", "background", "dispose"]);
 export type FaultPhase = typeof FaultPhase.Type;
 
 /**
@@ -109,10 +109,10 @@ export type ReportedFault = PluginFault & { readonly sequence: number };
 
 /** A serializable, actionable message about a composition. Errors block; warnings do not. */
 export class Diagnostic extends Schema.Class<Diagnostic>("@lemma/core/Diagnostic")({
-  severity: Schema.Literal("error", "warning"),
+  severity: Schema.Literals(["error", "warning"]),
   pluginId: Schema.optional(Schema.String),
   /** Location inside the plugin's config, when the problem is a config value. */
-  path: Schema.optional(Schema.Array(Schema.Union(Schema.String, Schema.Number))),
+  path: Schema.optional(Schema.Array(Schema.Union([Schema.String, Schema.Number]))),
   message: Schema.String,
   suggestion: Schema.optional(Schema.String),
 }) {}

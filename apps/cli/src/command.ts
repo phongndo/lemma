@@ -1,6 +1,6 @@
 import { Data } from "effect";
 import type { Effect, Scope } from "effect";
-import type { RpcClientError } from "@effect/rpc";
+import type { RpcClientError } from "effect/rpc";
 import type { HostError, ThinkingLevel, WhenBusy } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/plugin-transport";

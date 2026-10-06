@@ -82,7 +82,7 @@ export async function boot(options: BootOptions): Promise<void> {
   const faults = faultHistory();
 
   /** A capability of the running composition, or undefined when no plugin provides it. */
-  const serviceOf = <I, S>(tag: Context.Tag<I, S>): Promise<S | undefined> =>
+  const serviceOf = <I, S>(tag: Context.Key<I, S>): Promise<S | undefined> =>
     Effect.runPromiseExit(loader.core.run(tag)).then((exit) => (Exit.isSuccess(exit) ? exit.value : undefined));
   const refresh = async () => {
     const snapshot = await runPromise(loader.core.inspect);
@@ -222,7 +222,9 @@ export async function boot(options: BootOptions): Promise<void> {
   const scope = await runPromise(Scope.make());
   /** Starts `planned` with what can start: a plugin that fails is left failed, unless it is pinned or a pinned plugin needs it. */
   const start = (planned: Plan) =>
-    Effect.runPromiseExit(Scope.extend(makeLoader({ source, composition: planned.resolved.composition, partialStart: { required: planned.required } }), scope));
+    Effect.runPromiseExit(
+      Scope.provide(makeLoader({ source, composition: planned.resolved.composition, partialStart: { required: planned.required } }), scope),
+    );
   let first = await planFor(initial);
   adopt(first.plan);
   let made = first.errors.length > 0 ? undefined : await start(first.plan);

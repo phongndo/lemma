@@ -1,11 +1,12 @@
 import { Effect, Layer } from "effect";
 import type { Scope } from "effect";
-import { FetchHttpClient, HttpClient, HttpClientRequest, Socket } from "@effect/platform";
-import { RpcClient, RpcSerialization } from "@effect/rpc";
-import type { RpcClientError, RpcGroup } from "@effect/rpc";
+import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
+import { RpcClient, RpcSerialization } from "effect/rpc";
+import type { RpcClientError, RpcGroup } from "effect/rpc";
+import { Socket } from "effect/socket";
 import { HostRpcs } from "@lemma/contracts";
 
-/** The typed Effect surface: `rpc.Session.List({})`, `rpc.Host.Events()`, ... */
+/** The typed Effect surface: `rpc["Session.List"]({})`, `rpc["Host.Events"]()`, ... */
 export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof HostRpcs>, RpcClientError.RpcClientError>;
 
 /**
@@ -51,7 +52,9 @@ export const makeHostRpc = (
 export const makeHostRpcHttp = (base: string, token: string | undefined): Effect.Effect<HostRpcClient, never, Scope.Scope> =>
   Effect.gen(function* () {
     const authorize = token === undefined || token === "" ? (request: HttpClientRequest.HttpClientRequest) => request : HttpClientRequest.bearerToken(token);
-    const protocol = RpcClient.layerProtocolHttp({ url: new URL("/rpc/http", base).toString() }).pipe(
+    const url = new URL("/rpc/http", base).toString();
+    // The protocol posts to `<url>/` (it joins an empty path on), which the host does not route: set the URL whole.
+    const protocol = RpcClient.layerProtocolHttp({ url, transformClient: HttpClient.mapRequest(HttpClientRequest.setUrl(url)) }).pipe(
       Layer.provide(
         Layer.effect(
           HttpClient.HttpClient,

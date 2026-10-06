@@ -1,5 +1,5 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { newRequestId } from "@lemma/client";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/contracts";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
@@ -72,10 +72,12 @@ const readImage = (file: File): Promise<ImageContent> =>
   });
 
 const ComposerConfig = Schema.Struct({
-  send: Schema.optionalWith(Schema.Literal("enter", "mod+enter"), { default: () => "enter" as const }).annotations({
-    title: "Send with",
-    description: "enter: Enter sends and Shift+Enter starts a new line. mod+enter: ⌘Enter (Ctrl+Enter) sends and Enter starts a new line.",
-  }),
+  send: Schema.Literals(["enter", "mod+enter"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "enter" as const)))
+    .annotate({
+      title: "Send with",
+      description: "enter: Enter sends and Shift+Enter starts a new line. mod+enter: ⌘Enter (Ctrl+Enter) sends and Enter starts a new line.",
+    }),
 });
 
 type Send = typeof ComposerConfig.Type.send;

@@ -7,7 +7,7 @@ tools through. Tool plugins require `Tools` and register during activation.
 const greet = definePlugin({
   id: "greet",
   requires: [Tools],
-  layer: Layer.scopedDiscard(
+  layer: Layer.effectDiscard(
     Effect.flatMap(Tools, (tools) =>
       tools.register({
         name: "greet",
@@ -41,9 +41,16 @@ const greet = definePlugin({
   that may run alongside others declares `parallel: "safe"`: the agent runs a
   run of consecutive such calls of one response at once. `list` carries both.
 - `list` is sorted by name, so re-registration after a reload does not reorder
-  (and re-log) the tool list. Parameters come from `JSONSchema.make(tool.input)`
-  with `$schema`, ids, and Effect's generated titles removed and every `$ref`
-  inlined; the root is always an object with `properties`.
+  (and re-log) the tool list. Parameters are the draft-07 JSON Schema of the
+  input's encoded side (Effect's `SchemaRepresentation` compiler), closed
+  (`additionalProperties: false`), with `$schema`, ids, and titles removed and
+  every `$ref` inlined; the root is always an object with `properties`. Effect
+  describes JSON, so it would offer `null` for an optional field and the strings
+  `"NaN"`/`"Infinity"` for a number; the decoder accepts neither, so an optional
+  field is offered as its value type and a number as `number`. To show the
+  model other parameters than the schema implies (an input that repairs
+  malformed shapes before decoding), put a check with a `toJsonSchema`
+  annotation on its encoded side, as the builtin `edit` tool does.
 - `execute(invocation, signal)`:
   1. unknown tool: fails with `ToolError` `NotFound` (message lists available tools);
   2. input decoded with the tool's schema: failure is an error result with the formatted parse error;

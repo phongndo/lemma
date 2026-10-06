@@ -1,4 +1,4 @@
-import { Effect, Layer, Runtime, Stream } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import { definePlugin, PluginContext, Registries } from "@lemma/core";
 import { Slots } from "../ui/contracts.ts";
 import { createSlots } from "../ui/slots.ts";
@@ -17,7 +17,7 @@ export default definePlugin({
     Effect.gen(function* () {
       const context = yield* PluginContext;
       const registries = yield* Registries;
-      const run = Runtime.runSync(yield* Effect.runtime<never>());
+      const run = Effect.runSyncWith(yield* Effect.context<never>());
       // Each slot's changes feed its signal for as long as this plugin runs.
       const watch = (name: string, changes: Stream.Stream<readonly unknown[]>, apply: (items: any) => void) =>
         run(

@@ -1,4 +1,4 @@
-import { Effect, Either } from "effect";
+import { Effect, Result } from "effect";
 import type { Scope } from "effect";
 import type { Core, CoreOptions } from "./core.ts";
 import { Diagnostic, ReloadError } from "./errors.ts";
@@ -78,21 +78,21 @@ export function makeLoader(options: LoaderOptions): Effect.Effect<Loader, Reload
         const diagnostics: Diagnostic[] = [];
         for (const [id, entry] of Object.entries(composition.plugins)) {
           if (entry.enabled === false) continue;
-          const resolved = yield* Effect.either(options.source.resolve(id));
-          if (Either.isLeft(resolved)) {
-            const diagnostic = resolved.left;
+          const resolved = yield* Effect.result(options.source.resolve(id));
+          if (Result.isFailure(resolved)) {
+            const diagnostic = resolved.failure;
             diagnostics.push(diagnostic.pluginId === undefined ? new Diagnostic({ ...diagnostic, pluginId: id }) : diagnostic);
-          } else if (resolved.right.id !== id) {
+          } else if (resolved.success.id !== id) {
             diagnostics.push(
               new Diagnostic({
                 severity: "error",
                 pluginId: id,
-                message: `Source resolved "${id}" to a plugin whose id is "${resolved.right.id}"`,
+                message: `Source resolved "${id}" to a plugin whose id is "${resolved.success.id}"`,
                 suggestion: `Fix the source mapping or the plugin's id`,
               }),
             );
           } else {
-            members.push({ plugin: resolved.right, ...(entry.config === undefined ? {} : { config: entry.config }) });
+            members.push({ plugin: resolved.success, ...(entry.config === undefined ? {} : { config: entry.config }) });
           }
         }
         if (diagnostics.length) return yield* new ReloadError({ diagnostics });

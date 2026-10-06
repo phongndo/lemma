@@ -132,7 +132,7 @@ describe("slots", () => {
   });
 });
 
-class Counter extends Context.Tag("test/Counter")<Counter, { readonly count: () => number; readonly add: () => void }>() {}
+class Counter extends Context.Service<Counter, { readonly count: () => number; readonly add: () => void }>()("test/Counter") {}
 
 const counter = defineUiPlugin({
   id: "counter",
@@ -148,7 +148,7 @@ const run = async (plugins: readonly Plugin[], body: (loader: Loader) => Promise
   const scope = Effect.runSync(Scope.make());
   try {
     const loader = await Effect.runPromise(
-      Scope.extend(
+      Scope.provide(
         makeLoader({
           source: { resolve: (id) => Effect.succeed(plugins.find((plugin) => plugin.id === id)!) },
           composition: { plugins: Object.fromEntries(running.map((id) => [id, {}])) },
@@ -191,7 +191,7 @@ describe("defineUiPlugin", () => {
     const seen: unknown[] = [];
     const configured = defineUiPlugin({
       id: "configured",
-      config: Schema.Struct({ size: Schema.optionalWith(Schema.Number, { default: () => 3 }) }),
+      config: Schema.Struct({ size: Schema.Number.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 3))) }),
       setup: (_, plugin) => void seen.push(plugin.config),
     });
     await run([configured], async (loader) => {
@@ -201,7 +201,7 @@ describe("defineUiPlugin", () => {
   });
 
   it("a computation that throws after setup stops its plugin and what needs it, and the others keep updating", async () => {
-    class Model extends Context.Tag("test/Model")<Model, { readonly ok: true }>() {}
+    class Model extends Context.Service<Model, { readonly ok: true }>()("test/Model") {}
     const [count, setCount] = createSignal(0);
     const seen: number[] = [];
     const faulty = defineUiPlugin({

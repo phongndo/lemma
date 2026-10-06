@@ -1,4 +1,4 @@
-import { Cause, Effect, Order, ParseResult, Runtime, Schema } from "effect";
+import { Cause, Effect, Order, Result, Schema } from "effect";
 import type { Context } from "effect";
 import { Events, Hooks, PluginContext, Registries, Registry } from "@lemma/core";
 import { Inspectors, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult } from "@lemma/contracts";
@@ -6,7 +6,7 @@ import type { Guard, Tool, ToolContext, ToolContribution, ToolInvocation, Tools 
 import { capResult } from "./content.ts";
 import { toolParameters } from "./schema.ts";
 
-type Service = Context.Tag.Service<typeof Tools>;
+type Service = Context.Service.Shape<typeof Tools>;
 
 interface RegistryOptions {
   /** Total text characters a result may carry to the model before it is truncated. */
@@ -40,7 +40,7 @@ const message = (cause: unknown): string => (cause instanceof Error ? cause.mess
 const errorResult = (text: string, details?: unknown): ToolResult =>
   new ToolResult({ content: [{ type: "text", text }], isError: true, ...(details === undefined ? {} : { details }) });
 
-const decodeResult = Schema.decodeUnknownEither(ToolResult);
+const decodeResult = Schema.decodeUnknownResult(ToolResult);
 
 /** How often a running tool's output is published, at most. */
 const OUTPUT_INTERVAL_MS = 50;
@@ -95,10 +95,10 @@ function runTool(tool: Tool<any>, input: unknown, base: Omit<ToolContext, "signa
     return running.pipe(
       Effect.map((value) => {
         const decoded = decodeResult(value);
-        return decoded._tag === "Right" ? decoded.right : errorResult(`Tool "${tool.name}" returned an invalid result: ${decoded.left.message}`);
+        return Result.isSuccess(decoded) ? decoded.success : errorResult(`Tool "${tool.name}" returned an invalid result: ${decoded.failure.message}`);
       }),
-      Effect.catchAllCause((cause) =>
-        Cause.isInterruptedOnly(cause) ? Effect.failCause(cause as Cause.Cause<never>) : Effect.succeed(errorResult(message(Cause.squash(cause)))),
+      Effect.catchCause((cause) =>
+        Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause as Cause.Cause<never>) : Effect.succeed(errorResult(message(Cause.squash(cause)))),
       ),
       Effect.onInterrupt(() => Effect.sync(() => controller.abort("interrupted"))),
       Effect.ensuring(Effect.sync(() => outer.removeEventListener("abort", forward))),
@@ -108,7 +108,7 @@ function runTool(tool: Tool<any>, input: unknown, base: Omit<ToolContext, "signa
 
 /** Fails with `Cancelled` once the signal aborts. */
 const aborted = (tool: string, signal: AbortSignal) =>
-  Effect.async<never, ToolError>((resume) => {
+  Effect.callback<never, ToolError>((resume) => {
     const cancel = () => resume(Effect.fail(new ToolError({ tool, reason: "Cancelled", message: `Tool "${tool}" was cancelled` })));
     if (signal.aborted) {
       cancel();
@@ -131,7 +131,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
     const register: Service["register"] = (tool) =>
       Effect.gen(function* () {
         const contributor = yield* PluginContext;
-        const decodeInput = Schema.decodeUnknown(tool.input);
+        const decodeInput = Schema.decodeUnknownEffect(tool.input);
         const entry: Entry = {
           tool,
           spec: { name: tool.name, description: tool.description, parameters: toolParameters(tool.input) },
@@ -142,7 +142,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
                   new ToolError({
                     tool: tool.name,
                     reason: "InvalidInput",
-                    message: `Validation failed for tool "${tool.name}":\n${ParseResult.TreeFormatter.formatErrorSync(error)}`,
+                    message: `Validation failed for tool "${tool.name}":\n${error.message}`,
                     cause: error,
                   }),
               ),
@@ -182,7 +182,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           ...(contribution.item.tool.replay === undefined ? {} : { replay: contribution.item.tool.replay }),
           ...(contribution.item.tool.parallel === undefined ? {} : { parallel: contribution.item.tool.parallel }),
         }))
-        .sort((a, b) => Order.string(a.spec.name, b.spec.name)),
+        .sort((a, b) => Order.String(a.spec.name, b.spec.name)),
     );
 
     const unknown = (name: string, names: string[]) =>
@@ -207,11 +207,11 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             const decision = yield* candidate.item.guard(call);
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
-          const runtime = yield* Effect.runtime<never>();
+          const services = yield* Effect.context<never>();
           const output =
             update === undefined
               ? outputBatcher((chunk, offset) =>
-                  Runtime.runFork(runtime)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
+                  Effect.runForkWith(services)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
                 )
               : { update, flush: () => {} };
           const context = {
@@ -243,7 +243,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             Effect.map((result) => capResult(result, options.maxResultChars)),
             // Handler failures, invalid input, and denials are results the model reads and can act on. A core shutting
             // down is not one: a defect, which the caller (the agent leaves its turn to resume) can tell apart.
-            Effect.catchAll((error) => (error._tag === "CoreClosed" ? Effect.die(error) : Effect.succeed(errorResult(error.message)))),
+            Effect.catch((error) => (error._tag === "CoreClosed" ? Effect.die(error) : Effect.succeed(errorResult(error.message)))),
             Effect.raceFirst(aborted(invocation.name, signal)),
           );
           yield* events.publish(ToolExecuted, { invocation, result: settled, durationMs: Date.now() - started });

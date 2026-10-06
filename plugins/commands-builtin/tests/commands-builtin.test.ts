@@ -4,7 +4,7 @@ import type { Context } from "effect";
 import type { Command, HostControl, Interaction, Llm, Workspace } from "@lemma/contracts";
 import { hostCommands, llmCommands, workspaceCommands } from "../src/index.ts";
 
-type Ask = Context.Tag.Service<typeof Interaction>;
+type Ask = Context.Service.Shape<typeof Interaction>;
 
 /** Answers every question with the scripted value, recording what was asked. */
 const scripted = (answer: string) => {
@@ -18,7 +18,7 @@ const scripted = (answer: string) => {
 };
 
 const find = (commands: readonly Command[], id: string) => commands.find((command) => command.id === id)!;
-const run = (command: Command, cwd = "/repo") => Effect.runPromise(Effect.either(command.run({ cwd })));
+const run = (command: Command, cwd = "/repo") => Effect.runPromise(Effect.result(command.run({ cwd })));
 
 describe("workspace commands", () => {
   const calls: unknown[] = [];
@@ -35,7 +35,7 @@ describe("workspace commands", () => {
         calls.push({ path, branch, options });
         return { path, exists: true, git: { root: path, branch: branch.replace(/^origin\//, ""), changes: 0, ahead: 0, behind: 0 } };
       }),
-  } as unknown as Context.Tag.Service<typeof Workspace>;
+  } as unknown as Context.Service.Shape<typeof Workspace>;
 
   test("switch branch offers every branch it could check out here", async () => {
     calls.length = 0;
@@ -43,7 +43,7 @@ describe("workspace commands", () => {
     const result = await run(find(workspaceCommands(workspace, ask), "workspace.checkout"));
     expect(asked).toEqual([{ title: "Switch to which branch?", options: ["feature", "origin/fix"] }]);
     expect(calls).toEqual([{ path: "/repo", branch: "origin/fix", options: undefined }]);
-    expect(result).toMatchObject({ right: { message: "Switched to fix" } });
+    expect(result).toMatchObject({ success: { message: "Switched to fix" } });
   });
 
   test("create branch creates the named branch from HEAD", async () => {
@@ -51,7 +51,7 @@ describe("workspace commands", () => {
     const { ask } = scripted("  topic  ");
     const result = await run(find(workspaceCommands(workspace, ask), "workspace.new-branch"));
     expect(calls).toEqual([{ path: "/repo", branch: "topic", options: { create: true } }]);
-    expect(result).toMatchObject({ right: { message: "Created and switched to topic" } });
+    expect(result).toMatchObject({ success: { message: "Created and switched to topic" } });
   });
 });
 
@@ -85,20 +85,20 @@ describe("host commands", () => {
         const stopped = ids.filter((id) => rows[id]?.enabled === false);
         return { ...empty, started, stopped: stopped.includes("bash") ? [...stopped, "edit"] : stopped };
       }),
-  } as unknown as Context.Tag.Service<typeof HostControl>;
+  } as unknown as Context.Service.Shape<typeof HostControl>;
 
   test("reload describes what changed", async () => {
     const result = await run(find(hostCommands(control, scripted("").ask), "host.reload"));
-    expect(result).toMatchObject({ right: { message: "Config reloaded: started x; stopped y" } });
+    expect(result).toMatchObject({ success: { message: "Config reloaded: started x; stopped y" } });
   });
 
   test("restart plugin offers failed plugins and running ones the host does not depend on, forcing only the latter", async () => {
     restarted.length = 0;
     const failed = scripted("llm");
-    expect(await run(find(hostCommands(control, failed.ask), "host.restart-plugin"))).toMatchObject({ right: { message: "Restarted llm" } });
+    expect(await run(find(hostCommands(control, failed.ask), "host.restart-plugin"))).toMatchObject({ success: { message: "Restarted llm" } });
     expect(failed.asked[0]?.options).toEqual(["llm", "bash"]);
     const running = scripted("bash");
-    expect(await run(find(hostCommands(control, running.ask), "host.restart-plugin"))).toMatchObject({ right: { message: "Restarted bash" } });
+    expect(await run(find(hostCommands(control, running.ask), "host.restart-plugin"))).toMatchObject({ success: { message: "Restarted bash" } });
     expect(restarted).toEqual([
       ["llm", undefined],
       ["bash", { force: true }],
@@ -111,19 +111,19 @@ describe("host commands", () => {
     const result = await run(find(hostCommands(control, ask), "host.toggle-plugin"));
     expect(asked[0]?.options).toEqual(["bash", "project-context", "stuck", "my-llm"]);
     expect(configured).toEqual([[{ bash: { enabled: false } }, undefined]]);
-    expect(result).toMatchObject({ right: { message: "Turned bash off; stopped edit" } });
+    expect(result).toMatchObject({ success: { message: "Turned bash off; stopped edit" } });
 
     configured.length = 0;
     const stuck = await run(find(hostCommands(control, scripted("stuck").ask), "host.toggle-plugin"));
     expect(configured).toEqual([[{ stuck: { enabled: true } }, { scope: "project" }]]);
-    expect(stuck).toMatchObject({ left: { reason: "Failed", message: "stuck is still off: the project config decides it" } });
+    expect(stuck).toMatchObject({ failure: { reason: "Failed", message: "stuck is still off: the project config decides it" } });
   });
 
   test("toggle plugin reports a plugin that is on but waiting, and a change applied after the reply, as done", async () => {
     const waiting = await run(find(hostCommands(control, scripted("project-context").ask), "host.toggle-plugin"));
-    expect(waiting).toMatchObject({ right: { message: "Turned project-context on; it starts when workspace is on" } });
+    expect(waiting).toMatchObject({ success: { message: "Turned project-context on; it starts when workspace is on" } });
     const deferred = await run(find(hostCommands(control, scripted("my-llm").ask), "host.toggle-plugin"));
-    expect(deferred).toMatchObject({ right: { message: "Turning my-llm on: the host restarts the plugins that use it, and clients reconnect" } });
+    expect(deferred).toMatchObject({ success: { message: "Turning my-llm on: the host restarts the plugins that use it, and clients reconnect" } });
   });
 });
 
@@ -137,13 +137,13 @@ describe("llm commands", () => {
           { id: "b", name: "Beta", auth: [], configured: false },
         ]),
         logout: (id: string) => Effect.sync(() => void loggedOut.push(id)),
-      }) as unknown as Context.Tag.Service<typeof Llm>;
+      }) as unknown as Context.Service.Shape<typeof Llm>;
 
     const { ask, asked } = scripted("a");
-    expect(await run(find(llmCommands(llm(true), ask), "llm.logout"))).toMatchObject({ right: { message: "Logged out of Alpha" } });
+    expect(await run(find(llmCommands(llm(true), ask), "llm.logout"))).toMatchObject({ success: { message: "Logged out of Alpha" } });
     expect(asked[0]?.options).toEqual(["a"]);
     expect(loggedOut).toEqual(["a"]);
 
-    expect(await run(find(llmCommands(llm(false), ask), "llm.logout"))).toMatchObject({ left: { reason: "Failed", message: "No provider is logged in" } });
+    expect(await run(find(llmCommands(llm(false), ask), "llm.logout"))).toMatchObject({ failure: { reason: "Failed", message: "No provider is logged in" } });
   });
 });

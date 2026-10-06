@@ -1,17 +1,17 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Deferred, Duration, Effect, Exit, Layer, Ref, Schedule, Stream } from "effect";
+import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Ref, Schedule, Stream } from "effect";
 import { CoreClosed, DeadlineExceeded, definePlugin, makeCore, PluginContext } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
-class Db extends Context.Tag("test/Db")<Db, { readonly name: string }>() {}
-class Api extends Context.Tag("test/Api")<Api, string>() {}
+class Db extends Context.Service<Db, { readonly name: string }>()("test/Db") {}
+class Api extends Context.Service<Api, string>()("test/Api") {}
 
 /** A provider whose background task fails when the test fires the trigger created for its current activation. */
 const flaky = (options: { required: boolean; log: string[]; triggers: Deferred.Deferred<void>[] }) =>
   definePlugin({
     id: "db",
     provides: [Db],
-    layer: Layer.scoped(
+    layer: Layer.effect(
       Db,
       Effect.gen(function* () {
         options.log.push("db+");
@@ -23,7 +23,7 @@ const flaky = (options: { required: boolean; log: string[]; triggers: Deferred.D
         const owner = yield* PluginContext;
         const trigger = yield* Deferred.make<void>();
         options.triggers.push(trigger);
-        yield* owner.background("poll", Deferred.await(trigger).pipe(Effect.zipRight(Effect.fail("connection lost"))), { required: options.required });
+        yield* owner.background("poll", Deferred.await(trigger).pipe(Effect.andThen(Effect.fail("connection lost"))), { required: options.required });
         return { name: "db" };
       }),
     ),
@@ -33,7 +33,7 @@ const api = (log: string[]) =>
     id: "api",
     requires: [Db],
     provides: [Api],
-    layer: Layer.scoped(
+    layer: Layer.effect(
       Api,
       Effect.gen(function* () {
         log.push("api+");
@@ -49,7 +49,7 @@ const api = (log: string[]) =>
 const bystander = (log: string[]) =>
   definePlugin({
     id: "bystander",
-    layer: Layer.scopedDiscard(
+    layer: Layer.effectDiscard(
       Effect.acquireRelease(
         Effect.sync(() => {
           log.push("bystander+");
@@ -69,10 +69,10 @@ describe("supervision", () => {
         const log: string[] = [];
         const triggers: Deferred.Deferred<void>[] = [];
         const core = yield* makeCore([flaky({ required: false, log, triggers }), api(log)]);
-        const fault = yield* Effect.fork(Stream.runHead(core.faults));
+        const fault = yield* Effect.forkChild(Stream.runHead(core.faults));
         yield* Effect.sleep(Duration.millis(5));
         yield* Deferred.succeed(triggers[0]!, undefined);
-        const seen = yield* fault.await;
+        const seen = yield* Fiber.await(fault);
         expect(Exit.isSuccess(seen) && seen.value._tag === "Some" && seen.value.value).toMatchObject({
           pluginId: "db",
           phase: "background",
@@ -142,7 +142,7 @@ describe("supervision", () => {
           id: "db",
           provides: [Db],
           restart: Schedule.recurs(2),
-          layer: Layer.scoped(
+          layer: Layer.effect(
             Db,
             Effect.gen(function* () {
               const attempt = yield* Ref.updateAndGet(attempts, (n) => n + 1);
@@ -171,7 +171,7 @@ describe("supervision", () => {
   });
 
   test("background work is rejected once the plugin or core has stopped", async () => {
-    let context!: Context.Tag.Service<PluginContext>;
+    let context!: Context.Service.Shape<typeof PluginContext>;
     await run(
       Effect.gen(function* () {
         const plugin = definePlugin({
@@ -190,7 +190,7 @@ describe("supervision", () => {
   });
 
   test("a fault a plugin reports for its own work is attributed, and a fatal one stops it and its dependents only", async () => {
-    let owner!: Context.Tag.Service<PluginContext>;
+    let owner!: Context.Service.Shape<typeof PluginContext>;
     const reporter = definePlugin({
       id: "db",
       provides: [Db],
@@ -225,7 +225,7 @@ describe("supervision", () => {
   });
 
   test("a fault reported while its plugin is still staged is kept, and a fatal one fails it once it is published", async () => {
-    class Breaker extends Context.Tag("test/Breaker")<Breaker, { readonly breakIt: (fatal: boolean) => Effect.Effect<void> }>() {}
+    class Breaker extends Context.Service<Breaker, { readonly breakIt: (fatal: boolean) => Effect.Effect<void> }>()("test/Breaker") {}
     const breaker = definePlugin({
       id: "breaker",
       provides: [Breaker],
@@ -266,16 +266,16 @@ describe("supervision", () => {
     });
     const error = await Effect.runPromise(Effect.flip(Effect.scoped(makeCore([stuck]))));
     expect(error).toMatchObject({ _tag: "PluginFault", pluginId: "stuck", phase: "activate", deadline: true });
-    expect(error._tag === "PluginFault" && error.cause._tag === "Fail" && error.cause.error).toBeInstanceOf(DeadlineExceeded);
+    expect(error._tag === "PluginFault" && Option.getOrUndefined(Cause.findErrorOption(error.cause))).toBeInstanceOf(DeadlineExceeded);
 
     const slowClose = definePlugin({
       id: "slow-close",
       deadlines: { dispose: Duration.millis(30) },
-      layer: Layer.scopedDiscard(
+      layer: Layer.effectDiscard(
         Effect.addFinalizer(() =>
           Effect.sync(() => {
             log.push("closing");
-          }).pipe(Effect.zipRight(Effect.never)),
+          }).pipe(Effect.andThen(Effect.never)),
         ),
       ),
     });
@@ -284,8 +284,8 @@ describe("supervision", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const core = yield* makeCore([slowClose]);
-          const faults = yield* Effect.fork(Stream.runHead(core.faults));
-          yield* Effect.yieldNow();
+          const faults = yield* Effect.forkChild(Stream.runHead(core.faults));
+          yield* Effect.yieldNow;
           return faults;
         }),
       ),

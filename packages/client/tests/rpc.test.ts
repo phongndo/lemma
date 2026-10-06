@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Exit, Fiber, Layer, Option, Stream, TestClock, TestContext } from "effect";
-import { Socket } from "@effect/platform";
+import { Effect, Exit, Layer, Stream } from "effect";
+import { Socket } from "effect/socket";
+import { TestClock } from "effect/testing";
 import { makeHostRpc } from "../src/rpc.ts";
 
 /** A socket that opens and then goes silent, as a connection does across laptop sleep or a network change. */
@@ -42,7 +43,7 @@ describe("makeHostRpc", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const rpc = yield* makeHostRpc("ws://host.invalid/rpc", constructor);
-          const events = yield* Effect.fork(Stream.runDrain(rpc.Host.Events()));
+          const events = yield* Effect.forkChild(Stream.runDrain(rpc["Host.Events"]()));
           const subscribed = () => sockets[0]?.sent.some((line) => line.includes("Host.Events")) ?? false;
           yield* until(() => Effect.sync(subscribed));
           expect(subscribed()).toBe(true);
@@ -51,11 +52,11 @@ describe("makeHostRpc", () => {
             yield* TestClock.adjust("10 seconds");
             yield* tick;
           }
-          yield* until(() => Effect.map(Fiber.poll(events), Option.isSome));
-          return yield* Fiber.poll(events);
-        }).pipe(Effect.provide(TestContext.TestContext)),
+          yield* until(() => Effect.sync(() => events.pollUnsafe() !== undefined));
+          return events.pollUnsafe();
+        }).pipe(Effect.provide(TestClock.layer())),
       ),
     );
-    expect(Option.isSome(exit) && Exit.isFailure(exit.value)).toBe(true);
+    expect(exit !== undefined && Exit.isFailure(exit)).toBe(true);
   });
 });

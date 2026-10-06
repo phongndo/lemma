@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { Deferred, Effect, Layer, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import { Agent, AgentRequestHook, branchOf, rebuildRequest, ToolResult } from "@lemma/contracts";
@@ -126,7 +126,7 @@ describe("retries", () => {
     const id = await run({ scripts: [failWith("502 Bad Gateway", { kind: "transient" })], config: { retryDelay: 0.3 } }, () =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
-        yield* Effect.fork((yield* Agent).prompt(id, text("go")));
+        yield* Effect.forkChild((yield* Agent).prompt(id, text("go")));
         yield* waitFor(log(id), (events) => ofType(events, "step-end").length > 0);
         return id;
       }),
@@ -242,7 +242,7 @@ describe("tools together", () => {
     const wait: Tool<{ readonly name: "a" | "b" }> = {
       name: "wait",
       description: "Waits for its gate.",
-      input: Schema.Struct({ name: Schema.Literal("a", "b") }),
+      input: Schema.Struct({ name: Schema.Literals(["a", "b"]) }),
       parallel: "safe",
       execute: ({ name }) =>
         Effect.gen(function* () {
@@ -255,7 +255,7 @@ describe("tools together", () => {
     await run({ scripts: [useTools(...calls), reply("done")], tools: [wait] }, ({ requests }) =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
-        const turn = yield* Effect.fork((yield* Agent).prompt(id, text("go")));
+        const turn = yield* Effect.forkChild((yield* Agent).prompt(id, text("go")));
         // Both run before either ends.
         yield* waitFor(
           Effect.sync(() => started.length),
@@ -264,7 +264,7 @@ describe("tools together", () => {
         yield* Deferred.succeed(gates.b, undefined);
         yield* waitFor(log(id), (events) => results(events).length === 1);
         yield* Deferred.succeed(gates.a, undefined);
-        yield* turn.await;
+        yield* Fiber.await(turn);
         const events = yield* log(id);
         expect(results(events).map((result) => result.toolCallId)).toEqual(["cb", "ca", "cc"]);
         const marks = ofType(events, "custom").filter((data) => data.kind === TOOLS_STARTED);
@@ -352,7 +352,7 @@ describe("stopping", () => {
       ({ executed }) =>
         Effect.gen(function* () {
           const { id } = yield* newSession;
-          yield* Effect.fork((yield* Agent).prompt(id, text("go")));
+          yield* Effect.forkChild((yield* Agent).prompt(id, text("go")));
           yield* waitFor(
             Effect.sync(() => briefStarted),
             (value) => value,
@@ -386,7 +386,7 @@ describe("stopping", () => {
     const id = await run({ scripts: [useTools(call("c1", "brief", {}))], tools: [brief], config: { stopGrace: 5 } }, () =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
-        yield* Effect.fork((yield* Agent).prompt(id, text("go")));
+        yield* Effect.forkChild((yield* Agent).prompt(id, text("go")));
         yield* waitFor(
           Effect.sync(() => briefStarted),
           (value) => value,
@@ -412,7 +412,7 @@ describe("stopping", () => {
     const id = await run({ scripts: [gated(gate, reply("final answer"))], config: { stopGrace: 5 } }, () =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
-        yield* Effect.fork((yield* Agent).prompt(id, text("go")));
+        yield* Effect.forkChild((yield* Agent).prompt(id, text("go")));
         yield* waitFor(log(id), (events) => ofType(events, "request").length > 0);
         setTimeout(() => Effect.runSync(Deferred.succeed(gate, undefined)), 100);
         return id;
@@ -446,9 +446,9 @@ describe("stopping", () => {
         const a = yield* Agent;
         const first = yield* newSession;
         const second = yield* newSession;
-        yield* Effect.fork(a.prompt(first.id, text("go")));
+        yield* Effect.forkChild(a.prompt(first.id, text("go")));
         yield* waitFor(log(first.id), (events) => ofType(events, "request").length > 0);
-        yield* Effect.fork(a.prompt(second.id, text("go")));
+        yield* Effect.forkChild(a.prompt(second.id, text("go")));
         yield* waitFor(
           Effect.sync(() => slowStarted),
           (value) => value,
@@ -483,7 +483,7 @@ describe("stopping", () => {
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
-        yield* Effect.fork(a.prompt(id, text("go")));
+        yield* Effect.forkChild(a.prompt(id, text("go")));
         yield* waitFor(a.view(id), (view) => view.output.length > 0);
         return id;
       }),
@@ -509,15 +509,15 @@ describe("admission", () => {
         const a = yield* Agent;
         const first = yield* newSession;
         const second = yield* newSession;
-        const one = yield* Effect.fork(a.prompt(first.id, text("one")));
+        const one = yield* Effect.forkChild(a.prompt(first.id, text("one")));
         yield* waitFor(log(first.id), (events) => events.length > 0);
-        const two = yield* Effect.fork(a.prompt(second.id, text("two")));
+        const two = yield* Effect.forkChild(a.prompt(second.id, text("two")));
         yield* waitFor(a.busy(second.id), (busy) => busy);
         yield* Effect.sleep(50);
         expect(yield* log(second.id)).toEqual([]);
         yield* Deferred.succeed(gate, undefined);
-        yield* one.await;
-        yield* two.await;
+        yield* Fiber.await(one);
+        yield* Fiber.await(two);
         const end = (yield* log(first.id)).find((event) => event.data.type === "turn-end")!;
         const start = (yield* log(second.id)).find((event) => event.data.type === "turn-start")!;
         expect(start.at).toBeGreaterThanOrEqual(end.at);
@@ -532,21 +532,21 @@ describe("admission", () => {
         const a = yield* Agent;
         const first = yield* newSession;
         const second = yield* newSession;
-        const one = yield* Effect.fork(a.prompt(first.id, text("one")));
+        const one = yield* Effect.forkChild(a.prompt(first.id, text("one")));
         yield* waitFor(log(first.id), (events) => events.length > 0);
-        const two = yield* Effect.fork(a.prompt(second.id, text("two")));
+        const two = yield* Effect.forkChild(a.prompt(second.id, text("two")));
         yield* waitFor(a.busy(second.id), (busy) => busy);
         // At once, though the first turn still holds the only slot.
         yield* a.cancel(second.id);
-        yield* two.await;
+        yield* Fiber.await(two);
         expect(yield* a.busy(second.id)).toBe(false);
         expect(yield* log(second.id)).toEqual([]);
         // The session takes prompts again: this one starts a turn, which waits for the slot.
-        const three = yield* Effect.fork(a.prompt(second.id, text("three")));
+        const three = yield* Effect.forkChild(a.prompt(second.id, text("three")));
         yield* waitFor(a.busy(second.id), (busy) => busy);
         yield* Deferred.succeed(gate, undefined);
-        yield* one.await;
-        yield* three.await;
+        yield* Fiber.await(one);
+        yield* Fiber.await(three);
         expect(ofType(yield* log(second.id), "turn-end").map((end) => end.reason)).toEqual(["done"]);
       }),
     );
@@ -563,12 +563,12 @@ describe("admission", () => {
           const a = yield* Agent;
           const first = yield* newSession;
           const second = yield* newSession;
-          const one = yield* Effect.fork(a.prompt(first.id, text("one")));
+          const one = yield* Effect.forkChild(a.prompt(first.id, text("one")));
           yield* waitFor(log(first.id), (events) => ofType(events, "attempt").length > 0);
           // The first turn waits to ask again; the second runs meanwhile.
           yield* a.prompt(second.id, text("two"));
           expect(ofType(yield* log(first.id), "request")).toHaveLength(1);
-          yield* one.await;
+          yield* Fiber.await(one);
           expect(ofType(yield* log(first.id), "turn-end").map((end) => end.reason)).toEqual(["done"]);
         }),
     );

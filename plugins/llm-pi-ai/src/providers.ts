@@ -27,36 +27,36 @@ const apis = {
   "pi-messages": piMessagesApi,
 } satisfies Record<string, () => ProviderStreams>;
 
-const ApiId = Schema.Literal(...(Object.keys(apis) as (keyof typeof apis)[]));
+const ApiId = Schema.Literals(Object.keys(apis) as (keyof typeof apis)[]);
 type ApiId = typeof ApiId.Type;
 
 const Cost = Schema.Struct({ input: Schema.Number, output: Schema.Number, cacheRead: Schema.Number, cacheWrite: Schema.Number });
 /** pi-ai's per-API `compat` flags (e.g. `supportsDeveloperRole: false` for Ollama); passed through unchecked. */
-const Compat = Schema.Record({ key: Schema.String, value: Schema.Unknown });
+const Compat = Schema.Record(Schema.String, Schema.Unknown);
 
 const CustomModel = Schema.Struct({
   id: Schema.String,
   name: Schema.optional(Schema.String),
   reasoning: Schema.optional(Schema.Boolean),
-  input: Schema.optional(Schema.Array(Schema.Literal("text", "image"))),
-  contextWindow: Schema.optional(Schema.Number.pipe(Schema.positive())),
-  maxTokens: Schema.optional(Schema.Number.pipe(Schema.positive())),
+  input: Schema.optional(Schema.Array(Schema.Literals(["text", "image"]))),
+  contextWindow: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
+  maxTokens: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
   /** USD per million tokens. */
   cost: Schema.optional(Cost),
   /** pi thinking level → provider value; `null` marks a level unsupported. */
-  thinkingLevelMap: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.NullOr(Schema.String) })),
+  thinkingLevelMap: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
   compat: Schema.optional(Compat),
 });
 type CustomModel = typeof CustomModel.Type;
 
 export const CustomProvider = Schema.Struct({
-  id: Schema.String.pipe(Schema.pattern(/^[^/]+$/)),
+  id: Schema.String.check(Schema.isPattern(/^[^/]+$/)),
   name: Schema.optional(Schema.String),
   api: ApiId,
   baseUrl: Schema.String,
   /** A literal key or an environment variable. Omit both for keyless local servers. */
   apiKey: Schema.optional(Schema.Struct({ env: Schema.optional(Schema.String), value: Schema.optional(Schema.String) })),
-  headers: Schema.optional(Schema.Record({ key: Schema.String, value: Schema.String })),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   /** Applied to every model; a model's own `compat` wins per field. */
   compat: Schema.optional(Compat),
   models: Schema.Array(CustomModel),

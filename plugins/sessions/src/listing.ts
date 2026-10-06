@@ -12,9 +12,9 @@ import type { Scanned } from "./file.ts";
  */
 const Index = Schema.Struct({
   version: Schema.Literal(1),
-  files: Schema.Record({
-    key: Schema.String,
-    value: Schema.Struct({
+  files: Schema.Record(
+    Schema.String,
+    Schema.Struct({
       size: Schema.Number,
       mtimeMs: Schema.Number,
       ino: Schema.Number,
@@ -24,7 +24,7 @@ const Index = Schema.Struct({
       lastHash: Schema.String,
       info: SessionInfo,
     }),
-  }),
+  ),
 });
 
 const indexFile = (root: string): string => path.join(root, ".index.json");

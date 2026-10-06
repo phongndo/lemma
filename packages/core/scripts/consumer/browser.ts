@@ -2,7 +2,7 @@ import { Context, Effect, Layer, Schema, Scope } from "effect";
 import { definePlugin, Event, Events, Hook, Hooks, makeLoader, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 
-class Label extends Context.Tag("ui/Label")<Label, string>() {}
+class Label extends Context.Service<Label, string>()("ui/Label") {}
 const Format = Hook.make<string, string>("ui/format");
 const Click = Event.make<number>("ui/click");
 const root = document.querySelector("main")!;
@@ -30,7 +30,7 @@ async function verify() {
             id: "view",
             requires: [Label],
             exclusive: true,
-            layer: Layer.scopedDiscard(
+            layer: Layer.effectDiscard(
               Effect.gen(function* () {
                 const text = yield* Label;
                 const owner = yield* PluginContext;

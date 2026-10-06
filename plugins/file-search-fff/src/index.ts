@@ -216,10 +216,12 @@ export const makeFileSearch = (init: FileSearchInit) =>
   });
 
 export const FileSearchConfig = Schema.Struct({
-  idleMinutes: Schema.optionalWith(Schema.Number.pipe(Schema.between(1, 24 * 60)), { default: () => 15 }).annotations({
-    title: "Keep an index for",
-    description: "Minutes (1 to 1440) a repository's index stays in memory after its last search; the next search opens it again.",
-  }),
+  idleMinutes: Schema.Number.check(Schema.isBetween({ minimum: 1, maximum: 24 * 60 }))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 15)))
+    .annotate({
+      title: "Keep an index for",
+      description: "Minutes (1 to 1440) a repository's index stays in memory after its last search; the next search opens it again.",
+    }),
 });
 
 /** Contributes the bundled `FileSearchers` entry: nothing requires it, so turning it off leaves the host running. */
@@ -228,7 +230,7 @@ export default definePlugin({
   version: "0.1.0",
   config: FileSearchConfig,
   layer: (config) =>
-    Layer.scopedDiscard(
+    Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
         const { service, snapshot } = yield* makeFileSearch({ idleMs: config.idleMinutes * 60_000 });

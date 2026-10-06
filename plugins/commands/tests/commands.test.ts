@@ -9,7 +9,7 @@ const contributor = (id: string, contributed: readonly Command[]) =>
   definePlugin({
     id,
     requires: [Commands],
-    layer: Layer.scopedDiscard(Effect.flatMap(Commands, (registry) => Effect.forEach(contributed, registry.register, { discard: true }))),
+    layer: Layer.effectDiscard(Effect.flatMap(Commands, (registry) => Effect.forEach(contributed, registry.register, { discard: true }))),
   });
 
 const command = (id: string, run: Command["run"] = () => Effect.void, fields: Partial<Command> = {}): Command => ({ id, title: id, ...fields, run });
@@ -83,9 +83,10 @@ describe("commands", () => {
       [commands, contributor("p", [command("forever", () => Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => (interrupted = true)))))])],
       Effect.gen(function* () {
         const registry = yield* Commands;
-        const fiber = yield* Effect.fork(registry.run("forever", { cwd: "/" }));
-        yield* Effect.yieldNow();
-        expect(Exit.isInterrupted(yield* Fiber.interrupt(fiber))).toBe(true);
+        const fiber = yield* Effect.forkChild(registry.run("forever", { cwd: "/" }));
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(fiber);
+        expect(Exit.hasInterrupts(yield* Fiber.await(fiber))).toBe(true);
       }),
     );
     expect(interrupted).toBe(true);
@@ -98,9 +99,9 @@ describe("commands", () => {
         Effect.gen(function* () {
           const loader = yield* makeLoader({ source: { resolve: (id) => Effect.succeed(plugins.get(id)!) }, composition: { plugins: { commands: {} } } });
           const events = yield* loader.core.run(Events);
-          const collected = yield* Effect.fork(Stream.runCollect(Stream.take(events.stream(CommandsChanged), 2)));
+          const collected = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(CommandsChanged), 2)));
           // Let the subscription start before anything is published.
-          yield* Effect.yieldNow();
+          yield* Effect.yieldNow;
           yield* loader.apply({ plugins: { commands: {}, p: {} } });
           yield* loader.apply({ plugins: { commands: {} } });
           return [...(yield* Fiber.join(collected))].map((event) => event.commands.map((info) => info.id));

@@ -9,7 +9,7 @@ import { Paths } from "./host.ts";
  */
 
 /** A plugin providing `Paths` as a host in `home` would, each file where the host puts it unless `paths` names it. */
-export const pathsPlugin = (home: string, paths: Partial<Context.Tag.Service<typeof Paths>> = {}) =>
+export const pathsPlugin = (home: string, paths: Partial<Context.Service.Shape<typeof Paths>> = {}) =>
   definePlugin({
     id: "paths",
     provides: [Paths],

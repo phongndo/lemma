@@ -122,13 +122,13 @@ describe("sessions lock", () => {
       const alive = (pid: number) => pid !== 4242;
       const results = await Effect.runPromise(
         Effect.all(
-          [Effect.either(acquireLock(root, { ...other(7, true), isAlive: alive })), Effect.either(acquireLock(root, { ...other(8, true), isAlive: alive }))],
+          [Effect.result(acquireLock(root, { ...other(7, true), isAlive: alive })), Effect.result(acquireLock(root, { ...other(8, true), isAlive: alive }))],
           {
             concurrency: "unbounded",
           },
         ),
       );
-      const won = results.flatMap((result) => (result._tag === "Right" ? [result.right] : []));
+      const won = results.flatMap((result) => (result._tag === "Success" ? [result.success] : []));
       expect(won).toHaveLength(1);
       expect((await recorded()).token).toBe(won[0]!.token);
     }

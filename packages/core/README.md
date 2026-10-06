@@ -15,7 +15,7 @@ declarations and targets Node.js 24 and browsers.
 import { Context, Effect, Layer } from "effect";
 import { definePlugin, makeCore } from "@lemma/core";
 
-class Greeting extends Context.Tag("example/Greeting")<Greeting, string>() {}
+class Greeting extends Context.Service<Greeting, string>()("example/Greeting") {}
 
 const greeting = definePlugin({
   id: "greeting",
@@ -42,9 +42,9 @@ See [`examples/hello.ts`](examples/hello.ts) for a capability implementation ext
 - `id` uniquely identifies an instance within one core. `version` is optional diagnostic metadata, not a dependency constraint.
 - `config` is an Effect Schema. `makeCore(plugins, { configs })` decodes every plugin's config before any activation; a missing value decodes as `{}`; an invalid one is a `CompositionError` (`InvalidConfig`) naming the plugin and the failing path. `layer` may be a function of the decoded config.
 - `exclusive` marks a plugin that cannot coexist with its replacement (a port, a lock, a unique registration in a retained registry); a reload stops it before starting the new instance. `restart` is an Effect `Schedule` consulted after a runtime failure; without one the plugin stays failed. `deadlines` bound activation and disposal (defaults 30s and 10s, overridable per core).
-- Capabilities are ordinary Effect `Context.Tag`s. Share the tags between consumers and providers; use namespaced keys. Effect identifies capabilities by their keys.
+- Capabilities are ordinary Effect `Context.Service` keys. Share the keys between consumers and providers; use namespaced key names. Effect identifies capabilities by their key names.
 - `provides` declares exports; `requires` declares dependencies supplied by other plugins. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
-- `layer` is an ordinary Effect `Layer`. Use `Layer.scoped`, `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared.
+- `layer` is an ordinary Effect `Layer`. Use `Layer.effect` (its Effect may use the layer's `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared.
 - The manifest is needed for runtime graph inspection and validation: Effect's type-level requirements alone cannot describe a dynamically supplied composition. Construction and cleanup still belong to Effect, not a second dependency-injection system.
 
 The complete graph is validated before Layers execute. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`; `checkComposition(plugins, configs)` returns the same errors without running anything, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.

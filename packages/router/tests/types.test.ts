@@ -17,8 +17,8 @@ describe("route types", () => {
   test("a Schema's decoded types are the route's", () => {
     const Numbered = defineRoute("numbered", {
       path: "/n/:n",
-      params: Schema.Struct({ n: Schema.NumberFromString }),
-      search: Schema.Struct({ page: Schema.optional(Schema.NumberFromString) }),
+      params: Schema.Struct({ n: Schema.FiniteFromString }),
+      search: Schema.Struct({ page: Schema.optional(Schema.FiniteFromString) }),
     });
     expectTypeOf<ParamsOf<typeof Numbered>>().toEqualTypeOf<{ readonly n: number }>();
     expectTypeOf<SearchOf<typeof Numbered>>().toEqualTypeOf<{ readonly page?: number | undefined }>();

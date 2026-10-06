@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { Cause, Effect, Exit, Stream } from "effect";
+import { Cause, Effect, Exit, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
 import { CoreClosed, Hook } from "@lemma/core";
 import type { Events, Hooks } from "@lemma/core";
@@ -49,12 +49,12 @@ import type { ResumePlan, StepOutcome } from "./resume.ts";
 import type { LiveFile } from "./state.ts";
 
 interface TurnServices {
-  readonly sessions: Context.Tag.Service<typeof Sessions>;
-  readonly llm: Context.Tag.Service<typeof Llm>;
-  readonly tools: Context.Tag.Service<typeof Tools>;
-  readonly host: Context.Tag.Service<typeof HostControl>;
-  readonly hooks: Context.Tag.Service<typeof Hooks>;
-  readonly events: Context.Tag.Service<typeof Events>;
+  readonly sessions: Context.Service.Shape<typeof Sessions>;
+  readonly llm: Context.Service.Shape<typeof Llm>;
+  readonly tools: Context.Service.Shape<typeof Tools>;
+  readonly host: Context.Service.Shape<typeof HostControl>;
+  readonly hooks: Context.Service.Shape<typeof Hooks>;
+  readonly events: Context.Service.Shape<typeof Events>;
   /** The agent plugin's id, recorded as the source of the sections it contributes. */
   readonly source: string;
 }
@@ -203,7 +203,8 @@ const isCoreClosed = (error: unknown, depth = 0): boolean =>
   ((error as { readonly _tag?: unknown })._tag === "CoreClosed" || ("cause" in error && isCoreClosed(error.cause, depth + 1)));
 
 /** The turn failed because the core is shutting down. */
-const closedCore = (cause: Cause.Cause<unknown>): boolean => [...Cause.failures(cause), ...Cause.defects(cause)].some((error) => isCoreClosed(error));
+const closedCore = (cause: Cause.Cause<unknown>): boolean =>
+  cause.reasons.some((reason) => (Cause.isFailReason(reason) && isCoreClosed(reason.error)) || (Cause.isDieReason(reason) && isCoreClosed(reason.defect)));
 
 /** Never handled: dispatching it says whether the core still dispatches hooks. */
 const Probe = Hook.make<void, void>("agent/core-closing");
@@ -261,7 +262,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     .invoke(Probe, undefined, () => Effect.void)
     .pipe(
       Effect.as(false),
-      Effect.catchAll((error) => Effect.succeed(error._tag === "CoreClosed")),
+      Effect.catch((error) => Effect.succeed(error._tag === "CoreClosed")),
     );
   /** Stops the turn, to be left open, when the core is shutting down. */
   const unlessClosing = Effect.flatMap(coreClosing, (closing) => (closing ? Effect.die(new CoreClosed()) : Effect.void));
@@ -270,7 +271,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    * Uninterruptible so a cancelled turn never loses track of an event that did reach the log. One at a time, so tool
    * calls running together each chain after the last.
    */
-  const appending = Effect.unsafeMakeSemaphore(1);
+  const appending = Semaphore.makeUnsafe(1);
   const append = (data: EventData): Effect.Effect<SessionEvent, AgentError> =>
     appending.withPermits(1)(
       Effect.uninterruptible(
@@ -292,7 +293,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    * Waits until epoch `at`, without a slot; a stopping agent suspends the turn instead, and the rest of the wait comes
    * when it resumes.
    */
-  const waitUntil = (at: number) => Effect.zipRight(input.idle(Effect.raceFirst(Effect.sleep(Math.max(0, at - Date.now())), input.stopping)), boundary);
+  const waitUntil = (at: number) => Effect.andThen(input.idle(Effect.raceFirst(Effect.sleep(Math.max(0, at - Date.now())), input.stopping)), boundary);
 
   const hookError = (hook: string) => (error: { readonly message: string }) =>
     new AgentError({ sessionId, reason: "Hook", message: `${hook}: ${error.message}`, cause: error });
@@ -401,7 +402,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       });
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
       const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
-      if (request === undefined) return yield* Effect.dieMessage(`request ${logged.id} is not on its own branch`);
+      if (request === undefined) return yield* Effect.die(new Error(`request ${logged.id} is not on its own branch`));
       return { request, model, offered: specs.map((spec) => spec.name) };
     });
 
@@ -440,7 +441,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           }),
         ),
         Effect.as(undefined),
-        Effect.catchAll((error) => Effect.succeed(error.message)),
+        Effect.catch((error) => Effect.succeed(error.message)),
       );
       const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: Date.now() };
       // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
@@ -510,12 +511,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ? { content: [{ type: "text" as const, text: interruptedText(interrupted.get(call.id)) }], isError: true, details: undefined }
         : yield* tools.execute(invocation, signal).pipe(
             Effect.map((value) => ({ content: value.content, isError: value.isError ?? false, details: value.details })),
-            Effect.catchAll((error) =>
+            Effect.catch((error) =>
               isCoreClosed(error)
                 ? Effect.die(error)
                 : Effect.succeed({ content: [{ type: "text" as const, text: error.message }], isError: true, details: undefined }),
             ),
-            Effect.catchAllDefect((defect) =>
+            Effect.catchDefect((defect) =>
               isCoreClosed(defect)
                 ? Effect.die(defect)
                 : Effect.succeed({
@@ -714,7 +715,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const cutOff = () => partialMessage(cutStep?.content ?? [], input.model, cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL);
       const timing = () => ({ startedAt: cutStep?.startedAt ?? Date.now(), endedAt: Date.now() });
       /** The next step, once a retry's wait (cut short by the restart) is over. */
-      const again = () => Effect.zipRight(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
+      const again = () => Effect.andThen(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
 
       if (at.kind === "failed") {
         if (!at.closed) state.step = { id: at.stepId, model: input.model };
@@ -779,7 +780,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const leftOpen = (exit: Exit.Exit<Ended, AgentError>): Effect.Effect<boolean> => {
     if (Exit.isSuccess(exit)) return Effect.succeed(false);
     if (input.suspended() || closedCore(exit.cause)) return Effect.succeed(true);
-    return Cause.isInterruptedOnly(exit.cause) ? Effect.succeed(false) : coreClosing;
+    return Cause.hasInterruptsOnly(exit.cause) ? Effect.succeed(false) : coreClosing;
   };
   /** Set by `finish`: the turn was left open. */
   let open = false;
@@ -796,7 +797,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       if (open) return;
       const ended: Ended = Exit.isSuccess(exit)
         ? exit.value
-        : Cause.isInterruptedOnly(exit.cause)
+        : Cause.hasInterruptsOnly(exit.cause)
           ? { reason: "cancelled" }
           : { reason: "error", error: causeMessage(exit.cause) };
       const cancelled = ended.reason === "cancelled";
@@ -817,7 +818,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       if (step !== undefined) yield* append({ type: "step-end", turnId, stepId: step.id });
       yield* append({ type: "turn-end", turnId, reason: ended.reason, ...(ended.error === undefined ? {} : { error: ended.error }) });
     }).pipe(
-      Effect.catchAll((error) => Effect.logWarning(`agent: could not close turn ${turnId} in session ${sessionId}: ${error.message}`)),
+      Effect.catch((error) => Effect.logWarning(`agent: could not close turn ${turnId} in session ${sessionId}: ${error.message}`)),
       Effect.ensuring(
         Effect.suspend(() =>
           open
@@ -826,7 +827,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
                 sessionId,
                 turnId,
                 usage: state.usage,
-                reason: Exit.isSuccess(exit) ? exit.value.reason : Cause.isInterruptedOnly(exit.cause) ? "cancelled" : "error",
+                reason: Exit.isSuccess(exit) ? exit.value.reason : Cause.hasInterruptsOnly(exit.cause) ? "cancelled" : "error",
               }),
         ),
       ),
@@ -857,7 +858,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     return yield* body.pipe(
       Effect.onExit(finish),
       Effect.map((ended): TurnOutcome => ended.reason),
-      Effect.catchAllCause((cause) => (open ? Effect.succeed("suspended" as const) : Effect.failCause(cause))),
+      Effect.catchCause((cause) => (open ? Effect.succeed("suspended" as const) : Effect.failCause(cause))),
     );
   });
 }

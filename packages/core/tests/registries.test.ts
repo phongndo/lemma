@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Chunk, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
 import type { Composition, Plugin, PluginSource } from "../src/index.ts";
 import { failure, run, waitFor } from "./support.ts";
@@ -104,7 +104,7 @@ describe("registries", () => {
         const exit = yield* Effect.exit(makeCore([contributor("first", [{ label: "run" }], Commands), contributor("second", [{ label: "run" }], Commands)]));
         const fault = failure(exit);
         expect(fault).toBeInstanceOf(PluginFault);
-        const cause = Option.getOrThrow(Cause.failureOption((fault as PluginFault).cause));
+        const cause = Option.getOrThrow(Cause.findErrorOption((fault as PluginFault).cause));
         expect(cause).toMatchObject({ _tag: "RegistryError", reason: "Conflict", registry: "test/commands", pluginId: "second" });
       }),
     );
@@ -152,7 +152,7 @@ describe("registries", () => {
         yield* core.run(
           Effect.gen(function* () {
             const registries = yield* Registries;
-            const fiber = yield* Effect.fork(
+            const fiber = yield* Effect.forkChild(
               Stream.runForEach(Stream.take(registries.changes(Menu), 2), (items) =>
                 Effect.sync(() => {
                   seen.push(items.map((item) => item.item.label));
@@ -169,7 +169,7 @@ describe("registries", () => {
         );
         expect(seen).toEqual([["a", "b"], ["a"]]);
         const collected = yield* core.run(Effect.flatMap(Registries, (registries) => Stream.runCollect(Stream.take(registries.changes(Menu), 1))));
-        expect(Chunk.toArray(collected).map((items) => items.map((item) => item.item.label))).toEqual([["a"]]);
+        expect(Array.from(collected).map((items) => items.map((item) => item.item.label))).toEqual([["a"]]);
       }),
     );
   });
@@ -179,12 +179,12 @@ describe("registries", () => {
       Effect.gen(function* () {
         const impostor = Registry.make<Entry>("test/menu");
         const clash = yield* Effect.exit(makeCore([contributor("one", [{ label: "x" }]), contributor("two", [{ label: "y" }], impostor)]));
-        expect(Option.getOrThrow(Cause.failureOption((failure(clash) as PluginFault).cause))).toMatchObject({ reason: "PointConflict" });
+        expect(Option.getOrThrow(Cause.findErrorOption((failure(clash) as PluginFault).cause))).toMatchObject({ reason: "PointConflict" });
         const keyless = Registry.make<Entry>("test/keyless", { unique: true });
         const missing = yield* Effect.exit(makeCore([contributor("one", [{ label: "x" }], keyless)]));
-        expect(Option.getOrThrow(Cause.failureOption((failure(missing) as PluginFault).cause))).toBeInstanceOf(RegistryError);
+        expect(Option.getOrThrow(Cause.findErrorOption((failure(missing) as PluginFault).cause))).toBeInstanceOf(RegistryError);
         const infinite = yield* Effect.exit(makeCore([contributor("one", [{ label: "x", order: Number.POSITIVE_INFINITY }])]));
-        expect(Option.getOrThrow(Cause.failureOption((failure(infinite) as PluginFault).cause))).toMatchObject({ reason: "InvalidOrder" });
+        expect(Option.getOrThrow(Cause.findErrorOption((failure(infinite) as PluginFault).cause))).toMatchObject({ reason: "InvalidOrder" });
       }),
     );
   });

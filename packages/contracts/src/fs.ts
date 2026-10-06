@@ -42,9 +42,9 @@ export const kindOf = (path: string): Promise<"file" | "directory" | "other" | u
   );
 
 /** The file at `path` as JSON of `schema`; undefined when it is missing, unreadable, or does not decode. */
-export const readJsonFile = async <A, I>(path: string, schema: Schema.Schema<A, I>): Promise<A | undefined> => {
+export const readJsonFile = async <A, I>(path: string, schema: Schema.Codec<A, I>): Promise<A | undefined> => {
   const text = await readFile(path, "utf8").catch(() => undefined);
-  return text === undefined ? undefined : Option.getOrUndefined(Schema.decodeUnknownOption(Schema.parseJson(schema))(text));
+  return text === undefined ? undefined : Option.getOrUndefined(Schema.decodeUnknownOption(Schema.fromJsonString(schema))(text));
 };
 
 export interface AtomicWriteOptions {

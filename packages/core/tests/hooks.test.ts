@@ -37,7 +37,7 @@ describe("plugin-owned hooks", () => {
       (input, next) =>
         Effect.sync(() => {
           seen.push("first");
-        }).pipe(Effect.zipRight(next(input))),
+        }).pipe(Effect.andThen(next(input))),
       -1,
     );
     await run(
@@ -86,8 +86,8 @@ describe("plugin-owned hooks", () => {
   });
 
   test("captures each plugin's dependencies and retains terminal caller dependencies", async () => {
-    class Multiplier extends Context.Tag("test/Multiplier")<Multiplier, number>() {}
-    class Request extends Context.Tag("test/Request")<Request, number>() {}
+    class Multiplier extends Context.Service<Multiplier, number>()("test/Multiplier") {}
+    class Request extends Context.Service<Request, number>()("test/Request") {}
     const dependency = definePlugin({ id: "dependency", provides: [Multiplier], layer: Layer.succeed(Multiplier, 3) });
     const consumer = definePlugin({
       id: "consumer",
@@ -124,7 +124,7 @@ describe("plugin-owned hooks", () => {
         const error = failure(invalid);
         expect(error._tag).toBe("PluginFault");
         if (error._tag === "PluginFault") {
-          expect(Option.getOrThrow(Cause.failureOption(error.cause))).toMatchObject({ reason: "InvalidOrder" });
+          expect(Option.getOrThrow(Cause.findErrorOption(error.cause))).toMatchObject({ reason: "InvalidOrder" });
         }
       }),
     );
@@ -134,7 +134,7 @@ describe("plugin-owned hooks", () => {
     let calls = 0;
     const twice = middleware("twice", (input, next) => {
       const continuation = next(input);
-      return continuation.pipe(Effect.zipRight(continuation));
+      return continuation.pipe(Effect.andThen(continuation));
     });
     await run(
       Effect.gen(function* () {
@@ -178,20 +178,20 @@ describe("plugin-owned hooks", () => {
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        let owner!: Context.Tag.Service<PluginContext>;
+        let owner!: Context.Service.Shape<typeof PluginContext>;
         const plugin = definePlugin({
           id: "dynamic",
           layer: Layer.effectDiscard(
             Effect.gen(function* () {
               owner = yield* PluginContext;
               yield* owner.on(point, (input, next) =>
-                Deferred.succeed(entered, undefined).pipe(Effect.zipRight(Deferred.await(release)), Effect.zipRight(next(input))),
+                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)), Effect.andThen(next(input))),
               );
             }),
           ),
         });
         const core = yield* makeCore([plugin]);
-        const first = yield* Effect.fork(core.run(invoke(1)));
+        const first = yield* Effect.forkChild(core.run(invoke(1)));
         yield* Deferred.await(entered);
         yield* owner.on(point, (input, next) => next(input + 10));
         yield* Deferred.succeed(release, undefined);
@@ -203,7 +203,7 @@ describe("plugin-owned hooks", () => {
 
   test("interruption unwinds middleware and expired owners cannot register", async () => {
     let cleaned = false;
-    let owner!: Context.Tag.Service<PluginContext>;
+    let owner!: Context.Service.Shape<typeof PluginContext>;
     await run(
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
@@ -214,7 +214,7 @@ describe("plugin-owned hooks", () => {
               owner = yield* PluginContext;
               yield* owner.on(point, (_input, _next) =>
                 Deferred.succeed(entered, undefined).pipe(
-                  Effect.zipRight(Effect.never),
+                  Effect.andThen(Effect.never),
                   Effect.ensuring(
                     Effect.sync(() => {
                       cleaned = true;
@@ -226,7 +226,7 @@ describe("plugin-owned hooks", () => {
           ),
         });
         const core = yield* makeCore([plugin]);
-        const fiber = yield* Effect.fork(core.run(invoke(1)));
+        const fiber = yield* Effect.forkChild(core.run(invoke(1)));
         yield* Deferred.await(entered);
         yield* Fiber.interrupt(fiber);
         expect(cleaned).toBe(true);
@@ -238,11 +238,11 @@ describe("plugin-owned hooks", () => {
   test("spans attribute plugin work and nest under the invocation, not activation", async () => {
     const spans: Tracer.Span[] = [];
     await Effect.runPromise(
-      Tracer.tracerWith((base) => {
+      Tracer.Tracer.use((base) => {
         const tracer = Tracer.make({
-          context: (evaluate, fiber) => base.context(evaluate, fiber),
-          span: (...args) => {
-            const span = base.span(...args);
+          ...(base.context === undefined ? {} : { context: base.context }),
+          span(options) {
+            const span = base.span(options);
             spans.push(span);
             return span;
           },

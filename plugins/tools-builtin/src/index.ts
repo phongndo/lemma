@@ -29,22 +29,24 @@ export { resolveToCwd } from "./files.ts";
  * replacement take over its names. A tool that runs others is built from the
  * registry it registers with.
  */
-const toolPlugin = (id: string, tool: Tool<any> | ((registry: Context.Tag.Service<typeof Tools>) => Tool<any>)) =>
+const toolPlugin = (id: string, tool: Tool<any> | ((registry: Context.Service.Shape<typeof Tools>) => Tool<any>)) =>
   definePlugin({
     id,
     version: "0.1.0",
     requires: [Tools],
-    layer: Layer.scopedDiscard(Effect.flatMap(Tools, (registry) => registry.register(typeof tool === "function" ? tool(registry) : tool))),
+    layer: Layer.effectDiscard(Effect.flatMap(Tools, (registry) => registry.register(typeof tool === "function" ? tool(registry) : tool))),
   });
 
 export const read = toolPlugin(readTool.name, readTool);
 export const write = toolPlugin(writeTool.name, writeTool);
 export const edit = toolPlugin(editTool.name, editTool);
 const BashConfig = Schema.Struct({
-  timeout: Schema.optionalWith(Schema.Number.pipe(Schema.nonNegative()), { default: () => DEFAULT_BASH_TIMEOUT }).annotations({
-    title: "Default timeout",
-    description: "Seconds a command may run when the model names no timeout of its own. 0: no limit.",
-  }),
+  timeout: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => DEFAULT_BASH_TIMEOUT)))
+    .annotate({
+      title: "Default timeout",
+      description: "Seconds a command may run when the model names no timeout of its own. 0: no limit.",
+    }),
 });
 
 export const bash = definePlugin({
@@ -52,7 +54,7 @@ export const bash = definePlugin({
   version: "0.1.0",
   config: BashConfig,
   requires: [Tools],
-  layer: (config: typeof BashConfig.Type) => Layer.scopedDiscard(Effect.flatMap(Tools, (registry) => registry.register(makeBashTool(config.timeout)))),
+  layer: (config: typeof BashConfig.Type) => Layer.effectDiscard(Effect.flatMap(Tools, (registry) => registry.register(makeBashTool(config.timeout)))),
 });
 export const codemode = toolPlugin("codemode", codemodeTool);
 

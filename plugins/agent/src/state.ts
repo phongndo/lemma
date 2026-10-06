@@ -51,7 +51,7 @@ const livePath = (home: string, sessionId: string) => join(stateDir(home), `${se
 const bestEffort = (what: string, write: () => Promise<unknown>): Effect.Effect<void> =>
   Effect.tryPromise(write).pipe(
     Effect.asVoid,
-    Effect.catchAll((error) => Effect.logWarning(`agent: could not ${what}: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`)),
+    Effect.catch((error) => Effect.logWarning(`agent: could not ${what}: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`)),
   );
 
 /** Every session's journal; one that cannot be read is skipped with a warning, so it never keeps the agent from starting. */

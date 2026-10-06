@@ -8,13 +8,13 @@ shows it. Its only dependency is Effect (Schema decodes and encodes params and
 search).
 
 ```ts
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { createBrowserHistory, createRouter, defineRoute, isRoute } from "@lemma/router";
 
 // Params come from the path: { id: string; tab?: string }.
 const User = defineRoute("user", {
   path: "/users/:id/:tab?",
-  search: Schema.Struct({ page: Schema.optionalWith(Schema.NumberFromString, { default: () => 1 }) }),
+  search: Schema.Struct({ page: Schema.FiniteFromString.pipe(Schema.withDecodingDefaultType(Effect.succeed(1))) }),
 });
 
 const router = createRouter<{ route: typeof User; render: () => string }>({ history: createBrowserHistory(), known: [User], retain: ["debug"] });

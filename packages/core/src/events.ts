@@ -35,11 +35,11 @@ export interface ObserveOptions {
 /** An observer failure becomes a `PluginFault` (phase "observe") for its owner and affects nothing else. */
 export type Observer<Payload, Requirements = never> = (payload: Payload) => Effect.Effect<void, unknown, Requirements>;
 
-export class Events extends Context.Tag("@lemma/core/Events")<
+export class Events extends Context.Service<
   Events,
   {
     readonly publish: <P>(event: Event<P>, payload: P) => Effect.Effect<void>;
     /** Subscribe from outside a plugin (transports, tests). Ends when the stream's consumer stops or the core closes. */
     readonly stream: <P>(event: Event<P>, options?: ObserveOptions) => Stream.Stream<P>;
   }
->() {}
+>()("@lemma/core/Events") {}
