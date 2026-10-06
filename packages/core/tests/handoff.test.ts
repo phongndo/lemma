@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Cause, Context, Deferred, Effect, Fiber, Schema, Stream } from "effect";
 import { definePlugin, makeLoader } from "../src/index.ts";
 import type { Plugin } from "../src/index.ts";
+import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
 import { run, waitFor } from "./support.ts";
 
 class Count extends Context.Service<Count, { readonly add: () => number; readonly previous: unknown }>()("test/Count") {}
@@ -189,6 +190,28 @@ describe("handing state to a replacement", () => {
         yield* waitFor(loader.core.inspect, (now) => now.plugins[0]?.state === "failed");
         yield* loader.core.restart("counter");
         expect(yield* loader.core.run(previous)).toBeUndefined();
+      }),
+    );
+  });
+
+  test("a plugin written with promises hands over the same way", async () => {
+    const plain = definePlainPlugin({
+      id: "counter",
+      config: { version: 0 },
+      carry: Schema.Struct({ seen: Schema.Array(Schema.String) }),
+      provides: { count: Count },
+      setup: (_, { previous, handoff }) => {
+        const seen = [...(previous?.seen ?? [])];
+        handoff(() => ({ seen }));
+        return { count: { add: () => seen.push(`#${seen.length}`), previous } };
+      },
+    });
+    await run(
+      Effect.gen(function* () {
+        const loader = yield* loaded(plain);
+        yield* loader.core.run(add);
+        yield* loader.apply(version(1));
+        expect(yield* loader.core.run(previous)).toEqual({ seen: ["#0"] });
       }),
     );
   });

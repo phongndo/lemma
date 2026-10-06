@@ -1,5 +1,6 @@
 // Checked by core:check, not executed. These assertions protect the public seam.
-import { Context, Effect, Layer, Schema } from "effect";
+import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
 import { definePlugin, Event, Events, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
 
 class Value extends Context.Service<Value, string>()("types/Value") {}
@@ -149,3 +150,66 @@ export function setups() {
 }
 
 // The promise-based view of services: what plain plugins see.
+const Point = Hook.make<string, number>("types/plain-point");
+export function plainViews() {
+  interface Key<A> {
+    readonly name: string;
+    readonly default: A;
+  }
+  class Cache extends Context.Service<
+    Cache,
+    {
+      readonly get: (key: string) => Effect.Effect<string, Error>;
+      readonly typed: <A>(key: Key<A>) => Effect.Effect<A>;
+      readonly size: Effect.Effect<number>;
+      readonly changes: Stream.Stream<string>;
+      readonly local: (key: string) => number;
+      readonly settings: { readonly limit: number; readonly when: Date };
+      readonly "~plain"?: { readonly typed: <A>(key: Key<A>) => Promise<A> };
+    }
+  >()("types/Cache") {}
+  definePlainPlugin({
+    id: "plain-reader",
+    config: { limit: 3 },
+    requires: { cache: Cache, value: Value },
+    provides: { other: Other },
+    setup: async ({ cache, value }, { config, on, signal }) => {
+      const text: string = await cache.get("a");
+      const size: number = await cache.size();
+      const typed: number = await cache.typed({ name: "n", default: 1 });
+      const local: number = cache.local("a");
+      const limit: number = cache.settings.limit + config.limit;
+      const when: Date = cache.settings.when;
+      for await (const change of cache.changes()) void change.length;
+      // @ts-expect-error A promise, not a string.
+      const wrong: string = cache.get("a");
+      on(Point, (input, next) => (input === "" ? 0 : next(input)));
+      // @ts-expect-error The handler must return the hook's output.
+      on(Point, () => "not a number");
+      void [text, size, typed, local, limit, when, wrong, value.length, signal];
+      return { other: 1 };
+    },
+  });
+  class Directory extends Context.Service<
+    Directory,
+    { readonly users: { readonly list: () => Effect.Effect<readonly string[]> }; readonly index: Map<string, number> }
+  >()("types/Directory") {}
+  definePlainPlugin({
+    id: "plain-nested",
+    requires: { directory: Directory },
+    setup: async ({ directory }) => {
+      // Nested services are promises, as the runtime makes them; data inside is left as it is.
+      const users: readonly string[] = await directory.users.list();
+      const size: number = directory.index.size;
+      // @ts-expect-error A promise, not an Effect.
+      void directory.users.list().pipe;
+      void [users, size];
+    },
+  });
+  definePlainPlugin({
+    id: "plain-wrong-export",
+    provides: { other: Other },
+    // @ts-expect-error Other is a number.
+    setup: () => ({ other: "text" }),
+  });
+}

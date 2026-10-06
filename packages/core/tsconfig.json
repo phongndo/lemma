@@ -10,7 +10,7 @@
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true,
-    "paths": { "@lemma/core": ["./src/index.ts"], "@lemma/core/testing": ["./src/testing.ts"] },
+    "paths": { "@lemma/core": ["./src/index.ts"], "@lemma/core/plain": ["./src/plain/index.ts"], "@lemma/core/testing": ["./src/testing.ts"] },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },

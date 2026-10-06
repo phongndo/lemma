@@ -17,6 +17,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./plain": {
+      "lemma-source": "./src/plain/index.ts",
+      "types": "./dist/plain/index.d.ts",
+      "import": "./dist/plain/index.js"
+    },
     "./testing": {
       "lemma-source": "./src/testing.ts",
       "types": "./dist/testing.d.ts",

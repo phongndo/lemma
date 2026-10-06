@@ -11,6 +11,7 @@ export {
   FaultPhase,
   HookError,
   PluginFault,
+  PluginStopped,
   RegistryError,
   ReloadError,
   ShutdownTimeout,
@@ -24,6 +25,8 @@ export { Registries, Registry } from "./registries.ts";
 export type { ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";
 export type { RegistrySnapshot } from "./internal/registries.ts";
 export type { Composition, Loader, LoaderOptions, PluginEntry, PluginSource, ReloadReport } from "./loader.ts";
+export { awaitable, fail, isExpectedFailure } from "./awaitable.ts";
+export type { Awaitable } from "./awaitable.ts";
 export { configSchema } from "./config.ts";
 export type { ConfigDefaults, ConfigInput, ConfigOf, ConfigValue } from "./config.ts";
 export { definePlugin } from "./plugin.ts";

@@ -78,6 +78,21 @@ export class RegistryError extends Data.TaggedError("RegistryError")<{
   readonly message: string;
 }> {}
 
+/**
+ * A call through a stopped plugin's handle: a promise-based view of a
+ * service (`@lemma/core/plain`) refuses work once its plugin has stopped, so
+ * a timer or promise the plugin left behind cannot act through it.
+ */
+export class PluginStopped extends Data.TaggedError("PluginStopped")<{
+  readonly pluginId: string;
+  /** What was called. */
+  readonly operation?: string;
+}> {
+  override get message(): string {
+    return `Plugin "${this.pluginId}" has stopped${this.operation === undefined ? "" : `; refused ${this.operation}`}`;
+  }
+}
+
 /** Where in a plugin's life a failure was observed. */
 export const FaultPhase = Schema.Literals(["activate", "service", "observe", "background", "dispose"]);
 export type FaultPhase = typeof FaultPhase.Type;

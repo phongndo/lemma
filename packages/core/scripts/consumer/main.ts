@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
-import { Effect, Layer } from "effect";
+import { Context, Effect, Layer } from "effect";
 import { definePlugin, Diagnostic, makeLoader } from "@lemma/core";
 import type { Composition, Plugin } from "@lemma/core";
+import { definePlugin as definePlainPlugin } from "@lemma/core/plain";
+import { testPlugin } from "@lemma/core/testing";
 import { Formatter, Message } from "./contracts.js";
 
 const active = new Set<string>();
@@ -82,3 +84,23 @@ await Effect.runPromise(
 assert.equal(active.size, 0);
 assert.deepEqual(closed, ["consumer", "lower", "consumer", "upper"]);
 console.log("External consumer: provider replacement and cleanup passed.");
+
+// The package's other entry points, as a consumer imports them: plugins written with promises, and the test harness.
+{
+  class Clock extends Context.Service<Clock, { readonly now: () => Effect.Effect<number> }>()("consumer/Clock") {}
+  class Stamp extends Context.Service<Stamp, { readonly stamp: (text: string) => string }>()("consumer/Stamp") {}
+  const stamper = definePlainPlugin({
+    id: "stamper",
+    config: { separator: "@" },
+    requires: { clock: Clock },
+    provides: { stamp: Stamp },
+    setup: async ({ clock }, { config }) => {
+      const at = await clock.now();
+      return { stamp: { stamp: (text: string) => `${text}${config.separator}${at}` } };
+    },
+  });
+  const tested = await testPlugin(stamper, { provide: [[Clock, { now: () => Effect.succeed(7) }]] });
+  assert.equal((await tested.get(Stamp)).stamp("a"), "a@7");
+  await tested.close();
+  console.log("External consumer: @lemma/core/plain and @lemma/core/testing passed.");
+}
