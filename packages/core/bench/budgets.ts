@@ -9,7 +9,17 @@ import { join } from "node:path";
 // Allow roughly 50% headroom for host noise and added lifecycle bookkeeping.
 // New workload/bundle limits bound regression risk; they do not prove optimality.
 export const budgets = {
-  "Hook / 32 handlers / spans on": 120,
+  // Dispatch tuned 2026-10-06 (same machine): a handler's own services are overlaid on its caller's context instead
+  // of merged into a copy per call, and no span is made with tracing off. 32 handlers: 67.3 -> 18.3us spans off,
+  // 74.1 -> 64.4 spans on (Effect's span machinery is the rest).
+  "Hook / 32 handlers / spans on": 100,
+  "Hook / 32 handlers / spans off": 28,
+  // Handlers written with promises: passing through in place 26.6us against 18.5 for Effect handlers (1.4x). Async-local
+  // storage is entered for every handler: entering it only for `async` ones (22.3us) lost the operation's context in
+  // `.then` chains. A call through a promise-based view 0.46us against 0.16 for Effect.runPromise, its plugin's own
+  // services overlaid on the caller's context.
+  "Hook / 32 plain handlers, in place / spans off": 34,
+  "Plain service call": 0.6,
   "core.run entry": 6,
   "Mount + dispose / 32 plugins": 2000,
   "Reload one of 32 plugins": 120,

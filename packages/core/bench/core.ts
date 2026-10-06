@@ -3,6 +3,7 @@ import { Context, Effect, Layer } from "effect";
 import { finish, record } from "./budgets.ts";
 import { definePlugin, Event, Events, Hook, Hooks, makeCore, makeLoader, PluginContext, Registries, Registry } from "../src/index.ts";
 import type { Plugin } from "../src/index.ts";
+import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
 
 // Warm microbenchmarks, not end-to-end latency or a comparison with another harness.
 // Every reported value is a batch mean. Samples use fresh Effect runtime entry but
@@ -97,6 +98,70 @@ for (const count of [0, 1, 8, 32]) {
         const batch = core.run(repeat(hooks.invoke(point, 1, terminal), iterations));
         yield* Effect.promise(() => measure(`Hook / ${count} handlers / spans on`, iterations, batch));
         yield* Effect.promise(() => measure(`Hook / ${count} handlers / spans off`, iterations, batch.pipe(Effect.withTracerEnabled(false))));
+      }),
+    ),
+  );
+}
+
+// Handlers written with promises (`@lemma/core/plain`): passing through in place (`next` returned from a plain
+// function, the in-fiber path) and awaiting `next` (an async handler, a promise per handler).
+const plainPlugins = (count: number, kind: "in place" | "async") =>
+  Array.from({ length: count }, (_, index) =>
+    definePlainPlugin({
+      id: `plain-${String(index).padStart(3, "0")}`,
+      setup: (_, { on }) => on(point, kind === "in place" ? (value, next) => next(value) : async (value, next) => await next(value)),
+    }),
+  );
+for (const kind of ["in place", "async"] as const) {
+  const count = 32;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const core = yield* makeCore(plainPlugins(count, kind));
+        const hooks = yield* core.run(Hooks);
+        const rounds = kind === "async" ? Math.max(1, Math.floor(iterations / 10)) : iterations;
+        const batch = core.run(repeat(hooks.invoke(point, 1, terminal), rounds));
+        yield* Effect.promise(() => measure(`Hook / ${count} plain handlers, ${kind} / spans off`, rounds, batch.pipe(Effect.withTracerEnabled(false))));
+      }),
+    ),
+  );
+}
+
+// A call through a promise-based view of a service: what bridging an Effect to a promise costs, against running it directly.
+class Counter extends Context.Service<Counter, { readonly add: (n: number) => Effect.Effect<number> }>()("bench/Counter") {}
+{
+  let call!: (n: number) => Promise<number>;
+  const caller = definePlainPlugin({
+    id: "caller",
+    requires: { counter: Counter },
+    setup: ({ counter }) => {
+      call = counter.add;
+    },
+  });
+  const counter = definePlugin({ id: "counter", provides: [Counter], layer: Layer.succeed(Counter, { add: (n: number) => Effect.succeed(n + 1) }) });
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* makeCore([counter, caller]);
+        const rounds = Math.max(1, Math.floor(iterations / 10));
+        yield* Effect.promise(() =>
+          measure(
+            "Effect.runPromise direct",
+            rounds,
+            Effect.promise(async () => {
+              for (let n = 0; n < rounds; n++) sink = await Effect.runPromise(Effect.succeed(sink + 1));
+            }),
+          ),
+        );
+        yield* Effect.promise(() =>
+          measure(
+            "Plain service call",
+            rounds,
+            Effect.promise(async () => {
+              for (let n = 0; n < rounds; n++) sink = await call(sink);
+            }),
+          ),
+        );
       }),
     ),
   );
