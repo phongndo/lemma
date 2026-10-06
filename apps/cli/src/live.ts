@@ -266,6 +266,8 @@ export const runCommand =
       const whole = new Set<string>();
       let joined: { readonly stepId: string; readonly seq: number } | undefined;
       const printed = new Map<string, number>();
+      /** What was shown of each answer block, by step and stream index: its text, or for a tool call, that it was. */
+      const shown = new Map<string, string>();
       const turnOfEvent = (event: HostEvent): string | undefined => {
         if (event.type === "delta" || event.type === "turn-started" || event.type === "turn-ended") return event.turnId;
         if (event.type === "session-appended") return "turnId" in event.event.data ? event.event.data.turnId : undefined;
@@ -274,7 +276,11 @@ export const runCommand =
       };
       const print = (event: HostEvent) =>
         Effect.gen(function* () {
-          if (event.type === "delta" && (event.event.type === "text-delta" || event.event.type === "toolcall-end")) streamed = true;
+          if (event.type === "delta" && (event.event.type === "text-delta" || event.event.type === "toolcall-end")) {
+            streamed = true;
+            const key = `${event.stepId}:${event.event.index}`;
+            shown.set(key, event.event.type === "text-delta" ? (shown.get(key) ?? "") + event.event.delta : "");
+          }
           if (options.json) io.out(JSON.stringify(event));
           else if (event.type === "delta" && event.event.type === "text-delta") {
             io.write?.(event.event.delta);
@@ -313,18 +319,23 @@ export const runCommand =
         }
         return print(event);
       };
-      /** A model answer's text and tool calls, shown as if streamed. */
-      const answer = (turnId: string, stepId: string, content: AssistantMessage["content"]) =>
+      /** A model answer's text and tool calls (each block with its stream index), shown as if streamed: what was not yet. */
+      const answer = (turnId: string, stepId: string, blocks: readonly { readonly index: number; readonly block: AssistantMessage["content"][number] }[]) =>
         Effect.forEach(
-          content,
-          (block, index) =>
-            block.type === "text"
-              ? print({ type: "delta", sessionId, turnId, stepId, event: { type: "text-delta", index, delta: block.text } })
-              : block.type === "toolCall" && Object.keys(block.arguments).length > 0
+          blocks,
+          ({ index, block }) => {
+            const before = shown.get(`${stepId}:${index}`);
+            return block.type === "text"
+              ? block.text.length > (before?.length ?? 0) && block.text.startsWith(before ?? "")
+                ? print({ type: "delta", sessionId, turnId, stepId, event: { type: "text-delta", index, delta: block.text.slice(before?.length ?? 0) } })
+                : Effect.void
+              : block.type === "toolCall" && Object.keys(block.arguments).length > 0 && before === undefined
                 ? print({ type: "delta", sessionId, turnId, stepId, event: { type: "toolcall-end", index, toolCall: block } })
-                : Effect.void,
+                : Effect.void;
+          },
           { discard: true },
         );
+      const indexed = (content: AssistantMessage["content"]) => content.map((block, index) => ({ index, block }));
       // One event at a time, so a retry's join and the events after it show in order.
       const lock = yield* Semaphore.make(1);
       yield* subscribe(rpc, (event) =>
@@ -372,7 +383,7 @@ export const runCommand =
               if (data.type !== "message" || data.turnId !== turnId || data.message.role === "user") continue;
               if (data.message.role === "assistant") {
                 if (data.stepId !== undefined) whole.add(data.stepId);
-                yield* answer(turnId, data.stepId ?? "", data.message.content);
+                yield* answer(turnId, data.stepId ?? "", indexed(data.message.content));
               } else yield* print({ type: "session-appended", sessionId, event });
             }
             logSeq = log.at(-1)?.seq ?? 0;
@@ -390,11 +401,7 @@ export const runCommand =
             // The call in flight and running tools' output, as the agent had them.
             if (view.turnId === turnId && view.draft !== undefined && !endedSince.has(view.draft.stepId)) {
               joined = { stepId: view.draft.stepId, seq: view.draft.seq };
-              yield* answer(
-                turnId,
-                view.draft.stepId,
-                view.draft.blocks.map((entry) => entry.block),
-              );
+              yield* answer(turnId, view.draft.stepId, view.draft.blocks);
             }
             if (view.turnId === turnId) {
               for (const entry of view.output) {
@@ -409,7 +416,7 @@ export const runCommand =
               if (turnOfEvent(event) !== turnId) continue;
               const data = event.type === "session-appended" ? event.event.data : undefined;
               if (event.type === "session-appended" && data?.type === "message" && data.message.role === "assistant" && endedSince.has(data.stepId ?? "")) {
-                if (data.stepId !== joined?.stepId && event.event.seq > logSeq) yield* answer(turnId, data.stepId ?? "", data.message.content);
+                if (data.stepId !== joined?.stepId && event.event.seq > logSeq) yield* answer(turnId, data.stepId ?? "", indexed(data.message.content));
                 continue;
               }
               yield* show(event);
@@ -420,6 +427,23 @@ export const runCommand =
       yield* rpc["Agent.Prompt"](payload);
       // `turn-ended` may trail the reply; the log is authoritative either way.
       yield* Deferred.await(ended).pipe(Effect.timeout(Duration.seconds(2)), Effect.ignore);
+      // Each event kind comes in its own order, so `turn-ended` can overtake the turn's last deltas: what the log has of
+      // the answers streamed and not yet shown is shown now, and their deltas still to come are skipped.
+      if (streamed && ours !== undefined) {
+        const turnId = ours;
+        const log = yield* connection.rpc["Session.Events"]({ sessionId });
+        yield* lock.withPermits(1)(
+          Effect.forEach(
+            log,
+            ({ data }) => {
+              if (data.type !== "message" || data.turnId !== turnId || data.message.role !== "assistant") return Effect.void;
+              whole.add(data.stepId ?? "");
+              return answer(turnId, data.stepId ?? "", indexed(data.message.content));
+            },
+            { discard: true },
+          ),
+        );
+      }
       if (midLine) io.write?.("\n");
       return result(yield* turnOf(connection.rpc, sessionId, requestId), options, options.json || streamed);
     });
