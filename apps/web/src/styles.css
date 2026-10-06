@@ -97,6 +97,13 @@
     margin: 0;
   }
 
+  /* The app fills the window and scrolls inside its panes: the page itself never scrolls or rubber-bands. */
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
   body {
     font: 14px/1.55 var(--font-ui);
     color: var(--text);
