@@ -90,7 +90,7 @@ const once = (command: string, args: readonly string[]) =>
 run(
   "host",
   process.execPath,
-  ["--watch", "--watch-preserve-output", "--conditions=lemma-source", fileURLToPath(new URL("main.ts", import.meta.url)), "--no-open"],
+  ["--watch", "--watch-preserve-output", "--conditions=lemma-source", fileURLToPath(new URL("../src/main.ts", import.meta.url)), "--no-open"],
   {
     cwd: project,
     env: { ...process.env, INIT_CWD: project },

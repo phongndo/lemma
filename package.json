@@ -11,7 +11,7 @@
     "test": "pnpm build && pnpm -r --workspace-concurrency=4 test",
     "start": "pnpm --filter @lemma/web build && pnpm --filter @lemma/host start",
     "lemma": "node --conditions=lemma-source apps/cli/src/main.ts",
-    "dev": "node --conditions=lemma-source packages/host/src/dev.ts",
+    "dev": "node --conditions=lemma-source packages/host/scripts/dev.ts",
     "dev:desktop": "pnpm --filter @lemma/desktop dev",
     "dev:web": "pnpm --filter @lemma/web dev",
     "desktop": "pnpm --filter @lemma/desktop start",
