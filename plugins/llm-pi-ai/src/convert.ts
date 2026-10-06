@@ -1,13 +1,14 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type * as Pi from "@earendil-works/pi-ai";
-import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall } from "@lemma/contracts";
+import { ThinkingLevel } from "@lemma/contracts";
+import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ToolCall } from "@lemma/contracts";
 
 // Pure mappings between pi-ai values and the contract shapes. Contract messages
 // are pi-ai-shaped, so requests pass through; results are rebuilt field by field
 // so pi-only fields (diagnostics, responseModel, rawStopReason, ...) never reach
 // the session log.
 
-const contractLevels: ReadonlySet<string> = new Set<ThinkingLevel>(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+const contractLevels: ReadonlySet<string> = new Set(ThinkingLevel.literals);
 
 const modelRef = (model: Pi.Model<Pi.Api>): string => `${model.provider}/${model.id}`;
 
