@@ -197,6 +197,29 @@ describe("plugins' routes in conflict", () => {
     expect(issues).toHaveLength(3);
   });
 
+  test("Schemas built apart but reading alike are a conflict; ones that read differently are not", () => {
+    const issues: RouteIssue[] = [];
+    const router = createRouter<Entry>({ history: createMemoryHistory("/"), onIssue: (issue) => issues.push(issue) });
+    const make = (id: string) =>
+      defineRoute(id, { path: "/n/:id/:tab?", params: Schema.Struct({ id: Schema.FiniteFromString, tab: Schema.optional(Schema.Literals(["a", "b"])) }) });
+    const Optional = defineRoute("optional-tab", {
+      path: "/n/:id/:tab?",
+      params: Schema.Struct({ id: Schema.FiniteFromString, tab: Schema.optional(Schema.String) }),
+    });
+    router.setEntries([entry(make("first")), entry(make("second")), entry(Optional)]);
+    expect(issues.map((issue) => issue.routes.map((route) => route.id))).toEqual([["first", "second"]]);
+  });
+
+  test("unions with the same members but a different way of matching them are not a conflict", () => {
+    const issues: RouteIssue[] = [];
+    const router = createRouter<Entry>({ history: createMemoryHistory("/"), onIssue: (issue) => issues.push(issue) });
+    const members = [Schema.String, Schema.Literal("x")] as const;
+    const AnyOf = defineRoute("any-of", { path: "/u/:id", params: Schema.Struct({ id: Schema.Union(members) }) });
+    const OneOf = defineRoute("one-of", { path: "/u/:id", params: Schema.Struct({ id: Schema.Union(members, { mode: "oneOf" }) }) });
+    router.setEntries([entry(AnyOf), entry(OneOf)]);
+    expect(issues).toEqual([]);
+  });
+
   test("routes told apart by their Schemas are a fallback, not a conflict", () => {
     const issues: RouteIssue[] = [];
     const router = createRouter<Entry>({ history: createMemoryHistory("/threads/ada"), onIssue: (issue) => issues.push(issue) });

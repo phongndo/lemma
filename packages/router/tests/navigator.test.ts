@@ -77,6 +77,50 @@ describe("navigators over one route table", () => {
     expect(a.inspect().issues).toHaveLength(1);
   });
 
+  test("a reporter of conflicts that throws does not keep the navigators on the old routes", () => {
+    const table = createRouteTable<Entry>({
+      onIssue: () => {
+        throw new Error("reporter broke");
+      },
+    });
+    const navigator = createNavigator(table, { history: createMemoryHistory("/items/1") });
+    const error = console.error;
+    console.error = () => {};
+    try {
+      table.setEntries([
+        { route: Item, name: "item" },
+        { route: Twin, name: "twin" },
+      ]);
+    } finally {
+      console.error = error;
+    }
+    expect(shown(navigator.match())).toBe("item /items/1");
+    expect(navigator.journal().filter((event) => event.kind === "issue")).toHaveLength(1);
+  });
+
+  test("a destroyed table keeps the routes it last had, for the navigators still over it", () => {
+    const table = createRouteTable<Entry>();
+    table.setEntries([{ route: Home, name: "home" }]);
+    const navigator = createNavigator(table, { history: createMemoryHistory("/") });
+    table.destroy();
+    table.setEntries([]);
+    expect(navigator.matchHref("/").status).toBe("matched");
+    expect(table.entries()).toHaveLength(1);
+  });
+
+  test("a journal of 0 keeps nothing; one that is not a whole number keeps the default", () => {
+    const table = createRouteTable<Entry>();
+    table.setEntries([{ route: Item, name: "item" }]);
+    const none = createNavigator(table, { history: createMemoryHistory("/"), journal: 0 });
+    const odd = createNavigator(table, { history: createMemoryHistory("/"), journal: Number.NaN });
+    for (let n = 0; n < 500; n++) {
+      none.navigate(`/items/${n}`);
+      odd.navigate(`/items/${n}`);
+    }
+    expect(none.journal()).toEqual([]);
+    expect(odd.journal()).toHaveLength(200);
+  });
+
   test("createRouter is a table and one navigator, destroyed together", () => {
     const router = createRouter<Entry>({ history: createMemoryHistory("/") });
     router.setEntries([{ route: Home, name: "home" }]);

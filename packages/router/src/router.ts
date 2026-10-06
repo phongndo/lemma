@@ -1,4 +1,4 @@
-import { Order, Result, SchemaRepresentation } from "effect";
+import { Order, Result, SchemaAST } from "effect";
 import type { Schema } from "effect";
 import { BASE, split } from "./history.ts";
 import type { HistoryAction, HistoryLocation, RouterHistory } from "./history.ts";
@@ -77,7 +77,7 @@ export interface NavigatorOptions {
    * land within `settleTimeout` (`history`). Default `console.error`.
    */
   readonly onError?: (error: unknown, during: "listener" | "blocker" | "navigate" | "history") => void;
-  /** How many events the journal keeps; older ones are dropped. Default 200. */
+  /** How many events the journal keeps (0 for none); older ones are dropped. Default 200. */
   readonly journal?: number;
   /** How long navigations wait for a back or forward to land before going ahead anyway, the move reported (ms). Default 1000. */
   readonly settleTimeout?: number;
@@ -178,7 +178,17 @@ type Candidate = { readonly route: AnyRoute; readonly score: readonly number[]; 
 /** Routes ready to match: one per id with its shown entry, and how many segments each can take. */
 export interface CompiledRoutes<E extends RouteEntry> {
   readonly entryOf: ReadonlyMap<string, E>;
-  readonly routes: readonly { readonly route: AnyRoute; readonly min: number; readonly max: number }[];
+  readonly routes: readonly CompiledRoute[];
+  /** Routes by their first segment, when it is literal: only they can match a path starting with it. */
+  readonly byFirst: ReadonlyMap<string, readonly CompiledRoute[]>;
+  /** Routes whose first segment is not literal (or that have none): any path may match them. */
+  readonly anyFirst: readonly CompiledRoute[];
+}
+
+interface CompiledRoute {
+  readonly route: AnyRoute;
+  readonly min: number;
+  readonly max: number;
 }
 
 /** Compiles `entries` (first per route id wins) and `known` routes for `resolve`; done once per change, not per navigation. */
@@ -188,13 +198,28 @@ export const compileRoutes = <E extends RouteEntry>(entries: readonly E[], known
   const byId = new Map<string, AnyRoute>();
   for (const entry of entryOf.values()) byId.set(entry.route.id, entry.route);
   for (const route of known) if (!byId.has(route.id)) byId.set(route.id, route);
-  const routes = [...byId.values()].map((route) => {
+  const routes: CompiledRoute[] = [];
+  const byFirst = new Map<string, CompiledRoute[]>();
+  const anyFirst: CompiledRoute[] = [];
+  for (const route of byId.values()) {
     const segments = route.pattern.segments;
-    const rest = segments.some((segment) => segment.kind === "rest");
-    const min = segments.filter((segment) => segment.kind === "static" || segment.kind === "param").length;
-    return { route, min, max: rest ? Infinity : segments.length };
-  });
-  return { entryOf, routes };
+    let min = 0;
+    let rest = false;
+    for (const segment of segments) {
+      if (segment.kind === "static" || segment.kind === "param") min++;
+      else if (segment.kind === "rest") rest = true;
+    }
+    const compiled = { route, min, max: rest ? Infinity : segments.length };
+    routes.push(compiled);
+    const first = segments[0];
+    if (first?.kind !== "static") anyFirst.push(compiled);
+    else {
+      const group = byFirst.get(first.value);
+      if (group === undefined) byFirst.set(first.value, [compiled]);
+      else group.push(compiled);
+    }
+  }
+  return { entryOf, routes, byFirst, anyFirst };
 };
 
 const lengthOf = (min: number, max: number) => (max === Infinity ? `${min} or more` : min === max ? `${min}` : `${min} to ${max}`);
@@ -213,14 +238,22 @@ export const resolve = <E extends RouteEntry>(location: HistoryLocation, table: 
   }
   const candidates: Candidate[] = [];
   const misses: [AnyRoute, string][] = [];
-  for (const { route, min, max } of table.routes) {
-    if (segments.length < min || segments.length > max) {
-      if (trace !== undefined) misses.push([route, `it takes ${lengthOf(min, max)} segments; the path has ${segments.length}`]);
-      continue;
+  const tryRoutes = (routes: readonly CompiledRoute[]) => {
+    for (const { route, min, max } of routes) {
+      if (segments.length < min || segments.length > max) {
+        if (trace !== undefined) misses.push([route, `it takes ${lengthOf(min, max)} segments; the path has ${segments.length}`]);
+        continue;
+      }
+      const found = matchPattern(route.pattern, segments);
+      if (found !== undefined) candidates.push({ route, score: found.score, raw: found.params });
+      else if (trace !== undefined) misses.push([route, "its literal segments differ from the path's"]);
     }
-    const found = matchPattern(route.pattern, segments);
-    if (found !== undefined) candidates.push({ route, score: found.score, raw: found.params });
-    else if (trace !== undefined) misses.push([route, "its literal segments differ from the path's"]);
+  };
+  // Explaining tries every route, for its verdict; matching tries only those that could fit the first segment.
+  if (trace !== undefined) tryRoutes(table.routes);
+  else {
+    if (segments.length > 0) tryRoutes(table.byFirst.get(segments[0]!) ?? []);
+    tryRoutes(table.anyFirst);
   }
   // Specificity first; ties by fewer segments, then id, so the answer never depends on the order routes arrived in.
   if (candidates.length > 1) candidates.sort(byPreference);
@@ -298,17 +331,79 @@ const sameShape = (a: AnyRoute, b: AnyRoute) =>
   });
 
 const descriptions = new WeakMap<Schema.Top, string | undefined>();
-/** A Schema's structure as text, once per Schema; undefined (never equal) for one that cannot be described, such as a declared type. */
+/** A Schema's structure as text, once per Schema; undefined (never equal) for one that cannot be described. */
 const describe = (schema: Schema.Top): string | undefined => {
   if (descriptions.has(schema)) return descriptions.get(schema);
   let description: string | undefined;
   try {
-    description = JSON.stringify(SchemaRepresentation.toRepresentation(schema.ast));
+    description = fingerprint(schema.ast, new Set());
   } catch {
     description = undefined;
   }
   descriptions.set(schema, description);
   return description;
+};
+
+/** A stable number per object, for what is compared by identity: a declared type, a check, a transformation. */
+const identities = new WeakMap<object, number>();
+let nextIdentity = 0;
+const identity = (value: object) => {
+  let found = identities.get(value);
+  if (found === undefined) identities.set(value, (found = ++nextIdentity));
+  return found;
+};
+
+/**
+ * What a Schema reads and how, as text: its structure (fields, elements,
+ * members, literals) and, by identity, what code it runs (declared types,
+ * checks, transformations). Two Schemas with one fingerprint decode the same
+ * strings the same way. One made twice from equal parts but separate checks
+ * reads as different, which can miss a conflict but never invents one. Kept
+ * to what `SchemaAST` holds, so the router does not bring Effect's Schema
+ * representation and JSON Schema modules into a browser bundle.
+ */
+const fingerprint = (ast: SchemaAST.AST, seen: Set<SchemaAST.AST>): string => {
+  if (seen.has(ast)) return `#${identity(ast)}`;
+  seen.add(ast);
+  const inner = (child: SchemaAST.AST) => fingerprint(child, seen);
+  let shape: string;
+  switch (ast._tag) {
+    case "Literal":
+      shape = `Literal(${typeof ast.literal === "bigint" ? `${ast.literal}n` : JSON.stringify(ast.literal)})`;
+      break;
+    case "Enum":
+      shape = `Enum(${JSON.stringify(ast.enums)})`;
+      break;
+    case "TemplateLiteral":
+      shape = `Template(${ast.parts.map(inner).join(",")})`;
+      break;
+    case "Arrays":
+      shape = `Arrays(${ast.elements.map(inner).join(",")};${ast.rest.map(inner).join(",")})`;
+      break;
+    case "Objects":
+      shape = `Objects(${ast.propertySignatures.map((field) => `${String(field.name)}${SchemaAST.isOptional(field.type) ? "?" : ""}:${inner(field.type)}`).join(",")};${ast.indexSignatures.map((index) => `${inner(index.parameter as SchemaAST.AST)}=>${inner(index.type)}`).join(",")})`;
+      break;
+    case "Union":
+      // How it matches its members matters: "oneOf" refuses what two members both accept, "anyOf" takes the first.
+      shape = `Union:${ast.options?.mode ?? "anyOf"}(${ast.types.map(inner).join("|")})`;
+      break;
+    case "Declaration":
+      shape = `Declaration#${identity(ast.run)}${ast.encodingRun === undefined ? "" : `/${identity(ast.encodingRun)}`}(${ast.typeParameters.map(inner).join(",")})`;
+      break;
+    case "Suspend":
+      shape = `Suspend(${inner(ast.thunk())})`;
+      break;
+    case "UniqueSymbol":
+      shape = `UniqueSymbol#${identity(ast)}`;
+      break;
+    default:
+      shape = ast._tag;
+  }
+  const checks = ast.checks === undefined ? "" : `[${ast.checks.map((check) => identity(check)).join(",")}]`;
+  const encodingChecks = "encodingChecks" in ast && ast.encodingChecks !== undefined ? `{${ast.encodingChecks.map((check) => identity(check)).join(",")}}` : "";
+  const encoding = ast.encoding === undefined ? "" : `<-${ast.encoding.map((link) => `${identity(link.transformation)}:${inner(link.to)}`).join("<-")}`;
+  seen.delete(ast);
+  return `${shape}${checks}${encodingChecks}${encoding}`;
 };
 
 /** The conflicts among `entries` and `known` (see `RouteIssue`). */
@@ -328,9 +423,19 @@ export const findIssues = (entries: readonly RouteEntry[], known: readonly AnyRo
       });
     }
   }
+  // Only routes of one shape (the same literals, and the same kind of param at each place) can match the same
+  // addresses, so each is compared with the others of its shape, not with every route: linear in routes, not quadratic.
   const routes = [...firstOf.values()].sort(byId);
-  for (const [index, a] of routes.entries()) {
-    for (const b of routes.slice(index + 1)) {
+  const byShape = new Map<string, AnyRoute[]>();
+  for (const route of routes) {
+    const shape = route.pattern.segments.map((segment) => (segment.kind === "static" ? `=${segment.value}` : segment.kind)).join("/");
+    const group = byShape.get(shape);
+    if (group === undefined) byShape.set(shape, [route]);
+    else group.push(route);
+  }
+  for (const a of routes) {
+    const group = byShape.get(a.pattern.segments.map((segment) => (segment.kind === "static" ? `=${segment.value}` : segment.kind)).join("/"))!;
+    for (const b of group.slice(group.indexOf(a) + 1)) {
       if (sameShape(a, b))
         issues.push({
           kind: "same-addresses",
@@ -355,6 +460,14 @@ const isPath = (href: string) => {
   }
 };
 
+/**
+ * Why a match's signal aborts: the location changed. One shared reason, made
+ * on first use: `abort()` without one builds a new `DOMException`, stack and
+ * all, which cost most of a navigation.
+ */
+let moved: DOMException | undefined;
+const movedOn = () => (moved ??= new DOMException("The location changed", "AbortError"));
+
 const same = <E extends RouteEntry>(a: Match<E>, b: Match<E>) =>
   a.status === b.status &&
   a.location.key === b.location.key &&
@@ -376,12 +489,20 @@ export const createRouteTable = <E extends RouteEntry = RouteEntry>(options: Rou
   const label: (entry: E) => string = options.label ?? ((entry) => entry.route.id);
 
   /** Routes changed: compile them again, report new conflicts, and tell the navigators. */
+  let destroyed = false;
   const recompile = () => {
     compiled = compileRoutes(entries, known);
     const before = new Set(issues.map((issue) => issue.message));
     issues = findIssues(entries, known);
     const fresh = issues.filter((issue) => !before.has(issue.message));
-    for (const issue of fresh) options.onIssue?.(issue);
+    // A reporter that throws must not keep the navigators on the routes they had.
+    for (const issue of fresh) {
+      try {
+        options.onIssue?.(issue);
+      } catch (error) {
+        console.error("router: onIssue failed", error);
+      }
+    }
     // A copy: a listener may unsubscribe while being called. One that throws does not keep the others from hearing.
     for (const listener of Array.from(listeners)) {
       try {
@@ -393,11 +514,14 @@ export const createRouteTable = <E extends RouteEntry = RouteEntry>(options: Rou
   };
 
   return {
+    // Destroyed, it keeps the routes it last had: its navigators go on matching against those.
     setEntries: (next) => {
+      if (destroyed) return;
       entries = next;
       recompile();
     },
     setKnown: (next) => {
+      if (destroyed) return;
       known = next;
       recompile();
     },
@@ -424,7 +548,10 @@ export const createRouteTable = <E extends RouteEntry = RouteEntry>(options: Rou
       }
       return [...routes].map(([id, route]): RouteInfo => ({ id, ...route })).sort((a, b) => Order.String(a.path, b.path));
     },
-    destroy: () => listeners.clear(),
+    destroy: () => {
+      destroyed = true;
+      listeners.clear();
+    },
   };
 };
 
@@ -444,14 +571,21 @@ export const createNavigator = <E extends RouteEntry = RouteEntry>(table: RouteT
   const listeners = new Set<(match: Match<E>) => void>();
   const blockers = new Map<(transition: Transition) => boolean, string>();
 
-  const kept = options.journal ?? 200;
+  /** How many events the journal keeps: a whole number, 0 for none; anything else is the default. */
+  const kept = options.journal !== undefined && Number.isFinite(options.journal) && options.journal >= 0 ? Math.floor(options.journal) : 200;
   let events: RouterEvent[] = [];
   let seq = 0;
   const eventListeners = new Set<(event: RouterEvent) => void>();
+  /** The latest `kept` events, made when read and kept until the next is recorded. */
+  let view: readonly RouterEvent[] | undefined;
   const record = (event: RouterEventInput) => {
     const full = { ...event, seq: ++seq, at: Date.now(), index: history.location().index } as RouterEvent;
-    events.push(full);
-    if (events.length > kept) events = events.slice(-kept);
+    if (kept > 0) {
+      events.push(full);
+      view = undefined;
+      // Trimmed in batches, not on every event: a copy every `kept` events rather than one each time.
+      if (events.length >= kept * 2) events = events.slice(-kept);
+    }
     for (const listener of Array.from(eventListeners)) {
       try {
         listener(full);
@@ -473,7 +607,7 @@ export const createNavigator = <E extends RouteEntry = RouteEntry>(table: RouteT
 
   const update = (moved: boolean) => {
     if (moved) {
-      controller.abort();
+      controller.abort(movedOn());
       controller = new AbortController();
     }
     const next = table.resolve(history.location(), controller.signal);
@@ -665,7 +799,7 @@ export const createNavigator = <E extends RouteEntry = RouteEntry>(table: RouteT
       retain,
       moving,
     }),
-    journal: () => events,
+    journal: () => (view ??= events.length > kept ? events.slice(-kept) : events.slice()),
     onEvent: (listener) => {
       eventListeners.add(listener);
       return () => void eventListeners.delete(listener);
@@ -678,7 +812,7 @@ export const createNavigator = <E extends RouteEntry = RouteEntry>(table: RouteT
       stopFollowing();
       stopUnload?.();
       stop();
-      controller.abort();
+      controller.abort(movedOn());
       listeners.clear();
       blockers.clear();
       eventListeners.clear();
