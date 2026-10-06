@@ -1,7 +1,7 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect, Scope } from "effect";
 import { Event, Hook } from "@lemma/core";
-import type { PluginContext } from "@lemma/core";
+import type { Awaitable, PluginContext } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "./llm.ts";
 
 export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
@@ -84,7 +84,8 @@ export const ToolExecuteHook = Hook.make<ToolInvocation, ToolResult, ToolError>(
  * model receives the reason as an error result. No guard ships by default.
  */
 export type GuardDecision = { readonly _tag: "allow" } | { readonly _tag: "deny"; readonly reason: string };
-export type Guard = (invocation: ToolInvocation) => Effect.Effect<GuardDecision, ToolError>;
+/** Returns its decision, a promise of it, or an Effect (`Awaitable`), so a plugin written with promises can guard too. */
+export type Guard = (invocation: ToolInvocation) => Awaitable<GuardDecision, ToolError>;
 
 export const ToolExecuted = Event.make<{
   readonly invocation: ToolInvocation;

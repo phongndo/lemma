@@ -1,6 +1,6 @@
 import { Cause, Effect, Order, Result, Schema } from "effect";
 import type { Context } from "effect";
-import { Events, Hooks, PluginContext, Registries, Registry } from "@lemma/core";
+import { awaitable, Events, Hooks, PluginContext, Registries, Registry } from "@lemma/core";
 import { Inspectors, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult } from "@lemma/contracts";
 import type { Guard, Tool, ToolContext, ToolContribution, ToolInvocation, Tools } from "@lemma/contracts";
 import { capResult } from "./content.ts";
@@ -204,7 +204,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           const input = call === original ? decoded : yield* entry.decode(call.input);
           for (const candidate of yield* registries.items(Guards)) {
             if (candidate.item.name !== "*" && candidate.item.name !== call.name) continue;
-            const decision = yield* candidate.item.guard(call);
+            const decision = yield* awaitable(() => candidate.item.guard(call));
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
           const services = yield* Effect.context<never>();
