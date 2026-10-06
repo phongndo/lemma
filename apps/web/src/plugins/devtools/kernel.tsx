@@ -3,7 +3,7 @@ import type { Accessor, JSX } from "solid-js";
 import { kernelOf, tablesOf } from "@lemma/contracts";
 import type { InspectorInfo, KernelView, PluginStatus, Table } from "@lemma/contracts";
 import * as contracts from "../../ui/contracts.ts";
-import { PLUGIN_PANEL, SettingsRoute } from "../../ui/contracts.ts";
+import { PLUGIN_PANEL, SectionIds, SettingsRoute } from "../../ui/contracts.ts";
 import type { ClientService, DevtoolsService, RouterService } from "../../ui/contracts.ts";
 import { DEFAULT_PART_ORDER, definedSlots } from "../../ui/slots.ts";
 import type { Slot, SlotItem, SlotsService } from "../../ui/slots.ts";
@@ -175,7 +175,7 @@ function PluginView(props: {
         <strong class="dt-code">{plugin().id}</strong>
         <span class="dt-muted">{plugin().version ?? ""}</span>
         <span class={stateClass(plugin().state, plugin().enabled)}>{stateLabel(plugin())}</span>
-        <a style={{ "margin-left": "auto" }} href={deps.router.href(SettingsRoute, { section: "plugins" }, { plugin: plugin().id, kind: props.kind })}>
+        <a style={{ "margin-left": "auto" }} href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}>
           Plugins page
         </a>
       </div>

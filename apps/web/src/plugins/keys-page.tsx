@@ -3,22 +3,20 @@ import { bindingOf, formatKeys } from "../lib/keys.ts";
 import { KEYMAP_PLUGIN, conflicts, defaultKeys, formatBindings, keysFor, overridesFrom, withOverride } from "../model/keybindings.ts";
 import type { KeyOverrides } from "../model/keybindings.ts";
 import { matchesQuery } from "../model/palette.ts";
-import { Actions, Notify, Settings, SettingsGroups, SettingsSections, Slots, UiPlugins } from "../ui/contracts.ts";
-import type { Action, NotifyService, UiPluginsService } from "../ui/contracts.ts";
+import { Actions, Notify, SectionIds, Settings, SettingsGroups, SettingsSections, Slots, UiPlugins } from "../ui/contracts.ts";
+import type { Action, UiPluginsService } from "../ui/contracts.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
 import { defineUiPlugin } from "../ui/define.ts";
-import { CommandIcon, PlusIcon, RefreshIcon, SearchField, Segmented, SettingRow, XIcon } from "../ui/parts.tsx";
+import { CommandIcon, PlusIcon, RefreshIcon, SearchField, XIcon } from "../ui/parts.tsx";
 import styles from "./keys-page.css?inline";
 
-const SECTION = "keyboard";
-const COMPOSER_PLUGIN = "composer";
+const SECTION = SectionIds.keyboard;
 
 type Item = SlotItem<Action>;
 
 interface Deps {
   readonly slots: SlotsService;
   readonly uiPlugins: UiPluginsService;
-  readonly notify: NotifyService;
   readonly overrides: () => KeyOverrides;
   readonly save: (next: KeyOverrides) => Promise<void>;
   /** Every action's keys now, for finding conflicts. */
@@ -143,33 +141,6 @@ function ShortcutRow(props: { deps: Deps; action: Item }) {
   );
 }
 
-/** How the composer sends: a setting of the composer plugin, shown with the keys it is about. */
-function SendRow(props: { deps: Deps }) {
-  const composer = () => props.deps.uiPlugins.list().find((plugin) => plugin.id === COMPOSER_PLUGIN);
-  const value = () => (composer()?.config?.values.send === "mod+enter" ? "mod+enter" : "enter");
-  return (
-    <Show when={composer()}>
-      {(plugin) => (
-        <SettingRow title="Send a message" description="The other one starts a new line, as does Shift+Enter.">
-          <Segmented
-            label="Send a message with"
-            value={value()}
-            options={[
-              { value: "enter", label: formatKeys("enter") },
-              { value: "mod+enter", label: formatKeys("mod+enter") },
-            ]}
-            onChange={(next) =>
-              void props.deps.uiPlugins
-                .setConfig(plugin(), { send: next === "enter" ? null : next })
-                .catch((error) => props.deps.notify.report(error, "Could not change the send key"))
-            }
-          />
-        </SettingRow>
-      )}
-    </Show>
-  );
-}
-
 /** Every action by category, filtered by a search over titles and keys. */
 function KeysBody(props: { deps: Deps }) {
   const [query, setQuery] = createSignal("");
@@ -190,13 +161,18 @@ function KeysBody(props: { deps: Deps }) {
       <Show when={!keymapOn()}>
         <p class="callout">The keymap plugin is off, so shortcuts do nothing until it is back on (Settings › Plugins).</p>
       </Show>
+      {/* What other plugins add to this section (the composer's send key) comes first; its own shortcuts follow. */}
       <Show when={query().trim() === ""}>
-        <section class="settings-group">
-          <h3 class="settings-group-title">Composer</h3>
-          <div class="settings-rows">
-            <SendRow deps={props.deps} />
-          </div>
-        </section>
+        <For each={props.deps.slots.list(SettingsGroups).filter((group) => group.section === SECTION && group.id !== SECTION)}>
+          {(group) => (
+            <section class="settings-group">
+              <Show when={group.title}>{(title) => <h3 class="settings-group-title">{title()}</h3>}</Show>
+              <div class="settings-rows">
+                <For each={group.entries()}>{(entry) => entry.view()}</For>
+              </div>
+            </section>
+          )}
+        </For>
       </Show>
       <For each={groups()} fallback={<p class="settings-empty">No shortcuts match “{query().trim()}”</p>}>
         {([category, actions]) => (
@@ -242,7 +218,7 @@ export default defineUiPlugin({
       }
     };
     const bound = () => slots.list(Actions).map((action) => ({ id: action.id, keys: keysFor(action.id, action.keys, overrides()) }));
-    const deps: Deps = { slots, uiPlugins, notify, overrides, save, bound };
+    const deps: Deps = { slots, uiPlugins, overrides, save, bound };
 
     slots.add(SettingsSections, {
       id: SECTION,

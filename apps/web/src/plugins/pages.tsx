@@ -1,6 +1,6 @@
 import { RouteOutlet } from "@lemma/router-solid";
 import type { RouteFailure } from "@lemma/router-solid";
-import { MainRegion, NewThreadRoute, Notify, Pages, Router, SettingsRoute, Slots, UiPlugins } from "../ui/contracts.ts";
+import { MainRegion, NewThreadRoute, Notify, Pages, Router, SectionIds, SettingsRoute, Slots, UiPlugins } from "../ui/contracts.ts";
 import type { Page } from "../ui/contracts.ts";
 import type { SlotItem } from "../ui/slots.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -34,7 +34,10 @@ export default defineUiPlugin({
               <button class="button small" onClick={() => props.failure.retry()}>
                 Try again
               </button>{" "}
-              <a class="button small" href={router.href(SettingsRoute, { section: "plugins" }, owner === undefined ? {} : { plugin: owner, kind: "web" })}>
+              <a
+                class="button small"
+                href={router.href(SettingsRoute, { section: SectionIds.plugins }, owner === undefined ? {} : { plugin: owner, kind: "web" })}
+              >
                 Plugins
               </a>
             </p>
@@ -52,7 +55,10 @@ export default defineUiPlugin({
             <a class="button small" href={router.href(NewThreadRoute, {})}>
               New thread
             </a>{" "}
-            <a class="button small" href={router.href(SettingsRoute, { section: "plugins" }, pluginId === undefined ? {} : { plugin: pluginId, kind: "web" })}>
+            <a
+              class="button small"
+              href={router.href(SettingsRoute, { section: SectionIds.plugins }, pluginId === undefined ? {} : { plugin: pluginId, kind: "web" })}
+            >
               Plugins
             </a>
           </p>

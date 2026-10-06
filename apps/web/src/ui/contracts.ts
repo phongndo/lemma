@@ -782,8 +782,12 @@ export const ActionIds = {
   eventLog: "event-log.open",
 } as const;
 
-/** Settings sections other plugins add groups to; a Settings replacement provides them. */
-export const SectionIds = { general: "general" } as const;
+/**
+ * Settings sections other plugins add groups to or link to: `general` comes
+ * with Settings (a replacement provides it), `keyboard` with the shortcuts page,
+ * and `plugins` with the Plugins page.
+ */
+export const SectionIds = { general: "general", keyboard: "keyboard", plugins: "plugins" } as const;
 
 // ------------------------------------------------------------------ parts
 

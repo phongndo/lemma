@@ -6,14 +6,27 @@ import { tildePath } from "../model/format.ts";
 import { PLUGIN_FILTERS, dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "../model/plugins.ts";
 import type { KindedPlugin, PluginKind } from "../model/plugins.ts";
 import { stepFor } from "../lib/keys.ts";
-import { Actions, Client, HostPlugins, Notify, PluginTabs, Threads, Settings, SettingsGroups, SettingsSections, Slots, UiPlugins } from "../ui/contracts.ts";
+import {
+  Actions,
+  Client,
+  HostPlugins,
+  Notify,
+  PluginTabs,
+  SectionIds,
+  Threads,
+  Settings,
+  SettingsGroups,
+  SettingsSections,
+  Slots,
+  UiPlugins,
+} from "../ui/contracts.ts";
 import type { ClientService, PluginTab, PluginsService, ThreadsService, UiPluginsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
 import { ConfigForm, Contained, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "../ui/parts.tsx";
 import styles from "./plugins-page.css?inline";
 
-const SECTION = "plugins";
+const SECTION = SectionIds.plugins;
 const DEFAULT_TAB = "plugins.overview";
 const KIND_LABEL: Readonly<Record<PluginKind, string>> = { host: "host", web: "web app" };
 

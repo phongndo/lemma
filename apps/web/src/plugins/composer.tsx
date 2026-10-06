@@ -21,8 +21,11 @@ import {
   Models,
   Notify,
   Router,
+  SectionIds,
+  SettingsGroups,
   Threads,
   Slots,
+  UiPlugins,
   Workspace,
 } from "../ui/contracts.ts";
 import type {
@@ -41,7 +44,20 @@ import type {
 import { defineUiPlugin } from "../ui/define.ts";
 import { DEFAULT_PART_ORDER } from "../ui/slots.ts";
 import type { SlotItem, SlotsService } from "../ui/slots.ts";
-import { ChatIcon, ComposerQueued, ComposerSuggestionView, Each, Highlighted, ImageIcon, Isolated, SendIcon, StopIcon, XIcon } from "../ui/parts.tsx";
+import {
+  ChatIcon,
+  ComposerQueued,
+  ComposerSuggestionView,
+  Each,
+  Highlighted,
+  ImageIcon,
+  Isolated,
+  Segmented,
+  SendIcon,
+  SettingRow,
+  StopIcon,
+  XIcon,
+} from "../ui/parts.tsx";
 import styles from "./composer.css?inline";
 
 const readImage = (file: File): Promise<ImageContent> =>
@@ -61,6 +77,8 @@ const ComposerConfig = Schema.Struct({
     description: "enter: Enter sends and Shift+Enter starts a new line. mod+enter: ⌘Enter (Ctrl+Enter) sends and Enter starts a new line.",
   }),
 });
+
+type Send = typeof ComposerConfig.Type.send;
 
 /** A prompt being written. */
 interface Draft {
@@ -629,6 +647,23 @@ function SuggestionRow(props: ComposerSuggestionProps) {
   );
 }
 
+/** Which keys send, on the Keyboard page. */
+function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
+  return (
+    <SettingRow title="Send a message" description="The other one starts a new line, as does Shift+Enter.">
+      <Segmented
+        label="Send a message with"
+        value={props.send}
+        options={[
+          { value: "enter", label: formatKeys("enter") },
+          { value: "mod+enter", label: formatKeys("mod+enter") },
+        ]}
+        onChange={props.onChange}
+      />
+    </SettingRow>
+  );
+}
+
 /** The default composer action: pick images to attach. */
 function AttachImages(props: ComposerActionProps) {
   let picker!: HTMLInputElement;
@@ -657,7 +692,7 @@ export default defineUiPlugin({
   id: "composer",
   styles,
   config: ComposerConfig,
-  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router },
+  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router, uiPlugins: UiPlugins },
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const drafts = new Map<string, Draft>();
@@ -673,6 +708,23 @@ export default defineUiPlugin({
     use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
     use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow });
     use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow });
+    // How it sends belongs with the keys, so it offers the setting on the Keyboard page.
+    const setSend = (send: Send) => {
+      const self = use.uiPlugins.list().find((candidate) => candidate.id === plugin.id);
+      if (self === undefined) return;
+      void use.uiPlugins.setConfig(self, { send: send === "enter" ? null : send }).catch((error) => use.notify.report(error, "Could not change the send key"));
+    };
+    use.slots.add(SettingsGroups, {
+      id: "composer.send",
+      section: SectionIds.keyboard,
+      title: "Composer",
+      entries: () => [
+        {
+          text: "Composer: send a message with Enter or Mod+Enter; the other one, or Shift+Enter, starts a new line",
+          view: () => <SendSetting send={plugin.config.send} onChange={setSend} />,
+        },
+      ],
+    });
     use.slots.add(Actions, {
       id: ActionIds.focusComposer,
       order: 3,
