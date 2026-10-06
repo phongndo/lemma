@@ -33,8 +33,8 @@ the `browser` shell, which supplies pinned Chromium on Linux. On macOS, install
 one with `nix develop .#browser -c pnpm exec playwright install chromium`, or
 set `LEMMA_CHROMIUM` to an existing executable.
 
-`scripts/mock-openai.ts` is a scripted provider for end-to-end runs
-without an API key.
+`scripts/mock-openai.ts` is a scripted provider for end-to-end runs without an
+API key; `scripts/e2e.ts` starts it and a host for tests.
 
 The web app's conventions are in [its AGENTS.md](../apps/web/AGENTS.md), and
 the core's checks and benchmarks in [its README](../packages/core/README.md#develop).

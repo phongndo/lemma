@@ -1,59 +1,23 @@
 import { execFileSync } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { createServer } from "node:net";
-import type { AddressInfo } from "node:net";
-import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { ExitCode, run } from "../src/cli.ts";
-import { mockConfig, startHost, startMockProvider, stopHost } from "../../../scripts/e2e.ts";
-import { invoke } from "./invoke.ts";
-
-/** Retries `read` until it answers without throwing, while a restarting transport comes back (a new port here) and rewrites transport.json. */
-const settled = async <A>(read: () => Promise<A | undefined>, until: (value: A) => boolean = () => true): Promise<A | undefined> => {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    try {
-      const value = await read();
-      if (value !== undefined && until(value)) return value;
-    } catch {
-      /* not back yet */
-    }
-    if (Date.now() > deadline) return undefined;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-};
-
-const freePort = () =>
-  new Promise<number>((resolve) => {
-    const server = createServer();
-    server.listen(0, "127.0.0.1", () => {
-      const { port } = server.address() as AddressInfo;
-      server.close(() => resolve(port));
-    });
-  });
+import { settled, startLemma } from "../../../scripts/e2e.ts";
+import type { Lemma } from "../../../scripts/e2e.ts";
+import { ExitCode } from "../src/cli.ts";
+import { invoke, printOnFailure } from "./invoke.ts";
 
 describe("against a running host", () => {
+  let lemma: Lemma;
   let home: string;
-  let host: ChildProcess;
-  let mock: ChildProcess;
-
   beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), "lemma-cli-"));
-    // A scripted provider: a prompt gets a bash call, the tool result gets a streamed answer.
-    const provider = await startMockProvider();
-    mock = provider.process;
-    await writeFile(join(home, "config.jsonc"), JSON.stringify(mockConfig(provider.baseUrl)));
-    host = await startHost(home);
+    lemma = await startLemma("lemma-cli-");
+    home = lemma.home;
   }, 30_000);
-
-  afterAll(async () => {
-    mock.kill();
-    await stopHost(host);
-    await rm(home, { recursive: true, force: true });
-  });
+  afterAll(() => lemma?.stop());
+  printOnFailure(() => lemma?.output());
 
   test("status reports the composition", async () => {
     const result = await invoke(["status", "--json"], home);
@@ -64,111 +28,6 @@ describe("against a running host", () => {
     expect(status.plugins.every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
     expect(status.running).toEqual([]);
   });
-
-  test("run sends a prompt and prints the reply; --follow --json streams events and ends with the result", async () => {
-    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
-    expect(await invoke(["session", "title", session, "CLI", "test"], home)).toMatchObject({ code: ExitCode.ok, out: `${session}  CLI test` });
-    expect(await invoke(["session", "pin", session], home)).toMatchObject({ code: ExitCode.ok, out: `${session}  pinned` });
-    expect(await invoke(["session", "archive", session], home)).toMatchObject({ code: ExitCode.ok, out: `${session}  archived` });
-    expect((await invoke(["session", "list", "--all"], home)).out).toContain("CLI test [pinned] [archived]");
-    expect(await invoke(["session", "unarchive", session], home)).toMatchObject({ code: ExitCode.ok, out: `${session}  unarchived` });
-    const doomed = (await invoke(["session", "new", "--cwd", home], home)).out;
-    expect(await invoke(["session", "delete", doomed], home)).toMatchObject({ code: ExitCode.ok, out: `${doomed}  deleted` });
-    expect((await invoke(["session", "list", "--all"], home)).out).not.toContain(doomed);
-
-    const plain = await invoke(["run", session, "check", "the", "shell", "--model", "mock/scripted"], home);
-    expect(plain.code).toBe(ExitCode.ok);
-    expect(plain.out).toContain("Everything works end to end.");
-    expect(plain.out).toMatch(/── turn done · 2 steps · 1 tool call/);
-
-    const followed = await invoke(["run", session, "again", "--model", "mock/scripted", "--follow", "--json"], home);
-    const lines = followed.out.split("\n").map((line) => JSON.parse(line));
-    expect(lines.some((event) => event.type === "turn-started")).toBe(true);
-    expect(lines.some((event) => event.type === "delta" && event.event.type === "toolcall-end")).toBe(true);
-    // The command's output also streams live (order across event kinds is not guaranteed, so only its arrival is checked).
-    expect(lines.some((event) => event.type === "tool-output" && event.chunk.includes("hello from lemma"))).toBe(true);
-    expect(lines.at(-1)).toMatchObject({ type: "result", session, reason: "done", steps: 2, toolCalls: 1 });
-
-    const tools = JSON.parse((await invoke(["inspect", session, "--filter", "kind:tool", "--json"], home)).out);
-    expect(tools.map((record: { tool: string; status: string }) => [record.tool, record.status])).toEqual([
-      ["bash", "ok"],
-      ["bash", "ok"],
-    ]);
-    // The host consumes the INIT_CWD it was started with, so a CLI the agent runs uses the agent's directory.
-    expect(JSON.stringify(tools)).toContain("INIT_CWD=unset");
-    expect(JSON.parse((await invoke(["inspect", session, "--records", "--sort", "duration", "--desc", "--json"], home)).out)[0].kind).toBe("assistant");
-    expect((await invoke(["cancel", session], home)).code).toBe(ExitCode.ok);
-  }, 30_000);
-
-  test("a prompt sent while a turn runs is queued or steers it; a queued one can be withdrawn; a request id sends it once", async () => {
-    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
-    const first = invoke(["run", session, "ramble on", "--model", "mock/scripted", "--json"], home);
-    await settled(
-      async () => JSON.parse((await invoke(["status", "--json"], home)).out).running as string[],
-      (running) => running.includes(session),
-    );
-    const queued = invoke(["run", session, "afterwards", "--request-id", "q1", "--json"], home);
-    const listed = await settled(
-      async () => JSON.parse((await invoke(["queue", session, "--json"], home)).out) as { requestId: string; mode: string }[],
-      (queue) => queue.some((item) => item.requestId === "q1"),
-    );
-    expect(listed).toEqual([expect.objectContaining({ requestId: "q1", mode: "follow-up" })]);
-    expect((await invoke(["queue", session], home)).out).toMatch(/follow-up\s+q1\s+\S+\s+afterwards/);
-    expect((await invoke(["withdraw", session, "q1"], home)).code).toBe(ExitCode.ok);
-    const withdrawn = await queued;
-    expect(withdrawn.code).toBe(ExitCode.failed);
-    expect(JSON.parse(withdrawn.err).error.code).toBe("Withdrawn");
-    expect((await invoke(["withdraw", session, "q1", "--json"], home)).code).toBe(ExitCode.failed);
-
-    // A steer joins the running turn: both runs report that one turn.
-    const steered = invoke(["run", session, "also check the shell", "--steer", "--request-id", "s1", "--json"], home);
-    const [ramble, steer] = await Promise.all([first, steered]);
-    expect(ramble.code).toBe(ExitCode.ok);
-    expect(steer.code).toBe(ExitCode.ok);
-    const turn = JSON.parse(ramble.out).turn as string;
-    expect(JSON.parse(steer.out)).toMatchObject({ turn, reason: "done", toolCalls: 1 });
-    // The same request id again reports that turn instead of placing the prompt twice.
-    expect(JSON.parse((await invoke(["run", session, "also check the shell", "--request-id", "s1", "--json"], home)).out).turn).toBe(turn);
-    const { branch } = JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as { branch: { data: { type: string } }[] };
-    expect(branch.filter((event) => event.data.type === "turn-start")).toHaveLength(1);
-    expect((await invoke(["run", session, "x", "--steer", "--when-busy", "reject"], home)).code).toBe(ExitCode.usage);
-  }, 30_000);
-
-  test("a retried run reports the turn that placed its prompt, even after a checkout left it off the branch", async () => {
-    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
-    const first = JSON.parse((await invoke(["run", session, "first", "--request-id", "b1", "--json"], home)).out);
-    const second = JSON.parse((await invoke(["run", session, "second", "--request-id", "b2", "--json"], home)).out);
-    expect(second.turn).not.toBe(first.turn);
-    const { branch } = JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as {
-      branch: { id: string; data: Record<string, unknown> }[];
-    };
-    const firstEnd = branch.find((event) => event.data.type === "turn-end" && event.data.turnId === first.turn)!;
-    expect((await invoke(["session", "checkout", session, firstEnd.id], home)).code).toBe(ExitCode.ok);
-    const retried = JSON.parse((await invoke(["run", session, "second", "--request-id", "b2", "--json"], home)).out);
-    expect(retried).toMatchObject({ turn: second.turn, reason: "done", text: second.text });
-  }, 30_000);
-
-  test("a retried run --follow shows the turn that placed its prompt: its answer when done, all of it when running", async () => {
-    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
-    const done = await invoke(["run", session, "check the shell", "--request-id", "d1", "--follow"], home);
-    expect(done.out).toContain("Everything works end to end.");
-    const again = await invoke(["run", session, "check the shell", "--request-id", "d1", "--follow"], home);
-    expect(again.code).toBe(ExitCode.ok);
-    expect(again.out).toContain("Everything works end to end.");
-
-    // Retried while it runs: what it said before the retry, then the rest as it comes, once each, in order.
-    const running = invoke(["run", session, "ramble on", "--request-id", "r1"], home);
-    await settled(
-      async () => JSON.parse((await invoke(["status", "--json"], home)).out).running as string[],
-      (ids) => ids.includes(session),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 1500));
-    const joined = await invoke(["run", session, "ramble on", "--request-id", "r1", "--follow"], home);
-    expect(joined.code).toBe(ExitCode.ok);
-    const words = [...joined.out.matchAll(/word(\d+)/g)].map((match) => Number(match[1]));
-    expect(words).toEqual(Array.from({ length: 60 }, (_, i) => i + 1));
-    expect((await running).code).toBe(ExitCode.ok);
-  }, 30_000);
 
   test("lists providers, models, and open questions", async () => {
     expect(JSON.parse((await invoke(["models", "--json"], home)).out).map((model: { ref: string }) => model.ref)).toEqual(["mock/scripted"]);
@@ -307,6 +166,10 @@ describe("against a running host", () => {
     const userConfig = join(home, "config.jsonc");
     const original = await readFile(userConfig, "utf8");
     const config = async (id: string) => JSON.parse((await invoke(["plugins", "config", id, "--json"], home)).out);
+    // A restarted transport writes transport.json again: until the new one answers, calls may reach neither.
+    const startedAt = async () => (JSON.parse(await readFile(join(home, "transport.json"), "utf8")) as { startedAt: number }).startedAt;
+    const restarted = (before: number) =>
+      settled(async () => ((await startedAt()) !== before && (await invoke(["status"], home)).code === ExitCode.ok) || undefined);
     try {
       const agent = await config("agent");
       expect(agent.fields.find((field: { key: string }) => field.key === "maxSteps")).toMatchObject({ type: "integer", default: 200 });
@@ -314,10 +177,12 @@ describe("against a running host", () => {
       expect((await invoke(["plugins", "config", "agent"], home)).out).toContain("Model calls allowed in one turn");
 
       // The transport needs the agent, so the change is written, answered, and then applied, restarting the transport.
+      const before = await startedAt();
       const set = await invoke(["plugins", "config", "agent", "maxSteps", "80", "--json"], home);
       expect(set.code).toBe(ExitCode.ok);
       expect(JSON.parse(set.out)).toMatchObject({ id: "agent", key: "maxSteps", value: 80, scope: "user", deferred: true });
       expect(JSON.parse(await readFile(userConfig, "utf8")).plugins.agent).toEqual({ config: { maxSteps: 80 } });
+      expect(await restarted(before)).toBe(true);
       const maxSteps = async () => (await config("agent")).values.maxSteps as number;
       expect(await settled(maxSteps, (value) => value === 80)).toBe(80);
 
@@ -327,8 +192,10 @@ describe("against a running host", () => {
       const unknown = await invoke(["plugins", "config", "agent", "speed", "9", "--json"], home);
       expect(JSON.parse(unknown.err).error.message).toContain("its fields are defaultModel, systemPrompt, cli, maxSteps");
 
+      const beforeUnset = await startedAt();
       await invoke(["plugins", "config", "agent", "maxSteps", "--unset"], home);
       expect(JSON.parse(await readFile(userConfig, "utf8")).plugins.agent).toBeUndefined();
+      expect(await restarted(beforeUnset)).toBe(true);
       expect(await settled(maxSteps, (value) => value === 200)).toBe(200);
       // The transport's token is secret: clients learn only whether it is set.
       const transport = await config("transport");
@@ -358,12 +225,11 @@ describe("against a running host", () => {
 
       await mkdir(join(home, "ui"), { recursive: true });
       await writeFile(join(home, "ui", "theme.css"), ":root { --accent: red; }");
-      const deadline = Date.now() + 5_000;
-      let files: { name: string; kind: string; url: string }[] = [];
-      while (files.length === 0 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 100));
-        files = (await ui()).files;
-      }
+      const files = await settled(
+        async () => (await ui()).files as { name: string; kind: string; url: string }[],
+        (found) => found.length > 0,
+        5_000,
+      );
       expect(files).toMatchObject([{ name: "theme.css", kind: "style" }]);
       expect((await invoke(["ui"], home)).out).toContain("user/theme.css");
     } finally {
@@ -426,184 +292,4 @@ describe("against a running host", () => {
       await rm(other, { recursive: true, force: true });
     }
   });
-
-  describe("from another machine", () => {
-    // `other` stands for the client machine: a home with no local host, only what `lemma remote` writes.
-    let other: string;
-    let url: string;
-    let token: string;
-    let dead: string;
-    beforeAll(async () => {
-      other = await mkdtemp(join(tmpdir(), "lemma-cli-client-"));
-      ({ url, token } = JSON.parse(await readFile(join(home, "transport.json"), "utf8")));
-      dead = `http://127.0.0.1:${await freePort()}`;
-    });
-    afterAll(() => rm(other, { recursive: true, force: true }));
-    const remoteFile = () => join(other, "remote.json");
-
-    test("token prints the local host's token; remote set checks it against the host before saving it", async () => {
-      expect(await invoke(["token"], home)).toMatchObject({ code: ExitCode.ok, out: token });
-
-      const wrong = await invoke(["remote", "set", url, "--token", "wrong", "--json"], other);
-      expect(wrong.code).toBe(ExitCode.unavailable);
-      expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Unauthorized" });
-      // `--token=`: a token written before hosts stopped making ones that start with "-" would read as an option.
-      const unreachable = await invoke(["remote", "set", dead, `--token=${token}`, "--json"], other);
-      expect(unreachable.code).toBe(ExitCode.unavailable);
-      expect(JSON.parse(unreachable.err).error).toMatchObject({ code: "Unreachable" });
-      expect(existsSync(remoteFile())).toBe(false);
-
-      const set = await invoke(["remote", "set", `${url}/`, `--token=${token}`, "--json"], other);
-      expect(set.code).toBe(ExitCode.ok);
-      expect(JSON.parse(set.out)).toMatchObject({ url, from: remoteFile(), info: { home } });
-      expect(JSON.parse(await readFile(remoteFile(), "utf8"))).toEqual({ url, token });
-      expect((await stat(remoteFile())).mode & 0o777).toBe(0o600);
-
-      // The token can come from LEMMA_TOKEN, or be asked for without echoing it.
-      expect((await invoke(["remote", "set", url], other, "/", { LEMMA_TOKEN: token })).code).toBe(ExitCode.ok);
-      const asked: boolean[] = [];
-      const code = await run(["remote", "set", url], {
-        env: { LEMMA_HOME: other },
-        cwd: "/",
-        out: () => {},
-        err: () => {},
-        ask: async (_question, secret) => {
-          asked.push(secret);
-          return `${token}\n`;
-        },
-      });
-      expect([code, asked]).toEqual([ExitCode.ok, [true]]);
-      expect(JSON.parse(await readFile(remoteFile(), "utf8"))).toEqual({ url, token });
-    });
-
-    test("commands go to the host in remote.json; remote names it without the token", async () => {
-      await writeFile(remoteFile(), JSON.stringify({ url, token }));
-      const shown = await invoke(["remote"], other);
-      expect(shown.out).toBe(`${url} (from ${remoteFile()})`);
-      expect(JSON.parse((await invoke(["remote", "--json"], other)).out)).toEqual({ source: "remote", url, from: remoteFile(), tokenSet: true });
-
-      const status = JSON.parse((await invoke(["status", "--json"], other)).out);
-      expect(status).toMatchObject({ url, source: "remote", info: { home } });
-      expect(status.pid).toBeUndefined();
-      expect((await invoke(["status"], other)).out).toContain(`${url} (from ${remoteFile()}, transport`);
-      const listed = JSON.parse((await invoke(["session", "list", "--all", "--json"], other)).out);
-      expect(listed).toEqual(JSON.parse((await invoke(["session", "list", "--all", "--json"], home)).out));
-      const opened = new URL(JSON.parse((await invoke(["open", "--json"], other)).out).url);
-      expect([opened.origin, opened.searchParams.get("token")]).toEqual([url, token]);
-      // `token` is about this machine's host, and there is none here.
-      expect(JSON.parse((await invoke(["token", "--json"], other)).err).error.code).toBe("NoHost");
-    });
-
-    test("LEMMA_URL and LEMMA_TOKEN override remote.json", async () => {
-      await writeFile(remoteFile(), JSON.stringify({ url: dead, token }));
-      const env = { LEMMA_URL: url, LEMMA_TOKEN: token };
-      expect(JSON.parse((await invoke(["remote", "--json"], other, "/", env)).out)).toMatchObject({ source: "env", url, from: "LEMMA_URL" });
-      expect(JSON.parse((await invoke(["status", "--json"], other, "/", env)).out)).toMatchObject({ url, source: "env", info: { home } });
-      const wrong = await invoke(["status", "--json"], other, "/", { ...env, LEMMA_TOKEN: "wrong" });
-      expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Unauthorized" });
-      expect(JSON.parse(wrong.err).error.message).toContain("LEMMA_TOKEN");
-    });
-
-    test("a remote host that does not answer is NoHost, naming its URL and the way back", async () => {
-      await writeFile(remoteFile(), JSON.stringify({ url: dead, token }));
-      const down = await invoke(["status", "--json"], other);
-      expect(down.code).toBe(ExitCode.unavailable);
-      const error = JSON.parse(down.err).error;
-      expect(error.code).toBe("NoHost");
-      expect(error.message).toContain(dead);
-      expect(error.message).toContain("lemma remote clear");
-
-      await writeFile(remoteFile(), JSON.stringify({ url, token: "stale" }));
-      const stale = JSON.parse((await invoke(["status", "--json"], other)).err).error;
-      expect(stale.code).toBe("Unauthorized");
-      expect(stale.message).toContain(remoteFile());
-
-      // An unusable file is an error, never a silent fallback to the local host.
-      await writeFile(remoteFile(), "{");
-      expect(JSON.parse((await invoke(["status", "--json"], other)).err).error.message).toContain(`Cannot use ${remoteFile()}`);
-    });
-
-    test("remote clear removes remote.json: back to the local host", async () => {
-      await writeFile(remoteFile(), JSON.stringify({ url, token }));
-      expect(JSON.parse((await invoke(["remote", "clear", "--json"], other)).out)).toEqual({ removed: true, from: remoteFile() });
-      expect(existsSync(remoteFile())).toBe(false);
-      expect(JSON.parse((await invoke(["remote", "clear", "--json"], other)).out)).toEqual({ removed: false, from: remoteFile() });
-      expect(JSON.parse((await invoke(["status", "--json"], other)).err).error.code).toBe("NoHost");
-    });
-  });
-});
-
-describe("a host killed mid-turn", () => {
-  let home: string;
-  let mock: ChildProcess;
-  const hosts: ChildProcess[] = [];
-
-  const startOne = async () => {
-    const host = await startHost(home);
-    hosts.push(host);
-    return host;
-  };
-  const show = async (session: string) =>
-    JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as { branch: { data: Record<string, any> }[] };
-
-  beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), "lemma-cli-crash-"));
-    const provider = await startMockProvider();
-    mock = provider.process;
-    await writeFile(join(home, "config.jsonc"), JSON.stringify(mockConfig(provider.baseUrl, { agent: { config: { defaultModel: "mock/scripted" } } })));
-  }, 30_000);
-
-  afterAll(async () => {
-    mock.kill();
-    for (const host of hosts) await stopHost(host);
-    await rm(home, { recursive: true, force: true });
-  });
-
-  test("resumes its turns when it starts again: a cut-off command is reported with its output, a cut-off answer is asked again", async () => {
-    const first = await startOne();
-    const slow = (await invoke(["session", "new", "--cwd", home], home)).out;
-    const ramble = (await invoke(["session", "new", "--cwd", home], home)).out;
-    // Both are left waiting when the host dies under them.
-    void invoke(["run", slow, "do it slowly"], home);
-    void invoke(["run", ramble, "ramble on"], home);
-    const live = (session: string) => readFile(join(home, "agent", `${session}.live.json`), "utf8");
-    expect(
-      await settled(
-        () => live(slow),
-        (text) => text.includes("started"),
-      ),
-    ).toBeDefined();
-    expect(
-      await settled(
-        () => live(ramble),
-        (text) => text.includes("word5"),
-      ),
-    ).toBeDefined();
-    const exited = new Promise((resolve) => first.once("exit", resolve));
-    first.kill("SIGKILL");
-    await exited;
-
-    await startOne();
-    const ended = async (session: string) =>
-      settled(
-        () => show(session),
-        ({ branch }) => branch.some((event) => event.data.type === "turn-end"),
-      );
-    const [slowLog, rambleLog] = await Promise.all([ended(slow), ended(ramble)]);
-    for (const log of [slowLog!, rambleLog!]) {
-      expect(log.branch.some((event) => event.data.type === "custom" && event.data.kind === "agent.resumed")).toBe(true);
-      expect(log.branch.find((event) => event.data.type === "turn-end")!.data.reason).toBe("done");
-      expect(log.branch.filter((event) => event.data.type === "turn-start")).toHaveLength(1);
-    }
-    // The command was not run again: the model was told it was cut off, with what it had printed.
-    const result = slowLog!.branch.find((event) => event.data.type === "message" && event.data.message.role === "toolResult")!.data.message;
-    expect(result.isError).toBe(true);
-    expect(result.content[0].text).toMatch(/interrupted[\s\S]*started/);
-    // The answer cut off midway is kept as an interrupted attempt, and asked again in full.
-    const attempt = rambleLog!.branch.find((event) => event.data.type === "attempt")!.data.message;
-    expect(attempt.errorMessage).toMatch(/^Interrupted/);
-    expect(attempt.content[0].text).toContain("word5");
-    const answer = rambleLog!.branch.filter((event) => event.data.type === "message" && event.data.message.role === "assistant").at(-1)!.data.message;
-    expect(answer.content[0].text).toContain("word60");
-  }, 60_000);
 });

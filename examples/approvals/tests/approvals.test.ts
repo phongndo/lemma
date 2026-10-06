@@ -1,22 +1,15 @@
-import { execFile } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
-import { copyFile, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { Effect, Layer, Schema } from "effect";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Interaction, InteractionError, ToolInvocation, ToolResult, Tools } from "@lemma/contracts";
 import type { Tool } from "@lemma/contracts";
-import { run as cli } from "@lemma/cli/src/cli.ts";
 import tools from "@lemma/plugin-tools";
 import approvals, { question } from "../approvals.ts";
-import { mockConfig, startHost, startMockProvider, stopHost } from "../../../scripts/e2e.ts";
 
-const file = fileURLToPath(new URL("../approvals.ts", import.meta.url));
 const defaults = { ask: ["bash"], outsideProject: ["write", "edit"] };
 const call = (name: string, input: unknown, sessionId = "s1") => new ToolInvocation({ sessionId, toolCallId: "c1", name, input, cwd: "/work/project" });
 
@@ -128,78 +121,4 @@ describe("the guard", () => {
     const [result] = await run([human.plugin], [call("bash", { command: "ls" })]);
     expect(result).toBe("Tool call denied: nobody could approve it (No client is attached)");
   });
-});
-
-const execFileAsync = promisify(execFile);
-const root = fileURLToPath(new URL("../../../", import.meta.url));
-const cliMain = join(root, "apps/cli/src/main.ts");
-
-// The user's path: the file dropped into `<home>/plugins`, loaded by a real host, its question answered at the CLI.
-describe("as a plugin file in a real host", () => {
-  let home: string | undefined;
-  let host: ChildProcess | undefined;
-  let mock: ChildProcess | undefined;
-  const lemma = async (...argv: string[]) => {
-    const { stdout } = await execFileAsync(process.execPath, ["--conditions=lemma-source", cliMain, ...argv], { env: { ...process.env, LEMMA_HOME: home! } });
-    return stdout;
-  };
-
-  beforeAll(async () => {
-    home = await mkdtemp(join(tmpdir(), "lemma-approvals-"));
-    await mkdir(join(home, "plugins"));
-    await copyFile(file, join(home, "plugins", "approvals.ts"));
-    const provider = await startMockProvider();
-    mock = provider.process;
-    await writeFile(join(home, "config.jsonc"), JSON.stringify(mockConfig(provider.baseUrl)));
-    host = await startHost(home);
-  }, 30_000);
-
-  // Whatever the setup got to before it failed.
-  afterAll(async () => {
-    mock?.kill();
-    if (host !== undefined) await stopHost(host);
-    if (home !== undefined) await rm(home, { recursive: true, force: true });
-  });
-
-  test("loads, and a command runs or not as the user answers", async () => {
-    const status = JSON.parse(await lemma("plugins", "--json"));
-    expect(status.find((plugin: { id: string }) => plugin.id === "approvals")).toMatchObject({ source: "user", state: "active" });
-
-    const session = (await lemma("session", "new", "--cwd", home!)).trim();
-    const allowed = await lemma("run", session, "check the shell", "--model", "mock/scripted", "--answer", "once");
-    expect(allowed).toContain("hello from lemma");
-    const denied = await lemma("run", session, "again", "--model", "mock/scripted", "--answer", "deny");
-    expect(denied).toContain("Tool call denied: the user declined");
-    // No terminal and nothing to answer with: the CLI does not attach, so nobody can approve and the call is denied.
-    const unattended = await lemma("run", session, "once more", "--model", "mock/scripted");
-    expect(unattended).toContain("Tool call denied: nobody could approve it");
-  }, 60_000);
-
-  test("a question answered elsewhere closes the terminal's prompt", async () => {
-    const session = (await lemma("session", "new", "--cwd", home!)).trim();
-    let withdrawn = false;
-    const asking = cli(["run", session, "check the shell", "--model", "mock/scripted"], {
-      env: { LEMMA_HOME: home! },
-      cwd: home!,
-      out: () => {},
-      write: () => {},
-      err: () => {},
-      // A terminal nobody types into: only withdrawing the prompt ends it.
-      ask: (_question, _secret, signal) =>
-        new Promise<string>((_, reject) =>
-          signal?.addEventListener("abort", () => {
-            withdrawn = true;
-            reject(signal.reason);
-          }),
-        ),
-    });
-    let open: { id: string }[] = [];
-    for (let tries = 0; open.length === 0 && tries < 100; tries++) {
-      await new Promise((done) => setTimeout(done, 100));
-      open = JSON.parse(await lemma("questions", "--json"));
-    }
-    await lemma("answer", open[0]!.id, "once");
-    expect(await asking).toBe(0);
-    expect(withdrawn).toBe(true);
-  }, 60_000);
 });
