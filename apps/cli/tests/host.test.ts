@@ -447,12 +447,13 @@ describe("against a running host", () => {
       const wrong = await invoke(["remote", "set", url, "--token", "wrong", "--json"], other);
       expect(wrong.code).toBe(ExitCode.unavailable);
       expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Unauthorized" });
-      const unreachable = await invoke(["remote", "set", dead, "--token", token, "--json"], other);
+      // `--token=`: a token written before hosts stopped making ones that start with "-" would read as an option.
+      const unreachable = await invoke(["remote", "set", dead, `--token=${token}`, "--json"], other);
       expect(unreachable.code).toBe(ExitCode.unavailable);
       expect(JSON.parse(unreachable.err).error).toMatchObject({ code: "Unreachable" });
       expect(existsSync(remoteFile())).toBe(false);
 
-      const set = await invoke(["remote", "set", `${url}/`, "--token", token, "--json"], other);
+      const set = await invoke(["remote", "set", `${url}/`, `--token=${token}`, "--json"], other);
       expect(set.code).toBe(ExitCode.ok);
       expect(JSON.parse(set.out)).toMatchObject({ url, from: remoteFile(), info: { home } });
       expect(JSON.parse(await readFile(remoteFile(), "utf8"))).toEqual({ url, token });

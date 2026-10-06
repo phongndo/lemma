@@ -25,6 +25,14 @@ const read = async (path: string): Promise<string | undefined> => {
   return token;
 };
 
+/** 192 random bits, url-safe, never starting with `-`, which a command line would take for an option (`--token <token>`). */
+const newToken = (): string => {
+  for (;;) {
+    const token = randomBytes(24).toString("base64url");
+    if (!token.startsWith("-")) return token;
+  }
+};
+
 /**
  * The token in `<home>/token`, created with a random one when missing, so
  * remote clients stay valid across host restarts; deleting the file rotates
@@ -38,7 +46,7 @@ export const loadToken = (home: string): Effect.Effect<string, TokenError> =>
       const path = tokenPath(home);
       const existing = await read(path);
       if (existing !== undefined) return existing;
-      const token = randomBytes(24).toString("base64url");
+      const token = newToken();
       let created: boolean;
       try {
         created = await writeFileAtomic(path, `${token}\n`, { exclusive: true });
