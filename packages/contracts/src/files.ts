@@ -1,7 +1,7 @@
 import { Data, Effect, Schema } from "effect";
 import type { Context } from "effect";
-import { Registry } from "@lemma/core";
-import type { Registries } from "@lemma/core";
+import { awaitable, Registry } from "@lemma/core";
+import type { Awaitable, Registries } from "@lemma/core";
 
 /** The most entries one search returns: providers answer on the host's thread, so a page stays small. */
 export const FILE_SEARCH_LIMIT = 200;
@@ -63,7 +63,8 @@ export class FileSearchError extends Data.TaggedError("FileSearchError")<{
 export interface FileSearcher {
   /** Names it, by convention its plugin's id; one plugin contributes one. */
   readonly id: string;
-  readonly search: (cwd: string, query: string, options?: FileSearchOptions) => Effect.Effect<FileSearchResult, FileSearchError>;
+  /** Returns its result, a promise of it, or an Effect (`Awaitable`). */
+  readonly search: (cwd: string, query: string, options?: FileSearchOptions) => Awaitable<FileSearchResult, FileSearchError>;
 }
 
 /**
@@ -85,5 +86,5 @@ export const searchFiles = (
   Effect.flatMap(registries.items(FileSearchers), ([first]) =>
     first === undefined
       ? Effect.fail(new FileSearchError({ path: cwd, reason: "Unavailable", message: "No plugin searches files: turn on file-search, or add one" }))
-      : first.item.search(cwd, query, options),
+      : awaitable(() => first.item.search(cwd, query, options)),
   );

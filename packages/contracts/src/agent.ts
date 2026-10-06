@@ -107,7 +107,8 @@ export interface RequestDraft {
    * Appends an event after the turn's last one (a `compaction`, say); the
    * request, and the rest of the turn, continue from it. It stays on the
    * turn's branch even if a later handler fails or the turn is cancelled, and
-   * a checkout meanwhile cannot move it.
+   * a checkout meanwhile cannot move it. A handler written with promises
+   * runs the Effect it returns with its plugin's `run`.
    */
   readonly append: (data: EventData) => Effect.Effect<SessionEvent, AgentError>;
 }

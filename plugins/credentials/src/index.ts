@@ -1,7 +1,8 @@
 import { Effect, Layer, Semaphore } from "effect";
 import { CredentialError, Credentials, Paths } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
-import { definePlugin } from "@lemma/core";
+import { awaitable, definePlugin } from "@lemma/core";
+import type { Awaitable } from "@lemma/core";
 import { decodeEntry, readStore, withFileLock, writeStore } from "./store.ts";
 
 export { decodeEntry, readStore, withFileLock, writeStore } from "./store.ts";
@@ -37,12 +38,12 @@ export default definePlugin({
               ...(error.cause === undefined ? {} : { cause: error.cause }),
             });
 
-      const modify = <E>(provider: string, update: (current: Credential | undefined) => Effect.Effect<Credential | undefined, E>) =>
+      const modify = <E>(provider: string, update: (current: Credential | undefined) => Awaitable<Credential | undefined, E>) =>
         serialized(
           Effect.gen(function* () {
             const store = yield* readStore(path);
             const current = yield* decodeEntry(path, store, provider);
-            const next = yield* update(current);
+            const next = yield* awaitable(() => update(current));
             if (next === undefined) return current;
             yield* writeStore(path, { ...store, [provider]: next });
             return next;

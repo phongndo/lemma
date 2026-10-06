@@ -36,9 +36,10 @@ export class ToolError extends Data.TaggedError("ToolError")<{
 }> {}
 
 /**
- * A tool as registered by a plugin. `execute` may return a Promise or an
- * Effect; the tools plugin adapts promises once at registration. A thrown or
- * failed execution becomes an `isError` result for the model.
+ * A tool as registered by a plugin. `execute` returns its result, a promise
+ * of it, or an Effect (`Awaitable`): a plugin written with promises or with
+ * Effects registers one alike. A thrown or failed execution becomes an
+ * `isError` result for the model.
  */
 export interface Tool<Input = any> {
   readonly name: string;
@@ -55,7 +56,7 @@ export interface Tool<Input = any> {
    * runs a run of consecutive such calls together. Absent: its calls run one at a time, in order.
    */
   readonly parallel?: "safe";
-  readonly execute: (input: Input, context: ToolContext) => Promise<ToolResult> | Effect.Effect<ToolResult, unknown>;
+  readonly execute: (input: Input, context: ToolContext) => Awaitable<ToolResult, unknown>;
 }
 
 export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvocation")({

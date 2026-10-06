@@ -40,6 +40,25 @@ describe("commands", () => {
     expect(JSON.stringify(exit)).toContain("is already registered by first");
   });
 
+  test("runs a command written with promises, or returning its result at once", async () => {
+    const results = await run(
+      [
+        commands,
+        contributor("plain", [
+          command("async", async ({ cwd }) => ({ message: `async in ${cwd}` })),
+          command("sync", () => ({ message: "at once" })),
+          command("rejects", async () => Promise.reject(new Error("broke"))),
+        ]),
+      ],
+      Effect.flatMap(Commands, (registry) =>
+        Effect.all([registry.run("async", { cwd: "/w" }), registry.run("sync", { cwd: "/w" }), Effect.flip(registry.run("rejects", { cwd: "/w" }))]),
+      ),
+    );
+    expect(results[0]).toEqual({ message: "async in /w" });
+    expect(results[1]).toEqual({ message: "at once" });
+    expect(results[2].reason).toBe("Failed");
+  });
+
   test("runs a command with the caller's context; a void result is an empty one", async () => {
     const seen: unknown[] = [];
     const results = await run(

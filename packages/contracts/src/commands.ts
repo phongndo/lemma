@@ -1,7 +1,7 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect, Scope } from "effect";
 import { Event } from "@lemma/core";
-import type { PluginContext } from "@lemma/core";
+import type { Awaitable, PluginContext } from "@lemma/core";
 
 /** Where a command runs: the client's working directory and, when it has one open, its session. */
 export const CommandContext = Schema.Struct({
@@ -49,7 +49,8 @@ export class CommandError extends Data.TaggedError("CommandError")<{
  * that can answer questions can run it.
  */
 export interface Command extends Omit<CommandInfo, "source"> {
-  readonly run: (context: CommandContext) => Effect.Effect<CommandResult | void, unknown>;
+  /** Returns its result, a promise of it, or an Effect (`Awaitable`), so a plugin written with promises registers one too. */
+  readonly run: (context: CommandContext) => Awaitable<CommandResult | void, unknown>;
 }
 
 /** Published whenever a command is registered or removed. */

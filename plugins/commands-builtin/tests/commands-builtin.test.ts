@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { Effect } from "effect";
 import type { Context } from "effect";
+import { awaitable } from "@lemma/core";
 import type { Command, HostControl, Interaction, Llm, Workspace } from "@lemma/contracts";
 import { hostCommands, llmCommands, workspaceCommands } from "../src/index.ts";
 
@@ -18,7 +19,7 @@ const scripted = (answer: string) => {
 };
 
 const find = (commands: readonly Command[], id: string) => commands.find((command) => command.id === id)!;
-const run = (command: Command, cwd = "/repo") => Effect.runPromise(Effect.result(command.run({ cwd })));
+const run = (command: Command, cwd = "/repo") => Effect.runPromise(Effect.result(awaitable(() => command.run({ cwd }))));
 
 describe("workspace commands", () => {
   const calls: unknown[] = [];

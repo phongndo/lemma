@@ -165,6 +165,10 @@ can supply them, and promise code runs in the caller's context. A value
 succeeds at once with no promise or extra turn. A callback that declares a
 parameter receives a signal, aborted when the Effect is interrupted.
 
+The other direction is left as it is: a function a contract hands _to_ a
+callback (in a hook's input, say) returns what its contract says, and a handler
+written with promises runs an Effect it returns with `run`.
+
 ## Testing a plugin
 
 `@lemma/core/testing` starts one plugin the way an application would, with

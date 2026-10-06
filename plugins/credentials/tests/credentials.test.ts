@@ -33,6 +33,21 @@ const increment = (current: Credential | undefined): Effect.Effect<Credential> =
   Effect.succeed({ type: "api_key", key: String(Number(current?.type === "api_key" ? current.key : 0) + 1) });
 
 describe("credentials", () => {
+  test("modify takes an update written with promises, or one returning at once", async () => {
+    const result = await run(
+      Effect.gen(function* () {
+        const service = yield* Credentials;
+        yield* service.modify("a", async () => ({ type: "api_key" as const, key: "from a promise" }));
+        yield* service.modify("b", () => ({ type: "api_key" as const, key: "at once" }));
+        return [yield* service.read("a"), yield* service.read("b")];
+      }),
+    );
+    expect(result).toEqual([
+      { type: "api_key", key: "from a promise" },
+      { type: "api_key", key: "at once" },
+    ]);
+  });
+
   test("modify writes atomically with 0600/0700, and read, list, and remove see it", async () => {
     await run(
       Effect.gen(function* () {

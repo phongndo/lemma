@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, Semaphore } from "effect";
 import type { AuthContext } from "@earendil-works/pi-ai";
-import { PluginContext, definePlugin, makeCore } from "@lemma/core";
+import { PluginContext, awaitable, definePlugin, makeCore } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Credentials, HostControl, Interaction, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
@@ -18,7 +18,7 @@ export function fakeCredentials(initial: Record<string, Credential> = {}) {
     modify: (provider, update) =>
       lock.withPermits(1)(
         Effect.gen(function* () {
-          const next = yield* update(store.get(provider));
+          const next = yield* awaitable(() => update(store.get(provider)));
           if (next !== undefined) store.set(provider, next);
           return store.get(provider);
         }),

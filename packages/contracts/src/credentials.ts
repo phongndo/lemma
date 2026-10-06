@@ -1,5 +1,6 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
+import type { Awaitable } from "@lemma/core";
 
 /**
  * One credential per provider id, stored in `auth.json` (mode 0600). The shape
@@ -48,7 +49,8 @@ export class Credentials extends Context.Service<
     readonly list: Effect.Effect<readonly { readonly provider: string; readonly type: Credential["type"] }[], CredentialError>;
     readonly modify: <E>(
       provider: string,
-      update: (current: Credential | undefined) => Effect.Effect<Credential | undefined, E>,
+      /** Returns the new entry (or `undefined` to leave it), a promise of it, or an Effect (`Awaitable`). */
+      update: (current: Credential | undefined) => Awaitable<Credential | undefined, E>,
     ) => Effect.Effect<Credential | undefined, CredentialError | E>;
     readonly remove: (provider: string) => Effect.Effect<void, CredentialError>;
   }

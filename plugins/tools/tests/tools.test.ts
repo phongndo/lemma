@@ -2,7 +2,7 @@ import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } fro
 import { describe, expect, it } from "vitest";
 import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Inspectors, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/contracts";
+import { Inspectors, snapshotOf, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/contracts";
 import type { Guard, Tool } from "@lemma/contracts";
 import tools, { toolParameters } from "../src/index.ts";
 import { outputBatcher } from "../src/registry.ts";
@@ -52,7 +52,7 @@ describe("registry", () => {
           const inspectors = yield* core.run(Effect.flatMap(Registries, (registries) => registries.items(Inspectors)));
           const found = inspectors.find((contribution) => contribution.item.id === "tools.registered");
           expect(found?.pluginId).toBe("tools");
-          return yield* found!.item.snapshot;
+          return yield* snapshotOf(found!.item);
         }),
       ),
     );
@@ -176,8 +176,10 @@ describe("execute", () => {
       },
     };
     const malformed: Tool<unknown> = { name: "malformed", description: "", input: Schema.Unknown, execute: async () => ({ nope: 1 }) as never };
+    // A tool may return its result at once, with no promise or Effect.
+    const immediate: Tool<unknown> = { name: "immediate", description: "", input: Schema.Unknown, execute: () => ok("at once") };
     await run(
-      [contributor("p", [echo, throwing, failing, rejecting, malformed])],
+      [contributor("p", [echo, throwing, failing, rejecting, malformed, immediate])],
       Effect.gen(function* () {
         expect(textOf(yield* call("echo", { text: "hi" }))).toBe("hi");
         const invalid = yield* call("echo", { text: 1 });
@@ -187,6 +189,7 @@ describe("execute", () => {
         expect(textOf(yield* call("fails", {}))).toBe("effect failed");
         expect(textOf(yield* call("rejects", {}))).toBe("rejected");
         expect(textOf(yield* call("malformed", {}))).toContain("invalid result");
+        expect(textOf(yield* call("immediate", {}))).toBe("at once");
         const missing = yield* Effect.flip(call("nope", {}));
         expect(missing.reason).toBe("NotFound");
         expect(missing.message).toContain("Available tools: echo");

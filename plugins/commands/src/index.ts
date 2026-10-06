@@ -1,6 +1,6 @@
 import { Cause, Effect, Layer, Stream } from "effect";
 import type { Context } from "effect";
-import { definePlugin, Events, PluginContext, Registries, Registry } from "@lemma/core";
+import { awaitable, definePlugin, Events, PluginContext, Registries, Registry } from "@lemma/core";
 import { CommandError, Commands, CommandsChanged, Inspectors, InteractionError } from "@lemma/contracts";
 import type { Command, CommandInfo } from "@lemma/contracts";
 
@@ -65,7 +65,7 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
         if (entry === undefined) {
           return yield* new CommandError({ command: id, reason: "NotFound", message: `No command "${id}"` });
         }
-        const result = yield* Effect.suspend(() => entry.run(context)).pipe(
+        const result = yield* awaitable(() => entry.run(context)).pipe(
           Effect.catchCause((cause) => {
             if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
             const error = Cause.squash(cause);

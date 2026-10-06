@@ -83,15 +83,8 @@ function runTool(tool: Tool<any>, input: unknown, base: Omit<ToolContext, "signa
     const forward = () => controller.abort(outer.reason);
     outer.addEventListener("abort", forward, { once: true });
     const context: ToolContext = { ...base, signal: controller.signal };
-    let output: Promise<ToolResult> | Effect.Effect<ToolResult, unknown>;
-    try {
-      output = tool.execute(input, context);
-    } catch (cause) {
-      return Effect.succeed(errorResult(message(cause)));
-    }
-    const running: Effect.Effect<unknown, unknown> = Effect.isEffect(output)
-      ? output
-      : Effect.tryPromise({ try: () => output as Promise<ToolResult>, catch: (cause) => cause });
+    // A value, a promise, or an Effect; a throw or rejection is a defect, which becomes an error result below.
+    const running: Effect.Effect<unknown, unknown> = awaitable(() => tool.execute(input, context));
     return running.pipe(
       Effect.map((value) => {
         const decoded = decodeResult(value);

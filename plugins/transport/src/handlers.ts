@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
+import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, snapshotOf, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
 import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
 import { toHostError } from "./errors.ts";
 import type { Hub } from "./hub.ts";
@@ -118,7 +118,7 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
         const found = items.find((contribution) => contribution.item.id === id)?.item;
         if (found === undefined) return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `No inspector "${id}"` }));
         // An inspector that fails or dies says so; it never takes the transport with it.
-        return found.snapshot.pipe(
+        return snapshotOf(found).pipe(
           Effect.catchCause((cause) => {
             const error = Cause.squash(cause);
             return Effect.fail(new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) }));
