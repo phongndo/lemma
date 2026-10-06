@@ -156,6 +156,7 @@ describe("loadComposition", () => {
     expect(isTrusted("/work/app", ["/work/app"])).toBe(true);
     expect(isTrusted("/work/app/sub", ["/work"])).toBe(true);
     expect(isTrusted("/work/app2", ["/work/app"])).toBe(false);
+    expect(isTrusted("/work/..app", ["/work"])).toBe(true);
     expect(isTrusted("/work", ["/work/app"])).toBe(false);
     expect(isTrusted("/work/app", ["app", "."])).toBe(false);
     expect(isTrusted("/work/app", [])).toBe(false);

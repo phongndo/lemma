@@ -2,14 +2,13 @@ import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Data, Effect } from "effect";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { errorCode, writeFileAtomic } from "@lemma/contracts/fs";
 
 /** `<home>/token`: the token the host uses when its config sets none. */
 export const tokenPath = (home: string): string => join(home, "token");
 
 export class TokenError extends Data.TaggedError("TokenError")<{ readonly message: string }> {}
 
-const errorCode = (cause: unknown) => (cause as NodeJS.ErrnoException).code;
 const reason = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 
 /** The file's token, or undefined when there is no file. */

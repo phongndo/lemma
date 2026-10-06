@@ -697,6 +697,7 @@ describe("transport", () => {
       await mkdir(join(dir, "assets"));
       await writeFile(join(dir, "index.html"), "<!doctype html><title>lemma</title>");
       await writeFile(join(dir, "assets", "app.js"), "console.log(1)");
+      await writeFile(join(dir, "..well-known.txt"), "dots");
       await writeFile(join(tmpdir(), "lemma-secret.txt"), "secret");
       await withHost(
         (host) =>
@@ -713,6 +714,8 @@ describe("transport", () => {
             expect((yield* get("/assets/missing.js")).status).toBe(404);
             expect((yield* get("/%2e%2e/lemma-secret.txt")).status).toBe(404);
             expect((yield* get("/..%2flemma-secret.txt")).status).toBe(404);
+            // A name starting with ".." is still inside.
+            expect(yield* get("/..well-known.txt")).toMatchObject({ status: 200, body: "dots" });
           }),
         { staticDir: dir },
       );

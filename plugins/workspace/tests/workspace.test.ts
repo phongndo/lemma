@@ -6,7 +6,7 @@ import { Effect, Either, Layer } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, makeCore } from "@lemma/core";
 import { Paths, Workspace, WorkspaceError } from "@lemma/contracts";
-import workspace, { expandPath, makeWorkspace, matchName } from "../src/index.ts";
+import workspace, { makeWorkspace, matchName } from "../src/index.ts";
 
 // Isolate every git call, ours and the plugin's, from the machine's config.
 beforeAll(() => {
@@ -58,9 +58,6 @@ const failure = async <A>(effect: Effect.Effect<A, WorkspaceError>): Promise<Wor
 
 describe("status", () => {
   it("expands ~ and treats relative paths as missing", async () => {
-    expect(expandPath("~", "/home/u")).toBe("/home/u");
-    expect(expandPath("~/code/x/", "/home/u")).toBe("/home/u/code/x");
-    expect(expandPath("/a/../b", "/home/u")).toBe("/b");
     expect(await run(ws.status("relative/dir"))).toEqual({ path: "relative/dir", exists: false });
     expect(await run(makeWorkspace({ home: dir, worktrees: path.join(dir, "trees") }).status("~"))).toEqual({ path: dir, exists: true });
   });

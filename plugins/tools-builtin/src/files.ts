@@ -1,14 +1,11 @@
-import { constants } from "node:fs";
-import { access, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
 import { ToolResult } from "@lemma/contracts";
+import { errorCode, expandHome, kindOf } from "@lemma/contracts/fs";
 
 export const text = (value: string, details?: unknown): ToolResult =>
   new ToolResult({ content: [{ type: "text", text: value }], ...(details === undefined ? {} : { details }) });
-
-export const errorCode = (cause: unknown): string | undefined =>
-  typeof cause === "object" && cause !== null && typeof (cause as { code?: unknown }).code === "string" ? (cause as { code: string }).code : undefined;
 
 export const throwIfAborted = (signal: AbortSignal): void => {
   if (signal.aborted) throw new Error("Operation aborted");
@@ -20,16 +17,10 @@ const UNICODE_SPACES = /[  -   　]/g;
 export function resolveToCwd(input: string, cwd: string): string {
   let value = input.replace(UNICODE_SPACES, " ");
   if (value.startsWith("@")) value = value.slice(1);
-  if (value === "~") value = homedir();
-  else if (value.startsWith("~/")) value = path.join(homedir(), value.slice(2));
-  return path.resolve(cwd, value);
+  return path.resolve(cwd, expandHome(value, homedir()));
 }
 
-const exists = (file: string) =>
-  access(file, constants.F_OK).then(
-    () => true,
-    () => false,
-  );
+const exists = async (file: string) => (await kindOf(file)) !== undefined;
 
 /**
  * Like `resolveToCwd`, but tries the spellings macOS uses in screenshot names

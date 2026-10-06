@@ -1,11 +1,44 @@
 import { randomUUID } from "node:crypto";
-import { link, mkdir, open, rename, rm } from "node:fs/promises";
-import { dirname } from "node:path";
+import { link, mkdir, open, rename, rm, stat } from "node:fs/promises";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /*
  * Node only, apart from the package root (which clients load in browsers):
  * `@lemma/contracts/fs`.
  */
+
+/** A Node error's `code` (`ENOENT`, `EEXIST`), if it has one. */
+export const errorCode = (cause: unknown): string | undefined =>
+  typeof cause === "object" && cause !== null && typeof (cause as { code?: unknown }).code === "string" ? (cause as { code: string }).code : undefined;
+
+/** Whether process `pid` runs on this machine, as this user or (refusing the signal) another. */
+export const isAlive = (pid: number): boolean => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (cause) {
+    return errorCode(cause) === "EPERM";
+  }
+};
+
+/** `~` and `~/…` against `home`, normalized when absolute; anything still relative is returned as is. */
+export const expandHome = (path: string, home: string): string => {
+  const expanded = path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
+  return isAbsolute(expanded) ? resolve(expanded) : expanded;
+};
+
+/** Whether `path` is `root` or inside it, by their resolved paths (symlinks are not followed). */
+export const isInside = (root: string, path: string): boolean => {
+  const inside = relative(resolve(root), resolve(path));
+  return inside !== ".." && !inside.startsWith(`..${sep}`) && !isAbsolute(inside);
+};
+
+/** What is at `path`, following symlinks: undefined when nothing is, or it cannot be read. */
+export const kindOf = (path: string): Promise<"file" | "directory" | "other" | undefined> =>
+  stat(path).then(
+    (info) => (info.isFile() ? "file" : info.isDirectory() ? "directory" : "other"),
+    () => undefined,
+  );
 
 export interface AtomicWriteOptions {
   /** The file's mode, set explicitly since the creation mode is subject to umask. Default 0600. */
@@ -45,7 +78,7 @@ export async function writeFileAtomic(path: string, text: string, options: Atomi
       await link(temp, path);
       return true;
     } catch (cause) {
-      if ((cause as NodeJS.ErrnoException).code === "EEXIST") return false;
+      if (errorCode(cause) === "EEXIST") return false;
       throw cause;
     }
   } finally {

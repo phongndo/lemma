@@ -1,10 +1,10 @@
-import { access, readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { readFile, readlink, realpath, stat, unlink } from "node:fs/promises";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Effect, Either, ParseResult, Schema } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
 import { ConfigFile } from "@lemma/contracts";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
 import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
 import { Diagnostic } from "@lemma/core";
 import type { Composition, PluginEntry } from "@lemma/core";
@@ -61,11 +61,7 @@ export const projectPluginsDir = (paths: PathsService): string => join(dirname(p
 
 /** A directory is trusted when it is, or is inside, an absolute entry of `trustedProjects`. */
 export function isTrusted(cwd: string, trustedProjects: readonly string[]): boolean {
-  return trustedProjects.some((entry) => {
-    if (!isAbsolute(entry)) return false;
-    const inside = relative(resolve(entry), cwd);
-    return inside === "" || (!inside.startsWith("..") && !isAbsolute(inside));
-  });
+  return trustedProjects.some((entry) => isAbsolute(entry) && isInside(entry, cwd));
 }
 
 /**
@@ -302,13 +298,7 @@ interface ReadConfig {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-const exists = (path: string): Effect.Effect<boolean> =>
-  Effect.promise(() =>
-    access(path).then(
-      () => true,
-      () => false,
-    ),
-  );
+const exists = (path: string): Effect.Effect<boolean> => Effect.promise(async () => (await kindOf(path)) !== undefined);
 
 /** An untrusted project's file: only whether it exists, never its contents. */
 const skipConfig = (path: string): Effect.Effect<ReadConfig> =>

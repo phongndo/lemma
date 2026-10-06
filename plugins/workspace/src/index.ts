@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdir, readdir, stat } from "node:fs/promises";
+import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { Effect, Layer, Schema } from "effect";
@@ -7,16 +7,11 @@ import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Paths, Workspace, WorkspaceError } from "@lemma/contracts";
 import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/contracts";
+import { expandHome, kindOf } from "@lemma/contracts/fs";
 
 export const READ_TIMEOUT_MS = 5_000;
 export const CHECKOUT_TIMEOUT_MS = 15_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
-
-/** `~` and `~/…` against `home`; anything still relative afterwards is returned as is and treated as missing. */
-export const expandPath = (path: string, home: string = homedir()): string => {
-  const expanded = path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
-  return isAbsolute(expanded) ? resolve(expanded) : expanded;
-};
 
 type GitResult = { readonly ok: true; readonly stdout: string } | { readonly ok: false; readonly message: string };
 
@@ -66,11 +61,7 @@ export const matchName = (name: string, needle: string): { readonly score: numbe
 /** Entries returned by `browse`; more are reported as `truncated`. */
 export const BROWSE_LIMIT = 200;
 
-const isDirectory = (path: string): Promise<boolean> =>
-  stat(path).then(
-    (info) => info.isDirectory(),
-    () => false,
-  );
+const isDirectory = async (path: string): Promise<boolean> => (await kindOf(path)) === "directory";
 
 /**
  * Parses `git status --porcelain=v2 --branch -z`. Every record is
@@ -174,7 +165,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
 
   const status = (path: string): Effect.Effect<WorkspaceStatus> =>
     Effect.promise(async () => {
-      const dir = expandPath(path, home);
+      const dir = expandHome(path, home);
       if (!isAbsolute(dir) || !(await isDirectory(dir))) return { path: dir, exists: false };
       const state = await gitStatus(dir);
       return { path: dir, exists: true, ...(state === undefined ? {} : { git: state }) };
@@ -183,7 +174,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
   const browse = (partialPath: string): Effect.Effect<DirectoryListing> =>
     Effect.promise(async () => {
       const typed = partialPath.trim() === "" ? "~/" : partialPath.trim();
-      const expanded = expandPath(typed, home);
+      const expanded = expandHome(typed, home);
       // `~/code/` lists `~/code`; `~/code/ba` lists `~/code` filtered by `ba`.
       const endsWithSlash = typed.endsWith("/") || typed === "~";
       const parent = endsWithSlash ? resolve(expanded) : dirname(resolve(expanded));
@@ -206,10 +197,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
         entries.push({
           name: match.name,
           path,
-          git: await stat(join(path, ".git")).then(
-            () => true,
-            () => false,
-          ),
+          git: (await kindOf(join(path, ".git"))) !== undefined,
           matches: match.matches,
         });
       }
@@ -218,16 +206,9 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
 
   const createDirectory = (path: string): Effect.Effect<WorkspaceStatus, WorkspaceError> =>
     Effect.gen(function* () {
-      const dir = expandPath(path, home);
+      const dir = expandHome(path, home);
       if (!isAbsolute(dir)) return yield* new WorkspaceError({ path: dir, reason: "NotFound", message: `"${path}" is not an absolute path` });
-      if (
-        yield* Effect.promise(() =>
-          stat(dir).then(
-            () => true,
-            () => false,
-          ),
-        )
-      ) {
+      if ((yield* Effect.promise(() => kindOf(dir))) !== undefined) {
         return yield* new WorkspaceError({ path: dir, reason: "Exists", message: `${dir} already exists` });
       }
       yield* Effect.tryPromise({
@@ -240,7 +221,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
   /** The expanded path of an existing directory inside a work tree. */
   const repository = (path: string): Effect.Effect<string, WorkspaceError> =>
     Effect.gen(function* () {
-      const dir = expandPath(path, home);
+      const dir = expandHome(path, home);
       if (!isAbsolute(dir) || !(yield* Effect.promise(() => isDirectory(dir)))) {
         return yield* new WorkspaceError({ path: dir, reason: "NotFound", message: `"${dir}" is not a directory` });
       }
@@ -302,17 +283,7 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Tag.Service<Wo
       // Take the first free name: `x`, then `x-2`, `x-3`, … for both the branch and its folder.
       let branch = options.branch;
       let target = join(worktrees, repoName, folderName(branch));
-      for (
-        let n = 2;
-        (yield* exists(dir, `refs/heads/${branch}`)) ||
-        (yield* Effect.promise(() =>
-          stat(target).then(
-            () => true,
-            () => false,
-          ),
-        ));
-        n++
-      ) {
+      for (let n = 2; (yield* exists(dir, `refs/heads/${branch}`)) || (yield* Effect.promise(() => kindOf(target))) !== undefined; n++) {
         branch = `${options.branch}-${n}`;
         target = join(worktrees, repoName, folderName(branch));
       }

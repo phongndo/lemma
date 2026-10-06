@@ -1,10 +1,11 @@
-import { realpath, stat } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Effect, Layer, Schema } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { FileSearchError, FileSearchers, Inspectors } from "@lemma/contracts";
 import type { FileEntry, FileKind, FileSearcher, FileSearchOptions, FileSearchResult } from "@lemma/contracts";
+import { expandHome, kindOf } from "@lemma/contracts/fs";
 
 /** Entries a search returns when the caller does not say. */
 export const DEFAULT_LIMIT = 50;
@@ -58,23 +59,9 @@ export interface FileSearchInit {
   readonly home?: string;
 }
 
-const expand = (path: string, home: string) => {
-  const expanded = path === "~" ? home : path.startsWith("~/") ? join(home, path.slice(2)) : path;
-  return isAbsolute(expanded) ? resolve(expanded) : expanded;
-};
-
 const message = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
 const posix = (path: string) => (sep === "/" ? path : path.split(sep).join("/"));
-const isDirectory = (path: string) =>
-  stat(path).then(
-    (info) => info.isDirectory(),
-    () => false,
-  );
-const exists = (path: string) =>
-  stat(path).then(
-    () => true,
-    () => false,
-  );
+const isDirectory = async (path: string) => (await kindOf(path)) === "directory";
 
 /**
  * A folder as an fff glob over everything inside it (`src/lib/**`): glob
@@ -159,14 +146,14 @@ export const makeFileSearch = (init: FileSearchInit) =>
     /** The work tree `dir` is in (where `.git` is), else `dir`: never the home directory or `/`, which fff refuses. */
     const rootOf = async (dir: string): Promise<string> => {
       for (let at = dir; at !== realHome && dirname(at) !== at; at = dirname(at)) {
-        if (await exists(join(at, ".git"))) return at;
+        if ((await kindOf(join(at, ".git"))) !== undefined) return at;
       }
       return dir;
     };
 
     const search = (cwd: string, query: string, options: FileSearchOptions = {}): Effect.Effect<FileSearchResult, FileSearchError> =>
       Effect.gen(function* () {
-        const path = expand(cwd, home);
+        const path = expandHome(cwd, home);
         const notFound = (where: string, why: string) => new FileSearchError({ path: where, reason: "NotFound", message: `"${where}" ${why}` });
         if (!isAbsolute(path)) return yield* notFound(path, "is not a directory");
         // Symlinks resolved: one index per directory, and fff reads git status only under a real path.

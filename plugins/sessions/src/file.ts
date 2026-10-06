@@ -7,9 +7,6 @@ import type { SessionEvent, SessionInfo } from "@lemma/contracts";
 import { decodeRecord, encodeLine } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
 
-export const errorCode = (cause: unknown): string | undefined =>
-  typeof cause === "object" && cause !== null && typeof (cause as { code?: unknown }).code === "string" ? (cause as { code: string }).code : undefined;
-
 export const io = (sessionId: string | undefined, message: string) => (cause: unknown) =>
   new SessionError({
     ...(sessionId === undefined ? {} : { sessionId }),

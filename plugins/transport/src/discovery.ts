@@ -1,7 +1,7 @@
 import { readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Effect, Either, Schema } from "effect";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { isAlive, writeFileAtomic } from "@lemma/contracts/fs";
 
 /** `<home>/transport.json`: how local clients find a running host. */
 export const Discovery = Schema.Struct({
@@ -18,22 +18,13 @@ export const discoveryPath = (home: string): string => join(home, "transport.jso
 
 const decode = Schema.decodeUnknownEither(Schema.parseJson(Discovery));
 
-const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (cause) {
-    return (cause as NodeJS.ErrnoException).code === "EPERM";
-  }
-};
-
 /** The running host's entry, or undefined when absent, unreadable, or left behind by a process that is gone. */
 export const readDiscovery = (home: string): Effect.Effect<Discovery | undefined> =>
   Effect.promise(() => readFile(discoveryPath(home), "utf8").catch(() => undefined)).pipe(
     Effect.map((text) => {
       if (text === undefined) return undefined;
       const entry = Either.getOrUndefined(decode(text));
-      return entry !== undefined && alive(entry.pid) ? entry : undefined;
+      return entry !== undefined && isAlive(entry.pid) ? entry : undefined;
     }),
   );
 

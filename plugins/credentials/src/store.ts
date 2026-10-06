@@ -4,7 +4,7 @@ import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { Duration, Effect, Either, Schedule, Schema } from "effect";
 import { Credential, CredentialError } from "@lemma/contracts";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { errorCode, isAlive, writeFileAtomic } from "@lemma/contracts/fs";
 
 /** The raw file: provider id → entry. Entries are decoded on use so unknown ones survive a write untouched. */
 export type RawStore = Readonly<Record<string, unknown>>;
@@ -19,7 +19,6 @@ export interface LockOptions {
 const DEFAULT_WAIT = 10_000;
 const DEFAULT_STALE = 30_000;
 
-const errno = (cause: unknown): string | undefined => (cause as NodeJS.ErrnoException | undefined)?.code;
 const describe = (cause: unknown): string => (cause instanceof Error ? cause.message : String(cause));
 const io = (message: string, cause: unknown, provider?: string) =>
   new CredentialError({ ...(provider === undefined ? {} : { provider }), reason: "Io", message: `${message}: ${describe(cause)}`, cause });
@@ -28,7 +27,7 @@ const io = (message: string, cause: unknown, provider?: string) =>
 export function readStore(path: string): Effect.Effect<RawStore, CredentialError> {
   return Effect.tryPromise({ try: () => readFile(path, "utf8"), catch: (cause) => cause }).pipe(
     Effect.matchEffect({
-      onFailure: (cause) => (errno(cause) === "ENOENT" ? Effect.succeed({}) : Effect.fail(io(`Cannot read ${path}`, cause))),
+      onFailure: (cause) => (errorCode(cause) === "ENOENT" ? Effect.succeed({}) : Effect.fail(io(`Cannot read ${path}`, cause))),
       onSuccess: (text) => {
         if (text.trim() === "") return Effect.succeed({});
         const parsed = Either.try(() => JSON.parse(text) as unknown);
@@ -78,15 +77,6 @@ interface LockOwner {
   readonly nonce: string;
 }
 
-const alive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (cause) {
-    return errno(cause) === "EPERM";
-  }
-};
-
 /**
  * Serializes read-modify-write across processes with `<path>.lock`, created
  * with O_EXCL and holding `{ pid, host, nonce }`. The holder touches it
@@ -128,13 +118,13 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
         const [info, text] = await Promise.all([handle.stat(), handle.readFile("utf8")]);
         if (Date.now() - info.mtimeMs > staleMs) return { text };
         const holder = Either.getOrUndefined(Either.try(() => JSON.parse(text) as Partial<LockOwner>));
-        if (holder?.host === owner.host && typeof holder.pid === "number" && !alive(holder.pid)) return { text };
+        if (holder?.host === owner.host && typeof holder.pid === "number" && !isAlive(holder.pid)) return { text };
         return undefined;
       } finally {
         await handle.close();
       }
     } catch (cause) {
-      if (errno(cause) === "ENOENT") return "vanished";
+      if (errorCode(cause) === "ENOENT") return "vanished";
       throw cause;
     }
   });
@@ -154,7 +144,7 @@ export function withFileLock<A, E>(path: string, body: Effect.Effect<A, E>, opti
     while (true) {
       const created = yield* tryCreate;
       if (Either.isRight(created)) return;
-      if (errno(created.left) !== "EEXIST") return yield* io(`Cannot create ${lock}`, created.left);
+      if (errorCode(created.left) !== "EEXIST") return yield* io(`Cannot create ${lock}`, created.left);
       const stale = yield* abandoned;
       if (stale === "vanished") continue;
       if (stale !== undefined) yield* removeIfUnchanged(stale.text);

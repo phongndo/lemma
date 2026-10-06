@@ -1,8 +1,8 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, stat } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { writeFileAtomic } from "../src/fs.ts";
+import { expandHome, isAlive, isInside, kindOf, writeFileAtomic } from "../src/fs.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -37,5 +37,36 @@ describe("writeFileAtomic", () => {
     await mkdir(path);
     await expect(writeFileAtomic(path, "x")).rejects.toThrow();
     expect(await readdir(dir)).toEqual(["taken"]);
+  });
+});
+
+describe("paths", () => {
+  test("isInside: the root and what is under it, not a sibling or its parent, whatever the names start with", () => {
+    expect(isInside("/srv/app", "/srv/app")).toBe(true);
+    expect(isInside("/srv/app/", "/srv/app/..env")).toBe(true);
+    expect(isInside("/srv/app", "/srv/app/a/../b")).toBe(true);
+    expect(isInside("/srv/app", "/srv/app/../app2")).toBe(false);
+    expect(isInside("/srv/app", "/srv/app-other")).toBe(false);
+    expect(isInside("/srv/app", "/srv")).toBe(false);
+  });
+
+  test("expandHome: ~ and ~/ only, normalized when absolute", () => {
+    expect(expandHome("~", "/home/u")).toBe("/home/u");
+    expect(expandHome("~/code/x/", "/home/u")).toBe("/home/u/code/x");
+    expect(expandHome("~other/x", "/home/u")).toBe("~other/x");
+    expect(expandHome("/a/../b", "/home/u")).toBe("/b");
+    expect(expandHome("relative", "/home/u")).toBe("relative");
+  });
+
+  test("kindOf: a file, a directory, or nothing", async () => {
+    await writeFile(join(dir, "file"), "");
+    expect(await kindOf(join(dir, "file"))).toBe("file");
+    expect(await kindOf(dir)).toBe("directory");
+    expect(await kindOf(join(dir, "missing"))).toBeUndefined();
+  });
+
+  test("isAlive: this process, and not a pid nothing has", () => {
+    expect(isAlive(process.pid)).toBe(true);
+    expect(isAlive(2 ** 22 + 1)).toBe(false);
   });
 });

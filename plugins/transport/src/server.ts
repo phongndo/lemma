@@ -1,8 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
-import { stat } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import { join, relative, resolve, sep } from "node:path";
+import { join, resolve } from "node:path";
 import { Effect, ExecutionStrategy, Layer, Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "@effect/platform";
 import type { HttpApp, HttpServer, HttpServerError } from "@effect/platform";
@@ -11,6 +10,7 @@ import { RpcSerialization, RpcServer } from "@effect/rpc";
 import type { Rpc, RpcGroup } from "@effect/rpc";
 import { HostRpcs } from "@lemma/contracts";
 import type { UiComposition } from "@lemma/contracts";
+import { isInside, kindOf } from "@lemma/contracts/fs";
 
 export type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof HostRpcs>>>;
 
@@ -50,15 +50,8 @@ const serveStatic = (root: string, pathname: string) =>
     const decoded = yield* Effect.try(() => decodeURIComponent(pathname)).pipe(Effect.orElseSucceed(() => undefined));
     if (decoded === undefined || decoded.includes("\0")) return notFound;
     const target = resolve(root, `.${decoded}`);
-    const inside = relative(root, target);
-    if (inside.startsWith("..") || inside.startsWith(sep)) return notFound;
-    const isFile = (path: string) =>
-      Effect.promise(() =>
-        stat(path).then(
-          (info) => info.isFile(),
-          () => false,
-        ),
-      );
+    if (!isInside(root, target)) return notFound;
+    const isFile = (path: string) => Effect.promise(async () => (await kindOf(path)) === "file");
     if (yield* isFile(target)) return yield* HttpServerResponse.file(target);
     const last = decoded.slice(decoded.lastIndexOf("/") + 1);
     const index = join(root, "index.html");

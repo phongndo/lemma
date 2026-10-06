@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Option, Schema } from "effect";
 import { SessionError } from "@lemma/contracts";
-import { errorCode, io } from "./file.ts";
+import { errorCode, isAlive, writeFileAtomic } from "@lemma/contracts/fs";
+import { io } from "./file.ts";
 
 /**
  * One process writes a sessions directory: two appending to one session would
@@ -45,44 +46,12 @@ export const thisProcess: Claimant = {
   pid: process.pid,
   hostname: os.hostname(),
   bootedAt: Date.now() - os.uptime() * 1000,
-  isAlive: (pid) => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch (cause) {
-      // It runs, as another user.
-      return errorCode(cause) === "EPERM";
-    }
-  },
+  isAlive,
 };
 
-/** Creates `file` holding `text`, failing with EEXIST if it exists. Synced: a lock emptied by a power loss would name nobody. */
-const createSynced = async (file: string, text: string) => {
-  const handle = await fs.open(file, "wx");
-  try {
-    await handle.writeFile(text);
-    await handle.sync();
-  } catch (cause) {
-    await handle.close();
-    await fs.rm(file, { force: true });
-    throw cause;
-  }
-  await handle.close();
-};
-
-/** Creates `file` holding `text`; false when it exists. */
+/** Creates `file` holding `text`; false when it exists. Synced: a lock emptied by a power loss would name nobody. */
 const writeNew = (file: string, text: string) =>
-  Effect.tryPromise({
-    try: () =>
-      createSynced(file, text).then(
-        () => true,
-        (cause) => {
-          if (errorCode(cause) === "EEXIST") return false;
-          throw cause;
-        },
-      ),
-    catch: io(undefined, `Cannot create ${file}`),
-  });
+  Effect.tryPromise({ try: () => writeFileAtomic(file, text, { exclusive: true, sync: true }), catch: io(undefined, `Cannot create ${file}`) });
 
 /** The file's text and how long ago it was last modified; `undefined` when there is none. */
 const inspect = (file: string): Effect.Effect<{ readonly text: string; readonly age: number } | undefined, SessionError> =>
@@ -135,18 +104,7 @@ export function acquireLock(root: string, claimant: Claimant = thisProcess): Eff
   const guard = guardFile(root);
   const self: Holder = { pid: claimant.pid, hostname: claimant.hostname, token: randomUUID(), startedAt: Date.now() };
   const text = JSON.stringify(self);
-  // Written aside and renamed over the lock, so a reader never sees half a record.
-  const replace = Effect.tryPromise({
-    try: async () => {
-      const aside = `${file}.${self.token}`;
-      await createSynced(aside, text);
-      await fs.rename(aside, file).catch(async (cause: unknown) => {
-        await fs.rm(aside, { force: true });
-        throw cause;
-      });
-    },
-    catch: io(undefined, `Cannot replace ${file}`),
-  });
+  const replace = Effect.tryPromise({ try: () => writeFileAtomic(file, text, { sync: true }), catch: io(undefined, `Cannot replace ${file}`) });
   const stale = (holder: Option.Option<Holder>, age: number) => {
     if (Option.isNone(holder)) return age > UNREADABLE_GRACE_MS || Date.now() - age < claimant.bootedAt - BOOT_SLACK_MS;
     const { pid, hostname, startedAt } = holder.value;
