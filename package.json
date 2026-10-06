@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @lemma/core build",
-    "check": "pnpm build && node scripts/check-boundaries.ts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
+    "check": "pnpm build && node scripts/check-boundaries.ts && tsc -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
@@ -25,10 +25,12 @@
     "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress"
   },
   "devDependencies": {
+    "@types/node": "24.19.0",
     "esbuild": "0.28.2",
     "oxfmt": "0.70.0",
     "oxlint": "1.85.0",
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=24",

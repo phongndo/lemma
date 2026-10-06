@@ -109,6 +109,9 @@ importers:
 
   .:
     devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
       esbuild:
         specifier: 0.28.2
         version: 0.28.2
@@ -121,6 +124,9 @@ importers:
       playwright:
         specifier: 1.63.0
         version: 1.63.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
 
   apps/cli:
     dependencies:
