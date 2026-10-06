@@ -595,23 +595,26 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       return results.sort((a, b) => (order.get(a.toolCallId) ?? 0) - (order.get(b.toolCallId) ?? 0));
     });
 
-  /** A response cut off at its output limit: its tool calls may be cut off too, so none runs, and each is answered for the model to make again. */
-  const answerTruncated = (stepId: string) =>
+  /** Answers each pending call, in order, with `text(call)`, without running it; a call leaves `pending` once its answer is logged. */
+  const answerPending = (stepId: string | undefined, text: (call: ToolCall) => string) =>
     Effect.gen(function* () {
       const results: ToolResultMessage[] = [];
       while (state.pending.length > 0) {
         const call = state.pending[0]!;
-        const message = toolResult(call, TRUNCATED_CALL);
+        const message = toolResult(call, text(call));
         yield* Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* append({ type: "message", message, turnId, stepId });
+            yield* append({ type: "message", message, turnId, ...(stepId === undefined ? {} : { stepId }) });
             state.pending = state.pending.slice(1);
+            live.toolEnded(call.id);
           }),
         );
         results.push(message);
       }
       return results;
     });
+  /** A response cut off at its output limit: its tool calls may be cut off too, so none runs, and each is answered for the model to make again. */
+  const answerTruncated = (stepId: string) => answerPending(stepId, () => TRUNCATED_CALL);
 
   /**
    * Places queued steers after the turn's last event; returns how many. Each
@@ -803,18 +806,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         yield* append({ type: "attempt", turnId, stepId: step.id, message, timing: { startedAt: state.partialStartedAt, endedAt: Date.now() } });
         state.partial = undefined;
       }
-      while (state.pending.length > 0) {
-        const call = state.pending[0]!;
-        const failed = `the turn failed (${ended.error ?? "unknown error"})`;
-        const text = cancelled
+      const failed = `the turn failed (${ended.error ?? "unknown error"})`;
+      yield* answerPending(step?.id, (call) =>
+        cancelled
           ? "Tool execution was cancelled."
           : state.started.has(call.id)
             ? `Tool execution was stopped: ${failed}. It may or may not have finished; check before running it again.`
-            : `Tool was not executed: ${failed}.`;
-        yield* append({ type: "message", message: toolResult(call, text), turnId, ...(step === undefined ? {} : { stepId: step.id }) });
-        state.pending.shift();
-        live.toolEnded(call.id);
-      }
+            : `Tool was not executed: ${failed}.`,
+      );
       if (step !== undefined) yield* append({ type: "step-end", turnId, stepId: step.id });
       yield* append({ type: "turn-end", turnId, reason: ended.reason, ...(ended.error === undefined ? {} : { error: ended.error }) });
     }).pipe(
