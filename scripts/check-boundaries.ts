@@ -33,7 +33,7 @@ for (const file of walk(core).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
   for (const match of text.matchAll(importPattern)) {
     const specifier = match[1]!;
     const escapes = specifier.startsWith(".") && !resolve(dirname(file), specifier).startsWith(core);
-    if ((specifier.startsWith("@lemma/") && specifier !== "@lemma/core") || escapes) {
+    if ((specifier.startsWith("@lemma/") && specifier !== "@lemma/core" && !specifier.startsWith("@lemma/core/")) || escapes) {
       problems.push(`${relative(root, file)}: imports "${specifier}"`);
     }
   }
@@ -80,6 +80,24 @@ const checkLibrary = (name: string, dir: string, allowed: readonly string[]) => 
 };
 checkLibrary("router", "packages/router", ["effect"]);
 checkLibrary("router-solid", "packages/router-solid", ["@lemma/router", "solid-js"]);
+
+// The core and the router can leave this repository as they are: their docs link within those packages only, never to
+// the app's docs, so a copy of the directories keeps every link working.
+const frameworks = ["packages/core", "packages/router", "packages/router-solid"].map((dir) => join(root, dir));
+const linkProblems: string[] = [];
+for (const home of frameworks) {
+  for (const file of walk(home).filter((path) => path.endsWith(".md"))) {
+    for (const match of readFileSync(file, "utf8").matchAll(/\]\(([^)\s]+)\)/g)) {
+      const target = match[1]!.split("#")[0]!;
+      if (target === "" || /^[a-z][a-z0-9+.-]*:/i.test(target)) continue;
+      const resolved = resolve(dirname(file), target);
+      if (!frameworks.some((framework) => resolved === framework || resolved.startsWith(`${framework}/`))) {
+        linkProblems.push(`${relative(root, file)}: links "${match[1]}", outside the framework packages`);
+      }
+    }
+  }
+}
+report("Framework doc links leaving the framework packages", linkProblems, "framework doc links: ok");
 
 // A bundled host plugin is one a user could have written: it meets the others only through `packages/contracts`
 // (AGENTS.md), so its package depends on no other plugin and its source imports none.
