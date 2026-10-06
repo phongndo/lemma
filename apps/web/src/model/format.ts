@@ -64,13 +64,13 @@ export interface UsageSummary {
 export const summarizeUsage = (usage: Usage): UsageSummary => {
   const cached = usage.cacheRead + usage.cacheWrite;
   const lines = [
-    `Input ${usage.input.toLocaleString()} tokens`,
+    `Input ${(usage.input + cached).toLocaleString()} tokens`,
     `Output ${usage.output.toLocaleString()} tokens${usage.reasoning ? ` (${usage.reasoning.toLocaleString()} reasoning)` : ""}`,
     `Cache read ${usage.cacheRead.toLocaleString()}, write ${usage.cacheWrite.toLocaleString()}`,
     `Cost ${formatCost(usage.cost.total)} (in ${formatCost(usage.cost.input)}, out ${formatCost(usage.cost.output)}, cache ${formatCost(usage.cost.cacheRead + usage.cost.cacheWrite)})`,
   ];
   return {
-    input: formatTokens(usage.input),
+    input: formatTokens(usage.input + cached),
     output: formatTokens(usage.output),
     ...(cached === 0 ? {} : { cache: `${formatTokens(usage.cacheRead)}${usage.cacheWrite ? ` +${formatTokens(usage.cacheWrite)}` : ""}` }),
     ...(usage.cost.total === 0 ? {} : { cost: formatCost(usage.cost.total) }),

@@ -51,7 +51,7 @@ describe("format", () => {
 
   it("summarizes usage", () => {
     const s = summarizeUsage({ ...usage(1200, 300, 0.02), cacheRead: 5000 });
-    expect(s).toMatchObject({ input: "1.2k", output: "300", cache: "5.0k", cost: "$0.020" });
+    expect(s).toMatchObject({ input: "6.2k", output: "300", cache: "5.0k", cost: "$0.020" });
   });
 
   it("truncates lines", () => {
