@@ -36,7 +36,7 @@ import sidebar from "./sidebar.tsx";
 import slots from "./slots.ts";
 import toasts from "./toasts.tsx";
 import tooltips from "./tooltips.tsx";
-import trajectory from "./trajectory.tsx";
+import trajectory from "./trajectory/index.tsx";
 import workspaceBar from "./workspace-bar.tsx";
 import workspace from "./workspace.ts";
 
