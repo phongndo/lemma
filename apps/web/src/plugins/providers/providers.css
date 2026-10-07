@@ -29,35 +29,6 @@
   padding: 6px 0;
 }
 
-.provider-models-toggle {
-  font-size: calc(12px * var(--text-scale));
-}
-
-.provider-models {
-  flex-basis: 100%;
-  list-style: none;
-  margin: 0 0 4px 36px;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: calc(12px * var(--text-scale));
-}
-
-.provider-models li {
-  display: flex;
-  gap: 10px;
-  min-width: 0;
-}
-
-.provider-model-ref {
-  font-family: var(--font-mono);
-  color: var(--text-2);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .provider.configured .provider-mark {
   color: var(--text);
 }

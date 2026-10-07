@@ -206,9 +206,6 @@ export interface ModelsService {
   /** Models usable now. */
   readonly models: Accessor<readonly ModelInfo[]>;
   readonly modelsLoaded: Accessor<boolean>;
-  /** Every known model, usable or not; undefined until `loadAll`. */
-  readonly all: Accessor<readonly ModelInfo[] | undefined>;
-  readonly loadAll: () => Promise<void>;
   /** Some provider is set up. */
   readonly configured: Accessor<boolean>;
   /** The remembered choice, which may name a model that is not available. */

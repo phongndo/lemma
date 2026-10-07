@@ -23,7 +23,6 @@ export default defineUiPlugin({
     const [providers, setProviders] = createSignal<readonly ProviderInfo[]>([]);
     const [models, setModels] = createSignal<readonly ModelInfo[]>([]);
     const [loadedAt, setLoadedAt] = createSignal(false);
-    const [all, setAll] = createSignal<readonly ModelInfo[]>();
     const [preferred, setPreferred] = createSignal(load(MODEL_KEY));
     const [thinkingByModel, setThinkingByModel] = createSignal<Readonly<Record<string, ThinkingLevel>>>(loadJson(THINKING_KEY, {}));
     const [favorites, setFavorites] = createSignal<readonly string[]>(loadJson(FAVORITES_KEY, []));
@@ -74,14 +73,6 @@ export default defineUiPlugin({
         providersLoaded: loadedAt,
         models,
         modelsLoaded: loadedAt,
-        all,
-        loadAll: async () => {
-          try {
-            setAll(await host.llm.models());
-          } catch (error) {
-            notify.report(error, "Could not list models");
-          }
-        },
         configured,
         preferred,
         selected,

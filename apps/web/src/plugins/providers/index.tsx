@@ -88,8 +88,6 @@ function ProviderRow(props: { models: ModelsService; provider: ProviderInfo; log
   const busy = () => props.models.loggingIn() === props.provider.id;
   const locked = () => props.models.loggingIn() !== undefined;
   const methods = () => props.provider.auth;
-  const [showModels, setShowModels] = createSignal(false);
-  const models = () => (props.models.all() ?? []).filter((model) => model.provider === props.provider.id);
   const login = (type: AuthType) => props.login(props.provider, type);
   const logout = () => void props.models.logout(props.provider);
   /** Signing in first: it needs nothing pasted. */
@@ -99,15 +97,7 @@ function ProviderRow(props: { models: ModelsService; provider: ProviderInfo; log
       <ProviderLogo id={props.provider.id} name={props.provider.name} custom={props.provider.logo} />
       <span class="provider-info">
         <span class="provider-name">{props.provider.name}</span>
-        <span class="provider-desc">
-          {describeProvider(props.provider)}
-          <Show when={models().length > 0}>
-            {" · "}
-            <button class="link-button provider-models-toggle" aria-expanded={showModels()} onClick={() => setShowModels(!showModels())}>
-              {models().length} model{models().length === 1 ? "" : "s"}
-            </button>
-          </Show>
-        </span>
+        <span class="provider-desc">{describeProvider(props.provider)}</span>
       </span>
       <Show
         when={props.provider.configured}
@@ -177,26 +167,6 @@ function ProviderRow(props: { models: ModelsService; provider: ProviderInfo; log
             </>
           )}
         </Popover>
-      </Show>
-      <Show when={showModels()}>
-        <ul class="provider-models">
-          <For each={models()}>
-            {(model) => (
-              <li>
-                <span class="provider-model-ref">{model.ref}</span>
-                <span class="muted">
-                  {Math.round(model.contextWindow / 1000)}k ctx{model.reasoning ? " · thinking" : ""}
-                  {model.input.includes("image") ? " · images" : ""}
-                </span>
-                <Show when={model.cost.input > 0 || model.cost.output > 0}>
-                  <span class="muted">
-                    ${model.cost.input}/${model.cost.output} per M
-                  </span>
-                </Show>
-              </li>
-            )}
-          </For>
-        </ul>
       </Show>
     </div>
   );
@@ -462,11 +432,7 @@ export default defineUiPlugin({
 
     function Search() {
       let input!: HTMLInputElement;
-      // Every known model, usable or not, as `lemma models --all` lists them.
-      onMount(() => {
-        if (models.all() === undefined) void models.loadAll();
-        input.focus();
-      });
+      onMount(() => input.focus());
       /** Enter starts the first match's quickest way in. */
       const connectFirst = () => {
         const provider = groups()
