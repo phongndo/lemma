@@ -484,9 +484,21 @@ export const createRouteTable = <E extends RouteEntry = RouteEntry>(options: Rou
   let entries: readonly E[] = [];
   let known: readonly AnyRoute[] = options.known ?? [];
   let compiled = compileRoutes(entries, known);
-  let issues: readonly RouteIssue[] = [];
   const listeners = new Set<(fresh: readonly RouteIssue[]) => void>();
   const label: (entry: E) => string = options.label ?? ((entry) => entry.route.id);
+  /** Tells `onIssue`; a reporter that throws must not keep the navigators on the routes they had. */
+  const report = (fresh: readonly RouteIssue[]) => {
+    for (const issue of fresh) {
+      try {
+        options.onIssue?.(issue);
+      } catch (error) {
+        console.error("router: onIssue failed", error);
+      }
+    }
+  };
+  // The routes it starts with are checked as any it is given later.
+  let issues: readonly RouteIssue[] = findIssues(entries, known);
+  report(issues);
 
   /** Routes changed: compile them again, report new conflicts, and tell the navigators. */
   let destroyed = false;
@@ -495,14 +507,7 @@ export const createRouteTable = <E extends RouteEntry = RouteEntry>(options: Rou
     const before = new Set(issues.map((issue) => issue.message));
     issues = findIssues(entries, known);
     const fresh = issues.filter((issue) => !before.has(issue.message));
-    // A reporter that throws must not keep the navigators on the routes they had.
-    for (const issue of fresh) {
-      try {
-        options.onIssue?.(issue);
-      } catch (error) {
-        console.error("router: onIssue failed", error);
-      }
-    }
+    report(fresh);
     // A copy: a listener may unsubscribe while being called. One that throws does not keep the others from hearing.
     for (const listener of Array.from(listeners)) {
       try {

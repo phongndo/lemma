@@ -77,6 +77,16 @@ describe("navigators over one route table", () => {
     expect(a.inspect().issues).toHaveLength(1);
   });
 
+  test("the routes a table starts with are checked too", () => {
+    const reported: RouteIssue[] = [];
+    const table = createRouteTable<Entry>({ known: [Item, Twin], onIssue: (issue) => reported.push(issue) });
+    expect(reported.map((issue) => issue.kind)).toEqual(["same-addresses"]);
+    expect(table.issues()).toHaveLength(1);
+    // Reported once: a change that keeps the conflict does not report it again.
+    table.setEntries([{ route: Home, name: "home" }]);
+    expect(reported).toHaveLength(1);
+  });
+
   test("a reporter of conflicts that throws does not keep the navigators on the old routes", () => {
     const table = createRouteTable<Entry>({
       onIssue: () => {

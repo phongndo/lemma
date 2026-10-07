@@ -52,7 +52,8 @@ naming the route.
 `createRouter` is a route table and one navigator over it, which is what a page
 with one location needs. A page with several (tabs, split panes, a preview)
 makes them separately. `createRouteTable({ known, onIssue, label })` holds the
-routes and what is registered at them, compiled once per change. Each
+routes and what is registered at them, compiled once per change and checked
+for conflicts from the start (`onIssue` hears those among `known`, too). Each
 `createNavigator(table, { history, retain, onError, journal, settleTimeout })`
 has its own history, match, blockers, and journal:
 
