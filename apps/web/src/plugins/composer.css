@@ -156,6 +156,11 @@
   padding-left: 0;
 }
 
+/* The quick-pick label sits at the row's end; the suggestion's own hint stays beside its name. */
+.completion[data-quick-key]::after {
+  margin-left: auto;
+}
+
 .completion mark {
   background: transparent;
   color: var(--text);

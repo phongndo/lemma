@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { PluginStatus } from "@lemma/contracts";
-import { conflicts, formatBindings, keysFor, overridesFrom, parseBindings, withOverride } from "../src/model/keybindings.ts";
+import { bindingRows, conflicts, formatBindings, keysFor, overridesFrom, parseBindings, withOverride } from "../src/model/keybindings.ts";
 
 describe("keybindings", () => {
   it("uses the user's keys over an action's own, and an empty list unbinds", () => {
@@ -40,5 +40,25 @@ describe("keybindings", () => {
     expect(overridesFrom([plugin({ bindings: ["a = mod+k"] })])).toEqual({ a: ["mod+k"] });
     expect(overridesFrom([plugin({})])).toEqual({});
     expect(overridesFrom([])).toEqual({});
+  });
+
+  it("lists a row per action and key by name, and finds actions without keys only when searching", () => {
+    const actions = [
+      { id: "shell.sidebar", title: "Toggle sidebar", category: "View", keys: ["mod+b", "mod+\\"] },
+      { id: "palette.open", title: "Command palette", keys: "mod+k", keywords: ["commands"] },
+      { id: "host.reload", title: "Reload Lemma" },
+    ];
+    const rows = (query: string, overrides = {}) =>
+      bindingRows(actions, overrides, query, (key) => key.toUpperCase()).map((row) => `${row.action.id} ${row.key ?? "-"}`);
+    expect(rows("")).toEqual(["palette.open mod+k", "shell.sidebar mod+b", "shell.sidebar mod+\\"]);
+    expect(rows("MOD+B")).toEqual(["shell.sidebar mod+b"]);
+    expect(rows("view b")).toEqual(["shell.sidebar mod+b", "shell.sidebar mod+\\"]);
+    expect(rows("reload")).toEqual(["host.reload -"]);
+    expect(rows("", { "host.reload": ["mod+r"], "palette.open": [] })).toEqual(["host.reload mod+r", "shell.sidebar mod+b", "shell.sidebar mod+\\"]);
+  });
+
+  it("lists a key the config repeats once", () => {
+    const rows = bindingRows([{ id: "a", title: "A" }], { a: ["mod+k", "mod+k"] }, "", (key) => key);
+    expect(rows.map((row) => row.key)).toEqual(["mod+k"]);
   });
 });
