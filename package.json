@@ -8,7 +8,7 @@
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
-    "test": "pnpm build && pnpm -r --no-sort --workspace-concurrency=4 test",
+    "test": "pnpm build && vitest run",
     "ci": "pnpm check && pnpm test",
     "stress": "node scripts/stress.ts",
     "start": "pnpm --filter @lemma/web build && pnpm --filter @lemma/host start",
@@ -35,7 +35,8 @@
     "oxfmt": "0.70.0",
     "oxlint": "1.85.0",
     "playwright": "1.63.0",
-    "typescript": "7.0.2"
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
   },
   "engines": {
     "node": ">=24",
