@@ -794,7 +794,14 @@ export const createMockHost = (): Host => {
         if (!s) throw notFound(sessionId);
         return s.events.filter((e) => e.seq > (after ?? 0));
       },
-      checkout: async (sessionId) => sessions.get(sessionId)!.info,
+      // Points the leaf at the event, as the host does: the next append branches from there.
+      checkout: async (sessionId, eventId) => {
+        const session = sessions.get(sessionId);
+        if (!session) throw notFound(sessionId);
+        session.info = { ...session.info, leaf: eventId };
+        emit({ type: "session-changed", info: session.info });
+        return session.info;
+      },
       setTitle: async (sessionId, title) => {
         append(sessionId, { type: "title", title });
         return sessions.get(sessionId)!.info;
