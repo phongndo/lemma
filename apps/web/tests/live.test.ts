@@ -4,6 +4,7 @@ import {
   appendOutput,
   applyDelta,
   beginJoin,
+  draftEntries,
   dropOutput,
   emptyLive,
   endTurn,
@@ -69,6 +70,24 @@ describe("live drafts", () => {
 
   it("parses partial arguments leniently", () => {
     expect(parseDraftArgs({ kind: "tool", id: "", name: "bash", args: '{"command":' })).toBeUndefined();
+  });
+});
+
+describe("draftEntries", () => {
+  it("joins adjacent thoughts and makes only the block being written live", () => {
+    const s = feed([
+      { type: "thinking-delta", index: 0, delta: "**Looking**" },
+      { type: "thinking-delta", index: 1, delta: "**Planning**" },
+      { type: "text-delta", index: 2, delta: "Here" },
+    ]);
+    expect(draftEntries(s.drafts[0]!)).toEqual([
+      { index: 0, block: { kind: "thinking", text: "**Looking**\n\n**Planning**" }, live: false },
+      { index: 2, block: { kind: "text", text: "Here" }, live: true },
+    ]);
+    const thinking = feed([{ type: "thinking-delta", index: 0, delta: "hm" }]);
+    expect(draftEntries(thinking.drafts[0]!).map((entry) => entry.live)).toEqual([true]);
+    const finished = feed([{ type: "done", message: assistant([]) }], thinking);
+    expect(draftEntries(finished.drafts[0]!).map((entry) => entry.live)).toEqual([false]);
   });
 });
 

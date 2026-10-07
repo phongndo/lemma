@@ -246,6 +246,34 @@ export const joinLive = (state: LiveState, view: AgentView | undefined, log: rea
   return reconcileLive(next, log);
 };
 
+/** A draft's block as shown: where it starts in the stream, and whether it is the one being written now. */
+export interface DraftEntry {
+  readonly index: number;
+  readonly block: DraftBlock;
+  readonly live: boolean;
+}
+
+/**
+ * A draft's blocks as shown: adjacent thoughts joined into one, as the logged
+ * message shows them, and only the last block live while the step streams.
+ */
+export const draftEntries = (draft: StepDraft): DraftEntry[] => {
+  const entries: { index: number; block: DraftBlock; live: boolean }[] = [];
+  draft.blocks.forEach((block, index) => {
+    if (block === undefined) return;
+    const last = entries.at(-1);
+    if (block.kind === "thinking" && last?.block.kind === "thinking") {
+      const text = [last.block.text.trim(), block.text.trim()].filter(Boolean).join("\n\n");
+      last.block = { kind: "thinking", text };
+      return;
+    }
+    entries.push({ index, block, live: false });
+  });
+  const last = entries.at(-1);
+  if (last !== undefined && !draft.finished) last.live = true;
+  return entries;
+};
+
 /** Best-effort parse of streamed tool arguments (partial JSON while streaming). */
 export const parseDraftArgs = (block: Extract<DraftBlock, { kind: "tool" }>): Record<string, unknown> | undefined => {
   if (block.call !== undefined) return block.call.arguments;

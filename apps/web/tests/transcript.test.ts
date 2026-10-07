@@ -6,6 +6,26 @@ import { assistant, branch, toolResult, transcriptOf, usage, user } from "./fixt
 const call = (id: string) => ({ type: "toolCall" as const, id, name: "bash", arguments: { command: "ls" } });
 
 describe("transcript", () => {
+  it("joins a message's adjacent thoughts into one block, keyed where the first starts", () => {
+    const t = transcriptOf(
+      branch({ type: "turn-start", turnId: "t1" }, user("hi", "t1"), {
+        type: "message",
+        turnId: "t1",
+        stepId: "s1",
+        message: assistant([
+          { type: "thinking", thinking: "**One**\n\na" },
+          { type: "thinking", thinking: "**Two**\n\nb" },
+          { type: "text", text: "ok" },
+          { type: "thinking", thinking: "three" },
+        ]),
+      }),
+    );
+    const blocks = (t.turns[0]!.items[1] as AssistantItem).blocks;
+    expect(blocks.map((block) => block.kind)).toEqual(["thinking", "text", "thinking"]);
+    expect(blocks[0]).toMatchObject({ index: 0, text: "**One**\n\na\n\n**Two**\n\nb", redacted: false });
+    expect(blocks[2]).toMatchObject({ index: 3, text: "three" });
+  });
+
   it("groups a turn and pairs tool calls with results", () => {
     const t = transcriptOf(
       branch(

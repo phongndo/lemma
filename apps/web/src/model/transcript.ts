@@ -21,7 +21,14 @@ export interface ToolResultView {
 
 export type Block =
   | { readonly kind: "text"; readonly key: string; readonly text: string }
-  | { readonly kind: "thinking"; readonly key: string; readonly text: string; readonly redacted: boolean }
+  | {
+      readonly kind: "thinking";
+      readonly key: string;
+      /** Where in the message's content it starts: one thought may join several adjacent parts. */
+      readonly index: number;
+      readonly text: string;
+      readonly redacted: boolean;
+    }
   | { readonly kind: "tool"; readonly key: string; readonly call: ToolCall; readonly result?: ToolResultView };
 
 export interface UserItem {
@@ -152,22 +159,51 @@ const newTurn = (key: string, at: number, turnId?: string): MutableTurn => ({
   hasOutput: false,
 });
 
-const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, results: ReadonlyMap<string, ToolResultView>): Block[] =>
-  message.content.map((part, index): Block => {
+/**
+ * A message's content as blocks. Adjacent thinking parts read as one thought:
+ * a model may return its reasoning as several items in a row (each kept in
+ * the log, as each is replayed on its own), which say one thing to a reader.
+ */
+const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, results: ReadonlyMap<string, ToolResultView>): Block[] => {
+  const blocks: Block[] = [];
+  const content = message.content;
+  for (let index = 0; index < content.length; index++) {
+    const part = content[index]!;
     const key = `${eventId}:${index}`;
     switch (part.type) {
       case "text":
-        return cache.get(key, "", () => ({ kind: "text", key, text: part.text }));
-      case "thinking":
-        return cache.get(key, "", () => ({ kind: "thinking", key, text: part.thinking, redacted: part.redacted === true }));
+        blocks.push(cache.get(key, "", () => ({ kind: "text", key, text: part.text })));
+        break;
+      case "thinking": {
+        let end = index + 1;
+        while (content[end]?.type === "thinking") end++;
+        const run = content.slice(index, end) as Extract<AssistantMessage["content"][number], { type: "thinking" }>[];
+        blocks.push(
+          cache.get(key, String(run.length), () => ({
+            kind: "thinking",
+            key,
+            index,
+            text: run
+              .map((thought) => thought.thinking.trim())
+              .filter(Boolean)
+              .join("\n\n"),
+            redacted: run.every((thought) => thought.redacted === true),
+          })),
+        );
+        index = end - 1;
+        break;
+      }
       case "toolCall": {
         const result = results.get(part.id);
-        return cache.get(key, result?.eventId ?? "", () =>
-          result === undefined ? { kind: "tool", key, call: part } : { kind: "tool", key, call: part, result },
+        blocks.push(
+          cache.get(key, result?.eventId ?? "", () => (result === undefined ? { kind: "tool", key, call: part } : { kind: "tool", key, call: part, result })),
         );
+        break;
       }
     }
-  });
+  }
+  return blocks;
+};
 
 /**
  * Projects a root-to-leaf branch (see `branchOf`). Pass a projector's cache
