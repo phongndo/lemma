@@ -599,6 +599,26 @@ export const createMockHost = (): Host => {
 
     const s2 = create(`${HOME}/code/website`, t0 - 86400_000 * 2).id;
     append(s2, { type: "title", title: "Landing page copy" }, t0 - 86400_000 * 2, true);
+    // A turn whose model call failed, with the provider's response body in its message.
+    t = t0 - 86400_000 * 2;
+    const oauthError =
+      'OAuth refresh failed for openai: OpenAI OAuth token request failed (400): { "error": "invalid_grant", "error_reason": "refresh_token_invalidated", "error_description": "The refresh token has been invalidated. A fresh sign-in is required." }. Run /login openai to sign in again.';
+    append(s2, { type: "turn-start", turnId: "t1" }, at(), true);
+    append(
+      s2,
+      { type: "message", turnId: "t1", message: { role: "user", timestamp: t, content: [{ type: "text", text: "Tighten the hero copy." }] } },
+      at(),
+      true,
+    );
+    append(s2, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
+    append(
+      s2,
+      { type: "message", turnId: "t1", stepId: "p1", timing: { startedAt: t, endedAt: at(363) }, message: assistant([], usage(0, 0), "error", oauthError) },
+      t,
+      true,
+    );
+    append(s2, { type: "step-end", turnId: "t1", stepId: "p1" }, at(10), true);
+    append(s2, { type: "turn-end", turnId: "t1", reason: "error", error: oauthError }, at(10), true);
     create(CWD, t0 - 86400_000);
   }
 

@@ -7,6 +7,7 @@ import { answerText, entryKey, foldRunning, foldTurn } from "../../model/fold.ts
 import type { TurnEntry } from "../../model/fold.ts";
 import { draftEntries, parseDraftArgs } from "../../model/live.ts";
 import type { DraftBlock, StepDraft } from "../../model/live.ts";
+import { errorView } from "../../model/error.ts";
 import { thoughtHeadline } from "../../model/thought.ts";
 import { workEntries } from "../../model/work.ts";
 import type { WorkEntry, WorkRow } from "../../model/work.ts";
@@ -148,14 +149,27 @@ function Blocks(props: { chat: Chat; blocks: readonly Block[]; scope: string; tu
   return <For each={props.blocks}>{(block) => <BlockView chat={props.chat} block={block} scope={props.scope} turnEnded={props.turnEnded} />}</For>;
 }
 
+/** An error in the transcript, read for a person (see `errorView`), with a button that copies what it shows. */
+function ErrorNote(props: { message: string }) {
+  const view = createMemo(() => errorView(props.message));
+  return (
+    <div class="callout callout-error chat-error">
+      <AlertIcon />
+      <div class="chat-error-text">
+        <p class="chat-error-summary">{view().summary}</p>
+        <Show when={view().description}>{(description) => <p>{description()}</p>}</Show>
+        <Show when={view().hint}>{(hint) => <p>{hint()}</p>}</Show>
+      </div>
+      <CopyButton text={[view().summary, view().description, view().hint].filter((line) => line !== undefined).join("\n")} label="Copy error" />
+    </div>
+  );
+}
+
 function StopNote(props: { item: AssistantItem }) {
   return (
     <Switch>
       <Match when={props.item.message.stopReason === "error"}>
-        <div class="callout callout-error">
-          <AlertIcon />
-          <span>{props.item.message.errorMessage ?? "The model request failed."}</span>
-        </div>
+        <ErrorNote message={props.item.message.errorMessage ?? "The model request failed."} />
       </Match>
       <Match when={props.item.message.stopReason === "aborted"}>
         <p class="note">Stopped</p>
@@ -418,10 +432,7 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
         </Keyed>
       </Show>
       <Show when={props.turn.end?.reason === "error" && props.turn.end.error !== lastError() && props.turn.end.error}>
-        <div class="callout callout-error">
-          <AlertIcon />
-          <span>{props.turn.end!.error}</span>
-        </div>
+        {(error) => <ErrorNote message={error()} />}
       </Show>
       <Show when={ended()}>
         <ChatTurnFooter turn={props.turn} answer={answerText(props.turn)} />
@@ -460,12 +471,7 @@ function Draft(props: { chat: Chat; draft: StepDraft }) {
       <Index each={draftEntries(props.draft)}>
         {(entry) => <DraftBlockView chat={props.chat} block={entry().block} stepId={props.draft.stepId} index={entry().index} live={entry().live} />}
       </Index>
-      <Show when={props.draft.error}>
-        <div class="callout callout-error">
-          <AlertIcon />
-          <span>{props.draft.error}</span>
-        </div>
-      </Show>
+      <Show when={props.draft.error}>{(error) => <ErrorNote message={error()} />}</Show>
     </div>
   );
 }
