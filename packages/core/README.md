@@ -108,12 +108,16 @@ export default definePlugin({
   `AsyncLocalStorage` (Node.js, found without importing it, so browser bundles
   are unaffected; `followsAwait` says so) this follows `await` and `.then`;
   elsewhere it holds until the first one, and later calls run in the plugin's
-  own context, stopping when it stops.
+  own context, stopping when it stops. What a plugin registers (a handler, an
+  observer, an item, a background task) is its own, not the work's that was
+  running when it registered: a handler registered during one operation does
+  not keep that operation's references for the next.
 - **`setup`** may be `async`, and receives the `PluginContext` operations as
   promise-based functions (`on`, `add`, `observe`, `publish`, `invoke`,
   `items`, `changes`, `background`, `fault`, `run`) plus `config`, `signal`, and
   `onCleanup`. The plugin is active once setup has returned and every call it
-  made has settled (calls a background task makes are not setup's). A call
+  made before it returned has settled (calls a background task or a loop
+  makes later are not setup's). A call
   that failed, which setup neither awaited nor caught, fails the activation, as
   does a throw; neither is ever an unhandled rejection. Start long-running work
   with `background`, not by leaving a promise behind.
@@ -122,21 +126,27 @@ export default definePlugin({
   place, on the caller's fiber: a pass-through costs about 1.4 times an Effect
   handler (`bench/budgets.ts`). Awaiting `next` costs a promise per handler. A
   handler that declares a third parameter receives a signal, aborted if the
-  operation is interrupted; calls the handler made stop then too.
-- **Errors.** A throw of an `Error` is a defect; `throw fail(error)` (or
-  returning an Effect) is a typed failure, and so is a thrown value that is not
-  an object (a string), which carries no stack and so was meant.
-- **Streams** read as async iterables end when the work that started reading
-  them is interrupted, or the plugin stops.
+  operation is interrupted; calls the handler made stop then too, as do calls
+  it makes later (a microtask it queued).
+- **Errors.** A throw nobody marked is a defect; `throw fail(error)` (or
+  returning an Effect) is a typed failure. A service call's failure is marked
+  already, so rethrowing it keeps it one. A value that is not an object (a
+  string) cannot carry a mark, so it is marked for the operation it was thrown
+  in: rethrown there it is that failure, and elsewhere a defect, so an Effect
+  typed as unable to fail never fails with a stray string.
+- **Streams** read as async iterables fail as calls do, with their typed error.
+  They end when the work that started reading them is interrupted, or the
+  plugin stops; what the stream had buffered then is not read.
 - **Stopping.** When the plugin stops, its signal aborts, then its cleanups run
   (`onCleanup`, last first, each even if another throws). Its services still
   work for them: what a cleanup calls runs until cleanup is over, however long
-  it takes within the dispose deadline. Then its services refuse calls with
-  `PluginStopped`, so a timer or promise it left behind cannot act through them:
-  a method that has returned Effects rejects (a refusal nobody awaits is logged
-  as a warning), any other throws where it is called, `items` throws, and
-  `publish` drops the event. A setup that fails aborts its signal before its
-  cleanups run.
+  it takes within the dispose deadline, and what it acquires (a scoped
+  resource) is released only once every cleanup is done. Then its services
+  refuse calls with `PluginStopped`, so a timer or promise it left behind
+  cannot act through them: a method that has returned Effects rejects (a
+  refusal nobody awaits is logged as a warning), any other throws where it is
+  called, `items` throws, and `publish` drops the event. A setup that fails
+  aborts its signal before its cleanups run.
 - **Unawaited failures.** A call that fails with nothing awaiting or chaining its
   promise is reported as the plugin's fault (`unawaited <operation>`), not as an
   unhandled rejection that would end a Node.js process.

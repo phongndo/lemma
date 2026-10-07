@@ -14,7 +14,7 @@ import type { Capabilities, Plugin, PluginManifest, Provided } from "../plugin.t
 import { Registries } from "../registries.ts";
 import type { ContributeOptions, Contribution, Registry } from "../registries.ts";
 import { makeBridge } from "./bridge.ts";
-import type { Bridge } from "./bridge.ts";
+import type { Bridge, RunOptions } from "./bridge.ts";
 import { followsAwait, within } from "../internal/current.ts";
 import type { Current } from "../internal/current.ts";
 import { plainView } from "./view.ts";
@@ -145,6 +145,14 @@ export const asEffect =
   (...args: Args): Effect.Effect<A, E> =>
     awaitable(() => fn(...args));
 
+/**
+ * What a plugin registers (a handler, an observer, an item, a background
+ * task) is the plugin's, not the work's that was running when it registered:
+ * it runs in the plugin's own context, so it never keeps that work's
+ * references (who asked, which trace) for later callers.
+ */
+const BELONGS_TO_PLUGIN: RunOptions = { context: "plugin" };
+
 /** A hook's `next` for promise-based code: awaited, it runs the rest of the chain; returned as it is, the chain runs in place. */
 class PlainNext<O> implements PromiseLike<O> {
   readonly [EffectOf]: Effect.Effect<O, unknown>;
@@ -159,7 +167,8 @@ class PlainNext<O> implements PromiseLike<O> {
     this.operation = operation;
   }
   private promise(): Promise<O> {
-    return (this.started ??= within(this.current, () => this.bridge.run(this[EffectOf], this.operation)));
+    // The rest of the chain is the caller's: it runs in the operation's context, not as this handler's plugin.
+    return (this.started ??= within(this.current, () => this.bridge.run(this[EffectOf], this.operation, { own: false })));
   }
   // Awaiting `next(input)` is how a promise-based handler runs the rest of the chain: it must be a thenable.
   // oxlint-disable-next-line unicorn/no-thenable
@@ -246,7 +255,8 @@ export function definePlugin<
                 }
               }
             } finally {
-              bridge.endCleanup();
+              // What cleanups acquired is released once they are all done.
+              await bridge.endCleanup().catch((error: unknown) => void errors.push(error));
             }
             if (errors.length === 1) throw errors[0];
             if (errors.length > 1) throw new AggregateError(errors, `${errors.length} cleanups of "${owner.id}" failed`);
@@ -317,16 +327,16 @@ const context = (
           }) as never,
         options,
       );
-      void bridge.run(register, `on ${hook.name}`);
+      void bridge.run(register, `on ${hook.name}`, BELONGS_TO_PLUGIN);
     },
     add: (registry, item, options) => {
-      const added = bridge.run(owner.add(registry, item, options), `add ${registry.name}`);
+      const added = bridge.run(owner.add(registry, item, options), `add ${registry.name}`, BELONGS_TO_PLUGIN);
       let removed = false;
       return () => {
         if (removed) return;
         removed = true;
         void added.then(
-          (remove) => (bridge.stopped() ? undefined : bridge.run(remove, `remove ${registry.name}`)),
+          (remove) => (bridge.stopped() ? undefined : bridge.run(remove, `remove ${registry.name}`, BELONGS_TO_PLUGIN)),
           () => undefined,
         );
       };
@@ -338,7 +348,7 @@ const context = (
         (payload) => inContext((invocation) => observer(payload, (wantsSignal ? invocation.signal() : undefined) as AbortSignal)),
         options,
       );
-      void bridge.run(register, `observe ${event.name}`);
+      void bridge.run(register, `observe ${event.name}`, BELONGS_TO_PLUGIN);
     },
     // A stopped plugin's news is dropped: publishing never fails.
     publish: (event, payload) => void (bridge.stopped() ? undefined : Effect.runFork(events.publish(event, payload))),
@@ -362,6 +372,7 @@ const context = (
           options,
         ),
         `background ${name}`,
+        BELONGS_TO_PLUGIN,
       ),
     fault: (operation, error, options) => void Effect.runFork(owner.fault(operation, causeOf(error), options)),
     run: (effect) => bridge.run(effect, "run"),

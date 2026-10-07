@@ -1,5 +1,6 @@
-import { Cause, Context, Effect, Exit, Option, Stream } from "effect";
+import { Cause, Context, Effect, Exit, Option, Scope, Stream } from "effect";
 import { fail } from "../awaitable.ts";
+import type { Invocation } from "../awaitable.ts";
 import { PluginStopped } from "../errors.ts";
 import { current } from "../internal/current.ts";
 import type { SetupCalls } from "../internal/current.ts";
@@ -63,8 +64,12 @@ export interface Bridge {
    * rethrowing it keeps it a failure), its defect, `PluginStopped` when the
    * plugin stopped it, or the invocation's abort reason.
    */
-  readonly run: <A>(effect: Effect.Effect<A, unknown, any>, operation: string) => Promise<A>;
-  /** A stream as an async iterable that ends when the invocation that started it is interrupted or the plugin stops. */
+  readonly run: <A>(effect: Effect.Effect<A, unknown, any>, operation: string, how?: RunOptions) => Promise<A>;
+  /**
+   * A stream as an async iterable that ends when the invocation that started
+   * it is interrupted or the plugin stops (what it had buffered then is not
+   * read); its failure rejects as `run`'s do.
+   */
   readonly iterate: <A>(stream: Stream.Stream<A, unknown, any>, operation: string) => AsyncIterable<A>;
   /** A call refused because the plugin stopped. */
   readonly refuse: (operation: string) => Promise<never>;
@@ -74,44 +79,84 @@ export interface Bridge {
   readonly endSetup: (setup: SetupCalls) => Promise<void>;
   /**
    * The plugin's signal has aborted and its cleanups run: calls made now get
-   * a lifetime of their own, so cleanup can still save through a service.
+   * a lifetime and a scope of their own, so cleanup can still save through a
+   * service, and what it acquires lasts until cleanup is done.
    */
   readonly beginCleanup: () => void;
-  /** Cleanup is done: what it left running stops, and calls are refused from now on. */
-  readonly endCleanup: () => void;
+  /**
+   * Cleanup is done: what it left running stops, what it acquired is
+   * released, and calls are refused from now on. Rejects if releasing fails.
+   */
+  readonly endCleanup: () => Promise<void>;
+}
+
+/** How `run` runs one call. */
+export interface RunOptions {
+  /**
+   * `"plugin"`: in the plugin's own context and lifetime, whatever invocation
+   * is current, for what belongs to the plugin rather than to the work that
+   * made it (a handler it registers must not keep that work's references).
+   */
+  readonly context?: "current" | "plugin";
+  /** False: without the plugin's own `PluginContext` and `Scope` (the rest of a hook's chain, which is the caller's). */
+  readonly own?: boolean;
 }
 
 export const makeBridge = (options: BridgeOptions): Bridge => {
   let stopped = false;
-  /** While cleanups run: the lifetime of the calls they make. */
-  let cleanup: AbortController | undefined;
+  /** While cleanups run: the lifetime of the calls they make, and the scope what they acquire belongs to. */
+  let cleanup: { readonly controller: AbortController; readonly scope: Scope.Closeable } | undefined;
   /** Failures `endSetup` reported as the activation's own; not reported again as unawaited. */
   const claimed = new WeakSet<Promise<unknown>>();
 
-  /** `context` as this plugin's: its own `PluginContext` and `Scope`, as overlays where they differ. */
+  /**
+   * `context` as this plugin's: its own `PluginContext` and `Scope`, as
+   * overlays where they differ. While cleanups run, the scope is cleanup's
+   * own: the plugin's is closing, so what a cleanup acquires would be
+   * released at once.
+   */
   const owned = (context: Context.Context<never>): Context.Context<never> => {
     let result = context;
-    for (const { key, value } of options.own) {
+    for (const { key, value: own } of options.own) {
+      const value = cleanup !== undefined && key.key === Scope.Scope.key ? cleanup.scope : own;
       if (Context.getOrUndefined(result, key) !== value) result = Context.addUnsafe(result, key.key, value) as Context.Context<never>;
     }
     return result;
   };
 
+  interface Lifetime {
+    readonly context: Context.Context<never>;
+    readonly signal: AbortSignal;
+    readonly setup: SetupCalls | undefined;
+    readonly invocation: Invocation | undefined;
+  }
   /** What a call lives within: the cleanup's lifetime while it runs, the plugin's otherwise, and the invocation's when there is one. */
-  const lifetime = (): { readonly context: Context.Context<never>; readonly signal: AbortSignal; readonly setup: SetupCalls | undefined } => {
+  const lifetime = (how?: RunOptions): Lifetime => {
     const now = current();
-    const plugin = cleanup?.signal ?? options.signal;
-    const invocation = now?.invocation?.signal();
+    const plugin = cleanup?.controller.signal ?? options.signal;
+    const setup = now?.setup?.open === true ? now.setup : undefined;
+    if (how?.context === "plugin") return { context: owned(options.base), signal: plugin, setup, invocation: undefined };
+    const invocation = now?.invocation;
+    const its = invocation?.signal();
+    const context = now?.context ?? options.base;
     return {
-      context: owned(now?.context ?? options.base),
-      signal: invocation === undefined ? plugin : AbortSignal.any([plugin, invocation]),
-      setup: now?.setup?.open === true ? now.setup : undefined,
+      context: how?.own === false ? context : owned(context),
+      signal: its === undefined ? plugin : AbortSignal.any([plugin, its]),
+      setup,
+      invocation,
     };
   };
 
-  const thrown = (cause: Cause.Cause<unknown>, signal: AbortSignal, operation: string): unknown => {
+  /** A failure as promise-based code sees it: marked as expected, so rethrown in the same invocation it stays one. */
+  const marked = (error: unknown, invocation: Invocation | undefined): unknown => {
+    if ((typeof error === "object" && error !== null) || typeof error === "function") return fail(error);
+    invocation?.markFailure(error);
+    return error;
+  };
+
+  const thrown = (cause: Cause.Cause<unknown>, signal: AbortSignal, operation: string, invocation: Invocation | undefined): unknown => {
     const failure = Cause.findErrorOption(cause);
-    if (Option.isSome(failure)) return fail(failure.value);
+    if (Option.isSome(failure)) return marked(failure.value, invocation);
     if (Cause.hasInterruptsOnly(cause)) {
       if (stopped || (cleanup === undefined && options.signal.aborted)) return new PluginStopped({ pluginId: options.pluginId, operation });
       return signal.aborted ? signal.reason : new Error(`${operation} was interrupted`);
@@ -122,14 +167,15 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
   /**
    * Every call's failure is handled the moment it exists, so none is an
    * unhandled rejection. One nobody awaited is reported as the plugin's fault
-   * once the turn that could have awaited it is over, unless its setup is
-   * still running, which waits for it and fails the activation instead.
+   * once the turn that could have awaited it is over, unless setup made it:
+   * setup waits for its calls and fails the activation instead.
    */
   const watch = (promise: Watched<unknown>, operation: string, setup: SetupCalls | undefined, causeOf: (error: unknown) => Cause.Cause<unknown>) => {
     setup?.calls.push(promise);
     quietly(promise, (error) => {
       setTimeout(() => {
-        if (promise.observed || claimed.has(promise) || setup?.open === true) return;
+        // A call setup made is setup's to judge: its activation fails on one nobody heard.
+        if (promise.observed || claimed.has(promise) || setup !== undefined) return;
         options.report(`unawaited ${operation}`, causeOf(error));
       }, 0);
     });
@@ -150,24 +196,28 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
   return {
     pluginId: options.pluginId,
     stopped: () => stopped,
-    run: <A>(effect: Effect.Effect<A, unknown, any>, operation: string): Promise<A> => {
+    run: <A>(effect: Effect.Effect<A, unknown, any>, operation: string, how?: RunOptions): Promise<A> => {
       if (stopped) return refuse(operation);
-      const { context, signal, setup } = lifetime();
+      const { context, signal, setup, invocation } = lifetime(how);
+      // Made after its handler returned, it stops if the operation's fiber is interrupted; until it ends.
+      const release = invocation?.follow();
       let failed: Cause.Cause<unknown> | undefined;
       const promise = new Watched<A>((resolve, reject) => {
         Effect.runPromiseExitWith(context)(effect as Effect.Effect<A, unknown, never>, { signal }).then((exit) => {
+          release?.();
           if (Exit.isSuccess(exit)) return resolve(exit.value as A);
           failed = exit.cause;
-          reject(thrown(exit.cause, signal, operation));
+          reject(thrown(exit.cause, signal, operation, invocation));
         });
       });
       watch(promise as Watched<unknown>, operation, setup, (error) => failed ?? Cause.die(error));
       return promise;
     },
     iterate: <A>(stream: Stream.Stream<A, unknown, any>, operation: string): AsyncIterable<A> => ({
-      [Symbol.asyncIterator]: () => {
+      [Symbol.asyncIterator]: (): AsyncIterator<A> => {
         if (stopped) return { next: () => refuse(operation) };
-        const { context, signal } = lifetime();
+        const { context, signal, invocation } = lifetime();
+        const release = invocation?.follow();
         // Ends the stream (done, not an error) when the signal aborts: one listener while it runs, removed when it ends.
         const aborted = Effect.callback<void>((resume) => {
           if (signal.aborted) return resume(Effect.void);
@@ -175,44 +225,58 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
           signal.addEventListener("abort", onAbort, { once: true });
           return Effect.sync(() => signal.removeEventListener("abort", onAbort));
         });
-        return Stream.toAsyncIterableWith((stream as Stream.Stream<A, unknown, never>).pipe(Stream.interruptWhen(aborted)), context)[Symbol.asyncIterator]();
+        const iterator = Stream.toAsyncIterableWith(
+          (stream as Stream.Stream<A, unknown, never>).pipe(
+            // Its failure is the stream's typed error, as a call's is: rethrown in the same invocation, it stays one.
+            Stream.mapError((error) => marked(error, invocation)),
+            Stream.interruptWhen(aborted),
+            Stream.ensuring(Effect.sync(() => release?.())),
+          ),
+          context,
+        )[Symbol.asyncIterator]();
+        const done = async (): Promise<IteratorResult<A>> => {
+          await iterator.return?.();
+          return { done: true, value: undefined };
+        };
+        // What the stream had buffered when the signal aborted is not read: the iterable ends there.
+        return { next: () => (signal.aborted ? done() : iterator.next()), return: done };
       },
     }),
     refuse,
     startSetup: () => ({ open: true, calls: [] }),
     endSetup: async (setup) => {
       // Waited for without marking them observed: a failure setup awaited or caught was its to handle; one it left
-      // behind fails the activation. Calls its work makes while it waits are waited for too.
-      const unheard: { readonly call: Promise<unknown>; readonly error: unknown }[] = [];
-      for (let waited = 0; waited < setup.calls.length;) {
-        const batch = setup.calls.slice(waited);
-        waited = setup.calls.length;
-        await Promise.all(
-          batch.map(
-            (call) =>
-              new Promise<void>((resolve) =>
-                Promise.prototype.then.call(
-                  call,
-                  () => resolve(),
-                  (error: unknown) => {
-                    if (!(call as Watched<unknown>).observed) unheard.push({ call, error });
-                    resolve();
-                  },
-                ),
-              ),
-          ),
-        );
-      }
+      // behind fails the activation. What setup made before it returned is waited for; a call made after (by a timer
+      // or loop it started) is ordinary, so such work cannot hold the activation open.
       setup.open = false;
+      const unheard: { readonly call: Promise<unknown>; readonly error: unknown }[] = [];
+      await Promise.all(
+        setup.calls.map(
+          (call) =>
+            new Promise<void>((resolve) =>
+              Promise.prototype.then.call(
+                call,
+                () => resolve(),
+                (error: unknown) => {
+                  if (!(call as Watched<unknown>).observed) unheard.push({ call, error });
+                  resolve();
+                },
+              ),
+            ),
+        ),
+      );
       for (const { call } of unheard) claimed.add(call);
       if (unheard[0] !== undefined) throw unheard[0].error;
     },
     beginCleanup: () => {
-      cleanup = new AbortController();
+      cleanup = { controller: new AbortController(), scope: Scope.makeUnsafe() };
     },
-    endCleanup: () => {
+    endCleanup: async () => {
       stopped = true;
-      cleanup?.abort(new PluginStopped({ pluginId: options.pluginId, operation: "cleanup" }));
+      if (cleanup === undefined) return;
+      cleanup.controller.abort(new PluginStopped({ pluginId: options.pluginId, operation: "cleanup" }));
+      const exit = await Effect.runPromiseExit(Scope.close(cleanup.scope, Exit.void));
+      if (Exit.isFailure(exit)) throw Cause.squash(exit.cause);
     },
   };
 };

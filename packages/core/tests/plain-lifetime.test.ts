@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import { Cause, Context, Effect, Exit, Fiber, Option, Stream } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
 import { definePlugin as defineEffectPlugin, Hook, Hooks, PluginContext, PluginFault, PluginStopped } from "../src/index.ts";
-import { awaitable, definePlugin, followsAwait } from "../src/plain/index.ts";
+import { awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
 
 class NotFound extends Error {
@@ -15,6 +15,8 @@ interface StoreShape {
   readonly wait: () => Effect.Effect<never>;
   readonly local: (key: string) => string;
   readonly ticks: Stream.Stream<number>;
+  readonly few: () => Stream.Stream<number>;
+  readonly broken: () => Stream.Stream<number, NotFound>;
 }
 class Store extends Context.Service<Store, StoreShape>()("test/LifetimeStore") {}
 
@@ -27,6 +29,8 @@ const makeStore = () => {
     wait: () => Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void events.push("wait interrupted")))),
     local: (key) => `local ${key}`,
     ticks: Stream.iterate(0, (n) => n + 1).pipe(Stream.ensuring(Effect.sync(() => void events.push("ticks ended")))),
+    few: () => Stream.make(1, 2, 3),
+    broken: () => Stream.fail(new NotFound("stream")),
   };
   return { store, data, events };
 };
@@ -94,6 +98,26 @@ describe("setup", () => {
     await tested.close();
   });
 
+  test("setup does not wait for calls a loop it started keeps making", async () => {
+    const { store } = makeStore();
+    let looping = true;
+    const looper = definePlugin({
+      id: "looper",
+      requires: { store: Store },
+      deadlines: { activate: "1 second" },
+      setup: async ({ store }, { onCleanup }) => {
+        const loop = async () => {
+          while (looping) await store.slowPut("tick", "1");
+        };
+        void loop();
+        onCleanup(() => void (looping = false));
+      },
+    });
+    const tested = await testPlugin(looper, { provide: [[Store, store]] });
+    expect((await tested.inspect()).plugins.find((plugin) => plugin.id === "looper")?.state).toBe("active");
+    await tested.close();
+  });
+
   test("a failed setup aborts its signal before its cleanups run, so one waiting on it ends", async () => {
     let sawAborted: boolean | undefined;
     const failing = definePlugin({
@@ -136,6 +160,37 @@ describe("cleanup", () => {
     await tested.close();
     expect(data.get("saved")).toBe("yes");
   });
+
+  test("what a cleanup acquires lasts until every cleanup is done", async () => {
+    const order: string[] = [];
+    class Files extends Context.Service<Files, { readonly open: () => Effect.Effect<{ readonly write: () => boolean }, never, Scope.Scope> }>()("test/Files") {}
+    const files = {
+      open: () =>
+        Effect.acquireRelease(
+          Effect.sync(() => {
+            let open = true;
+            order.push("opened");
+            return { handle: { write: () => open }, close: () => void (open = false) };
+          }),
+          (file) => Effect.sync(() => (file.close(), void order.push("closed"))),
+        ).pipe(Effect.map((file) => file.handle)),
+    };
+    const tested = await testPlugin(
+      definePlugin({
+        id: "writer",
+        requires: { files: Files },
+        setup: ({ files }, { onCleanup }) => {
+          let file: { readonly write: () => boolean } | undefined;
+          // Cleanups run last first: this one writes after the other opened.
+          onCleanup(() => void order.push(`write: ${file?.write()}`));
+          onCleanup(async () => void (file = await files.open()));
+        },
+      }),
+      { provide: [[Files, files]] },
+    );
+    await tested.close();
+    expect(order).toEqual(["opened", "write: true", "closed"]);
+  });
 });
 
 describe("streams", () => {
@@ -167,6 +222,49 @@ describe("streams", () => {
     } finally {
       await tested.close();
     }
+  });
+
+  test("fail with their typed error, which stays a failure when rethrown", async () => {
+    const { store } = makeStore();
+    const Read = Hook.make<string, number, NotFound>("test/read-broken");
+    const tested = await testPlugin(
+      definePlugin({
+        id: "broken-reader",
+        requires: { store: Store },
+        setup: ({ store }, { on }) => {
+          on(Read, async () => {
+            let sum = 0;
+            for await (const n of store.broken()) sum += n;
+            return sum;
+          });
+        },
+      }),
+      { provide: [[Store, store]] },
+    );
+    try {
+      const exit = await tested.run(Effect.exit(Effect.flatMap(Hooks, (hooks) => hooks.invoke(Read, "x", () => Effect.succeed(0)))));
+      expect(Exit.isFailure(exit) && Option.getOrUndefined(Cause.findErrorOption(exit.cause))).toBeInstanceOf(NotFound);
+    } finally {
+      await tested.close();
+    }
+  });
+
+  test("end where they are once the plugin stops: what was buffered is not read", async () => {
+    const { store } = makeStore();
+    let iterator!: AsyncIterator<number>;
+    const tested = await testPlugin(
+      definePlugin({
+        id: "buffered",
+        requires: { store: Store },
+        setup: async ({ store }) => {
+          iterator = store.few()[Symbol.asyncIterator]();
+          expect(await iterator.next()).toEqual({ done: false, value: 1 });
+        },
+      }),
+      { provide: [[Store, store]] },
+    );
+    await tested.close();
+    expect(await iterator.next()).toEqual({ done: true, value: undefined });
   });
 });
 
@@ -214,6 +312,83 @@ describe("context", () => {
     } finally {
       await tested.close();
     }
+  });
+
+  test("a handler registered during one operation does not keep its references for the next", async () => {
+    const Ask = Hook.make<string, string | undefined>("test/lazy-ask");
+    const Register = Hook.make<string, string>("test/lazy-register");
+    const tested = await testPlugin(
+      definePlugin({
+        id: "lazy",
+        requires: { asker: Asker },
+        setup: ({ asker }, { on }) => {
+          on(Register, (input) => {
+            on(Ask, () => asker.ask());
+            return input;
+          });
+        },
+      }),
+      { provide: [[Asker, { ask: () => Effect.service(Origin) }]] },
+    );
+    try {
+      const invoke = <I, O>(hook: Hook<I, O>, input: I, origin: string) =>
+        tested.run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(hook, input, () => Effect.die("no terminal"))).pipe(Effect.provideService(Origin, origin)));
+      await invoke(Register, "x", "first");
+      await turn();
+      expect(await invoke(Ask, "y", "second")).toBe("second");
+    } finally {
+      await tested.close();
+    }
+  });
+
+  test("a call an in-place handler makes after it returned stops when its operation is interrupted", async () => {
+    const { store, events } = makeStore();
+    const Wait = Hook.make<string, string>("test/late-wait");
+    let started!: () => void;
+    const waiting = new Promise<void>((resolve) => (started = resolve));
+    const tested = await testPlugin(
+      definePlugin({
+        id: "late",
+        requires: { store: Store },
+        setup: ({ store }, { on }) => {
+          on(Wait, (input, next) => {
+            queueMicrotask(() => {
+              void store.wait().catch(() => undefined);
+              started();
+            });
+            return next(input);
+          });
+        },
+      }),
+      { provide: [[Store, store]] },
+    );
+    try {
+      await tested.run(
+        Effect.gen(function* () {
+          const fiber = yield* Effect.forkChild(Effect.flatMap(Hooks, (hooks) => hooks.invoke(Wait, "x", () => Effect.never)));
+          yield* Effect.promise(() => waiting);
+          yield* Fiber.interrupt(fiber);
+        }),
+      );
+      await expect.poll(() => events).toContain("wait interrupted");
+    } finally {
+      await tested.close();
+    }
+  });
+
+  test("a thrown value that is not an object, and that nobody failed with, is a defect", async () => {
+    const thrown = await Effect.runPromiseExit(
+      awaitable(async (): Promise<number> => {
+        throw "boom";
+      }),
+    );
+    expect(Exit.isFailure(thrown) && Cause.hasDies(thrown.cause)).toBe(true);
+    const failed = await Effect.runPromiseExit(
+      awaitable(async (): Promise<number> => {
+        throw fail("expected");
+      }),
+    );
+    expect(Exit.isFailure(failed) && Option.getOrUndefined(Cause.findErrorOption(failed.cause))).toBe("expected");
   });
 
   test("a typed failure that is not an object stays a failure through promise code", async () => {
