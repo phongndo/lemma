@@ -32,6 +32,8 @@ import type { ObserverHandle } from "./events.ts";
 import { plan } from "./graph.ts";
 import { attributes, HookRegistry } from "./hooks.ts";
 import type { OwnerHandle } from "./hooks.ts";
+import { makeOwnServices } from "./own.ts";
+import type { OwnServices } from "./own.ts";
 import { RegistryStore } from "./registries.ts";
 import { runtimeSettings } from "./settings.ts";
 import type { ContributorHandle } from "./registries.ts";
@@ -76,6 +78,8 @@ interface Instance {
   readonly scope: Scope.Closeable;
   readonly hooks: OwnerHandle;
   readonly observers: ObserverHandle;
+  /** What its handlers and observers run with (see `OwnServices`). */
+  readonly own: OwnServices;
   readonly contributions: ContributorHandle;
   output: Context.Context<never>;
   state: PluginState;
@@ -202,14 +206,16 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
       Effect.gen(function* () {
         const scope = yield* Scope.make();
         const identity: PluginIdentity = { id: plugin.id, ...(plugin.version === undefined ? {} : { version: plugin.version }) };
+        const own = makeOwnServices();
         const instance: Instance = {
           id: plugin.id,
           plugin,
           rawConfig,
           identity,
           scope,
-          hooks: registry.owner(identity, scope, false),
-          observers: bus.owner(identity, scope, false, (fault) => report(instance, fault)),
+          own,
+          hooks: registry.owner(identity, scope, false, own),
+          observers: bus.owner(identity, scope, false, (fault) => report(instance, fault), own),
           contributions: store.contributor(identity, scope, false),
           output: Context.empty(),
           state: "pending",
@@ -297,6 +303,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
           for (const tag of instance.plugin.requires) {
             if (!inputs.has(tag.key)) inputs.set(tag.key, environment.mapUnsafe.get(tag.key));
           }
+          instance.own.begin(Context.makeUnsafe<never>(new Map([...inputs, [Scope.Scope.key, instance.scope]])));
           const limit = Duration.fromInputUnsafe(instance.plugin.deadlines?.activate ?? defaults.activate);
           const build = Effect.suspend(() => Layer.buildWithScope(instance.plugin.layer(config), instance.scope)).pipe(
             Effect.updateContext((caller: Context.Context<never>) => {
@@ -328,6 +335,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
           // Resource bookkeeping is masked; plugin initialization remains interruptible.
           const fiber = yield* Effect.forkIn(Effect.interruptible(build), instance.scope);
           const exit = yield* Effect.exit(restore(Fiber.join(fiber)).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber))));
+          instance.own.end();
           if (Exit.isSuccess(exit)) {
             instance.output = exit.value;
             instance.state = "active";

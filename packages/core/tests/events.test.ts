@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Ref, Schedule, Stream } from "effect";
+import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Ref, Schedule, Stream } from "effect";
 import { definePlugin, Event, Events, makeCore, PluginContext } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
@@ -50,6 +50,35 @@ describe("events", () => {
         // The failed observer's plugin is untouched: observers are not a failure domain.
         expect((yield* core.inspect).plugins.map((p) => p.state)).toEqual(["active", "active"]);
         expect((yield* core.inspect).events).toEqual([{ name: "test/tick", observers: ["broken", "good"] }]);
+      }),
+    );
+  });
+
+  test("an observer registered after activation keeps none of the references of the work that registered it", async () => {
+    const Origin = Context.Reference<string | undefined>("test/ObserveOrigin", { defaultValue: () => undefined });
+    const ping = Event.make<number>("test/ping");
+    class Watch extends Context.Service<Watch, { readonly start: Effect.Effect<void, unknown> }>()("test/Watch") {}
+    const seen: (string | undefined)[] = [];
+    const watcher = definePlugin({
+      id: "watcher",
+      provides: [Watch],
+      layer: Layer.effect(
+        Watch,
+        Effect.map(PluginContext, (owner) => ({
+          start: owner.observe(ping, () => Effect.map(Effect.service(Origin), (origin) => void seen.push(origin))),
+        })),
+      ),
+    });
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([watcher]);
+        yield* core.run(Effect.flatMap(Watch, (watch) => watch.start)).pipe(Effect.provideService(Origin, "registering"));
+        yield* core.run(Effect.flatMap(Events, (events) => events.publish(ping, 1)));
+        yield* waitFor(
+          Effect.sync(() => seen.length),
+          (count) => count === 1,
+        );
+        expect(seen).toEqual([undefined]);
       }),
     );
   });

@@ -113,6 +113,54 @@ describe("plugin-owned hooks", () => {
     );
   });
 
+  test("a handler registered after activation runs with its plugin's own services, not those of the work that registered it", async () => {
+    const Origin = Context.Reference<string | undefined>("test/LazyOrigin", { defaultValue: () => undefined });
+    class Internal extends Context.Service<Internal, string>()("test/Internal") {}
+    class Lazy extends Context.Service<Lazy, { readonly register: Effect.Effect<void, unknown, Internal | PluginContext> }>()("test/Lazy") {}
+    const ask = Hook.make<string, string>("test/lazy-ask");
+    const kick = Hook.make<string, string>("test/lazy-kick");
+    const describe: Handler<string, string, never, PluginContext | Internal> = () =>
+      Effect.gen(function* () {
+        return `${(yield* PluginContext).id}/${yield* Internal}/${(yield* Origin) ?? "none"}`;
+      });
+    const lazy = definePlugin({
+      id: "lazy",
+      provides: [Lazy],
+      layer: Layer.effect(
+        Lazy,
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          // Registered while activating, where its layer provides Internal: so its later handlers have Internal too.
+          yield* owner.on(kick, (input, next) => next(input).pipe(Effect.tap(() => Internal)));
+          return { register: owner.on(ask, describe) };
+        }),
+      ).pipe(Layer.provide(Layer.succeed(Internal, "internal"))),
+    });
+    // Another plugin's handler makes it register, during an operation of its own.
+    const trigger = definePlugin({
+      id: "trigger",
+      requires: [Lazy],
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          const { register } = yield* Lazy;
+          yield* owner.on(kick, (input, next) => register.pipe(Effect.provideService(Internal, "foreign"), Effect.orDie, Effect.andThen(next(input))), {
+            order: -1,
+          });
+        }),
+      ),
+    });
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([lazy, trigger]);
+        const invoke = (hook: Hook<string, string>) => core.run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(hook, "x", Effect.succeed)));
+        yield* invoke(kick).pipe(Effect.provideService(Origin, "first"));
+        expect(yield* invoke(ask).pipe(Effect.provideService(Origin, "second"))).toBe("lazy/internal/second");
+        expect(yield* invoke(ask)).toBe("lazy/internal/none");
+      }),
+    );
+  });
+
   test("rejects different tokens with the same name and invalid ordering", async () => {
     const other = Hook.make<string, string>(point.name);
     await run(

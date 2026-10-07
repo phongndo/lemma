@@ -25,6 +25,11 @@ export const runtimeSettings: ReadonlySet<string> = new Set([
   Schedule.CurrentMetadata.key,
 ]);
 
+/** `context`'s runtime settings only: what work forked from it keeps of the fiber that forked it. */
+export function settingsOf<R>(context: Context.Context<R>): Context.Context<never> {
+  return Context.makeUnsafe<never>(new Map([...context.mapUnsafe].filter(([key]) => runtimeSettings.has(key))));
+}
+
 /** Keys a captured context leaves behind: the trace it was captured in, and the memo map of the Layer build that ran then. */
 const transient: ReadonlySet<string> = new Set([Tracer.ParentSpan.key, Layer.CurrentMemoMap.key]);
 

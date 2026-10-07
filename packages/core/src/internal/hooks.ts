@@ -1,5 +1,6 @@
 import { Context, Effect, Order, References, Scope } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
+import type { OwnServices } from "./own.ts";
 import { servicesOf } from "./settings.ts";
 import type { Handler, Hook, HookOptions, Hooks, Next, PluginContext, PluginIdentity } from "../hooks.ts";
 
@@ -72,7 +73,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
       }));
   }
 
-  owner(identity: PluginIdentity, scope: Scope.Scope, visible: boolean): OwnerHandle {
+  owner(identity: PluginIdentity, scope: Scope.Scope, visible: boolean, own: OwnServices): OwnerHandle {
     const owner: Owner = { identity, visible, accepting: true };
     const owned = new Set<Registration>();
     const on = <I, O, E, R>(hook: Hook<I, O, E>, handler: Handler<I, O, E, R>, options: HookOptions = {}) =>
@@ -85,7 +86,8 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
             return yield* new HookError({ reason: "InvalidOrder", hook: hook.name, pluginId: identity.id, message: "Hook order must be finite" });
           }
           const entry = yield* this.entry(hook);
-          const environment: readonly Provided[] = [...servicesOf(yield* Effect.context<R>()).mapUnsafe].map(([key, value]) => ({
+          // The plugin's own services, never the references of the work that registered it (see `OwnServices`).
+          const environment: readonly Provided[] = [...own.capture(yield* Effect.context<R>()).mapUnsafe].map(([key, value]) => ({
             key: { key } as Context.Key<unknown, unknown>,
             value,
           }));

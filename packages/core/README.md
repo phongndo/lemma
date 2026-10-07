@@ -234,7 +234,7 @@ The hook contract is one mechanism: awaited, sequential around middleware. A han
 
 - Lower `order` runs first; ties use plugin id, then that plugin's registration order.
 - A call snapshots its handler array. New registrations affect subsequent calls.
-- Registration captures the plugin's dependency context, but **not its activation span**. The terminal retains its caller's dependencies. Trace ancestry follows the current invocation.
+- A handler runs in its caller's context with its **plugin's own services** laid over it: what the plugin requires, its `PluginContext` and `Scope`, and what its layers provided to the registrations it made while activating. That holds whenever it registers: one registered later, during some operation or from another plugin's call, keeps none of that work's references or plugin. A service provided only around such a registration is not kept; provide it in the plugin's layer, or capture it as a value. Registration keeps **no activation span** either. The terminal retains its caller's dependencies, and trace ancestry follows the current invocation.
 - A handler may execute `next` at most once, and only before the handler finishes. Await or join that work; do not detach continuations.
 - Typed hook failures and defects propagate through the same Effect channels; interruption runs finalizers. `HookError` reports invalid ordering, token collisions, or continuation misuse.
 - A name identifies one shared hook token within a core. Creating another token with the same name is rejected rather than risking an incompatible handler signature.
@@ -247,7 +247,9 @@ declares a notification. `Events.publish` does not propagate observer failures;
 `PluginContext.observe` subscribes with a bounded queue (default 64) and an
 `overflow` policy. The default `dropOldest` and optional `dropNewest` never wait
 for observers. Explicit `suspend` applies backpressure until queue space is
-available or the subscription closes. An observer's failure becomes a
+available or the subscription closes. An observer runs with its plugin's own
+services, as a handler does, and with no trace parent or references of the
+work that registered it. An observer's failure becomes a
 `PluginFault` (phase `observe`) for its plugin and affects neither the publisher
 nor other observers. `Events.stream` subscribes from outside a plugin. Use events
 only for information that is safe to lose; applications own authoritative state

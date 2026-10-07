@@ -3,7 +3,8 @@ import { CoreClosed, EventError, PluginFault } from "../errors.ts";
 import type { Event, Events, Observer, ObserveOptions } from "../events.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
 import { attributes } from "./hooks.ts";
-import { servicesOf } from "./settings.ts";
+import type { OwnServices } from "./own.ts";
+import { settingsOf } from "./settings.ts";
 
 interface Entry {
   readonly token: object;
@@ -79,7 +80,7 @@ export class EventBus implements Context.Service.Shape<typeof Events> {
       }));
   }
 
-  owner(identity: PluginIdentity, scope: Scope.Scope, visible: boolean, report: (fault: PluginFault) => Effect.Effect<void>): ObserverHandle {
+  owner(identity: PluginIdentity, scope: Scope.Scope, visible: boolean, report: (fault: PluginFault) => Effect.Effect<void>, own: OwnServices): ObserverHandle {
     const owner: Owner = { identity, visible, accepting: true };
     const owned = new Set<Entry>();
     const observe = <P, R>(event: Event<P>, observer: Observer<P, R>, options: ObserveOptions = {}) =>
@@ -87,13 +88,14 @@ export class EventBus implements Context.Service.Shape<typeof Events> {
         Effect.gen({ self: this }, function* () {
           if (this.closed || !owner.accepting) return yield* new CoreClosed();
           const entry = yield* this.entry(event);
-          const environment = servicesOf(yield* Effect.context<R>());
+          const context = yield* Effect.context<R>();
+          // The plugin's own services, never the references of the work that registered it (see `OwnServices`).
+          const environment = own.capture(context);
           const subscription = yield* this.subscribe(entry, owner, options, scope);
           owned.add(entry);
           const consume = Queue.take(subscription.queue).pipe(
             Effect.flatMap((payload) =>
               Effect.suspend(() => observer(payload as P)).pipe(
-                Effect.provide(environment),
                 Effect.withSpan("core.observe", { attributes: { ...attributes(identity), "event.name": event.name } }, { captureStackTrace: false }),
                 Effect.catchCause((cause) =>
                   Cause.hasInterruptsOnly(cause)
@@ -105,8 +107,11 @@ export class EventBus implements Context.Service.Shape<typeof Events> {
             Effect.forever,
             Effect.catchIf(Cause.isDone, () => Effect.void),
           );
-          // Listening before observe returns; interruptible, so it stops when the scope closes.
-          yield* Effect.forkIn(Effect.interruptible(consume), scope, { startImmediately: true });
+          // Listening before observe returns; interruptible, so it stops when the scope closes. It runs with the
+          // registering fiber's runtime settings and the plugin's own services: not that work's references or trace.
+          yield* Effect.forkIn(Effect.interruptible(consume), scope, { startImmediately: true }).pipe(
+            Effect.updateContext((_: Context.Context<never>) => Context.merge(settingsOf(context), environment) as never),
+          );
         }).pipe(Effect.asVoid),
       );
     const each = () => {

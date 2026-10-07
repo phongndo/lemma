@@ -59,7 +59,12 @@ export interface PluginIdentity {
 export class PluginContext extends Context.Service<
   PluginContext,
   PluginIdentity & {
-    /** Captures dependencies now; removes the handler when the plugin's scope closes. */
+    /**
+     * The handler runs with this plugin's own services (what it requires, and
+     * what it registered with while activating), whenever it is registered:
+     * never the references or plugin of the work that registered it. Removed
+     * when the plugin's scope closes.
+     */
     readonly on: <I, O, E, R>(hook: Hook<I, O, E>, handler: Handler<I, O, E, R>, options?: HookOptions) => Effect.Effect<void, HookError | CoreClosed, R>;
     /**
      * Contribute an item to a registry. It is visible once this plugin is
@@ -67,7 +72,10 @@ export class PluginContext extends Context.Service<
      * sooner.
      */
     readonly add: <I>(registry: Registry<I>, item: I, options?: ContributeOptions) => Effect.Effect<Effect.Effect<void>, RegistryError | CoreClosed>;
-    /** Observe an event. Failures are attributed to this plugin and isolated from everything else. */
+    /**
+     * Observe an event, with this plugin's own services as `on` has them.
+     * Failures are attributed to this plugin and isolated from everything else.
+     */
     readonly observe: <P, R>(event: Event<P>, observer: Observer<P, R>, options?: ObserveOptions) => Effect.Effect<void, EventError | CoreClosed, R>;
     /**
      * Run supervised work owned by this plugin's scope. Its exit is reported as a
