@@ -19,16 +19,42 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 # Actions are pinned by commit, their version in the comment.
-# What each job runs is a script in package.json (`pnpm run ci` is the check job), so it runs the same locally.
+# What each job runs is a script in package.json (`pnpm run ci` is the check and test jobs), so it runs the same
+# locally. The jobs run in parallel, each on its own runner; on Linux in the Nix development shell as developers use
+# it (.github/actions/dev-shell).
 jobs:
-  # The same checks on Linux and macOS, in parallel, with plain Node.js and pnpm. The host does not support Windows yet.
+  # Build, import boundaries, test hygiene, lint, format check, type-check.
   check:
-    name: check (${{ matrix.os }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/dev-shell
+      - run: nix develop -c pnpm check
+
+  # The tests keep a runner's cores busy, so they run in two halves (Vitest's shards, by file) on a runner each.
+  test:
+    name: test (Linux, ${{ matrix.shard }}/2)
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/dev-shell
+      - run: nix develop -c pnpm test --shard=${{ matrix.shard }}/2
+
+  # The tests again on macOS, with plain Node.js and pnpm; what the check job checks is the same on every platform.
+  # The host does not support Windows yet. No pnpm store cache: on macOS, restoring it took longer than installing.
+  macos:
+    name: test (macOS, ${{ matrix.shard }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: macos-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,40 +62,22 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - run: pnpm run ci
+      - run: pnpm test --shard=${{ matrix.shard }}/2
 
-  # The Nix development shell as developers use it, plus the packed-package and browser checks, and the web
-  # app's replaceability checked on its real composition in Chromium (apps/web/AGENTS.md).
-  nix:
+  # The packed packages, in Node.js and in Chromium.
+  packages:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
-      - id: pnpm-store
-        run: echo "path=$(nix develop -c pnpm store path)" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      - uses: ./.github/actions/dev-shell
         with:
-          path: ${{ steps.pnpm-store.outputs.path }}
-          key: pnpm-store-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: pnpm-store-${{ runner.os }}-
-      - run: nix develop -c pnpm install --frozen-lockfile
-      - run: nix develop -c pnpm run ci
+          shell: browser
       - run: nix develop -c pnpm package:check
       - run: nix develop .#browser -c pnpm browser:check
         env:
           LEMMA_BENCH_OUTPUT_DIR: ${{ runner.temp }}/metrics
-      - run: nix develop .#browser -c pnpm --filter @lemma/web ui:check
-        env:
-          LEMMA_UI_ARTIFACTS: ${{ runner.temp }}/ui-check
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: failure()
-        with:
-          name: ui-check
-          path: ${{ runner.temp }}/ui-check
-          if-no-files-found: ignore
       # Each commit on main leaves its numbers (bundle size, microbenchmarks, the session log's appends), so a
       # trend can be read back: `gh run download --name metrics-<sha>`. Timings on shared runners are noisy; compare
       # two builds with the bench workflow instead.
@@ -84,6 +92,42 @@ jobs:
           name: metrics-${{ github.sha }}
           path: ${{ runner.temp }}/metrics
           retention-days: 90
+
+  # The web app's replaceability, checked on its real composition in Chromium (apps/web/AGENTS.md); in two shares, as
+  # its lanes keep a runner's cores busy.
+  ui:
+    name: ui (${{ matrix.shard }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/dev-shell
+        with:
+          shell: browser
+      - run: nix develop .#browser -c pnpm --filter @lemma/web ui:check --shard=${{ matrix.shard }}/2
+        env:
+          LEMMA_UI_ARTIFACTS: ${{ runner.temp }}/ui-check
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: ui-check-${{ matrix.shard }}
+          path: ${{ runner.temp }}/ui-check
+          if-no-files-found: ignore
+
+  # The one check a branch rule needs to require: it passes only when every job above passed, so jobs can be added,
+  # split, or renamed without changing the rule. A skipped required job would count as passing; this one never skips.
+  passed:
+    if: always()
+    needs: [check, test, macos, packages, ui]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: echo "::error::Not every job passed." && exit 1
 
   # Nightly (or by hand): the tests with a fresh seed and many more property-test cases, and the performance checks.
   nightly:
@@ -104,8 +148,7 @@ jobs:
       LEMMA_PERF_ENFORCE: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
-      - run: nix develop -c pnpm install --frozen-lockfile
+      - uses: ./.github/actions/dev-shell
       # The randomized tests (the core's, the session log's simulation, the agent's conversations), many more of them;
       # every test runs in the jobs above.
       - run: nix develop -c pnpm test:random
