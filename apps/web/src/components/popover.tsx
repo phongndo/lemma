@@ -1,10 +1,12 @@
 import { Show, createSignal, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
 
+import { listKey, modKey, quickKey } from "../lib/keys.ts";
 import type { Placement, PopoverProps } from "../ui/contracts.ts";
 
 const MARGIN = 8;
 const GAP = 6;
+let menus = 0;
 const ITEMS = '[role="menuitem"]:not([aria-disabled="true"]), [role="menuitemradio"]:not([aria-disabled="true"]), [role="option"]:not([aria-disabled="true"])';
 
 /**
@@ -32,8 +34,10 @@ const position = (anchor: DOMRect, menu: HTMLElement, placement: Placement) => {
 /**
  * A trigger with a floating menu. The menu renders at the document root so no
  * container clips it, and it owns keyboard navigation: arrows move the active
- * item (focus stays in a search field if there is one), Enter picks it, typing
- * a letter jumps to a matching item, Escape closes and returns focus.
+ * item (focus stays in a search field if there is one, which then names the
+ * active item to screen readers), as do Ctrl+N/P and Ctrl+J/K; Enter picks it,
+ * mod+1 … mod+9 picks the item at that place (labelled while mod is held),
+ * typing a letter jumps to a matching item, Escape closes and returns focus.
  *
  * Items are elements with role `menuitem`, `menuitemradio`, or `option`.
  */
@@ -44,15 +48,35 @@ export function Popover(props: PopoverProps) {
   let observer: MutationObserver | undefined;
   let typed = "";
   let typedAt = 0;
+  let quick = false;
+  const menuId = `popover-${++menus}`;
 
   const items = () => (menu === undefined ? [] : [...menu.querySelectorAll<HTMLElement>(ITEMS)]);
   const activeIndex = () => items().findIndex((item) => item.dataset.active === "true");
+  const search = () => menu?.querySelector<HTMLInputElement>("input") ?? undefined;
   const activate = (index: number, scroll = true) => {
     const all = items();
     all.forEach((item, i) => {
       item.dataset.active = String(i === index);
+      item.id ||= `${menuId}-item-${i}`;
     });
-    if (scroll) all[index]?.scrollIntoView({ block: "nearest" });
+    const active = all[index];
+    if (active === undefined) search()?.removeAttribute("aria-activedescendant");
+    else search()?.setAttribute("aria-activedescendant", active.id);
+    if (scroll) active?.scrollIntoView({ block: "nearest" });
+  };
+  // While mod is held, the first nine items show the key that picks them.
+  const label = () =>
+    items().forEach((item, i) => {
+      const key = quick ? quickKey(i) : undefined;
+      if (key === undefined) delete item.dataset.quickKey;
+      else item.dataset.quickKey = key;
+    });
+  const hold = (event: KeyboardEvent | FocusEvent) => {
+    const next = event instanceof KeyboardEvent && modKey(event) && !event.altKey && !event.shiftKey;
+    if (next === quick) return;
+    quick = next;
+    label();
   };
   const place = () => {
     if (menu !== undefined) position(trigger.getBoundingClientRect(), menu, props.placement ?? "bottom-end");
@@ -65,6 +89,7 @@ export function Popover(props: PopoverProps) {
     if (restoreFocus) trigger.focus({ preventScroll: true });
   };
   const show = () => {
+    quick = false;
     props.onOpen?.();
     setOpen(true);
     attach();
@@ -72,11 +97,21 @@ export function Popover(props: PopoverProps) {
       if (menu === undefined) return;
       place();
       const selected = items().findIndex((item) => item.getAttribute("aria-checked") === "true" || item.getAttribute("aria-selected") === "true");
+      // A search field drives the list, so it is a combobox over the menu.
+      const field = search();
+      if (field !== undefined) {
+        field.setAttribute("role", "combobox");
+        field.setAttribute("aria-expanded", "true");
+        field.setAttribute("aria-autocomplete", "list");
+        field.setAttribute("aria-controls", menuId);
+      }
       activate(Math.max(0, selected));
       (menu.querySelector<HTMLElement>("[data-autofocus]") ?? menu).focus({ preventScroll: true });
-      // Filtering replaces items: keep one active and the menu in place.
+      // Filtering replaces items: keep one active, its labels, and the menu in place.
       observer = new MutationObserver(() => {
         if (activeIndex() === -1) activate(0, false);
+        else activate(activeIndex(), false);
+        if (quick) label();
         place();
       });
       observer.observe(menu, { childList: true, subtree: true });
@@ -112,9 +147,17 @@ export function Popover(props: PopoverProps) {
   onCleanup(detach);
 
   const onKeyDown = (event: KeyboardEvent) => {
+    hold(event);
     const all = items();
     const index = activeIndex();
     const inField = event.target instanceof HTMLInputElement;
+    const list = event.isComposing ? undefined : listKey(event);
+    if (list !== undefined) {
+      event.preventDefault();
+      if ("pick" in list) all[list.pick]?.click();
+      else activate(all.length === 0 ? -1 : (index + list.move + all.length) % all.length);
+      return;
+    }
     switch (event.key) {
       case "Escape":
         event.preventDefault();
@@ -123,14 +166,6 @@ export function Popover(props: PopoverProps) {
         return;
       case "Tab":
         close(false);
-        return;
-      case "ArrowDown":
-        event.preventDefault();
-        activate(all.length === 0 ? -1 : (index + 1) % all.length);
-        return;
-      case "ArrowUp":
-        event.preventDefault();
-        activate(all.length === 0 ? -1 : (index - 1 + all.length) % all.length);
         return;
       case "Home":
         if (inField) return;
@@ -193,10 +228,13 @@ export function Popover(props: PopoverProps) {
             ref={(el) => {
               menu = el;
             }}
+            id={menuId}
             class={`popover menu ${props.menuClass ?? ""}`}
             role="menu"
             tabindex="-1"
             onKeyDown={onKeyDown}
+            onKeyUp={hold}
+            onFocusOut={hold}
             onPointerMove={onPointerMove}
           >
             {props.children(() => close())}

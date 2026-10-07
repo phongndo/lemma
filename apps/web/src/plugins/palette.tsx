@@ -3,7 +3,8 @@ import type { Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { CommandInfo, InteractionRequest } from "@lemma/contracts";
 import { shownKeys } from "../model/keybindings.ts";
-import { formatKeys, shortcut } from "../lib/keys.ts";
+import { formatKeys, listKey, quickKey, shortcut } from "../lib/keys.ts";
+import { createQuickHold } from "../lib/quick-pick.ts";
 import { load, save } from "../lib/storage.ts";
 import { relativeTime, tildePath } from "../model/format.ts";
 import { parseQuery, rank, remember } from "../model/palette.ts";
@@ -288,15 +289,18 @@ function Palette(props: { deps: Deps }) {
     choose(picked);
   };
 
+  const hold = createQuickHold();
   const onKeyDown = (event: KeyboardEvent) => {
+    hold.track(event);
     if (event.isComposing) return;
-    const ctrlOnly = event.ctrlKey && !event.metaKey && !event.altKey;
-    if (event.key === "ArrowDown" || (ctrlOnly && event.key === "n")) {
+    const list = listKey(event);
+    if (list !== undefined) {
       event.preventDefault();
-      move(1);
-    } else if (event.key === "ArrowUp" || (ctrlOnly && event.key === "p")) {
-      event.preventDefault();
-      move(-1);
+      if (!("pick" in list)) move(list.move);
+      else if (list.pick < items().length) {
+        setActive(list.pick);
+        submit();
+      }
     } else if (event.key === "PageDown") {
       event.preventDefault();
       move(Math.min(8, items().length - 1 - active()));
@@ -371,7 +375,7 @@ function Palette(props: { deps: Deps }) {
           if (event.target === event.currentTarget) close();
         }}
       >
-        <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown}>
+        <div class="palette" role="dialog" aria-modal="true" aria-label="Command palette" onKeyDown={onKeyDown} onKeyUp={hold.track} onFocusOut={hold.track}>
           <Show when={heading()}>
             <div class="palette-heading">{heading()}</div>
           </Show>
@@ -413,6 +417,7 @@ function Palette(props: { deps: Deps }) {
                       role="option"
                       data-index={row.index}
                       data-active={String(row.index === active())}
+                      data-quick-key={hold.held() ? quickKey(row.index) : undefined}
                       aria-selected={row.index === active()}
                       onPointerMove={() => setActive(row.index)}
                       onMouseDown={(event) => event.preventDefault()}

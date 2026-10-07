@@ -3,7 +3,8 @@ import { Effect, Schema } from "effect";
 import { newRequestId } from "@lemma/client";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/contracts";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
-import { formatKeys, modKey } from "../lib/keys.ts";
+import { formatKeys, listKey, modKey, quickKey } from "../lib/keys.ts";
+import { createQuickHold } from "../lib/quick-pick.ts";
 import { applySuggestion, findTrigger } from "../model/completion.ts";
 import type { TriggerMatch } from "../model/completion.ts";
 import {
@@ -393,17 +394,24 @@ function Composer(props: { deps: Deps }) {
     setImages((current) => [...current, ...read]);
   };
 
+  const hold = createQuickHold();
   const onKeyDown = (event: KeyboardEvent) => {
-    // The completion menu, while open, takes the keys that move through it, pick, and close it.
-    // Only plain keys: with a modifier they stay the app's (mod+alt+arrows switch threads, mod+enter sends).
+    hold.track(event);
+    // The completion menu, while open, takes the keys that move through it, pick, and close it: a search
+    // list's (`listKey`), then plain ones. Other keys with a modifier stay the app's (mod+alt+arrows switch threads, mod+enter sends).
+    const list = completion.open() && !event.isComposing ? listKey(event) : undefined;
+    if (list !== undefined && completion.items().length > 0) {
+      event.preventDefault();
+      if (!("pick" in list)) completion.move(list.move);
+      else {
+        const item = completion.items()[list.pick];
+        if (item !== undefined) pick(item.suggestion);
+      }
+      return;
+    }
     const plain = !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey;
     if (completion.open() && plain && !event.isComposing) {
       const count = completion.items().length;
-      if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count > 0) {
-        event.preventDefault();
-        completion.move(event.key === "ArrowDown" ? 1 : -1);
-        return;
-      }
       if (event.key === "Tab" || event.key === "Enter") {
         if (count > 0) {
           event.preventDefault();
@@ -496,6 +504,7 @@ function Composer(props: { deps: Deps }) {
                             class="menu-item completion"
                             aria-selected={item.index === completion.active()}
                             data-active={item.index === completion.active()}
+                            data-quick-key={hold.held() ? quickKey(item.index) : undefined}
                             onMouseMove={() => completion.setActive(item.index)}
                             onClick={() => pick(item.suggestion)}
                           >
@@ -579,8 +588,14 @@ function Composer(props: { deps: Deps }) {
               syncCursor();
             })
           }
-          onBlur={() => setFocused(false)}
-          onKeyUp={syncCursor}
+          onBlur={(event) => {
+            hold.track(event);
+            setFocused(false);
+          }}
+          onKeyUp={(event) => {
+            hold.track(event);
+            syncCursor();
+          }}
           onClick={syncCursor}
           onSelect={syncCursor}
           onKeyDown={onKeyDown}

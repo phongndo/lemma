@@ -96,3 +96,27 @@ export const typing = (target: EventTarget | null): boolean =>
 /** Where ↓ or ↑ moves from `index` in a list of `length`, staying in it; undefined for any other key. From nothing (-1), both go to the first. */
 export const stepFor = (key: string, index: number, length: number): number | undefined =>
   key === "ArrowDown" ? Math.min(length - 1, index + 1) : key === "ArrowUp" ? Math.max(0, index - 1) : undefined;
+
+/** What a key does in a list being searched: moves the active item, or picks one of the first nine at once. */
+export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };
+
+/**
+ * A search list's keys, the same in every one: ↓ and ↑, Ctrl+N and Ctrl+P, or
+ * Ctrl+J and Ctrl+K move; mod+1 … mod+9 picks the item shown at that place
+ * (⌘1 on macOS, Ctrl+1 elsewhere). Undefined for any other key, which stays the field's.
+ */
+export const listKey = (event: KeyEvent): ListKey | undefined => {
+  const key = keyOf(event);
+  if (modKey(event as KeyboardEvent) && !event.altKey && !event.shiftKey && /^[1-9]$/.test(key)) return { pick: Number(key) - 1 };
+  if (event.altKey || event.shiftKey || event.metaKey) return undefined;
+  if (key === "arrowdown" && !event.ctrlKey) return { move: 1 };
+  if (key === "arrowup" && !event.ctrlKey) return { move: -1 };
+  if (!event.ctrlKey) return undefined;
+  return key === "n" || key === "j" ? { move: 1 } : key === "p" || key === "k" ? { move: -1 } : undefined;
+};
+
+/**
+ * The quick-pick label for the item at `index` while the modifier is held (`⌘1`),
+ * shown by the foundation's `[data-quick-key]` rule; undefined past the ninth.
+ */
+export const quickKey = (index: number): string | undefined => (index >= 0 && index < 9 ? formatKeys(`mod+${index + 1}`) : undefined);

@@ -2,9 +2,9 @@
  * The foundation every plugin draws on: tokens (every colour, radius, width,
  * and stacking level is a `--` custom property), the base element styles, and
  * the shared class vocabulary (`.button`, `.icon-button`, `.field`, `.badge`,
- * `.callout`, `.muted`, the `.search-box` field, the `.menu-*` rows, the
- * `.palette-*` list, and the inspectors' `.dt-*`). Everything
- * else belongs to the plugin that draws it and loads with it (`styles` in
+ * `.callout`, `.muted`, the `.search-box` field, the `.menu-*` rows and their
+ * `[data-quick-key]` pick labels, the `.palette-*` list, and the inspectors'
+ * `.dt-*`). Everything else belongs to the plugin that draws it and loads with it (`styles` in
  * `defineUiPlugin`), in the `plugins` layer; the shared parts' styles sit in
  * its `parts` sublayer, under the views. Tailwind's utilities (`tailwind.css`)
  * come last of the layers, so a class in a plugin's markup beats a rule in a
@@ -546,6 +546,16 @@
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
+  }
+
+  /* A search list's quick pick: while ⌘ (Ctrl off macOS) is held, its first nine items show the key that picks them (`lib/keys.ts` `quickKey`). */
+  [data-quick-key]::after {
+    content: attr(data-quick-key);
+    flex: none;
+    margin-left: 10px;
+    color: var(--text-3);
+    font-size: calc(11px * var(--text-scale));
+    font-variant-numeric: tabular-nums;
   }
 
   .picker-empty {

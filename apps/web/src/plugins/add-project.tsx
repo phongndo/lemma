@@ -1,6 +1,8 @@
 import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
 import type { DirectoryEntry } from "@lemma/contracts";
 import { Portal } from "solid-js/web";
+import { listKey, quickKey } from "../lib/keys.ts";
+import { createQuickHold } from "../lib/quick-pick.ts";
 import { tildePath } from "../model/format.ts";
 import { ActionIds, Actions, Client, Dialogs, Layers, Notify, Slots, Workspace } from "../ui/contracts.ts";
 import type { ClientService, DialogsService, NotifyService, WorkspaceService } from "../ui/contracts.ts";
@@ -139,18 +141,19 @@ function AddProjectDialog(props: { deps: Deps }) {
   };
 
   const caretAtEnd = () => input.selectionStart === value().length && input.selectionEnd === value().length;
+  const hold = createQuickHold();
   const onKeyDown = (event: KeyboardEvent) => {
+    hold.track(event);
     const row = rows()[active()];
+    const list = event.isComposing ? undefined : listKey(event);
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
       close();
-    } else if (event.key === "ArrowDown") {
+    } else if (list !== undefined) {
       event.preventDefault();
-      move(1);
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      move(-1);
+      if (!("pick" in list)) move(list.move);
+      else if (list.pick < rows().length) pick(rows()[list.pick]);
     } else if ((event.key === "Tab" && !event.shiftKey) || (event.key === "ArrowRight" && caretAtEnd())) {
       if (row?.kind === "entry") {
         event.preventDefault();
@@ -193,7 +196,7 @@ function AddProjectDialog(props: { deps: Deps }) {
           if (event.target === event.currentTarget) close();
         }}
       >
-        <div class="palette" role="dialog" aria-modal="true" aria-label="Add project" onKeyDown={onKeyDown}>
+        <div class="palette" role="dialog" aria-modal="true" aria-label="Add project" onKeyDown={onKeyDown} onKeyUp={hold.track} onFocusOut={hold.track}>
           <div class="palette-input">
             <FolderIcon />
             <input
@@ -224,6 +227,7 @@ function AddProjectDialog(props: { deps: Deps }) {
                   role="option"
                   data-index={index()}
                   data-active={String(index() === active())}
+                  data-quick-key={hold.held() ? quickKey(index()) : undefined}
                   aria-selected={index() === active()}
                   onPointerMove={() => setActive(index())}
                   onClick={() => pick(row)}
