@@ -180,11 +180,12 @@ one dropped).
 by entry key and name: a scroll position, a draft. Going back to an entry
 finds its state again, and with `storage` (`sessionStorage`, anything with
 `getItem` and `setItem`) so does a reload. Past `limit` (default 100) the
-entries written least recently are dropped. What it reads is checked, and only
-what was stored is read back (no inherited names). A write the storage refuses
-(full, turned off) keeps the state for as long as the page lasts; a value JSON
-cannot hold (a cycle, a BigInt) stays in memory without keeping the rest from
-being saved. A listener that throws is reported to `onError` (default
+entries written least recently are dropped, on a reload too. What it reads is
+checked, and only what was stored is read back (no inherited names). A value
+the storage refuses (too big for its quota) or that JSON cannot hold (a cycle,
+a BigInt) stays in memory without keeping the rest from being saved; written
+again, it is tried again. A storage that refuses every write (turned off) keeps
+all of it for as long as the page lasts. A listener that throws is reported to `onError` (default
 `console.error`) and does not keep the others from hearing.
 
 ## Not here

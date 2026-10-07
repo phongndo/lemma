@@ -122,6 +122,36 @@ describe("an entry store, at its edges", () => {
     expect(store.get("e1", "big")).toBe(10n);
   });
 
+  test("a value too big for what the storage has left stays in memory without keeping the rest from being saved", () => {
+    const items = new Map<string, string>();
+    // A quota of 200 characters.
+    const storage: KeyValueStorage = {
+      getItem: (key) => items.get(key) ?? null,
+      setItem: (key, value) => {
+        if (value.length > 200) throw new Error("QuotaExceededError");
+        items.set(key, value);
+      },
+    };
+    const store = createEntryStore({ storage });
+    store.set("e1", "scroll", 1);
+    store.set("e2", "draft", "x".repeat(500));
+    store.set("e1", "scroll", 2);
+    store.set("e3", "scroll", 3);
+    const reloaded = createEntryStore({ storage });
+    expect(reloaded.all()).toEqual({ e2: {}, e1: { scroll: 2 }, e3: { scroll: 3 } });
+    expect(store.get("e2", "draft")).toHaveLength(500);
+    // Written again small enough, it is saved.
+    store.set("e2", "draft", "short");
+    expect(createEntryStore({ storage }).get("e2", "draft")).toBe("short");
+  });
+
+  test("restored, it keeps no more than its limit, the most recently written", () => {
+    const { storage } = memoryStorage();
+    const writer = createEntryStore({ storage, limit: 10 });
+    for (let n = 1; n <= 6; n++) writer.set(`e${n}`, "scroll", n);
+    expect(Object.keys(createEntryStore({ storage, limit: 2 }).all())).toEqual(["e5", "e6"]);
+  });
+
   test("reads only what was stored, and a listener that throws does not keep the others from hearing", () => {
     const errors: unknown[] = [];
     const store = createEntryStore({ onError: (error) => errors.push(error) });

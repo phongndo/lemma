@@ -37,13 +37,16 @@ const own = (state: Record<string, unknown>): Record<string, unknown> => Object.
 
 /**
  * The state as stored: entries in the order they were written (a list, since an object would put keys that look like
- * numbers first), each value that JSON can hold. One that it cannot (a cycle, a BigInt) stays in memory only.
+ * numbers first), each value that JSON can hold. One that it cannot (a cycle, a BigInt) stays in memory only, as do
+ * those in `unsaved`.
  */
-const serialize = (states: ReadonlyMap<string, Record<string, unknown>>): string => {
+const serialize = (states: ReadonlyMap<string, Record<string, unknown>>, unsaved: ReadonlyMap<string, ReadonlySet<string>>): string => {
   const entries: string[] = [];
   for (const [entry, state] of states) {
     const fields: string[] = [];
+    const skipped = unsaved.get(entry);
     for (const name of Object.keys(state)) {
+      if (skipped?.has(name) === true) continue;
       try {
         const json = JSON.stringify(state[name]);
         if (json !== undefined) fields.push(`${JSON.stringify(name)}:${json}`);
@@ -70,10 +73,11 @@ const deserialize = (text: string): Map<string, Record<string, unknown>> => {
 
 /**
  * An `EntryStore`, read from `storage` when it has one. What it read is
- * checked rather than trusted: anything that is not state by entry is dropped.
- * A write the storage refuses (full, turned off) keeps the state for as long
- * as the page lasts, as does a value JSON cannot hold, without keeping the
- * rest from being saved.
+ * checked rather than trusted: anything that is not state by entry is dropped,
+ * and so are entries past `limit`, oldest first. A value the storage refuses
+ * (too big for what is left of it) is kept for as long as the page lasts, as
+ * is a value JSON cannot hold, without keeping the rest from being saved; a
+ * storage that refuses everything (turned off) leaves all of it in memory.
  */
 export const createEntryStore = (options: EntryStoreOptions = {}): EntryStore => {
   const key = options.key ?? "router.entries";
@@ -86,6 +90,36 @@ export const createEntryStore = (options: EntryStoreOptions = {}): EntryStore =>
   } catch {
     // Unreadable or not JSON: start empty.
   }
+  /** Values the storage refused, by entry: kept in memory, left out of what is saved so the rest still is. */
+  const unsaved = new Map<string, Set<string>>();
+  /** Drops the entries written least recently while there are more than `limit`. */
+  const trim = () => {
+    for (const old of states.keys()) {
+      if (states.size <= limit) break;
+      states.delete(old);
+      unsaved.delete(old);
+    }
+  };
+  trim();
+  /** Saves the state; if the storage refuses it, saves it without what was just written. */
+  const save = (entry: string, name: string) => {
+    const storage = options.storage;
+    if (storage === undefined) return;
+    try {
+      storage.setItem(key, serialize(states, unsaved));
+      return;
+    } catch {
+      // Likely the value just written does not fit: keep it in memory only, and save the rest.
+    }
+    let skipped = unsaved.get(entry);
+    if (skipped === undefined) unsaved.set(entry, (skipped = new Set()));
+    skipped.add(name);
+    try {
+      storage.setItem(key, serialize(states, unsaved));
+    } catch {
+      // Storage full or off: the state lasts as long as the page.
+    }
+  };
   let view: Record<string, Readonly<Record<string, unknown>>> | undefined;
   return {
     get: <T>(entry: string, name: string) => {
@@ -98,16 +132,11 @@ export const createEntryStore = (options: EntryStoreOptions = {}): EntryStore =>
       // The entry written last moves to the end, so the oldest are the first dropped.
       states.delete(entry);
       states.set(entry, state);
-      for (const old of states.keys()) {
-        if (states.size <= limit) break;
-        states.delete(old);
-      }
+      // A new value may fit where the last did not.
+      unsaved.get(entry)?.delete(name);
+      trim();
       view = undefined;
-      try {
-        options.storage?.setItem(key, serialize(states));
-      } catch {
-        // Storage full or off: the state lasts as long as the page.
-      }
+      save(entry, name);
       for (const listener of Array.from(listeners)) {
         try {
           listener();
