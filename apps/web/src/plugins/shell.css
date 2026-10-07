@@ -1,3 +1,8 @@
+:root {
+  /* What dims the page under the sidebar as a drawer. */
+  --scrim: rgba(0, 0, 0, 0.3);
+}
+
 .frame {
   display: flex;
   flex-direction: column;
@@ -95,6 +100,6 @@
     position: fixed;
     inset: 0;
     z-index: calc(var(--z-drawer) - 1);
-    background: rgba(0, 0, 0, 0.3);
+    background: var(--scrim);
   }
 }

@@ -2,11 +2,37 @@ import { Show, createSignal } from "solid-js";
 import { CodeBlocks, Layers, Slots } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import { Dialog } from "../ui/parts.tsx";
-import { currentTheme, onThemeChange } from "../lib/paint.ts";
+import { currentTheme, currentToken, onLookChange, tokenColor } from "../lib/paint.ts";
+import type { DiagramLook } from "../lib/mermaid.ts";
 import { viewerScale } from "../model/viewer.ts";
 import styles from "./diagrams.css?inline";
 
-const dark = () => currentTheme() === "dark";
+const DIAGRAM_TOKENS = ["--diagram-background", "--diagram-node", "--diagram-border", "--diagram-text", "--diagram-line", "--diagram-note"];
+
+/**
+ * How diagrams are drawn: in Mermaid's own light or dark theme, unless the
+ * look sets a `--diagram-*` token. Then they are drawn in the page's colors,
+ * with each `--diagram-*` token set over them; a plain color is all an image
+ * can take.
+ */
+const diagramLook = (): DiagramLook => {
+  const dark = currentTheme() === "dark";
+  const font = currentToken("--font-ui");
+  if (DIAGRAM_TOKENS.every((token) => currentToken(token) === "")) return { dark, font };
+  const color = (token: string, fallback: string, under = "--bg-raised") => tokenColor(currentToken(token) === "" ? fallback : token, under);
+  return {
+    dark,
+    font,
+    colors: {
+      background: color("--diagram-background", "--bg-raised", "--bg"),
+      node: color("--diagram-node", "--bg-active"),
+      border: color("--diagram-border", "--border-strong"),
+      text: color("--diagram-text", "--text"),
+      line: color("--diagram-line", "--text-3"),
+      note: color("--diagram-note", "--accent-soft"),
+    },
+  };
+};
 
 /** Resolves when the browser has a moment between frames, so Mermaid's synchronous work does not land in one mid-stream. */
 const idle = (): Promise<void> =>
@@ -47,8 +73,11 @@ function Viewer(props: { viewing: Viewing; onClose: () => void }) {
 /**
  * Mermaid diagrams for ```mermaid blocks, through the `markdown.code` slot.
  * A block is drawn once its fence closes (until then it streams as code),
- * and its source stays a click away. Diagrams on the page are drawn again
- * in the new colors when the theme changes. Mermaid loads on first use.
+ * and its source stays a click away. A diagram is drawn in Mermaid's own
+ * light or dark theme, or in the page's colors once the look sets a
+ * `--diagram-*` token (`--diagram-node`, `--diagram-border`, `--diagram-line`,
+ * `--diagram-text`, `--diagram-background`, `--diagram-note`), and drawn
+ * again when the look changes. Mermaid loads on first use.
  */
 export default defineUiPlugin({
   id: "diagrams",
@@ -69,14 +98,14 @@ export default defineUiPlugin({
     const draw = async (image: HTMLImageElement, code: string) => {
       const { renderDiagram } = await load();
       await idle();
-      image.src = await renderDiagram(code, dark());
+      image.src = await renderDiagram(code, diagramLook());
     };
     const [viewing, setViewing] = createSignal<Viewing>();
     slots.add(Layers, {
       id: "diagram-viewer",
       component: () => <Show when={viewing()}>{(shown) => <Viewer viewing={shown()} onClose={() => setViewing(undefined)} />}</Show>,
     });
-    /** Its diagrams on the page, redrawn in the new colors when the theme changes. */
+    /** Its diagrams on the page, redrawn in the new colors when the look changes. */
     const drawn = new Set<HTMLImageElement>();
     const redraw = () => {
       for (const image of drawn) {
@@ -88,7 +117,7 @@ export default defineUiPlugin({
         if (code !== undefined) void draw(image, code).catch(() => {});
       }
     };
-    plugin.onCleanup(onThemeChange(redraw));
+    plugin.onCleanup(onLookChange(redraw));
     slots.add(CodeBlocks, {
       id: "mermaid",
       order: 50,

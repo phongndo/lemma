@@ -14,11 +14,11 @@
 .toast {
   pointer-events: auto;
   padding: 10px 10px 10px 14px;
-  border-radius: 10px;
+  border-radius: calc(10px * var(--radius-scale));
   border: 1px solid var(--border-strong);
   background: var(--bg-raised);
   box-shadow: var(--shadow-lg);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   animation: drop 0.16s ease-out;
 }
 
@@ -41,7 +41,7 @@
 }
 
 .toast-source {
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -83,7 +83,7 @@
 }
 
 .device-code code {
-  font-size: 20px;
+  font-size: calc(20px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.12em;
   user-select: all;

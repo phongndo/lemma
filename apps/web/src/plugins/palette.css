@@ -1,6 +1,6 @@
 .palette-heading {
   padding: 10px 16px 0;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   font-weight: 500;
   color: var(--text-3);
 }
@@ -14,7 +14,7 @@
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   color: var(--text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   white-space: pre-wrap;
 }
 
@@ -27,7 +27,7 @@
   min-width: 0;
   padding-left: 4px;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -41,7 +41,7 @@
   background: none;
   color: var(--text-3);
   font-family: var(--font-ui);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .palette-kbd {
@@ -64,7 +64,7 @@
   gap: 4px 14px;
   padding: 8px 14px;
   border-top: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--text-scale));
   color: var(--text-3);
 }
 

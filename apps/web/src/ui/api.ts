@@ -16,6 +16,7 @@ import { Segmented as DefaultSegmented, SettingRow as DefaultSettingRow } from "
 import { SearchField as DefaultSearchField } from "../components/search-field.tsx";
 import { Toggle as DefaultToggle } from "../components/toggle.tsx";
 import { copyText } from "../lib/clipboard.ts";
+import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "../lib/paint.ts";
 import { bundled } from "../plugins/index.ts";
 import * as contracts from "./contracts.ts";
 import { defineUiPlugin, extendUiPlugin } from "./define.ts";
@@ -48,6 +49,13 @@ export const api = {
   /** The order bundled parts are added at: add with a lower one to replace a part. */
   DEFAULT_PART_ORDER,
   contracts,
+  /**
+   * The page's look (see "the look" in the contracts): `paint` applies a scheme and tokens for an owner, as the
+   * bundled `appearance` does, remembered so the next load shows it before plugins start, and `unpaint` stops; a
+   * replacement for `appearance` uses these to take its place. The rest read the look for a renderer that does
+   * not draw with CSS: `tokenColor` gives a token as a plain color, and `onLookChange` says when to draw again.
+   */
+  look: { paint, unpaint, currentTheme, onThemeChange, currentToken, tokenColor, onLookChange },
   solid,
   web,
   store,

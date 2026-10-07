@@ -7,7 +7,7 @@
 }
 
 .callout-detail {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text-2);
   overflow-wrap: anywhere;
 }
@@ -32,7 +32,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text-3);
   white-space: nowrap;
 }

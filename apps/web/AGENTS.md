@@ -29,9 +29,24 @@ file. Build every default so a user could have written it and could replace it.
 - **A component** (`src/components/`) is a default implementation of a part.
   It draws other parts through `ui/parts.tsx`.
 - **A model** (`src/model/`) is pure data and functions, tested in `tests/`.
-- **The foundation** (`src/styles.css`) holds the tokens, base styles, and the
-  class vocabulary several plugins share (`.button`, `.field`, `.menu-*`). A
-  rule one plugin's markup needs goes in that plugin's stylesheet.
+- **The foundation** (`src/styles.css`) holds the tokens, base styles, and
+  the class vocabulary several plugins share (`.button`, `.field`,
+  `.menu-*`). A rule one plugin's markup needs goes in that plugin's
+  stylesheet, or is Tailwind utilities in its markup.
+- **The look is tokens all through**, so a theme or a setting reaches every
+  plugin. Draw with the foundation's tokens; a color of a plugin's own (a
+  shadow, a palette) is a token declared in its stylesheet, its default the
+  look it has. Sizes are scaled: `calc(12px * var(--text-scale))` for a font,
+  `calc(6px * var(--radius-scale))` for a corner. In a stylesheet,
+  `check-boundaries` fails a color written outside a token's declaration, or
+  a font size, line height, or radius with px not scaled so.
+- **Utilities** (`src/tailwind.css`) are Tailwind's, prefixed `tw:` and named
+  for the tokens: the token `--x` is the value `x`, as in `tw:bg-bg-raised`
+  and `tw:text-text-2`. Use them for a plugin's own layout and spacing, as
+  `appearance-page` does. A piece other plugins draw, or a user would restyle
+  across the app, keeps a semantic class and a part, so one rule in a
+  stylesheet restyles it everywhere. Write a class whole (`tw:bg-accent`,
+  never `tw:bg-${name}`): the build finds classes by reading the source.
 
 ## Adding or changing UI
 

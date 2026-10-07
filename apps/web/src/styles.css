@@ -6,43 +6,75 @@
  * `.palette-*` list, and the inspectors' `.dt-*`). Everything
  * else belongs to the plugin that draws it and loads with it (`styles` in
  * `defineUiPlugin`), in the `plugins` layer; the shared parts' styles sit in
- * its `parts` sublayer, under the views. Stylesheets in `~/.lemma/ui` are not
- * layered, so they override all of it.
+ * its `parts` sublayer, under the views. Tailwind's utilities (`tailwind.css`)
+ * come last of the layers, so a class in a plugin's markup beats a rule in a
+ * stylesheet. Stylesheets in `~/.lemma/ui` are not layered, so they override
+ * all of it.
  */
-@layer foundation, plugins;
+@layer theme, foundation, plugins, utilities;
+@import "./tailwind.css";
 
 @layer foundation {
-  :root {
+  /*
+   * Every color, font, font size, radius, and drop shadow is a token here or
+   * in the stylesheet of the plugin that uses it, and each default is Lemma's
+   * own look. (A 1px ring drawn with `box-shadow` is a border: its color is a
+   * token, its width not, as no border's is.) Colors start from three base colors: `--bg`, `--text`, and
+   * `--accent` (which follows `--text` unless set). Surfaces, muted text, and
+   * the accent's tint and the text on it derive from them, so a theme that
+   * sets only those three restyles every plugin; any derived token can still
+   * be set itself. Overlays and borders are black on a light scheme and white
+   * on a dark one, which reads on any background. The status colors, their
+   * tints, and a plugin's own palette (`--code-*`, `--trj-*`) are tokens with
+   * their own values. `--text-scale` sizes every font, and `--radius-scale`
+   * rounds every corner. A `data-theme` on any element gives it that scheme's
+   * tokens: the page's on `<html>`, a preview's on its own.
+   */
+  :root,
+  [data-theme="light"] {
     --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
     --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --text-scale: 1;
+    --radius-scale: 1;
 
     --bg: #fafafa;
-    --bg-sunk: #f4f4f4;
-    --bg-raised: #ffffff;
+    --text: #171717;
+    --accent: var(--text);
+
+    /* Light surfaces sink toward black and rise toward white: Lemma's own rise to white itself. */
+    --bg-sunk: color-mix(in srgb, var(--bg), black 2.4%);
+    --bg-raised: oklch(from var(--bg) calc(l + 0.015) c h);
     --bg-hover: rgba(0, 0, 0, 0.045);
     --bg-active: rgba(0, 0, 0, 0.075);
     --border: rgba(0, 0, 0, 0.09);
     --border-strong: rgba(0, 0, 0, 0.16);
-    --text: #171717;
-    --text-2: #525252;
-    --text-3: #8a8a8a;
-    --accent: #171717;
-    --accent-soft: rgba(0, 0, 0, 0.06);
-    --accent-text: #171717;
-    --accent-fg: #ffffff;
+    --text-2: color-mix(in srgb, var(--text), var(--bg) 25.99%);
+    --text-3: color-mix(in srgb, var(--text), var(--bg) 50.66%);
+    --accent-soft: color-mix(in srgb, var(--accent) 6.61%, transparent);
+    --accent-text: var(--accent);
+    /* Black or white, whichever reads on the accent: lightness above 0.65 takes the near-black. */
+    --accent-fg: oklch(from var(--accent) clamp(0.1495, calc((0.65 - l) * 1000), 1) 0 0);
+
     --ok: #1f8a4c;
     --warn: #a86b00;
     --warn-soft: rgba(200, 130, 0, 0.1);
     --err: #c43d3d;
     --err-soft: rgba(196, 61, 61, 0.08);
+    /* Text on a fill of `--err` (a danger button, a count). */
+    --err-fg: #ffffff;
     --add: #1f7a45;
     --add-bg: rgba(40, 170, 90, 0.1);
     --del: #b33a3a;
     --del-bg: rgba(210, 60, 60, 0.09);
+
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 4px 16px rgba(0, 0, 0, 0.06);
     --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.16);
-    --radius: 8px;
-    --radius-sm: 6px;
+    /* What dims the page under a dialog, and under the palette. */
+    --backdrop: rgba(0, 0, 0, 0.32);
+    --backdrop-strong: rgba(0, 0, 0, 0.45);
+    --shadow-palette: 0 24px 60px -16px rgba(0, 0, 0, 0.6);
+    --radius: calc(8px * var(--radius-scale));
+    --radius-sm: calc(6px * var(--radius-scale));
     --sidebar: 264px;
     /* Stacking of what covers the page, lowest first. A layer from a UI file slots in between by picking a value. */
     --z-drawer: 40;
@@ -54,22 +86,25 @@
     color-scheme: light;
   }
 
-  /* The theme is resolved in JS (lib/paint.ts), so an explicit choice overrides the system. */
-  :root[data-theme="dark"] {
+  /* The scheme is resolved in JS (lib/paint.ts), so an explicit choice overrides the system. */
+  [data-theme="dark"] {
     --bg: #0b0b0b;
-    --bg-sunk: #080808;
-    --bg-raised: #161616;
+    --text: #ececec;
+    --accent: var(--text);
+
+    /* Dark surfaces sink toward black and rise toward the text, so a tinted theme's keep its tint. */
+    --bg-sunk: color-mix(in srgb, var(--bg), black 27.27%);
+    --bg-raised: color-mix(in srgb, var(--bg), var(--text) 4.889%);
     --bg-hover: rgba(255, 255, 255, 0.05);
     --bg-active: rgba(255, 255, 255, 0.08);
     --border: rgba(255, 255, 255, 0.08);
     --border-strong: rgba(255, 255, 255, 0.14);
-    --text: #ececec;
-    --text-2: #a3a3a3;
-    --text-3: #6b6b6b;
-    --accent: #ececec;
-    --accent-soft: rgba(255, 255, 255, 0.08);
-    --accent-text: #e5e5e5;
-    --accent-fg: #0b0b0b;
+    --text-2: color-mix(in srgb, var(--text), var(--bg) 32.44%);
+    --text-3: color-mix(in srgb, var(--text), var(--bg) 57.33%);
+    --accent-soft: color-mix(in srgb, var(--accent) 8.68%, transparent);
+    --accent-text: color-mix(in srgb, var(--accent), var(--bg) 3.11%);
+    --accent-fg: oklch(from var(--accent) clamp(0.1495, calc((0.65 - l) * 1000), 1) 0 0);
+
     --ok: #4cc27f;
     --warn: #e0a640;
     --warn-soft: rgba(224, 166, 64, 0.12);
@@ -79,6 +114,7 @@
     --add-bg: rgba(80, 200, 120, 0.12);
     --del: #f08a8a;
     --del-bg: rgba(240, 100, 100, 0.12);
+
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 4px 16px rgba(0, 0, 0, 0.3);
     --shadow-lg: 0 8px 40px rgba(0, 0, 0, 0.5);
     color-scheme: dark;
@@ -105,7 +141,7 @@
   }
 
   body {
-    font: 14px/1.55 var(--font-ui);
+    font: calc(14px * var(--text-scale))/1.55 var(--font-ui);
     color: var(--text);
     background: var(--bg);
     -webkit-font-smoothing: antialiased;
@@ -138,7 +174,7 @@
   :focus-visible {
     outline: 2px solid var(--text-3);
     outline-offset: 1px;
-    border-radius: 4px;
+    border-radius: calc(4px * var(--radius-scale));
   }
 
   ::selection {
@@ -162,7 +198,7 @@
   }
 
   .small {
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .spacer {
@@ -170,9 +206,9 @@
   }
 
   kbd {
-    font-size: 11px;
+    font-size: calc(11px * var(--text-scale));
     padding: 0 4px;
-    border-radius: 4px;
+    border-radius: calc(4px * var(--radius-scale));
     border: 1px solid var(--border);
     background: var(--bg-raised);
     color: var(--text-2);
@@ -194,7 +230,7 @@
     border: 1px solid var(--border);
     background: var(--bg-raised);
     color: var(--text);
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
     font-weight: 500;
     white-space: nowrap;
     text-decoration: none;
@@ -215,7 +251,7 @@
   .button.small {
     height: 26px;
     padding: 0 9px;
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .button-primary {
@@ -252,7 +288,7 @@
     background: none;
     padding: 0;
     color: var(--accent-text);
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .link-button:hover {
@@ -284,9 +320,9 @@
   }
 
   .tag {
-    font-size: 10.5px;
+    font-size: calc(10.5px * var(--text-scale));
     padding: 0 5px;
-    border-radius: 4px;
+    border-radius: calc(4px * var(--radius-scale));
     background: var(--bg-active);
     color: var(--text-2);
   }
@@ -297,7 +333,7 @@
     gap: 8px;
     padding: 9px 12px;
     border-radius: var(--radius);
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
     line-height: 1.45;
   }
 
@@ -349,7 +385,7 @@
     border: 0;
     outline: none;
     background: transparent;
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
     font-weight: 500;
     color: var(--text);
   }
@@ -397,7 +433,7 @@
     display: grid;
     place-items: start center;
     padding: 12vh 16px 16px;
-    background: rgba(0, 0, 0, 0.32);
+    background: var(--backdrop);
     animation: fade 0.12s ease-out;
   }
 
@@ -423,7 +459,7 @@
 
   .menu-section {
     padding: 8px 10px 4px;
-    font-size: 11px;
+    font-size: calc(11px * var(--text-scale));
     font-weight: 500;
     color: var(--text-3);
     letter-spacing: 0.01em;
@@ -449,10 +485,10 @@
     padding: 0 10px;
     flex: none;
     border: 0;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--radius-scale));
     background: transparent;
     text-align: left;
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
     color: var(--text-2);
     white-space: nowrap;
     cursor: default;
@@ -506,7 +542,7 @@
     margin-left: auto;
     padding-left: 10px;
     color: var(--text-3);
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
     overflow: hidden;
     text-overflow: ellipsis;
     min-width: 0;
@@ -516,7 +552,7 @@
     padding: 18px 12px;
     text-align: center;
     color: var(--text-3);
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
   }
 
   @keyframes tip-in {
@@ -527,7 +563,7 @@
 
   .palette-backdrop {
     padding-top: 14vh;
-    background: rgba(0, 0, 0, 0.45);
+    background: var(--backdrop-strong);
   }
 
   .palette {
@@ -537,9 +573,9 @@
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--border-strong);
-    border-radius: 14px;
+    border-radius: calc(14px * var(--radius-scale));
     background: var(--bg-raised);
-    box-shadow: 0 24px 60px -16px rgba(0, 0, 0, 0.6);
+    box-shadow: var(--shadow-palette);
     animation: menu-in 0.14s cubic-bezier(0.2, 0.9, 0.3, 1);
   }
 
@@ -559,7 +595,7 @@
     border: 0;
     outline: none;
     background: transparent;
-    font-size: 15px;
+    font-size: calc(15px * var(--text-scale));
     font-family: var(--font-mono);
     color: var(--text);
   }
@@ -582,9 +618,9 @@
     gap: 10px;
     min-height: 36px;
     padding: 0 6px 0 12px;
-    border-radius: 8px;
+    border-radius: calc(8px * var(--radius-scale));
     color: var(--text-2);
-    font-size: 13.5px;
+    font-size: calc(13.5px * var(--text-scale));
     cursor: default;
   }
 
@@ -607,7 +643,7 @@
 
   .palette-section {
     padding: 10px 12px 4px;
-    font-size: 11px;
+    font-size: calc(11px * var(--text-scale));
     font-weight: 500;
     color: var(--text-3);
   }
@@ -633,7 +669,7 @@
     padding: 22px;
     text-align: center;
     color: var(--text-3);
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
   }
 
   input,
@@ -666,7 +702,7 @@
 
   ::-webkit-scrollbar-thumb {
     background: var(--border-strong);
-    border-radius: 10px;
+    border-radius: calc(10px * var(--radius-scale));
     border: 3px solid transparent;
     background-clip: padding-box;
   }
@@ -704,7 +740,7 @@
     gap: 8px;
     margin: 0;
     color: var(--text-3);
-    font-size: 13px;
+    font-size: calc(13px * var(--text-scale));
   }
 
   .setting-row {
@@ -724,12 +760,12 @@
   }
 
   .setting-title {
-    font-size: 13.5px;
+    font-size: calc(13.5px * var(--text-scale));
     font-weight: 500;
   }
 
   .setting-desc {
-    font-size: 12.5px;
+    font-size: calc(12.5px * var(--text-scale));
     color: var(--text-3);
   }
 
@@ -751,16 +787,19 @@
      `.dt-check`s, `.dt-sep`s), a `.dt-table` (rows marked `data-row`, `data-selected`), `.dt-tabs` of `.dt-tab`s,
      a `.dt-details` pane (a `.dt-details-title`, `.dt-facts`, `.dt-section`s), and a `.dt-status` bar. A table and
    its details sit in a `.dt-split`: a `.dt-main` beside a `.dt-details dt-side` holding a `.dt-side-body`. */
-  :root {
+  :root,
+  [data-theme="light"] {
     --dt-line: var(--border);
     --dt-grid: color-mix(in srgb, var(--border) 70%, transparent);
     --dt-row: 21px;
     --dt-select: #cfe3fb;
     --dt-select-focus: #1a73e8;
     --dt-link: #2a78d6;
+    /* Text on a row selected while its table has focus. */
+    --dt-select-focus-fg: #ffffff;
   }
 
-  :root[data-theme="dark"] {
+  [data-theme="dark"] {
     --dt-select: #25354a;
     --dt-select-focus: #2c5ea8;
     --dt-link: #3987e5;
@@ -773,7 +812,7 @@
     outline: none;
     background: var(--bg-raised);
     color: var(--text);
-    font: 12px/1.4 var(--font-ui);
+    font: calc(12px * var(--text-scale))/1.4 var(--font-ui);
   }
 
   .dt-scope button,
@@ -813,7 +852,7 @@
 
   .dt-code {
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: calc(11.5px * var(--text-scale));
   }
 
   /* A cell whose content is a list (who uses a capability): it wraps rather than being cut off. */
@@ -863,7 +902,7 @@
     width: 300px;
     max-width: 40%;
     padding: 0 6px;
-    border-radius: 2px;
+    border-radius: calc(2px * var(--radius-scale));
     background: var(--bg-raised);
     box-shadow: inset 0 0 0 1px var(--dt-line);
     color: var(--text-3);
@@ -880,7 +919,7 @@
     outline: none;
     background: transparent;
     color: var(--text);
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .dt-filter input::placeholder {
@@ -901,10 +940,10 @@
     height: 20px;
     padding: 0 7px;
     border: 0;
-    border-radius: 10px;
+    border-radius: calc(10px * var(--radius-scale));
     background: transparent;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .dt-chip:hover {
@@ -991,7 +1030,7 @@
   }
 
   .dt-scope:focus-within .dt-table tbody tr[data-selected="true"] :is(td, td *) {
-    color: #fff !important;
+    color: var(--dt-select-focus-fg) !important;
   }
 
   .dt-status {
@@ -1006,7 +1045,7 @@
     border-top: 1px solid var(--dt-line);
     background: var(--bg);
     color: var(--text-2);
-    font-size: 11.5px;
+    font-size: calc(11.5px * var(--text-scale));
   }
 
   .dt-status > span {
@@ -1037,7 +1076,7 @@
     border: 0;
     background: transparent;
     color: var(--text-2);
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
   }
 
   .dt-tab:hover {
@@ -1115,7 +1154,7 @@
     min-width: 0;
     overflow-wrap: anywhere;
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: calc(11.5px * var(--text-scale));
   }
 
   .dt-section {
@@ -1128,7 +1167,7 @@
     display: flex;
     align-items: baseline;
     gap: 8px;
-    font-size: 12px;
+    font-size: calc(12px * var(--text-scale));
     font-weight: 600;
     margin: 0;
     padding-bottom: 3px;
@@ -1144,7 +1183,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: calc(11px * var(--text-scale));
     font-weight: 400;
     color: var(--text-3);
   }
@@ -1187,10 +1226,10 @@
   .dt-pre {
     margin: 0;
     padding: 6px 8px;
-    border-radius: 2px;
+    border-radius: calc(2px * var(--radius-scale));
     background: var(--bg-sunk);
     font-family: var(--font-mono);
-    font-size: 11.5px;
+    font-size: calc(11.5px * var(--text-scale));
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }

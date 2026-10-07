@@ -1,4 +1,12 @@
-/* Highlighted code carries both themes' colors; the page's theme picks one. */
+/*
+ * Highlighted code carries both themes' colors; the page's theme picks one.
+ * Each color is a token with GitHub's as its fallback (lib/highlight.ts):
+ * `--code-text`, `--code-comment`, `--code-keyword`, `--code-string`,
+ * `--code-regexp` (in the dark scheme; the light one colors regexps as
+ * strings), `--code-constant`, `--code-entity` (functions and types),
+ * `--code-variable`, `--code-tag`, `--code-invalid`, `--code-bracket`,
+ * `--code-ignored`, and `--code-carriage-return`.
+ */
 .shiki span {
   color: var(--shiki-light);
 }

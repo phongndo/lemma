@@ -1166,8 +1166,142 @@ try {
   await connect.close();
   expectNoErrors("connecting providers each way");
 
+  // A UI file's Tailwind classes work as the app's own: compiled in the page with them into one sheet, so a file's
+  // `tw:px-4` beats the app's `tw:p-0.5` as one build would, drawn from the tokens, and gone with the file. The same
+  // file is a theme pack: its theme, accent, and Appearance row are offered beside Lemma's own, and leave with it.
+  const styled = await open();
+  styled.on("pageerror", (error) => errors.push(error.message));
+  await styled.goto(`${url}/?mock`);
+  await settled(styled);
+  await styled.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
+  await styled.evaluate(() => {
+    const source = `export default ({ defineUiPlugin, contracts: { Slots, SidebarFooter, Themes, Accents, SettingsGroups, SectionIds }, html }) =>
+      defineUiPlugin({ id: "check-look", requires: { slots: Slots }, setup: ({ slots }) => {
+        slots.add(SidebarFooter, { id: "check-utilities", order: 1, component: () => html\`<span class="check-utilities tw:p-0.5 tw:px-4 tw:bg-accent tw:rounded">styled</span>\` });
+        slots.add(Themes, { id: "check-night", title: "Check night", scheme: "dark", colors: { bg: "rgb(10, 20, 30)" } });
+        slots.add(Themes, { id: "check-day", title: "Check day", scheme: "light", colors: { bg: "rgb(250, 240, 220)" } });
+        slots.add(Accents, { id: "check-teal", title: "Check teal", color: "rgb(0, 128, 128)" });
+        slots.add(SettingsGroups, { id: "check-look", section: SectionIds.appearance, title: "Check", entries: () => [{ text: "check look", view: () => html\`<p class="check-look-row">a plugin's row</p>\` }] });
+      } });`;
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setUiFiles([{ name: "check-look.js", source: "user", kind: "script", path: "/check/check-look.js", url }]);
+  });
+  await styled.waitForSelector(".check-utilities", { timeout: 10_000 }).catch(() => assert.fail("a UI file's plugin did not draw"));
+  const look = () =>
+    styled.evaluate(() => {
+      const style = getComputedStyle(document.querySelector(".check-utilities")!);
+      return { left: style.paddingLeft, top: style.paddingTop, radius: style.borderTopLeftRadius, background: style.backgroundColor };
+    });
+  const accentNow = () =>
+    styled.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.backgroundColor = "var(--accent)";
+      document.body.append(probe);
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    });
+  assert.deepEqual(
+    await look(),
+    { left: "16px", top: "2px", radius: "8px", background: await accentNow() },
+    "a UI file's utilities are not compiled in order, or not from the tokens",
+  );
+  await styled.evaluate(() => document.documentElement.style.setProperty("--accent", "rgb(1, 2, 3)"));
+  assert.equal((await look()).background, "rgb(1, 2, 3)", "a UI file's utility does not follow its token");
+  await styled.evaluate(() => document.documentElement.style.removeProperty("--accent"));
+
+  const painted = (token: string) => styled.evaluate((token) => document.documentElement.style.getPropertyValue(token), token);
+  await styled.keyboard.press("ControlOrMeta+,");
+  await styled.click(".settings-nav >> text=Appearance");
+  await styled.waitForSelector(".check-look-row", { timeout: 5_000 }).catch(() => assert.fail("a plugin's row is not in the Appearance section"));
+  await styled.click("[role=radio][aria-label='Check teal']");
+  await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--accent") === "rgb(0, 128, 128)", undefined, { timeout: 5_000 });
+  await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Dark')");
+  await styled.click("[role=radiogroup][aria-label='Dark theme'] [role=radio]:has-text('Check night')");
+  await styled
+    .waitForFunction(
+      () => document.documentElement.style.getPropertyValue("--bg") === "rgb(10, 20, 30)" && document.documentElement.dataset.theme === "dark",
+      undefined,
+      {
+        timeout: 5_000,
+      },
+    )
+    .catch(() => assert.fail("a theme a plugin offers does not paint"));
+  // A theme sets base colors; the rest derive from them, so its surfaces follow its background.
+  const raised = await styled.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg-raised"));
+  assert.match(raised, /rgb\(10, 20, 30\)/, `a theme's surfaces do not derive from its background: --bg-raised is ${raised}`);
+  // A light theme's too: its raised surfaces rise from its background, not to plain white.
+  await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Light')");
+  await styled.click("[role=radiogroup][aria-label='Light theme'] [role=radio]:has-text('Check day')");
+  await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "rgb(250, 240, 220)", undefined, { timeout: 5_000 });
+  const day = await styled.evaluate(async () => (await import("/src/lib/paint.ts" as string)).tokenColor("--bg-raised"));
+  const [red, , blue] = [1, 3, 5].map((at) => Number.parseInt(day.slice(at, at + 2), 16)) as [number, number, number];
+  assert(day !== "#ffffff" && red - blue > 15, `a light theme's raised surface does not follow its background: ${day}`);
+  // The look changes with a stylesheet too (a UI file's), once a linked one has loaded: what renderers redraw on.
+  await styled.evaluate(async () => {
+    const { onLookChange } = await import("/src/lib/paint.ts" as string);
+    (window as any).looks = 0;
+    (window as any).stopLooks = onLookChange(() => (window as any).looks++);
+    const style = document.createElement("style");
+    style.textContent = ":root { --check-look: 1; }";
+    document.head.append(style);
+  });
+  await styled
+    .waitForFunction(() => (window as any).looks >= 1, undefined, { timeout: 5_000 })
+    .catch(() => assert.fail("a stylesheet added is no look change"));
+  const before = await styled.evaluate(() => {
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.href = URL.createObjectURL(new Blob([":root { --check-look: 2; }"], { type: "text/css" }));
+    link.addEventListener("load", () => ((window as any).linkLoaded = true));
+    document.head.append(link);
+    return (window as any).looks as number;
+  });
+  await styled
+    .waitForFunction((before) => (window as any).linkLoaded === true && (window as any).looks >= before + 2, before, { timeout: 5_000 })
+    .catch(() => assert.fail("a linked stylesheet's loading is no look change"));
+  await styled.evaluate(() => (window as any).stopLooks());
+
+  await styled.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
+  await styled.waitForSelector(".check-utilities", { state: "detached", timeout: 10_000 });
+  await styled
+    .waitForFunction(() => document.querySelector("style[data-lemma-utilities]") === null, undefined, { timeout: 5_000 })
+    .catch(() => assert.fail("the UI files' utilities outlived the files"));
+  // What the file offered leaves with it: the look falls back, and the page says what is missing.
+  await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "", undefined, { timeout: 5_000 });
+  assert.equal(await painted("--accent"), "", "an accent outlived the plugin that offered it");
+  assert.equal(await styled.locator(".check-look-row").count(), 0, "a plugin's Appearance row outlived it");
+  await styled.waitForSelector('text="check-teal" is not offered', { timeout: 5_000 }).catch(() => assert.fail("a missing accent is not explained"));
+  await styled.close();
+  expectNoErrors("a UI file's Tailwind classes and theme pack");
+
+  // An older app kept the scheme and width in the browser: the first start carries them into config and forgets them.
+  const carried = await open();
+  carried.on("pageerror", (error) => errors.push(error.message));
+  await carried.addInitScript(() => {
+    if (sessionStorage.getItem("check-carried") !== null) return;
+    sessionStorage.setItem("check-carried", "1");
+    localStorage.setItem("lemma.theme", "dark");
+    localStorage.setItem("lemma.contentWidth", "full");
+  });
+  await carried.goto(`${url}/?mock`);
+  await settled(carried);
+  await carried
+    .waitForFunction(
+      () =>
+        document.documentElement.dataset.theme === "dark" &&
+        document.documentElement.style.getPropertyValue("--content") === "none" &&
+        localStorage.getItem("lemma.theme") === null &&
+        localStorage.getItem("lemma.contentWidth") === null,
+      undefined,
+      { timeout: 10_000 },
+    )
+    .catch(() => assert.fail("an older app's scheme and width were not carried into config"));
+  await carried.close();
+  expectNoErrors("carrying an older app's appearance into config");
+
   console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog.`,
+    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a UI file's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over.`,
   );
 } catch (error) {
   await saveArtifacts();

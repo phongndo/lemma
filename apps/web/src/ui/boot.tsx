@@ -7,6 +7,7 @@ import type { Host } from "@lemma/client";
 import { faultMessage, toPluginStatus } from "@lemma/contracts";
 import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
+import { settlePaint } from "../lib/paint.ts";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, withReplacements } from "@lemma/plugin-host/catalog";
 import { planComposition } from "@lemma/plugin-host/planner";
@@ -239,6 +240,8 @@ export async function boot(options: BootOptions): Promise<void> {
     if (Exit.isFailure(made)) throw new Error(`The web app cannot start: ${describeFailure(made.cause).join("; ")}`);
   }
   loader = made.value;
+  // The look the last load remembered stays only if a plugin painted it again.
+  settlePaint();
   // Plugins that failed to start, left failed: no fault stream existed yet to hear them.
   for (const plugin of (await runPromise(loader.core.inspect)).plugins) {
     if (plugin.state !== "failed" || plugin.fault === undefined) continue;

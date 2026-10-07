@@ -30,7 +30,7 @@
 }
 
 .provider-models-toggle {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .provider-models {
@@ -41,7 +41,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .provider-models li {
@@ -71,13 +71,13 @@
 }
 
 .provider-name {
-  font-size: 13.5px;
+  font-size: calc(13.5px * var(--text-scale));
   font-weight: 500;
   color: var(--text);
 }
 
 .provider-desc {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text-3);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -94,7 +94,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -110,7 +110,7 @@
 .settings-intro {
   margin: 0;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 /* Connecting a provider: the key to paste, or the page to open and the code to enter there, and what it waits for. */
@@ -131,7 +131,7 @@
 }
 
 .connect-method {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   font-weight: 400;
   color: var(--text-3);
 }
@@ -161,7 +161,7 @@
   max-height: 4.8em;
   overflow-y: auto;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   line-height: 1.6;
   color: var(--text-2);
   word-break: break-all;
@@ -190,7 +190,7 @@
 
 .connect-code code {
   font-family: var(--font-mono);
-  font-size: 26px;
+  font-size: calc(26px * var(--text-scale));
   font-weight: 600;
   letter-spacing: 0.12em;
   user-select: all;
@@ -213,7 +213,7 @@
 
 .connect-hint,
 .connect-note {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -238,7 +238,7 @@
   cursor: pointer;
   width: fit-content;
   color: var(--text-2);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .connect-paste summary:hover {
@@ -247,7 +247,7 @@
 
 .connect-paste p {
   margin: 8px 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -295,7 +295,7 @@
 }
 
 .connect-choice-desc {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -303,7 +303,7 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
 }
 
 .connect-get-key .icon {
@@ -331,12 +331,12 @@
   display: flex;
   flex-direction: column;
   gap: 5px;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   color: var(--text-2);
 }
 
 .custom-provider-field small {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -348,7 +348,7 @@
 
 .custom-provider-problem {
   flex: 1;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -358,6 +358,6 @@
 
 .connect-info {
   margin: 0;
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   color: var(--text-3);
 }

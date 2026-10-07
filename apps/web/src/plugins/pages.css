@@ -12,7 +12,7 @@
 }
 
 .page-missing h1 {
-  font-size: 20px;
+  font-size: calc(20px * var(--text-scale));
   font-weight: 600;
   letter-spacing: -0.015em;
   margin-bottom: 8px;
