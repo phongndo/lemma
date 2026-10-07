@@ -257,9 +257,6 @@ function AddProjectDialog(props: { deps: Deps }) {
                             <span class="palette-name">
                               <Highlighted text={row.entry.name} matches={row.entry.matches} />
                             </span>
-                            <Show when={row.entry.git}>
-                              <span class="tag palette-tag">git</span>
-                            </Show>
                             <button
                               type="button"
                               class="icon-button palette-into"
