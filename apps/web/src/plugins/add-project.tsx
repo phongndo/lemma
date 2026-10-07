@@ -2,7 +2,6 @@ import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount
 import type { DirectoryEntry } from "@lemma/contracts";
 import { Portal } from "solid-js/web";
 import { tildePath } from "../model/format.ts";
-import { folderName } from "../model/prefs.ts";
 import { ActionIds, Actions, Client, Dialogs, Layers, Notify, Slots, Workspace } from "../ui/contracts.ts";
 import type { ClientService, DialogsService, NotifyService, WorkspaceService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
@@ -19,7 +18,6 @@ interface Deps {
 }
 
 type Row =
-  | { readonly kind: "recent"; readonly path: string }
   | { readonly kind: "here"; readonly path: string }
   | { readonly kind: "entry"; readonly entry: DirectoryEntry }
   | { readonly kind: "create"; readonly path: string };
@@ -42,7 +40,6 @@ function AddProjectDialog(props: { deps: Deps }) {
   const [loading, setLoading] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [home, setHome] = createSignal<string>();
-  let initial = "";
   let input!: HTMLInputElement;
   let list!: HTMLDivElement;
   let request = 0;
@@ -51,14 +48,12 @@ function AddProjectDialog(props: { deps: Deps }) {
 
   /** The part after the last slash: what the listing is filtered by. */
   const needle = () => value().slice(value().lastIndexOf("/") + 1);
-  const recents = workspace.projects;
 
   const rows = createMemo((): Row[] => {
     const current = listing();
     if (current === undefined) return [];
     const typed = needle();
     const out: Row[] = [];
-    if (value() === initial) out.push(...recents().map((path): Row => ({ kind: "recent", path })));
     if (typed === "") out.push({ kind: "here", path: current.parent });
     out.push(...current.entries.map((entry): Row => ({ kind: "entry", entry })));
     const exact = current.entries.some((entry) => entry.name.toLowerCase() === typed.toLowerCase());
@@ -125,7 +120,6 @@ function AddProjectDialog(props: { deps: Deps }) {
       return;
     }
     switch (row.kind) {
-      case "recent":
       case "here":
         void open(row.path);
         return;
@@ -158,10 +152,9 @@ function AddProjectDialog(props: { deps: Deps }) {
       event.preventDefault();
       move(-1);
     } else if ((event.key === "Tab" && !event.shiftKey) || (event.key === "ArrowRight" && caretAtEnd())) {
-      const target = row?.kind === "entry" ? row.entry.path : row?.kind === "recent" ? row.path : undefined;
-      if (target !== undefined) {
+      if (row?.kind === "entry") {
         event.preventDefault();
-        go(target);
+        go(row.entry.path);
       } else if (event.key === "Tab") event.preventDefault();
     } else if (event.key === "Backspace" && value().endsWith("/") && caretAtEnd() && value().length > 1) {
       event.preventDefault();
@@ -171,19 +164,6 @@ function AddProjectDialog(props: { deps: Deps }) {
       pick(row);
     }
   };
-
-  /** The listed directory as clickable segments: `~ / code /`. */
-  const crumbs = createMemo(() => {
-    const parent = listing()?.parent;
-    if (parent === undefined) return [];
-    const short = tildePath(parent, home());
-    const parts = short.split("/").filter((part, index) => part !== "" || index === 0);
-    let acc = "";
-    return parts.map((part, index) => {
-      acc = index === 0 ? (part === "" ? "/" : part) : `${withSlash(acc)}${part}`;
-      return { label: part === "" ? "/" : part, path: acc };
-    });
-  });
 
   onMount(async () => {
     input.focus();
@@ -196,7 +176,7 @@ function AddProjectDialog(props: { deps: Deps }) {
       /* absolute paths still work */
     }
     const cwd = client.info()?.cwd;
-    initial = cwd === undefined ? "~/" : withSlash(tildePath(cwd.slice(0, cwd.lastIndexOf("/")) || "/", userHome));
+    const initial = cwd === undefined ? "~/" : withSlash(tildePath(cwd.slice(0, cwd.lastIndexOf("/")) || "/", userHome));
     update(initial, true);
     input.setSelectionRange(initial.length, initial.length);
   });
@@ -204,13 +184,6 @@ function AddProjectDialog(props: { deps: Deps }) {
     window.clearTimeout(debounce);
     previous?.focus?.();
   });
-
-  const section = (index: number, row: Row) => {
-    const before = rows()[index - 1];
-    if (row.kind === "recent" && index === 0) return "Recent";
-    if (row.kind !== "recent" && before?.kind === "recent") return "Folders";
-    return undefined;
-  };
 
   return (
     <Portal>
@@ -241,104 +214,77 @@ function AddProjectDialog(props: { deps: Deps }) {
               <Spinner />
             </Show>
           </div>
-          <Show when={crumbs().length > 0}>
-            <nav class="palette-crumbs" aria-label="Current folder">
-              <For each={crumbs()}>
-                {(crumb, index) => (
-                  <>
-                    <Show when={index() > 0}>
-                      <span class="crumb-sep">/</span>
-                    </Show>
-                    <button type="button" class="crumb" tabindex="-1" onClick={() => go(crumb.path)}>
-                      {crumb.label}
-                    </button>
-                  </>
-                )}
-              </For>
-              <Show when={listing()?.truncated}>
-                <span class="crumb-note">Showing the first {listing()?.entries.length}</span>
-              </Show>
-            </nav>
-          </Show>
           <div class="palette-list" id={listId} role="listbox" ref={list}>
             <For each={rows()}>
               {(row, index) => (
-                <>
-                  <Show when={section(index(), row)}>{(label) => <div class="palette-section">{label()}</div>}</Show>
-                  <div
-                    id={`${listId}-${index()}`}
-                    class="palette-row"
-                    classList={{ create: row.kind === "create" }}
-                    role="option"
-                    data-index={index()}
-                    data-active={String(index() === active())}
-                    aria-selected={index() === active()}
-                    onPointerMove={() => setActive(index())}
-                    onClick={() => pick(row)}
-                  >
-                    {(() => {
-                      switch (row.kind) {
-                        case "recent":
-                          return (
-                            <>
-                              <FolderIcon />
-                              <span class="palette-name">{folderName(row.path)}</span>
-                              <span class="palette-path">{tildePath(row.path, home())}</span>
-                            </>
-                          );
-                        case "here":
-                          return (
-                            <>
-                              <FolderIcon />
-                              <span class="palette-name">
-                                Open <span class="palette-mono">{tildePath(row.path, home())}</span>
-                              </span>
-                            </>
-                          );
-                        case "create":
-                          return (
-                            <>
-                              <FolderPlusIcon />
-                              <span class="palette-name">
-                                Create folder <span class="palette-mono">{tildePath(row.path, home())}</span>
-                              </span>
-                            </>
-                          );
-                        case "entry":
-                          return (
-                            <>
-                              <Show when={row.entry.git} fallback={<FolderIcon />}>
-                                <GitBranchIcon />
-                              </Show>
-                              <span class="palette-name">
-                                <Highlighted text={row.entry.name} matches={row.entry.matches} />
-                              </span>
-                              <Show when={row.entry.git}>
-                                <span class="tag palette-tag">git</span>
-                              </Show>
-                              <button
-                                type="button"
-                                class="icon-button palette-into"
-                                aria-label={`Show folders in ${row.entry.name}`}
-                                data-tip="Show folders inside"
-                                tabindex="-1"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  go(row.entry.path);
-                                }}
-                              >
-                                <ChevronIcon />
-                              </button>
-                            </>
-                          );
-                      }
-                    })()}
-                  </div>
-                </>
+                <div
+                  id={`${listId}-${index()}`}
+                  class="palette-row"
+                  classList={{ create: row.kind === "create" }}
+                  role="option"
+                  data-index={index()}
+                  data-active={String(index() === active())}
+                  aria-selected={index() === active()}
+                  onPointerMove={() => setActive(index())}
+                  onClick={() => pick(row)}
+                >
+                  {(() => {
+                    switch (row.kind) {
+                      case "here":
+                        return (
+                          <>
+                            <FolderIcon />
+                            <span class="palette-name">
+                              Open <span class="palette-mono">{tildePath(row.path, home())}</span>
+                            </span>
+                          </>
+                        );
+                      case "create":
+                        return (
+                          <>
+                            <FolderPlusIcon />
+                            <span class="palette-name">
+                              Create folder <span class="palette-mono">{tildePath(row.path, home())}</span>
+                            </span>
+                          </>
+                        );
+                      case "entry":
+                        return (
+                          <>
+                            <Show when={row.entry.git} fallback={<FolderIcon />}>
+                              <GitBranchIcon />
+                            </Show>
+                            <span class="palette-name">
+                              <Highlighted text={row.entry.name} matches={row.entry.matches} />
+                            </span>
+                            <Show when={row.entry.git}>
+                              <span class="tag palette-tag">git</span>
+                            </Show>
+                            <button
+                              type="button"
+                              class="icon-button palette-into"
+                              aria-label={`Show folders in ${row.entry.name}`}
+                              data-tip="Show folders inside"
+                              tabindex="-1"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                go(row.entry.path);
+                              }}
+                            >
+                              <ChevronIcon />
+                            </button>
+                          </>
+                        );
+                    }
+                  })()}
+                </div>
               )}
             </For>
             <Show when={!loading() && listing() !== undefined && rows().length === 0}>
               <div class="palette-empty">No folder here. Check the path.</div>
+            </Show>
+            <Show when={listing()?.truncated}>
+              <div class="palette-note">Showing the first {listing()?.entries.length}</div>
             </Show>
           </div>
         </div>
