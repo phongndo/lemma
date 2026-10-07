@@ -1,3 +1,9 @@
+:root {
+  --composer-shadow: 0 12px 28px -18px rgba(0, 0, 0, 0.4);
+  --composer-menu-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.45);
+  --send-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+}
+
 .composer-wrap {
   flex: none;
   max-width: var(--content);
@@ -8,13 +14,13 @@
 
 .composer {
   position: relative;
-  border-radius: 24px;
+  border-radius: calc(24px * var(--radius-scale));
   background: color-mix(in srgb, var(--bg-raised) 80%, transparent);
   -webkit-backdrop-filter: blur(12px) saturate(1.4);
   backdrop-filter: blur(12px) saturate(1.4);
   box-shadow:
     inset 0 0 0 1px var(--border),
-    0 12px 28px -18px rgba(0, 0, 0, 0.4);
+    var(--composer-shadow);
   transition:
     box-shadow 0.15s,
     background-color 0.2s;
@@ -39,7 +45,7 @@
   outline: none;
   resize: none;
   background: transparent;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   line-height: 1.625;
 }
 
@@ -88,7 +94,7 @@
   flex: none;
   background: var(--accent);
   color: var(--accent-fg);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.24);
+  box-shadow: var(--send-shadow);
   transition:
     transform 0.15s,
     opacity 0.15s,
@@ -111,7 +117,7 @@
 
 .send.stop {
   background: color-mix(in srgb, var(--err) 90%, transparent);
-  color: #fff;
+  color: var(--err-fg);
 }
 
 .send .icon {
@@ -133,9 +139,9 @@
   overscroll-behavior: contain;
   padding: 4px;
   border: 1px solid var(--border-strong);
-  border-radius: 14px;
+  border-radius: calc(14px * var(--radius-scale));
   background: var(--bg-raised);
-  box-shadow: 0 16px 40px -16px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--composer-menu-shadow);
   animation: menu-in 0.12s cubic-bezier(0.2, 0.9, 0.3, 1);
   transform-origin: bottom center;
 }
@@ -161,7 +167,7 @@
 
 .completions-note {
   padding: 8px 10px;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   color: var(--text-3);
 }
 
@@ -185,15 +191,15 @@
   gap: 8px;
   min-width: 0;
   padding: 2px 2px 2px 8px;
-  border-radius: 8px;
+  border-radius: calc(8px * var(--radius-scale));
   background: var(--bg-hover);
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .queued-mode {
   flex: none;
   color: var(--text-3);
-  font-size: 11px;
+  font-size: calc(11px * var(--text-scale));
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;

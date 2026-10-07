@@ -352,6 +352,15 @@ export const createMockHost = (): Host => {
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
   let ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+  // For the UI check: UI files as the host would list them from `~/.lemma/ui` (a `blob:` URL stands in for the served file).
+  Object.assign(window, {
+    lemmaMock: {
+      setUiFiles: (files: UiComposition["files"]) => {
+        ui = { ...ui, files };
+        emit({ type: "ui-changed", ui });
+      },
+    },
+  });
   const halted = () => {
     for (const plugin of plugins) {
       if (!plugin.enabled) continue;

@@ -1,0 +1,72 @@
+/*
+ * Tailwind's utilities, named for Lemma's tokens: the token `--x` is the
+ * utility value `x`, so `--bg-raised` is `tw:bg-bg-raised`, `--text-2` is
+ * `tw:text-text-2`, `--border` is `tw:border-border`, `--accent-fg` is
+ * `tw:text-accent-fg`, `--font-mono` is `tw:font-mono`, `--radius-sm` is
+ * `tw:rounded-sm`, and `--shadow-lg` is `tw:shadow-lg`; font sizes are
+ * `tw:text-xs` (11.5px), `tw:text-sm` (12.5px), `tw:text-md` (13px), and
+ * `tw:text-base` (14px), each scaled by `--text-scale`. Tailwind's own
+ * palette, fonts, sizes, radii, and shadows are dropped, so a utility can only name a token,
+ * and `inline` makes it read the token itself: whatever restyles a token (the
+ * look a theme paints, a stylesheet in `~/.lemma/ui`) restyles the utility.
+ * Spacing, sizing, and layout keep Tailwind's scale (`tw:p-2` is 8px), and a
+ * token with no utility is one bracket away (`tw:z-(--z-menu)`,
+ * `tw:max-w-(--content)`).
+ *
+ * Every utility starts with `tw:` (`tw:flex`, `tw:hover:bg-bg-hover`), so it
+ * never meets a class of the app's or a plugin's own (`.hidden`, `.static`),
+ * and only a word written so becomes one. The build compiles the classes in
+ * `src/`; the page compiles UI files' classes with this same file
+ * (`ui/utilities.ts`), so both name the same utilities.
+ */
+@import "tailwindcss/theme.css" layer(theme) prefix(tw);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "./";
+
+@theme inline {
+  --color-*: initial;
+  --color-bg: var(--bg);
+  --color-bg-sunk: var(--bg-sunk);
+  --color-bg-raised: var(--bg-raised);
+  --color-bg-hover: var(--bg-hover);
+  --color-bg-active: var(--bg-active);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-text: var(--text);
+  --color-text-2: var(--text-2);
+  --color-text-3: var(--text-3);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-text: var(--accent-text);
+  --color-accent-fg: var(--accent-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-err: var(--err);
+  --color-err-soft: var(--err-soft);
+  --color-add: var(--add);
+  --color-add-bg: var(--add-bg);
+  --color-del: var(--del);
+  --color-del-bg: var(--del-bg);
+  --color-transparent: transparent;
+  --color-current: currentColor;
+
+  --font-*: initial;
+  --font-ui: var(--font-ui);
+  --font-mono: var(--font-mono);
+
+  /* Font sizes the app uses most, scaled by `--text-scale` as every font is. */
+  --text-*: initial;
+  --text-xs: calc(11.5px * var(--text-scale));
+  --text-sm: calc(12.5px * var(--text-scale));
+  --text-md: calc(13px * var(--text-scale));
+  --text-base: calc(14px * var(--text-scale));
+
+  --radius-*: initial;
+  --radius: var(--radius);
+  --radius-sm: var(--radius-sm);
+
+  --shadow-*: initial;
+  --shadow: var(--shadow);
+  --shadow-lg: var(--shadow-lg);
+}

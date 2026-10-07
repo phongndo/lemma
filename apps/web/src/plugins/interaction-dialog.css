@@ -31,6 +31,6 @@
 }
 
 .choice-desc {
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   color: var(--text-3);
 }

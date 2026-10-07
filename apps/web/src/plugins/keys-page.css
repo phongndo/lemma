@@ -34,9 +34,9 @@
   display: inline-block;
   min-width: 24px;
   padding: 3px 8px;
-  border-radius: 6px;
+  border-radius: calc(6px * var(--radius-scale));
   color: var(--text);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   text-align: center;
 }
 
@@ -88,10 +88,10 @@
   height: 26px;
   padding: 0 10px;
   border: 1px solid var(--accent);
-  border-radius: 6px;
+  border-radius: calc(6px * var(--radius-scale));
   background: var(--bg-raised);
   color: var(--text-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   outline: none;
   animation: pulse 1.4s ease-in-out infinite;
 }
@@ -99,7 +99,7 @@
 .shortcut-conflict {
   margin-top: 2px;
   color: var(--warn);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 @media (hover: none) {

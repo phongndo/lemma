@@ -9,10 +9,11 @@ import { boot } from "./ui/boot.tsx";
 import "./styles.css";
 
 const start = async () => {
-  // The last look any plugin painted, so a dark theme does not flash light while the plugins start.
-  preloadPaint();
-  const token = takeToken();
   const params = new URLSearchParams(location.search);
+  // The last look any plugin painted, so a dark theme does not flash light while the plugins start; `?safe` starts
+  // from the system's, whatever the last look was.
+  preloadPaint(!params.has("safe"));
+  const token = takeToken();
   let host: Host;
   // `?mock` in dev runs against an in-browser fake host (no backend needed).
   if (import.meta.env.DEV && params.has("mock")) {

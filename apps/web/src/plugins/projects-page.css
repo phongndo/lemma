@@ -27,7 +27,7 @@
 .project-location code {
   overflow: hidden;
   color: var(--text-2);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -35,7 +35,7 @@
 .button.button-danger {
   background: var(--err);
   border-color: transparent;
-  color: #fff;
+  color: var(--err-fg);
 }
 
 .button.button-danger:hover:not(:disabled) {
@@ -48,7 +48,7 @@
 }
 
 .delete-project-dialog code {
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .delete-project-running {

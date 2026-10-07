@@ -182,14 +182,83 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
     }
   }
 }
-// What covers the page stacks by the `--z-*` tokens, so a layer from a UI file can slot in between.
+// What covers the page stacks by the `--z-*` tokens, so a layer from a UI file can slot in between. And the look is
+// tokens all through, so a theme or a setting reaches every plugin: a color is written only where a token is declared
+// (its default), and a font size or a corner's radius is scaled by `--text-scale` or `--radius-scale`.
+const COLOR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(/i;
+// CSS's named colors, which count as literals in a declaration's value (not in a selector or a property's name).
+const NAMED_COLOR = new RegExp(
+  `(?<![\\w-])(?:${"aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen".split(" ").join("|")})(?![\\w-])`,
+  "i",
+);
+/**
+ * Each declaration a stylesheet's rules hold, with the line it starts on: the
+ * text before each `;` or `}` inside a rule's block, past comments and strings
+ * (which may hold any character, escaped quotes too). A block opened by an
+ * at-rule (`@media`, `@layer`, `@property`) holds rules, not declarations, as a
+ * selector is none, unless it is nested in a rule, which it then continues.
+ */
+const declarations = (css: string): { readonly property: string; readonly value: string; readonly line: number }[] => {
+  const found: { property: string; value: string; line: number }[] = [];
+  const blocks: ("rule" | "group")[] = [];
+  let segment = "";
+  let line = 1;
+  let starts: number | undefined;
+  for (let at = 0; at < css.length; at++) {
+    const char = css[at]!;
+    if (char === "/" && css[at + 1] === "*") {
+      const end = css.indexOf("*/", at + 2);
+      const skipped = css.slice(at, end === -1 ? css.length : end + 2);
+      line += skipped.split("\n").length - 1;
+      at += skipped.length - 1;
+      continue;
+    }
+    if (char === "\n") line++;
+    if (starts === undefined && !/\s/.test(char)) starts = line;
+    if (char === '"' || char === "'") {
+      // To the quote that closes it, past escaped ones (`"\\""`).
+      let end = at + 1;
+      while (end < css.length && css[end] !== char) end += css[end] === "\\" ? 2 : 1;
+      const quoted = css.slice(at, end + 1);
+      segment += quoted;
+      line += quoted.split("\n").length - 1;
+      at += quoted.length - 1;
+      continue;
+    }
+    if (char !== "{" && char !== "}" && char !== ";") {
+      segment += char;
+      continue;
+    }
+    const colon = segment.indexOf(":");
+    if (char !== "{" && blocks.at(-1) === "rule" && colon !== -1) {
+      found.push({ property: segment.slice(0, colon).trim(), value: segment.slice(colon + 1).trim(), line: starts ?? line });
+    }
+    // An at-rule's block holds rules, unless it sits in a rule (CSS nesting), where it holds that rule's declarations.
+    if (char === "{") blocks.push(/^\s*@(?!font-face|page)/.test(segment) && blocks.at(-1) !== "rule" ? "group" : "rule");
+    if (char === "}") blocks.pop();
+    segment = "";
+    starts = undefined;
+  }
+  return found;
+};
+
 for (const file of walk(web).filter((path) => path.endsWith(".css"))) {
-  readFileSync(file, "utf8")
-    .split("\n")
-    .forEach((line, index) => {
-      const value = /z-index:\s*(\d+)/.exec(line)?.[1];
-      if (value !== undefined && Number(value) > 20) uiProblems.push(`${relative(root, file)}:${index + 1}: z-index ${value} (use a --z-* token)`);
-    });
+  for (const { property, value, line } of declarations(readFileSync(file, "utf8"))) {
+    const where = `${relative(root, file)}:${line}`;
+    const stacking = property === "z-index" ? Number(value) : 0;
+    if (stacking > 20) uiProblems.push(`${where}: z-index ${value} (use a --z-* token)`);
+    // A token's declaration is where its default is written.
+    if (property.startsWith("--")) continue;
+    const bare = value.replace(/"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'/g, "");
+    if (COLOR_LITERAL.test(bare) || NAMED_COLOR.test(bare.replace(/--[\w-]+/g, "")))
+      uiProblems.push(`${where}: a color outside a token (declare a --token for it)`);
+    if (/^(?:font|font-size|line-height)$/.test(property) && /\b[\d.]+px/.test(bare.replace(/calc\([\d.]+px \* var\(--text-scale\)\)/g, ""))) {
+      uiProblems.push(`${where}: a font size in px (scale it: calc(12px * var(--text-scale)))`);
+    }
+    if (property.endsWith("radius") && /\b[\d.]+px/.test(bare.replace(/calc\([\d.]+px \* var\(--radius-scale\)\)/g, ""))) {
+      uiProblems.push(`${where}: a radius in px (scale it: calc(6px * var(--radius-scale)))`);
+    }
+  }
 }
 report("Web UI boundary violations (see apps/web/AGENTS.md)", uiProblems, "web ui boundary: ok");
 

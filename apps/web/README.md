@@ -42,6 +42,87 @@ needs it, while the rest of the page keeps updating. Open the app with `?safe`
 to ignore rows and files, the way back from a customization that broke the
 frame itself.
 
+### The look
+
+Every color, font, font size, radius, and drop shadow is a `--` token, and
+every plugin draws with them, so one change restyles them all. Widths and
+spacing are layout, not tokens (a 1px ring drawn with `box-shadow` is a
+border: its color is a token). Each token's default is
+Lemma's own look; customizing only sets tokens over it. Colors start from
+three base colors, `--bg`, `--text`, and `--accent`, and
+[`styles.css`](src/styles.css) derives surfaces, muted text, and the accent's
+tint from them. A plugin's own colors are tokens in its stylesheet:
+`highlight`'s `--code-*` (GitHub's colors until set), `diagrams'`
+`--diagram-*` (Mermaid's own until set). `--text-scale` sizes every font and
+`--radius-scale` rounds every corner.
+
+The look is the `appearance` plugin's config, which it paints on the page:
+
+```jsonc
+"ui": { "appearance": { "config": {
+  "scheme": "dark",              // system (the default), light, or dark
+  "darkTheme": "tokyo-night",    // a theme a plugin offers; unset, Lemma's own
+  "accent": "blue",              // an accent a plugin offers, or any CSS color
+  "monoFont": "jetbrains-mono",  // a font a plugin offers, or a CSS font-family list
+  "textSize": "large",           // small, default, large, or larger
+  "corners": "round",            // square, default, or round
+  "contentWidth": "wide"         // default, wide, or full
+} } }
+```
+
+Settings › Appearance (the `appearance-page` plugin) edits that row, as
+`lemma ui config appearance accent blue` or an agent's edit to `config.jsonc`
+does, and the palette's Appearance commands switch the scheme. What there is
+to choose from is three slots, `Themes`, `Accents`, and `Fonts`: `appearance`
+adds Lemma's own there, and a plugin adds others beside them, so a theme pack
+is a UI file, offered while it loads and gone with it. A theme is its base
+colors, and `tokens` for any other:
+
+```js
+// ~/.lemma/ui/tokyo-night.js
+export default ({ defineUiPlugin, contracts: { Slots, Themes, Accents } }) =>
+  defineUiPlugin({
+    id: "tokyo-night",
+    requires: { slots: Slots },
+    setup: ({ slots }) => {
+      slots.add(Themes, {
+        id: "tokyo-night",
+        title: "Tokyo Night",
+        scheme: "dark",
+        colors: { bg: "#1a1b26", text: "#c0caf5", accent: "#7aa2f7" },
+        tokens: { "--code-keyword": "#bb9af7", "--code-string": "#9ece6a", "--diagram-node": "#24283b" },
+      });
+      slots.add(Accents, { id: "teal", title: "Teal", color: "oklch(0.62 0.11 190)" });
+    },
+  });
+```
+
+A font plugin declares its file with `@font-face` in its `styles` and adds a
+`Fonts` item; the file loads only once the font is chosen. A plugin's rows in
+the `SectionIds.appearance` settings section sit beside the look's own. A
+stylesheet in `~/.lemma/ui` sets any token the look leaves unset, and a
+plugin that replaces `appearance` paints through `api.look` (`paint`,
+`unpaint`), so the next load shows its look before plugins start; a renderer
+that does not draw with CSS reads the look there too (`tokenColor`,
+`onLookChange`).
+
+### Utilities
+
+A UI file's markup can use Tailwind utilities, prefixed `tw:`, as the bundled
+plugins do:
+
+```js
+html`<div class="tw:flex tw:gap-2 tw:bg-bg-raised tw:rounded">${label}</div>`;
+```
+
+Each is named for its token, not Tailwind's palette: `--x` is the value `x`
+(`tw:bg-bg-raised`, `tw:text-text-2`, `tw:border-border`, `tw:bg-accent`;
+[`tailwind.css`](src/tailwind.css)), so they follow the look. While a UI file has a script, the page
+compiles its classes with the app's own; a class must appear whole in the
+file, as Tailwind requires. A plugin's `styles` and the stylesheets in
+`~/.lemma/ui` are plain CSS: Tailwind's `@apply` does not reach them, and the
+tokens do.
+
 ## Writing a plugin
 
 A plugin requires and provides capabilities, and adds items to slots.

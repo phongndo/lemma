@@ -22,9 +22,12 @@
     "marked": "18.0.14",
     "mermaid": "12.0.0",
     "shiki": "4.4.3",
-    "solid-js": "1.9.15"
+    "solid-js": "1.9.15",
+    "tailwindcss": "4.3.3"
   },
   "devDependencies": {
+    "@tailwindcss/oxide": "4.3.3",
+    "@tailwindcss/vite": "4.3.3",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vite": "8.3.1",

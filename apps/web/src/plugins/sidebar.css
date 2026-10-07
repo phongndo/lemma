@@ -51,7 +51,7 @@
 
 .sidebar-empty {
   color: var(--text-3);
-  font-size: 12.5px;
+  font-size: calc(12.5px * var(--text-scale));
   padding: 8px 10px;
 }
 
@@ -65,7 +65,7 @@
   height: 26px;
   padding-right: 4px;
   color: var(--text-3);
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
 }
 
 .group-toggle {
@@ -77,7 +77,7 @@
   height: 100%;
   padding: 0 8px;
   border: 0;
-  border-radius: 6px;
+  border-radius: calc(6px * var(--radius-scale));
   background: none;
   color: inherit;
   font: inherit;
@@ -137,7 +137,7 @@
   color: inherit;
   text-align: left;
   font: inherit;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
   text-decoration: none;
   cursor: pointer;
 }
@@ -196,7 +196,7 @@
 .session-time {
   flex: none;
   color: var(--text-3);
-  font-size: 11.5px;
+  font-size: calc(11.5px * var(--text-scale));
 }
 
 .running-dot {
@@ -216,7 +216,7 @@
   border: 1px solid var(--accent);
   background: var(--bg-raised);
   outline: none;
-  font-size: 13px;
+  font-size: calc(13px * var(--text-scale));
 }
 
 .sidebar-foot {

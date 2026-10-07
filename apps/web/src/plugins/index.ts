@@ -1,6 +1,7 @@
 import type { Plugin } from "@lemma/core";
 import addProject from "./add-project.tsx";
-import appearance from "./appearance.tsx";
+import appearance from "./appearance/index.ts";
+import appearancePage from "./appearance-page/index.tsx";
 import archivedPage from "./archived-page.tsx";
 import chat from "./chat/index.tsx";
 import commands from "./commands.ts";
@@ -81,6 +82,7 @@ export const bundled: readonly Plugin[] = [
   providers,
   pluginsPage,
   keysPage,
+  appearancePage,
   projectsPage,
   archivedPage,
   addProject,

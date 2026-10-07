@@ -24,11 +24,11 @@
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
 }
 
 .main-title h1 {
-  font-size: 14px;
+  font-size: calc(14px * var(--text-scale));
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -52,7 +52,7 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--text-scale));
   color: var(--accent-text);
 }
 
@@ -99,7 +99,7 @@
 }
 
 .thread-unknown h2 {
-  font-size: 20px;
+  font-size: calc(20px * var(--text-scale));
   font-weight: 600;
   margin-bottom: 8px;
 }
