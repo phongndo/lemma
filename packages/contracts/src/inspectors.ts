@@ -1,5 +1,4 @@
-import { Schema } from "effect";
-import type { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { awaitable, Registry } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
 
@@ -25,8 +24,12 @@ export interface Inspector {
 }
 
 /** What an inspector shows now, however it gives it (see `Inspector.snapshot`). */
-export const snapshotOf = (inspector: Inspector): Effect.Effect<unknown> =>
-  typeof inspector.snapshot === "function" ? awaitable(inspector.snapshot as () => Awaitable<unknown>) : inspector.snapshot;
+export const snapshotOf = (inspector: Inspector): Effect.Effect<unknown> => {
+  const snapshot = inspector.snapshot;
+  // An Effect first: some Effects (a service's tag) are functions too. A function is called on its inspector.
+  if (Effect.isEffect(snapshot)) return snapshot;
+  return awaitable(() => (snapshot as () => Awaitable<unknown>).call(inspector));
+};
 
 export const Inspectors = Registry.make<Inspector>("lemma/inspectors", { key: (inspector) => inspector.id });
 

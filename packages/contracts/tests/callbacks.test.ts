@@ -52,4 +52,16 @@ describe("callbacks a plugin hands the contracts", () => {
     );
     expect(snapshots).toEqual(["effect", "value", "promise", "lazy"]);
   });
+
+  test("an inspector's snapshot method is called on its inspector", async () => {
+    class Rows implements Inspector {
+      readonly id = "rows";
+      readonly title = "Rows";
+      readonly rows = [{ n: 1 }];
+      snapshot() {
+        return this.rows;
+      }
+    }
+    expect(await Effect.runPromise(snapshotOf(new Rows()))).toEqual([{ n: 1 }]);
+  });
 });
