@@ -17,14 +17,6 @@
   color: var(--text-2);
 }
 
-.palette-tag {
-  margin-left: auto;
-}
-
-.tag + .palette-into {
-  margin-left: 4px;
-}
-
 .palette-row[data-active="true"] .palette-into {
   opacity: 1;
 }
