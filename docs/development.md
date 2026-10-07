@@ -11,7 +11,7 @@ publish a `source` condition for files they do not ship.
 nix develop -c pnpm install --frozen-lockfile
 nix develop -c pnpm check          # build, import boundaries, test hygiene, lint, format check, type-check
 nix develop -c pnpm test           # every package's tests
-nix develop -c pnpm run ci         # what CI's check job runs: check, then test
+nix develop -c pnpm run ci         # check, then test: CI's check and test jobs in one
 nix develop -c pnpm format         # write the formatting `pnpm check` expects
 nix develop -c hk install          # git hooks (hk.pkl), below
 ```
@@ -19,14 +19,16 @@ nix develop -c hk install          # git hooks (hk.pkl), below
 `pnpm run ci` needs `run`: `pnpm ci` is pnpm's own clean install.
 
 The hooks format and lint-fix the staged files on commit, and run `pnpm run ci`
-on push, since commits go straight to main with no merge queue to check them
-first; the push check sees the working tree, uncommitted changes included.
+on push; the push check sees the working tree, uncommitted changes included.
 They call the dev shell's `hk`: commit and push from inside `nix develop`, or
 set `HK=0` to skip them once.
 
-CI (`.github/workflows/check.yml`) runs `pnpm run ci` on Linux and macOS, and
-in the dev shell with the packed-package and browser checks; each commit on main
-also uploads its bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
+CI (`.github/workflows/check.yml`) runs its checks as parallel jobs, in the dev
+shell on Linux: `pnpm check`, `pnpm test`, the packed-package and browser
+checks, and the web app's `ui:check`; macOS runs `pnpm test` with plain Node.js
+and pnpm. The `passed` job succeeds only when every other job does, so it is the
+one check a branch rule needs to require. Each commit on main also uploads its
+bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
 every job on main, unchanged, so a failure there is a flake to fix, and runs the
 tests with fresh seeds and many more random cases, and the performance checks;
 a failure prints the command that repeats it.
