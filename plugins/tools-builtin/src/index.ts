@@ -33,8 +33,8 @@ const toolPlugin = (id: string, tool: Tool<any> | ((registry: Context.Service.Sh
   definePlugin({
     id,
     version: "0.1.0",
-    requires: [Tools],
-    layer: Layer.effectDiscard(Effect.flatMap(Tools, (registry) => registry.register(typeof tool === "function" ? tool(registry) : tool))),
+    requires: { tools: Tools },
+    setup: ({ tools }) => tools.register(typeof tool === "function" ? tool(tools) : tool),
   });
 
 export const read = toolPlugin(readTool.name, readTool);

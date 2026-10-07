@@ -2,7 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Paths, Workspace, WorkspaceError } from "@lemma/contracts";
@@ -308,11 +308,7 @@ export default definePlugin({
   id: "workspace",
   version: "0.1.0",
   config: WorkspaceConfig,
-  provides: [Workspace],
-  requires: [Paths],
-  layer: (config) =>
-    Layer.effect(
-      Workspace,
-      Effect.map(Paths, (paths) => makeWorkspace({ worktrees: config.worktrees ?? join(paths.home, "worktrees") })),
-    ),
+  provides: { workspace: Workspace },
+  requires: { paths: Paths },
+  setup: ({ paths }, { config }) => Effect.succeed({ workspace: makeWorkspace({ worktrees: config.worktrees ?? join(paths.home, "worktrees") }) }),
 });

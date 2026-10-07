@@ -1,6 +1,6 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { Agent, appUrl, Commands, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
-import { definePlugin, Events, PluginContext, Registries } from "@lemma/core";
+import { definePlugin, Events, Registries } from "@lemma/core";
 import { makeHandlers } from "./handlers.ts";
 import { makeHub } from "./hub.ts";
 import type { Hub } from "./hub.ts";
@@ -52,39 +52,36 @@ export default definePlugin({
   id: "transport",
   version: VERSION,
   config: TransportConfig,
-  requires: [Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands],
+  requires: { paths: Paths, sessions: Sessions, agent: Agent, llm: Llm, host: HostControl, workspace: Workspace, commands: Commands },
   // Owns the listening port: a reload stops this instance before starting its replacement.
   exclusive: true,
-  layer: (config) =>
-    Layer.effectDiscard(
-      Effect.gen(function* () {
-        const owner = yield* PluginContext;
-        const events = yield* Events;
-        const [paths, sessions, agent, llm, control, workspace, commands] = yield* Effect.all([Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands]);
-        const registries = yield* Registries;
+  setup: function* (_, owner) {
+    const config = owner.config;
+    const events = yield* Events;
+    const [paths, sessions, agent, llm, control, workspace, commands] = yield* Effect.all([Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands]);
+    const registries = yield* Registries;
 
-        let hub: Hub | undefined;
-        const interactions = makeInteractions(() => hub!, config.interactionGraceMs);
-        hub = yield* makeHub(owner, interactions.open);
-        yield* owner.on(InteractionHook, interactions.handle);
+    let hub: Hub | undefined;
+    const interactions = makeInteractions(() => hub!, config.interactionGraceMs);
+    hub = yield* makeHub(owner, interactions.open);
+    yield* owner.on(InteractionHook, interactions.handle);
 
-        const token = config.token ?? (yield* loadToken(paths.home));
-        const logins = makeLogins(llm, yield* Effect.scope);
-        const handlers = HostRpcs.toLayer(
-          makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }),
-        );
-        const address = yield* startServer(
-          { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },
-          handlers,
-        );
-        const url = `http://${clientHost(address.hostname)}:${address.port}`;
-        yield* publishDiscovery(paths.home, { url, token, pid: process.pid, startedAt: Date.now() });
-        yield* events.publish(Notice, {
-          level: "info",
-          source: owner.id,
-          message: `Listening on ${url}`,
-          ...(config.staticDir === undefined ? {} : { links: [{ url: appUrl(url, "/", token), label: "Open the web app" }] }),
-        });
-      }),
-    ),
+    const token = config.token ?? (yield* loadToken(paths.home));
+    const logins = makeLogins(llm, yield* Effect.scope);
+    const handlers = HostRpcs.toLayer(
+      makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }),
+    );
+    const address = yield* startServer(
+      { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },
+      handlers,
+    );
+    const url = `http://${clientHost(address.hostname)}:${address.port}`;
+    yield* publishDiscovery(paths.home, { url, token, pid: process.pid, startedAt: Date.now() });
+    yield* events.publish(Notice, {
+      level: "info",
+      source: owner.id,
+      message: `Listening on ${url}`,
+      ...(config.staticDir === undefined ? {} : { links: [{ url: appUrl(url, "/", token), label: "Open the web app" }] }),
+    });
+  },
 });

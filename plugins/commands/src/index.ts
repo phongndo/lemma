@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Stream } from "effect";
+import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries, Registry } from "@lemma/core";
 import { CommandError, Commands, CommandsChanged, Inspectors, InteractionError } from "@lemma/contracts";
@@ -106,6 +106,6 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
 export default definePlugin({
   id: "commands",
   version: "0.1.0",
-  provides: [Commands],
-  layer: Layer.effect(Commands, makeRegistry),
+  provides: { commands: Commands },
+  setup: () => Effect.map(makeRegistry, (commands) => ({ commands })),
 });

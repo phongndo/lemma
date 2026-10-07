@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Effect, Layer } from "effect";
+import { Effect } from "effect";
 import { Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
 import { definePlugin, Hooks } from "@lemma/core";
@@ -15,33 +15,32 @@ type Answer<T extends InteractionRequest["type"]> = Extract<InteractionAnswer, {
 export default definePlugin({
   id: "interaction",
   version: "0.1.0",
-  provides: [Interaction],
-  layer: Layer.effect(
-    Interaction,
-    Effect.gen(function* () {
-      const hooks = yield* Hooks;
+  provides: { interaction: Interaction },
+  setup: function* () {
+    const hooks = yield* Hooks;
 
-      const request = <T extends InteractionRequest["type"]>(request: Extract<InteractionRequest, { type: T }>): Effect.Effect<Answer<T>, InteractionError> =>
-        InteractionOrigin.pipe(
-          Effect.flatMap((origin) => hooks.invoke(InteractionHook, origin === undefined ? request : { ...request, origin }, unavailable)),
-          // An answerer that breaks the protocol is no usable answerer: callers recover as if nobody were attached.
-          Effect.flatMap((answer) =>
-            answer.type === request.type
-              ? Effect.succeed(answer.value as Answer<T>)
-              : Effect.fail(
-                  new InteractionError({
-                    reason: "Unavailable",
-                    message: `"${request.title}" is a ${request.type} question but was answered as ${answer.type}`,
-                  }),
-                ),
-          ),
-          Effect.catchTags({
-            HookError: (error) => new InteractionError({ reason: "Unavailable", message: error.message }),
-            CoreClosed: (error) => new InteractionError({ reason: "Unavailable", message: error.message }),
-          }),
-        );
+    const request = <T extends InteractionRequest["type"]>(request: Extract<InteractionRequest, { type: T }>): Effect.Effect<Answer<T>, InteractionError> =>
+      InteractionOrigin.pipe(
+        Effect.flatMap((origin) => hooks.invoke(InteractionHook, origin === undefined ? request : { ...request, origin }, unavailable)),
+        // An answerer that breaks the protocol is no usable answerer: callers recover as if nobody were attached.
+        Effect.flatMap((answer) =>
+          answer.type === request.type
+            ? Effect.succeed(answer.value as Answer<T>)
+            : Effect.fail(
+                new InteractionError({
+                  reason: "Unavailable",
+                  message: `"${request.title}" is a ${request.type} question but was answered as ${answer.type}`,
+                }),
+              ),
+        ),
+        Effect.catchTags({
+          HookError: (error) => new InteractionError({ reason: "Unavailable", message: error.message }),
+          CoreClosed: (error) => new InteractionError({ reason: "Unavailable", message: error.message }),
+        }),
+      );
 
-      return {
+    return {
+      interaction: {
         confirm: (title, detail) => request({ type: "confirm", id: randomUUID(), title, ...(detail === undefined ? {} : { detail }) }),
         ask: (title, options) =>
           request({
@@ -63,9 +62,9 @@ export default definePlugin({
               (value) => new InteractionError({ reason: "Unavailable", message: `Selected "${value}" is not one of the options offered for "${title}"` }),
             ),
           ),
-      };
-    }),
-  ),
+      },
+    };
+  },
 });
 
 const unavailable = (request: InteractionRequest): Effect.Effect<never, InteractionError> =>
