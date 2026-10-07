@@ -24,9 +24,10 @@ They call the dev shell's `hk`: commit and push from inside `nix develop`, or
 set `HK=0` to skip them once.
 
 CI (`.github/workflows/check.yml`) runs its checks as parallel jobs, in the dev
-shell on Linux: `pnpm check`, `pnpm test`, the packed-package and browser
-checks, and the web app's `ui:check`; macOS runs `pnpm test` with plain Node.js
-and pnpm. The `passed` job succeeds only when every other job does, so it is the
+shell on Linux: `pnpm check`, `pnpm test` in two halves (`--shard=1/2`,
+`--shard=2/2`), the packed-package and browser checks, and the web app's
+`ui:check`; macOS runs `pnpm test`, in halves too, with plain Node.js and pnpm.
+The `passed` job succeeds only when every other job does, so it is the
 one check a branch rule needs to require. Each commit on main also uploads its
 bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
 every job on main, unchanged, so a failure there is a flake to fix, and runs the

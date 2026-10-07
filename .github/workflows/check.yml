@@ -32,19 +32,28 @@ jobs:
       - uses: ./.github/actions/dev-shell
       - run: nix develop -c pnpm check
 
+  # The tests keep a runner's cores busy, so they run in two halves (Vitest's shards, by file) on a runner each.
   test:
-    name: test (Linux)
+    name: test (Linux, ${{ matrix.shard }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/dev-shell
-      - run: nix develop -c pnpm test
+      - run: nix develop -c pnpm test --shard=${{ matrix.shard }}/2
 
   # The tests again on macOS, with plain Node.js and pnpm; what the check job checks is the same on every platform.
   # The host does not support Windows yet. No pnpm store cache: on macOS, restoring it took longer than installing.
   macos:
-    name: test (macOS)
+    name: test (macOS, ${{ matrix.shard }}/2)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
@@ -54,7 +63,7 @@ jobs:
         with:
           node-version: 24
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test
+      - run: pnpm test --shard=${{ matrix.shard }}/2
 
   # The packed packages, in Node.js and in Chromium.
   packages:
