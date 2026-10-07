@@ -45,8 +45,29 @@ const provided = (reader: string): Accessor<Provided> => {
   return found;
 };
 
-/** The nearest provider's navigator, now: to navigate, link (`href`), or block. */
-export const useNavigator = <E extends RouteEntry = RouteEntry>(): Navigator<E> => provided("useNavigator")().navigator as Navigator<E>;
+/**
+ * The nearest provider's navigator: to navigate, link (`href`), or block. It
+ * follows the provider: given another navigator, what a component kept from
+ * this (a method it took, too) acts on the new one.
+ */
+export const useNavigator = <E extends RouteEntry = RouteEntry>(): Navigator<E> => {
+  const current = provided("useNavigator");
+  /** One function per method, calling the method of whichever navigator is provided when it is called. */
+  const methods = new Map<PropertyKey, (...args: unknown[]) => unknown>();
+  return new Proxy({} as Navigator<E>, {
+    get: (_, key) => {
+      const value: unknown = Reflect.get(current().navigator, key);
+      if (typeof value !== "function") return value;
+      let method = methods.get(key);
+      if (method === undefined) {
+        method = (...args) => (Reflect.get(current().navigator, key) as (...args: unknown[]) => unknown)(...args);
+        methods.set(key, method);
+      }
+      return method;
+    },
+    has: (_, key) => Reflect.has(current().navigator, key),
+  });
+};
 
 /** `route`'s params and search while the nearest navigator is at it, else undefined; runs again only when that route's match changes. */
 export const useMatch = <R extends AnyRoute>(route: R): Accessor<{ readonly params: ParamsOf<R>; readonly search: SearchOf<R> } | undefined> => {

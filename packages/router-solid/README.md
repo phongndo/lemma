@@ -36,8 +36,9 @@ the next navigation.
 ## Providers
 
 `RouterProvider` hands a router, or one navigator, to the components under it.
-Given another navigator, the components follow it; the signals following the
-last one stop, as they do when the provider is removed.
+Given another navigator, the components follow it, a navigator one kept from
+`useNavigator()` too; the signals following the last one stop, as they do when
+the provider is removed.
 `useMatch(route)`, `useNavigator()`, `useLocation()`, and `useRouteMatch()`
 read the nearest one. Each tab or pane provides its own navigator, so a page
 component reads its route the same way wherever it is shown:

@@ -1,7 +1,7 @@
 import { createComponent, createEffect, createRoot, createSignal } from "solid-js";
 import { describe, expect, test } from "vitest";
 import { createMemoryHistory, createNavigator, createRouteTable, defineRoute } from "@lemma/router";
-import type { AnyRoute } from "@lemma/router";
+import type { AnyRoute, Navigator } from "@lemma/router";
 import { RouterProvider, useLocation, useMatch, useNavigator } from "../src/context.ts";
 import { ActiveContext, createKeepAlive, onResume, onSuspend, useActive } from "../src/keep-alive.ts";
 
@@ -15,7 +15,7 @@ describe("RouterProvider", () => {
     const left = createNavigator(table, { history: createMemoryHistory("/items/1") });
     const right = createNavigator(table, { history: createMemoryHistory("/") });
     const read: Record<string, string[]> = { left: [], right: [] };
-    const provided: Record<string, unknown> = {};
+    const provided: Record<string, Navigator<{ readonly route: AnyRoute }>> = {};
     const dispose = createRoot((dispose) => {
       for (const [name, navigator] of [
         ["left", left],
@@ -34,7 +34,7 @@ describe("RouterProvider", () => {
       }
       return dispose;
     });
-    expect(provided).toEqual({ left, right });
+    expect([provided.left?.location().pathname, provided.right?.location().pathname]).toEqual(["/items/1", "/"]);
     expect(read).toEqual({ left: ["1"], right: ["/"] });
     left.navigate("/items/2");
     expect(read).toEqual({ left: ["1", "2"], right: ["/"] });
@@ -70,6 +70,35 @@ describe("RouterProvider", () => {
     first.navigate("/items/3");
     second.navigate("/items/4");
     expect(read).toEqual(["1", "2", "4"]);
+    dispose();
+  });
+
+  test("a navigator a component kept follows the provider to its next one", () => {
+    const table = createRouteTable<{ readonly route: AnyRoute }>();
+    table.setEntries([{ route: Home }, { route: Item }]);
+    const first = createNavigator(table, { history: createMemoryHistory("/") });
+    const second = createNavigator(table, { history: createMemoryHistory("/") });
+    const [navigator, setNavigator] = createSignal(first);
+    let kept!: Navigator<{ readonly route: AnyRoute }>;
+    const dispose = createRoot((dispose) => {
+      createComponent(RouterProvider, {
+        get navigator() {
+          return navigator();
+        },
+        get children() {
+          kept = useNavigator();
+          return undefined;
+        },
+      });
+      return dispose;
+    });
+    const { navigate } = kept;
+    setNavigator(second);
+    kept.navigate(Item, { id: "kept" });
+    expect(second.location().pathname).toBe("/items/kept");
+    navigate("/items/taken");
+    expect(second.location().pathname).toBe("/items/taken");
+    expect(first.location().pathname).toBe("/");
     dispose();
   });
 
