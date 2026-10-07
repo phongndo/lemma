@@ -188,11 +188,13 @@ function Attempt(props: { chat: Chat; item: AttemptItem }) {
   const label = () => (props.item.message.stopReason === "aborted" ? "Attempt cancelled" : "Attempt failed");
   return (
     <div class="attempt" classList={{ open: open() }}>
-      <button class="attempt-head" aria-expanded={open()} disabled={!hasContent()} onClick={() => toggle(props.item.id, false)}>
-        <AlertIcon />
+      <button class="row-head attempt-head" aria-expanded={open()} disabled={!hasContent()} onClick={() => toggle(props.item.id, false)}>
+        <span class="row-icon">
+          <AlertIcon />
+        </span>
         <span class="attempt-label">{label()}</span>
         <span class="attempt-error">{props.item.message.errorMessage ?? ""}</span>
-        <span class="muted">{formatDuration(props.item.timing.endedAt - props.item.timing.startedAt)}</span>
+        <span class="attempt-time">{formatDuration(props.item.timing.endedAt - props.item.timing.startedAt)}</span>
       </button>
       <Show when={open() && hasContent()}>
         <div class="attempt-body">
@@ -356,6 +358,9 @@ function WorkView(props: ChatWorkProps) {
       <button class="work-head" aria-expanded={props.open} onClick={() => props.onToggle()}>
         <span class="work-label">{label()}</span>
         <Show when={props.failed > 0}>
+          <span class="work-sep" aria-hidden="true">
+            ·
+          </span>
           <span class="work-failed">{props.failed} failed</span>
         </Show>
         <ChevronIcon class="chevron" />

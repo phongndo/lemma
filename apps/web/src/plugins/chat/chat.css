@@ -669,21 +669,9 @@
   padding: 4px 0;
 }
 
-.attempt {
-  font-size: 12.5px;
-}
-
-.attempt-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 5px 10px;
-  border-radius: var(--radius-sm);
-  border: 1px dashed color-mix(in srgb, var(--warn) 45%, transparent);
-  background: var(--warn-soft);
+/* A failed attempt the turn went on past: a row like a call's, its icon the only colour. */
+.attempt-head .row-icon {
   color: var(--warn);
-  text-align: left;
 }
 
 .attempt-head:disabled {
@@ -691,8 +679,9 @@
 }
 
 .attempt-label {
-  font-weight: 600;
   flex: none;
+  font-weight: 500;
+  color: var(--text-2);
 }
 
 .attempt-error {
@@ -701,8 +690,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 12.5px;
+}
+
+.attempt-time {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 
 .attempt-body {
@@ -818,6 +812,27 @@
   flex: none;
   font-size: 12px;
   color: var(--err);
+}
+
+.work-sep {
+  opacity: 0.6;
+}
+
+/* The turn's line only notes a failure: its call, opened, says which and why. */
+.work-head .work-failed {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: inherit;
+}
+
+.work-head .work-failed::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--err);
 }
 
 .work-body {
