@@ -94,6 +94,13 @@ describe("without a host", () => {
     expect(result.code).toBe(ExitCode.ok);
     expect(result.out).toContain("session show <id>");
   });
+
+  test("prints its version without a running host", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+    expect(await invoke(["--version"], home)).toMatchObject({ code: ExitCode.ok, out: `lemma ${version}` });
+    expect(JSON.parse((await invoke(["--version", "--json"], home)).out)).toEqual({ version });
+  });
 });
 
 describe("argument parsing", () => {
