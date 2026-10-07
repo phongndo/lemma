@@ -18,9 +18,8 @@ import workspace from "@lemma/plugin-workspace";
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
-const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
-/** Use the host's runtime even in an install with no Node on PATH. Quote paths for the agent's shell. */
-export const cliCommand = `${process.versions.electron ? "ELECTRON_RUN_AS_NODE=1 " : ""}${quote(process.execPath)} --conditions=lemma-source ${quote(fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url)))}`;
+/** How the agent runs this checkout's `lemma` CLI from its shell; `node` is on PATH wherever the host runs. */
+export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url))}`;
 
 /**
  * Everything a fresh install runs. The host plugin is built by main.ts with a

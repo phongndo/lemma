@@ -4,9 +4,6 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @lemma/core --filter @lemma/router build",
-    "dist:build": "node scripts/dist.ts",
-    "dist:check": "node scripts/check-dist.ts",
-    "dist:formula": "node scripts/homebrew.ts",
     "check": "pnpm build && node scripts/check-boundaries.ts && tsc -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",

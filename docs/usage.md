@@ -1,14 +1,5 @@
 # Using Lemma
 
-With an [installed copy](installation.md), run this from your project:
-
-```sh
-lemma serve                      # run the host and open the web app
-lemma status                     # from another terminal
-```
-
-From a source checkout:
-
 ```sh
 nix develop -c pnpm start          # build the web app, start the host, print its URL
 nix develop -c pnpm desktop        # the same app in a desktop window

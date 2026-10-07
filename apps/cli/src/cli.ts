@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Schema } from "effect";
@@ -194,7 +193,6 @@ Inspect (the web app's Trajectory view)
 
 Options
   --json      Print results as JSON (errors as {"error": {...}} on stderr)
-  --version   Print the installed Lemma version
   -h, --help  Show this help
 
 Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
@@ -711,7 +709,6 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         "when-busy": { type: "string" },
         steer: { type: "boolean", default: false },
         help: { type: "boolean", short: "h", default: false },
-        version: { type: "boolean", default: false },
       },
     });
   } catch (error) {
@@ -720,11 +717,6 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
   const { positionals, values } = parsed;
   if (values.help) {
     io.out(USAGE);
-    return ExitCode.ok;
-  }
-  if (values.version) {
-    const { version } = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string };
-    io.out(values.json ? JSON.stringify({ version }) : `lemma ${version}`);
     return ExitCode.ok;
   }
   const views = (["system", "tools", "diff", "rebuilt"] as const).filter((view) => values[view]);

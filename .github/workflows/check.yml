@@ -21,10 +21,6 @@ concurrency:
 # Actions are pinned by commit, their version in the comment.
 # What each job runs is a script in package.json (`pnpm run ci` is the check job), so it runs the same locally.
 jobs:
-  # Install the actual release archive on every supported platform, outside the checkout.
-  distribution:
-    uses: ./.github/workflows/build-dist.yml
-
   # The same checks on Linux and macOS, in parallel, with plain Node.js and pnpm. The host does not support Windows yet.
   check:
     name: check (${{ matrix.os }})
