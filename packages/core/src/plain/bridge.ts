@@ -71,8 +71,12 @@ export interface Bridge {
    * read); its failure rejects as `run`'s do.
    */
   readonly iterate: <A>(stream: Stream.Stream<A, unknown, any>, operation: string) => AsyncIterable<A>;
-  /** A call refused because the plugin stopped. */
-  readonly refuse: (operation: string) => Promise<never>;
+  /**
+   * A call refused because the plugin stopped: a promise rejecting with
+   * `PluginStopped`, which is also an async iterable rejecting with it, so
+   * a refused call reads the same whether it returned a promise or a stream.
+   */
+  readonly refuse: (operation: string) => Refused;
   /** A new record of the calls a setup makes (see `Current.setup`). */
   readonly startSetup: () => SetupCalls;
   /** Waits for the calls made during setup; rejects with the first that failed and that setup neither awaited nor caught. */
@@ -89,6 +93,9 @@ export interface Bridge {
    */
   readonly endCleanup: () => Promise<void>;
 }
+
+/** A refused call: rejects with `PluginStopped` awaited or read. */
+export type Refused = Promise<never> & AsyncIterable<never>;
 
 /** How `run` runs one call. */
 export interface RunOptions {
@@ -181,16 +188,18 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
     });
   };
 
-  const refuse = (operation: string): Promise<never> => {
+  const refuse = (operation: string): Refused => {
     const error = new PluginStopped({ pluginId: options.pluginId, operation });
-    const refused = new Watched<never>((_, reject) => reject(error));
+    const refused = new Watched<never>((_, reject) => reject(error)) as Watched<never> & { [Symbol.asyncIterator]?: () => AsyncIterator<never> };
+    // Read as a stream, it refuses the same way: its first item is this rejection.
+    refused[Symbol.asyncIterator] = () => ({ next: () => refused });
     // The plugin has stopped, so a fault of its would be dropped: a refusal nobody awaits is logged.
     quietly(refused, () => {
       setTimeout(() => {
         if (!refused.observed) Effect.runFork(Effect.logWarning(error.message));
       }, 0);
     });
-    return refused;
+    return refused as Refused;
   };
 
   return {
@@ -215,7 +224,7 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
     },
     iterate: <A>(stream: Stream.Stream<A, unknown, any>, operation: string): AsyncIterable<A> => ({
       [Symbol.asyncIterator]: (): AsyncIterator<A> => {
-        if (stopped) return { next: () => refuse(operation) };
+        if (stopped) return refuse(operation)[Symbol.asyncIterator]();
         const { context, signal, invocation } = lifetime();
         const release = invocation?.follow();
         // Ends the stream (done, not an error) when the signal aborts: one listener while it runs, removed when it ends.

@@ -190,20 +190,36 @@ export function plainViews() {
       return { other: 1 };
     },
   });
+  class Reader {
+    read(): Effect.Effect<string> {
+      return Effect.succeed("read");
+    }
+  }
   class Directory extends Context.Service<
     Directory,
-    { readonly users: { readonly list: () => Effect.Effect<readonly string[]> }; readonly index: Map<string, number> }
+    {
+      readonly users: { readonly list: () => Effect.Effect<readonly string[]> };
+      readonly index: Map<string, number>;
+      readonly reader: Reader;
+      readonly steps: readonly Effect.Effect<number>[];
+      readonly a: { readonly b: { readonly c: { readonly read: () => Effect.Effect<string>; readonly d: { readonly read: () => Effect.Effect<string> } } } };
+    }
   >()("types/Directory") {}
   definePlainPlugin({
     id: "plain-nested",
     requires: { directory: Directory },
     setup: async ({ directory }) => {
-      // Nested services are promises, as the runtime makes them; data inside is left as it is.
+      // Nested services are promises, as the runtime makes them, class instances too; data inside is left as it is.
       const users: readonly string[] = await directory.users.list();
+      const read: string = await directory.reader.read();
       const size: number = directory.index.size;
       // @ts-expect-error A promise, not an Effect.
       void directory.users.list().pipe;
-      void [users, size];
+      // Arrays are left as they are, and so is what lies four levels below the service.
+      const step: Effect.Effect<number> = directory.steps[0]!;
+      const third: string = await directory.a.b.c.read();
+      const fourth: Effect.Effect<string> = directory.a.b.c.d.read();
+      void [users, read, size, step, third, fourth];
     },
   });
   definePlainPlugin({

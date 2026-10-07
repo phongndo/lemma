@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Cause, Context, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
 import { definePlugin as defineEffectPlugin, Hook, Hooks, PluginContext, PluginFault, PluginStopped } from "../src/index.ts";
 import { awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
+import type { Plain } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
 
 class NotFound extends Error {
@@ -445,9 +446,67 @@ describe("services as promises", () => {
     expect(seen).toEqual([["ada"], 1, 5, 1, 1]);
   });
 
-  test("once stopped, a method that returned Effects refuses with a rejection; any other throws where it is called", async () => {
+  test("a frozen class instance is converted too", async () => {
+    class Frozen {
+      readonly read = () => Effect.succeed("frozen");
+      constructor() {
+        Object.freeze(this);
+      }
+    }
+    class Freezer extends Context.Service<Freezer, Frozen>()("test/Freezer") {}
+    let read: string | undefined;
+    const tested = await testPlugin(
+      definePlugin({
+        id: "frozen",
+        requires: { freezer: Freezer },
+        setup: async ({ freezer }) => void (read = await freezer.read()),
+      }),
+      { provide: [[Freezer, new Frozen()]] },
+    );
+    await tested.close();
+    expect(read).toBe("frozen");
+  });
+
+  test("nested class instances are converted; arrays and what lies four levels down are left as they are", async () => {
+    class Reader {
+      read(): Effect.Effect<string> {
+        return Effect.succeed("read");
+      }
+    }
+    const deep = Effect.succeed("deep");
+    class Deep extends Context.Service<
+      Deep,
+      {
+        readonly reader: Reader;
+        readonly steps: readonly Effect.Effect<number>[];
+        readonly a: { readonly b: { readonly c: { readonly read: () => Effect.Effect<string>; readonly d: { readonly read: () => Effect.Effect<string> } } } };
+      }
+    >()("test/Deep") {}
+    const seen: unknown[] = [];
+    const steps = [Effect.succeed(1)];
+    const tested = await testPlugin(
+      definePlugin({
+        id: "deep",
+        requires: { deep: Deep },
+        setup: async ({ deep }) => {
+          seen.push(
+            await deep.reader.read(),
+            deep.reader instanceof Reader,
+            deep.steps === steps,
+            await deep.a.b.c.read(),
+            Effect.isEffect(deep.a.b.c.d.read()),
+          );
+        },
+      }),
+      { provide: [[Deep, { reader: new Reader(), steps, a: { b: { c: { read: () => deep, d: { read: () => deep } } } } }]] },
+    );
+    await tested.close();
+    expect(seen).toEqual(["read", true, true, "deep", true]);
+  });
+
+  test("once stopped, nothing a service offers throws where leaked work would not catch it", async () => {
     const { store } = makeStore();
-    let kept!: { readonly get: (key: string) => Promise<string>; readonly local: (key: string) => string };
+    let kept!: Plain<StoreShape>;
     let plugin!: { readonly publish: (event: never, payload: never) => void; readonly items: (registry: never) => unknown };
     const tested = await testPlugin(
       definePlugin({
@@ -457,13 +516,21 @@ describe("services as promises", () => {
           kept = store;
           plugin = context as never;
           await store.get("a");
+          store.local("a");
         },
       }),
       { provide: [[Store, store]] },
     );
     await tested.close();
+    // A method that returned promises, or one never called, rejects; one that returned values throws, as it would fail.
     await expect(kept.get("a")).rejects.toBeInstanceOf(PluginStopped);
+    await expect(kept.slowPut("a", "b")).rejects.toBeInstanceOf(PluginStopped);
     expect(() => kept.local("a")).toThrow(PluginStopped);
+    // A stream is still an iterable, which refuses when read.
+    const read = async () => {
+      for await (const n of kept.few()) void n;
+    };
+    await expect(read()).rejects.toBeInstanceOf(PluginStopped);
     expect(() => plugin.items({ name: "test/none" } as never)).toThrow(PluginStopped);
     expect(() => plugin.publish({ name: "test/none" } as never, undefined as never)).not.toThrow();
   });

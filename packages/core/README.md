@@ -143,19 +143,23 @@ export default definePlugin({
   it takes within the dispose deadline, and what it acquires (a scoped
   resource) is released only once every cleanup is done. Then its services
   refuse calls with `PluginStopped`, so a timer or promise it left behind
-  cannot act through them: a method that has returned Effects rejects (a
-  refusal nobody awaits is logged as a warning), any other throws where it is
-  called, `items` throws, and `publish` drops the event. A setup that fails
-  aborts its signal before its cleanups run.
+  cannot act through them. A method that has returned plain values throws where
+  it is called; any other (one that returned Effects, streams, or promises, or
+  one never called) returns a refusal that rejects whether it is awaited or
+  read as a stream, so leaked work that catches never throws (a refusal nobody
+  awaits is logged as a warning). `items` throws, and `publish` drops the
+  event. A setup that fails aborts its signal before its cleanups run.
 - **Unawaited failures.** A call that fails with nothing awaiting or chaining its
   promise is reported as the plugin's fault (`unawaited <operation>`), not as an
   unhandled rejection that would end a Node.js process.
 - **Reloading.** `handoff(() => state)` and `previous` carry state to the
   replacement, as `PluginContext.handoff` does, checked by `carry` when given.
-- **Services as data.** Plain objects inside a service are converted as the
-  service is; class instances inside it (a `Map`, a `Date`) are data, left as
-  they are. A service that is itself a class instance keeps its prototype,
-  getters, and private fields behind a proxy.
+- **Nested services.** Objects inside a service are converted as the service
+  is, down to four levels below it: a plain object into a copy, a class
+  instance behind a proxy that keeps its prototype, getters, and private fields
+  (a frozen one too). Built-in data (a `Map`, a `Date`, an `Error`, a typed
+  array) and arrays are left as they are, as is anything deeper. `Plain<S>`
+  types them the same way.
 - **Providing.** `setup` returns services as their contracts declare them; it does
   not convert them. `asEffect(async (…) => …)` turns an async function into one
   returning an Effect, for a contract whose methods return Effects.
