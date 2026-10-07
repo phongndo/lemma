@@ -3,6 +3,13 @@ description: >-
   Install Nix and the workspace's dependencies in the development shell (flake.nix), restoring the pnpm store from
   the cache. Runs after actions/checkout; later steps run in the shell with `nix develop -c`.
 
+inputs:
+  shell:
+    description: >-
+      The flake's dev shell the job's later steps use. One other than `default` (`browser`) is fetched in the
+      background meanwhile, so it is there, or nearly, when they start.
+    default: default
+
 # Actions are pinned by commit, their version in the comment.
 runs:
   using: composite
@@ -10,7 +17,11 @@ runs:
     - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
     - id: pnpm-store
       shell: bash
-      run: echo "path=$(nix develop -c pnpm store path)" >> "$GITHUB_OUTPUT"
+      env:
+        DEV_SHELL: ${{ inputs.shell }}
+      run: |
+        if [ "$DEV_SHELL" != default ]; then nix develop ".#$DEV_SHELL" -c true > /dev/null 2>&1 & fi
+        echo "path=$(nix develop -c pnpm store path)" >> "$GITHUB_OUTPUT"
     - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       with:
         path: ${{ steps.pnpm-store.outputs.path }}
