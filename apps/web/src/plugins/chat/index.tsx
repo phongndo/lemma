@@ -381,10 +381,15 @@ function WorkGroupView(props: ChatWorkGroupProps) {
         <span class="row-icon">
           <Icon name={commands() ? "terminal" : "hammer"} />
         </span>
-        <span class="row-label">{props.summary}</span>
-        <Show when={props.failed > 0}>
-          <span class="work-failed">{props.failed} failed</span>
-        </Show>
+        <span class="row-label">
+          <span class="work-group-summary">{props.summary}</span>
+          <Show when={props.failed > 0}>
+            <span class="work-sep" aria-hidden="true">
+              ·
+            </span>
+            <span class="work-failed">{props.failed} failed</span>
+          </Show>
+        </span>
         <span class="row-time">{new Date(props.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
         <ChevronIcon class="chevron row-chevron" />
       </button>

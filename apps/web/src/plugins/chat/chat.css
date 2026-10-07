@@ -815,11 +815,19 @@
 }
 
 .work-sep {
+  flex: none;
   opacity: 0.6;
 }
 
-/* The turn's line only notes a failure: its call, opened, says which and why. */
-.work-head .work-failed {
+.work-group-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* A work line only notes a failure, beside what it says: its call, opened, says which and why. */
+.work-head .work-failed,
+.work-group-head .work-failed {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -827,7 +835,8 @@
   color: inherit;
 }
 
-.work-head .work-failed::before {
+.work-head .work-failed::before,
+.work-group-head .work-failed::before {
   content: "";
   width: 6px;
   height: 6px;
