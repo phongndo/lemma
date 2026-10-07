@@ -2,7 +2,7 @@ import { Cause, Effect, Order, Result, Schema } from "effect";
 import type { Context } from "effect";
 import { awaitable, Events, Hooks, PluginContext, Registries, Registry } from "@lemma/core";
 import { Inspectors, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult } from "@lemma/contracts";
-import type { Guard, Tool, ToolContext, ToolContribution, ToolInvocation, Tools } from "@lemma/contracts";
+import type { ExecuteOptions, Guard, Tool, ToolContext, ToolContribution, ToolInvocation, Tools } from "@lemma/contracts";
 import { capResult } from "./content.ts";
 import { toolParameters } from "./schema.ts";
 
@@ -69,6 +69,25 @@ export const outputBatcher = (publish: (chunk: string, offset: number) => void, 
   };
   return { update, flush };
 };
+
+/**
+ * A caller's `ExecuteOptions.update` as the tool's `update`: what it returns
+ * (an Effect, a promise) runs on its own, and its failure is logged rather
+ * than thrown into the tool, whose output is only shown.
+ */
+const listening =
+  (update: NonNullable<ExecuteOptions["update"]>, services: Context.Context<never>) =>
+  (chunk: string): void => {
+    const failed = (cause: Cause.Cause<unknown>) => void Effect.runForkWith(services)(Effect.logWarning("A tool output listener failed", cause));
+    try {
+      const result = update(chunk);
+      if (Effect.isEffect(result)) Effect.runForkWith(services)(result.pipe(Effect.catchCause((cause) => Effect.sync(() => failed(cause)))));
+      else if (typeof (result as PromiseLike<void> | undefined)?.then === "function")
+        (result as PromiseLike<void>).then(undefined, (error: unknown) => failed(Cause.die(error)));
+    } catch (error) {
+      failed(Cause.die(error));
+    }
+  };
 
 /**
  * Runs a tool's `execute`, whichever shape it returns. A promise tool gets a
@@ -187,7 +206,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
 
     /** Guards, then the tool. Runs as the hook's terminal so no handler can route around a guard. */
     const terminal =
-      (original: ToolInvocation, decoded: unknown, signal: AbortSignal, update: ((chunk: string) => void) | undefined) =>
+      (original: ToolInvocation, decoded: unknown, signal: AbortSignal, update: ExecuteOptions["update"]) =>
       (call: ToolInvocation): Effect.Effect<ToolResult, ToolError> =>
         Effect.gen(function* () {
           const found = yield* find(call.name);
@@ -206,7 +225,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
               ? outputBatcher((chunk, offset) =>
                   Effect.runForkWith(services)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
                 )
-              : { update, flush: () => {} };
+              : { update: listening(update, services), flush: () => {} };
           const context = {
             sessionId: call.sessionId,
             toolCallId: call.toolCallId,

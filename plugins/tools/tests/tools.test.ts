@@ -414,7 +414,7 @@ describe("execute", () => {
         const result = yield* registry.execute(
           new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
           new AbortController().signal,
-          { update: (chunk) => received.push(chunk) },
+          { update: (chunk) => void received.push(chunk) },
         );
         yield* Effect.sleep("100 millis");
         yield* Fiber.interrupt(watching);
@@ -423,6 +423,49 @@ describe("execute", () => {
         expect(published).toEqual([]);
       }),
     );
+  });
+
+  it("runs a caller's update as a listener: an Effect it returns runs, and its failures never reach the tool", async () => {
+    const chatty: Tool<unknown> = {
+      name: "chatty",
+      description: "",
+      input: Schema.Unknown,
+      execute: async (_input, { update }) => {
+        for (const chunk of ["effect", "rejects", "throws", "fails"]) update?.(chunk);
+        return ok("done");
+      },
+    };
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      await run(
+        [contributor("p", [chatty])],
+        Effect.gen(function* () {
+          const received: string[] = [];
+          const registry = yield* Tools;
+          const result = yield* registry.execute(
+            new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
+            new AbortController().signal,
+            {
+              update: (chunk) => {
+                if (chunk === "effect") return Effect.sync(() => void received.push(chunk));
+                if (chunk === "rejects") return Promise.reject(new Error("listener rejected"));
+                if (chunk === "fails") return Effect.fail(new Error("listener failed"));
+                throw new Error("listener threw");
+              },
+            },
+          );
+          expect(textOf(result)).toBe("done");
+          expect(received).toEqual(["effect"]);
+        }),
+      );
+      // The turn after: an unhandled rejection would have been reported by now.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 
   it("keeps the tail of output that floods between publishes, its offset counting what was dropped", () => {

@@ -118,9 +118,10 @@ export interface ToolContribution {
 export interface ExecuteOptions {
   /**
    * Where the call's live output goes instead of its own `ToolOutput`: a tool that runs others passes its
-   * `ToolContext.update`, so their output shows as its own and ends with it.
+   * `ToolContext.update`, so their output shows as its own and ends with it. A listener: an Effect it returns
+   * runs, and its failure (thrown, rejected, or failed) is logged, never the tool's.
    */
-  readonly update?: (chunk: string) => void;
+  readonly update?: (chunk: string) => Awaitable<void, unknown>;
 }
 
 export class Tools extends Context.Service<
