@@ -158,6 +158,21 @@ describe("createKeepAlive", () => {
     });
   });
 
+  test("drops the active key too when it is no longer open", () => {
+    createRoot((dispose) => {
+      const [open, setOpen] = createSignal<readonly string[]>(["a", "b"]);
+      const [active, setActive] = createSignal<string | undefined>("b");
+      const state = createKeepAlive(active, () => 5, open);
+      setActive("a");
+      expect(state.mounted()).toEqual(["b", "a"]);
+      setOpen(["b"]);
+      expect(state.mounted()).toEqual(["b"]);
+      setActive("b");
+      expect(state.mounted()).toEqual(["b"]);
+      dispose();
+    });
+  });
+
   test("a view hears when it is suspended and resumed; outside a KeepAlive it is active", () => {
     const heard: string[] = [];
     createRoot((dispose) => {

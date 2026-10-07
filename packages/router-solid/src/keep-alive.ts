@@ -31,7 +31,8 @@ export const createKeepAlive = (
     const limit = Number.isFinite(wanted) ? Math.max(1, Math.floor(wanted)) : DEFAULT_KEEP;
     const existing = open?.();
     const still = existing === undefined ? previous : previous.filter((key) => existing.includes(key));
-    const order = now === undefined ? still : [now, ...still.filter((key) => key !== now)];
+    // An active key `open` no longer has is closed too: its view goes now, not when another becomes active.
+    const order = now === undefined || (existing !== undefined && !existing.includes(now)) ? still : [now, ...still.filter((key) => key !== now)];
     return order.length > limit ? order.slice(0, limit) : order;
   }, []);
   const mounted = createMemo<readonly string[]>((previous) => {
