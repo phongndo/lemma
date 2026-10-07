@@ -1,5 +1,6 @@
 import { Context } from "effect";
 import type { Effect, Stream } from "effect";
+import { token } from "./internal/tokens.ts";
 
 const EventTypeId: unique symbol = Symbol("@lemma/core/Event");
 
@@ -17,7 +18,7 @@ export interface Event<Payload> {
 
 export const Event = {
   make<Payload>(name: string): Event<Payload> {
-    return Object.freeze({ name }) as Event<Payload>;
+    return token(Object.freeze({ name })) as Event<Payload>;
   },
 };
 

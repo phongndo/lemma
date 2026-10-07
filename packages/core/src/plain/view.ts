@@ -1,5 +1,6 @@
 import { Effect, Stream } from "effect";
 import { PluginStopped } from "../errors.ts";
+import { isToken } from "../internal/tokens.ts";
 import type { Bridge } from "./bridge.ts";
 
 type Effectful = Effect.Effect<any, any, any> | Stream.Stream<any, any, any>;
@@ -78,18 +79,34 @@ const isData = (value: object): boolean =>
   ArrayBuffer.isView(value) ||
   (typeof URL !== "undefined" && value instanceof URL);
 
+const isPlainObject = (value: object): boolean => {
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+};
+
+/** What a view leaves as it is: not an object to convert, too deep, data, or a token compared by identity. */
+const kept = (value: unknown, depth: number): boolean =>
+  typeof value !== "object" || value === null || Array.isArray(value) || depth >= DEPTH || isData(value) || isToken(value);
+
+/** A member not read yet. */
+const UNREAD = Symbol("unread");
+
 const isThenable = (value: unknown): boolean =>
   ((typeof value === "object" && value !== null) || typeof value === "function") && typeof (value as { then?: unknown }).then === "function";
 
 /**
- * `service` as `Plain<S>`, converted once when the plugin starts: a function
- * runs what it returns through `bridge`, an Effect or stream member becomes a
- * method, and objects inside are converted the same way, down to `DEPTH`
- * levels. A plain object is converted into a copy; a class instance is read
- * through a proxy that keeps its prototype, getters, and private fields (even
- * frozen, since the proxy's own target is a fresh object); built-in data
- * (`isData`) and arrays are left as they are. A function is called on its own
- * object, so `this` inside it is the service.
+ * `service` as `Plain<S>`: a function runs what it returns through `bridge`,
+ * an Effect or stream member becomes a method, and objects inside are
+ * converted the same way, down to `DEPTH` levels. Every converted object is
+ * read through: a plain object as an object with its keys, a class instance
+ * behind a proxy that keeps its prototype, getters, and private fields (even
+ * frozen, since the proxy's own target is a fresh object). A member is
+ * converted when it is read and kept while the object holds the same value
+ * there, so a method is one function and data is as it is now. An object is
+ * one view however it is reached (`===` holds between reads). Built-in data
+ * (`isData`), arrays, tokens (a Hook, an Event, a Registry), and a plain
+ * object with nothing to convert are left as they are. A function is called
+ * on its own object, so `this` inside it is the service.
  *
  * Once the plugin has stopped, nothing is called: a method that returned
  * plain values throws `PluginStopped` where it is called, and any other (one
@@ -115,29 +132,55 @@ export const plainView = (service: unknown, bridge: Bridge, name: string): unkno
     };
   };
 
+  /** Views made, by object and level: an object reached twice is one view while it lives. */
+  const views = new WeakMap<object, unknown[]>();
+
   const convert = (value: unknown, self: unknown, path: string, depth: number): unknown => {
     if (Effect.isEffect(value)) return () => bridge.run(value, path);
     if (Stream.isStream(value)) return () => bridge.iterate(value, path);
     if (typeof value === "function") return wrap(value as (...args: unknown[]) => unknown, self, path);
-    if (typeof value !== "object" || value === null || Array.isArray(value) || depth >= DEPTH || isData(value)) return value;
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return proxied(value, path, depth);
-    const view: Record<PropertyKey, unknown> = {};
-    let changed = false;
-    for (const key of Reflect.ownKeys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-      const member = `${path}.${String(key)}`;
-      if ("value" in descriptor) {
-        const converted = convert(descriptor.value, value, member, depth + 1);
-        if (converted !== descriptor.value) changed = true;
-        view[key] = converted;
-      } else if (descriptor.get !== undefined) {
-        const get = descriptor.get;
-        changed = true;
-        Object.defineProperty(view, key, { enumerable: descriptor.enumerable ?? true, get: () => convert(get.call(value), value, member, depth + 1) });
-      }
+    if (kept(value, depth)) return value;
+    const object = value as object;
+    let made = views.get(object);
+    if (made !== undefined && depth in made) return made[depth];
+    const view = !isPlainObject(object) ? proxied(object, path, depth) : converts(object, depth) ? readThrough(object, path, depth) : object;
+    if (made === undefined) views.set(object, (made = []));
+    made[depth] = view;
+    return view;
+  };
+
+  /** Whether a plain object has anything to convert: an Effect, a stream, a function, a getter, or an object that has. */
+  const converts = (object: object, depth: number): boolean => {
+    for (const key of Reflect.ownKeys(object)) {
+      const descriptor = Reflect.getOwnPropertyDescriptor(object, key)!;
+      if (!("value" in descriptor)) return true;
+      const member: unknown = descriptor.value;
+      if (typeof member === "function" || Effect.isEffect(member) || Stream.isStream(member)) return true;
+      if (!kept(member, depth + 1) && (!isPlainObject(member as object) || converts(member as object, depth + 1))) return true;
     }
-    return changed ? Object.freeze(view) : value;
+    return false;
+  };
+
+  /** A plain object, read through: one property per key it has, each converting what it holds when read. */
+  const readThrough = (original: object, path: string, depth: number): object => {
+    const view = {};
+    for (const key of Reflect.ownKeys(original)) {
+      const member = `${path}.${String(key)}`;
+      let from: unknown = UNREAD;
+      let to: unknown;
+      Object.defineProperty(view, key, {
+        enumerable: Reflect.getOwnPropertyDescriptor(original, key)!.enumerable ?? true,
+        get: () => {
+          const value: unknown = Reflect.get(original, key, original);
+          if (value !== from) {
+            from = value;
+            to = convert(value, original, member, depth + 1);
+          }
+          return to;
+        },
+      });
+    }
+    return Object.freeze(view);
   };
 
   /**

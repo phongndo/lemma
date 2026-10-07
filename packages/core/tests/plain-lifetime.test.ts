@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Cause, Context, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
-import { definePlugin as defineEffectPlugin, Hook, Hooks, PluginContext, PluginFault, PluginStopped } from "../src/index.ts";
+import { definePlugin as defineEffectPlugin, Hook, Hooks, PluginContext, PluginFault, PluginStopped, Registry } from "../src/index.ts";
 import { awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
 import type { Plain } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
@@ -502,6 +502,51 @@ describe("services as promises", () => {
     );
     await tested.close();
     expect(seen).toEqual(["read", true, true, "deep", true]);
+  });
+
+  test("tokens inside a service are the tokens; an object is one view, and reads what it holds now", async () => {
+    const Items = Registry.make<string>("test/items", { key: (item) => item });
+    const Ping = Hook.make<string, string>("test/ping");
+    const state = { count: 1, bump: () => Effect.sync(() => ++state.count) };
+    class Holder extends Context.Service<
+      Holder,
+      {
+        readonly tokens: { readonly items: typeof Items; readonly ping: typeof Ping };
+        readonly state: typeof state;
+        readonly same: typeof state;
+        readonly current: typeof state;
+      }
+    >()("test/Holder") {}
+    const seen: unknown[] = [];
+    const tested = await testPlugin(
+      definePlugin({
+        id: "holder",
+        requires: { holder: Holder },
+        setup: async ({ holder }) => {
+          seen.push(holder.tokens.items === Items, holder.tokens.ping === Ping);
+          seen.push(holder.state === holder.same, holder.current === holder.current, holder.state.bump === holder.state.bump);
+          await holder.state.bump();
+          seen.push(holder.state.count);
+        },
+      }),
+      {
+        provide: [
+          [
+            Holder,
+            {
+              tokens: { items: Items, ping: Ping },
+              state,
+              same: state,
+              get current() {
+                return state;
+              },
+            },
+          ],
+        ],
+      },
+    );
+    await tested.close();
+    expect(seen).toEqual([true, true, true, true, true, 2]);
   });
 
   test("once stopped, nothing a service offers throws where leaked work would not catch it", async () => {

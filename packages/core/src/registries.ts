@@ -1,5 +1,6 @@
 import { Context } from "effect";
 import type { Effect, Stream } from "effect";
+import { token } from "./internal/tokens.ts";
 
 const RegistryTypeId: unique symbol = Symbol("@lemma/core/Registry");
 
@@ -25,7 +26,7 @@ export interface Registry<Item> {
 
 export const Registry = {
   make<Item>(name: string, options: RegistryOptions<Item> = {}): Registry<Item> {
-    return Object.freeze({ name, options: Object.freeze({ ...options }) }) as Registry<Item>;
+    return token(Object.freeze({ name, options: Object.freeze({ ...options }) })) as Registry<Item>;
   },
 };
 

@@ -155,10 +155,13 @@ export default definePlugin({
 - **Reloading.** `handoff(() => state)` and `previous` carry state to the
   replacement, as `PluginContext.handoff` does, checked by `carry` when given.
 - **Nested services.** Objects inside a service are converted as the service
-  is, down to four levels below it: a plain object into a copy, a class
-  instance behind a proxy that keeps its prototype, getters, and private fields
-  (a frozen one too). Built-in data (a `Map`, a `Date`, an `Error`, a typed
-  array) and arrays are left as they are, as is anything deeper. `Plain<S>`
+  is, down to four levels below it, and read through: what a view shows is what
+  the object holds now. A plain object becomes an object with its keys; a class
+  instance goes behind a proxy that keeps its prototype, getters, and private
+  fields (a frozen one too). An object is one view however it is reached, so
+  `===` holds between reads, though not with the object itself. Built-in data
+  (a `Map`, a `Date`, an `Error`, a typed array), arrays, tokens (a Hook, an
+  Event, a Registry), and anything deeper are left as they are. `Plain<S>`
   types them the same way.
 - **Providing.** `setup` returns services as their contracts declare them; it does
   not convert them. `asEffect(async (…) => …)` turns an async function into one

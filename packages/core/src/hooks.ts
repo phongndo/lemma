@@ -3,6 +3,7 @@ import type { Cause } from "effect";
 import type { CoreClosed, EventError, HookError, RegistryError } from "./errors.ts";
 import type { Event, Observer, ObserveOptions } from "./events.ts";
 import type { ContributeOptions, Registry } from "./registries.ts";
+import { token } from "./internal/tokens.ts";
 
 const HookTypeId: unique symbol = Symbol("@lemma/core/Hook");
 
@@ -23,7 +24,7 @@ export interface Hook<Input, Output, Error = never> {
 
 export const Hook = {
   make<Input, Output, Error = never>(name: string): Hook<Input, Output, Error> {
-    return Object.freeze({ name }) as Hook<Input, Output, Error>;
+    return token(Object.freeze({ name })) as Hook<Input, Output, Error>;
   },
 };
 
