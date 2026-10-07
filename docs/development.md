@@ -97,6 +97,10 @@ Dependency licenses stay with their packages; the runtime's license is included.
 outside the checkout, without a system Node or provider credentials. The
 [distribution workflow](../.github/workflows/build-dist.yml) runs this check on
 every supported platform and attaches archives to Check runs for testers.
+It also installs the generated Homebrew formula on both Mac architectures,
+including opening the native file-search library after Homebrew has relocated
+the package. The formula preserves that library's short `@rpath` ID because
+the upstream binary has no header space for Homebrew's full Cellar path.
 [`docs/installation.md`](installation.md) is the user-facing install contract.
 
 The release version is `apps/cli/package.json`'s `version`, also printed by

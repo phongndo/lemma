@@ -41,7 +41,7 @@ To choose a release, including a prerelease:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/phongndo/lemma/main/scripts/install.sh |
-  LEMMA_VERSION=v0.1.0 sh
+  LEMMA_VERSION=v0.1.1 sh
 ```
 
 `LEMMA_INSTALL_DIR` changes the command directory; `LEMMA_DATA_DIR` changes the
@@ -58,10 +58,10 @@ artifact for each supported platform. Download the matching artifact from the
 unzip it, then check and extract its archive. For example, on Apple Silicon:
 
 ```sh
-shasum -a 256 -c lemma-v0.1.0-darwin-arm64.tar.gz.sha256
-tar -xzf lemma-v0.1.0-darwin-arm64.tar.gz
+shasum -a 256 -c lemma-v0.1.1-darwin-arm64.tar.gz.sha256
+tar -xzf lemma-v0.1.1-darwin-arm64.tar.gz
 cd your-project
-/path/to/lemma-v0.1.0-darwin-arm64/bin/lemma serve
+/path/to/lemma-v0.1.1-darwin-arm64/bin/lemma serve
 ```
 
 Use the version and target actually named in your download; on Linux,
