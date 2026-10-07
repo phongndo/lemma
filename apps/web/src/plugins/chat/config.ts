@@ -26,6 +26,12 @@ export interface Chat {
   readonly isOpen: (key: string, fallback: boolean) => boolean;
   readonly toggle: (key: string, fallback: boolean) => void;
   readonly pending: () => ReadonlySet<string>;
+  /**
+   * When the tool call with this id first showed, streamed or logged, in ms
+   * since the epoch. `before` is what the call was shown as before its id
+   * arrived (its place in the stream): the call keeps that time.
+   */
+  readonly seen: (id: string, before?: string) => number;
   /** The time, ticking each second while a turn runs, for elapsed-time labels. */
   readonly now: () => number;
 }

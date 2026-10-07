@@ -10,6 +10,7 @@ import {
   ComposerSuggestionPart,
   ChatWorkingPart,
   ChatWorkPart,
+  ChatWorkGroupPart,
   ConfigFormPart,
   CopyButtonPart,
   DialogPart,
@@ -154,6 +155,7 @@ export const ComposerSuggestionView = partView(ComposerSuggestionPart);
 export const ChatThinking = partView(ChatThinkingPart);
 export const ChatTool = partView(ChatToolPart);
 export const ChatWork = partView(ChatWorkPart);
+export const ChatWorkGroup = partView(ChatWorkGroupPart);
 export const ChatWorking = partView(ChatWorkingPart);
 export const ChatTurnFooter = partView(ChatTurnFooterPart);
 
@@ -200,6 +202,8 @@ export const BrainIcon = () => <Icon name="brain" />;
 export const ChatIcon = () => <Icon name="chat" />;
 export const TrajectoryIcon = () => <Icon name="trajectory" />;
 export const CommandIcon = () => <Icon name="command" />;
+export const TerminalIcon = () => <Icon name="terminal" />;
+export const HammerIcon = () => <Icon name="hammer" />;
 export const SlidersIcon = () => <Icon name="sliders" />;
 export const PaletteIcon = () => <Icon name="palette" />;
 export const ArrowLeftIcon = () => <Icon name="arrow-left" />;

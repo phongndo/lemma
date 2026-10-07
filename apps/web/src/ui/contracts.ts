@@ -960,6 +960,8 @@ export type IconName =
   | "chat"
   | "trajectory"
   | "command"
+  | "terminal"
+  | "hammer"
   | "sliders"
   | "palette"
   | "arrow-left"
@@ -1041,11 +1043,13 @@ export interface ChatToolProps extends ToolBodyProps {
 export const ChatToolPart = definePart<ChatToolProps>("chat.tool");
 
 export interface ChatWorkProps {
-  /** Steps folded: a finished turn's work, or a running turn's earlier steps (`live`). */
+  /** Steps folded: a finished turn's work, or a running turn's work so far (`live`). */
   readonly steps: number;
   readonly tools: number;
   readonly failed: number;
+  /** How long the turn took, or while it runs, has run so far. */
   readonly duration?: number | undefined;
+  /** The turn is still running; its fold is open unless the reader closed it. */
   readonly live?: boolean | undefined;
   readonly open: boolean;
   readonly onToggle: () => void;
@@ -1054,13 +1058,29 @@ export interface ChatWorkProps {
 }
 export const ChatWorkPart = definePart<ChatWorkProps>("chat.work");
 
+export interface ChatWorkGroupProps {
+  /** What its calls did, in a sentence: "Read 3 files, ran 2 commands". */
+  readonly summary: string;
+  /** The tool names its calls used, in order. */
+  readonly tools: readonly string[];
+  readonly failed: number;
+  /** When its first step was logged. */
+  readonly at: number;
+  readonly open: boolean;
+  readonly onToggle: () => void;
+  /** Its thoughts and calls, rendered by the chat. */
+  readonly children: JSX.Element;
+}
+/** Tool calls made one after another inside folded work, as one line that opens to them. */
+export const ChatWorkGroupPart = definePart<ChatWorkGroupProps>("chat.work-group");
+
 export interface ChatWorkingProps {
   /** When the running turn started, if known. */
   readonly startedAt?: number | undefined;
   /** The time, ticking each second. */
   readonly now: number;
 }
-/** Shown while the model is thinking between steps. */
+/** Shown at the end of the transcript while a turn runs. */
 export const ChatWorkingPart = definePart<ChatWorkingProps>("chat.working");
 
 export interface ChatTurnFooterProps {

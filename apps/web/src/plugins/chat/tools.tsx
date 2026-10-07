@@ -1,13 +1,13 @@
-import { For, Match, Show, Switch, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { contentText, formatDuration } from "@lemma/contracts";
 import type { ImageContent, TextContent } from "@lemma/contracts";
 import { diffStats, parseDiff, readDetails } from "../../model/details.ts";
 import { formatElapsed, summarizeToolArgs, summarizePartialArgs, truncateLines } from "../../model/format.ts";
 import type { ToolResultView } from "../../model/transcript.ts";
 import { ToolViews } from "../../ui/contracts.ts";
-import type { ChatToolProps, ClientService, ThreadsService } from "../../ui/contracts.ts";
+import type { ChatToolProps, ClientService, IconName, ThreadsService } from "../../ui/contracts.ts";
 import type { SlotsService } from "../../ui/slots.ts";
-import { ChatTool, CheckIcon, ChevronDownIcon, ChevronIcon, Contained, FileTypeIcon, Spinner, XIcon } from "../../ui/parts.tsx";
+import { ChatTool, ChevronDownIcon, ChevronIcon, Contained, Icon, Spinner } from "../../ui/parts.tsx";
 import type { Chat } from "./config.ts";
 
 const imageSrc = (image: ImageContent) => `data:${image.mimeType};base64,${image.data}`;
@@ -59,15 +59,25 @@ function Diff(props: { diff: string }) {
   );
 }
 
-/** Lines of a running tool's output shown under it. */
-const LIVE_LINES = 6;
-
 export type ToolState = "running" | "queued" | "ok" | "error" | "interrupted";
+
+/** What a call shows beside its line, by tool: what kind of thing it did. */
+const TOOL_ICONS: ReadonlyMap<string, IconName> = new Map([
+  ["bash", "terminal"],
+  ["read", "file"],
+  ["edit", "pencil"],
+  ["write", "pencil"],
+  ["grep", "search"],
+  ["find", "search"],
+  ["ls", "folder"],
+]);
 
 /** A tool call, through the `chat.tool` part, with the chat's open state, its live output, and how long it has run. */
 export function ToolCard(props: {
   chat: Chat;
   id: string;
+  /** What a streamed call was shown as before its id arrived; see `Chat.seen`. */
+  before?: string;
   name: string;
   args: Record<string, unknown> | undefined;
   partial?: string;
@@ -76,13 +86,14 @@ export function ToolCard(props: {
 }) {
   // Every call starts as one quiet line unless configured otherwise.
   const defaultOpen = () => props.chat.config.expandTools;
-  /** The last lines a running tool printed; its result replaces them. */
+  /** The last lines a running tool printed, as many as its result will show; the result replaces them. */
   const output = createMemo(() => {
     const text = props.chat.threads.live().output.get(props.id)?.replace(/\n+$/, "");
-    return text === undefined || text === "" ? undefined : text.split("\n").slice(-LIVE_LINES).join("\n");
+    return text === undefined || text === "" ? undefined : text.split("\n").slice(-OUTPUT_LINES).join("\n");
   });
-  // Measured from when the call appeared here: close enough to show that a slow command is still going.
-  const shownAt = Date.now();
+  // Measured from when the call first appeared, streamed or logged: close enough to show that a slow command is still going.
+  // Read again when the id changes: a streamed call can be shown before its id arrives.
+  const shownAt = createMemo(() => props.chat.seen(props.id, props.before));
   const running = () => props.state === "running";
   return (
     <ChatTool
@@ -93,7 +104,7 @@ export function ToolCard(props: {
       result={props.result}
       state={props.state}
       output={running() ? output() : undefined}
-      elapsed={running() ? props.chat.now() - shownAt : undefined}
+      elapsed={running() ? props.chat.now() - shownAt() : undefined}
       open={props.chat.isOpen(props.id, defaultOpen())}
       onToggle={() => props.chat.toggle(props.id, defaultOpen())}
     />
@@ -128,39 +139,28 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
       const t = props.result?.timing;
       return t === undefined ? undefined : t.endedAt - t.startedAt;
     };
+    /** A built-in tool says what it did by its icon; any other is named. */
+    const named = () => !TOOL_ICONS.has(props.name) || primary() === undefined;
     return (
       <div class={`tool tool-${props.state}`} classList={{ open: open() }}>
-        <button class="tool-head" aria-expanded={open()} onClick={() => props.onToggle()}>
-          <ChevronIcon class="chevron" />
-          <span class="tool-status">
-            <Switch>
-              <Match when={props.state === "running"}>
-                <Spinner />
-              </Match>
-              <Match when={props.state === "queued"}>
-                <span class="dot-muted" />
-              </Match>
-              <Match when={props.state === "ok"}>
-                <CheckIcon />
-              </Match>
-              <Match when={props.state === "error"}>
-                <XIcon />
-              </Match>
-              <Match when={props.state === "interrupted"}>
-                <span class="dot-muted" />
-              </Match>
-            </Switch>
+        <button class="row-head tool-head" aria-expanded={open()} onClick={() => props.onToggle()}>
+          <span class="row-icon tool-status">
+            <Show when={props.state === "running" || props.state === "queued"} fallback={<Icon name={TOOL_ICONS.get(props.name) ?? "puzzle"} />}>
+              <Spinner />
+            </Show>
           </span>
-          <span class="tool-name">{props.name || "tool"}</span>
-          <Show when={summary().file}>{(file) => <FileTypeIcon path={file().path} kind={file().kind} class="tool-file" />}</Show>
-          <Show when={primary()}>
-            <span class="tool-primary" classList={{ shell: summary().shell === true || props.name === "bash" }}>
-              {primary()}
+          <span class="row-label">
+            {/* The icon is not read out: a built-in tool's name still is. */}
+            <span class="tool-name" classList={{ "sr-only": !named() }}>
+              {props.name || "tool"}
             </span>
-          </Show>
-          <Show when={summary().secondary}>
-            <span class="tool-secondary">{summary().secondary}</span>
-          </Show>
+            <Show when={primary()}>
+              <span class="tool-primary">{primary()}</span>
+            </Show>
+            <Show when={summary().secondary}>
+              <span class="tool-secondary">{summary().secondary}</span>
+            </Show>
+          </span>
           <span class="tool-meta">
             <Show when={stats()}>
               {(s) => (
@@ -170,20 +170,23 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
               )}
             </Show>
             <Show when={details().exitCode !== undefined && details().exitCode !== 0}>
-              <span class="badge badge-error">exit {details().exitCode}</span>
+              <span class="tool-fail">exit {details().exitCode}</span>
+            </Show>
+            <Show when={props.state === "error" && details().exitCode === undefined}>
+              <span class="tool-fail">failed</span>
             </Show>
             <Show when={props.state === "interrupted"}>
-              <span class="badge">no result</span>
+              <span>no result</span>
             </Show>
             <Show when={duration() !== undefined && duration()! >= 1000}>
-              <span class="muted">{formatDuration(duration()!)}</span>
+              <span class="tool-time">{formatDuration(duration()!)}</span>
             </Show>
             <Show when={props.elapsed !== undefined && props.elapsed >= 1000}>
-              <span class="muted">{formatElapsed(props.elapsed!)}</span>
+              <span>{formatElapsed(props.elapsed!)}</span>
             </Show>
           </span>
+          <ChevronIcon class="chevron row-chevron" />
         </button>
-        <Show when={props.output}>{(text) => <pre class="tool-live">{text()}</pre>}</Show>
         <Show when={open()}>
           <Show
             // A view with a summary and no body leaves the body to the chat's own.
@@ -198,6 +201,7 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
                 argsShown={argsShown()}
                 diff={diff()}
                 outputText={outputText()}
+                liveOutput={props.output}
                 details={details()}
               />
             }
@@ -224,6 +228,8 @@ function DefaultBody(props: {
   argsShown: boolean;
   diff: string | undefined;
   outputText: string;
+  /** What a running tool has printed so far. */
+  liveOutput: string | undefined;
   details: ReturnType<typeof readDetails>;
 }) {
   const argsShown = () => props.argsShown;
@@ -236,6 +242,13 @@ function DefaultBody(props: {
         <pre class="tool-args">{JSON.stringify(props.args, null, 2)}</pre>
       </Show>
       <Show when={diff()}>{(d) => <Diff diff={d()} />}</Show>
+      <Show when={props.result === undefined && props.liveOutput}>
+        {(text) => (
+          <div class="output">
+            <pre>{text()}</pre>
+          </div>
+        )}
+      </Show>
       <Show when={outputText() && !(diff() !== undefined && props.state === "ok")}>
         <Output text={outputText()} error={props.state === "error"} />
       </Show>

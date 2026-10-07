@@ -432,6 +432,8 @@ try {
     (window as any).removeToolView = (window as any).lemma.slots().add(ToolViews, { id: "bash", summary: () => ({ primary: "summarized by a plugin" }) });
   });
   if ((await page.locator(".work-head[aria-expanded=false]").count()) > 0) await page.click(".work-head[aria-expanded=false] >> nth=0");
+  // Calls made one after another sit in a group of the fold.
+  if ((await page.locator(".work-group-head[aria-expanded=false]").count()) > 0) await page.click(".work-group-head[aria-expanded=false] >> nth=0");
   await page.click(".tool-head:has-text('summarized by a plugin') >> nth=0");
   await page.waitForSelector(".tool-body", { timeout: 5_000 }).catch(() => assert.fail("a tool view without a body hid the chat's own"));
   await page.evaluate(() => (window as any).removeToolView());

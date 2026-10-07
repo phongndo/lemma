@@ -663,7 +663,9 @@ export const createMockHost = (): Host => {
     const call = { type: "toolCall" as const, id: id("c"), name: "bash", arguments: { command: "ls -la packages" } };
     const m1 = assistant(
       [
-        { type: "thinking", thinking: `The user said: "${text.slice(0, 60)}". I'll look around the repo first.` },
+        // Reasoning as some models return it: several parts in a row, each opening with a bold title.
+        { type: "thinking", thinking: `**Reading the request**\n\nThe user said: "${text.slice(0, 60)}".` },
+        { type: "thinking", thinking: "**Looking around the repo**\n\nI'll list the packages before answering." },
         { type: "text", text: "Let me look at the workspace layout first." },
         call,
       ],
@@ -696,6 +698,42 @@ export const createMockHost = (): Host => {
         content: [{ type: "text", text: "drwxr-xr-x client\ndrwxr-xr-x contracts\ndrwxr-xr-x core" }],
       },
     });
+    // A second step: two more calls, which the chat gathers with the first under one line.
+    const stepB = id("p");
+    const sB = Date.now();
+    const status = { type: "toolCall" as const, id: id("c"), name: "bash", arguments: { command: "git status --short" } };
+    const readme = { type: "toolCall" as const, id: id("c"), name: "read", arguments: { path: `${CWD}/README.md` } };
+    const mB = assistant(
+      [{ type: "thinking", thinking: "**Checking the working tree**\n\nThen the README, for how the packages fit together." }, status, readme],
+      usage(3100, 60, 8000),
+      "toolUse",
+      undefined,
+      by,
+    );
+    if (!(await stream(sessionId, turnId, stepB, mB))) return end("cancelled");
+    append(sessionId, { type: "message", turnId, stepId: stepB, message: mB, timing: { startedAt: sB, firstTokenAt: sB + 200, endedAt: Date.now() } });
+    for (const [done, output] of [
+      [status, " M apps/web/src/plugins/chat/index.tsx"],
+      [readme, "# Lemma\n\nA coding-agent harness in which every part is a plugin."],
+    ] as const) {
+      await sleep(500);
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: stepB,
+        ...(done.name === "bash" ? { details: { exitCode: 0 } } : {}),
+        timing: { startedAt: Date.now() - 500, endedAt: Date.now() },
+        message: {
+          role: "toolResult",
+          toolCallId: done.id,
+          toolName: done.name,
+          isError: false,
+          timestamp: Date.now(),
+          content: [{ type: "text", text: output }],
+        },
+      });
+    }
+    if (cancelled.has(sessionId)) return end("cancelled");
     // Steers sent meanwhile join the turn here, between its steps.
     const steers = queueOf(sessionId).filter((queued) => queued.prompt.mode === "steer");
     if (steers.length > 0) {

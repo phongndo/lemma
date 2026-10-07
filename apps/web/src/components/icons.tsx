@@ -256,6 +256,16 @@ const CommandIcon = (props: GlyphProps) => (
     <path d="M6 6V4.5A1.5 1.5 0 104.5 6H6zm0 0h4m-4 0v4m4-4V4.5A1.5 1.5 0 1111.5 6H10zm0 0v4m0 0h1.5a1.5 1.5 0 11-1.5 1.5V10zm0 0H6m0 0v1.5A1.5 1.5 0 114.5 10H6z" />
   </Icon>
 );
+const TerminalIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M3 4.5L6.5 8 3 11.5M8 12h5" />
+  </Icon>
+);
+const HammerIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M9.5 2.5l4 4-1.75 1.75-4-4zM8.6 5.4L2.8 11.2a1.4 1.4 0 002 2l5.8-5.8" />
+  </Icon>
+);
 const SlidersIcon = (props: GlyphProps) => (
   <Icon class={props.class}>
     <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6" />
@@ -318,6 +328,8 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   chat: ChatIcon,
   trajectory: TrajectoryIcon,
   command: CommandIcon,
+  terminal: TerminalIcon,
+  hammer: HammerIcon,
   sliders: SlidersIcon,
   palette: PaletteIcon,
   "arrow-left": ArrowLeftIcon,

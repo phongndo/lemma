@@ -1,31 +1,38 @@
+.output-more {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.output-more[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+
+.working-time {
+  font-variant-numeric: tabular-nums;
+}
+
+.working-time::before {
+  content: "· ";
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .output-more {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .output-more[aria-expanded="true"] .icon {
-    transform: rotate(180deg);
-  }
-  /* A running tool's latest output, under its line until the result arrives. */
-  .tool-live {
-    margin: 4px 0 2px 22px;
-    padding: 4px 0 4px 10px;
-    border-left: 2px solid var(--border);
-    font: 11.5px/1.45 var(--font-mono);
-    color: var(--text-3);
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-  }
-  .working-time {
-    font-variant-numeric: tabular-nums;
-  }
-  .working-time::before {
-    content: "· ";
-  }
   .pulse {
     animation-duration: 2.4s;
   }
+}
+
+/* Read out, not shown: what an icon says to the eye. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 .badge {
@@ -348,190 +355,198 @@
   min-width: 0;
 }
 
-.streaming > :last-child::after {
-  content: "";
-  display: inline-block;
-  width: 7px;
-  height: 1em;
-  margin-left: 2px;
-  vertical-align: -2px;
-  background: var(--text-3);
-  animation: pulse 1s steps(2) infinite;
-}
-
-.thinking {
-  font-size: 13px;
-  color: var(--text-2);
-}
-
-.thinking-head {
+/*
+ * A row of work: a thought, a tool call, a group of calls. An icon, one quiet
+ * line, and a chevron at the end; opening it shows what is behind it, indented
+ * under a rule.
+ */
+.row-head {
   display: flex;
   align-items: center;
-  gap: 6px;
-  max-width: 100%;
-  padding: 2px 6px 2px 2px;
-  margin-left: -2px;
+  gap: 10px;
+  width: 100%;
+  min-height: 28px;
+  padding: 3px 8px;
+  margin-left: -8px;
   border: 0;
   border-radius: var(--radius-sm);
   background: none;
   color: var(--text-3);
+  font-size: 13.5px;
   text-align: left;
 }
 
-.thinking-head:hover {
-  color: var(--text-2);
+.row-head:hover:not(:disabled) {
   background: var(--bg-hover);
-}
-
-.thinking-label {
-  font-weight: 500;
-  flex: none;
-}
-
-.thinking.live .thinking-label {
   color: var(--text-2);
-  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.row-head:disabled {
+  cursor: default;
+}
+
+.row-icon {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  flex: none;
+  color: var(--text-3);
+}
+
+.row-icon .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.row-label {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  white-space: nowrap;
 }
 
 .thinking-preview {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-  font-style: italic;
+}
+
+.row-chevron {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.12s ease-out;
+}
+
+.row-head:hover .row-chevron,
+.row-head:focus-visible .row-chevron,
+.open > .row-head .row-chevron {
+  opacity: 0.7;
 }
 
 .open > button > .chevron {
   transform: rotate(90deg);
 }
 
+/* The clock time a group started, while it is pointed at. */
+.row-time {
+  flex: none;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  opacity: 0;
+}
+
+.row-head:hover .row-time,
+.row-head:focus-visible .row-time {
+  opacity: 1;
+}
+
+/* What is being worked on now: its words shimmer. */
+.thinking.live .thinking-preview {
+  background: linear-gradient(90deg, var(--text-3) 0%, var(--text-3) 40%, var(--text) 50%, var(--text-3) 60%, var(--text-3) 100%);
+  background-size: 250% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: shimmer 2.2s linear infinite;
+}
+
+/* What is being worked on reads plainly where motion is unwanted: no sweep across its words. */
+@media (prefers-reduced-motion: reduce) {
+  .thinking.live .thinking-preview {
+    animation: none;
+    background: none;
+    color: var(--text-2);
+  }
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -150% 0;
+  }
+}
+
+/* The thought as written: markdown, quieter and smaller than the answer. */
 .thinking-body {
-  white-space: pre-wrap;
-  padding: 6px 0 4px 14px;
-  margin-left: 5px;
-  border-left: 2px solid var(--border);
-  font-style: italic;
+  padding: 4px 0 4px 14px;
+  margin: 2px 0 6px 7px;
+  border-left: 1px solid var(--border-strong);
+  font-size: 13px;
   line-height: 1.55;
+  color: var(--text-2);
   max-height: 420px;
   overflow-y: auto;
 }
 
-/* A tool call is one quiet line, like a thought; opening it shows the call's output indented under a rule. */
-.tool {
-  font-size: 13px;
-}
-
-.tool-head {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  width: 100%;
-  min-height: 26px;
-  padding: 2px 6px;
-  margin-left: -6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  text-align: left;
-  color: var(--text-3);
-  font-size: 13px;
-}
-
-.tool-head:hover {
-  background: var(--bg-hover);
-  color: var(--text-2);
-}
-
-.tool-head .chevron {
-  width: 12px;
-  height: 12px;
-  flex: none;
-  color: var(--text-3);
-  opacity: 0.7;
-}
-
-.tool-status {
-  display: grid;
-  place-items: center;
-  width: 14px;
-  color: var(--text-3);
-  flex: none;
-}
-
-.tool-status .icon {
+.tool-status .spinner {
   width: 13px;
   height: 13px;
 }
 
-.tool-ok .tool-status {
-  color: var(--ok);
-}
-
-.tool-error .tool-status,
-.tool-error .tool-name {
+.tool-error .tool-status {
   color: var(--err);
 }
 
-.tool-running .tool-status {
-  color: var(--accent);
-}
-
 .tool-name {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--text-2);
   flex: none;
-}
-
-/* The file a call acts on (the `file-icon` part), tucked against its path. */
-.tool-file {
-  width: 14px;
-  height: 14px;
-  flex: none;
-  margin-right: -3px;
 }
 
 .tool-primary {
-  font-family: var(--font-mono);
-  font-size: 12.5px;
-  color: var(--text-3);
   min-width: 0;
-  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Consecutive calls read as one list rather than separate blocks. */
-.tool + .tool {
-  margin-top: -6px;
-}
-
-.tool-head:hover .tool-primary {
-  color: var(--text-2);
-}
-
-.tool-primary.shell::before {
-  content: "$ ";
-  opacity: 0.7;
 }
 
 .tool-secondary {
-  color: var(--text-3);
-  white-space: nowrap;
   flex: none;
-  font-size: 12px;
+  font-size: 12.5px;
 }
 
 .tool-meta {
-  margin-left: auto;
   display: flex;
   align-items: center;
   gap: 8px;
   flex: none;
-  font-size: 11.5px;
+  font-size: 12px;
   color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.tool-fail {
+  color: var(--err);
+}
+
+/* A finished call's time, while it is pointed at. */
+.tool-time {
+  display: none;
+}
+
+.row-head:hover .tool-time,
+.row-head:focus-visible .tool-time {
+  display: inline;
+}
+
+/* Where nothing hovers, what hovering shows is always there. */
+@media (hover: none) {
+  .row-time {
+    opacity: 1;
+  }
+  .tool-time {
+    display: inline;
+  }
+  .row-chevron {
+    opacity: 0.7;
+  }
 }
 
 .diffstat {
@@ -546,16 +561,8 @@
   color: var(--del);
 }
 
-.dot-muted {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--text-3);
-  opacity: 0.6;
-}
-
 .tool-body {
-  margin: 2px 0 6px 12px;
+  margin: 2px 0 6px 7px;
   padding-left: 14px;
   border-left: 1px solid var(--border-strong);
 }
@@ -702,6 +709,32 @@
   cursor: default;
 }
 
+.turn-usage {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  border-radius: var(--radius-sm);
+}
+
+/* The tokens: in the tooltip where a pointer hovers, on the line where none does. */
+@media (hover: hover) {
+  .turn-tokens {
+    display: none;
+  }
+}
+
+/* Out of the way until the reader looks at the turn. */
+@media (hover: hover) {
+  .turn-footer {
+    opacity: 0.55;
+    transition: opacity 0.15s ease-out;
+  }
+  .turn:hover .turn-footer,
+  .turn-footer:focus-within {
+    opacity: 1;
+  }
+}
+
 .turn-copy {
   width: 22px;
   height: 22px;
@@ -714,9 +747,9 @@
   height: 14px;
 }
 
-/* A finished turn's work, folded to one quiet line above the answer. */
+/* A turn's work, "Working for 12s" then "Worked for 35s", above the answer; open, a rule under its line and its rows below. */
 .work {
-  font-size: 13px;
+  font-size: 13.5px;
 }
 
 .work-head {
@@ -724,10 +757,8 @@
   align-items: center;
   gap: 6px;
   max-width: 100%;
-  padding: 2px 6px 2px 2px;
-  margin-left: -2px;
+  padding: 2px 0;
   border: 0;
-  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-3);
   text-align: left;
@@ -735,24 +766,47 @@
 
 .work-head:hover {
   color: var(--text-2);
-  background: var(--bg-hover);
 }
 
-.work-label {
-  font-weight: 500;
+.work-head .chevron {
+  width: 12px;
+  height: 12px;
+  opacity: 0.7;
+}
+
+/* Open while it runs, and nothing to say about closing it yet. */
+.work.live.open > .work-head .chevron {
+  display: none;
 }
 
 .work-failed {
+  flex: none;
+  font-size: 12px;
   color: var(--err);
 }
 
 .work-body {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  padding: 6px 0 4px 14px;
-  margin: 2px 0 6px 5px;
-  border-left: 2px solid var(--border);
+  gap: 2px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+
+/* What the model says between its calls reads as itself, not as a row. */
+.work-body > .md,
+.work-body > .assistant > .md {
+  margin: 6px 0;
+}
+
+.work-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 4px 7px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border-strong);
 }
 
 .working {
@@ -776,4 +830,9 @@
   .content {
     padding: 16px 14px 24px;
   }
+}
+
+/* A step still streaming inside the work: its rows sit as close as the logged ones. */
+.work-body > .assistant {
+  gap: 2px;
 }
