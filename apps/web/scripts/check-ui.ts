@@ -65,12 +65,16 @@ assert(engine !== undefined, `LEMMA_BROWSER is chromium, firefox, or webkit, not
 const executablePath = engine === chromium ? process.env.LEMMA_CHROMIUM : undefined;
 const browser = await engine.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
 
-const errors: string[] = [];
-/** The app's warnings (`lemma ui: …` problems, each also a toast). */
-const warnings: string[] = [];
-const expectNoErrors = (when: string) => {
-  const found = errors.splice(0);
-  assert.deepEqual(found, [], `errors ${when}`);
+/** What went wrong on a lane's pages (see `lanes` below), kept apart from the other lanes'. */
+const log = () => {
+  const errors: string[] = [];
+  /** The app's warnings (`lemma ui: …` problems, each also a toast). */
+  const warnings: string[] = [];
+  const expectNoErrors = (when: string) => {
+    const found = errors.splice(0);
+    assert.deepEqual(found, [], `errors ${when}`);
+  };
+  return { errors, warnings, expectNoErrors };
 };
 /** Resolves once the page has a frame drawn by whatever fills `root`. */
 const settled = (page: Page) => page.waitForFunction(() => document.querySelector("#root")!.childElementCount > 0, undefined, { timeout: 10_000 });
@@ -108,8 +112,9 @@ const saveArtifacts = async () => {
   }
   console.error(`UI check failed: traces and screenshots are in ${directory}`);
 };
-
-try {
+/** A page of its own, on a mock host of its own (a new page is a new browser context), booted without errors. */
+const boot = async () => {
+  const { errors, warnings, expectNoErrors } = log();
   const page = await open();
   page.on("pageerror", (error) => errors.push(error.message));
   page.on("console", (message) => {
@@ -120,6 +125,30 @@ try {
   await settled(page);
   await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
   expectNoErrors("while booting");
+  return { page, errors, warnings, expectNoErrors };
+};
+/** Turns a plugin on or off the way the Plugins page switches it, and says what state it is in after. */
+const switchTo = (page: Page, id: string, enabled: boolean) =>
+  page.evaluate(
+    async ({ id, enabled }) => {
+      const lemma = (window as any).lemma;
+      const plugin = lemma.plugins.list().find((candidate: any) => candidate.id === id);
+      await lemma.plugins.setEnabled(plugin, enabled);
+      return lemma.plugins.list().find((candidate: any) => candidate.id === id).state;
+    },
+    { id, enabled },
+  );
+
+/*
+ * The checks run in lanes, all at once, each on pages of its own; a lane's checks run in order. Like a real host, the
+ * mock answers after a while rather than at once (a switch on the Plugins page takes 200 ms, a reply streams), so the
+ * time is mostly waiting, and the lanes wait together.
+ */
+
+// 1–3: booting, the parts, and every plugin off and on.
+const toggling = async () => {
+  // 1. The app boots without errors.
+  const { page, warnings, expectNoErrors } = await boot();
 
   // 2. Every declared part has a provider.
   const unfilled: string[] = await page.evaluate(async () => {
@@ -136,23 +165,13 @@ try {
   const plugins: { id: string; locked: boolean }[] = await page.evaluate(() =>
     (window as any).lemma.plugins.list().map((plugin: any) => ({ id: plugin.id, locked: plugin.locked !== undefined })),
   );
-  const switchTo = (id: string, enabled: boolean) =>
-    page.evaluate(
-      async ({ id, enabled }) => {
-        const lemma = (window as any).lemma;
-        const plugin = lemma.plugins.list().find((candidate: any) => candidate.id === id);
-        await lemma.plugins.setEnabled(plugin, enabled);
-        return lemma.plugins.list().find((candidate: any) => candidate.id === id).state;
-      },
-      { id, enabled },
-    );
   const toggled: string[] = [];
   const locked: string[] = [];
   for (const { id, locked: isLocked } of plugins) {
     if (id === "client") continue;
     const stylesheets = () => page.evaluate((plugin) => document.head.querySelectorAll(`style[data-plugin="${plugin}"]`).length, id);
     const styled = await stylesheets();
-    const stateOff = await switchTo(id, false);
+    const stateOff = await switchTo(page, id, false);
     await settled(page);
     expectNoErrors(`turning ${id} off`);
     if (isLocked) {
@@ -163,7 +182,7 @@ try {
       // Its styles leave with it, so nothing it drew styles a replacement.
       assert.equal(await stylesheets(), 0, `${id} left its stylesheet behind`);
     }
-    await switchTo(id, true);
+    await switchTo(page, id, true);
     await settled(page);
     expectNoErrors(`turning ${id} back on`);
     assert.equal(await stylesheets(), styled, `${id} came back with ${await stylesheets()} stylesheets, not ${styled}`);
@@ -182,6 +201,12 @@ try {
     [],
     "turning plugins off warned about the plugins that need them",
   );
+  return { toggled, locked };
+};
+
+// 4–7: a part replaced, what plugins add to the extension slots, and the address.
+const parts = async () => {
+  const { page, errors, expectNoErrors } = await boot();
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
   await page.fill("textarea", "hello");
@@ -535,10 +560,10 @@ try {
   await archive(false);
   await page.waitForSelector(".turn");
   // The thread page's plugin off: the address stays and says so; back on, the thread returns.
-  await switchTo("thread-view", false);
+  await switchTo(page, "thread-view", false);
   await page.waitForSelector(".page-missing >> text=This page is off");
   assert.equal(await where(), thread, "turning the page's plugin off moved the address");
-  await switchTo("thread-view", true);
+  await switchTo(page, "thread-view", true);
   await page.waitForSelector(".turn");
   // An address from before threads had paths becomes the thread's own; one no page has says so.
   const id = thread.split("/")[2]!.split("?")[0]!;
@@ -720,6 +745,11 @@ try {
     for (const remove of check.removals) remove();
   });
   errors.splice(0);
+};
+
+// 8–9: the devtools, and a turn while it runs.
+const devtools = async () => {
+  const { page, errors, expectNoErrors } = await boot();
 
   // 8. The devtools: docked under the app, each panel shows the app as it runs, and every panel's data reads as JSON.
   await page.goto(`${url}/?mock`);
@@ -931,6 +961,11 @@ try {
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
+};
+
+// 10: the prompt rail.
+const rail = async () => {
+  const { page, expectNoErrors } = await boot();
 
   // 10. The prompt rail: a tick per prompt; the card for the one pointed at is level with it, and a click goes there.
   await page.goto(`${url}/?mock`);
@@ -1076,6 +1111,11 @@ try {
     .catch(() => assert.fail("the prompt rail's strip covers the text once the content is wider"));
   await page.evaluate(() => document.documentElement.style.removeProperty("--content"));
   expectNoErrors("using the prompt rail");
+};
+
+// 11 on: pages that start elsewhere: with no provider, connecting one, with a UI file, and from an older app.
+const separate = async () => {
+  const { errors, expectNoErrors } = log();
 
   // 11. No provider set up: the chat, not settings, and its notice opens Providers, which returns to the chat once one connects.
   const fresh = await open();
@@ -1299,7 +1339,10 @@ try {
     .catch(() => assert.fail("an older app's scheme and width were not carried into config"));
   await carried.close();
   expectNoErrors("carrying an older app's appearance into config");
+};
 
+try {
+  const [{ toggled, locked }] = await Promise.all([toggling(), parts(), devtools(), rail(), separate()]);
   console.log(
     `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a UI file's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over.`,
   );
