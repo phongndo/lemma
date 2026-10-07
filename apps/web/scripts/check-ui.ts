@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { chromium, firefox, webkit } from "playwright";
 import type { Page } from "playwright";
 import { createServer } from "vite";
@@ -45,6 +46,8 @@ import { createServer } from "vite";
  *    opens Providers, which goes back to the chat once one connects.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
+ * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the
+ * checks run in (below), every n-th from the i-th.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
  * (`pnpm exec playwright install firefox webkit`; `PLAYWRIGHT_BROWSERS_PATH`
  * puts them elsewhere): history timing differs between engines. A failed run
@@ -52,6 +55,10 @@ import { createServer } from "vite";
  * `LEMMA_UI_ARTIFACTS` (by default a new directory under the OS temp
  * directory, named in the output); `pnpm exec playwright show-trace` opens a trace.
  */
+
+const { values: options } = parseArgs({ options: { shard: { type: "string", default: "1/1" } } });
+const [shard, shards] = options.shard.split("/").map(Number) as [number, number];
+assert(Number.isInteger(shard) && Number.isInteger(shards) && shard >= 1 && shard <= shards, `--shard is i/n, not "${options.shard}"`);
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const server = await createServer({ root, configFile: resolve(root, "vite.config.ts"), logLevel: "error", server: { port: 0, host: "127.0.0.1" } });
@@ -201,7 +208,7 @@ const toggling = async () => {
     [],
     "turning plugins off warned about the plugins that need them",
   );
-  return { toggled, locked };
+  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")})`;
 };
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
@@ -762,6 +769,7 @@ const parts = async () => {
     for (const remove of check.removals) remove();
   });
   errors.splice(0);
+  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page";
 };
 
 // 8–9: the devtools, and a turn while it runs.
@@ -978,6 +986,7 @@ const devtools = async () => {
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
+  return "the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id";
 };
 
 // 10: the prompt rail.
@@ -1128,6 +1137,7 @@ const rail = async () => {
     .catch(() => assert.fail("the prompt rail's strip covers the text once the content is wider"));
   await page.evaluate(() => document.documentElement.style.removeProperty("--content"));
   expectNoErrors("using the prompt rail");
+  return "the prompt rail previews a prompt level with its tick and goes to it";
 };
 
 // 11 on: pages that start elsewhere: with no provider, connecting one, with a UI file, and from an older app.
@@ -1356,13 +1366,14 @@ const separate = async () => {
     .catch(() => assert.fail("an older app's scheme and width were not carried into config"));
   await carried.close();
   expectNoErrors("carrying an older app's appearance into config");
+  return "with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a UI file's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
 };
 
 try {
-  const [{ toggled, locked }] = await Promise.all([toggling(), parts(), devtools(), rail(), separate()]);
-  console.log(
-    `UI check: booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id; the prompt rail previews a prompt level with its tick and goes to it; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a UI file's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over.`,
-  );
+  // In this order, every other lane makes two shares that take about as long.
+  const lanes = [toggling, parts, rail, devtools, separate].filter((_, at) => at % shards === shard - 1);
+  const done = await Promise.all(lanes.map((lane) => lane()));
+  console.log(`UI check${shards > 1 ? ` (${shard}/${shards})` : ""}: ${done.join("; ")}.`);
 } catch (error) {
   await saveArtifacts();
   throw error;
