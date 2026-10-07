@@ -42,7 +42,7 @@ jobs:
       - run: nix develop -c pnpm test
 
   # The tests again on macOS, with plain Node.js and pnpm; what the check job checks is the same on every platform.
-  # The host does not support Windows yet.
+  # The host does not support Windows yet. No pnpm store cache: on macOS, restoring it took longer than installing.
   macos:
     name: test (macOS)
     runs-on: macos-latest
@@ -53,7 +53,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm test
 
