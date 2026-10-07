@@ -51,7 +51,7 @@ describe("foldTurn", () => {
     expect(entries![1]).toMatchObject({ key: "t1:work", duration: turn.endedAt! - turn.startedAt });
   });
 
-  it("keeps a turn still running, or without tool calls, as it is", () => {
+  it("keeps a turn still running, or with nothing before its answer, as it is", () => {
     const running = turnOf({ type: "message", turnId: "t1", stepId: "s1", message: assistant([call("c1")]) });
     expect(foldTurn(running)).toBeUndefined();
     const chat = turnOf(
@@ -66,7 +66,12 @@ describe("foldTurn", () => {
       },
       { type: "turn-end", turnId: "t1", reason: "done" },
     );
-    expect(foldTurn(chat)).toBeUndefined();
+    expect(describeEntries(foldTurn(chat))).toEqual(["user", { work: [["thinking"]], tools: 0, failed: 0 }, { answer: ["text"] }]);
+    const plain = turnOf(
+      { type: "message", turnId: "t1", stepId: "s1", message: assistant([{ type: "text", text: "Hi" }]) },
+      { type: "turn-end", turnId: "t1", reason: "done" },
+    );
+    expect(foldTurn(plain)).toBeUndefined();
   });
 
   it("leaves an empty answer for a turn that stopped in a tool call, so its stop note shows", () => {
@@ -85,28 +90,26 @@ describe("foldRunning", () => {
     { type: "message", turnId: "t1", stepId: `s${n}`, message: assistant([call(`c${n}`)]) } as EventData,
     toolResult(`c${n}`, "ok", { isError: n === 1 }),
   ];
-  it("folds a running turn's earlier steps under the finished turn's key, keeping the last two", () => {
-    const turn = turnOf(...step(1), ...step(2), ...step(3), ...step(4));
+  it("folds all of a running turn's work so far under the finished turn's key", () => {
+    const entries = foldRunning(turnOf(...step(1), ...step(2), ...step(3)))!;
+    expect(entries.map((entry) => entry.kind)).toEqual(["item", "work"]);
+    expect(entries[1]).toMatchObject({ key: "t1:work", tools: 3, failed: 1, live: true });
+    const ended = foldTurn(turnOf(...step(1), ...step(2), ...step(3), { type: "turn-end", turnId: "t1", reason: "done" }))!;
+    expect(ended.map(entryKey).slice(0, 2)).toEqual(entries.map(entryKey));
+  });
+
+  it("keeps a steer where it joined, after the work it followed and before what answers it", () => {
+    const turn = turnOf(...step(1), user("look at the tests too", "t1"), ...step(2));
     const entries = foldRunning(turn)!;
-    expect(entries.map((entry) => entry.kind)).toEqual(["item", "work", "item", "item"]);
-    expect(entries[1]).toMatchObject({ key: "t1:work", tools: 2, failed: 1, live: true });
+    expect(describeEntries(entries)).toEqual(["user", { work: [["tool"], "user", ["tool"]], tools: 2, failed: 1 }]);
   });
 
-  it("keys entries so what stays in view keeps its key as the turn runs on and ends", () => {
-    const running = foldRunning(turnOf(...step(1), ...step(2), ...step(3)))!;
-    const later = foldRunning(turnOf(...step(1), ...step(2), ...step(3), ...step(4)))!;
-    const ended = foldTurn(turnOf(...step(1), ...step(2), ...step(3), ...step(4), { type: "turn-end", turnId: "t1", reason: "done" }))!;
-    const keys = (entries: readonly TurnEntry[]) => entries.map(entryKey);
-    expect(new Set(keys(running)).size).toBe(running.length);
-    // The fold and the prompt keep theirs; the last step stays in view under its own.
-    expect(keys(later).slice(0, 2)).toEqual(keys(running).slice(0, 2));
-    expect(keys(later)).toContain(keys(running).at(-1));
-    expect(keys(ended).slice(0, 2)).toEqual(keys(later).slice(0, 2));
+  it("has a fold from the start, for its streaming step to join", () => {
+    expect(describeEntries(foldRunning(turnOf()))).toEqual(["user", { work: [], tools: 0, failed: 0 }]);
   });
 
-  it("leaves short and finished turns alone", () => {
-    expect(foldRunning(turnOf(...step(1), ...step(2)))).toBeUndefined();
-    expect(foldRunning(turnOf(...step(1), ...step(2), ...step(3), { type: "turn-end", turnId: "t1", reason: "done" }))).toBeUndefined();
+  it("leaves finished turns alone", () => {
+    expect(foldRunning(turnOf(...step(1), { type: "turn-end", turnId: "t1", reason: "done" }))).toBeUndefined();
   });
 });
 
