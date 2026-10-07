@@ -375,11 +375,28 @@ const parts = async () => {
     .catch(() => assert.fail("the default suggestion row does not return"));
   await page.keyboard.press("Tab");
   assert.equal(await page.inputValue("textarea"), "see @src/components/Composer.tsx #xy #checked ", "Tab does not pick the suggestion");
-  // Enter while the answer is on its way waits for it, rather than sending a half-typed mention.
+  // Enter while the answer is on its way waits for it, rather than sending a half-typed mention. The answer is held
+  // until Enter is down, so it is still on its way however long the keys took to arrive.
+  await page.evaluate(async () => {
+    const { Client } = await import("/src/ui/contracts.ts" as string);
+    const files = (await (window as any).lemma.service(Client)).host.files;
+    const search = files.search;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    files.search = async (...args: unknown[]) => {
+      await held;
+      return search.apply(files, args);
+    };
+    (window as any).releaseSearch = () => {
+      files.search = search;
+      release();
+    };
+  });
   await page.fill("textarea", "");
   await page.keyboard.type("@READ");
   await page.keyboard.press("Enter");
   assert.equal(await page.inputValue("textarea"), "@READ", "Enter sent the prompt while its suggestions loaded");
+  await page.evaluate(() => (window as any).releaseSearch());
   await page.waitForSelector(".completion >> text=README.md", { timeout: 5_000 });
   await page.keyboard.press("Enter");
   assert.equal(await page.inputValue("textarea"), "@README.md ", "Enter does not pick once the suggestions arrive");
