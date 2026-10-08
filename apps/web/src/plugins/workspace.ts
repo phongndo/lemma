@@ -1,4 +1,5 @@
 import { createEffect, createMemo, createSignal, on } from "solid-js";
+import { WorkspaceChannels } from "@lemma/contracts";
 import type { WorkspaceStatus } from "@lemma/contracts";
 import { load, loadJson, save } from "../lib/storage.ts";
 import { branchSlug } from "../model/format.ts";
@@ -23,9 +24,9 @@ export default defineUiPlugin({
   requires: { client: Client, notify: Notify, threads: Threads },
   provides: { workspace: Workspace },
   setup: ({ client, notify, threads }, plugin) => {
-    const api = client.host.workspace;
     const [added, setAdded] = createSignal<readonly string[]>(loadJson(PROJECTS_KEY, []));
     const [status, setStatus] = createSignal<WorkspaceStatus>();
+    const statusOf = (path: string) => client.channel.call(WorkspaceChannels.status, { path });
     const [settings, setSettings] = createSignal<Readonly<Record<string, ProjectSettings>>>(loadJson(PROJECT_SETTINGS_KEY, {}));
     const [worktree, setWorktreeDraft] = createSignal<WorktreeDraft>({ enabled: load(WORKTREE_KEY) === "1" });
     /** Whether a new thread in `cwd` starts in a worktree: its project's setting, else the global one. */
@@ -51,7 +52,7 @@ export default defineUiPlugin({
         const dir = standaloneDir();
         if (dir === undefined) return;
         try {
-          if (!(await api.status(dir)).exists) await api.createDirectory(dir);
+          if (!(await statusOf(dir)).exists) await client.channel.call(WorkspaceChannels.createDirectory, { path: dir });
           if (!onlyIfIdle) threads.newThread(dir);
           else if (threads.activeId() === undefined && threads.pendingCwd() === undefined) threads.startIn(dir);
         } catch (error) {
@@ -68,7 +69,7 @@ export default defineUiPlugin({
       const path = workingDir();
       if (path === undefined || !client.connected()) return;
       try {
-        const next = await api.status(path);
+        const next = await statusOf(path);
         if (workingDir() === path) setStatus(next);
       } catch {
         /* keep the last known status */
@@ -111,7 +112,6 @@ export default defineUiPlugin({
 
     return {
       workspace: {
-        api,
         projects,
         added,
         add,
@@ -135,7 +135,7 @@ export default defineUiPlugin({
         open: async (input: string) => {
           if (input.trim() === "") return false;
           try {
-            const found = await api.status(input.trim());
+            const found = await statusOf(input.trim());
             if (!found.exists) {
               notify.toast({ level: "error", message: `No folder at ${found.path} on the host` });
               return false;
@@ -162,7 +162,11 @@ export default defineUiPlugin({
           const current = status();
           const draft = worktree();
           if (!draft.enabled || current?.git === undefined || current.path !== workingDir()) return undefined;
-          const created = await api.createWorktree(current.path, { branch: branchSlug(text), ...(draft.base === undefined ? {} : { base: draft.base }) });
+          const created = await client.channel.call(WorkspaceChannels.createWorktree, {
+            path: current.path,
+            branch: branchSlug(text),
+            ...(draft.base === undefined ? {} : { base: draft.base }),
+          });
           setWorktreeBase(undefined);
           return created.path;
         },

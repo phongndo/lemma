@@ -22,38 +22,25 @@ export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pag
     styles,
     requires: { slots: Slots, client: Client, router: Router },
     setup: ({ slots, client, router }, plugin) => {
-      /** Streams the prices while it shows: opened on every (re)connect, and again whenever the channel serving them comes back. */
+      /**
+       * Streams the prices while it shows. `follow` keeps the stream open: again on every reconnect, at once when its
+       * plugin restarts, and when the channel comes back after its plugin was off.
+       */
       const TickerPage = () => {
         const [quotes, setQuotes] = createSignal([]);
         const [problem, setProblem] = createSignal();
-        let close;
-        const open = () => {
-          close?.();
-          close = client.host.channel.open(
-            "ticker.prices",
-            undefined,
-            (next) => {
-              setQuotes(next);
-              setProblem(undefined);
-            },
-            (error) => {
-              close = undefined;
-              // Its plugin stopped or was replaced: a replacement usually serves it already, else `channels-changed` says when.
-              if (error?.code === "Withdrawn") open();
-              else setProblem(error === undefined ? "The prices stopped." : error.message);
-            },
-          );
-        };
-        const stopSync = client.onConnect(open);
-        // The channel came back (its plugin on again, or restarted after a gap): open it again.
-        const stopEvents = client.onEvent((event) => {
-          if (event.type === "channels-changed" && close === undefined && event.channels.some((channel) => channel.id === "ticker.prices")) open();
-        });
-        onCleanup(() => {
-          stopSync();
-          stopEvents();
-          close?.();
-        });
+        const close = client.follow(
+          "ticker.prices",
+          undefined,
+          (next) => {
+            setQuotes(next);
+            setProblem(undefined);
+          },
+          (error) => {
+            if (error?.code !== "Withdrawn") setProblem(error === undefined ? "The prices stopped." : error.message);
+          },
+        );
+        onCleanup(close);
 
         const asOf = () => (quotes().length === 0 ? "Waiting for prices…" : `As of ${new Date(quotes()[0].at).toLocaleTimeString()}`);
         const signed = (change) => (change > 0 ? `+${change.toFixed(2)}` : change.toFixed(2));

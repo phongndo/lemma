@@ -1,9 +1,22 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
+import { WorkspaceChannels } from "@lemma/contracts";
 import type { GitBranch, WorkspaceStatus } from "@lemma/contracts";
 import { folderName } from "../model/prefs.ts";
-import { ActionIds, Actions, ComposerFooter, Notify, SectionIds, Threads, SettingsGroups, Slots, Workspace, WorkspaceBarItems } from "../ui/contracts.ts";
-import type { NotifyService, ThreadsService, WorkspaceService } from "../ui/contracts.ts";
+import {
+  ActionIds,
+  Actions,
+  Client,
+  ComposerFooter,
+  Notify,
+  SectionIds,
+  Threads,
+  SettingsGroups,
+  Slots,
+  Workspace,
+  WorkspaceBarItems,
+} from "../ui/contracts.ts";
+import type { ClientService, NotifyService, ThreadsService, WorkspaceService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
 import {
@@ -24,6 +37,7 @@ import {
 import styles from "./workspace-bar.css?inline";
 
 interface Deps {
+  readonly client: ClientService;
   readonly threads: ThreadsService;
   readonly workspace: WorkspaceService;
   readonly notify: NotifyService;
@@ -245,7 +259,7 @@ function ProjectPicker(props: { deps: Deps }) {
 }
 
 function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]>; onChanged: (status: WorkspaceStatus) => void }) {
-  const { threads, workspace, notify } = props.deps;
+  const { client, threads, workspace, notify } = props.deps;
   const workingDir = workspace.workingDir;
   const [branches, setBranches] = createSignal<readonly GitBranch[]>([]);
   const [query, setQuery] = createSignal("");
@@ -258,7 +272,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
     const path = workingDir();
     if (path === undefined) return;
     try {
-      setBranches(await workspace.api.branches(path));
+      setBranches(await client.channel.call(WorkspaceChannels.branches, { path }));
     } catch (error) {
       notify.report(error, "Could not list branches");
     }
@@ -283,7 +297,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
     close();
     setSwitching(true);
     try {
-      props.onChanged(await workspace.api.checkout(path, branch, create ? { create: true } : undefined));
+      props.onChanged(await client.channel.call(WorkspaceChannels.checkout, create ? { path, branch, create: true } : { path, branch }));
     } catch (error) {
       notify.report(error, `Could not switch to ${branch}`);
     } finally {
@@ -422,7 +436,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
 export default defineUiPlugin({
   id: "workspace-bar",
   styles,
-  requires: { threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
+  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
   setup: (deps) => {
     deps.slots.add(ComposerFooter, { id: "workspace-bar", component: () => <WorkspaceBar deps={deps} /> });
     // Its own pickers go through the slot other plugins add theirs to.

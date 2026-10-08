@@ -279,7 +279,6 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "apps/web/scripts/shots.ts": 1,
   "apps/web/tests/ui.test.ts": 1,
   "packages/client/tests/rpc.test.ts": 1,
-  "packages/client/tests/session-log.test.ts": 1,
   "packages/core/tests/events.test.ts": 5,
   "packages/core/tests/lifecycle-regressions.test.ts": 1,
   "packages/core/tests/supervision.test.ts": 3,

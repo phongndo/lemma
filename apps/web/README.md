@@ -213,14 +213,20 @@ anything it imports, and take from the api what it offers, so it shares the
 page's module instances. UI files run with the page's permissions and token,
 as host plugins run with the host's.
 
-A host plugin serves its own UI through
-[`Channels`](../../packages/contracts/src/channels.ts): a UI plugin requires
-`Client` and calls `client.host.channel.call(id, payload)`, or follows a
-stream with `client.host.channel.open(id, payload, onElement, onEnd)`, opening
-it again on `client.onConnect`, when it ends `Withdrawn`, and on a
-`channels-changed` host event that lists it while it is closed. A plugin with a
-build step passes the channel's declaration instead of its id and is typed by
-it: the payload and the results go through its schemas.
+`Client` is the page's connection to the host: its status, the host's own
+calls and events (its plugins, inspectors, the `ui` rows), and the
+[channels](../../packages/contracts/src/channels.ts) host plugins serve. Every
+subsystem is reached through channels: the bundled plugins reach sessions,
+the agent, models, the workspace, files, and commands that way, and a host
+plugin serves its own UI the same way. A UI plugin requires `Client` and calls
+`client.channel.call(id, payload)`, or follows a stream with
+`client.follow(id, payload, onElement, onEnd)`, which keeps it open: again on
+every reconnect, at once when it ends `Withdrawn` (its plugin restarted), and
+when a `channels-changed` event lists it after nothing served it. A
+subsystem's stream starts with `subscribed`, from which its reader resyncs.
+Passing a channel's declaration instead of its id (`api.channels` holds the
+bundled subsystems', `@lemma/contracts` all of them) types the call: the
+payload and the results go through its schemas.
 [`examples/ticker`](../../examples/ticker/README.md) is a host plugin file and a
 UI file that shows its prices at `/ticker`.
 
@@ -282,10 +288,13 @@ plugin, until it returns, and a page that throws fails alone.
 
 ## Devtools
 
-`mod+shift+d` docks the devtools under the app: routes, navigation, host
-events, and, for the web app and the host alike, plugins, hooks, registries,
-and inspectors. A capability the runtime provides shows as the web app's or
-the host's, not as missing. They show the app as it runs; the Plugins page is
-where things change. A web plugin adds a panel with a `DevtoolsPanels` item,
-and a host plugin adds an inspector to the `Inspectors` registry
-(`@lemma/contracts`), which also shows in `lemma inspectors`.
+`mod+shift+d` docks the devtools under the app: routes, navigation, the
+host's events (with, while the devtools are open, its subsystems' streams:
+sessions' and commands' changes, models to list again, the agent's activity),
+the channels host plugins serve, and, for the web app and the host alike,
+plugins, hooks, registries, and inspectors. A capability the runtime provides
+shows as the web app's or the host's, not as missing. They show the app as it
+runs; the Plugins page is where things change. A web plugin adds a panel with
+a `DevtoolsPanels` item, and a host plugin adds an inspector to the
+`Inspectors` registry (`@lemma/contracts`), which also shows in
+`lemma inspectors`.

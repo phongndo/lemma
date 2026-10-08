@@ -273,7 +273,12 @@ export default defineUiPlugin({
       }),
     );
     // What was published while the connection was down is lost; the logins still running ask again or time out.
-    plugin.onCleanup(client.host.onStatus((status) => status.state === "reconnecting" && setLoginNotices({})));
+    createEffect(
+      on(
+        () => client.status().state,
+        (state) => state === "reconnecting" && setLoginNotices({}),
+      ),
+    );
     const isLogin = (request: InteractionRequest) => request.origin?.startsWith("login:") === true;
     const providerOf = (origin: string | undefined) => models.providers().find((candidate) => origin === `login:${candidate.id}`);
     /** Logins this dialog leaves alone: the one answered for a new custom provider, and this client's own once cancelled. */

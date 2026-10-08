@@ -2,6 +2,7 @@ import * as solid from "solid-js";
 import html from "solid-js/html";
 import * as store from "solid-js/store";
 import * as web from "solid-js/web";
+import { AgentChannels, CommandChannels, FileChannels, LlmChannels, SessionChannels, WorkspaceChannels } from "@lemma/contracts";
 import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
 import { ConfigForm as DefaultConfigForm } from "../components/config-form.tsx";
@@ -44,6 +45,15 @@ export const api = {
    */
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
   defineSlot,
+  /**
+   * The bundled subsystems' channels, as `@lemma/contracts` declares them: what
+   * the bundled plugins reach the host's sessions, agent, models, workspace,
+   * files, and commands through, with `Client`. A UI file passes one to
+   * `client.channel.call` or `client.follow` to have its payload and results
+   * go through its schemas (`client.channel.call(channels.SessionChannels.list, {})`);
+   * by id, they are plain JSON.
+   */
+  channels: { SessionChannels, AgentChannels, LlmChannels, WorkspaceChannels, FileChannels, CommandChannels },
   /** A route of the plugin's own (`/notes/:id`), for a `Pages` item; links to it are `router.href(route, params)`. */
   defineRoute,
   /** Narrows `router.match()` to a route, with its typed params and search. */

@@ -1,12 +1,24 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConnectionStatus, Host } from "@lemma/client";
-import type { HostEvent, HostInfo, InteractionRequest, PluginStatus } from "@lemma/contracts";
+import type { ConnectionStatus } from "@lemma/client";
+import { HostError } from "@lemma/contracts";
+import type { ChannelDeclaration, HostEvent, HostInfo, InteractionRequest, PluginStatus } from "@lemma/contracts";
 import { createClient } from "../src/runtime/client.ts";
 import { createHostPlugins } from "../src/runtime/host-plugins.ts";
 import { createInteractions } from "../src/runtime/interactions.ts";
 import { createNotify } from "../src/runtime/notify.ts";
+import type { HostConnection } from "../src/ui/runtime.ts";
 
-/** A host connection the test drives: its status, its events, and the replies its calls get. */
+/** A stream the client opened on the fake connection. */
+interface Opened {
+  readonly id: string;
+  readonly payload: unknown;
+  readonly send: (element: unknown) => void;
+  /** Ends it as the host would. */
+  readonly end: (error?: Error) => void;
+  closed: boolean;
+}
+
+/** A host connection the test drives: its status, its events, the replies its calls get, and the streams opened on it. */
 const fakeHost = () => {
   let status: ConnectionStatus = { state: "connected", generation: 1, attempts: 0 };
   const statusListeners = new Set<(status: ConnectionStatus) => void>();
@@ -16,7 +28,25 @@ const fakeHost = () => {
   let plugins: readonly PluginStatus[] = [];
   /** Each `interaction.list` call's reply, resolved by the test. */
   const lists: ((requests: readonly InteractionRequest[]) => void)[] = [];
+  const opened: Opened[] = [];
   const host = {
+    channel: {
+      open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: Error) => void) => {
+        const stream: Opened = {
+          id: typeof target === "string" ? target : target.id,
+          payload,
+          send: (element) => !stream.closed && onElement(element),
+          end: (error) => {
+            if (stream.closed) return;
+            stream.closed = true;
+            onEnd?.(error);
+          },
+          closed: false,
+        };
+        opened.push(stream);
+        return () => void (stream.closed = true);
+      },
+    },
     status: () => status,
     onStatus: (listener: (status: ConnectionStatus) => void) => {
       statusListeners.add(listener);
@@ -39,9 +69,10 @@ const fakeHost = () => {
     },
   };
   return {
-    host: host as unknown as Host,
+    host: host as unknown as HostConnection,
     calls,
     lists,
+    opened,
     setPlugins: (next: readonly PluginStatus[]) => void (plugins = next),
     setStatus: (next: Partial<ConnectionStatus>) => {
       status = { ...status, ...next };
@@ -91,6 +122,65 @@ describe("createClient", () => {
     dispose();
     expect(fake.listeners()).toBe(0);
     errors.mockRestore();
+  });
+
+  it("passes on the host's own events only: each subsystem streams its own", () => {
+    const fake = fakeHost();
+    const { client } = createClient(fake.host);
+    const heard: string[] = [];
+    const stop = client.onEvent((event) => void heard.push(event.type));
+    fake.emit({ type: "plugins-changed", plugins: [] });
+    fake.emit({ type: "models-changed" });
+    fake.emit({ type: "turn-started", sessionId: "s", turnId: "t" });
+    fake.emit({ type: "channels-changed", channels: [] });
+    expect(heard).toEqual(["plugins-changed", "channels-changed"]);
+    stop();
+  });
+
+  it("follows a stream: opened while connected, again after a reconnect and when withdrawn, and once listed after nothing served it", () => {
+    const fake = fakeHost();
+    fake.setStatus({ state: "reconnecting" });
+    const { client } = createClient(fake.host);
+    const elements: unknown[] = [];
+    const ends: (string | undefined)[] = [];
+    let after = 0;
+    const close = client.follow(
+      "test.feed",
+      () => ({ after }),
+      (element) => void elements.push(element),
+      (error) => void ends.push(error instanceof HostError ? error.code : error?.message),
+    );
+    expect(fake.opened).toEqual([]);
+    fake.setStatus({ state: "connected", generation: 2 });
+    expect(fake.opened.map((stream) => [stream.id, stream.payload])).toEqual([["test.feed", { after: 0 }]]);
+    fake.opened[0]!.send("a");
+    after = 1;
+    // Its plugin reloads: opened again at once, from where its reader is.
+    fake.opened[0]!.end(new HostError({ code: "Withdrawn", subject: "test.feed", message: "withdrawn" }));
+    expect(fake.opened.map((stream) => stream.payload)).toEqual([{ after: 0 }, { after: 1 }]);
+    // The replacement is not there yet: it waits for a `channels-changed` that lists it.
+    fake.opened[1]!.end(new HostError({ code: "NotFound", subject: "test.feed", message: "none" }));
+    fake.emit({ type: "channels-changed", channels: [{ id: "other", kind: "stream", source: "x" }] });
+    expect(fake.opened).toHaveLength(2);
+    fake.emit({ type: "channels-changed", channels: [{ id: "test.feed", kind: "stream", source: "x" }] });
+    expect(fake.opened).toHaveLength(3);
+    fake.opened[2]!.send("b");
+    // A channels-changed while it is open, and an element from a stream it left, change nothing.
+    fake.emit({ type: "channels-changed", channels: [{ id: "test.feed", kind: "stream", source: "x" }] });
+    fake.opened[0]!.send("stale");
+    expect(fake.opened).toHaveLength(3);
+    // The connection drops and comes back: the stream it had is replaced by a new one.
+    fake.setStatus({ state: "reconnecting" });
+    fake.opened[2]!.end(new Error("Error in socket"));
+    fake.setStatus({ state: "connected", generation: 3 });
+    expect(fake.opened).toHaveLength(4);
+    expect(elements).toEqual(["a", "b"]);
+    expect(ends).toEqual(["Withdrawn", "NotFound", "Error in socket"]);
+    close();
+    expect(fake.opened[3]!.closed).toBe(true);
+    fake.setStatus({ state: "connected", generation: 4 });
+    expect(fake.opened).toHaveLength(4);
+    expect(fake.listeners()).toBe(1);
   });
 });
 
@@ -142,7 +232,7 @@ describe("createInteractions", () => {
     const fake = fakeHost();
     const { client } = createClient(fake.host);
     const { notify } = createNotify(client);
-    const { interactions, dispose } = createInteractions(client, notify);
+    const { interactions, dispose } = createInteractions(fake.host, client, notify);
     const ids = () => interactions.open().map((request) => request.id);
     fake.emit({ type: "interaction", request: confirm("a") });
     // The first connection's list is on its way; "b" closes before it arrives, so the reply cannot bring it back.

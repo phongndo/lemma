@@ -769,7 +769,7 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
     () => current()?.id,
     async (id) => {
       try {
-        return { value: await deps.client.host.host.inspect(id) };
+        return { value: await deps.client.inspect(id) };
       } catch (error) {
         return { error: error instanceof Error ? error.message : String(error) };
       }
@@ -860,7 +860,7 @@ export function kernelPanels(deps: Deps): readonly SlotItem<contracts.DevtoolsPa
   // Read again whenever the host's plugins change: inspectors come and go with them.
   const [inspectors] = createResource(
     () => deps.lists.host(),
-    () => deps.client.host.host.inspectors().catch(() => [] as readonly InspectorInfo[]),
+    () => deps.client.inspectors().catch(() => [] as readonly InspectorInfo[]),
     { initialValue: [] },
   );
   return [

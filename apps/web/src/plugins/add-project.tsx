@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
+import { WorkspaceChannels } from "@lemma/contracts";
 import type { DirectoryEntry } from "@lemma/contracts";
 import { Portal } from "solid-js/web";
 import { listKey, quickKey } from "../lib/keys.ts";
@@ -68,7 +69,7 @@ function AddProjectDialog(props: { deps: Deps }) {
     const id = ++request;
     setLoading(true);
     try {
-      const next = await workspace.api.browse(typed);
+      const next = await client.channel.call(WorkspaceChannels.browse, { partialPath: typed });
       if (id !== request) return;
       setListing(next);
       setActive(0);
@@ -107,7 +108,7 @@ function AddProjectDialog(props: { deps: Deps }) {
   const create = async (path: string) => {
     setBusy(true);
     try {
-      const status = await workspace.api.createDirectory(path);
+      const status = await client.channel.call(WorkspaceChannels.createDirectory, { path });
       if (await workspace.open(status.path)) close();
     } catch (error) {
       notify.report(error, "Could not create the folder");
@@ -173,7 +174,7 @@ function AddProjectDialog(props: { deps: Deps }) {
     // Learn the host user's home, then start beside the host's project.
     let userHome: string | undefined;
     try {
-      userHome = (await workspace.api.browse("~/")).parent;
+      userHome = (await client.channel.call(WorkspaceChannels.browse, { partialPath: "~/" })).parent;
       setHome(userHome);
     } catch {
       /* absolute paths still work */

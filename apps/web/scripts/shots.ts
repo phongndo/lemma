@@ -60,7 +60,7 @@ try {
     await page.waitForSelector("textarea");
     await page.keyboard.press("ControlOrMeta+Shift+d");
     await page.waitForSelector(".devtools");
-    for (const [index, panel] of ["Routes", "Navigation", "Host events", "Plugins", "Hooks", "Registries", "Inspectors"].entries()) {
+    for (const [index, panel] of ["Routes", "Navigation", "Host events", "Plugins", "Hooks", "Registries", "Inspectors", "Channels"].entries()) {
       await page.click(`[aria-label='Devtools panels'] [role=tab] >> text=${panel}`);
       await shot(page, `${theme}-${String(11 + index).padStart(2, "0")}-devtools-${panel.toLowerCase().replace(" ", "-")}`);
     }

@@ -2,14 +2,19 @@ import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
 import type { ConnectionStatus, Host } from "@lemma/client";
 import type {
+  ChannelDeclaration,
+  ConfigScope,
+  HostError,
   HostEvent,
   HostInfo,
+  InspectorInfo,
   InteractionAnswer,
   InteractionRequest,
   NoticePayload,
   PluginChange,
   PluginStatus,
   ReloadResult,
+  UiComposition,
   UiFile,
 } from "@lemma/contracts";
 import type {
@@ -54,24 +59,79 @@ export const Root = defineSlot<Region>("root", { shows: "first" });
 // ------------------------------------------------------------------ the host
 
 /**
- * The page's one connection to the host. Its `host` and `onEvent` carry every
- * subsystem's calls and events, until each serves its own as channels.
+ * What the page reaches the host with: `@lemma/client`'s `Host`, as far as
+ * the runtime uses it (the connection, the runtime's calls and events, and
+ * channels). `?mock` stands a fake in for it.
+ */
+export type HostConnection = Pick<Host, "status" | "onStatus" | "onEvent" | "close" | "host" | "ui" | "interaction" | "channel">;
+
+/** The host's own events, as `Client.onEvent` passes them on: each subsystem streams its own on a channel. */
+export type RuntimeEvent = Extract<
+  HostEvent,
+  { readonly type: "notice" | "plugins-changed" | "channels-changed" | "ui-changed" | "interaction" | "interaction-closed" }
+>;
+
+type StreamEnd = (error?: HostError | Error) => void;
+
+/**
+ * The page's one connection to the host: its status, the host's own calls and
+ * events, and the channels host plugins serve, through which every subsystem
+ * is reached, with the declarations in `@lemma/contracts` (`SessionChannels`,
+ * `AgentChannels`, `LlmChannels`, `WorkspaceChannels`, `FileChannels`,
+ * `CommandChannels`) or by id. Calls reject with a `HostError`, or with an
+ * `Error` when the connection failed (see `@lemma/client`'s `Host`).
  */
 export interface ClientService {
-  /** The host connection: every RPC as a promise. */
-  readonly host: Host;
   readonly status: Accessor<ConnectionStatus>;
   readonly connected: Accessor<boolean>;
   /** `Host.Info`, fetched on every (re)connect. */
   readonly info: Accessor<HostInfo | undefined>;
-  /** Every host event as it arrives. Returns the unsubscribe. */
-  readonly onEvent: (listener: (event: HostEvent) => void) => () => void;
+  /** The host's own events as they arrive (`RuntimeEvent`). Returns the unsubscribe. */
+  readonly onEvent: (listener: (event: RuntimeEvent) => void) => () => void;
   /**
    * Runs `sync` now if connected, then after every reconnect: where a model
    * loads what it shows, since events may have been missed in between. A
    * `sync` that throws is logged; the others still run.
    */
   readonly onConnect: (sync: () => void) => () => void;
+  /** Lists, calls, and opens what host plugins serve, as `@lemma/client`'s `Host.channel` does. */
+  readonly channel: Host["channel"];
+  /**
+   * Keeps a channel stream open until the returned close: opened now if
+   * connected, and anew after every reconnect, since a stream ends with its
+   * connection; again at once when it ends `Withdrawn`, its plugin stopped or
+   * replaced; and, after it ended otherwise (nothing served it, say), when a
+   * `channels-changed` lists it. Each opening starts afresh, so a subsystem's
+   * stream begins with `subscribed`, from which its reader resyncs. `payload`
+   * may be a function, read at each opening (`sessions.log` resumes `after`
+   * the last event its reader has). `onEnd` hears each ending.
+   */
+  readonly follow: {
+    <Payload, Success>(
+      channel: ChannelDeclaration<"stream", Payload, Success>,
+      payload: Payload | (() => Payload),
+      onElement: (element: Success) => void,
+      onEnd?: StreamEnd,
+    ): () => void;
+    (id: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: StreamEnd): () => void;
+  };
+  /** Every plugin the host knows, enabled or not. */
+  readonly plugins: () => Promise<readonly PluginStatus[]>;
+  /** A failed or halted host plugin and its dependents; `force` also replaces a running one. */
+  readonly restartPlugin: (pluginId: string, options?: { readonly force?: boolean }) => Promise<void>;
+  /** Re-reads the host's config files and applies them; `deferred` says it applies once this call has ended. */
+  readonly reload: () => Promise<ReloadResult>;
+  /** Writes host plugin rows into the user (default) or project config file and applies them; a rejected change is undone. */
+  readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { readonly scope?: ConfigScope }) => Promise<ReloadResult>;
+  /** What host plugins let you look into (`Inspectors`), and one's snapshot as plain JSON. */
+  readonly inspectors: () => Promise<readonly InspectorInfo[]>;
+  readonly inspect: (id: string) => Promise<unknown>;
+  /** The web app's own rows and UI files, which the boot plans and runs (`UiPlugins` changes them). */
+  readonly ui: {
+    readonly composition: () => Promise<UiComposition>;
+    /** Writes `ui` rows; every page hears `ui-changed`. */
+    readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { readonly scope?: ConfigScope }) => Promise<UiComposition>;
+  };
 }
 export class Client extends Context.Service<Client, ClientService>()("lemma-ui/Client") {}
 

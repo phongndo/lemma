@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Effect, Exit, Layer, Stream } from "effect";
 import { Socket } from "effect/socket";
 import { TestClock } from "effect/testing";
-import { makeHostRpc } from "../src/rpc.ts";
+import { makeHostRpc, rpcUrl } from "../src/rpc.ts";
 
 /** A socket that opens and then goes silent, as a connection does across laptop sleep or a network change. */
 class SilentWebSocket extends EventTarget {
@@ -58,5 +58,12 @@ describe("makeHostRpc", () => {
       ),
     );
     expect(exit !== undefined && Exit.isFailure(exit)).toBe(true);
+  });
+});
+
+describe("rpcUrl", () => {
+  test("maps http(s) origins to ws(s) with the token", () => {
+    expect(rpcUrl("http://127.0.0.1:7433/app/", "a b")).toBe("ws://127.0.0.1:7433/rpc?token=a+b");
+    expect(rpcUrl("https://example.com", undefined)).toBe("wss://example.com/rpc");
   });
 });

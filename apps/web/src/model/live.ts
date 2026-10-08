@@ -167,7 +167,7 @@ const blockOf = (part: AssistantMessage["content"][number]): DraftBlock => {
 };
 
 /**
- * What the agent says the running turn has produced so far (`Agent.View`),
+ * What the agent says the running turn has produced so far (`agent.view`),
  * for a session opened or reconnected mid-turn: it replaces the draft of
  * that step and the running tools' output. Updates that arrived while it was
  * on its way are held (`beginJoin`) and replayed over it (`joinLive`), their

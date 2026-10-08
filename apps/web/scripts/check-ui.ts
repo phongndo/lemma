@@ -41,12 +41,15 @@ import { createServer } from "vite";
  *    plugin's fault; routes in conflict are reported; a hovered
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
- * 8. The devtools dock under the app, and each panel shows it as it runs: a
+ * 8. The devtools dock under the app, and each panel shows it as it runs (the
+ *    host's events and its subsystems' streams, the channels it serves): a
  *    capability the runtime provides is the web app's, not a missing one.
  * 9. While a turn runs, the composer steers it or queues a prompt for after
  *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
- *    a steer shows in its turn. A send that fails is retried with its request
- *    id, until the prompt is edited.
+ *    a steer shows in its turn. A running turn's thread left and opened again,
+ *    and the agent restarting under it, leave the turn shown to its end and its
+ *    prompt placed once. A send that fails is retried with its request id,
+ *    until the prompt is edited.
  * 10. The prompt rail has a tick per prompt; the one pointed at, or chosen with
  *    the keys, shows its prompt in a card level with it, and a click or Enter
  *    goes there, lighting it; the previous and next buttons move a turn each.
@@ -269,7 +272,7 @@ const toggling = async () => {
     page.evaluate(
       async ({ ids, enabled }) => {
         const { Client } = await import("/src/ui/contracts.ts" as string);
-        await (await (window as any).lemma.service(Client)).host.ui.configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
+        await (await (window as any).lemma.service(Client)).ui.configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
       },
       { ids: unlocked, enabled },
     );
@@ -503,16 +506,16 @@ const parts = async () => {
   // until Enter is down, so it is still on its way however long the keys took to arrive.
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    const files = (await (window as any).lemma.service(Client)).host.files;
-    const search = files.search;
+    const channel = (await (window as any).lemma.service(Client)).channel;
+    const call = channel.call;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
-    files.search = async (...args: unknown[]) => {
-      await held;
-      return search.apply(files, args);
+    channel.call = async (target: string | { id: string }, payload?: unknown) => {
+      if ((typeof target === "string" ? target : target.id) === "files.search") await held;
+      return call(target, payload);
     };
     (window as any).releaseSearch = () => {
-      files.search = search;
+      channel.call = call;
       release();
     };
   });
@@ -760,26 +763,34 @@ const parts = async () => {
   await page
     .waitForFunction(() => location.pathname === "/", undefined, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings over a deleted thread went to ${await where()}`));
-  // Resting on a thread's row fetches its log; opening it uses that rather than fetching again.
+  // Resting on a thread's row fetches its log; opening it follows the log on from there rather than reading it again.
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    const session = (await (window as any).lemma.service(Client)).host.session;
-    const events = session.events.bind(session);
+    const channel = (await (window as any).lemma.service(Client)).channel;
+    const { call, open } = channel;
     const fetched: unknown[] = ((window as any).fetched = []);
-    session.events = (id: string, after?: number) => (fetched.push([id, after ?? null]), events(id, after));
+    const idOf = (target: string | { id: string }) => (typeof target === "string" ? target : target.id);
+    channel.call = (target: string | { id: string }, payload?: any) => {
+      if (idOf(target) === "sessions.events") fetched.push(["events", payload.sessionId, payload.after ?? 0]);
+      return call(target, payload);
+    };
+    channel.open = (target: string | { id: string }, payload: any, ...rest: unknown[]) => {
+      if (idOf(target) === "sessions.log") fetched.push(["log", payload.sessionId, payload.after ?? 0]);
+      return open(target, payload, ...rest);
+    };
   });
+  const reads = (id: string) => page.evaluate((id) => (window as any).fetched.filter(([, session]: any) => session === id), id);
   const row = page.locator(`.session-open[href^="/threads/${seeded}"]`);
   await row.hover();
   await page
-    .waitForFunction((id) => (window as any).fetched.some(([fetched, after]: any) => fetched === id && after === null), seeded, { timeout: 2_000 })
+    .waitForFunction((id) => (window as any).fetched.some(([kind, session]: any) => kind === "events" && session === id), seeded, { timeout: 2_000 })
     .catch(() => assert.fail("resting on a thread's row did not preload it"));
   await row.click();
   await page.waitForSelector(".turn");
-  assert.equal(
-    await page.evaluate((id) => (window as any).fetched.filter(([fetched, after]: any) => fetched === id && after === null).length, seeded),
-    1,
-    "opening a preloaded thread fetched its log again",
-  );
+  await page.waitForFunction((id) => (window as any).fetched.some(([kind, session]: any) => kind === "log" && session === id), seeded);
+  const [preloaded, followed, ...more] = await reads(seeded);
+  assert.deepEqual([preloaded[0], followed[0], more], ["events", "log", []], "opening a preloaded thread read its log again");
+  assert(followed[2] > 0, "opening a preloaded thread followed its log from the start rather than from what the preload read");
   // Unsent text: closing or reloading the tab asks first, while settings show too; sent or cleared, it does not.
   const unloadAsks = () =>
     page.evaluate(() => {
@@ -1002,10 +1013,13 @@ const devtools = async () => {
   // Navigation: the journal has what the router did.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Navigation");
   await page.waitForSelector("[aria-label='Router journal'] >> text=matched");
-  // Host events: the host's stream, and a session's id goes to its thread's trajectory.
+  // Host events: the host's own stream and its subsystems' streams, and a session's id goes to its thread's trajectory.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Host events");
   await page.waitForSelector("[aria-label=Events] tbody tr[data-row]");
-  // Pinning a thread has the host publish its change, naming the session.
+  await page
+    .waitForSelector("[aria-label=Events] tr:has(td:text-is('agent.activity')):has(td:text-is('subscribed'))", { timeout: 5_000 })
+    .catch(() => assert.fail("the Host events panel does not follow the agent's activity"));
+  // Pinning a thread has its sessions.changes report it, naming the session.
   const pinned: string = await page.evaluate(async () => {
     const { Threads } = await import("/src/ui/contracts.ts" as string);
     const threads = await (window as any).lemma.service(Threads);
@@ -1017,6 +1031,11 @@ const devtools = async () => {
   await page.click(`[aria-label=Events] a >> text=${pinned}`);
   await page.waitForFunction((id) => location.pathname === `/threads/${id}/trajectory`, pinned);
   await page.waitForSelector(".devtools");
+  // Channels: what host plugins serve, each with the plugin that answers for it.
+  await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Channels");
+  await page.click("[aria-label=Channels] td:text-is('sessions.log')");
+  await page.waitForSelector("[aria-label='Channel details'] >> text=Session log");
+  await page.waitForSelector("[aria-label=Channels] tr:has(td:text-is('agent.prompt')) button:text-is('agent')");
   // A plugin's name anywhere opens it in the Plugins panel: everything it does, and what depends on it.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Routes");
   await page.click("[aria-label=Routes] tr:has(td:text-is('/threads/:id/:view?')) button:text-is('thread-view')");
@@ -1049,6 +1068,7 @@ const devtools = async () => {
     return JSON.parse(JSON.stringify((await (window as any).lemma.service(Devtools)).snapshot()));
   });
   assert.deepEqual(Object.keys(snapshot).sort(), [
+    "devtools.channels",
     "devtools.events",
     "devtools.hooks",
     "devtools.inspectors",
@@ -1116,16 +1136,48 @@ const devtools = async () => {
   );
   expectNoErrors("steering and queueing");
 
+  // A turn runs on while the page leaves its thread and comes back, asking the agent what it has streamed, and while
+  // the agent restarts under it: the page follows on, and its prompt is placed once.
+  const turnPath = new URL(page.url()).pathname;
+  await page.fill("textarea", "keep going");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".assistant.draft", { timeout: 5_000 });
+  await page.evaluate(async () => {
+    const { Router } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Router)).navigate("/");
+  });
+  await page.waitForFunction(() => location.pathname === "/");
+  await page.goBack();
+  await page.waitForFunction((path) => location.pathname === path, turnPath);
+  await page.evaluate(async () => {
+    const { Client } = await import("/src/ui/contracts.ts" as string);
+    await (await (window as any).lemma.service(Client)).restartPlugin("agent", { force: true });
+  });
+  await page
+    .waitForFunction(() => document.querySelectorAll(".turn-footer").length === 2, undefined, { timeout: 20_000 })
+    .catch(() => assert.fail("a turn did not finish on screen after its thread was left and the agent restarted"));
+  assert.equal(await page.locator(".user-text:text-is('keep going')").count(), 1, "a prompt sent again after the agent restarted was placed twice");
+  const reported: string[] = await page.evaluate(async () => {
+    const { Notify } = await import("/src/ui/contracts.ts" as string);
+    return (await (window as any).lemma.service(Notify))
+      .toasts()
+      .filter((toast: { level: string }) => toast.level === "error")
+      .map((toast: { message: string }) => toast.message);
+  });
+  assert.deepEqual(reported, [], "the agent restarting mid-turn was reported as a failure");
+  expectNoErrors("leaving a running turn's thread and restarting the agent under it");
+
   // A send that fails (the connection dropped, say) keeps its request id: sending the same prompt again, even after
   // moving to another thread and back, is a retry the host can recognise. An edit makes it a new prompt.
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    const agent = (await (window as any).lemma.service(Client)).host.agent;
-    const prompt = agent.prompt.bind(agent);
+    const channel = (await (window as any).lemma.service(Client)).channel;
+    const call = channel.call;
     const sent: (string | undefined)[] = ((window as any).sentIds = []);
-    agent.prompt = (sessionId: string, content: unknown, options: unknown, submit?: { requestId?: string }) => {
-      sent.push(submit?.requestId);
-      return sent.length === 1 || sent.length === 3 ? Promise.reject(new Error("connection lost")) : prompt(sessionId, content, options, submit);
+    channel.call = (target: string | { id: string }, payload?: { requestId?: string }) => {
+      if ((typeof target === "string" ? target : target.id) !== "agent.prompt") return call(target, payload);
+      sent.push(payload?.requestId);
+      return sent.length === 1 || sent.length === 3 ? Promise.reject(new Error("connection lost")) : call(target, payload);
     };
   });
   const sentIds = () => page.evaluate(() => (window as any).sentIds as (string | undefined)[]);
@@ -1166,7 +1218,7 @@ const devtools = async () => {
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
-  return "the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id";
+  return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts, and outlives its thread being left and the agent restarting; a failed send is retried with its request id";
 };
 
 // 10: the prompt rail.

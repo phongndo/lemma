@@ -1,5 +1,5 @@
 import { batch, createMemo, createSignal } from "solid-js";
-import { HostError } from "@lemma/contracts";
+import { HostError, LlmChannels } from "@lemma/contracts";
 import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, ThinkingLevel } from "@lemma/contracts";
 import { load, loadJson, save } from "../lib/storage.ts";
 import { DEFAULT_THINKING, clampThinking, resolveModel } from "../model/prefs.ts";
@@ -9,6 +9,8 @@ import { defineUiPlugin } from "../ui/define.ts";
 const MODEL_KEY = "lemma.model";
 const THINKING_KEY = "lemma.thinkingByModel";
 const FAVORITES_KEY = "lemma.favoriteModels";
+/** How long a change to a provider waits for the host to list it changed (ms). */
+const SETTLE_MS = 5_000;
 
 /**
  * Providers and models as the host reports them, and this browser's choices:
@@ -19,7 +21,6 @@ export default defineUiPlugin({
   requires: { client: Client, notify: Notify },
   provides: { models: Models },
   setup: ({ client, notify }, plugin) => {
-    const host = client.host;
     const [providers, setProviders] = createSignal<readonly ProviderInfo[]>([]);
     const [models, setModels] = createSignal<readonly ModelInfo[]>([]);
     const [loadedAt, setLoadedAt] = createSignal(false);
@@ -35,38 +36,52 @@ export default defineUiPlugin({
     });
     const configured = createMemo(() => providers().some((provider) => provider.configured));
 
+    /** Each listing applied calls these, so `settle` hears it. */
+    const listings = new Set<() => void>();
+    /** The latest listing asked for: an older one answering after it must not undo it. */
+    let asked = 0;
     const refresh = async () => {
-      const [nextProviders, nextModels] = await Promise.all([host.llm.providers(), host.llm.models(true)]);
+      const listing = ++asked;
+      const [nextProviders, nextModels] = await Promise.all([
+        client.channel.call(LlmChannels.providers, undefined),
+        client.channel.call(LlmChannels.models, { available: true }),
+      ]);
+      if (listing !== asked) return;
       batch(() => {
         setProviders(nextProviders);
         setModels(nextModels);
         setLoadedAt(true);
       });
+      for (const heard of listings) heard();
     };
-    const quietly = () => void refresh().catch(() => {});
 
-    plugin.onCleanup(client.onConnect(() => void refresh().catch((error) => notify.report(error, "Sync failed"))));
-    plugin.onCleanup(
-      client.onEvent((event) => {
-        // A login may finish after this page reloaded and lost its own call; provider plugins may come or go; a
-        // provider's catalog refreshes (a ChatGPT plan's list, say).
-        if ((event.type === "notice" && event.notice.source === "llm") || event.type === "plugins-changed" || event.type === "models-changed") quietly();
-      }),
-    );
+    // Listed when subscribed, and again after each change it reports: a login wherever it ran, a provider's catalog
+    // refreshing (a ChatGPT plan's list, say). It starts afresh, so lists again, when the llm plugin reloads (a change
+    // to its providers) or comes back.
+    plugin.onCleanup(client.follow(LlmChannels.changes, undefined, () => void refresh().catch((error) => notify.report(error, "Sync failed"))));
 
     /**
      * Waits until the host lists a provider as `listed` wants, after a change
-     * saved to the llm plugin's config (its reload may finish after the reply).
+     * saved to the llm plugin's config: its reload may finish after the reply,
+     * and `llm.changes` says when, starting afresh on the reloaded plugin.
+     * Undefined if it is not listed so within `SETTLE_MS`.
      */
-    const settle = async (id: string, listed: (provider: ProviderInfo | undefined) => boolean) => {
-      for (let attempt = 0; attempt < 20; attempt++) {
-        await refresh();
-        const found = providers().find((provider) => provider.id === id);
-        if (listed(found)) return found;
-        await new Promise((resolve) => setTimeout(resolve, 250));
-      }
-      return undefined;
-    };
+    const settle = (id: string, listed: (provider: ProviderInfo | undefined) => boolean) =>
+      new Promise<ProviderInfo | undefined>((resolve) => {
+        const check = () => {
+          const found = providers().find((provider) => provider.id === id);
+          if (!listed(found)) return;
+          listings.delete(check);
+          clearTimeout(timer);
+          resolve(found);
+        };
+        const timer = setTimeout(() => {
+          listings.delete(check);
+          resolve(undefined);
+        }, SETTLE_MS);
+        listings.add(check);
+        check();
+      });
     return {
       models: {
         providers,
@@ -106,8 +121,8 @@ export default defineUiPlugin({
           setLoggingIn(provider.id);
           const before = Math.max(0, ...notify.toasts().map((toast) => toast.id));
           try {
-            // The host announces success as a notice, which also refreshes providers.
-            await host.llm.login(provider.id, type);
+            // Listed now, so it shows connected as the call returns: `llm.changes` reports it too, a moment later.
+            await client.channel.call(LlmChannels.login, { provider: provider.id, type });
             await refresh();
             return true;
           } catch (error) {
@@ -124,14 +139,14 @@ export default defineUiPlugin({
           }
         },
         cancelLogin: async (provider: ProviderInfo) => {
-          return host.llm.cancelLogin(provider.id).catch((error) => {
+          return client.channel.call(LlmChannels.cancelLogin, { provider: provider.id }).catch((error) => {
             notify.report(error, `Could not cancel the ${provider.name} login`);
             return true;
           });
         },
         logout: async (provider: ProviderInfo) => {
           try {
-            await host.llm.logout(provider.id);
+            await client.channel.call(LlmChannels.logout, { provider: provider.id });
             notify.toast({ level: "info", message: `Logged out of ${provider.name}` });
             await refresh();
           } catch (error) {
@@ -139,17 +154,17 @@ export default defineUiPlugin({
           }
         },
         addCustom: async (spec: CustomProviderSpec) => {
-          const id = await host.llm.addCustom(spec);
+          const id = await client.channel.call(LlmChannels.addCustom, { spec });
           const provider = await settle(id, (found) => found !== undefined);
           if (provider === undefined) throw new Error(`The host did not list ${spec.name} after saving it`);
           return provider;
         },
         removeCustom: async (provider: ProviderInfo) => {
-          await host.llm.removeCustom(provider.id);
+          await client.channel.call(LlmChannels.removeCustom, { provider: provider.id });
           await settle(provider.id, (found) => found === undefined);
         },
         setLogo: async (provider: ProviderInfo, svg: string | undefined) => {
-          await host.llm.setLogo(provider.id, svg);
+          await client.channel.call(LlmChannels.setLogo, svg === undefined ? { provider: provider.id } : { provider: provider.id, svg });
           await settle(provider.id, (found) => found?.logo === svg);
         },
         refresh,

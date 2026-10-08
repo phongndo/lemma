@@ -1,9 +1,8 @@
 import { Context, Effect, Layer } from "effect";
-import type { Host } from "@lemma/client";
 import type { ApplicationServices } from "@lemma/core";
 import type { AnyRoute } from "@lemma/router";
 import { Client, HostPlugins, Interactions, Notify, Router, Slots, UI_API, UiApi, UiPlugins } from "../ui/runtime.ts";
-import type { NotifyService, UiPluginsService } from "../ui/runtime.ts";
+import type { HostConnection, NotifyService, UiPluginsService } from "../ui/runtime.ts";
 import { createClient } from "./client.ts";
 import { createHostPlugins } from "./host-plugins.ts";
 import { createInteractions } from "./interactions.ts";
@@ -38,7 +37,7 @@ export interface WebRuntime {
  * read its registries, and are released after its last plugin is.
  */
 export function createWebRuntime(options: {
-  readonly host: Host;
+  readonly host: HostConnection;
   /** The web app's own plugins, which the boot runs. */
   readonly plugins: UiPluginsService;
   /** The app's own routes, known whatever plugins run (`BootOptions.appRoutes`). */
@@ -47,7 +46,7 @@ export function createWebRuntime(options: {
   const client = createClient(options.host);
   const notify = createNotify(client.client);
   const hostPlugins = createHostPlugins(client.client, notify.notify);
-  const interactions = createInteractions(client.client, notify.notify);
+  const interactions = createInteractions(options.host, client.client, notify.notify);
   const layer = Layer.effectContext(
     Effect.gen(function* () {
       const slots = yield* makeSlots;

@@ -1,6 +1,5 @@
 import { Context, Schema } from "effect";
 import type { Accessor, Component, JSX } from "solid-js";
-import type { Host } from "@lemma/client";
 import type {
   AuthType,
   CommandInfo,
@@ -70,9 +69,11 @@ export * from "./runtime.ts";
 
 // ------------------------------------------------------------------ host models
 
+/** The open thread's log as it reads it (`sessions.log`). */
 export interface LogState {
+  /** Its events so far have arrived; from here on each one appended follows. */
   readonly loaded: boolean;
-  readonly syncing: boolean;
+  /** Why the log stopped (the session is gone, or unreadable); cleared once it reads again. */
   readonly error?: string;
 }
 
@@ -173,8 +174,12 @@ export interface WorktreeDraft {
   readonly base?: string;
 }
 
+/**
+ * Projects and the directory the composer works in. The host's directories,
+ * branches, and worktrees themselves are `WorkspaceChannels`, which any plugin
+ * calls through `Client`.
+ */
 export interface WorkspaceService {
-  readonly api: Host["workspace"];
   /** Folders with threads, most recently used first, then ones added by hand; never `standaloneDir`. */
   readonly projects: Accessor<readonly string[]>;
   /** Added by hand (remembered), so they are offered before they have threads. */

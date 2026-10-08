@@ -1,12 +1,12 @@
 // First, so Effect finds it when it loads (see the file).
 import "./lib/immediate.ts";
 import { connect, describeError } from "@lemma/client";
-import type { Host } from "@lemma/client";
 import { preloadPaint } from "./lib/paint.ts";
 import { takeToken } from "./lib/token.ts";
 import { bundled } from "./plugins/index.ts";
 import { boot } from "./ui/boot.tsx";
 import { NewThreadRoute, SettingsRoute, ThreadRoute } from "./ui/contracts.ts";
+import type { HostConnection } from "./ui/runtime.ts";
 import "./styles.css";
 
 const start = async () => {
@@ -15,7 +15,7 @@ const start = async () => {
   // from the system's, whatever the last look was.
   preloadPaint(!params.has("safe"));
   const token = takeToken();
-  let host: Host;
+  let host: HostConnection;
   // `?mock` in dev runs against an in-browser fake host (no backend needed).
   if (import.meta.env.DEV && params.has("mock")) {
     const { createMockHost } = await import("./mock.ts");

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
-import { fileSessions, groupSessions, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/model/threads.ts";
+import { appendLog, applySessionsChange, fileSessions, groupSessions, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/model/threads.ts";
 
 const info = (id: string, cwd: string, updatedAt: number, lastSeq = 0): SessionInfo => ({ id, cwd, createdAt: 0, updatedAt, lastSeq });
 const ev = (id: string, parent: string | null, seq: number): SessionEvent => ({ seq, id, parent, at: seq, data: { type: "title", title: id } });
@@ -35,6 +35,30 @@ describe("upsertSession", () => {
     expect(upsertSession(list, info("b", "/x", 1)).map((s) => s.id)).toEqual(["b", "a"]);
     expect(upsertSession(list, info("a", "/x", 4, 2))[0]!.lastSeq).toBe(3);
     expect(upsertSession(list, { ...info("a", "/x", 6, 4), title: "t" })[0]!.title).toBe("t");
+  });
+});
+
+describe("applySessionsChange", () => {
+  it("replays a change heard while a listing was on its way over that listing", () => {
+    const listed = [info("a", "/x", 5, 3), info("b", "/x", 4)];
+    const changes = [
+      { type: "session-changed", info: info("c", "/y", 9) },
+      { type: "session-removed", sessionId: "b" },
+      { type: "session-changed", info: info("a", "/x", 4, 2) },
+    ] as const;
+    expect(changes.reduce(applySessionsChange, listed).map((s) => [s.id, s.lastSeq])).toEqual([
+      ["c", 0],
+      ["a", 3],
+    ]);
+  });
+});
+
+describe("appendLog", () => {
+  it("adds what follows the last event, and keeps the same log when nothing does", () => {
+    const log = [ev("1", null, 1), ev("2", "1", 2)];
+    expect(appendLog(log, [ev("2", "1", 2), ev("3", "2", 3)]).map((event) => event.seq)).toEqual([1, 2, 3]);
+    expect(appendLog(log, [ev("1", null, 1)])).toBe(log);
+    expect(appendLog([], log)).toEqual(log);
   });
 });
 

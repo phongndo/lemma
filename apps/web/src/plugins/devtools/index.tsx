@@ -6,6 +6,7 @@ import type { DevtoolsService } from "../../ui/contracts.ts";
 import { defineUiPlugin } from "../../ui/define.ts";
 import { CodeIcon, Contained, LogIcon, XIcon } from "../../ui/parts.tsx";
 import styles from "./devtools.css?inline";
+import { channelsPanel } from "./channels.tsx";
 import { EVENTS_PANEL, hostEventsPanel } from "./events.tsx";
 import { kernelPanels } from "./kernel.tsx";
 import { routePanels } from "./routes.tsx";
@@ -30,8 +31,9 @@ const load = (): Saved => {
 /**
  * The devtools: a panel docked under the app (`mod+shift+d`), whose tabs are
  * the `DevtoolsPanels` items. They look into the app as it runs and never
- * change what it does. Its own panels (the router, the host's events, and both
- * kernels' plugins, hooks, registries, and inspectors) are added there like any
+ * change what it does. Its own panels (the router, the host's events and
+ * streams, the channels host plugins serve, and both kernels' plugins, hooks,
+ * registries, and inspectors) are added there like any
  * plugin's. Whether they are open, and at which panel, lasts the tab's life.
  */
 export default defineUiPlugin({
@@ -136,7 +138,8 @@ export default defineUiPlugin({
     // Its own panels go through the slot a plugin's would.
     const panelsMade = [
       ...routePanels(router, slots, devtools),
-      hostEventsPanel(client, router, plugin.onCleanup),
+      hostEventsPanel(client, router, open, plugin.onCleanup),
+      channelsPanel(client, devtools, plugin.onCleanup),
       ...kernelPanels({ slots, router, devtools, client, lists: { web: ui.list, host: host.list }, runtime: { web: ui.runtime, host: host.runtime } }),
     ];
     for (const item of panelsMade) slots.add(DevtoolsPanels, item);

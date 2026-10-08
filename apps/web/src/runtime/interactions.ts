@@ -1,13 +1,17 @@
 import { createSignal } from "solid-js";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
-import type { ClientService, InteractionsService, NotifyService } from "../ui/runtime.ts";
+import type { ClientService, HostConnection, InteractionsService, NotifyService } from "../ui/runtime.ts";
 
 /**
  * The runtime's `Interactions`: the questions the host is waiting on. Plugins
- * answer them, each the ones it claims (the question dialog takes the rest).
+ * answer them, each the ones it claims (the question dialog takes the rest),
+ * so the host's `Interaction` calls are this service's alone.
  */
-export function createInteractions(client: ClientService, notify: NotifyService): { readonly interactions: InteractionsService; readonly dispose: () => void } {
-  const host = client.host;
+export function createInteractions(
+  host: HostConnection,
+  client: ClientService,
+  notify: NotifyService,
+): { readonly interactions: InteractionsService; readonly dispose: () => void } {
   const [open, setOpen] = createSignal<readonly InteractionRequest[]>([]);
   const [claims, setClaims] = createSignal<readonly ((request: InteractionRequest) => boolean)[]>([]);
   /** Ids closed while a list is in flight, so its reply cannot bring them back. */
