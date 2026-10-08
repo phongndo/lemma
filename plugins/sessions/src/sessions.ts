@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import { Clock, Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
 import { Events, Hooks, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
@@ -381,32 +381,39 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         );
       });
 
-    /**
-     * How many holds each held session has, and how many removals of each session being removed run. `hold` and
-     * `remove` each check the other's count and add to their own in one step, so a session is never both.
-     */
+    /** How many holds each held session has (`hold`). */
     const holds = new Map<string, number>();
-    const removing = new Map<string, number>();
-    const count = (counts: Map<string, number>, sessionId: string, by: 1 | -1) => {
-      const next = (counts.get(sessionId) ?? 0) + by;
-      if (next === 0) counts.delete(sessionId);
-      else counts.set(sessionId, next);
-    };
+    /**
+     * The sessions whose file `removeNow` is deleting, each with what completes once it has, or has failed to. It
+     * checks for holds and marks the session in one step, and calls nothing outside the store until the mark goes,
+     * so a hold asked for meanwhile waits on the disk alone.
+     */
+    const deleting = new Map<string, Deferred.Deferred<void>>();
+    const busy = (sessionId: string) =>
+      new SessionError({ sessionId, reason: "Busy", message: "This session is in use, by a running turn or other work; stop it before deleting" });
 
     const hold: Service["hold"] = (sessionId) =>
-      Effect.acquireRelease(
-        Effect.flatMap(locate(sessionId), (entry) =>
+      Effect.flatMap(locate(sessionId), (entry) =>
+        Effect.acquireRelease(
+          // Counted in the step that finds it is not being deleted.
           Effect.suspend(() => {
-            // Removed while it was found.
             if (entries.get(sessionId) !== entry) return Effect.fail(notFound(sessionId, `Session ${sessionId} does not exist`));
-            if (removing.has(sessionId)) {
-              return Effect.fail(new SessionError({ sessionId, reason: "Removing", message: `Session ${sessionId} is being deleted` }));
-            }
-            count(holds, sessionId, 1);
-            return Effect.void;
+            const deletion = deleting.get(sessionId);
+            if (deletion === undefined) holds.set(sessionId, (holds.get(sessionId) ?? 0) + 1);
+            return Effect.succeed(deletion);
           }),
+          (deletion) =>
+            deletion !== undefined
+              ? Effect.void
+              : Effect.sync(() => {
+                  const left = (holds.get(sessionId) ?? 1) - 1;
+                  if (left === 0) holds.delete(sessionId);
+                  else holds.set(sessionId, left);
+                }),
+        ).pipe(
+          // Being deleted: whether it is gone is known once the deletion has ended.
+          Effect.flatMap((deletion) => (deletion === undefined ? Effect.void : Effect.andThen(Deferred.await(deletion), hold(sessionId)))),
         ),
-        () => Effect.sync(() => count(holds, sessionId, -1)),
       );
 
     /** What `remove` does once every `SessionRemoveHook` handler let it. */
@@ -417,15 +424,28 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
           // Uninterruptible, so memory matches whether the file went, and its removal is announced.
           Effect.uninterruptible(
             Effect.gen(function* () {
-              if (entries.get(sessionId) !== entry) return yield* notFound(sessionId, `Session ${sessionId} does not exist`);
-              // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
-              yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
-              // So a crash does not bring it back. Best effort: the file is gone either way, and a session that
-              // returns after a crash on a failing disk is whole.
-              yield* Effect.promise(() => syncDirectory(fs, path.dirname(entry.file)).catch(() => undefined));
-              entries.delete(sessionId);
-              indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
-              yield* entry.open?.writer?.close ?? Effect.void;
+              const deletion = yield* Effect.suspend(() => {
+                if (entries.get(sessionId) !== entry) return Effect.fail(notFound(sessionId, `Session ${sessionId} does not exist`));
+                if (holds.has(sessionId)) return Effect.fail(busy(sessionId));
+                const deletion = Deferred.makeUnsafe<void>();
+                deleting.set(sessionId, deletion);
+                return Effect.succeed(deletion);
+              });
+              const deleted = yield* Effect.exit(
+                Effect.gen(function* () {
+                  // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
+                  yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
+                  // So a crash does not bring it back. Best effort: the file is gone either way, and a session that
+                  // returns after a crash on a failing disk is whole.
+                  yield* Effect.promise(() => syncDirectory(fs, path.dirname(entry.file)).catch(() => undefined));
+                  entries.delete(sessionId);
+                  indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
+                  yield* entry.open?.writer?.close ?? Effect.void;
+                }),
+              );
+              deleting.delete(sessionId);
+              yield* Deferred.succeed(deletion, undefined);
+              if (Exit.isFailure(deleted)) return yield* Effect.failCause(deleted.cause);
               yield* events.publish(SessionRemoved, { sessionId });
             }),
           ),
@@ -433,24 +453,16 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       });
 
     const remove: Service["remove"] = (sessionId) =>
-      Effect.acquireUseRelease(
-        Effect.suspend(() => {
-          if (holds.has(sessionId)) {
-            return Effect.fail(
-              new SessionError({ sessionId, reason: "Busy", message: "This session is in use, by a running turn or other work; stop it before deleting" }),
-            );
-          }
-          count(removing, sessionId, 1);
-          return Effect.void;
-        }),
-        () =>
-          hooks
-            .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
-            .pipe(
-              // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
-              Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
-            ),
-        () => Effect.sync(() => count(removing, sessionId, -1)),
+      Effect.suspend(() =>
+        // Refused before its handlers run, too, so they see no removal a hold refuses.
+        holds.has(sessionId)
+          ? Effect.fail(busy(sessionId))
+          : hooks
+              .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
+              .pipe(
+                // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
+                Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
+              ),
       );
 
     const branch: Service["branch"] = (sessionId, options) =>

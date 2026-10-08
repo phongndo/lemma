@@ -147,11 +147,8 @@ export type SessionInfo = typeof SessionInfo.Type;
 
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
-  /**
-   * `Busy`: `remove` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler refused it.
-   * `Removing`: `hold` refused, as the session is being removed; it may stay, if the removal fails.
-   */
-  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "Removing";
+  /** `Busy`: `remove` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler refused it. */
+  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -167,12 +164,13 @@ export const SessionChanged = Event.make<{ readonly info: SessionInfo }>("lemma/
 export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/session.removed");
 
 /**
- * Around every `Sessions.remove` that no hold refused, whoever calls it; the
- * terminal deletes the session. A handler refuses by failing instead of
- * calling `next`; no hold is granted while it runs. A provider of `Sessions`
- * runs each removal through it, so a handler's rule holds for every client
- * and every plugin. Work that writes to the session holds it instead (see
- * `Sessions.hold`).
+ * Around every `Sessions.remove` of a session nothing holds, whoever calls
+ * it; the terminal deletes the session, unless a hold was taken meanwhile, when
+ * it fails `Busy`. A handler refuses by failing instead of calling `next`, and
+ * cleans up after the session only once `next` has succeeded. A provider of
+ * `Sessions` runs each removal through it, so a handler's rule holds for every
+ * client and every plugin. Work that writes to the session holds it instead
+ * (see `Sessions.hold`).
  */
 export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
 
@@ -209,14 +207,18 @@ export class Sessions extends Context.Service<
      * writes to it holds it from before it starts until it has stopped, as the
      * agent does for each turn. Not a `SessionRemoveHook` handler, since core
      * retires a stopping plugin's handlers before its work has stopped. Fails
-     * `NotFound` when it does not exist, and `Removing` while a removal runs.
-     * Any number of holds may exist at once.
+     * `NotFound` when it does not exist. Asked for while the session's data is
+     * being deleted, it waits for that to end: it fails `NotFound` once the
+     * session is gone, and holds it if the deletion failed. Any number of holds
+     * may exist at once.
      */
     readonly hold: (sessionId: string) => Effect.Effect<void, SessionError, Scope.Scope>;
     /**
-     * Deletes it from disk, for good. Fails `Busy` while any hold exists. From
-     * the moment it passes that check until it ends, it grants no new hold, and
-     * runs through `SessionRemoveHook`, whose handlers may refuse it.
+     * Deletes it from disk, for good, through `SessionRemoveHook`, whose
+     * handlers may refuse. Fails `Busy` while any hold exists: checked before
+     * the handlers run, and again in one step with marking the session as
+     * being deleted, after them, so no hold is granted until its data is gone
+     * or the deletion has failed.
      */
     readonly remove: (sessionId: string) => Effect.Effect<void, SessionError>;
   }

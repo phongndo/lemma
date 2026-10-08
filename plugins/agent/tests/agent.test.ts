@@ -1,6 +1,7 @@
+import { promises } from "node:fs";
 import * as fs from "node:fs/promises";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
 import {
   Agent,
@@ -28,10 +29,37 @@ beforeEach(async () => {
   dir = await tempDir();
 });
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.rm(dir, { recursive: true, force: true });
 });
 
 const withAgent = <A, E>(setup: AgentSetup, body: Parameters<typeof runAgent<A, E>>[2]) => runAgent(dir, setup, body);
+
+/**
+ * Holds up the next `rm` or `rename` through `node:fs`'s promises (as the sessions store and journal writes make
+ * them) of a path ending in `suffix`: `reached` once it waits, until `go`.
+ */
+const holdUpFile = (operation: "rm" | "rename", suffix: string) => {
+  let reach = () => {};
+  let go = () => {};
+  const reached = new Promise<void>((resolve) => (reach = resolve));
+  const gate = new Promise<void>((resolve) => (go = resolve));
+  const original = promises[operation] as (...args: unknown[]) => Promise<void>;
+  const spy = vi.spyOn(promises, operation).mockImplementation((async (...args: unknown[]) => {
+    if (String(args[operation === "rm" ? 0 : 1]).endsWith(suffix)) {
+      spy.mockRestore();
+      reach();
+      await gate;
+    }
+    return original.apply(promises, args);
+  }) as never);
+  return { reached: Effect.promise(() => reached), go: () => go() };
+};
+
+/** Lets every fiber that can run do so, as far as it can without waiting on anything but another's turn. */
+const settle = Effect.gen(function* () {
+  for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
+});
 
 /** The sessions store, but the next `branch` read is followed by `race.checkout`: a client moving the leaf as a turn starts. */
 const racingSessions = (race: { checkout?: { readonly sessionId: string; readonly eventId: string } }) =>
@@ -458,10 +486,11 @@ describe("agent", () => {
     );
   });
 
-  it("refuses deleting a session while its turn runs; admits no prompt while a deletion runs, and drops the queue with it", async () => {
+  it("refuses deleting a session while its turn runs; a prompt sent while a deletion's handlers run starts its turn, and the deletion then fails Busy", async () => {
     const entered = Effect.runSync(Deferred.make<void>());
     const release = Effect.runSync(Deferred.make<void>());
-    // Past the store's check for holds, a deletion waits for `release`, as on a slow disk.
+    const answer = Effect.runSync(Deferred.make<void>());
+    // Before the store's own deletion, a handler holds a deletion up until `release`.
     const slowRemoval = definePlugin({
       id: "slow-removal",
       layer: Layer.effectDiscard(
@@ -476,7 +505,36 @@ describe("agent", () => {
         ).pipe(Effect.orDie),
       ),
     });
-    await withAgent({ plugins: [slowRemoval], scripts: [hang("thinking")] }, () =>
+    await withAgent({ plugins: [slowRemoval], scripts: [hang("thinking"), gated(answer, reply("done"))] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const store = yield* Sessions;
+        const first = yield* Effect.forkChild(a.prompt(id, text("go")));
+        yield* waitFor(
+          Effect.sync(() => requests.length),
+          (asked) => asked === 1,
+        );
+        expect(yield* Effect.flip(store.remove(id))).toMatchObject({ reason: "Busy", sessionId: id });
+        yield* a.cancel(id);
+        yield* Fiber.join(first);
+
+        const removal = yield* Effect.forkChild(store.remove(id));
+        yield* Deferred.await(entered);
+        // Not deleted yet: a prompt starts a turn, which holds the session.
+        const now = yield* Effect.forkChild(a.prompt(id, text("now")));
+        yield* waitFor(a.busy(id), (busy) => busy);
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* Effect.flip(Fiber.join(removal))).toMatchObject({ reason: "Busy", sessionId: id });
+        yield* Deferred.succeed(answer, undefined);
+        yield* Fiber.join(now);
+        expect(ofType(yield* log(id), "turn-end").map((data) => data.reason)).toEqual(["cancelled", "done"]);
+      }),
+    );
+  });
+
+  it("a prompt sent while the store deletes the session waits for the deletion, then fails Session; the session's queue and journal go with it", async () => {
+    await withAgent({ scripts: [hang("thinking")] }, () =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
@@ -485,30 +543,71 @@ describe("agent", () => {
         yield* waitFor(a.busy(id), (busy) => busy);
         const queued = yield* Effect.forkChild(Effect.flip(a.prompt(id, text("next"))));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
-        expect(yield* Effect.flip(store.remove(id))).toMatchObject({ reason: "Busy", sessionId: id });
         // Cancelled, the turn leaves its follow-up queued for the next prompt.
         yield* a.cancel(id);
         yield* Fiber.join(first);
         expect(yield* a.queue(id)).toHaveLength(1);
 
+        const deleting = holdUpFile("rm", `_${id}.jsonl`);
         const removal = yield* Effect.forkChild(store.remove(id));
-        yield* Deferred.await(entered);
-        // The session is still there, but no turn starts in it: the store holds it for none.
-        expect(yield* Effect.flip(a.prompt(id, text("too late")))).toMatchObject({
-          reason: "Session",
-          sessionId: id,
-          message: `Session ${id} is being deleted`,
-        });
-        expect(yield* a.busy(id)).toBe(false);
-        yield* Deferred.succeed(release, undefined);
+        yield* deleting.reached;
+        const late = yield* Effect.forkChild(Effect.flip(a.prompt(id, text("too late"))));
+        yield* settle;
+        const waited = late.pollUnsafe() === undefined;
+        deleting.go();
         yield* Fiber.join(removal);
+        expect(waited).toBe(true);
+        expect(yield* Fiber.join(late)).toMatchObject({ reason: "Session", sessionId: id, message: `Session ${id} does not exist` });
         // Heard removed, the agent drops the session's queue and journal.
-        expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: id });
+        expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: id, message: `Session ${id} was deleted` });
         expect(yield* a.queue(id)).toEqual([]);
         yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
       }),
     );
   });
+
+  it("hears every deletion, however many come while it is busy: each deleted session's queue and journal go", async () => {
+    await withAgent({ scripts: [hang("thinking"), reply("ok")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        const store = yield* Sessions;
+        // A session whose prompt waits in the queue after its turn was cancelled.
+        const { id: queuedIn } = yield* newSession;
+        const first = yield* Effect.forkChild(a.prompt(queuedIn, text("go")));
+        yield* waitFor(
+          Effect.sync(() => requests.length),
+          (asked) => asked === 1,
+        );
+        const queued = yield* Effect.forkChild(Effect.flip(a.prompt(queuedIn, text("next"))));
+        yield* waitFor(a.queue(queuedIn), (queue) => queue.length === 1);
+        yield* a.cancel(queuedIn);
+        yield* Fiber.join(first);
+        const { id: taken } = yield* newSession;
+        const many = yield* Effect.forEach(Array.from({ length: 1100 }), () => newSession, { concurrency: 64 });
+
+        // The agent busy writing another session's journal, held up meanwhile.
+        const { id: busyIn } = yield* newSession;
+        const writing = holdUpFile("rename", `${busyIn}.json`);
+        const busy = yield* Effect.forkChild(a.prompt(busyIn, text("go")));
+        yield* writing.reached;
+        // It hears the first deletion and waits; the queued session's comes next, then more than it has room for.
+        yield* store.remove(taken);
+        yield* store.remove(queuedIn);
+        const rest = yield* Effect.forkChild(Effect.forEach(many, ({ id }) => store.remove(id), { concurrency: "unbounded", discard: true }));
+        yield* waitFor(store.list(), (left) => left.length === 1);
+        writing.go();
+        yield* Fiber.join(rest);
+        yield* Fiber.join(busy);
+
+        yield* waitFor(
+          Effect.sync(() => queued.pollUnsafe()),
+          (exit) => exit !== undefined,
+        );
+        expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: queuedIn, message: `Session ${queuedIn} was deleted` });
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(queuedIn));
+      }),
+    );
+  }, 30_000);
 
   it("fails with NoModel before logging anything when no model is available or the model is unknown", async () => {
     await withAgent({ scripts: [], models: [] }, () =>

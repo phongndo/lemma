@@ -205,7 +205,8 @@ export default definePlugin({
     const admit = yield* Semaphore.make(1);
     /**
      * The session held (`Sessions.hold`) for a turn about to start, in a scope `start` closes once the turn has
-     * stopped: the session cannot be deleted under it. Fails `Session` when the session is gone or being deleted.
+     * stopped: the session cannot be deleted under it. Fails `Session` when the session is gone, once a deletion
+     * under way has ended.
      */
     const holdFor = (sessionId: string) =>
       Effect.flatMap(Scope.make(), (lease) =>
@@ -541,7 +542,7 @@ export default definePlugin({
                 yield* queueChanged(sessionId);
                 return item.done;
               }
-              // A session gone, or being deleted, starts no turn.
+              // A session gone starts no turn.
               const lease = yield* holdFor(sessionId);
               // Prompts held after a failed or cancelled turn go first, then this one.
               const item = yield* makeItem(content, options, "follow-up");
@@ -594,7 +595,10 @@ export default definePlugin({
         }),
       );
 
-    /** A deleted session's queue and journal go with it (under `admit`). No turn runs in it: each held it (see `holdFor`). */
+    /**
+     * A deleted session's queue and journal go with it. No turn runs in it: each held it (see `holdFor`). It takes no
+     * lock but `writing`, whose holders wait on the disk alone, and calls nothing outside the agent.
+     */
     const removed = (sessionId: string) =>
       Effect.gen(function* () {
         const state = states.get(sessionId);
@@ -603,7 +607,8 @@ export default definePlugin({
         for (const item of state?.queue ?? []) {
           yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
         }
-        yield* removeState(home, sessionId);
+        // After a journal write under way, which would bring the file back.
+        yield* writing.withPermits(1)(removeState(home, sessionId));
       });
 
     const view = (sessionId: string): Effect.Effect<AgentView> =>
@@ -624,8 +629,11 @@ export default definePlugin({
         }),
       { buffer: 1024, overflow: "suspend" },
     );
-    // One deleted while no instance heard it (between two, say) is found gone when the next starts.
-    yield* owner.observe(SessionRemoved, ({ sessionId }) => admit.withPermits(1)(removed(sessionId)), { buffer: 1024 });
+    // Every deletion heard, so no queued prompt's caller waits on a session that is gone: one that finds no room waits
+    // for it. Never for good: the store announces a deletion once no hold waits on it, and `removed` takes no lock
+    // that a call into the store is made under (not `admit`). One deleted while no instance listened (between two,
+    // say) is found gone when the next starts.
+    yield* owner.observe(SessionRemoved, ({ sessionId }) => removed(sessionId), { overflow: "suspend" });
 
     // What the last instance left: turns to resume, and queues to run on. Prompts the log already has were placed
     // before it stopped, whatever the journal says.
@@ -651,7 +659,7 @@ export default definePlugin({
             const { turn } = journal;
             if (turn === undefined && (state.queue.length === 0 || state.held)) return yield* persist(sessionId);
             const lease = yield* Effect.result(holdFor(sessionId));
-            // Gone, or being deleted, since it was found: no turn starts in it, and its state goes.
+            // Deleted since it was found: no turn starts in it, and its state goes.
             if (Result.isFailure(lease)) return yield* removed(sessionId);
             if (turn !== undefined) {
               const prompts = yield* Effect.forEach(turn.prompts, restore);

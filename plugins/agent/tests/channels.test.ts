@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Exit, Fiber } from "effect";
-import { Agent, AgentChannels, Sessions } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect";
+import { definePlugin, PluginContext } from "@lemma/core";
+import { Agent, AgentChannels, Paths, SessionError, SessionRemoveHook, Sessions } from "@lemma/contracts";
 import type { AgentView, ChannelInfo, QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
 import { call, collect, hostError, open, served } from "../../sessions/tests/served.ts";
@@ -212,6 +213,79 @@ describe("the agent leaving", () => {
           expect(yield* call(client, "sessions.delete", { sessionId: id })).toBeNull();
         }),
       { configs: { agent: { stopGrace: 20 } }, deadlines: { dispose: Duration.seconds(30) } },
+    );
+  }, 30_000);
+
+  test("a deletion that a SessionRemoveHook handler holds up while the restarted agent resumes a turn, then refuses, leaves the turn to resume", () => {
+    const llm = fakeLlm([hang("thinking"), reply("done")]);
+    const reached = Effect.runSync(Deferred.make<void>());
+    const resume = Effect.runSync(Deferred.make<void>());
+    const entered = Effect.runSync(Deferred.make<void>());
+    const refuse = Effect.runSync(Deferred.make<void>());
+    const race: { sessionId?: string } = {};
+    // The sessions store, but the next hold of `race.sessionId` says it is `reached`, then waits for `resume`: the
+    // restarted agent, about to hold the session to resume its turn, held up there while a deletion starts.
+    const racing = definePlugin({
+      id: "sessions",
+      provides: [Sessions],
+      requires: [Paths],
+      exclusive: true,
+      layer: Layer.effect(
+        Sessions,
+        Effect.map(Sessions, (store) => ({
+          ...store,
+          hold: (sessionId: string) => {
+            if (sessionId !== race.sessionId) return store.hold(sessionId);
+            delete race.sessionId;
+            return Effect.andThen(Effect.andThen(Deferred.succeed(reached, undefined), Deferred.await(resume)), store.hold(sessionId));
+          },
+        })),
+      ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
+    });
+    // Holds every deletion up until `refuse`, then refuses it.
+    const refusing = definePlugin({
+      id: "refusing",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(SessionRemoveHook, (input) =>
+            Effect.andThen(
+              Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(refuse)),
+              Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: "kept" })),
+            ),
+          ),
+        ).pipe(Effect.orDie),
+      ),
+    });
+    return served(
+      (home) => [paths(home, home), host(), racing, tools, testTools().plugin, llm.plugin, agent, refusing],
+      (client, core) =>
+        Effect.gen(function* () {
+          const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+          yield* Effect.forkChild(call(client, "agent.prompt", { sessionId: id, content: text("go"), requestId: "r1" }));
+          yield* waitFor(
+            Effect.sync(() => llm.requests.length),
+            (asked) => asked === 1,
+          );
+
+          race.sessionId = id;
+          const restart = yield* Effect.forkChild(core.restart("agent", { force: true }));
+          // The old turn has stopped and nothing holds the session: a deletion starts, and the handler holds it up.
+          yield* Deferred.await(reached);
+          const deletion = yield* Effect.forkChild(call(client, "sessions.delete", { sessionId: id }));
+          yield* Deferred.await(entered);
+          // The new agent holds the session and resumes its turn; then the handler refuses the deletion.
+          yield* Deferred.succeed(resume, undefined);
+          yield* Fiber.join(restart);
+          yield* Deferred.succeed(refuse, undefined);
+          expect(hostError(yield* Fiber.await(deletion))).toMatchObject({ code: "Busy", subject: id, message: "kept" });
+
+          // Its journal kept, the turn resumed, asked the model again, and ended.
+          yield* waitFor(call(client, "agent.running"), (running) => (running as readonly string[]).length === 0);
+          const log = (yield* call(client, "sessions.events", { sessionId: id })) as SessionEvent[];
+          expect(ofType(log, "turn-end")).toMatchObject([{ reason: "done" }]);
+          expect(llm.requests).toHaveLength(2);
+        }),
+      { configs: { agent: { stopGrace: 0 } } },
     );
   }, 30_000);
 });

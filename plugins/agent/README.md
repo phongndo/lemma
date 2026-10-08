@@ -118,10 +118,12 @@ A prompt sent while the session's turn runs does what its `whenBusy` says:
 A session with a turn running cannot be deleted: each turn holds its session
 (`Sessions.hold`) from before it starts until it has stopped, through a
 stopping agent's grace too (see [Stopping](#stopping)). A prompt that would
-start a turn in a session being deleted fails `Session`, as in one that does
-not exist. When the agent hears a session removed (`SessionRemoved`), its
-queued prompts fail `Session` and its journal goes; one removed while no agent
-ran goes when the next starts.
+start a turn while a deletion runs starts it if the deletion has not reached
+the session's file, which it then finds held (`Busy`); otherwise it waits for
+the deletion and fails `Session`, as in a session that does not exist. The
+agent hears every session removed (`SessionRemoved`, with backpressure rather
+than loss): its queued prompts fail `Session` and its journal goes. One removed
+while no agent ran goes when the next starts.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Retracted`), and `QueueChanged` reports every change with a revision that only

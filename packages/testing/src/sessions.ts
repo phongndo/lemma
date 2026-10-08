@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, Fiber, Layer, Result, Scope } from "effect";
+import { Effect, Exit, Fiber, Layer, Result, Scope } from "effect";
 import type { Context } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, test } from "vitest";
@@ -10,23 +10,35 @@ import type { EventData, SessionEvent } from "@lemma/contracts";
 type Store = Context.Service.Shape<typeof Sessions>;
 
 /**
+ * The provider's deletions of a session's stored data, which the suite holds
+ * up and fails as a slow or failing disk would: `compose` has its storage
+ * wait on `before` ahead of each, and fail the deletion, keeping the data,
+ * when `before` rejects.
+ */
+export interface Deletions {
+  readonly before: () => Promise<void>;
+}
+
+/**
  * The `Sessions` contract as tests. The sessions plugin runs them on a real
  * and a simulated disk, and a plugin written to replace it can run them to
  * meet the same bar. `compose` returns, fresh for each test, the plugins that
- * provide `Sessions` (and what they require). Time is Effect's test clock,
- * which the body moves.
+ * provide `Sessions` (and what they require), their deletions going through
+ * `deletions`. Time is Effect's test clock, which the body moves.
  */
-export function sessionsConformance(name: string, compose: () => readonly Plugin[] | Promise<readonly Plugin[]>): void {
+export function sessionsConformance(name: string, compose: (deletions: Deletions) => readonly Plugin[] | Promise<readonly Plugin[]>): void {
   describe(`Sessions contract: ${name}`, () => {
-    const run = async <A>(body: (store: Store, seen: Seen) => Effect.Effect<A, SessionError, Scope.Scope>) => {
-      const plugins = await compose();
+    const run = async <A>(body: (store: Store, seen: Seen, disk: Disk) => Effect.Effect<A, SessionError, Scope.Scope>) => {
+      const disk = slowDisk();
+      const plugins = await compose(disk.deletions);
       const seen = recorder();
       return Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
             const core = yield* makeCore([...plugins, seen.plugin]);
             const store = yield* core.run(Sessions);
-            return yield* body(store, seen);
+            // A deletion held up by a test that failed is let go, or closing the store would wait on it.
+            return yield* body(store, seen, disk).pipe(Effect.ensuring(Effect.sync(disk.letGo)));
           }),
         ).pipe(Effect.provide(TestClock.layer())),
       );
@@ -146,13 +158,13 @@ export function sessionsConformance(name: string, compose: () => readonly Plugin
         Effect.gen(function* () {
           const { id } = yield* store.create({ cwd: "/work/a" });
           yield* store.append(id, note("one"));
-          seen.kept.add(id);
+          seen.around.set(id, () => Effect.fail(new SessionError({ sessionId: id, reason: "Busy", message: `"${id}" is in use` })));
           expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
           expect((yield* store.get(id)).lastSeq).toBe(1);
           expect((yield* store.events(id)).length).toBe(1);
           expect((yield* store.list()).map((info) => info.id)).toEqual([id]);
           // Let go, it is removed.
-          seen.kept.delete(id);
+          seen.around.delete(id);
           yield* store.remove(id);
           expect(reason(yield* Effect.result(store.get(id)))).toBe("NotFound");
         }),
@@ -177,25 +189,69 @@ export function sessionsConformance(name: string, compose: () => readonly Plugin
         }),
       ));
 
-    test("hold is refused on a missing session, NotFound, and while a removal runs, Removing; a refused removal leaves it to be held", () =>
-      run((store, seen) =>
+    test("hold fails NotFound on a missing session; taken while the session is deleted, it waits for the deletion, then fails NotFound", () =>
+      run((store, _seen, disk) =>
         Effect.gen(function* () {
           expect(reason(yield* Effect.result(Effect.scoped(store.hold("missing"))))).toBe("NotFound");
           const { id } = yield* store.create({ cwd: "/work/a" });
-          // A removal ends when a handler refuses it.
-          seen.kept.add(id);
-          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
-          yield* Effect.scoped(store.hold(id));
-          seen.kept.delete(id);
-          // Held up in `SessionRemoveHook`, past its check for holds, a removal refuses every hold until it ends.
-          const stall = { entered: yield* Deferred.make<void>(), open: yield* Deferred.make<void>() };
-          seen.stalled.set(id, stall);
+          const deletion = disk.holdUp();
           const removal = yield* Effect.forkChild(store.remove(id));
-          yield* Deferred.await(stall.entered);
-          expect(reason(yield* Effect.result(Effect.scoped(store.hold(id))))).toBe("Removing");
-          yield* Deferred.succeed(stall.open, undefined);
+          yield* Effect.promise(() => deletion.reached);
+          const held = yield* Effect.forkChild(Effect.result(Effect.scoped(store.hold(id))));
+          yield* settle;
+          expect(held.pollUnsafe()).toBeUndefined();
+          deletion.go();
           yield* Fiber.join(removal);
-          expect(reason(yield* Effect.result(Effect.scoped(store.hold(id))))).toBe("NotFound");
+          expect(reason(yield* Fiber.join(held))).toBe("NotFound");
+        }),
+      ));
+
+    test("hold, taken while a deletion the disk then fails runs, holds the session once it has failed", () =>
+      run((store, _seen, disk) =>
+        Effect.gen(function* () {
+          const { id } = yield* store.create({ cwd: "/work/a" });
+          yield* store.append(id, note("one"));
+          const deletion = disk.holdUp();
+          const removal = yield* Effect.forkChild(store.remove(id));
+          yield* Effect.promise(() => deletion.reached);
+          const scope = yield* Scope.make();
+          const held = yield* Effect.forkChild(store.hold(id).pipe(Scope.provide(scope)));
+          yield* settle;
+          expect(held.pollUnsafe()).toBeUndefined();
+          deletion.fail();
+          expect(reason(yield* Effect.result(Fiber.join(removal)))).toBe("Io");
+          yield* Fiber.join(held);
+          expect((yield* store.events(id)).length).toBe(1);
+          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
+          yield* Scope.close(scope, Exit.void);
+          yield* store.remove(id);
+          expect(reason(yield* Effect.result(store.get(id)))).toBe("NotFound");
+        }),
+      ));
+
+    test("a SessionRemoveHook handler that holds the session before calling next has it fail Busy, keeping it; one that holds it after next gets NotFound", () =>
+      run((store, seen) =>
+        Effect.gen(function* () {
+          const { id: kept } = yield* store.create({ cwd: "/work/a" });
+          seen.around.set(kept, (next) => Effect.scoped(Effect.andThen(store.hold(kept), next)));
+          expect(reason(yield* Effect.result(store.remove(kept)))).toBe("Busy");
+          expect((yield* store.get(kept)).id).toBe(kept);
+          // Not held once the handler has let go.
+          seen.around.delete(kept);
+          yield* store.remove(kept);
+
+          const { id: gone } = yield* store.create({ cwd: "/work/a" });
+          let after: string | undefined;
+          seen.around.set(gone, (next) =>
+            Effect.andThen(
+              next,
+              Effect.map(Effect.result(Effect.scoped(store.hold(gone))), (held) => {
+                after = reason(held);
+              }),
+            ),
+          );
+          yield* store.remove(gone);
+          expect(after).toBe("NotFound");
         }),
       ));
 
@@ -236,29 +292,19 @@ interface Seen {
   readonly appended: { readonly sessionId: string; readonly event: SessionEvent }[];
   readonly changed: { readonly id: string; readonly lastSeq: number }[];
   readonly removed: string[];
-  /** Sessions whose removal it refuses, `Busy`, as a `SessionRemoveHook` handler may. */
-  readonly kept: Set<string>;
-  /** Sessions whose removal it holds up until `open`, saying so with `entered`, as a slow handler would. */
-  readonly stalled: Map<string, { readonly entered: Deferred.Deferred<void>; readonly open: Deferred.Deferred<void> }>;
+  /** By session, what its `SessionRemoveHook` handler does around `next` (the rest of the removal), as a plugin's may. */
+  readonly around: Map<string, <E>(next: Effect.Effect<void, E>) => Effect.Effect<void, E | SessionError>>;
 }
 
-/** Another plugin beside the store: it records what the store publishes, and refuses or holds up the removals it is told to. */
+/** Another plugin beside the store: it records what the store publishes, and handles the removals it is told to. */
 function recorder(): Seen {
-  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], kept: new Set(), stalled: new Map() };
+  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], around: new Map() };
   const plugin = definePlugin({
     id: "conformance-recorder",
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
-        yield* owner.on(SessionRemoveHook, (input, next) => {
-          if (seen.kept.has(input.sessionId)) {
-            return Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: `"${input.sessionId}" is in use` }));
-          }
-          const stall = seen.stalled.get(input.sessionId);
-          return stall === undefined
-            ? next(input)
-            : Effect.andThen(Deferred.succeed(stall.entered, undefined), Effect.andThen(Deferred.await(stall.open), next(input)));
-        });
+        yield* owner.on(SessionRemoveHook, (input, next) => seen.around.get(input.sessionId)?.(next(input)) ?? next(input));
         yield* owner.observe(SessionAppended, (payload) => Effect.sync(() => void seen.appended.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionChanged, ({ info }) => Effect.sync(() => void seen.changed.push(info)), { buffer: 256 });
         yield* owner.observe(SessionRemoved, ({ sessionId }) => Effect.sync(() => void seen.removed.push(sessionId)), { buffer: 256 });
@@ -267,6 +313,47 @@ function recorder(): Seen {
   });
   return { plugin, ...seen };
 }
+
+interface Disk {
+  readonly deletions: Deletions;
+  /** Holds up the next deletion: `reached` once it waits, until `go` lets it delete or `fail` fails it as the disk would. */
+  readonly holdUp: () => { readonly reached: Promise<void>; readonly go: () => void; readonly fail: () => void };
+  /** Lets a deletion still held up go. */
+  readonly letGo: () => void;
+}
+
+/** `Deletions` that go at once, except one `holdUp` holds up. */
+function slowDisk(): Disk {
+  let next: { readonly reach: () => void; readonly outcome: Promise<void> } | undefined;
+  let go = () => {};
+  return {
+    deletions: {
+      before: () => {
+        const held = next;
+        next = undefined;
+        held?.reach();
+        return held?.outcome ?? Promise.resolve();
+      },
+    },
+    holdUp: () => {
+      let reach = () => {};
+      let fail = () => {};
+      const reached = new Promise<void>((resolve) => (reach = resolve));
+      const outcome = new Promise<void>((resolve, reject) => {
+        go = resolve;
+        fail = () => reject(Object.assign(new Error("I/O error"), { code: "EIO" }));
+      });
+      next = { reach, outcome };
+      return { reached, go, fail };
+    },
+    letGo: () => go(),
+  };
+}
+
+/** Lets every fiber that can run do so, as far as it can without waiting on anything but another's turn. */
+const settle = Effect.gen(function* () {
+  for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
+});
 
 /** Lets observers run until `check` holds; on the test clock, so it yields instead of sleeping. */
 const eventually = (check: () => boolean) =>
