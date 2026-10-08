@@ -158,7 +158,7 @@ export class SessionError extends Data.TaggedError("SessionError")<{
  * `sessions.log` follows a session from it.
  */
 export const SessionAppended = Event.make<{ readonly sessionId: string; readonly event: SessionEvent }>("lemma/session.appended");
-/** A session created, or its info changed: by an append (its `lastSeq` and `updatedAt`), a checkout, or its marks. */
+/** A session created, or its info changed: by an append (its `lastSeq`, `updatedAt` and `leaf`, and `title` for a title event), a checkout (its `leaf`), or its marks. */
 export const SessionChanged = Event.make<{ readonly info: SessionInfo }>("lemma/session.changed");
 export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/session.removed");
 
@@ -208,7 +208,7 @@ export class Sessions extends Context.Service<
 export const SessionsChange = Schema.Union([
   /** First: from here on the stream hears every change; a client lists what it shows (`sessions.list`) after it. */
   Schema.Struct({ type: Schema.Literal("subscribed") }),
-  /** Created, or changed: an append moves its `lastSeq` and `updatedAt`, a checkout its `leaf`. */
+  /** Created, or changed: an append moves its `lastSeq`, `updatedAt` and `leaf` (and `title` for a title event), a checkout its `leaf`, a mark its marks. */
   Schema.Struct({ type: Schema.Literal("session-changed"), info: SessionInfo }),
   Schema.Struct({ type: Schema.Literal("session-removed"), sessionId: Schema.String }),
 ]);
@@ -231,7 +231,7 @@ const sessionField = { sessionId: Schema.String };
  * as the code (`NotFound`, `Corrupt`, `Io`, `InvalidParent`, `Busy`) and the
  * session as the subject.
  */
-export const SessionsChannels = {
+export const SessionChannels = {
   list: defineChannel({
     kind: "call",
     id: "sessions.list",
@@ -283,8 +283,8 @@ export const SessionsChannels = {
   log: defineChannel({
     kind: "stream",
     id: "sessions.log",
-    title: "Follow a session's log",
-    description: "A session's log past a seq (after), then each event appended to it, in order and without gaps, after a subscribed acknowledgement",
+    title: "Session log",
+    description: "A subscribed acknowledgement carrying a session's log past a seq (after), then each event appended to it, in order and without gaps",
     payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
     success: SessionLogUpdate,
   }),
@@ -386,22 +386,22 @@ const follow = (
     ),
   );
 
-/** `SessionsChannels` served from `sessions`: what a provider of `Sessions` adds to `Channels`, each with `PluginContext.add`. */
+/** `SessionChannels` served from `sessions`: what a provider of `Sessions` adds to `Channels`, each with `PluginContext.add`. */
 export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
-  serveChannel(SessionsChannels.list, ({ cwd }) => sessions.list(cwd === undefined ? undefined : { cwd })),
-  serveChannel(SessionsChannels.get, ({ sessionId }) => sessions.get(sessionId)),
-  serveChannel(SessionsChannels.create, ({ cwd }) => sessions.create(cwd === undefined ? undefined : { cwd })),
-  serveChannel(SessionsChannels.events, ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after })),
-  serveChannel(SessionsChannels.log, ({ sessionId, after }) => follow(sessions, events, sessionId, after ?? 0)),
-  serveChannel(SessionsChannels.checkout, ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId)),
-  serveChannel(SessionsChannels.setTitle, ({ sessionId, title }) =>
+  serveChannel(SessionChannels.list, ({ cwd }) => sessions.list(cwd === undefined ? undefined : { cwd })),
+  serveChannel(SessionChannels.get, ({ sessionId }) => sessions.get(sessionId)),
+  serveChannel(SessionChannels.create, ({ cwd }) => sessions.create(cwd === undefined ? undefined : { cwd })),
+  serveChannel(SessionChannels.events, ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after })),
+  serveChannel(SessionChannels.log, ({ sessionId, after }) => follow(sessions, events, sessionId, after ?? 0)),
+  serveChannel(SessionChannels.checkout, ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId)),
+  serveChannel(SessionChannels.setTitle, ({ sessionId, title }) =>
     Effect.andThen(sessions.append(sessionId, { type: "title", title }), sessions.get(sessionId)),
   ),
-  serveChannel(SessionsChannels.mark, ({ sessionId, pinned, archived }) =>
+  serveChannel(SessionChannels.mark, ({ sessionId, pinned, archived }) =>
     sessions.mark(sessionId, { ...(pinned === undefined ? {} : { pinned }), ...(archived === undefined ? {} : { archived }) }),
   ),
-  serveChannel(SessionsChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
-  serveChannel(SessionsChannels.changes, () =>
+  serveChannel(SessionChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
+  serveChannel(SessionChannels.changes, () =>
     eventFeed(Effect.succeed<SessionsChange>({ type: "subscribed" }), [
       Stream.map(events.stream(SessionChanged, FEED), ({ info }): SessionsChange => ({ type: "session-changed", info })),
       Stream.map(events.stream(SessionRemoved, FEED), ({ sessionId }): SessionsChange => ({ type: "session-removed", sessionId })),

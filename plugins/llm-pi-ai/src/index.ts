@@ -136,7 +136,7 @@ export function makeLlmPlugin(options: Options = {}) {
       const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
       /**
        * Saves a change to this plugin's own `providers` list, in the config file its config comes from. The change
-       * restarts this plugin, so the host applies it once the work asking for it has ended (`ConfigureReport`): a
+       * restarts this plugin, so the host applies it once the work asking for it has ended (`ChangeReport`): a
        * client's call returns first.
        */
       const saveProviders = (provider: string, change: { readonly add?: readonly CustomProvider[]; readonly remove?: readonly string[] }) =>

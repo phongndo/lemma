@@ -2,7 +2,7 @@
 
 Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
 `SessionEvent`s stored as one JSONL file. Requires `Paths`. Serves the
-`sessions.*` channels (`SessionsChannels`, through `serveSessions`): the calls
+`sessions.*` channels (`SessionChannels`, through `serveSessions`): the calls
 clients make on sessions; `sessions.log`, one session's log as it grows; and
 `sessions.changes`, every session created, changed, or removed.
 

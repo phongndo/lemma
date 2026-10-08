@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { Effect, Exit, Layer } from "effect";
-import { SessionError, SessionRemoveHook, Sessions, SessionsChannels } from "@lemma/contracts";
+import { SessionError, SessionRemoveHook, Sessions, SessionChannels } from "@lemma/contracts";
 import type { ChannelInfo, SessionEvent, SessionInfo } from "@lemma/contracts";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { pathsPlugin } from "@lemma/contracts/testing";
@@ -28,7 +28,7 @@ describe("the sessions channels, through the transport", () => {
       Effect.gen(function* () {
         const listed = (yield* client["Channel.List"]()).filter((channel: ChannelInfo) => channel.id.startsWith("sessions."));
         expect(listed.map(({ id, kind, source }) => [id, kind, source])).toEqual(
-          Object.values(SessionsChannels).map((channel) => [channel.id, channel.kind, "sessions"]),
+          Object.values(SessionChannels).map((channel) => [channel.id, channel.kind, "sessions"]),
         );
         expect(listed.every((channel) => channel.title !== undefined && channel.description !== undefined)).toBe(true);
       }),

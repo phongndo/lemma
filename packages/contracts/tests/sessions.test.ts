@@ -4,7 +4,7 @@ import type { Context } from "effect";
 import { Events, makeCore } from "@lemma/core";
 import { elementsOf, resultOf } from "../src/channels.ts";
 import type { Channel, ChannelCall, ChannelStream } from "../src/channels.ts";
-import { NewThreadRoute, serveSessions, SessionAppended, SessionError, SessionRemoved, SessionsChannels, ThreadRoute } from "../src/sessions.ts";
+import { NewThreadRoute, serveSessions, SessionAppended, SessionError, SessionRemoved, SessionChannels, ThreadRoute } from "../src/sessions.ts";
 import type { SessionEvent, SessionInfo, SessionLogUpdate, Sessions } from "../src/sessions.ts";
 
 describe("thread routes", () => {
@@ -68,7 +68,7 @@ describe("serveSessions", () => {
   test("serves each declaration as declared", () =>
     withServed((channels) =>
       Effect.sync(() => {
-        expect([...channels.values()].map(({ handle: _, ...declared }) => declared)).toEqual(Object.values(SessionsChannels));
+        expect([...channels.values()].map(({ handle: _, ...declared }) => declared)).toEqual(Object.values(SessionChannels));
       }),
     ));
 

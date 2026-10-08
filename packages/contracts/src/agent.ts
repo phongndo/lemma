@@ -248,12 +248,12 @@ export const AgentChannels = {
    * `Retracted` when `agent.withdraw` took the prompt out of the queue, each
    * with the session as its subject. `Withdrawn` (its subject `agent.prompt`)
    * says instead that the agent stopped or was replaced while the call
-   * waited, and the call ends at once: a prompt it took stays taken, its turn
-   * resuming in the replacement, so call again with the same `requestId` once
-   * the channel answers again. A client that clears its input once the prompt
-   * is taken reads that from `agent.activity`, opened first: `turn-started`
-   * for the session, or the `requestId` in a `queue-changed`; or its message
-   * on the session's `sessions.log`.
+   * waited, and the call ends at once; a prompt it took stays taken, its
+   * turn resuming in the replacement once the channel answers again. A client
+   * that clears its input once the prompt is taken reads that from
+   * `agent.activity`, opened first: `turn-started` for the session, or the
+   * `requestId` in a `queue-changed`; or its message on the session's
+   * `sessions.log`.
    */
   prompt: defineChannel({
     kind: "call",
