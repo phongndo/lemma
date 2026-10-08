@@ -12,12 +12,12 @@ import {
   InteractionOrigin,
   Llm,
   LlmError,
-  llmChannels,
   LlmRequestHook,
   ModelsChanged,
   Notice,
   Paths,
   parseModelRef,
+  serveLlm,
 } from "@lemma/contracts";
 import type { AuthType, LlmRequest, NoticePayload, ProviderInfo, StreamEvent } from "@lemma/contracts";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
@@ -428,7 +428,7 @@ export function makeLlmPlugin(options: Options = {}) {
             saveProviders(providerId, { add: [svg === undefined ? entry : { ...entry, logo: svg }] }),
           ),
       });
-      for (const channel of yield* llmChannels(llm)) yield* plugin.add(Channels, channel);
+      for (const channel of yield* serveLlm(llm, events)) yield* plugin.add(Channels, channel);
       return { llm };
     },
   });

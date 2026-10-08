@@ -2,25 +2,7 @@ import { describe, expect, it } from "vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
 import { connect } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import {
-  Agent,
-  Channels,
-  Commands,
-  defineChannel,
-  HostError,
-  llmAddCustom,
-  llmCancelLogin,
-  llmChanges,
-  llmLogin,
-  llmLogout,
-  llmModels,
-  llmProviders,
-  llmRemoveCustom,
-  llmSetLogo,
-  serveChannel,
-  Sessions,
-  Workspace,
-} from "@lemma/contracts";
+import { Agent, Channels, Commands, defineChannel, HostError, LlmChannels, serveChannel, Sessions, Workspace } from "@lemma/contracts";
 import type { LlmChange } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { definePlugin, makeCore } from "@lemma/core";
@@ -128,11 +110,11 @@ describe("llm's channels, through the transport", () => {
           ["llm.changes", "stream", "llm"],
         ]);
         expect(listed.every((channel) => channel.title !== undefined && channel.description !== undefined)).toBe(true);
-        expect(await host.channel.call(llmProviders, undefined)).toEqual([
+        expect(await host.channel.call(LlmChannels.providers, undefined)).toEqual([
           { id: "gateway", name: "Gateway", auth: [{ type: "api_key", name: "Gateway API key", interactive: true }], configured: false, custom: true },
         ]);
-        expect((await host.channel.call(llmModels, {})).map((model) => model.ref)).toEqual(["gateway/m"]);
-        expect(await host.channel.call(llmModels, { available: true })).toEqual([]);
+        expect((await host.channel.call(LlmChannels.models, {})).map((model) => model.ref)).toEqual(["gateway/m"]);
+        expect(await host.channel.call(LlmChannels.models, { available: true })).toEqual([]);
       },
       { llm: gateway },
     );
@@ -144,25 +126,28 @@ describe("llm's channels, through the transport", () => {
       plugins,
       async (client) => {
         const host = await client();
-        await host.channel.call(llmLogin, { provider: "gateway", type: "api_key" });
+        await host.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
         expect(interaction.origins).toEqual(["login:gateway"]);
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-test" });
-        expect((await host.channel.call(llmProviders, undefined))[0]).toMatchObject({ configured: true, source: "stored credential" });
+        expect((await host.channel.call(LlmChannels.providers, undefined))[0]).toMatchObject({ configured: true, source: "stored credential" });
 
-        expect(await rejection(host.channel.call(llmLogin, { provider: "nope", type: "api_key" }))).toMatchObject({
+        expect(await rejection(host.channel.call(LlmChannels.login, { provider: "nope", type: "api_key" }))).toMatchObject({
           code: "UnknownProvider",
           subject: "nope",
           message: "Unknown provider: nope",
         });
-        expect(await rejection(host.channel.call(llmLogin, { provider: "gateway", type: "oauth" }))).toMatchObject({
+        expect(await rejection(host.channel.call(LlmChannels.login, { provider: "gateway", type: "oauth" }))).toMatchObject({
           code: "LoginFailed",
           subject: "gateway",
         });
-        expect(await rejection(host.channel.call(llmRemoveCustom, { provider: "elsewhere" }))).toMatchObject({ code: "UnknownProvider", subject: "elsewhere" });
+        expect(await rejection(host.channel.call(LlmChannels.removeCustom, { provider: "elsewhere" }))).toMatchObject({
+          code: "UnknownProvider",
+          subject: "elsewhere",
+        });
         // A payload its schema refuses names the channel.
         expect(await rejection(host.channel.call("llm.models", { available: "yes" }))).toMatchObject({ code: "InvalidPayload", subject: "llm.models" });
 
-        await host.channel.call(llmLogout, { provider: "gateway" });
+        await host.channel.call(LlmChannels.logout, { provider: "gateway" });
         expect(credentials.store.has("gateway")).toBe(false);
       },
       { llm: gateway },
@@ -176,13 +161,13 @@ describe("llm's channels, through the transport", () => {
       plugins,
       async (client) => {
         const [starter, other] = [await client(), await client()];
-        expect(await other.channel.call(llmCancelLogin, { provider: "gateway" })).toBe(false);
-        const login = rejection(starter.channel.call(llmLogin, { provider: "gateway", type: "api_key" }));
+        expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(false);
+        const login = rejection(starter.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" }));
         await until(() => interaction.asked.length === 1);
-        expect(await other.channel.call(llmCancelLogin, { provider: "gateway" })).toBe(true);
+        expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(true);
         expect(await login).toMatchObject({ code: "Cancelled", subject: "gateway" });
         expect(withdrawn).toBe(true);
-        expect(await other.channel.call(llmCancelLogin, { provider: "gateway" })).toBe(false);
+        expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(false);
       },
       { llm: gateway },
     );
@@ -204,14 +189,14 @@ describe("llm's channels, through the transport", () => {
         const [leaving, staying] = [await client(), await client()];
         leaving.channel.open("probe.open", undefined, () => {});
         await until(() => probes === 1);
-        void leaving.channel.call(llmLogin, { provider: "gateway", type: "api_key" }).catch(() => undefined);
+        void leaving.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" }).catch(() => undefined);
         await until(() => interaction.asked.length === 1);
         await leaving.close();
         // The host has dropped the leaving client's requests: its login call among them.
         await until(() => probes === 0);
         expect(withdrawn).toBe(false);
-        const joined = staying.channel.call(llmLogin, { provider: "gateway", type: "api_key" });
-        expect(await rejection(staying.channel.call(llmLogin, { provider: "gateway", type: "oauth" }))).toMatchObject({
+        const joined = staying.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
+        expect(await rejection(staying.channel.call(LlmChannels.login, { provider: "gateway", type: "oauth" }))).toMatchObject({
           code: "Busy",
           subject: "gateway",
           message: 'A api_key login to "gateway" is in progress',
@@ -233,13 +218,13 @@ describe("llm's channels, through the transport", () => {
       async (client, host) => {
         const user = await client();
         expect(
-          await user.channel.call(llmAddCustom, {
+          await user.channel.call(LlmChannels.addCustom, {
             spec: { name: "Local", api: "openai-completions", baseUrl: "http://localhost:11434/v1", models: ["qwen3"] },
           }),
         ).toBe("local");
-        await user.channel.call(llmSetLogo, { provider: "gateway", svg: "<svg>new</svg>" });
-        await user.channel.call(llmSetLogo, { provider: "gateway" });
-        await user.channel.call(llmRemoveCustom, { provider: "gateway" });
+        await user.channel.call(LlmChannels.setLogo, { provider: "gateway", svg: "<svg>new</svg>" });
+        await user.channel.call(LlmChannels.setLogo, { provider: "gateway" });
+        await user.channel.call(LlmChannels.removeCustom, { provider: "gateway" });
         // Each one saved: the host's reload would list the change.
         const [added, logo, cleared, removed, ...rest] = host.saved;
         expect(added).toEqual({ llm: { add: { providers: [expect.objectContaining({ id: "local", api: "openai-completions" })] } } });
@@ -262,17 +247,17 @@ describe("llm's channels, through the transport", () => {
       async (client) => {
         const [watching, other] = [await client(), await client()];
         const changes: LlmChange[] = [];
-        const close = watching.channel.open(llmChanges, undefined, (change) => changes.push(change));
+        const close = watching.channel.open(LlmChannels.changes, undefined, (change) => changes.push(change));
         await until(() => changes.length === 1);
         expect(changes).toEqual([{ type: "subscribed" }]);
-        const available = async () => (await watching.channel.call(llmModels, { available: true })).map((model) => model.ref);
+        const available = async () => (await watching.channel.call(LlmChannels.models, { available: true })).map((model) => model.ref);
         expect(await available()).toEqual([]);
         // Neither changes the models gateway lists, only whether they are available.
-        await other.channel.call(llmLogin, { provider: "gateway", type: "api_key" });
+        await other.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
         await until(() => changes.length === 2);
         expect(changes[1]).toEqual({ type: "models-changed" });
         expect(await available()).toEqual(["gateway/m"]);
-        await other.channel.call(llmLogout, { provider: "gateway" });
+        await other.channel.call(LlmChannels.logout, { provider: "gateway" });
         await until(() => changes.length === 3);
         expect(changes[2]).toEqual({ type: "models-changed" });
         expect(await available()).toEqual([]);

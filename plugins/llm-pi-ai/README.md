@@ -1,6 +1,6 @@
 # @lemma/plugin-llm-pi-ai
 
-Provides `Llm` (plugin id `llm`) by wrapping [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi), and serves its `llm.*` channels to clients (`llmChannels` in [the contract](../../packages/contracts/src/llm.ts)). Requires `Credentials`, `Interaction`, `HostControl`, and `Paths`.
+Provides `Llm` (plugin id `llm`) by wrapping [`@earendil-works/pi-ai`](https://github.com/earendil-works/pi), and serves its `llm.*` channels to clients (`LlmChannels`, through `serveLlm` from [the contract](../../packages/contracts/src/llm.ts), which a replacement uses as well). Requires `Credentials`, `Interaction`, `HostControl`, and `Paths`.
 
 Every pi-ai built-in provider but the legacy OpenAI Codex is registered, with the logins pi-ai offers: OpenAI (API key, or signing in with a ChatGPT plan), Anthropic (API keys only), Google, Vertex, Bedrock, Mistral, Groq, xAI, OpenRouter, GitHub Copilot, OpenCode Zen and Go, and the rest. Auth resolves the way pi does: a credential stored by `/login` wins, then the provider's environment variables or ambient config (AWS profiles, gcloud ADC).
 

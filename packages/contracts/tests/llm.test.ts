@@ -5,7 +5,7 @@ import type { Core } from "@lemma/core";
 import { channelProblem, Channels, elementsOf, resultOf } from "../src/channels.ts";
 import type { Channel, ChannelCall, ChannelStream } from "../src/channels.ts";
 import { InteractionOrigin } from "../src/interaction.ts";
-import { Llm, llmChannels, LlmError, ModelsChanged } from "../src/llm.ts";
+import { Llm, LlmError, ModelsChanged, serveLlm } from "../src/llm.ts";
 import { callServed } from "../src/testing.ts";
 import type { AuthType } from "../src/llm.ts";
 
@@ -26,7 +26,7 @@ const provider = (login: (provider: string, type: AuthType) => Effect.Effect<voi
         removeCustom: () => Effect.void,
         setLogo: () => Effect.void,
       });
-      for (const channel of yield* llmChannels(llm)) yield* owner.add(Channels, channel);
+      for (const channel of yield* serveLlm(llm, yield* Events)) yield* owner.add(Channels, channel);
       return { llm };
     },
   });
@@ -58,7 +58,7 @@ const failure = (exit: Exit.Exit<unknown, unknown>) => (Exit.isFailure(exit) ? O
 
 const run = <A, E>(body: Effect.Effect<A, E, Scope.Scope>) => Effect.runPromise(Effect.scoped(body).pipe(Effect.timeout(Duration.seconds(5))));
 
-describe("llmChannels", () => {
+describe("serveLlm", () => {
   test("serves every llm call and its stream of changes, each well formed", () =>
     run(
       Effect.gen(function* () {
