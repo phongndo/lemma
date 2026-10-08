@@ -24,6 +24,19 @@ so the two show the same records and accept the same queries.
   ([remote access](../../docs/remote.md)), else the local one. With none, a
   command fails with `NoHost` rather than starting one: a second host would
   break the sessions store's single writer.
+- **Channels.** Sessions, turns, models, the workspace, and commands are
+  reached through the channels their plugins serve (`sessions.*`, `agent.*`,
+  `llm.*`, `workspace.*`, `files.search`, `commands.*`), typed by their
+  declarations in `@lemma/contracts`; the host's own calls (plugins, config,
+  the web app's rows, questions) and its event stream are the runtime's. A
+  channel whose plugin is off fails `NotFound`, naming the channel. While the
+  host is still starting, a command fails `Unavailable` naming what it called
+  (exit 3, as for a host it cannot reach); a subsystem's own `Unavailable`
+  (no plugin searches files, say) names what it concerns and exits 1. A
+  prompt, a login, or a command that its plugin's reload withdrew is made
+  again once the channel is served (for at most 30 seconds): a prompt with
+  its request id, so it is never placed twice; a login or a command from the
+  start, its questions asked anew.
 - **Questions.** While `run`, `do`, `events`, or `login` watches the host,
   it is offered the host's questions, such as a login's API key or a tool
   asking to confirm. `--answer <value>` answers them in order; otherwise
@@ -43,6 +56,25 @@ so the two show the same records and accept the same queries.
   [agent](../../plugins/agent/README.md#busy-sessions) defines. Each `run`
   sends a request id (`--request-id` to choose it), so retrying with the same
   id reports the turn that placed the prompt rather than placing it twice.
+- **Following a turn.** `run --follow` opens `agent.activity` and the
+  session's `sessions.log` before it sends the prompt, and shows the turn
+  that places it from the prompt on: the log says what the turn did, in
+  order, and the activity fills in the step in flight. Output the log has
+  not reached yet waits for it, so one step's answer never prints after the
+  next one's; what the activity lost, the log's answer has. Retried with the
+  same `--request-id` while its turn runs, it shows what the turn has said so
+  far (from the log and `agent.view`), then the rest. With `--json` it prints
+  the turn's `agent.activity` elements and its `sessions.log` events (as
+  `appended` elements) as the channels send them, and the host's notices.
+- **Events.** `lemma events` follows the host's own events (notices,
+  questions, plugin, channel, and UI changes) and the bundled subsystems'
+  streams: `agent.activity`, `sessions.changes`, `llm.changes`, and
+  `commands.changes`. `--session <id>` keeps that session's turns and changes
+  and adds its `sessions.log` from now on. A stream that is not served, or
+  that its plugin's reload withdrew, is followed again once the host lists
+  it. With `--json`, each line is `{"from", "element"}`: `from` is `host`
+  for the host's own events, else the channel, and `element` is what it
+  sent.
 - **Machine-readable output.** With `--json`, results are the contract shapes
   (`HostInfo`, `SessionInfo`, `SessionEvent`, …) on stdout, and failures are
   `{"error": {"code", "message", "subject"?}}` on stderr. Streams

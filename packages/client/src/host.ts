@@ -1,5 +1,6 @@
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, Stream } from "effect";
 import type { Layer } from "effect";
+import type { RpcClientError } from "effect/rpc";
 import type { Socket } from "effect/socket";
 import { HostError, SUBSCRIBED_HEADER, wireCodec } from "@lemma/contracts";
 import type {
@@ -272,6 +273,42 @@ const channelOf = (target: string | ChannelDeclaration): ChannelAccess => {
         ),
       ),
   };
+};
+
+/**
+ * One call to a declared channel over an Effect client (`makeHostRpc`,
+ * `makeHostRpcHttp`), typed as `Host.channel.call` is: the payload encoded
+ * and the result decoded with its schemas' JSON codecs. Fails as that
+ * rejects: a `HostError`, or an `RpcClientError` when the connection failed.
+ */
+export const callChannel = <Payload, Success>(
+  rpc: Pick<HostRpcClient, "Channel.Call">,
+  channel: ChannelDeclaration<"call", Payload, Success>,
+  payload: Payload,
+): Effect.Effect<Success, HostError | RpcClientError.RpcClientError> => {
+  const access = channelOf(channel);
+  return Effect.flatMap(Effect.flatMap(access.request(payload), rpc["Channel.Call"]), access.read) as Effect.Effect<
+    Success,
+    HostError | RpcClientError.RpcClientError
+  >;
+};
+
+/**
+ * A declared channel's stream over an Effect client, typed as
+ * `Host.channel.open` is. It ends as that does: by itself, with a `HostError`
+ * (`Withdrawn` says to open it again), or with an `RpcClientError` when the
+ * connection dropped. Nothing resumes it.
+ */
+export const openChannel = <Payload, Success>(
+  rpc: Pick<HostRpcClient, "Channel.Open">,
+  channel: ChannelDeclaration<"stream", Payload, Success>,
+  payload: Payload,
+): Stream.Stream<Success, HostError | RpcClientError.RpcClientError> => {
+  const access = channelOf(channel);
+  return Stream.unwrap(Effect.map(access.request(payload), rpc["Channel.Open"])).pipe(Stream.mapEffect(access.read)) as Stream.Stream<
+    Success,
+    HostError | RpcClientError.RpcClientError
+  >;
 };
 
 export const describeError = (error: unknown): string => {

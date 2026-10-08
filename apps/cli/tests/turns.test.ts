@@ -94,6 +94,50 @@ describe("turns against a running host", () => {
     expect((await invoke(["run", session, "x", "--steer", "--when-busy", "reject"], home)).code).toBe(ExitCode.usage);
   }, 30_000);
 
+  test("events follows the host's own events and its subsystems' streams; --session keeps one session's, with its log", async () => {
+    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const other = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const lines: { from: string; element: any }[] = [];
+    const interrupt = new AbortController();
+    const following = run(["events", "--session", session, "--json"], {
+      env: { LEMMA_HOME: home },
+      cwd: "/",
+      out: (text) => void lines.push(JSON.parse(text)),
+      err: () => {},
+      interrupt: interrupt.signal,
+    });
+    const of = (from: string) => lines.filter((line) => line.from === from).map((line) => line.element);
+    // Each stream says first that it is live: commands.changes with the list of commands.
+    const live = ["agent.activity", "sessions.changes", "llm.changes", "sessions.log"].map(
+      (from) => () => of(from).some((element) => element.type === "subscribed"),
+    );
+    expect(await settled(async () => [...live, () => of("commands.changes").length > 0].every((done) => done()) || undefined)).toBe(true);
+
+    expect((await invoke(["session", "title", other, "elsewhere"], home)).code).toBe(ExitCode.ok);
+    expect((await invoke(["run", session, "check the shell", "--model", "mock/scripted"], home)).code).toBe(ExitCode.ok);
+    expect(
+      await settled(async () => of("sessions.log").some((element) => element.type === "appended" && element.event.data.type === "turn-end") || undefined),
+    ).toBe(true);
+    interrupt.abort();
+    expect(await following).toBe(ExitCode.interrupted);
+
+    const activity = of("agent.activity").filter((element) => element.type !== "subscribed");
+    expect(activity.map((element) => element.type)).toEqual(expect.arrayContaining(["turn-started", "delta", "tool-output", "turn-ended"]));
+    expect(activity.every((element) => element.sessionId === session)).toBe(true);
+    const changed = of("sessions.changes").filter((element) => element.type !== "subscribed");
+    expect(changed.length).toBeGreaterThan(0);
+    expect(changed.every((element) => element.info.id === session)).toBe(true);
+    // Its log from when it began following, in order without gaps.
+    const seqs = of("sessions.log").flatMap((element) =>
+      element.type === "appended" ? [element.event.seq] : element.events.map((event: { seq: number }) => event.seq),
+    );
+    expect(seqs[0]).toBe(1);
+    expect(seqs).toEqual(seqs.map((_, index) => index + 1));
+    // The host's own events: what the subsystems report comes on their streams.
+    const runtime = ["notice", "interaction", "interaction-closed", "plugins-changed", "channels-changed", "ui-changed"];
+    expect(of("host").every((element) => runtime.includes(element.type))).toBe(true);
+  }, 30_000);
+
   test("a retried run reports the turn that placed its prompt, even after a checkout left it off the branch", async () => {
     const session = (await invoke(["session", "new", "--cwd", home], home)).out;
     const first = JSON.parse((await invoke(["run", session, "first", "--request-id", "b1", "--json"], home)).out);

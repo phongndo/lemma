@@ -1,8 +1,9 @@
-import { Deferred, Effect, Fiber, Queue, Stream } from "effect";
+import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, test } from "vitest";
 import type { HostEvent, InteractionRequest, NoticePayload } from "@lemma/contracts";
-import type { Connection, Io, Options } from "../src/command.ts";
+import type { Io, Options } from "../src/command.ts";
 import { loginCommand } from "../src/live.ts";
+import { fakeHost, fed } from "./fake.ts";
 
 const copilot = { id: "github-copilot", name: "GitHub Copilot", configured: false, auth: [{ type: "oauth", name: "GitHub Copilot", interactive: true }] };
 const notice = (fields: Partial<NoticePayload>): HostEvent => ({
@@ -16,34 +17,36 @@ const question = (request: Record<string, unknown>, id = "q1"): HostEvent =>
  * A host whose login publishes `events` and runs until the test calls `finish`, recording the calls
  * it is sent. Cancelling withdraws the login's open questions, as the transport does.
  */
-const fakeHost = (events: readonly HostEvent[]) => {
+const fakeLogin = (events: readonly HostEvent[]) => {
   const calls: string[] = [];
   const answers: unknown[] = [];
   const done = Effect.runSync(Deferred.make<void>());
   const answered = Effect.runSync(Deferred.make<void>());
-  const stream = Effect.runSync(Queue.unbounded<HostEvent>());
-  for (const event of [{ type: "subscribed" } as HostEvent, ...events]) Queue.offerUnsafe(stream, event);
-  const rpc = {
-    "Llm.Providers": () => Effect.succeed([copilot]),
-    "Host.Events": () => Stream.fromQueue(stream),
-    "Llm.Login": () =>
-      Effect.andThen(
-        Effect.sync(() => calls.push("login")),
-        Deferred.await(done),
-      ),
-    // The transport withdraws the question before it replies, so the client hears of that first.
-    "Llm.CancelLogin": () =>
-      Effect.sync(() => {
-        calls.push("cancel");
-        for (const event of events) if (event.type === "interaction") Queue.offerUnsafe(stream, { type: "interaction-closed", id: event.request.id });
-      }).pipe(Effect.andThen(Effect.repeat(Effect.yieldNow, { times: 20 })), Effect.as(true)),
-    "Interaction.Answer": ({ answer }: { answer: unknown }) =>
-      Effect.andThen(
-        Effect.sync(() => void answers.push(answer)),
-        Deferred.succeed(answered, undefined),
-      ),
-  };
-  const connection = { target: { url: "http://host.test", token: "t" }, rpc, live: Effect.succeed(rpc) } as unknown as Connection;
+  const stream = fed<HostEvent>(...events);
+  const connection = fakeHost({
+    calls: {
+      "llm.providers": () => Effect.succeed([copilot]),
+      "llm.login": () =>
+        Effect.andThen(
+          Effect.sync(() => calls.push("login")),
+          Deferred.await(done),
+        ),
+      // The transport withdraws the question before it replies, so the client hears of that first.
+      "llm.cancel-login": () =>
+        Effect.sync(() => {
+          calls.push("cancel");
+          for (const event of events) if (event.type === "interaction") stream.push({ type: "interaction-closed", id: event.request.id });
+        }).pipe(Effect.andThen(Effect.repeat(Effect.yieldNow, { times: 20 })), Effect.as(true)),
+    },
+    events: stream.stream,
+    rpcs: {
+      "Interaction.Answer": ({ answer }: { answer: unknown }) =>
+        Effect.andThen(
+          Effect.sync(() => void answers.push(answer)),
+          Deferred.succeed(answered, undefined),
+        ),
+    },
+  });
   return { connection, calls, answers, answered: Deferred.await(answered), finish: () => Effect.runSync(Deferred.succeed(done, undefined)) };
 };
 
@@ -71,7 +74,7 @@ describe("lemma login", () => {
       ["ignore", false],
       ["ask", true],
     ] as const) {
-      const host = fakeHost([device]);
+      const host = fakeLogin([device]);
       const tty = terminal(({ err, asked }) => {
         if (shown(err, "Only enter this code") && (!offered || asked.length > 0)) host.finish();
       });
@@ -83,7 +86,7 @@ describe("lemma login", () => {
 
   test("leaves a question after a documentation link as it was asked", async () => {
     const docs = notice({ message: "Amazon Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test/profiles", label: "AWS profiles" }] });
-    const host = fakeHost([docs, question({ type: "ask", title: "Enter AWS profile name" })]);
+    const host = fakeLogin([docs, question({ type: "ask", title: "Enter AWS profile name" })]);
     const tty = terminal(
       () => {},
       async () => "",
@@ -100,7 +103,7 @@ describe("lemma login", () => {
 
   test("words the host's paste-the-address question, after the link it follows though the question arrived first", async () => {
     const link = notice({ kind: "sign-in", message: "Complete sign-in", links: [{ url: "https://auth.test/authorize" }] });
-    const host = fakeHost([question({ type: "ask", title: "Paste the final redirect URL:", kind: "sign-in-code" }), link]);
+    const host = fakeLogin([question({ type: "ask", title: "Paste the final redirect URL:", kind: "sign-in-code" }), link]);
     const tty = terminal(({ asked }) => asked.length > 0 && host.finish());
     await Effect.runPromise(Effect.scoped(loginCommand("github-copilot")(host.connection, tty.io, options({ questions: "ask" }))));
     expect(tty.opened).toEqual(["https://auth.test/authorize"]);
@@ -109,7 +112,7 @@ describe("lemma login", () => {
   });
 
   test("interrupting cancels the login on the host, without saying its questions were answered elsewhere", async () => {
-    const host = fakeHost([question({ type: "ask", title: "GitHub Enterprise URL" })]);
+    const host = fakeLogin([question({ type: "ask", title: "GitHub Enterprise URL" })]);
     const asking = Effect.runSync(Deferred.make<void>());
     const tty = terminal(({ asked }) => asked.length > 0 && Effect.runSync(Deferred.succeed(asking, undefined)));
     const login = Effect.runFork(Effect.scoped(loginCommand("github-copilot")(host.connection, tty.io, options({ questions: "ask" }))));

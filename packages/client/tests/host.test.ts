@@ -10,8 +10,9 @@ import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Core } from "@lemma/core";
 import transport from "@lemma/plugin-transport";
 import { settled } from "../../../scripts/e2e.ts";
-import { connect } from "../src/host.ts";
+import { callChannel, connect, openChannel } from "../src/host.ts";
 import type { Host } from "../src/host.ts";
+import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "../src/rpc.ts";
 
 /** What else the transport requires, as far as these tests reach it: `Host.Info` for the connect probe, nothing more. */
 const stubs = definePlugin({
@@ -62,7 +63,7 @@ const doubler = definePlugin({
   ),
 });
 
-const withHost = (body: (host: Host, core: Core<any>) => Promise<void>) =>
+const withHost = (body: (host: Host, core: Core<any>, found: { readonly url: string; readonly token: string }) => Promise<void>) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -77,7 +78,7 @@ const withHost = (body: (host: Host, core: Core<any>) => Promise<void>) =>
           Effect.promise(() => connect({ url: found.url, token: found.token })),
           (host) => Effect.promise(() => host.close()),
         );
-        yield* Effect.promise(() => body(host, core));
+        yield* Effect.promise(() => body(host, core, found));
       }),
     ),
   );
@@ -126,6 +127,25 @@ describe("the channel facade", () => {
       expect(typeof (await first.until(1))).toBe("number");
       close();
     }));
+
+  test("calls and opens a declared channel typed over an Effect client, on HTTP and the socket alike", () =>
+    withHost((_, __, found) =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            for (const rpc of [yield* makeHostRpcHttp(found.url, found.token), yield* makeHostRpc(rpcUrl(found.url, found.token))]) {
+              const doubled: number = yield* callChannel(rpc, double, 21);
+              expect(doubled).toBe(42);
+              expect(yield* callChannel(rpc, later, { from: new Date(0) })).toEqual(new Date(86_400_000));
+              const first = yield* openChannel(rpc, instanceOf, undefined).pipe(Stream.take(1), Stream.runCollect);
+              expect(typeof first[0]).toBe("number");
+              const older = defineChannel({ kind: "call", id: "doubler.double", payload: Schema.Number, success: Schema.String });
+              expect(yield* Effect.flip(callChannel(rpc, older, 21))).toMatchObject({ code: "Mismatch", subject: "doubler.double" });
+            }
+          }),
+        ),
+      ),
+    ));
 
   test("a result the client's declaration does not read rejects Mismatch; a payload it cannot encode, InvalidPayload", () =>
     withHost(async (host) => {

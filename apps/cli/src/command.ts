@@ -86,7 +86,7 @@ export interface Connection {
   readonly target: Target;
   /** One-shot HTTP calls: never subscribes to events, so never answers questions. */
   readonly rpc: HostRpcClient;
-  /** A WebSocket client for `Host.Events`, opened on first use and closed with the command. */
+  /** A WebSocket client for streams (the host's events, channels' streams) and the calls made while following them, opened on first use and closed with the command. */
   readonly live: Effect.Effect<HostRpcClient, never, Scope.Scope>;
 }
 

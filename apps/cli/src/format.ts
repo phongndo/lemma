@@ -42,7 +42,7 @@ import type {
   WorkspaceStatus,
 } from "@lemma/contracts";
 import type { Target } from "./command.ts";
-import type { TurnResult } from "./live.ts";
+import type { TurnResult } from "./run.ts";
 
 /** Human-readable output. `--json` bypasses all of this and prints the contract shapes. */
 
@@ -70,14 +70,15 @@ const countStates = (plugins: readonly PluginStatus[]): string => {
   return [...counts].map(([state, count]) => `${count} ${state}`).join(", ");
 };
 
-export const formatStatus = (target: Target, info: HostInfo, plugins: readonly PluginStatus[], running: readonly string[]): string =>
+/** `running` is undefined when nothing serves `agent.running`. */
+export const formatStatus = (target: Target, info: HostInfo, plugins: readonly PluginStatus[], running: readonly string[] | undefined): string =>
   pad([
     ["host", `${target.url} (${target.pid === undefined ? `from ${target.from}` : `pid ${target.pid}`}, transport ${info.version})`],
     ["home", info.home],
     ["project", info.cwd],
     ["composition", `${info.composition.id.slice(0, 12)} (${info.composition.plugins.length} plugins)`],
     ["plugins", countStates(plugins) || "none"],
-    ["running", running.length ? running.join(", ") : "none"],
+    ["running", running === undefined ? "unknown: no agent runs" : running.length ? running.join(", ") : "none"],
   ]);
 
 /** `needs agent, which needs tools, which is off`: from a halted plugin to the one turned off or left out. */

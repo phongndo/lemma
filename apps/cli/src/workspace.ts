@@ -1,12 +1,15 @@
 import { resolve } from "node:path";
 import { Effect } from "effect";
+import { FileChannels, WorkspaceChannels } from "@lemma/contracts";
+import { call } from "./channels.ts";
 import { usage } from "./command.ts";
 import type { CliError, Command, Io, Options } from "./command.ts";
 import { formatBranches, formatFiles, formatListing, formatWorkspace } from "./format.ts";
 
 /**
  * `lemma workspace …`: the project directory controls the web app's
- * workspace bar and add-project dialog offer, over `Workspace`.
+ * workspace bar and add-project dialog offer, through `WorkspaceChannels`
+ * and `FileChannels`.
  */
 
 /** A path for the host: `~` is left for the host to expand; anything else resolves against where the CLI runs. */
@@ -20,13 +23,16 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
       return (
         extra(1) ??
         (({ rpc }) =>
-          Effect.map(rpc["Workspace.Status"]({ path: hostPath(io, args[0] ?? options.path) }), (status) => ({ json: status, text: formatWorkspace(status) })))
+          Effect.map(call(rpc, WorkspaceChannels.status, { path: hostPath(io, args[0] ?? options.path) }), (status) => ({
+            json: status,
+            text: formatWorkspace(status),
+          })))
       );
     case "branches":
       return (
         extra(1) ??
         (({ rpc }) =>
-          Effect.map(rpc["Workspace.Branches"]({ path: hostPath(io, args[0] ?? options.path) }), (branches) => ({
+          Effect.map(call(rpc, WorkspaceChannels.branches, { path: hostPath(io, args[0] ?? options.path) }), (branches) => ({
             json: branches,
             text: formatBranches(branches),
           })))
@@ -37,10 +43,13 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
       return (
         extra(1) ??
         (({ rpc }) =>
-          Effect.map(rpc["Workspace.Checkout"]({ path: hostPath(io, options.path), branch, ...(options.create ? { create: true } : {}) }), (status) => ({
-            json: status,
-            text: formatWorkspace(status),
-          })))
+          Effect.map(
+            call(rpc, WorkspaceChannels.checkout, { path: hostPath(io, options.path), branch, ...(options.create ? { create: true } : {}) }),
+            (status) => ({
+              json: status,
+              text: formatWorkspace(status),
+            }),
+          ))
       );
     }
     case "worktree": {
@@ -50,7 +59,11 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
         extra(1) ??
         (({ rpc }) =>
           Effect.map(
-            rpc["Workspace.CreateWorktree"]({ path: hostPath(io, options.path), branch, ...(options.base === undefined ? {} : { base: options.base }) }),
+            call(rpc, WorkspaceChannels.createWorktree, {
+              path: hostPath(io, options.path),
+              branch,
+              ...(options.base === undefined ? {} : { base: options.base }),
+            }),
             (status) => ({ json: status, text: formatWorkspace(status) }),
           ))
       );
@@ -60,7 +73,8 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
       if (path === undefined) return usage("workspace mkdir needs a path");
       return (
         extra(1) ??
-        (({ rpc }) => Effect.map(rpc["Workspace.CreateDirectory"]({ path: hostPath(io, path) }), (status) => ({ json: status, text: formatWorkspace(status) })))
+        (({ rpc }) =>
+          Effect.map(call(rpc, WorkspaceChannels.createDirectory, { path: hostPath(io, path) }), (status) => ({ json: status, text: formatWorkspace(status) })))
       );
     }
     case "browse": {
@@ -72,7 +86,8 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
             ? args[0]
             : `${resolve(io.cwd, args[0])}${args[0].endsWith("/") ? "/" : ""}`;
       return (
-        extra(1) ?? (({ rpc }) => Effect.map(rpc["Workspace.Browse"]({ partialPath: partial }), (listing) => ({ json: listing, text: formatListing(listing) })))
+        extra(1) ??
+        (({ rpc }) => Effect.map(call(rpc, WorkspaceChannels.browse, { partialPath: partial }), (listing) => ({ json: listing, text: formatListing(listing) })))
       );
     }
     case "files": {
@@ -80,7 +95,7 @@ export const workspaceCommand = (sub: string | undefined, args: readonly string[
       const query = args.join(" ");
       return ({ rpc }) =>
         Effect.map(
-          rpc["Files.Search"]({ cwd: hostPath(io, options.path), query, ...(options.limit === undefined ? {} : { limit: options.limit }) }),
+          call(rpc, FileChannels.search, { cwd: hostPath(io, options.path), query, ...(options.limit === undefined ? {} : { limit: options.limit }) }),
           (result) => ({ json: result, text: formatFiles(result) }),
         );
     }
