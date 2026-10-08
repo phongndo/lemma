@@ -435,11 +435,13 @@ const program = Effect.gen(function* () {
     ),
   );
   yield* Deferred.succeed(ready, loader);
+  // Heard from here on; faults from before, the sweep below records (once each, by sequence).
+  yield* Effect.forkScoped(reportFaults(loader, faults), { startImmediately: true });
   // The handle as plugins have it, publishing what its changes do. Read once: a reload drains in-flight core.run work, so it must not run inside core.run.
   const control = yield* loader.core.run(HostControl);
   const { plugins } = yield* loader.core.inspect;
   for (const plugin of plugins) {
-    // No fault stream existed yet to hear these: the Plugins page's history gets them here.
+    // Raised before the reporter subscribed: the Plugins page's history gets them here.
     if (plugin.state === "failed" && plugin.fault !== undefined) faults.record(plugin.fault as ReportedFault);
   }
   yield* printDiagnostics(
@@ -472,7 +474,6 @@ const program = Effect.gen(function* () {
   );
   yield* log(`home ${paths.home}, project ${paths.cwd}`);
 
-  yield* Effect.forkScoped(reportFaults(loader, faults));
   // In safe mode no config file is read, even to remember it.
   if (!safe) for (const [path, text] of yield* readConfigFiles) seenConfig.set(path, text);
   // In safe mode the files are not read, so their changes are nothing to apply.

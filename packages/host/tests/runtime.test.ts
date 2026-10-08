@@ -156,18 +156,11 @@ describe("host runtime", () => {
         Effect.gen(function* () {
           const heard = recorder();
           const { loader, history } = yield* start([heard.plugin, flaky], { plugins: { recorder: {} } });
-          yield* Effect.forkScoped(reportFaults(loader, history));
-          // Applied and restarted directly, not through HostControl, so what is published comes from the faults.
+          // Forked as main.ts forks it, it has subscribed by the time the fork returns: flaky's first fault is heard.
+          yield* Effect.forkScoped(reportFaults(loader, history), { startImmediately: true });
+          // Applied directly, not through HostControl, so what is published comes from the fault.
           yield* loader.apply({ plugins: { recorder: {}, flaky: {} } });
-          // The fault reporter subscribes once its fiber runs; flaky fails again on each restart until it has heard one.
-          yield* Effect.repeat(
-            Effect.gen(function* () {
-              const state = (yield* loader.core.inspect).plugins.find((plugin) => plugin.id === "flaky")?.state;
-              if (state === "failed") yield* loader.core.restart("flaky");
-              return heard.notices.length > 0;
-            }),
-            { until: (done) => done, schedule: Schedule.spaced(Duration.millis(2)) },
-          ).pipe(Effect.timeout(Duration.seconds(5)));
+          yield* until(() => heard.notices.length > 0);
           const [notice] = heard.notices;
           expect(notice).toMatchObject({ level: "error", source: "flaky" });
           expect(notice?.message).toContain("boom");

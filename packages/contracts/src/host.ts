@@ -181,13 +181,15 @@ export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, num
  * Handle on the loader, provided by the host itself (it owns the loader; no
  * plugin can provide this) so transports and UIs can inspect and change the
  * running composition without reaching into the kernel. Its methods wait
- * until the composition is up: a plugin may call one from work it starts
- * while activating. A change through it publishes `PluginsChanged`.
+ * until the composition is up, so a plugin may call one from work it forks
+ * while activating (`owner.background`); called directly in its setup, one
+ * waits on that plugin's own activation until the activate deadline. A change
+ * through it publishes `PluginsChanged`.
  *
- * A change (`restart`, `reload`, `configure`) drains the work in flight in
- * the plugins it replaces before swapping, so call it from a plugin's own code
- * (a transport's handler, a command): from inside `core.run` it would wait on
- * itself until the dispose deadline.
+ * A change (`restart`, `reload`, `configure`) drains all work in flight under
+ * `core.run` before swapping, whichever plugins it touches, so call it from a
+ * plugin's own code (a transport's handler, a command): from inside `core.run`
+ * it would wait on itself until the dispose deadline.
  */
 export class HostControl extends Context.Service<
   HostControl,

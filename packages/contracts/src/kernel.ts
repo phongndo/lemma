@@ -69,7 +69,7 @@ export const recoverable = (plugin: { readonly state?: string | undefined; reado
   plugin.state === "failed" || (plugin.state === "closed" && plugin.haltedBy !== undefined);
 
 /** `plugins` as their kernel runs them; `runtime` is what the app provides itself, by capability key. */
-export const kernelOf = (plugins: readonly PluginStatus[], runtime: readonly string[] = []): KernelView => {
+export const kernelOf = (plugins: readonly PluginStatus[], runtime: readonly string[]): KernelView => {
   const hooks = new Map<string, { plugin: string; order: number }[]>();
   const registries = new Map<string, { plugin: string; items: number; keys: readonly string[] }[]>();
   const events = new Map<string, string[]>();

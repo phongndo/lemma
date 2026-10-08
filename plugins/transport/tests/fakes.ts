@@ -245,7 +245,7 @@ export const fakeLlm = definePlugin({
   ),
 });
 
-/** Runs `InteractionHook` the way the interaction plugin does: with no handler answering, `Unavailable`. */
+/** Runs `InteractionHook` the way the host's `Interaction` does: with no handler answering, `Unavailable`. */
 export const fakeInteraction = definePlugin({
   id: "interaction",
   provides: [Interaction],

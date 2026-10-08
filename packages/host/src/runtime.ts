@@ -73,18 +73,17 @@ export function hostRuntime(options: { readonly paths: PathsService; readonly co
  * Reports each fault of `loader`'s plugins until it closes: records it in
  * `history` first, so the plugin list published next already has it, logs
  * it, then publishes an error `Notice` from the plugin and `PluginsChanged`.
- * The log is the durable record; events are losable. Never fails: a fault it
- * cannot publish is logged.
+ * The log is the durable record; events are losable. Subscribing is the first
+ * thing it does, so forked with `startImmediately` it hears every fault raised
+ * after the fork. Never fails: a fault it cannot publish is logged.
  */
 export const reportFaults = (loader: Loader, history: { readonly record: (fault: ReportedFault) => void }): Effect.Effect<void> =>
-  Effect.gen(function* () {
-    const { events, control } = yield* loader.core.run(Effect.all({ events: Events, control: HostControl }));
-    yield* Stream.runForEach(loader.core.faults, (fault) =>
-      Effect.gen(function* () {
-        history.record(fault);
-        console.error(`lemma: ${fault.message}\n${Cause.pretty(fault.cause)}`);
-        yield* events.publish(Notice, { level: "error", source: fault.pluginId, message: `${fault.message}: ${Cause.pretty(fault.cause)}` });
-        yield* events.publish(PluginsChanged, { plugins: yield* control.plugins });
-      }).pipe(Effect.catchCause(logFailure(`could not report a fault of "${fault.pluginId}"`))),
-    );
-  }).pipe(Effect.catchCause(logFailure("stopped reporting plugin faults")));
+  Stream.runForEach(loader.core.faults, (fault) =>
+    Effect.gen(function* () {
+      history.record(fault);
+      console.error(`lemma: ${fault.message}\n${Cause.pretty(fault.cause)}`);
+      const { events, control } = yield* loader.core.run(Effect.all({ events: Events, control: HostControl }));
+      yield* events.publish(Notice, { level: "error", source: fault.pluginId, message: `${fault.message}: ${Cause.pretty(fault.cause)}` });
+      yield* events.publish(PluginsChanged, { plugins: yield* control.plugins });
+    }).pipe(Effect.catchCause(logFailure(`could not report a fault of "${fault.pluginId}"`))),
+  ).pipe(Effect.catchCause(logFailure("stopped reporting plugin faults")));

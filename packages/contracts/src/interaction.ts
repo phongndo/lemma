@@ -85,8 +85,9 @@ export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, 
  *   defect, so a login flow or a tool recovers as when nobody is attached.
  * - `Dismissed` when the human closes the question.
  *
- * The core closes hooks before it disposes plugins and the application's
- * services, so a plugin finalizer that asks gets `Unavailable`.
+ * When the core shuts down it closes hooks before it disposes plugins and the
+ * application's services, so a finalizer that asks then gets `Unavailable`. A
+ * plugin replaced by a reload can still ask from its finalizer.
  */
 export class Interaction extends Context.Service<
   Interaction,

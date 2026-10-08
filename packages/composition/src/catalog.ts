@@ -268,12 +268,14 @@ export function catalog({
 /**
  * Recent faults per plugin, newest first and at most `limit` each: the core
  * keeps only an instance's latest, and a restart clears it, so the history of
- * a flaky plugin lives here, fed by `core.faults`.
+ * a flaky plugin lives here, fed by `core.faults`. A fault recorded twice (by
+ * its `sequence`) is kept once, so a startup sweep may overlap the stream.
  */
 export function faultHistory(limit = 20) {
   const byPlugin = new Map<string, FaultRecord[]>();
   return {
     record: (fault: ReportedFault, at: number = Date.now()): void => {
+      if (byPlugin.get(fault.pluginId)?.some((record) => record.sequence === fault.sequence)) return;
       const record: FaultRecord = {
         sequence: fault.sequence,
         at,

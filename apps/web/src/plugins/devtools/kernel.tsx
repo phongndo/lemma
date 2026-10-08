@@ -613,7 +613,7 @@ function RegistriesPanel(props: { deps: Deps }) {
   const [filter, setFilter] = createSignal("");
   const [selected, setSelected] = createSignal<string>();
   const web = createMemo(() => slotViews(deps.slots));
-  const host = createMemo(() => kernelOf(deps.lists.host()).registries);
+  const host = createMemo(() => kernelOf(deps.lists.host(), deps.runtime.host()).registries);
   const rows = () => {
     const all =
       kind() === "web"
@@ -883,7 +883,7 @@ export function kernelPanels(deps: Deps): readonly SlotItem<contracts.DevtoolsPa
       order: 40,
       title: "Registries",
       component: () => <RegistriesPanel deps={deps} />,
-      snapshot: () => ({ web: slotViews(deps.slots), host: kernelOf(deps.lists.host()).registries }),
+      snapshot: () => ({ web: slotViews(deps.slots), host: kernelOf(deps.lists.host(), deps.runtime.host()).registries }),
     },
     {
       id: INSPECTORS_PANEL,

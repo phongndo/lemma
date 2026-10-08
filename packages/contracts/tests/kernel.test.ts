@@ -55,7 +55,7 @@ describe("kernelOf", () => {
     plugin("llm-off", { enabled: false, state: "disabled", provides: ["lemma/Llm"] }),
     plugin("orphan", { requires: ["lemma/Nothing"] }),
   ];
-  const kernel = kernelOf(plugins);
+  const kernel = kernelOf(plugins, []);
 
   test("each hook's chain runs in order, lowest first", () => {
     expect(kernel.hooks).toEqual([

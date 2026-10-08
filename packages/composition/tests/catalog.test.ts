@@ -190,6 +190,7 @@ describe("wiring and faults", () => {
     history.record(fault(1, "one"), 10);
     history.record(fault(2, "two"), 20);
     history.record(fault(3, "three"), 30);
+    history.record(fault(3, "three"), 40);
     const entries = catalog({
       known,
       composition,
