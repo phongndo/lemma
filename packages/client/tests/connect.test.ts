@@ -120,6 +120,33 @@ describe("connect", () => {
     expect(statuses[1]?.error).toBe("Timed out waiting for the host's events");
   });
 
+  test("gives the listener it is given what the host sends as it subscribes, before the probe answers, which one added once connected misses", async () => {
+    const question = { type: "interaction", request: { type: "confirm", id: "q1", title: "Delete it?" } };
+    const webSocket = Layer.succeed(
+      Socket.WebSocketConstructor,
+      () =>
+        new ScriptedWebSocket((request, reply) => {
+          if (request._tag !== "Request") return;
+          // The probe answers late, after the subscription has sent the question still open.
+          if (request.tag === "Host.Info") reply({ _tag: "Exit", requestId: request.id, exit: { _tag: "Success", value: info } }, 50);
+          else if (request.tag === "Host.Events") reply({ _tag: "Chunk", requestId: request.id, values: [{ type: "subscribed" }, question] });
+        }) as unknown as globalThis.WebSocket,
+    );
+    const heard: unknown[] = [];
+    const host = await connect({ url: "http://host.invalid", webSocket, onEvent: (event) => void heard.push(event) });
+    const late: unknown[] = [];
+    try {
+      const stop = host.onStatus((status) => void heard.push(status.state));
+      await statusWhere(host, (status) => status.state === "connected");
+      stop();
+      host.onEvent((event) => void late.push(event));
+    } finally {
+      await host.close();
+    }
+    expect(heard).toEqual(["connecting", question, "connected"]);
+    expect(late).toEqual([]);
+  });
+
   test("subscribes saying whether it answers the host's questions", async () => {
     for (const answers of [undefined, false]) {
       const host = flaky(() => "drop");

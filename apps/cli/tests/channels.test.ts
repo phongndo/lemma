@@ -1,15 +1,15 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Effect, Fiber, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
 import { RpcClientError } from "effect/rpc";
 import { AgentChannels, emptyUsage, FileChannels, HostError, SessionChannels } from "@lemma/contracts";
-import type { AgentActivity, EventData, SessionEvent, SessionLogUpdate, SessionsChange } from "@lemma/contracts";
+import type { AgentActivity, EventData, InteractionRequest, SessionEvent, SessionLogUpdate, SessionsChange } from "@lemma/contracts";
 import { settled } from "../../../scripts/e2e.ts";
 import { call, follow, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
 import type { Command, Io, Options } from "../src/command.ts";
 import { doCommand, eventsCommand } from "../src/live.ts";
 import { toCliError } from "../src/remote.ts";
-import { fakeHost, fed } from "./fake.ts";
+import { fakeHost, fed, info } from "./fake.ts";
 import type { Fed } from "./fake.ts";
 
 const refused = (code: string, subject: string) => () => Effect.fail(new HostError({ code, subject, message: `${code}: ${subject}` }));
@@ -210,6 +210,31 @@ describe("lemma events", () => {
     expect(from("llm.changes")).toEqual(["subscribed"]);
     expect(from("commands.changes")).toEqual(["list"]);
     expect(from("sessions.log")).toEqual(["subscribed"]);
+  });
+
+  test("answers a question already open, which the host sends as it subscribes, before its connection is confirmed", async () => {
+    const approval: InteractionRequest = { type: "confirm", id: "q1", title: "Delete the branch?" };
+    const waiting = [approval];
+    const answered = Deferred.makeUnsafe<unknown>();
+    const host: ReturnType<typeof fakeHost> = fakeHost({
+      rpcs: {
+        // The connect probe answers only once the client has passed on the question: it comes before the connection is confirmed.
+        "Host.Info": () => Effect.andThen(host.heard, Effect.succeed(info)),
+        "Interaction.List": () => Effect.sync(() => [...waiting]),
+        "Interaction.Answer": (given: unknown) =>
+          Effect.sync(() => {
+            waiting.length = 0;
+            Deferred.doneUnsafe(answered, Effect.succeed(given));
+          }),
+      },
+    });
+    const lines: { from: string; element: unknown }[] = [];
+    const io: Io = { env: {}, cwd: "/", out: (text) => void lines.push(JSON.parse(text)), err: () => {} };
+    const watching = Effect.runFork(Effect.scoped(eventsCommand(host, io, { ...options, questions: "ignore", answers: ["yes"] })));
+    const given = await Effect.runPromise(Deferred.await(answered).pipe(Effect.timeoutOption(Duration.seconds(2))));
+    await Effect.runPromise(Fiber.interrupt(watching));
+    expect(given).toEqual(Option.some({ id: "q1", answer: { type: "confirm", value: true } }));
+    expect(lines).toContainEqual({ from: "host", element: { type: "interaction", request: approval } });
   });
 
   test("goes on after its connection drops: each stream says it is subscribed anew, and the log from the last event printed", async () => {

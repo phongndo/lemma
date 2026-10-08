@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Layer, Queue, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Layer, Queue, Schema, Stream } from "effect";
 import type { Fiber } from "effect";
 import { Rpc } from "effect/rpc";
 import { Socket } from "effect/socket";
@@ -34,7 +34,7 @@ export const fed = <A>(...first: readonly A[]): Fed<A> => {
 const notFound = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
 
 /** What `Host.Info` answers: `connect` asks it of every connection. */
-const info = { version: "0.0.0", cwd: "/", home: "/", composition: { id: "fake", plugins: [] }, runtime: [] };
+export const info = { version: "0.0.0", cwd: "/", home: "/", composition: { id: "fake", plugins: [] }, runtime: [] };
 
 /** A message of Effect RPC's JSON protocol, one to a frame. */
 interface Frame {
@@ -90,6 +90,8 @@ export interface FakeHost extends Connection {
   readonly refuseTooLarge: () => void;
   /** What each `Host.Events` subscription said it does: whether it answers questions. */
   readonly subscriptions: () => readonly boolean[];
+  /** Resolves once the client has passed on one of the host's events to its listeners (`ConnectOptions.onEvent`). */
+  readonly heard: Effect.Effect<void>;
 }
 
 /**
@@ -178,6 +180,7 @@ export const fakeHost = (host: {
     );
 
   let up = true;
+  const heard = Deferred.makeUnsafe<void>();
   const wires = new Set<Wire>();
   const hangUp = (wire: Wire) => {
     wires.delete(wire);
@@ -219,9 +222,23 @@ export const fakeHost = (host: {
   return {
     target: { url: "http://host.test", token: "t" } as Connection["target"],
     rpc,
-    host: ({ answers }) =>
-      openHost({ url: "http://host.test", backoff: () => host.backoff ?? 100, webSocket: Layer.succeed(Socket.WebSocketConstructor, dial), answers }, rpc),
+    host: (options) =>
+      openHost(
+        {
+          url: "http://host.test",
+          backoff: () => host.backoff ?? 100,
+          webSocket: Layer.succeed(Socket.WebSocketConstructor, dial),
+          ...options,
+          // `heard` hears it, whether or not the command listens.
+          onEvent: (event) => {
+            Deferred.doneUnsafe(heard, Effect.void);
+            options.onEvent?.(event);
+          },
+        },
+        rpc,
+      ),
     subscriptions: () => [...subscriptions],
+    heard: Deferred.await(heard),
     drop: () => {
       up = false;
       for (const wire of wires) {

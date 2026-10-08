@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { Deferred, Duration, Effect, FiberMap, Stream } from "effect";
+import { Deferred, Duration, Effect, FiberMap, Queue, Stream } from "effect";
 import type { Scope } from "effect";
 import { AgentChannels, CommandChannels, LlmChannels, SessionChannels } from "@lemma/contracts";
 import type {
@@ -19,7 +19,7 @@ import { dropped } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { call, callOn, connectedAfter, following, ofChannel, received, reconnecting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Command, Failure, Io, Options } from "./command.ts";
+import type { Command, Connection, Failure, Io, Options } from "./command.ts";
 import { formatCommands, formatModels, formatProviders, formatQueue, formatQuestions } from "./format.ts";
 
 /**
@@ -98,13 +98,14 @@ interface QuestionView {
  * from `origin` are handled, so answers never reach another session's or
  * client's question; `undefined` handles every question (`events --answer`).
  *
- * The handler takes every event the command hears. Each question is
- * answered in its own fiber, so events keep flowing while the terminal waits,
- * and its prompt closes when the question is answered elsewhere or the
- * command ends. A dropped connection loses the events meanwhile. The host
- * sends the questions still open to every client that subscribes, so one
- * asked during the drop (a tool's approval) reaches the person once the
- * connection is back; the prompt of one that closed meanwhile closes then,
+ * The handler takes every event the command hears (`hearing`). Each question
+ * is answered in its own fiber, so events keep flowing while the terminal
+ * waits, and its prompt closes when the question is answered elsewhere or the
+ * command ends. The host sends the questions still open to every client that
+ * subscribes, so those open as the command connects reach the person. A
+ * dropped connection loses the events meanwhile, so one asked during the
+ * drop (a tool's approval) reaches them once the connection is back, as it
+ * subscribes anew; the prompt of one that closed meanwhile closes then,
  * as `Interaction.List` no longer has it; and an answer given while it was
  * down goes once it is back.
  */
@@ -201,18 +202,37 @@ export const questionHandler = (host: Host, io: Io, options: Options, origin: st
   });
 
 /**
- * Hears the host's own events from now on, for as long as the scope lasts.
- * The `Host` is connected, so its subscription has joined: nothing the
- * command causes next is missed (a question it asks among them). `onEvent`
- * takes them in order, from the command's own queue (`received`), so it may
- * wait (on a lock, a prompt) without holding back the connection. A
+ * `connection.host` for a command that hears the host's own events, with
+ * them in the command's own queue (`events`, which `hostEvents` reads),
+ * unbounded as `received`'s is, so the connection never waits on the
+ * command. The queue is made before the command connects and fed from the
+ * first subscription on (`ConnectOptions.onEvent`): a subscription starts
+ * with the questions still open, which can come before the connection is
+ * confirmed and `connection.host` returns.
+ */
+export const hearing = (
+  connection: Connection,
+  answers: boolean,
+): Effect.Effect<{ readonly host: Host; readonly events: Stream.Stream<RuntimeEvent> }, Failure, Scope.Scope> =>
+  Effect.gen(function* () {
+    const events = yield* Queue.unbounded<RuntimeEvent>();
+    const host = yield* connection.host({ answers, onEvent: (event) => void Queue.offerUnsafe(events, event) });
+    return { host, events: Stream.fromQueue(events) };
+  });
+
+/**
+ * Handles the host's own events a command hears (`hearing`), for as long as
+ * the scope lasts, from its first subscription's start. What the command
+ * causes next is among them (a question it asks): its connection is
+ * confirmed, so its subscription has joined. `onEvent` takes them in order,
+ * so it may wait (on a lock, a prompt) while the queue holds the rest. A
  * handler's failure is its event's alone.
  */
-export const hostEvents = (host: Host, onEvent: (event: RuntimeEvent) => Effect.Effect<void, Failure>): Effect.Effect<void, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const events = yield* received<RuntimeEvent>((onElement) => host.onEvent(onElement));
-    yield* Effect.forkScoped(Stream.runForEach(events, (event) => onEvent(event).pipe(Effect.catchCause(() => Effect.void))));
-  });
+export const hostEvents = (
+  events: Stream.Stream<RuntimeEvent>,
+  onEvent: (event: RuntimeEvent) => Effect.Effect<void, Failure>,
+): Effect.Effect<void, never, Scope.Scope> =>
+  Effect.asVoid(Effect.forkScoped(Stream.runForEach(events, (event) => onEvent(event).pipe(Effect.catchCause(() => Effect.void)))));
 
 export const noticeLine = (event: Extract<RuntimeEvent, { type: "notice" }>) => {
   const notice = event.notice;
@@ -272,11 +292,11 @@ export const withdrawCommand =
 export const eventsCommand: Command = (connection, io, options) =>
   Effect.gen(function* () {
     // Watching never answers unless asked to.
-    const host = yield* connection.host({ answers: options.questions !== undefined && answering(io, options) });
-    return yield* reconnecting(host, io, watch(host, io, options));
+    const { host, events } = yield* hearing(connection, options.questions !== undefined && answering(io, options));
+    return yield* reconnecting(host, io, watch(host, events, io, options));
   });
 
-const watch = (host: Host, io: Io, options: Options) =>
+const watch = (host: Host, events: Stream.Stream<RuntimeEvent>, io: Io, options: Options) =>
   Effect.gen(function* () {
     const session = options.session;
     // A session's log from now: what it has already, `lemma session show` prints.
@@ -291,7 +311,7 @@ const watch = (host: Host, io: Io, options: Options) =>
     };
     const questions =
       options.questions === undefined ? undefined : yield* questionHandler(host, io, options, session === undefined ? undefined : `session:${session}`);
-    yield* hostEvents(host, (event) => {
+    yield* hostEvents(events, (event) => {
       // What the subsystems report, their own streams carry; the host's stream is followed for its own events.
       print("host", event, hostLine(event));
       return questions === undefined ? Effect.void : questions(event);
@@ -460,7 +480,7 @@ export const loginCommand =
       if (method !== "api_key" && method !== "oauth") return yield* usage(`--method must be one of ${info.auth.map((auth) => auth.type).join(", ")}`);
       if (!info.auth.some((auth) => auth.type === method))
         return yield* usage(`${provider} does not offer ${method}; it offers ${info.auth.map((auth) => auth.type).join(", ")}`);
-      const host = yield* connection.host({ answers: answering(io, options) });
+      const { host, events } = yield* hearing(connection, answering(io, options));
       const origin = `login:${provider}`;
       /** The paste-the-address fallback of a sign-in page, as the host marks it. */
       const isPaste = (request: InteractionRequest) => request.type === "ask" && request.kind === "sign-in-code";
@@ -480,7 +500,7 @@ export const loginCommand =
       const asks = policyOf(io, options) === "ask" && io.ask !== undefined;
       /** Enter opens a device code's page; the prompt closes when the login ends. */
       const opener = yield* FiberMap.make<string>();
-      yield* hostEvents(host, (event) =>
+      yield* hostEvents(events, (event) =>
         Effect.gen(function* () {
           if (event.type === "notice") {
             if (options.json || event.notice.origin !== origin) io.err(noticeLine(event));
@@ -600,10 +620,10 @@ export const doCommand =
   (id: string): Command =>
   (connection, io, options) =>
     Effect.gen(function* () {
-      const host = yield* connection.host({ answers: answering(io, options) });
+      const { host, events } = yield* hearing(connection, answering(io, options));
       const origin = `command:${randomUUID()}`;
       const questions = yield* questionHandler(host, io, options, origin);
-      yield* hostEvents(host, (event) =>
+      yield* hostEvents(events, (event) =>
         Effect.gen(function* () {
           if (event.type === "notice") io.err(noticeLine(event));
           yield* questions(event);

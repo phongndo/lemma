@@ -61,7 +61,8 @@ so the two show the same records and accept the same queries.
   anew or run it twice: run the command again.
 - **Questions.** While `run`, `do`, `events --questions`, or `login` watches
   the host, it is offered the host's questions, such as a login's API key or
-  a tool asking to confirm. `--answer <value>` answers them in order;
+  a tool asking to confirm: those open as it connects, and those asked while
+  it runs. `--answer <value>` answers them in order;
   otherwise `--questions ask` prompts at the terminal (the default when
   stdin is one), `dismiss` fails them, and `ignore` (the default otherwise,
   so an agent never answers for the person) leaves them to another client

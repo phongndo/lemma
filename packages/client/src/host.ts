@@ -124,7 +124,11 @@ export interface Host {
   readonly status: () => ConnectionStatus;
   /** Called immediately with the current status, then on every change. */
   readonly onStatus: (listener: (status: ConnectionStatus) => void) => () => void;
-  /** Live `Host.Events`, the runtime's own events. Losable but for questions: a slow client loses the oldest. */
+  /**
+   * Live `Host.Events`, the runtime's own events, from now on (see `connect`
+   * for when they come, and `ConnectOptions.onEvent` for a listener that
+   * hears them all). Losable but for questions: a slow client loses the oldest.
+   */
   readonly onEvent: (listener: (event: RuntimeEvent) => void) => () => void;
   readonly close: () => Promise<void>;
 }
@@ -146,6 +150,14 @@ export interface ConnectOptions {
    * it still hears the questions others hold (`interaction` events).
    */
   readonly answers?: boolean;
+  /**
+   * Hears the host's events for the `Host`'s life, as a listener added with
+   * `Host.onEvent` does, but attached before the first subscription: so it
+   * hears all the host sends, the questions still open among them, which a
+   * subscription starts with before the status turns `connected` (see
+   * `connect`).
+   */
+  readonly onEvent?: (event: RuntimeEvent) => void;
 }
 
 export const defaultBackoff = (attempt: number): number => Math.min(5_000, 250 * 2 ** Math.max(0, attempt - 1));
@@ -320,6 +332,15 @@ export const describeError = (error: unknown): string => {
  * backoff. Each (re)connect is confirmed with `Host.Info`, and by the host's
  * `subscribed` (not passed to listeners), before the status turns `connected`,
  * so `generation` changes only when calls can succeed and events arrive.
+ *
+ * Listeners hear each subscription's events as they arrive, from its start:
+ * the host sends `subscribed` first, then the questions still open, while
+ * the probe may still wait, so before the status turns `connected`, even on
+ * a subscription that ends before it does. Every subscription sends the
+ * questions still open again, so a listener knows questions by their id. A
+ * listener given as `options.onEvent` hears the first subscription from its
+ * start; one added with `Host.onEvent`, from then on, so one added once
+ * connected has missed what that subscription started with.
  */
 export const connect = async (options: ConnectOptions): Promise<Host> => {
   const scope = await runPromise(Scope.make());
@@ -330,7 +351,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
 
   let status: ConnectionStatus = { state: "connecting", generation: 0, attempts: 0 };
   const statusListeners = new Set<(status: ConnectionStatus) => void>();
-  const eventListeners = new Set<(event: RuntimeEvent) => void>();
+  const eventListeners = new Set<(event: RuntimeEvent) => void>(options.onEvent === undefined ? [] : [options.onEvent]);
   const setStatus = (next: ConnectionStatus) => {
     status = next;
     for (const listener of statusListeners) listener(next);

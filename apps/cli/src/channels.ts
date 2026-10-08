@@ -134,7 +134,10 @@ export const connectedAfter = (host: Host, generation: number): Effect.Effect<vo
  * `@lemma/client`'s `Host` for a command that watches the host, once it is
  * connected; it closes with the scope. `answers` says whether the command
  * answers the host's questions (`ConnectOptions.answers`): one that does not
- * holds none of them. A first attempt that fails fails the
+ * holds none of them. It returns once connected, by when the host may have
+ * sent what a subscription starts with, the questions still open: a command
+ * that hears the host's events listens with `options.onEvent` (`hearing` in
+ * live.ts). A first attempt that fails fails the
  * command at once, as a one-shot call would: `Host.Info` over HTTP (`rpc`)
  * says why in the same terms (no host there, a rejected token), which a
  * WebSocket's failure does not, and the socket's own reason is the last word

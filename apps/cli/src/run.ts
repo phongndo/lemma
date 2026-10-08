@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
-import { Deferred, Duration, Effect, Fiber, Semaphore } from "effect";
+import { Deferred, Duration, Effect, Fiber, Semaphore, Stream } from "effect";
 import { AgentChannels, branchOf, contentText, HostError, SessionChannels, trajectory } from "@lemma/contracts";
 import type {
   AgentActivity,
@@ -24,7 +24,7 @@ import type { Calls } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options, Output, Target } from "./command.ts";
 import { formatTurnResult } from "./format.ts";
-import { answering, hostEvents, noticeLine, questionHandler } from "./live.ts";
+import { answering, hearing, hostEvents, noticeLine, questionHandler } from "./live.ts";
 import { toCliError } from "./remote.ts";
 
 // ------------------------------------------------------------------ the prompt
@@ -165,9 +165,12 @@ export const runCommand =
       // The turn's questions (a tool asking for approval, say) are answered here when there is something to answer
       // them with (`answering`): --answer, a terminal, or --questions ask or dismiss; `--follow` also shows them, with
       // how to answer them. Otherwise the host holds none for this command, so they go to another client (an open web
-      // app) or, with none, fail as unanswerable, which a tool asking for approval takes as a no.
+      // app) or, with none, fail as unanswerable, which a tool asking for approval takes as a no. The host's events are
+      // heard (`hearing`) only to answer the questions or, with `--follow`, to show them and the host's notices:
+      // otherwise nothing would read them.
       const answers = answering(io, options);
-      const host = yield* connection.host({ answers });
+      const { host, events: heard } =
+        answers || options.follow ? yield* hearing(connection, answers) : { host: yield* connection.host({ answers }), events: Stream.empty };
       const sessionId = target === "new" ? (yield* callOn(host, SessionChannels.create, { cwd: resolve(io.cwd, options.cwd ?? ".") })).id : target;
       if (target === "new" && !options.json) io.err(`lemma: session ${sessionId}`);
       // Always an id: the result and `--follow` are about the turn that places this prompt, which a queue can delay.
@@ -190,7 +193,7 @@ export const runCommand =
           ),
         );
       });
-      return yield* reconnecting(host, io, send(host, io, options, payload, place, answers)).pipe(
+      return yield* reconnecting(host, io, send(host, heard, io, options, payload, place, answers)).pipe(
         Effect.mapError((error) => (sent ? afterPrompt(error, connection.target, payload.requestId) : error)),
         // The id this command chose is the way back to the prompt's turn; `--json` has it in the error.
         Effect.tapError(() =>
@@ -207,13 +210,22 @@ export const runCommand =
 /**
  * Sends the prompt (`place`) and waits for its turn: shown as it runs with
  * `--follow`, else its result once it ends, answering the turn's questions
- * if it `answers` them.
+ * if it `answers` them. `heard` is the host's events (`hearing`), when it
+ * hears them.
  */
-const send = (host: Host, io: Io, options: Options, payload: Prompt, place: Effect.Effect<void, Failure>, answers: boolean) =>
+const send = (
+  host: Host,
+  heard: Stream.Stream<RuntimeEvent>,
+  io: Io,
+  options: Options,
+  payload: Prompt,
+  place: Effect.Effect<void, Failure>,
+  answers: boolean,
+) =>
   Effect.gen(function* () {
     const { sessionId } = payload;
-    if (options.follow) return yield* followed(host, io, options, payload, place);
-    if (answers) yield* hostEvents(host, yield* questionHandler(host, io, options, `session:${sessionId}`));
+    if (options.follow) return yield* followed(host, heard, io, options, payload, place);
+    if (answers) yield* hostEvents(heard, yield* questionHandler(host, io, options, `session:${sessionId}`));
     yield* place;
     const [info, events] = yield* readSession(on(host), sessionId);
     return result(summarize(info, events, payload.requestId), options, false);
@@ -228,7 +240,7 @@ const send = (host: Host, io: Io, options: Options, payload: Prompt, place: Effe
  * the log from the last event shown, and the activity, whose output meanwhile
  * was lost, caught up from `agent.view`.
  */
-const followed = (host: Host, io: Io, options: Options, payload: Prompt, place: Effect.Effect<void, Failure>) =>
+const followed = (host: Host, heard: Stream.Stream<RuntimeEvent>, io: Io, options: Options, payload: Prompt, place: Effect.Effect<void, Failure>) =>
   Effect.gen(function* () {
     const { sessionId, requestId } = payload;
     const view = turnView(io, options, sessionId, requestId, callOn(host, AgentChannels.view, { sessionId }));
@@ -236,7 +248,7 @@ const followed = (host: Host, io: Io, options: Options, payload: Prompt, place: 
     // One element at a time, whichever stream it comes from, so what is shown stays in order.
     const lock = yield* Semaphore.make(1);
     const serial = <E>(effect: Effect.Effect<void, E>) => lock.withPermits(1)(effect);
-    yield* hostEvents(host, (event) => (event.type === "notice" ? serial(Effect.sync(() => view.notice(event))) : questions(event)));
+    yield* hostEvents(heard, (event) => (event.type === "notice" ? serial(Effect.sync(() => view.notice(event))) : questions(event)));
     // The output first, so whatever the log then has, the output of what follows it is heard.
     const activity = yield* follow(
       host,

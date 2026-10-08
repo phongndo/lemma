@@ -33,7 +33,7 @@ import type { HostRpcClient } from "@lemma/client";
 import { resolvePaths } from "@lemma/host/paths";
 import { call, ofChannel, openHost, over, received, refined, starting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
+import type { Command, Connection, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
   formatConfig,
   formatDiff,
@@ -696,7 +696,7 @@ const connect = (io: Io) =>
     const target = yield* findTarget(io);
     if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
     const rpc = yield* makeHostRpcHttp(target.url, target.token);
-    const host = ({ answers }: { readonly answers: boolean }) => openHost({ url: target.url, token: target.token, answers }, rpc);
+    const host: Connection["host"] = (options) => openHost({ url: target.url, token: target.token, ...options }, rpc);
     return { target, rpc, host };
   });
 

@@ -1,7 +1,7 @@
 import { Data } from "effect";
 import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
-import type { HostError, ThinkingLevel, WhenBusy } from "@lemma/contracts";
+import type { HostError, RuntimeEvent, ThinkingLevel, WhenBusy } from "@lemma/contracts";
 import type { Host, HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/contracts/discovery";
 
@@ -96,8 +96,10 @@ export interface Connection {
    * connected (`openHost`), and closed with the command; a command opens one.
    * `answers` says whether the command answers the host's questions: the host
    * holds a question only for clients that do (`ConnectOptions.answers`).
+   * `onEvent` hears the host's own events from the first subscription on
+   * (`ConnectOptions.onEvent`), for a command that hears them (`hearing`).
    */
-  readonly host: (options: { readonly answers: boolean }) => Effect.Effect<Host, Failure, Scope.Scope>;
+  readonly host: (options: { readonly answers: boolean; readonly onEvent?: (event: RuntimeEvent) => void }) => Effect.Effect<Host, Failure, Scope.Scope>;
 }
 
 /** `json` is printed with `--json`, `text` otherwise; a command that streamed its output returns undefined. */

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Deferred, Effect } from "effect";
+import { Cause, Deferred, Duration, Effect } from "effect";
 import { emptyUsage, HostError } from "@lemma/contracts";
 import type { AgentActivity, AgentView, AssistantMessage, EventData, InteractionRequest, RuntimeEvent, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
 import { settled } from "../../../scripts/e2e.ts";
@@ -8,7 +8,7 @@ import { ExitCode } from "../src/command.ts";
 import type { Failure, Io, Options } from "../src/command.ts";
 import { toCliError } from "../src/remote.ts";
 import { runCommand } from "../src/run.ts";
-import { fakeHost, fed } from "./fake.ts";
+import { fakeHost, fed, info } from "./fake.ts";
 import type { Fed } from "./fake.ts";
 
 const sessionId = "s1";
@@ -378,6 +378,37 @@ const ids = (prompts: readonly unknown[]) => prompts.map((payload) => (payload a
 
 const lostLine = "lemma: lost the connection to the host; reconnecting…";
 const backLine = "lemma: reconnected to the host";
+
+describe("a run's questions", () => {
+  test("answers the session's question already open, with --follow or without, which the host sends as it subscribes, before its connection is confirmed", async () => {
+    for (const follow of [false, true]) {
+      const approval: InteractionRequest = { type: "confirm", id: "q1", origin: `session:${sessionId}`, title: "Run rm -rf build?" };
+      const waiting = [approval];
+      const answered = Deferred.makeUnsafe<unknown>();
+      const host: ReturnType<typeof scripted> = scripted({
+        rpcs: {
+          // The connect probe answers only once the client has passed on the question: it comes before the connection is confirmed.
+          "Host.Info": () => Effect.andThen(host.connection.heard, Effect.succeed(info)),
+          "Interaction.List": () => Effect.sync(() => [...waiting]),
+          "Interaction.Answer": ({ answer: given }: { answer: unknown }) =>
+            Effect.sync(() => {
+              waiting.length = 0;
+              Deferred.doneUnsafe(answered, Effect.succeed(given));
+            }),
+        },
+        // The running turn that asked it ends once it is answered, and the prompt's turn runs then; unanswered, it fails.
+        prompt: ({ append }) =>
+          Deferred.await(answered).pipe(
+            Effect.timeoutOrElse({ duration: Duration.seconds(2), orElse: () => Effect.fail(new HostError({ code: "Failed", message: "never answered" })) }),
+            Effect.andThen(Effect.sync(() => append(...started, ...step("t1.1", "removed "), ended))),
+          ),
+      });
+      const { exit } = await run(host, { follow, answers: ["yes"] });
+      expect(exit._tag).toBe("Success");
+      expect(await Effect.runPromise(Deferred.await(answered))).toEqual({ type: "confirm", value: true });
+    }
+  });
+});
 
 describe("a run whose connection drops", () => {
   test("--follow goes on once it is back: the rest of the turn shows, none of it twice, and the prompt, sent again with its request id, is placed once", async () => {
