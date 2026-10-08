@@ -31,17 +31,20 @@ so the two show the same records and accept the same queries.
   fails it the same way. When that connection drops, a client makes again
   what the host makes again when a plugin reloads: the calls declared
   repeatable, and streams. So `run` and `events` go on once it is back,
-  saying on stderr that it dropped and came back (stdout, `--json` too,
-  shows nothing twice and skips nothing): their streams open again where
-  they were, and `run` sends its prompt again with its request id. `do` and
-  `login` fail (exit 3), since a command or a login made again could run
-  twice or ask anew: run the command again. `channels open`, which prints a
-  stream as it is sent, ends, as it does when its plugin reloads. Questions
-  still open reach a command again once it is back (the host sends them to
-  each client that subscribes), and a prompt for one that closed meanwhile
-  closes. A command gives up after 16 attempts in a row to reconnect fail,
-  about a minute with the default backoff (counted rather than timed, so a
-  laptop that wakes from sleep tries as long), and exits 3.
+  saying on stderr that it dropped and came back: their streams open again
+  where they were, and `run` sends its prompt again with its request id. The
+  session log's events show once each and none is skipped; live output
+  while the connection was down (the agent's deltas, which `--json` prints
+  too) is lost, as when a slow client falls behind, and `events` may print
+  the questions still open again. `do` and `login` fail (exit 3), since a
+  command or a login made again could run twice or ask anew: run the command
+  again. `channels open`, which prints a stream as it is sent, ends, as it
+  does when its plugin reloads. A command gives up after 16 attempts in a
+  row to reconnect fail, about a minute with the default backoff (counted
+  rather than timed, so a laptop that wakes from sleep tries as long), and
+  exits 3. Reconnects go to the address the command started with: a
+  restarted host is there again on its default port (7433) with its saved
+  token; finding one that moved is later work.
 - **Channels.** Sessions, turns, models, the workspace, and commands are
   reached through the channels their plugins serve (`sessions.*`, `agent.*`,
   `llm.*`, `workspace.*`, `files.search`, `commands.*`), typed by their
@@ -56,17 +59,25 @@ so the two show the same records and accept the same queries.
   any call that only reads. A login or a command its plugin's reload cut off
   fails `Withdrawn` (exit 1), since making it again would ask its questions
   anew or run it twice: run the command again.
-- **Questions.** While `run`, `do`, `events`, or `login` watches the host,
-  it is offered the host's questions, such as a login's API key or a tool
-  asking to confirm. `--answer <value>` answers them in order; otherwise
-  `--questions ask` prompts at the terminal (the default when stdin is one),
-  `ignore` leaves them to another client and prints how to answer from the CLI
-  (the default otherwise, so an agent never answers for the person), and
-  `dismiss` fails them. A `run` with nothing to answer them with (no
-  `--answer`, `--questions`, terminal, or `--follow`) does not hear the
-  host's events, so the host does not ask it: its questions go to another
-  client, or fail as unanswerable, which a tool asking for approval takes as
-  a no.
+- **Questions.** While `run`, `do`, `events --questions`, or `login` watches
+  the host, it is offered the host's questions, such as a login's API key or
+  a tool asking to confirm. `--answer <value>` answers them in order;
+  otherwise `--questions ask` prompts at the terminal (the default when
+  stdin is one), `dismiss` fails them, and `ignore` (the default otherwise,
+  so an agent never answers for the person) leaves them to another client
+  and prints how to answer from the CLI. The host holds a question only for
+  clients that answer questions: a command that asks, dismisses, or was
+  given answers, and always `do` and `login`. One that ignores them, or only
+  watches (`events` without `--questions`, `channels open`), holds none: a
+  question with no answering client connected goes on to fail as
+  unanswerable, which a tool asking for approval takes as a no, and one an
+  answering client holds is shown. Once no answering client is connected,
+  the host waits 15 seconds for one to come back
+  ([`interactionGraceMs`](../../plugins/transport/README.md)) before the
+  question fails, so one asked during a longer drop is lost. Within that,
+  questions still open reach a command again once it is back (the host sends
+  them to each client that subscribes), an answer given while it was down is
+  sent then, and a prompt for one that closed meanwhile closes.
 - **Logins.** `lemma login` prints a sign-in's link and one-time code on lines
   of their own, so they copy whole into a browser on any machine. With a
   browser here (a display, not over SSH) it opens the link, and, when it
@@ -79,11 +90,13 @@ so the two show the same records and accept the same queries.
   [agent](../../plugins/agent/README.md#busy-sessions) defines. Each `run`
   sends a request id (`--request-id` to choose it), so retrying with the same
   id reports the turn that placed the prompt rather than placing it twice. A
-  `run` that loses sight of its turn once the prompt may be placed (it gave
-  up on the connection, or the agent stopped and nothing answers for
-  `agent.prompt` once its reload is over, while the agent may still resume
-  the prompt) prints the id it chose (without `--json`) and exits 3:
-  running it again with that id, not a new one, rejoins the turn.
+  `run` that fails once its prompt may be placed (it gave up on the
+  connection, say, or a read of the session failed) prints the id it chose
+  (without `--json`; with it, the error has it as `requestId`): running it
+  again with that id, not a new one, rejoins the turn. When the agent stops
+  with the prompt and nothing answers for `agent.prompt` once its reload is
+  over, it may still resume the prompt, so `run` exits 3, as when it gives up
+  on the connection.
 - **Following a turn.** `run --follow` opens `agent.activity` and the
   session's `sessions.log` before it sends the prompt, and shows the turn
   that places it from the prompt on: the log says what the turn did, in

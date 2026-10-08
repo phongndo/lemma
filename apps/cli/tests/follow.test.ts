@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Cause, Deferred, Effect } from "effect";
 import { emptyUsage, HostError } from "@lemma/contracts";
 import type { AgentActivity, AgentView, AssistantMessage, EventData, InteractionRequest, RuntimeEvent, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
+import { settled } from "../../../scripts/e2e.ts";
 import { GIVE_UP } from "../src/channels.ts";
 import { ExitCode } from "../src/command.ts";
 import type { Io, Options } from "../src/command.ts";
@@ -67,14 +68,16 @@ interface Host {
 /**
  * A host whose `agent.prompt` runs `prompt` (its `n`th call), with the
  * session's log as `log` has it and `agent.view` answering `view`.
- * `streamed` is sent on each `agent.activity` after its `subscribed`. `rpcs`
- * and `backoff` are `fakeHost`'s.
+ * `streamed` is sent on each `agent.activity` after its `subscribed`. `calls`
+ * answer first, by channel id, unless they return undefined. `rpcs` and
+ * `backoff` are `fakeHost`'s.
  */
 const scripted = (script: {
   readonly log?: readonly EventData[];
   readonly view?: AgentView | ((host: Host) => Effect.Effect<AgentView>);
   readonly streamed?: readonly AgentActivity[];
   readonly prompt: (host: Host, n: number) => Effect.Effect<void, HostError>;
+  readonly calls?: Readonly<Record<string, (payload: any, host: Host) => Effect.Effect<unknown, HostError> | undefined>>;
   readonly rpcs?: Readonly<Record<string, (payload: any) => unknown>>;
   readonly backoff?: number;
 }) => {
@@ -120,24 +123,25 @@ const scripted = (script: {
     restore: () => connection.restore(),
   };
   const view = script.view ?? { output: [], queue: [], queueRevision: 0 };
-  const connection = fakeHost({
-    calls: {
-      "agent.prompt": (payload) => {
-        prompts.push(payload);
-        return script.prompt(host, prompts.length);
-      },
-      "agent.view": () => (typeof view === "function" ? view(host) : Effect.succeed(view)),
-      "sessions.events": () => Effect.sync(() => [...logged]),
-      "sessions.get": () =>
-        Effect.sync(() => ({
-          id: sessionId,
-          cwd: "/",
-          createdAt: 0,
-          updatedAt: 0,
-          lastSeq: logged.length,
-          ...(logged.length ? { leaf: logged.at(-1)!.id } : {}),
-        })),
+  const calls: Readonly<Record<string, (payload: any) => Effect.Effect<unknown, HostError>>> = {
+    "agent.prompt": (payload) => {
+      prompts.push(payload);
+      return script.prompt(host, prompts.length);
     },
+    "agent.view": () => (typeof view === "function" ? view(host) : Effect.succeed(view)),
+    "sessions.events": () => Effect.sync(() => [...logged]),
+    "sessions.get": () =>
+      Effect.sync(() => ({
+        id: sessionId,
+        cwd: "/",
+        createdAt: 0,
+        updatedAt: 0,
+        lastSeq: logged.length,
+        ...(logged.length ? { leaf: logged.at(-1)!.id } : {}),
+      })),
+  };
+  const connection = fakeHost({
+    calls: Object.fromEntries(Object.entries(calls).map(([id, answer]) => [id, (payload: unknown) => script.calls?.[id]?.(payload, host) ?? answer(payload)])),
     streams: {
       "agent.activity": () => {
         const opened = fed<AgentActivity>({ type: "subscribed", running: [] }, ...(script.streamed ?? []));
@@ -173,9 +177,12 @@ const options: Options = {
   requestId,
 };
 
-/** `lemma run s1 ramble --follow` (or as `fields` say) against `host`, at a terminal that asks with `ask`: what it showed, and said on stderr, and its result or failure. */
-const run = async (host: ReturnType<typeof scripted>, fields: Partial<Options> = {}, ask?: Io["ask"]) => {
-  const said: string[] = [];
+/**
+ * `lemma run s1 ramble --follow` (or as `fields` say) against `host`, at a
+ * terminal that asks with `ask`: what it showed, and said on stderr (into
+ * `said`, as it goes), and its result or failure.
+ */
+const run = async (host: ReturnType<typeof scripted>, fields: Partial<Options> = {}, ask?: Io["ask"], said: string[] = []) => {
   const io: Io = {
     env: {},
     cwd: "/",
@@ -435,9 +442,9 @@ describe("a run whose connection drops", () => {
     expect(exit.value?.json).toMatchObject({ session: sessionId, turn: turnId, reason: "done", steps: 2, text: "second " });
     expect(ids(host.prompts)).toEqual([requestId, requestId]);
     expect(said).toEqual([lostLine, backLine]);
-    // With nothing to answer them with, it never heard the host's events: the host asks it no questions, which go to
-    // another client or fail as unanswerable.
-    expect(host.connection.subscriptions()).toBe(0);
+    // With nothing to answer them with, each connection subscribed as one that does not: the host holds no question
+    // for it, so they go to another client or fail as unanswerable.
+    expect(host.connection.subscriptions()).toEqual([false, false]);
   });
 
   test("answers a question asked while it was down, which the host still waits on", async () => {
@@ -462,7 +469,8 @@ describe("a run whose connection drops", () => {
               Effect.sync(() => {
                 append(...started);
                 drop();
-                // Asked with no client connected: its event reaches no one.
+                // Asked while this client is cut off (another one holds it): the command hears of it only when it
+                // subscribes anew, as the host sends the questions still open to each new subscriber.
                 waiting.push(approval);
                 restore();
               }),
@@ -476,6 +484,65 @@ describe("a run whose connection drops", () => {
     const { exit } = await run(host, { follow: false, answers: ["yes"] });
     expect(exit._tag).toBe("Success");
     expect(await Effect.runPromise(Deferred.await(answered))).toEqual({ type: "confirm", value: true });
+    // Given its answers, it subscribed as one that answers: the host holds the turn's questions for it.
+    expect(host.connection.subscriptions()).toEqual([true, true]);
+  });
+
+  test("sends an answer given while it was down once it is back, so the question the host waits on is answered and the turn ends", async () => {
+    const approval: InteractionRequest = { type: "confirm", id: "q1", origin: `session:${sessionId}`, title: "Run rm -rf build?" };
+    const waiting: InteractionRequest[] = [];
+    const answers: unknown[] = [];
+    const answered = Deferred.makeUnsafe<void>();
+    let reply: ((value: string) => void) | undefined;
+    const host = scripted({
+      rpcs: {
+        "Interaction.List": () => Effect.sync(() => [...waiting]),
+        "Interaction.Answer": ({ id, answer: given }: { id: string; answer: unknown }) =>
+          Effect.sync(() => {
+            answers.push(given);
+            waiting.splice(
+              waiting.findIndex((request) => request.id === id),
+              1,
+            );
+            Deferred.doneUnsafe(answered, Effect.void);
+          }),
+      },
+      prompt: ({ append, publish }, n) =>
+        n === 1
+          ? Effect.gen(function* () {
+              append(...started);
+              waiting.push(approval);
+              yield* publish({ type: "interaction", request: approval });
+              return yield* Effect.never;
+            })
+          : Effect.andThen(
+              Deferred.await(answered),
+              Effect.sync(() => append(...step("t1.1", "removed "), ended)),
+            ),
+    });
+    let prompts = 0;
+    const said: string[] = [];
+    const running = run(
+      host,
+      { follow: false },
+      () => {
+        prompts++;
+        return new Promise<string>((resolve) => (reply = resolve));
+      },
+      said,
+    );
+    await settled(async () => reply !== undefined || undefined);
+    host.connection.drop();
+    // The person answers once the command knows the connection is down: the answer cannot go now, and the host,
+    // which sends the question again once the command subscribes anew, still waits on it.
+    await settled(async () => said.includes(lostLine) || undefined);
+    reply!("y");
+    host.connection.restore();
+    const { exit } = await running;
+    expect(exit._tag).toBe("Success");
+    expect(answers).toEqual([{ type: "confirm", value: true }]);
+    // Asked once: the question sent again on the new connection is the one it is answering.
+    expect(prompts).toBe(1);
   });
 
   test("closes the prompt of a question that closed while it was down, whose closing it never heard", async () => {
@@ -541,5 +608,82 @@ describe("a run whose connection drops", () => {
     // Running it again would choose another id, and place the prompt twice: the one it chose rejoins its turn.
     const [sent] = ids(host.prompts);
     expect(said).toEqual([expect.stringContaining(`\`lemma run ${sessionId} --request-id ${sent}\``)]);
+  });
+
+  test("a drop while the agent's view of a turn it joins is on its way: the view is asked again, and the turn shows once", async () => {
+    let views = 0;
+    const host = scripted({
+      log: [...started, { type: "step-start", turnId, stepId: "t1.1" }],
+      view: ({ drop, restore }) =>
+        Effect.suspend(() => {
+          if (++views === 1) {
+            drop();
+            restore();
+            return Effect.never;
+          }
+          return Effect.succeed({
+            turnId,
+            draft: { stepId: "t1.1", seq: 2, blocks: [{ index: 0, block: { type: "text", text: "word1 word2 " } }] },
+            output: [],
+            queue: [],
+            queueRevision: 0,
+          });
+        }),
+      // Sent once the turn is joined, after the connection came back.
+      prompt: ({ act, append, reopened, showing }) =>
+        Effect.gen(function* () {
+          yield* reopened;
+          act(word("t1.1", 3));
+          yield* showing("word1 word2 word3 ");
+          append({ type: "message", turnId, stepId: "t1.1", message: answer("word1 word2 word3 ") }, { type: "step-end", turnId, stepId: "t1.1" }, ended);
+          act(turnEnded);
+        }),
+    });
+    const { shown, said, exit } = await run(host);
+    expect(exit._tag).toBe("Success");
+    expect(shown).toBe("word1 word2 word3 \n");
+    expect(views).toBeGreaterThan(1);
+    expect(ids(host.prompts)).toEqual([requestId]);
+    expect(said).toEqual([lostLine, backLine]);
+  });
+
+  test("a drop while it reads the session for the result: the read is made again, and the run ends with the result", async () => {
+    let gets = 0;
+    const host = scripted({
+      prompt: ({ append }) => Effect.sync(() => append(...started, ...step("t1.1", "done "), ended)),
+      calls: {
+        // The first read cuts the connection, which comes back.
+        "sessions.get": (_, { drop, restore }) => {
+          if (++gets > 1) return undefined;
+          drop();
+          restore();
+          return Effect.never;
+        },
+      },
+    });
+    const { exit, said } = await run(host, { follow: false, json: true });
+    if (exit._tag === "Failure") throw new Error(String(exit.cause));
+    expect(exit.value?.json).toMatchObject({ turn: turnId, reason: "done", text: "done " });
+    expect(gets).toBe(2);
+    expect(ids(host.prompts)).toEqual([requestId]);
+    expect(said).toEqual([lostLine, backLine]);
+  });
+});
+
+describe("a run that fails once its prompt may be placed", () => {
+  test("says the request id that rejoins its turn, and not to run the command again, which would place it twice", async () => {
+    for (const json of [false, true]) {
+      const host = scripted({
+        prompt: () => Effect.void,
+        calls: { "sessions.get": () => Effect.fail(new HostError({ code: "Withdrawn", subject: "sessions.get", message: "withdrawn" })) },
+      });
+      const { said, exit } = await run(host, { follow: false, json, requestId: undefined });
+      const error = failed(exit) as { readonly code?: string; readonly message: string; readonly requestId?: string };
+      const [sent] = ids(host.prompts);
+      expect(error).toMatchObject({ code: "Withdrawn", requestId: sent });
+      expect(error.message).not.toContain("run the command again");
+      // With --json the error carries the id; without, it is said.
+      expect(said).toEqual(json ? [] : [expect.stringContaining(`\`lemma run ${sessionId} --request-id ${sent}\``)]);
+    }
   });
 });

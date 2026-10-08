@@ -6,7 +6,7 @@ import type { AgentActivity, EventData, SessionEvent, SessionLogUpdate, Sessions
 import { settled } from "../../../scripts/e2e.ts";
 import { call, follow, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
-import type { Io, Options } from "../src/command.ts";
+import type { Command, Io, Options } from "../src/command.ts";
 import { doCommand, eventsCommand } from "../src/live.ts";
 import { fakeHost, fed } from "./fake.ts";
 import type { Fed } from "./fake.ts";
@@ -90,6 +90,23 @@ describe("a command that watches the host", () => {
   const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
   const options = { json: true, answers: [] } as unknown as Options;
 
+  test("holds the host's questions only when it answers them: watching, or leaving them to others, it holds none", async () => {
+    const subscribed = async (command: Command, terminal: Partial<Io>, fields: Partial<Options>) => {
+      const host = fakeHost({ calls: { "commands.run": () => Effect.never } });
+      const running = Effect.runFork(Effect.scoped(command(host, { ...io, ...terminal }, { ...options, ...fields })));
+      if ((await settled(async () => host.subscriptions().length > 0 || undefined)) === undefined) throw new Error("never subscribed");
+      await Effect.runPromise(Fiber.interrupt(running));
+      return host.subscriptions();
+    };
+    const ask = { ask: () => new Promise<string>(() => {}) };
+    expect(await subscribed(eventsCommand, ask, {})).toEqual([false]);
+    expect(await subscribed(eventsCommand, ask, { questions: "ignore" })).toEqual([false]);
+    expect(await subscribed(eventsCommand, ask, { questions: "ask" })).toEqual([true]);
+    expect(await subscribed(eventsCommand, {}, { questions: "dismiss" })).toEqual([true]);
+    expect(await subscribed(eventsCommand, {}, { questions: "ignore", answers: ["yes"] })).toEqual([true]);
+    expect(await subscribed(doCommand("x.y"), {}, {})).toEqual([true]);
+  });
+
   test("fails at once when its first connection fails, saying why as a one-shot command would", async () => {
     // HTTP says why (a refused connection, a rejected token), where a WebSocket that fails does not.
     const refusedHttp = new RpcClientError.RpcClientError({
@@ -120,7 +137,7 @@ describe("following a stream", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const reader = yield* follow(
-            yield* host.host(),
+            yield* host.host({ answers: false }),
             AgentChannels.activity,
             () => undefined,
             () => Effect.void,

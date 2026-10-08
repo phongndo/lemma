@@ -9,6 +9,8 @@ import { answers, channelInfo } from "./channels.ts";
 const SUBSCRIBER_BUFFER = 1024;
 
 interface Subscriber {
+  /** Whether it answers questions: only such subscribers hold them (`count`, `drained`). */
+  readonly answers: boolean;
   /** Kernel events: bounded, drop-oldest. */
   readonly feed: Queue.Queue<RuntimeEvent>;
   /** Interaction traffic: never dropped, since a hook is waiting on the answer. */
@@ -22,12 +24,17 @@ interface Subscriber {
  * but not across kinds.
  */
 export interface Hub {
-  /** One subscription per run of the stream: `subscribed` once it has joined, then the interactions still open, then what comes. */
-  readonly events: Stream.Stream<RuntimeEvent | { readonly type: "subscribed" }>;
+  /**
+   * One subscription per run of the stream: `subscribed` once it has joined,
+   * then the interactions still open, then what comes. `answers` says whether
+   * the subscriber answers questions; one that does not still receives them.
+   */
+  readonly events: (answers: boolean) => Stream.Stream<RuntimeEvent | { readonly type: "subscribed" }>;
+  /** Subscribers that answer questions. */
   readonly count: Effect.Effect<number>;
-  /** Lossless delivery to current subscribers, for interaction traffic. */
+  /** Lossless delivery to current subscribers, every one of them, for interaction traffic. */
   readonly broadcast: (event: RuntimeEvent) => Effect.Effect<void>;
-  /** Resolves when no subscriber is attached (immediately if none is). */
+  /** Resolves when no subscriber that answers questions is attached (immediately if none is). */
   readonly drained: Effect.Effect<void>;
 }
 
@@ -59,34 +66,41 @@ export const makeHub = (
       ),
     );
 
-    const join = Effect.gen(function* () {
-      const subscriber: Subscriber = { feed: yield* Queue.sliding<RuntimeEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<RuntimeEvent>() };
-      // Synchronous from here: no interaction can open or close between the replay and joining the set.
-      yield* Effect.sync(() => {
-        for (const request of open()) Queue.offerUnsafe(subscriber.inbox, { type: "interaction", request });
-        subscribers.add(subscriber);
+    const answering = () => {
+      let count = 0;
+      for (const subscriber of subscribers) if (subscriber.answers) count++;
+      return count;
+    };
+    const join = (answers: boolean) =>
+      Effect.gen(function* () {
+        const subscriber: Subscriber = { answers, feed: yield* Queue.sliding<RuntimeEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<RuntimeEvent>() };
+        // Synchronous from here: no interaction can open or close between the replay and joining the set.
+        yield* Effect.sync(() => {
+          for (const request of open()) Queue.offerUnsafe(subscriber.inbox, { type: "interaction", request });
+          subscribers.add(subscriber);
+        });
+        if (answers && answering() === 1) drained = yield* Deferred.make<void>();
+        return subscriber;
       });
-      if (subscribers.size === 1) drained = yield* Deferred.make<void>();
-      return subscriber;
-    });
     const leave = (subscriber: Subscriber) =>
       Effect.gen(function* () {
         subscribers.delete(subscriber);
         yield* Queue.shutdown(subscriber.feed);
         yield* Queue.shutdown(subscriber.inbox);
-        if (subscribers.size === 0) yield* Deferred.succeed(drained, undefined);
+        if (subscriber.answers && answering() === 0) yield* Deferred.succeed(drained, undefined);
       });
 
     // `subscribed` first, once the subscriber has joined: a request's reply on the same socket can overtake the join.
-    const events: Hub["events"] = Stream.unwrap(
-      Effect.map(Effect.acquireRelease(join, leave), (subscriber) =>
-        Stream.concat(Stream.succeed({ type: "subscribed" } as const), Stream.merge(Stream.fromQueue(subscriber.inbox), Stream.fromQueue(subscriber.feed))),
-      ),
-    );
+    const events: Hub["events"] = (answers) =>
+      Stream.unwrap(
+        Effect.map(Effect.acquireRelease(join(answers), leave), (subscriber) =>
+          Stream.concat(Stream.succeed({ type: "subscribed" } as const), Stream.merge(Stream.fromQueue(subscriber.inbox), Stream.fromQueue(subscriber.feed))),
+        ),
+      );
 
     return {
       events,
-      count: Effect.sync(() => subscribers.size),
+      count: Effect.sync(answering),
       broadcast: (event) => Effect.forEach(subscribers, (subscriber) => Queue.offer(subscriber.inbox, event), { discard: true }),
       drained: Effect.suspend(() => Deferred.await(drained)),
     };

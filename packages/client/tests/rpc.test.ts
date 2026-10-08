@@ -44,7 +44,7 @@ describe("makeHostRpc", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const rpc = yield* makeHostRpc("ws://host.invalid/rpc", constructor);
-          const events = yield* Effect.forkChild(Stream.runDrain(raw(rpc)["Host.Events"]()));
+          const events = yield* Effect.forkChild(Stream.runDrain(raw(rpc)["Host.Events"]({ answers: true })));
           const subscribed = () => sockets[0]?.sent.some((line) => line.includes("Host.Events")) ?? false;
           yield* until(() => Effect.sync(subscribed));
           expect(subscribed()).toBe(true);
@@ -65,9 +65,9 @@ describe("makeHostRpc", () => {
 describe("HostRpcClient", () => {
   test("leaves out the streams' RPCs, which only this package reads, so reading one raw fails to compile", () => {
     const misuse = (rpc: HostRpcClient, tag: string) => {
-      // @ts-expect-error The host's events are read through `eventsOver`.
+      // @ts-expect-error The host's events are read through `connect`'s `Host` (`onEvent`).
       void rpc["Host.Events"];
-      // @ts-expect-error A channel's stream is read through `channelsOver`.
+      // @ts-expect-error A channel's stream is read through `connect`'s `Host` (`channel.open`).
       const { "Channel.Open": open } = rpc;
       // @ts-expect-error Nor by a key worked out at run time.
       void rpc[tag];

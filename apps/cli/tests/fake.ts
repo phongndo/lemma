@@ -86,8 +86,8 @@ class Wire extends EventTarget {
 export interface FakeHost extends Connection {
   readonly drop: () => void;
   readonly restore: () => void;
-  /** How many times `Host.Events` was subscribed to: the host asks its questions of a subscriber. */
-  readonly subscriptions: () => number;
+  /** What each `Host.Events` subscription said it does: whether it answers questions. */
+  readonly subscriptions: () => readonly boolean[];
 }
 
 /**
@@ -145,11 +145,11 @@ export const fakeHost = (host: {
    */
   const subscribers = new Set<(event: RuntimeEvent) => void>();
   let publishing = false;
-  let subscriptions = 0;
-  const subscribe = () =>
+  const subscriptions: boolean[] = [];
+  const subscribe = (answers: boolean) =>
     Stream.unwrap(
       Effect.gen(function* () {
-        subscriptions++;
+        subscriptions.push(answers);
         const queue = yield* Queue.unbounded<RuntimeEvent>();
         const listener = (event: RuntimeEvent) => void Queue.offerUnsafe(queue, event);
         subscribers.add(listener);
@@ -183,7 +183,11 @@ export const fakeHost = (host: {
   };
   const serve = (wire: Wire, id: string | number, tag: string, payload: any) => {
     const stream =
-      tag === "Host.Events" ? subscribe() : tag === "Channel.Open" ? (streams[payload.id]?.(payload.payload) ?? Stream.fail(notFound(payload.id))) : undefined;
+      tag === "Host.Events"
+        ? subscribe(payload.answers)
+        : tag === "Channel.Open"
+          ? (streams[payload.id]?.(payload.payload) ?? Stream.fail(notFound(payload.id)))
+          : undefined;
     const work =
       stream === undefined
         ? answer(tag, payload)
@@ -213,9 +217,9 @@ export const fakeHost = (host: {
   return {
     target: { url: "http://host.test", token: "t" } as Connection["target"],
     rpc,
-    host: (options = {}) =>
-      openHost({ url: "http://host.test", backoff: () => host.backoff ?? 100, webSocket: Layer.succeed(Socket.WebSocketConstructor, dial), ...options }, rpc),
-    subscriptions: () => subscriptions,
+    host: ({ answers }) =>
+      openHost({ url: "http://host.test", backoff: () => host.backoff ?? 100, webSocket: Layer.succeed(Socket.WebSocketConstructor, dial), answers }, rpc),
+    subscriptions: () => [...subscriptions],
     drop: () => {
       up = false;
       for (const wire of wires) {

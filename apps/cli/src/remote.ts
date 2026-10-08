@@ -1,11 +1,12 @@
 import { Duration, Effect } from "effect";
+import { HostError } from "@lemma/contracts";
 import type { RpcClientError } from "effect/rpc";
 import { makeHostRpcHttp } from "@lemma/client";
 import { clearRemote, discoveryPath, findTarget as resolveTarget, normalizeUrl, readDiscovery, remotePath, writeRemote } from "@lemma/contracts/discovery";
 import type { Target } from "@lemma/contracts/discovery";
 import { resolvePaths } from "@lemma/host/paths";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Io, Options, Unattached } from "./command.ts";
+import type { Failure, Io, Options, Unattached } from "./command.ts";
 
 /*
  * `lemma remote` and `lemma token`: which host commands go to, as
@@ -34,6 +35,41 @@ export const reasonOf = (error: Error): string => {
     inner = next;
   }
   return inner instanceof Error && inner.message !== "" ? inner.message : error.message;
+};
+
+/**
+ * What a command's failure says and exits with. A remote target that cannot
+ * be reached is the remote's "no host"; a local one that was found but did
+ * not answer is unreachable.
+ */
+export const toCliError = (error: Failure, target?: Target): CliError => {
+  if (error instanceof CliError) return error;
+  if (error instanceof HostError) {
+    return new CliError({
+      code: error.code,
+      message: error.message,
+      ...(error.subject === undefined ? {} : { subject: error.subject }),
+      // Naming nothing, it is the host still starting (`Channel.List`, `Host.Inspectors`); see `starting`.
+      exit: error.code === "Unavailable" && error.subject === undefined ? ExitCode.unavailable : ExitCode.failed,
+    });
+  }
+  const remote = target !== undefined && target.source !== "local" ? target : undefined;
+  // `filterStatusOk` turns a rejected token into a failed send; the response status says which it was.
+  if (statusOf(error) === 401) {
+    const message =
+      remote === undefined
+        ? "The host rejected the token in transport.json"
+        : `The host at ${remote.url} rejected the token from ${remote.from}. \`lemma token\` there prints the current one; ${remote.source === "env" ? "set LEMMA_TOKEN to it" : `save it with \`lemma remote set ${remote.url} --token <token>\``}.`;
+    return new CliError({ code: "Unauthorized", message, exit: ExitCode.unavailable });
+  }
+  if (remote !== undefined) {
+    return new CliError({
+      code: "NoHost",
+      message: `No Lemma host answers at ${remote.url} (from ${remote.from}): ${reasonOf(error)}. Check that the host runs on that machine and that this one can reach it, or ${remote.source === "env" ? "unset LEMMA_URL" : "run `lemma remote clear`"} to use the local host.`,
+      exit: ExitCode.unavailable,
+    });
+  }
+  return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${reasonOf(error)}`, exit: ExitCode.unavailable });
 };
 
 export const noLocalHost = (home: string) =>

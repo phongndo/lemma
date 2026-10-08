@@ -178,7 +178,7 @@ describe("transport", () => {
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "inspected.broken" })))).toMatchObject({ code: "Failed", message: "no state here" });
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "nothing" })))).toMatchObject({ code: "NotFound" });
           // A snapshot JSON cannot carry fails its own request, never the connection: the subscription goes on.
-          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]()));
+          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]({ answers: true })));
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "inspected.big" })))).toMatchObject({
             code: "Failed",
             subject: "inspected.big",
@@ -275,7 +275,7 @@ describe("transport", () => {
           );
           yield* waitFor(first, (event) => event.type === "interaction");
           const second = yield* host.connect("websocket");
-          const secondEvents = yield* second["Host.Events"](undefined, { asQueue: true });
+          const secondEvents = yield* second["Host.Events"]({ answers: true }, { asQueue: true });
           const [subscribed, replayed] = yield* waitFor(secondEvents, (event) => event.type === "interaction");
           // A subscription opens with `subscribed`; the question open before it is replayed next.
           expect(subscribed).toEqual({ type: "subscribed" });
@@ -453,6 +453,33 @@ describe("transport", () => {
     ));
 
   test(
+    "a subscriber that only watches holds no question, and sees those an answering one holds",
+    () =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          const watcher = yield* subscribe(yield* host.connect("websocket"), false);
+          const interaction = yield* host.core.run(Interaction);
+          // Nobody to answer it: it falls through at once, as with no subscriber, instead of waiting on the watcher.
+          expect(interactionError(yield* Effect.exit(interaction.confirm("Anyone?")))).toMatchObject({
+            reason: "Unavailable",
+            message: "No answerer is attached",
+          });
+
+          const answerer = yield* host.connect("websocket");
+          yield* subscribe(answerer);
+          const confirm = yield* Effect.forkChild(interaction.confirm("Proceed?"));
+          const [asked] = (yield* waitFor(watcher, (event) => event.type === "interaction")).slice(-1);
+          expect(asked).toMatchObject({ type: "interaction", request: { title: "Proceed?" } });
+          if (asked?.type !== "interaction") throw new Error("expected an interaction");
+          yield* answerer["Interaction.Answer"]({ id: asked.request.id, answer: { type: "confirm", value: true } });
+          expect(yield* Fiber.join(confirm)).toBe(true);
+          yield* waitFor(watcher, (event) => event.type === "interaction-closed" && event.id === asked.request.id);
+        }),
+      ),
+    30_000,
+  );
+
+  test(
     "fails Unavailable when every client stays away past the grace period",
     () =>
       withHost((host) =>
@@ -544,7 +571,7 @@ describe("transport", () => {
       const url = await withHost((host) =>
         Effect.gen(function* () {
           const client = yield* Scope.provide(host.connect("websocket"), clientScope);
-          yield* Effect.forkIn(Stream.runDrain(client["Host.Events"]()), clientScope);
+          yield* Effect.forkIn(Stream.runDrain(client["Host.Events"]({ answers: true })), clientScope);
           yield* client["Host.Info"]();
           return host.url;
         }),

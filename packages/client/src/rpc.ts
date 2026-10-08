@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect";
-import type { Context, Scope } from "effect";
+import type { Scope } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
@@ -40,7 +40,6 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * Transient errors are not retried silently: a ping timeout (a connection
  * that died across sleep or a network change) must fail the `Host.Events`
  * subscription, or it would wait forever on a stream the server has dropped.
- * `socket` hears each connection of the socket open and close.
  *
  * What `connect` holds. Its streams (`Host.Events`, `Channel.Open`) are read
  * only through this package, which hands each element to a callback at
@@ -51,22 +50,20 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * suspends that fiber, and every call and stream on the socket waits behind
  * it: a reply its consumer waits for never arrives. A client that orders or
  * paces what it reads (the CLI) does so in a queue of its own, after the
- * callback. The rule holds by
- * construction: the client this hands out has no stream RPCs
- * (`HostRpcClient`), and `scripts/check-boundaries.ts` finds a client made
- * elsewhere. The owner is reporting the reader's behavior to Effect.
+ * callback. The rule holds by construction: the client this hands out has no
+ * stream RPCs (`HostRpcClient`), and `scripts/check-boundaries.ts` finds a
+ * client made elsewhere. The owner is reporting the reader's behavior to
+ * Effect.
  */
 export const makeHostRpc = (
   url: string,
   webSocket: Layer.Layer<Socket.WebSocketConstructor> = Socket.layerWebSocketConstructorGlobal,
-  socket: Context.Service.Shape<typeof RpcClient.ConnectionHooks> = { onConnect: Effect.void, onDisconnect: Effect.void },
 ): Effect.Effect<HostRpcClient, never, Scope.Scope> =>
   Effect.gen(function* () {
     const protocol = RpcClient.layerProtocolSocket({ retryTransientErrors: false }).pipe(
       Layer.provide(Socket.layerWebSocket(url)),
       Layer.provide(webSocket),
       Layer.provide(RpcSerialization.layerJson),
-      Layer.provide(Layer.succeed(RpcClient.ConnectionHooks, socket)),
     );
     const context = yield* Layer.build(protocol);
     return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));

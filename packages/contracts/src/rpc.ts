@@ -51,8 +51,15 @@ export class RuntimeRpcs extends RpcGroup.make(
    * questions still open. A client that must see the effects of its own next
    * call (a question a command asks) waits for `subscribed`: a call's reply is
    * no such sign, since the host handles a connection's calls concurrently.
+   * `answers` says whether the subscriber answers the host's questions: the
+   * host holds a question for the subscribers that do, and passes it on when
+   * none is there; one that only watches sees the questions the others hold.
    */
-  Rpc.make("Host.Events", { success: Schema.Union([Schema.Struct({ type: Schema.Literal("subscribed") }), RuntimeEvent]), stream: true }),
+  Rpc.make("Host.Events", {
+    payload: { answers: Schema.Boolean },
+    success: Schema.Union([Schema.Struct({ type: Schema.Literal("subscribed") }), RuntimeEvent]),
+    stream: true,
+  }),
   /** Every known plugin, enabled or not. */
   Rpc.make("Host.Plugins", { success: Schema.Array(PluginStatus) }),
   /** What host plugins let you look into (see `Inspectors`); waits while the host starts. */

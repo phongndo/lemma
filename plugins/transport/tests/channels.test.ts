@@ -42,7 +42,7 @@ describe("channels", () => {
         Effect.gen(function* () {
           // One connection carries all of a WebSocket client's requests; streaming HTTP makes one per request.
           const client = yield* host.connect("websocket");
-          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]()));
+          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]({ answers: true })));
           const sibling = yield* open(client, "steady.ticks");
           // The fake host control dies restarting "defect".
           const exit = yield* Effect.exit(client["Host.RestartPlugin"]({ pluginId: "defect" }));
@@ -101,7 +101,7 @@ describe("channels", () => {
       (host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]()));
+          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]({ answers: true })));
           const steady = yield* open(client, "shapes.steady");
           const called = (id: string, payload?: unknown) => Effect.exit(client["Channel.Call"](payload === undefined ? { id } : { id, payload }));
           const opened = (id: string) => {

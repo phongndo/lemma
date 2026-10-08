@@ -33,7 +33,7 @@ const TransportConfig = Schema.Struct({
   interactionGraceMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 15_000)))
     .annotate({
-      description: "How long an open interaction waits for a client to (re)connect before failing Unavailable.",
+      description: "How long an open interaction waits for a client that answers questions to (re)connect before failing Unavailable.",
     }),
   startupTimeoutMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 60_000)))

@@ -72,7 +72,7 @@ import {
   questionsCommand,
   withdrawCommand,
 } from "./live.ts";
-import { findTarget, noLocalHost, reasonOf, remoteCommand, statusOf, tokenCommand } from "./remote.ts";
+import { findTarget, noLocalHost, remoteCommand, toCliError, tokenCommand } from "./remote.ts";
 import { readSession, runCommand } from "./run.ts";
 import { workspaceCommand } from "./workspace.ts";
 
@@ -162,7 +162,8 @@ Questions the host asks (logins, tools that confirm)
   dismiss <question>             Dismiss one
     While run, login, do, or events --questions … is attached:
     --questions ask|ignore|dismiss   ask at the terminal (default when there is one), leave them
-                                     to another client such as the web app (default otherwise), or dismiss
+                                     to another client such as the web app, holding none (default
+                                     otherwise), or dismiss
     --answer <value>               Answer the next question with this (repeatable, in order)
 
 Providers and models
@@ -465,7 +466,7 @@ const channelsCommand = (sub: string | undefined, id: string | undefined, rest: 
   }
   return (connection, io) =>
     Effect.gen(function* () {
-      const host = yield* connection.host();
+      const host = yield* connection.host({ answers: false });
       const elements = yield* received<unknown>((onElement, onEnd) => host.channel.open(id, request.payload, onElement, onEnd));
       yield* Stream.runForEach(Stream.mapError(elements, refined(id)), (element) =>
         Effect.andThen(
@@ -693,7 +694,7 @@ const connect = (io: Io) =>
     const target = yield* findTarget(io);
     if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
     const rpc = yield* makeHostRpcHttp(target.url, target.token);
-    const host = (options: { readonly events?: boolean } = {}) => openHost({ url: target.url, token: target.token, ...options }, rpc);
+    const host = ({ answers }: { readonly answers: boolean }) => openHost({ url: target.url, token: target.token, answers }, rpc);
     return { target, rpc, host };
   });
 
@@ -723,40 +724,18 @@ const otherProtocol = (target: Target): Effect.Effect<CliError | undefined> =>
     }
   });
 
-/** A remote target that cannot be reached is the remote's "no host"; a local one that was found but did not answer is unreachable. */
-const toCliError = (error: Failure, target?: Target): CliError => {
-  if (error instanceof CliError) return error;
-  if (error instanceof HostError) {
-    return new CliError({
-      code: error.code,
-      message: error.message,
-      ...(error.subject === undefined ? {} : { subject: error.subject }),
-      // Naming nothing, it is the host still starting (`Channel.List`, `Host.Inspectors`); see `starting`.
-      exit: error.code === "Unavailable" && error.subject === undefined ? ExitCode.unavailable : ExitCode.failed,
-    });
-  }
-  const remote = target !== undefined && target.source !== "local" ? target : undefined;
-  // `filterStatusOk` turns a rejected token into a failed send; the response status says which it was.
-  if (statusOf(error) === 401) {
-    const message =
-      remote === undefined
-        ? "The host rejected the token in transport.json"
-        : `The host at ${remote.url} rejected the token from ${remote.from}. \`lemma token\` there prints the current one; ${remote.source === "env" ? "set LEMMA_TOKEN to it" : `save it with \`lemma remote set ${remote.url} --token <token>\``}.`;
-    return new CliError({ code: "Unauthorized", message, exit: ExitCode.unavailable });
-  }
-  if (remote !== undefined) {
-    return new CliError({
-      code: "NoHost",
-      message: `No Lemma host answers at ${remote.url} (from ${remote.from}): ${reasonOf(error)}. Check that the host runs on that machine and that this one can reach it, or ${remote.source === "env" ? "unset LEMMA_URL" : "run `lemma remote clear`"} to use the local host.`,
-      exit: ExitCode.unavailable,
-    });
-  }
-  return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${reasonOf(error)}`, exit: ExitCode.unavailable });
-};
-
 const report = (io: Io, json: boolean, error: CliError): number => {
   if (json) {
-    io.err(JSON.stringify({ error: { code: error.code, message: error.message, ...(error.subject === undefined ? {} : { subject: error.subject }) } }));
+    io.err(
+      JSON.stringify({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.subject === undefined ? {} : { subject: error.subject }),
+          ...(error.requestId === undefined ? {} : { requestId: error.requestId }),
+        },
+      }),
+    );
   } else {
     io.err(`lemma: ${error.message}`);
   }

@@ -15,8 +15,9 @@ import type {
   SessionsChange,
   UiComposition,
 } from "@lemma/contracts";
+import { dropped } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import { call, callOn, dropped, following, ofChannel, received, reconnecting } from "./channels.ts";
+import { call, callOn, connectedAfter, following, ofChannel, received, reconnecting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options } from "./command.ts";
 import { formatCommands, formatModels, formatProviders, formatQueue, formatQuestions } from "./format.ts";
@@ -30,6 +31,15 @@ import { formatCommands, formatModels, formatProviders, formatQueue, formatQuest
 // ------------------------------------------------------------------ questions
 
 const policyOf = (io: Io, options: Options) => options.questions ?? (io.ask === undefined ? "ignore" : "ask");
+
+/**
+ * Whether a command answers the host's questions, so the host holds them for
+ * it: it has answers to give (`--answer`), asks at the terminal, or dismisses
+ * them. `ignore` leaves them to another client: one that answers, or with
+ * none, the question fails as unanswerable, which a tool asking for approval
+ * takes as a no.
+ */
+export const answering = (io: Io, options: Options): boolean => options.answers.length > 0 || policyOf(io, options) !== "ignore";
 
 /** The answer a typed value means for this question, or an error message. */
 export const toAnswer = (request: InteractionRequest, raw: string): InteractionAnswer | string => {
@@ -78,7 +88,8 @@ interface QuestionView {
 /**
  * Handles the host's questions per the policy: the next `--answer`, then the
  * terminal (`ask`), `dismiss`, or `ignore` (leave it to another client, such
- * as an open web app, and say how to answer it from the CLI). Only questions
+ * as an open web app, and say how to answer it from the CLI: the command
+ * holds no question then, see `answering`). Only questions
  * from `origin` are handled, so answers never reach another session's or
  * client's question; `undefined` handles every question (`events --answer`).
  *
@@ -89,7 +100,8 @@ interface QuestionView {
  * sends the questions still open to every client that subscribes, so one
  * asked during the drop (a tool's approval) reaches the person once the
  * connection is back; the prompt of one that closed meanwhile closes then,
- * as `Interaction.List` no longer has it.
+ * as `Interaction.List` no longer has it; and an answer given while it was
+ * down goes once it is back.
  */
 export const questionHandler = (host: Host, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
   Effect.gen(function* () {
@@ -98,11 +110,24 @@ export const questionHandler = (host: Host, io: Io, options: Options, origin: st
     const prompts = yield* FiberMap.make<string>();
     /** Questions waiting at the terminal now. */
     const prompting = new Map<string, InteractionRequest>();
+    /**
+     * Sends an answer or a dismissal, again on the next connection when the
+     * connection dropped first: the first answer wins, so a second is safe.
+     * The host's refusal (answered elsewhere meanwhile: `NotFound`) is not
+     * this command's concern.
+     */
+    const reply = (send: () => Promise<void>): Effect.Effect<void> =>
+      Effect.suspend(() => {
+        const { generation } = host.status();
+        return Effect.tryPromise({ try: send, catch: (error) => error }).pipe(
+          Effect.catch((error) => (dropped(error) ? Effect.andThen(connectedAfter(host, generation), reply(send)) : Effect.void)),
+        );
+      });
     const handle = (request: InteractionRequest, next: string | undefined) =>
       Effect.gen(function* () {
         const policy = policyOf(io, options);
         if (next === undefined && policy === "dismiss") {
-          yield* Effect.promise(() => host.interaction.dismiss(request.id).catch(() => {}));
+          yield* reply(() => host.interaction.dismiss(request.id));
           io.err(`lemma: dismissed question "${request.title}"`);
           return;
         }
@@ -123,8 +148,7 @@ export const questionHandler = (host: Host, io: Io, options: Options, origin: st
           }
           const answer = toAnswer(request, raw);
           if (typeof answer !== "string") {
-            // Someone else may have answered first; that is not an error here.
-            yield* Effect.promise(() => host.interaction.answer(request.id, answer).catch(() => {}));
+            yield* reply(() => host.interaction.answer(request.id, answer));
             return;
           }
           io.err(`lemma: ${answer}`);
@@ -242,7 +266,8 @@ export const withdrawCommand =
  */
 export const eventsCommand: Command = (connection, io, options) =>
   Effect.gen(function* () {
-    const host = yield* connection.host();
+    // Watching never answers unless asked to.
+    const host = yield* connection.host({ answers: options.questions !== undefined && answering(io, options) });
     return yield* reconnecting(host, io, watch(host, io, options));
   });
 
@@ -259,7 +284,6 @@ const watch = (host: Host, io: Io, options: Options) =>
     const note = (text: string) => {
       if (!options.json) io.out(text);
     };
-    // Watching never answers unless asked to.
     const questions =
       options.questions === undefined ? undefined : yield* questionHandler(host, io, options, session === undefined ? undefined : `session:${session}`);
     yield* hostEvents(host, (event) => {
@@ -429,7 +453,7 @@ export const loginCommand =
       if (method !== "api_key" && method !== "oauth") return yield* usage(`--method must be one of ${info.auth.map((auth) => auth.type).join(", ")}`);
       if (!info.auth.some((auth) => auth.type === method))
         return yield* usage(`${provider} does not offer ${method}; it offers ${info.auth.map((auth) => auth.type).join(", ")}`);
-      const host = yield* connection.host();
+      const host = yield* connection.host({ answers: true });
       const origin = `login:${provider}`;
       /** The paste-the-address fallback of a sign-in page, as the host marks it. */
       const isPaste = (request: InteractionRequest) => request.type === "ask" && request.kind === "sign-in-code";
@@ -568,7 +592,7 @@ export const doCommand =
   (id: string): Command =>
   (connection, io, options) =>
     Effect.gen(function* () {
-      const host = yield* connection.host();
+      const host = yield* connection.host({ answers: true });
       const origin = `command:${randomUUID()}`;
       const questions = yield* questionHandler(host, io, options, origin);
       yield* hostEvents(host, (event) =>

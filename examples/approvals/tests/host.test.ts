@@ -48,6 +48,9 @@ describe("as a plugin file in a real host", () => {
     // No terminal and nothing to answer with: the CLI does not attach, so nobody can approve and the call is denied.
     const unattended = await lemma("run", session, "once more", "--model", "mock/scripted");
     expect(unattended).toContain("Tool call denied: nobody could approve it");
+    // Following the turn, it watches the host's events but answers no question, so it holds none.
+    const followed = await lemma("run", session, "and once more", "--model", "mock/scripted", "--follow");
+    expect(followed).toContain("Tool call denied: nobody could approve it");
   }, 60_000);
 
   test("a question answered elsewhere closes the terminal's prompt", async () => {

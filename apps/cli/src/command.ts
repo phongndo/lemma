@@ -13,6 +13,8 @@ export class CliError extends Data.TaggedError("CliError")<{
   readonly message: string;
   readonly subject?: string;
   readonly exit: number;
+  /** The prompt a failed `run` may have placed: running it again with this id rejoins its turn. */
+  readonly requestId?: string;
 }> {}
 
 export const usage = (message: string) => new CliError({ code: "Usage", message: `${message}\nRun \`lemma --help\` for usage.`, exit: ExitCode.usage });
@@ -92,11 +94,10 @@ export interface Connection {
    * a command that watches the host (its events and questions, its
    * subsystems' streams) and the calls it makes meanwhile: opened once
    * connected (`openHost`), and closed with the command; a command opens one.
-   * `events: false` opens it without the host's events, so the host asks it
-   * none of its questions (`ConnectOptions.events`): a `run` with nothing to
-   * answer them with.
+   * `answers` says whether the command answers the host's questions: the host
+   * holds a question only for clients that do (`ConnectOptions.answers`).
    */
-  readonly host: (options?: { readonly events?: boolean }) => Effect.Effect<Host, Failure, Scope.Scope>;
+  readonly host: (options: { readonly answers: boolean }) => Effect.Effect<Host, Failure, Scope.Scope>;
 }
 
 /** `json` is printed with `--json`, `text` otherwise; a command that streamed its output returns undefined. */

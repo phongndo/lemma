@@ -1,7 +1,7 @@
 import { Cause, Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import type { Scope } from "effect";
 import { RpcClientError } from "effect/rpc";
-import { callChannel, connect, follow as followChannel } from "@lemma/client";
+import { callChannel, connect, dropped, follow as followChannel } from "@lemma/client";
 import type { ConnectOptions, ConnectionStatus, Followable, Host, HostRpcClient } from "@lemma/client";
 import { HostError } from "@lemma/contracts";
 import type { ChannelDeclaration } from "@lemma/contracts";
@@ -19,6 +19,13 @@ import type { Failure, Io } from "./command.ts";
  * events and streams into the command's own queues (`received`, `follow`):
  * see `makeHostRpc` there for why they are read no other way.
  */
+
+/**
+ * What a failure says when the call may or may not have taken effect, and
+ * running the command again is the person's call. A `run` whose prompt may be
+ * placed says otherwise: run again, it would place it twice (`runCommand`).
+ */
+export const RUN_AGAIN = "; run the command again";
 
 /** Whether `error` is channel `id`'s own `code`: the transport's, naming the channel, rather than what the channel's subsystem refused. */
 export const ofChannel = (error: unknown, id: string, code: string): boolean =>
@@ -60,7 +67,7 @@ export const refined =
     if (ofChannel(error, id, "Withdrawn"))
       return new CliError({
         code: "Withdrawn",
-        message: `"${id}" was withdrawn: the plugin serving it was reloaded or stopped while it ran; run the command again`,
+        message: `"${id}" was withdrawn: the plugin serving it was reloaded or stopped while it ran${RUN_AGAIN}`,
         subject: id,
         exit: ExitCode.failed,
       });
@@ -73,14 +80,6 @@ export const call = <Payload, Success>(
   channel: ChannelDeclaration<"call", Payload, Success>,
   payload: Payload,
 ): Effect.Effect<Success, Failure> => Effect.mapError(callChannel(rpc, channel, payload), refined(channel.id));
-
-/**
- * Whether a request over a `Host` ended because its connection dropped, as
- * `@lemma/client` says it: with the RPC client's error. One the client could
- * not read (`RpcClientDefect`: a host on another protocol, say) leaves the
- * connection up.
- */
-export const dropped = (error: unknown): boolean => error instanceof RpcClientError.RpcClientError && error.reason._tag !== "RpcClientDefect";
 
 /** What a `Host` rejects with, as a command fails: its refusals and the connection's failures, else a defect (a host handler that died). */
 const failure = (error: HostError | Error): Cause.Cause<Failure> =>
@@ -127,9 +126,15 @@ const statusWhere = (host: Host, found: (status: ConnectionStatus) => boolean): 
     return Effect.sync(stop);
   });
 
+/** Resolves once `host` is connected anew, after the connection `generation` counted. */
+export const connectedAfter = (host: Host, generation: number): Effect.Effect<void> =>
+  Effect.asVoid(statusWhere(host, (status) => status.state === "connected" && status.generation > generation));
+
 /**
  * `@lemma/client`'s `Host` for a command that watches the host, once it is
- * connected; it closes with the scope. A first attempt that fails fails the
+ * connected; it closes with the scope. `answers` says whether the command
+ * answers the host's questions (`ConnectOptions.answers`): one that does not
+ * holds none of them. A first attempt that fails fails the
  * command at once, as a one-shot call would: `Host.Info` over HTTP (`rpc`)
  * says why in the same terms (no host there, a rejected token), which a
  * WebSocket's failure does not, and the socket's own reason is the last word
@@ -164,7 +169,8 @@ export const GIVE_UP = 16;
 /**
  * Runs `body`, a command that carries on across a dropped connection (`run`,
  * `events`): its streams open again on the next connection (`follow`), and
- * its repeatable calls are made again (`callOn`). It says on stderr when the
+ * its repeatable calls are made again (`Host.channel.call`), for as long as
+ * this lets them wait. It says on stderr when the
  * connection drops and when it is back, and fails `Disconnected` (exit 3) once
  * `GIVE_UP` attempts in a row have failed.
  */
@@ -204,38 +210,30 @@ export const reconnecting = <A, R>(host: Host, io: Io, body: Effect.Effect<A, Fa
 
 /**
  * One call to a channel over a command's `Host`. When the connection drops
- * while it waits, a call declared `repeatable` is made again once the
- * connection is back, as the host makes it again when its plugin reloads: it
- * has the same effect made once or twice. The wait is `reconnecting`'s to
- * bound. Any other call fails `Disconnected`, since it may or may not have
- * taken effect: whether to run the command again is the person's call.
+ * while it waits, `Host.channel.call` makes one declared `repeatable` again
+ * once the connection is back (within `reconnecting`, which bounds the
+ * wait); any other fails `Disconnected`, since it may or may not have taken
+ * effect: whether to run the command again is the person's call.
  */
 export const callOn = <Payload, Success>(
   host: Host,
   channel: ChannelDeclaration<"call", Payload, Success>,
   payload: Payload,
 ): Effect.Effect<Success, Failure> =>
-  Effect.suspend(() => {
-    const { generation } = host.status();
-    return Effect.tryPromise({ try: () => host.channel.call(channel, payload), catch: (error) => error as HostError | Error }).pipe(
-      Effect.catch((error) => {
-        if (!dropped(error)) return Effect.mapError(Effect.failCause(failure(error)), refined(channel.id));
-        if (channel.repeatable !== true)
-          return Effect.fail(
-            new CliError({
-              code: "Disconnected",
-              message: `"${channel.id}" was cut off: the connection to the host dropped while it ran; run the command again`,
-              subject: channel.id,
-              exit: ExitCode.unavailable,
-            }),
-          );
-        return Effect.andThen(
-          statusWhere(host, (status) => status.state === "connected" && status.generation > generation),
-          callOn(host, channel, payload),
+  Effect.tryPromise({ try: () => host.channel.call(channel, payload), catch: (error) => error as HostError | Error }).pipe(
+    Effect.catch((error) => {
+      if (dropped(error) && channel.repeatable !== true)
+        return Effect.fail(
+          new CliError({
+            code: "Disconnected",
+            message: `"${channel.id}" was cut off: the connection to the host dropped while it ran${RUN_AGAIN}`,
+            subject: channel.id,
+            exit: ExitCode.unavailable,
+          }),
         );
-      }),
-    );
-  });
+      return Effect.mapError(Effect.failCause(failure(error)), refined(channel.id));
+    }),
+  );
 
 /** How a command calls channels: over HTTP (`over`) when it makes a call or two, or over its `Host` (`on`) when it watches the host. */
 export type Calls = <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload) => Effect.Effect<Success, Failure>;

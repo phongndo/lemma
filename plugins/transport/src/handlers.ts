@@ -25,7 +25,7 @@ const asJson = Schema.encodeUnknownEffect(Schema.toCodecJson(Schema.Unknown));
 export const makeHandlers = ({ version, hub, interactions, paths, control, registries }: HandlerServices) =>
   ServedRpcs.of({
     "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition, runtime: control.runtime })),
-    "Host.Events": () => hub.events,
+    "Host.Events": ({ answers }) => hub.events(answers),
     "Host.Plugins": () => Effect.map(control.plugins, (plugins) => plugins.map(toPluginStatus)),
     "Host.Inspectors": () =>
       Effect.map(registries.items(Inspectors), (items) =>

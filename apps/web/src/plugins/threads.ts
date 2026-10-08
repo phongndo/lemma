@@ -377,8 +377,9 @@ export default defineUiPlugin({
           return false;
         },
       );
-      // Accepted, the turn is the host's: a dropped connection only ends this wait (the page reconnects and catches up).
-      // What the host reports otherwise is shown.
+      // Accepted, the turn is the host's. A dropped connection holds this wait until the page is back, where the host
+      // `channel.call` makes `agent.prompt` again (it is repeatable) and the page catches up. What the host reports is
+      // shown.
       if (accepted) void prompt.done.catch((error) => (error instanceof HostError ? notify.report(error) : undefined));
       return accepted;
     };

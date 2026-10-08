@@ -113,10 +113,10 @@ export const waitFor = (events: EventBox, done: (event: HostEvent) => boolean) =
   return loop([]).pipe(Effect.timeout(Duration.seconds(5)), Effect.orDie);
 };
 
-/** Subscribes and waits for the host's `subscribed`: from then on the subscription receives everything. */
-export const subscribe = (client: Client) =>
+/** Subscribes, as one that answers questions unless `answers` says not, and waits for the host's `subscribed`: from then on the subscription receives everything. */
+export const subscribe = (client: Client, answers = true) =>
   Effect.gen(function* () {
-    const events = yield* client["Host.Events"](undefined, { asQueue: true });
+    const events = yield* client["Host.Events"]({ answers }, { asQueue: true });
     yield* waitFor(events, (event) => event.type === "subscribed");
     return events;
   });

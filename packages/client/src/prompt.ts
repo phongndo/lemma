@@ -75,7 +75,9 @@ const noAgent = () =>
  * The prompt is sent once. When the agent reloads while it waits, the host
  * makes `agent.prompt` again on the replacement (it is `repeatable`), and
  * `agent.activity`, withdrawn, is followed onto the replacement, where the
- * prompt's acceptance is seen.
+ * prompt's acceptance is seen. When the connection drops, a `Host`'s
+ * `channel.call` makes it again once the connection is back, and `follow`
+ * opens `agent.activity` again there.
  */
 export function startPrompt(
   connection: PromptConnection,
