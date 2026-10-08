@@ -27,5 +27,6 @@ An app that provides capabilities itself (`provide` on `makeCore` or
 `makeLoader`, in the [core README](../core/README.md#capabilities-the-application-provides))
 passes the same list as `provided` to `planComposition`, `resolveComposition`
 and `restartedBy`. Like the core's own capabilities, what it provides needs no
-plugin: a plugin offering it too, which the core refuses, cannot run like any
-other, and neither keeps on nor halts the plugins requiring it.
+plugin. A plugin offering it too is refused by the core, so it is left out like
+any plugin that cannot run, and it neither keeps on nor halts the plugins that
+require it.

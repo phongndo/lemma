@@ -230,6 +230,6 @@ describe("restartedBy", () => {
 
   test("a plugin offering what the app provides restarts nothing through it", () => {
     expect([...restartedBy([pages, stray], ["stray"])].sort()).toEqual(["pages", "stray"]);
-    expect([...restartedBy([pages, stray], ["stray"], [Slots])]).toEqual(["stray"]);
+    expect([...restartedBy([pages, stray], ["stray"], { provided: [Slots] })]).toEqual(["stray"]);
   });
 });

@@ -104,7 +104,11 @@ export function resolveComposition(
  * what the app provides (`provided`) restarts nothing through it: the app's
  * own service is what its dependents get.
  */
-export function restartedBy(known: readonly KnownPlugin[], ids: readonly string[], provided: readonly Capability[] = []): Set<string> {
+export function restartedBy(
+  known: readonly KnownPlugin[],
+  ids: readonly string[],
+  { provided = [] }: { readonly provided?: readonly Capability[] } = {},
+): Set<string> {
   const reserved = reservedKeys(provided);
   const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
   const found = new Set(ids);

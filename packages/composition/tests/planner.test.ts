@@ -11,6 +11,7 @@ class Agent extends Context.Service<Agent, string>()("test/Agent") {}
 class Server extends Context.Service<Server, string>()("test/Server") {}
 /** What the app provides itself, in the tests that pass `provided`. */
 class Slots extends Context.Service<Slots, string>()("test/Slots") {}
+class Clock extends Context.Service<Clock, string>()("test/Clock") {}
 
 const host = definePlugin({ id: "host", provides: [HostApi(1)], layer: Layer.succeed(HostApi(1), 1) });
 const llm = definePlugin({
@@ -191,7 +192,7 @@ describe("planComposition", () => {
           severity: "warning",
           pluginId: "stray",
           message: `"stray" is left out: it provides "test/Slots", which the app provides itself`,
-          suggestion: `Handle the hooks of "test/Slots" instead of providing it, or turn it off`,
+          suggestion: `Stop providing "test/Slots": the app provides it, or turn it off`,
         }),
       ]);
     }
@@ -202,15 +203,16 @@ describe("planComposition", () => {
         severity: "error",
         pluginId: "stray",
         message: `"stray" cannot run, and it is required: it provides "test/Slots", which the app provides itself`,
-        suggestion: `Handle the hooks of "test/Slots" instead of providing it, or set "required": false in its row to start without it`,
+        suggestion: `Stop providing "test/Slots": the app provides it, or set "required": false in its row to start without it`,
       }),
     ]);
   });
 
-  test("what the app provides wrongly stops the start, naming no plugin", () => {
-    const { diagnostics } = plan({ provided: [Slots, Slots] });
+  test("what the app provides wrongly stops the start, naming no plugin, one error per problem", () => {
+    const { diagnostics } = plan({ provided: [Slots, Slots, Clock, Clock] });
     expect(diagnostics.map(({ severity, pluginId, message }) => [severity, pluginId, message])).toEqual([
       ["error", undefined, `The application lists capability "test/Slots" more than once`],
+      ["error", undefined, `The application lists capability "test/Clock" more than once`],
     ]);
   });
 

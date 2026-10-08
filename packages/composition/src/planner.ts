@@ -135,6 +135,8 @@ export function planComposition(input: PlanInput): Plan {
   const suggestions = new Map<string, string>();
   // Per plugin that must run and cannot: the problem, and what to do about it.
   const fatal = new Map<string, { readonly problem: string; readonly fix: string }>();
+  /** Errors naming no plugin: the app's own list of what it provides is wrong (a reserved key, or one listed twice). */
+  const appProblems = new Set<string>();
   const effective = (): Composition => ({
     plugins: Object.fromEntries(Object.entries(plugins).map(([id, entry]) => [id, problems.has(id) ? { ...entry, enabled: false } : entry])),
   });
@@ -150,8 +152,8 @@ export function planComposition(input: PlanInput): Plan {
       const problem = describe(error, running, configs, known, appKeys);
       const target = targetOf(error, (id) => !needed.has(id), sourceOf);
       if (target === undefined) {
-        // An error naming no plugin is the app's own: what it provides is reserved, or listed twice.
-        for (const id of error.plugins.length ? error.plugins.slice(0, 1) : [""]) fatal.set(id, { problem, fix: fixFor(error, appKeys) });
+        if (error.plugins[0] === undefined) appProblems.add(problem);
+        else fatal.set(error.plugins[0], { problem, fix: fixFor(error, appKeys) });
         continue;
       }
       if (!problems.has(target)) {
@@ -164,13 +166,16 @@ export function planComposition(input: PlanInput): Plan {
     resolved = resolveComposition(known, effective(), { pinned: [...pinned], provided });
   }
 
+  for (const problem of appProblems) {
+    diagnostics.push(new Diagnostic({ severity: "error", message: problem, suggestion: "Fix the list of capabilities the app provides (its `provide`)" }));
+  }
   for (const [id, { problem, fix }] of fatal) {
     const why = pinned.has(id) ? "the app cannot run without it" : requested.has(id) ? "it is required" : "a required plugin needs it";
     diagnostics.push(
       new Diagnostic({
         severity: "error",
-        ...(id === "" ? {} : { pluginId: id }),
-        message: id === "" ? problem : `"${id}" cannot run, and ${why}: ${problem}`,
+        pluginId: id,
+        message: `"${id}" cannot run, and ${why}: ${problem}`,
         suggestion: requested.has(id) && !pinned.has(id) ? `${fix}, or set "required": false in its row to start without it` : fix,
       }),
     );
@@ -327,7 +332,7 @@ function describe(
 }
 
 /** For a plugin offering what the app provides: it cannot replace the app's service, only change what that service does. */
-const handleInstead = (capability: string | undefined) => `Handle the hooks of "${capability}" instead of providing it`;
+const stopProviding = (capability: string | undefined) => `Stop providing "${capability}": the app provides it`;
 
 /** What to do about `error` for the plugin it leaves out. */
 function suggestionFor(error: CompositionError, appKeys: ReadonlySet<string>): string {
@@ -339,7 +344,7 @@ function suggestionFor(error: CompositionError, appKeys: ReadonlySet<string>): s
     case "DuplicateCapability":
       return "Turn one of them off";
     case "ReservedCapability":
-      return appKeys.has(error.capability ?? "") ? `${handleInstead(error.capability)}, or turn it off` : "Fix the plugin, or turn it off";
+      return appKeys.has(error.capability ?? "") ? `${stopProviding(error.capability)}, or turn it off` : "Fix the plugin, or turn it off";
     default:
       return "Fix the plugin, or turn it off";
   }
@@ -347,7 +352,7 @@ function suggestionFor(error: CompositionError, appKeys: ReadonlySet<string>): s
 
 /** What to do about `error` for a plugin that must run, so cannot simply be turned off. */
 function fixFor(error: CompositionError, appKeys: ReadonlySet<string>): string {
-  return error.reason === "ReservedCapability" && error.plugins.length > 0 && appKeys.has(error.capability ?? "") ? handleInstead(error.capability) : "Fix it";
+  return error.reason === "ReservedCapability" && appKeys.has(error.capability ?? "") ? stopProviding(error.capability) : "Fix it";
 }
 
 /** The plugin a halted one ultimately waits on: the first in its chain that is off or left out. */
