@@ -8,6 +8,7 @@ import {
   formatPlugin,
   formatPlugins,
   formatRecords,
+  formatReload,
   formatSession,
   formatStep,
   formatSystem,
@@ -169,6 +170,17 @@ describe("inspect formatting", () => {
 describe("formatChannels", () => {
   test("says so when no plugin serves one", () => {
     expect(formatChannels([])).toBe("No channels: no running plugin serves one.");
+  });
+});
+
+describe("formatReload", () => {
+  test("says what changed, or what a deferred change restarts", () => {
+    const report = { started: [], restarted: ["llm"], stopped: [] };
+    expect(formatReload(report)).toBe("restarted llm");
+    expect(formatReload({ started: [], restarted: [], stopped: [] })).toBe("nothing changed");
+    expect(formatReload({ ...report, restarted: [], deferred: true }, "the plugins the reload changes")).toBe(
+      "applying: the host restarts the plugins the reload changes, the transport among them, so clients reconnect",
+    );
   });
 });
 

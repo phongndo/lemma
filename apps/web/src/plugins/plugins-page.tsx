@@ -847,8 +847,16 @@ export default defineUiPlugin({
     const reload = () =>
       run("reload", async () => {
         try {
-          const summary = describeReload(await host.reload());
-          notify.toast({ level: "info", message: summary === undefined ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` });
+          const result = await host.reload();
+          const summary = describeReload(result);
+          notify.toast({
+            level: "info",
+            message: result.deferred
+              ? "Reloading config: the host restarts the plugins it changes, and this page reconnects"
+              : summary === undefined
+                ? "Config reloaded; nothing changed"
+                : `Config reloaded: ${summary}`,
+          });
         } catch (error) {
           notify.report(error, "Reload failed");
         }

@@ -54,7 +54,8 @@ export default defineUiPlugin({
             notify.toast({ level: "error", message: `Reload: ${describeReload(result) ?? "nothing changed"}. The Plugins page says why.` });
             return;
           }
-          leaveReport(describeReload(result) ?? "nothing changed");
+          // Deferred: it applies once this reply has left, restarting the transport, so the reloaded page reconnects.
+          leaveReport(result.deferred ? "the host is applying the change, and the page reconnects once it has" : (describeReload(result) ?? "nothing changed"));
         }
         window.location.reload();
       } catch (error) {

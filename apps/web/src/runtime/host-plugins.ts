@@ -48,7 +48,7 @@ export function createHostPlugins(client: ClientService, notify: NotifyService):
       },
       reload: async () => {
         const result = await host.host.reload();
-        await refresh();
+        if (!result.deferred) await refresh();
         return result;
       },
     },
