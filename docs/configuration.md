@@ -73,7 +73,7 @@ neither: the way back when your config keeps the host from starting.
 
 A plugin says which version of the host's contracts it is written for by
 requiring `HostApi(version)` from `@lemma/contracts`, which the host provides
-for each version it supports, and a web app plugin by
+for the version it implements (`HOST_API`), and a web app plugin by
 `defineUiPlugin({ api })`, so after an incompatible change it is left out with
 the version named rather than failing at some later call. A plugin that
 renames a setting reads its users' old rows with `migrateConfig` from

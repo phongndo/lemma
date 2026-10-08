@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { Context, Effect, Layer, Schema } from "effect";
-import { HostApi } from "@lemma/contracts";
+import { HOST_API, HostApi } from "@lemma/contracts";
 import { definePlugin } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { planComposition } from "../src/planner.ts";
@@ -37,7 +37,7 @@ const bundled: readonly Plugin[] = [llm, agent, compaction, transport];
 
 /** As the host plans: the transport pinned, and the host API version provided by the app itself. */
 const plan = (input: Partial<PlanInput> = {}): Plan =>
-  planComposition({ bundled, local: [], rows: {}, pinned: ["transport"], provided: [HostApi(1)], ...input });
+  planComposition({ bundled, local: [], rows: {}, pinned: ["transport"], provided: [HostApi(HOST_API)], ...input });
 const running = (planned: Plan) =>
   Object.keys(planned.resolved.composition.plugins).filter((id) => planned.resolved.composition.plugins[id]?.enabled !== false);
 const messages = (planned: Plan, severity: "error" | "warning") =>
@@ -155,25 +155,25 @@ describe("planComposition", () => {
   });
 
   test("a plugin written for an API version nobody provides is left out with the version named", () => {
-    const later = definePlugin({ id: "later", requires: [HostApi(2)], layer: Layer.empty });
-    const current = definePlugin({ id: "current", requires: [HostApi(1)], layer: Layer.empty });
+    const later = definePlugin({ id: "later", requires: [HostApi(HOST_API + 1)], layer: Layer.empty });
+    const current = definePlugin({ id: "current", requires: [HostApi(HOST_API)], layer: Layer.empty });
     const planned = plan({
       local: [
         { plugin: later, source: "user" },
         { plugin: current, source: "user" },
       ],
     });
-    expect(planned.problems.get("later")).toBe("it is written for version 2 of the lemma API, and this Lemma provides version 1");
+    expect(planned.problems.get("later")).toBe(`it is written for version ${HOST_API + 1} of the lemma API, and this Lemma provides version ${HOST_API}`);
     expect(running(planned)).toContain("current");
     // Whichever versions the app provides are the ones that count, and a plugin requiring one needs no plugin for it.
     const appProvided = plan({
-      provided: [HostApi(2)],
+      provided: [HostApi(HOST_API + 1)],
       local: [
         { plugin: later, source: "user" },
         { plugin: current, source: "user" },
       ],
     });
-    expect(appProvided.problems.get("current")).toBe("it is written for version 1 of the lemma API, and this Lemma provides version 2");
+    expect(appProvided.problems.get("current")).toBe(`it is written for version ${HOST_API} of the lemma API, and this Lemma provides version ${HOST_API + 1}`);
     expect(running(appProvided)).toContain("later");
   });
 
@@ -208,12 +208,12 @@ describe("planComposition", () => {
   });
 
   test("a bundled plugin providing what the app provides is left out, and what requires that runs without it", () => {
-    const current = definePlugin({ id: "current", requires: [HostApi(1)], layer: Layer.empty });
-    const stale = definePlugin({ id: "stale-host", provides: [HostApi(1)], layer: Layer.succeed(HostApi(1), 1) });
+    const current = definePlugin({ id: "current", requires: [HostApi(HOST_API)], layer: Layer.empty });
+    const stale = definePlugin({ id: "stale-host", provides: [HostApi(HOST_API)], layer: Layer.succeed(HostApi(HOST_API), HOST_API) });
     const planned = plan({ bundled: [...bundled, stale, current] });
     expect(running(planned)).toContain("current");
     expect(running(planned)).not.toContain("stale-host");
-    expect(planned.problems.get("stale-host")).toBe(`it provides "lemma/api@1", which the app provides itself`);
+    expect(planned.problems.get("stale-host")).toBe(`it provides "lemma/api@${HOST_API}", which the app provides itself`);
     expect(messages(planned, "error")).toEqual([]);
   });
 

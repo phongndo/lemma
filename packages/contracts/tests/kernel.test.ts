@@ -86,10 +86,10 @@ describe("kernelOf", () => {
   });
 
   test("what the app provides itself is a capability with no plugin behind it, listed whether or not a plugin requires it", () => {
-    const hosted = kernelOf([plugin("agent", { requires: ["lemma/Paths"] })], ["lemma/Paths", "lemma/api@1"]);
+    const hosted = kernelOf([plugin("agent", { requires: ["lemma/Paths"] })], ["lemma/Paths", "lemma/api@2"]);
     expect(hosted.capabilities).toEqual([
       { key: "lemma/Paths", providers: [], runtime: true, users: ["agent"] },
-      { key: "lemma/api@1", providers: [], runtime: true, users: [] },
+      { key: "lemma/api@2", providers: [], runtime: true, users: [] },
     ]);
   });
 });

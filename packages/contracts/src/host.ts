@@ -178,14 +178,12 @@ export interface RestartReport {
 /**
  * The host contracts' API version: a major number that changes when one of
  * them changes incompatibly. A plugin written for a version requires
- * `HostApi(version)`, and the host provides each version it supports, so a
- * plugin written for another is left out with a message naming the version
- * rather than failing at some later call. A breaking change gives the changed
- * capability a new key, keeping the old one provided by an adapter for as long
- * as its version is supported.
+ * `HostApi(version)`, and the host provides the version it implements, this
+ * one, so a plugin written for another is left out with a message naming the
+ * version rather than failing at some later call.
  */
-export const HOST_API = 1;
-/** A plugin written for host API `version` requires this; the host provides the versions it supports. */
+export const HOST_API = 2;
+/** What a plugin written for host API `version` requires; the host provides `HostApi(HOST_API)`. */
 export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, number> => Context.Service<`lemma/api@${number}`, number>(`lemma/api@${version}`);
 
 /**

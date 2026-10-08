@@ -314,7 +314,7 @@ export const createMockHost = (): Host => {
     return { ...plugin, configFields: fields, config: configValues(schema, configRows[plugin.id] ?? {}, fields) };
   };
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
-  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@1"];
+  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@2"];
   const plugins: PluginStatus[] = [
     bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"], locked: needed }),
     bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"], locked: needed }),
