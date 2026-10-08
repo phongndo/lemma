@@ -60,7 +60,7 @@ export default definePlugin({
 
     let hub: Hub | undefined;
     const interactions = makeInteractions(() => hub!, config.interactionGraceMs);
-    hub = yield* makeHub(owner, interactions.open);
+    hub = yield* makeHub(owner, interactions.open, registries);
     yield* owner.on(InteractionHook, interactions.handle);
 
     const token = config.token ?? (yield* loadToken(paths.home));

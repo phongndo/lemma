@@ -75,6 +75,8 @@ const describe = (line: Line): string => {
       return event.plugins.map((plugin) => `${plugin.id}=${plugin.state}`).join(" ");
     case "commands-changed":
       return event.commands.map((command) => command.id).join(" ");
+    case "channels-changed":
+      return event.channels.map((channel) => `${channel.id} (${channel.source})`).join(" ") || "none";
     case "models-changed":
       return "list them again";
     case "ui-changed":

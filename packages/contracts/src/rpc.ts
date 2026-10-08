@@ -1,6 +1,7 @@
 import { Rpc, RpcGroup } from "effect/rpc";
 import { Schema } from "effect";
 import { AgentView, PromptContent, QueuedPrompt, TurnOptions, WhenBusy } from "./agent.ts";
+import { ChannelInfo } from "./channels.ts";
 import { CommandInfo, CommandResult } from "./commands.ts";
 import { FileSearchOptions, FileSearchResult } from "./files.ts";
 import { ConfigScope, NoticePayload, PluginChange, UiComposition } from "./host.ts";
@@ -51,6 +52,12 @@ export const HostEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("notice"), notice: NoticePayload }),
   Schema.Struct({ type: Schema.Literal("plugins-changed"), plugins: Schema.Array(PluginStatus) }),
   Schema.Struct({ type: Schema.Literal("commands-changed"), commands: Schema.Array(CommandInfo) }),
+  /**
+   * The channels that answer changed: one came or went, or another contribution
+   * took over an id (a reload, an override). A client whose stream ended
+   * `Withdrawn`, or whose open found nothing, opens it again when its id is listed.
+   */
+  Schema.Struct({ type: Schema.Literal("channels-changed"), channels: Schema.Array(ChannelInfo) }),
   Schema.Struct({ type: Schema.Literal("models-changed") }),
   Schema.Struct({ type: Schema.Literal("ui-changed"), ui: UiComposition }),
 ]);

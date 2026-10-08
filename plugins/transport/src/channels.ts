@@ -7,24 +7,22 @@ import { isTagged, toHostError } from "./errors.ts";
 
 type Reader = Context.Service.Shape<typeof Registries>;
 
-/** The first channel per id: the one that answers for it. */
+/** The contributions that answer: the first per id. */
+export const answers = (items: readonly Contribution<Channel>[]): Contribution<Channel>[] => {
+  const seen = new Set<string>();
+  return items.filter(({ item }) => !seen.has(item.id) && Boolean(seen.add(item.id)));
+};
+
+export const channelInfo = ({ item, pluginId }: Contribution<Channel>): ChannelInfo => ({
+  id: item.id,
+  kind: item.kind,
+  ...(item.title === undefined ? {} : { title: item.title }),
+  ...(item.description === undefined ? {} : { description: item.description }),
+  source: pluginId,
+});
+
 export const listChannels = (registries: Reader): Effect.Effect<ChannelInfo[]> =>
-  Effect.map(registries.items(Channels), (items) => {
-    const seen = new Set<string>();
-    return items.flatMap(({ item, pluginId }) => {
-      if (seen.has(item.id)) return [];
-      seen.add(item.id);
-      return [
-        {
-          id: item.id,
-          kind: item.kind,
-          ...(item.title === undefined ? {} : { title: item.title }),
-          ...(item.description === undefined ? {} : { description: item.description }),
-          source: pluginId,
-        },
-      ];
-    });
-  });
+  Effect.map(registries.items(Channels), (items) => answers(items).map(channelInfo));
 
 const notFound = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
 

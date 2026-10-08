@@ -22,7 +22,7 @@ export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pag
     styles,
     requires: { slots: Slots, client: Client, router: Router },
     setup: ({ slots, client, router }, plugin) => {
-      /** Streams the prices while it shows: opened on every (re)connect, and again when the plugin serving them reloads. */
+      /** Streams the prices while it shows: opened on every (re)connect, and again whenever the channel serving them comes back. */
       const TickerPage = () => {
         const [quotes, setQuotes] = createSignal([]);
         const [problem, setProblem] = createSignal();
@@ -38,16 +38,16 @@ export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pag
             },
             (error) => {
               close = undefined;
-              // Its plugin stopped or reloaded: a reload's replacement serves it already, and a stopped one is NotFound.
+              // Its plugin stopped or was replaced: a replacement usually serves it already, else `channels-changed` says when.
               if (error?.code === "Withdrawn") open();
               else setProblem(error === undefined ? "The prices stopped." : error.message);
             },
           );
         };
         const stopSync = client.onConnect(open);
-        // A plugin turned back on serves them again.
+        // The channel came back (its plugin on again, or restarted after a gap): open it again.
         const stopEvents = client.onEvent((event) => {
-          if (event.type === "plugins-changed" && close === undefined) open();
+          if (event.type === "channels-changed" && close === undefined && event.channels.some((channel) => channel.id === "ticker.prices")) open();
         });
         onCleanup(() => {
           stopSync();

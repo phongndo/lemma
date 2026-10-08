@@ -565,6 +565,8 @@ const eventLine = (event: HostEvent): string => {
       return `plugins: ${event.plugins.map((plugin) => `${plugin.id}=${plugin.state}`).join(" ")}`;
     case "commands-changed":
       return `commands: ${event.commands.map((command) => command.id).join(" ")}`;
+    case "channels-changed":
+      return `channels: ${event.channels.map((channel) => channel.id).join(" ")}`;
     case "models-changed":
       return "models changed";
     case "ui-changed":

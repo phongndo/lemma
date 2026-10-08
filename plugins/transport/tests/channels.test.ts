@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import { Channels, FileSearchers, serveChannel } from "@lemma/contracts";
-import type { Channel } from "@lemma/contracts";
+import type { Channel, HostEvent } from "@lemma/contracts";
 import { definePlugin, PluginContext, Registries } from "@lemma/core";
 import { settled } from "../../../scripts/e2e.ts";
 import type { Client, Kind } from "./harness.ts";
-import { hostError, withHost } from "./harness.ts";
+import { hostError, subscribe, waitFor, withHost } from "./harness.ts";
 
 /** A plugin that adds `channels` when it starts. */
 const serving = (id: string, ...channels: readonly Channel[]) =>
@@ -220,6 +220,52 @@ describe("channels", () => {
       {},
       undefined,
       [usual, overriding],
+    );
+  }, 30_000);
+
+  test("channels-changed tells clients when a channel is gone and when it is back, as across an exclusive plugin's restart gap", () => {
+    let instances = 0;
+    // A replacement starts once the test lets it, as one waiting for a lock or a port would: the old instance is gone meanwhile.
+    const proceed = Deferred.makeUnsafe<void>();
+    const lockholder = definePlugin({
+      id: "lockholder",
+      exclusive: true,
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          const instance = ++instances;
+          if (instance > 1) yield* Deferred.await(proceed);
+          yield* owner.add(
+            Channels,
+            serveChannel({ kind: "stream", id: "lock.state", payload: Schema.Void, success: Schema.Number }, () =>
+              Stream.concat(Stream.make(instance), Stream.never),
+            ),
+          );
+        }).pipe(Effect.orDie),
+      ),
+    });
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          const events = yield* subscribe(client);
+          const before = yield* open(client, "lock.state");
+          const restarting = yield* Effect.forkChild(host.core.restart("lockholder", { force: true }));
+          expect(hostError(yield* Fiber.await(before.fiber))).toMatchObject({ code: "Withdrawn" });
+          const listed = (event: HostEvent) => event.type === "channels-changed" && event.channels.some((channel) => channel.id === "lock.state");
+          expect((yield* waitFor(events, (event) => event.type === "channels-changed")).at(-1)).toEqual({ type: "channels-changed", channels: [] });
+          yield* Deferred.succeed(proceed, undefined);
+          // Back, served by the new instance.
+          expect((yield* waitFor(events, listed)).at(-1)).toEqual({
+            type: "channels-changed",
+            channels: [{ id: "lock.state", kind: "stream", source: "lockholder" }],
+          });
+          expect((yield* open(client, "lock.state")).first).toBe(2);
+          yield* Fiber.join(restarting);
+        }),
+      {},
+      undefined,
+      [lockholder],
     );
   }, 30_000);
 

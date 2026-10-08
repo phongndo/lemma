@@ -41,8 +41,9 @@ lemma channels open ticker.prices                     # one line of JSON per tic
 Prices live in the plugin, so a reload (a settings change) starts them over.
 An open stream then fails `Withdrawn`, and the page opens it again on the new
 instance; it does the same after the page reconnects to the host, because a
-stream ends with its connection. A client that falls behind gets the latest
-prices rather than a backlog.
+stream ends with its connection, and when a `channels-changed` event lists
+`ticker.prices` again after the plugin was off. A client that falls behind
+gets the latest prices rather than a backlog.
 
 `nix develop -c pnpm --filter @lemma/example-ticker test` checks the walk and
 the channels, and runs the plugin as a file in a real host, using it from the

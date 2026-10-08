@@ -210,7 +210,8 @@ A host plugin serves its own UI through
 [`Channels`](../../packages/contracts/src/channels.ts): a UI plugin requires
 `Client` and calls `client.host.channel.call(id, payload)`, or follows a
 stream with `client.host.channel.open(id, payload, onElement, onEnd)`, opening
-it again on `client.onConnect` and when it ends `Withdrawn`.
+it again on `client.onConnect`, when it ends `Withdrawn`, and on a
+`channels-changed` host event that lists it while it is closed.
 [`examples/ticker`](../../examples/ticker/README.md) is a host plugin file and a
 UI file that shows its prices at `/ticker`.
 

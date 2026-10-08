@@ -2,6 +2,7 @@ import { Deferred, Effect, Queue, Stream } from "effect";
 import type { Context } from "effect";
 import {
   AssistantDelta,
+  Channels,
   CommandsChanged,
   ModelsChanged,
   Notice,
@@ -17,7 +18,8 @@ import {
   UiChanged,
 } from "@lemma/contracts";
 import type { HostEvent, InteractionRequest } from "@lemma/contracts";
-import type { CoreClosed, Event, EventError, PluginContext } from "@lemma/core";
+import type { CoreClosed, Event, EventError, PluginContext, Registries } from "@lemma/core";
+import { answers, channelInfo } from "./channels.ts";
 
 /** Per-subscriber buffer for kernel events. A slow client loses the oldest and repairs from the session log. */
 const SUBSCRIBER_BUFFER = 1024;
@@ -51,6 +53,7 @@ export interface Hub {
 export const makeHub = (
   owner: Context.Service.Shape<typeof PluginContext>,
   open: () => Iterable<InteractionRequest>,
+  registries: Context.Service.Shape<typeof Registries>,
 ): Effect.Effect<Hub, EventError | CoreClosed> =>
   Effect.gen(function* () {
     const subscribers = new Set<Subscriber>();
@@ -82,6 +85,16 @@ export const makeHub = (
     yield* forward(CommandsChanged, (e) => ({ type: "commands-changed", commands: e.commands }));
     yield* forward(ModelsChanged, () => ({ type: "models-changed" }));
     yield* forward(UiChanged, (ui) => ({ type: "ui-changed", ui }));
+    // The channels that answer, each time a different contribution answers for any id (not at start: clients list them).
+    yield* owner.background(
+      "channels-changed",
+      registries.changes(Channels).pipe(
+        Stream.map(answers),
+        Stream.changesWith((before, after) => before.length === after.length && before.every((contribution, index) => contribution === after[index])),
+        Stream.drop(1),
+        Stream.runForEach((current) => feed({ type: "channels-changed", channels: current.map(channelInfo) })),
+      ),
+    );
 
     const join = Effect.gen(function* () {
       const subscriber: Subscriber = { feed: yield* Queue.sliding<HostEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<HostEvent>() };
