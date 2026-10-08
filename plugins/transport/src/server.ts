@@ -13,8 +13,9 @@ import type { UiComposition } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 import { ServedRpcs } from "./channels.ts";
 import type { ChannelLifetime } from "./channels.ts";
+import type { Startup } from "./startup.ts";
 
-type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof ServedRpcs>> | ChannelLifetime>;
+type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof ServedRpcs>> | ChannelLifetime | Startup>;
 
 /** Where the server listens: the bound address as Node reports it (`0.0.0.0`, `::1`), and the port. */
 interface TcpAddress {

@@ -128,7 +128,7 @@ export interface Host {
     readonly run: (id: string, context?: { cwd?: string; sessionId?: string }) => Promise<CommandResult>;
   };
   readonly channel: {
-    /** What host plugins serve (see `Channels`): the channel that answers for each id. */
+    /** What host plugins serve (see `Channels`): the channel that answers for each id. Rejects `Unavailable` as `call` does. */
     readonly list: () => Promise<readonly ChannelInfo[]>;
     /**
      * One call. Given its declaration, typed: the payload is encoded and the
@@ -137,8 +137,8 @@ export interface Host {
      * another version of the channel). Given an id, with plain JSON: resolves
      * with the result as JSON (`null` for none). Rejects with a `HostError`
      * (`NotFound`, `InvalidPayload`, the channel's own code, `Failed` for its
-     * defects, or `Withdrawn`; see `Channel.Call`) or, when the connection
-     * failed, an `RpcClientError`.
+     * defects, `Withdrawn`, or `Unavailable` when the host is still starting;
+     * see `ChannelRpcs`) or, when the connection failed, an `RpcClientError`.
      */
     readonly call: {
       <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload): Promise<Success>;
@@ -150,12 +150,12 @@ export interface Host {
      * itself: with nothing when it finished; with a `HostError` when the host
      * ended it (`Withdrawn`: its plugin stopped or was replaced, or another
      * plugin took over its id, so open it again; `Failed`, including the
-     * handler's defects; `NotFound`; `InvalidPayload`; the channel's own code)
-     * or an element did not decode (`Mismatch`, which also closes it); or with
-     * an `RpcClientError` (an `Error`, `_tag` "RpcClientError") when the
-     * connection dropped. Nothing resumes it: open it again on reconnect, and
-     * on a `channels-changed` event listing it. Returns `close`, after which
-     * neither is called.
+     * handler's defects; `NotFound`; `InvalidPayload`; `Unavailable`; the
+     * channel's own code) or an element did not decode (`Mismatch`, which also
+     * closes it); or with an `RpcClientError` (an `Error`, `_tag`
+     * "RpcClientError") when the connection dropped. Nothing resumes it: open
+     * it again on reconnect, and on a `channels-changed` event listing it.
+     * Returns `close`, after which neither is called.
      */
     readonly open: {
       <Payload, Success>(

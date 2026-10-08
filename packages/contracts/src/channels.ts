@@ -165,11 +165,15 @@ export type ChannelInfo = typeof ChannelInfo.Type;
 /**
  * How clients reach `Channels`, by id with the payload and results as JSON;
  * `@lemma/client` encodes and decodes them with a declaration's schemas. The
- * transport serves these beside `HostRpcs`.
+ * transport serves these beside `HostRpcs`. While the host starts, a request
+ * waits until its plugins are up, so a client that has just found the host
+ * reaches the channels they serve; one still waiting at the transport's
+ * startup timeout fails `Unavailable` (a `HostError`, whose `subject` is the
+ * channel when the request names one).
  */
 export class ChannelRpcs extends RpcGroup.make(
   /** What host plugins serve: the channel that answers for each id. */
-  Rpc.make("Channel.List", { success: Schema.Array(ChannelInfo) }),
+  Rpc.make("Channel.List", { success: Schema.Array(ChannelInfo), error: HostError }),
   /**
    * Calls a channel. `payload` is its payload schema's JSON form (absent is
    * `null`, what `Schema.Void` takes), and the result is its success schema's

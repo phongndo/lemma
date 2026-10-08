@@ -15,6 +15,7 @@ Serves `HostRpcs` and `ChannelRpcs` from `@lemma/contracts` with `effect/rpc` on
 | `token`              | `<Paths.home>/token` | Required on `/rpc*` and `/api*`. The default is read from that file, created at the first start (below).    |
 | `staticDir`          | none                 | Built web app served at `/`; extensionless paths without a file fall back to `index.html`. No token needed. |
 | `interactionGraceMs` | `15000`              | How long an open question waits for a client to (re)connect before failing `Unavailable`.                   |
+| `startupTimeoutMs`   | `60000`              | How long a channel request made while the host starts waits for its plugins before failing `Unavailable`.   |
 
 Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser WebSockets need; otherwise `401`):
 
@@ -26,6 +27,8 @@ Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser 
 Without a configured `token`, the host's token is the one in `<Paths.home>/token`. The first start creates that file with a random token (mode 0600, in a 0700 home; never starting with `-`, which `--token <token>` would read as an option), complete before it appears and never replacing one another host created at the same moment; later starts read it, so clients on other machines stay valid across host restarts. Surrounding whitespace is ignored; an empty or unreadable file fails the plugin's activation. Delete the file and restart the host to rotate the token. Remote access is described in [docs/remote.md](../../docs/remote.md).
 
 After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry by which clients find the host (`Discovery` in `@lemma/contracts/discovery`), and removes it on shutdown unless another host has replaced it. It also publishes a `Notice` with the URL (and a tokenized link to the web app when `staticDir` is set).
+
+The file is written as soon as the transport listens, before the plugins after it have started; the startup gate (below) holds channel requests until they have. Written later, it would make a starting host look absent: the CLI would report that no host runs, and the desktop app would start a second one. The gate, not the file, says when channels are served, so it also covers clients that know the address another way (a remote, a reloaded page).
 
 ## Behavior
 
@@ -44,6 +47,18 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
   without the transport noticing. `Host.Inspect` checks a snapshot is JSON
   before sending it, so one that is not fails that request `Failed`, naming
   the inspector, rather than as a defect from the protocol.
+- **Startup.** `Channel.List`, `Channel.Call`, and `Channel.Open` wait
+  until the composition is first up (`HostControl.composition` resolves): no
+  plugin's channels are visible before then, and then all at once. So a
+  request made as soon as the host was found reaches a channel that a plugin
+  starting after the transport serves, rather than failing `NotFound`. One
+  still waiting after `startupTimeoutMs` fails `Unavailable`, naming the
+  channel. A restarted transport's gate opens at once. Other RPCs are not
+  held: those that call a capability the transport requires reach a plugin
+  that has already started, and `Host.Info`, `Host.Plugins`, and the host's
+  changes wait for the composition through `HostControl`. `Host.Inspectors`,
+  `Host.Inspect`, and `Files.Search` read registries, so until the
+  composition is up they miss what starting plugins contribute.
 - **Channels.** `Channel.List`, `Channel.Call`, and `Channel.Open`
   ([`ChannelRpcs`](../../packages/contracts/src/channels.ts)) serve whatever
   host plugins add to `Channels`, read at each call, so a plugin gives its own

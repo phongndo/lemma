@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Clock, Effect, Layer, Stream } from "effect";
+import { Clock, Deferred, Effect, Layer, Stream } from "effect";
 import {
   Agent,
   AgentError,
@@ -287,7 +287,8 @@ export const fakeGreeter = definePlugin({
 });
 
 export interface ControlHolder {
-  core?: Core<any>;
+  /** The test's core, once `makeCore` has returned it: what the host app's loader is to its handle. */
+  readonly core: Deferred.Deferred<Core<any>>;
   /** Restarted ids; a forced restart is suffixed with `!`. */
   readonly restarted: string[];
   /** Plugins `configure` turned off, with the scope written. */
@@ -296,7 +297,7 @@ export interface ControlHolder {
   ui: UiComposition;
 }
 
-/** Delegates to the test's core once it exists, as the host app does with its loader. */
+/** Delegates to the test's core, waiting until it exists, as the host app does with its loader. */
 export const fakeHostControl = (holder: ControlHolder) =>
   definePlugin({
     id: "host",
@@ -305,7 +306,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
       HostControl,
       Effect.gen(function* () {
         const events = yield* Events;
-        const core = Effect.suspend(() => (holder.core === undefined ? Effect.die(new Error("core not attached")) : Effect.succeed(holder.core)));
+        const core = Deferred.await(holder.core);
         // Every running plugin as a bundled catalog entry; one `configure` turned off is reported disabled (it keeps running here).
         const plugins = Effect.flatMap(core, (core) =>
           Effect.map(core.inspect, (snapshot): PluginInfo[] =>
@@ -320,7 +321,8 @@ export const fakeHostControl = (holder: ControlHolder) =>
         return {
           runtime: [Paths.key, HostControl.key],
           plugins,
-          composition: Effect.succeed({ id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] }),
+          // Up once the core is, which the transport's startup gate waits for.
+          composition: Effect.as(core, { id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] }),
           restart: (pluginId, options) =>
             Effect.gen(function* () {
               const runtime = yield* core;

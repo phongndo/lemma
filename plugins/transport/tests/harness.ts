@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Duration, Effect, Exit, Layer, Option, Queue, Scope } from "effect";
+import { Deferred, Duration, Effect, Exit, Layer, Option, Queue, Scope } from "effect";
 import type { Cause } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
@@ -60,6 +60,28 @@ export const connect = (url: string, token: string, kind: Kind): Effect.Effect<C
     return yield* RpcClient.make(ClientRpcs).pipe(Effect.provide(context));
   });
 
+/** A holder for the core the fake `HostControl` delegates to, once there is one. */
+export const makeHolder: Effect.Effect<ControlHolder> = Effect.map(Deferred.make<Core<any>>(), (core) => ({
+  core,
+  restarted: [],
+  off: {},
+  ui: { plugins: {}, enabledIn: {}, configIn: {}, files: [] },
+}));
+
+/** The transport, the fakes behind it, and the bundled `commands`, homed in `home`. */
+export const hostPlugins = (home: string, holder: ControlHolder): readonly Plugin[] => [
+  transport,
+  fakeAgent,
+  fakeSessions,
+  fakeLlm,
+  fakeInteraction,
+  fakeHostControl(holder),
+  fakePaths(home),
+  fakeWorkspace,
+  commands,
+  fakeGreeter,
+];
+
 /** Mounts the transport on an ephemeral port with fakes behind it; the client finds it through `transport.json`. */
 export const withHost = <A, E>(
   body: (host: Host) => Effect.Effect<A, E, Scope.Scope>,
@@ -76,27 +98,12 @@ export const withHost = <A, E>(
       Effect.gen(function* () {
         const home = owned ?? (yield* Effect.promise(() => mkdtemp(join(tmpdir(), "lemma-transport-"))));
         if (owned === undefined) yield* Effect.addFinalizer(() => Effect.promise(() => rm(home, { recursive: true, force: true })));
-        const holder: ControlHolder = { restarted: [], off: {}, ui: { plugins: {}, enabledIn: {}, configIn: {}, files: [] } };
-        const core = yield* makeCore(
-          [
-            transport,
-            fakeAgent,
-            fakeSessions,
-            fakeLlm,
-            fakeInteraction,
-            fakeHostControl(holder),
-            fakePaths(home),
-            fakeWorkspace,
-            commands,
-            fakeGreeter,
-            ...extra,
-          ],
-          {
-            configs: { transport: { port: 0, interactionGraceMs: 100, ...config } },
-            ...(deadlines === undefined ? {} : { deadlines }),
-          },
-        );
-        holder.core = core;
+        const holder = yield* makeHolder;
+        const core = yield* makeCore([...hostPlugins(home, holder), ...extra], {
+          configs: { transport: { port: 0, interactionGraceMs: 100, ...config } },
+          ...(deadlines === undefined ? {} : { deadlines }),
+        });
+        yield* Deferred.succeed(holder.core, core);
         const found = yield* readDiscovery(home);
         if (found === undefined) return yield* Effect.die(new Error("no discovery file"));
         return yield* body({ core, url: found.url, token: found.token, home, holder, connect: (kind, token = found.token) => connect(found.url, token, kind) });

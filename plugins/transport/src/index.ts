@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Duration, Effect, Layer, Schema } from "effect";
 import { Agent, appUrl, Commands, HostControl, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
 import { definePlugin, Events, Registries } from "@lemma/core";
 import { ChannelLifetime, channelLifetime, ServedRpcs } from "./channels.ts";
@@ -9,6 +9,7 @@ import { makeInteractions } from "./interactions.ts";
 import { makeLogins } from "./logins.ts";
 import { publishDiscovery } from "./discovery.ts";
 import { startServer } from "./server.ts";
+import { Startup, startupGate } from "./startup.ts";
 import { loadToken } from "./token.ts";
 
 /** Reported by `Host.Info` and as the plugin version. */
@@ -34,6 +35,11 @@ const TransportConfig = Schema.Struct({
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 15_000)))
     .annotate({
       description: "How long an open interaction waits for a client to (re)connect before failing Unavailable.",
+    }),
+  startupTimeoutMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 60_000)))
+    .annotate({
+      description: "How long a channel request made while the host starts waits for its plugins before failing Unavailable.",
     }),
 });
 type TransportConfig = typeof TransportConfig.Type;
@@ -65,15 +71,18 @@ export default definePlugin({
 
     const token = config.token ?? (yield* loadToken(paths.home));
     const logins = makeLogins(llm, yield* Effect.scope);
-    const handlers = Layer.merge(
+    const startup = yield* startupGate(owner, control.composition, Duration.millis(config.startupTimeoutMs));
+    const handlers = Layer.mergeAll(
       ServedRpcs.toLayer(makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins })),
       Layer.succeed(ChannelLifetime, channelLifetime(registries)),
+      Layer.succeed(Startup, startup),
     );
     const address = yield* startServer(
       { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },
       handlers,
     );
     const url = `http://${clientHost(address.hostname)}:${address.port}`;
+    // Before the composition is up, which waits on this setup: channel requests wait at the startup gate meanwhile.
     yield* publishDiscovery(paths.home, { url, token, pid: process.pid, startedAt: Date.now() });
     yield* events.publish(Notice, {
       level: "info",

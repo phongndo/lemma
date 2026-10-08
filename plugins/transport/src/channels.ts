@@ -4,6 +4,7 @@ import type { Contribution, Registries } from "@lemma/core";
 import { ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf, wireCodec } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
+import { Startup } from "./startup.ts";
 
 type Reader = Context.Service.Shape<typeof Registries>;
 
@@ -156,8 +157,11 @@ const Opened = Context.Reference<Opened | undefined>("lemma/transport/Opened", {
  */
 export class ChannelLifetime extends RpcMiddleware.Service<ChannelLifetime>()("lemma/transport/ChannelLifetime", { error: HostError }) {}
 
-/** What the transport serves: `HostRpcs`, and `ChannelRpcs` with `ChannelLifetime` around each request (it passes all but `Channel.Open` through). */
-export const ServedRpcs = HostRpcs.merge(ChannelRpcs.middleware(ChannelLifetime));
+/**
+ * What the transport serves: `HostRpcs`, and `ChannelRpcs` with `ChannelLifetime` around each request (it passes all
+ * but `Channel.Open` through), held at the `Startup` gate first.
+ */
+export const ServedRpcs = HostRpcs.merge(ChannelRpcs.middleware(ChannelLifetime).middleware(Startup));
 
 export const channelLifetime =
   (registries: Reader): Context.Service.Shape<typeof ChannelLifetime> =>
