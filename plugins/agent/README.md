@@ -162,15 +162,16 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 When the agent starts, each journal becomes its session's state as it was: the
 queue, and the turn, _suspended_. Then the agent takes each session up: it
-holds the session and reads it and its log, once, and the model a suspended
-turn continues on, unless it is being cancelled. The log is the truth: a queued
-prompt the log already has was placed, and a turn the log ended is over. A
-suspended turn then resumes once the composition is up, from where its log
-stops, after a `custom` event (`agent.resumed`); a session without one runs its
-queue on, unless the queue waits for the next prompt (see
-[Busy sessions](#busy-sessions)). Where a turn stops is the last event that
-names it, reached back to its `turn-start` by parents, so titles a rename hung
-off the turn meanwhile do not mislead it.
+holds the session and reads its log, once, and checks the queue against it at
+once, as that needs nothing more; then it reads the session, and the model a
+suspended turn continues on, unless it is being cancelled. The log is the
+truth: a queued prompt the log already has was placed, and leaves the queue,
+and a turn the log ended is over. A suspended turn then resumes once the
+composition is up, from where its log stops, after a `custom` event
+(`agent.resumed`); a session without one runs its queue on, unless the queue
+waits for the next prompt (see [Busy sessions](#busy-sessions)). Where a turn
+stops is the last event that names it, reached back to its `turn-start` by
+parents, so titles a rename hung off the turn meanwhile do not mislead it.
 
 - A model call cut off (its `request` logged, no answer) is logged as an
   `attempt` with what it had produced (from the live file), the error
@@ -194,17 +195,19 @@ The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
 restart can be awaited again with their `requestId`.
 
-Taking a session up changes nothing until all of that has been read. A session
-the store says does not exist (`NotFound`) goes, journal and all. One that
-cannot be taken up otherwise (the store fails, or no model resolves) stays as it
-was, its journal untouched, with a warning in the log; it is taken up when it
-is next prompted, the prompt failing as the reading did if it still cannot be,
-or at the next start. Until then its turn stays suspended, and is not running:
-`busy`, `running` and `view` leave it out, and nothing holds the session for it,
-so the session can be deleted, which drops the turn. `queue` and `withdraw` see
-the session's queue. `cancel` records the cancellation in the journal, then
-takes the session up at once if it can (see `Agent.cancel` for when it
-answers).
+Taking a session up changes nothing until all of that has been read, but for
+the queue's check. A session the store says does not exist (`NotFound`) goes,
+journal and all. One that cannot be taken up otherwise (the store fails, or no
+model resolves) stays as it was, its queue checked if the log was read, with a
+warning in the log; it is taken up when it is next prompted, the prompt failing
+as the reading did if it still cannot be, or at the next start. Until then its
+turn stays suspended, and is not running: `busy`, `running` and `view` leave it
+out, and nothing holds the session for it, so the session can be deleted, which
+drops the turn. `queue`, `view` and `withdraw` see the session's queue, checking
+it against the log first if that was not done, and fail as reading the log does
+if it still cannot be (see `Agent.queue`). `cancel` records the cancellation in
+the journal, then takes the session up at once if it can (see `Agent.cancel`
+for when it answers).
 
 ## Stopping
 
@@ -262,4 +265,4 @@ asked again, or run (or reported interrupted) when the turn resumes.
 `agent.turns` (in `Inspectors`) lists the sessions with a turn running or
 suspended (see [Durability](#durability)), or prompts queued: the turn, since
 when it runs, whether it is suspended or being cancelled, and how many prompts
-wait.
+wait, and whether that queue is still unchecked against the log.

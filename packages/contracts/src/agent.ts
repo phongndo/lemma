@@ -203,12 +203,21 @@ export class Agent extends Context.Service<
     readonly busy: (sessionId: string) => Effect.Effect<boolean>;
     /** Sessions with a running turn. */
     readonly running: Effect.Effect<readonly string[]>;
-    /** Prompts waiting for a turn, oldest first. */
-    readonly queue: (sessionId: string) => Effect.Effect<readonly QueuedPrompt[]>;
-    /** Takes a queued prompt out; its `prompt` call fails `Retracted`. False when it was not queued (placed already). */
-    readonly withdraw: (sessionId: string, requestId: string) => Effect.Effect<boolean>;
-    /** The session as a client joining now should show it (see `AgentView`). */
-    readonly view: (sessionId: string) => Effect.Effect<AgentView>;
+    /**
+     * Prompts waiting for a turn, oldest first. Fails `Session` when the
+     * agent cannot tell them: when it does not know which of them a turn
+     * placed before a restart, and the session's log, which says, cannot be
+     * read.
+     */
+    readonly queue: (sessionId: string) => Effect.Effect<readonly QueuedPrompt[], AgentError>;
+    /**
+     * Takes a queued prompt out; its `prompt` call fails `Retracted`. False
+     * when it was not queued (placed already). Fails as `queue` does, rather
+     * than take out a prompt that may have been placed.
+     */
+    readonly withdraw: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
+    /** The session as a client joining now should show it (see `AgentView`). Fails as `queue` does. */
+    readonly view: (sessionId: string) => Effect.Effect<AgentView, AgentError>;
   }
 >()("lemma/Agent") {}
 

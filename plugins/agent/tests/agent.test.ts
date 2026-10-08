@@ -1,5 +1,6 @@
 import { promises } from "node:fs";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
@@ -734,6 +735,67 @@ describe("agent", () => {
         expect(ofType(events, "turn-end")).toMatchObject([{ reason: "cancelled" }]);
         expect(requests).toHaveLength(0);
         yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
+  it("checks a restored queue against the log before anything needs a model: a steer placed before a crash leaves it, is not withdrawn, and is placed once", async () => {
+    const gate = Effect.runSync(Deferred.make<void>());
+    const journal = (id: string) => path.join(dir, "agent", `${id}.json`);
+    let saved = "";
+    const id = await withAgent(
+      { scripts: [gated(gate, useTools(call("c1", "echo", { text: "one" }))), hang("thinking")], config: { stopGrace: 0 } },
+      ({ requests }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          const a = yield* Agent;
+          yield* Effect.forkChild(a.prompt(id, text("go")));
+          yield* waitFor(
+            Effect.sync(() => requests.length),
+            (asked) => asked === 1,
+          );
+          yield* Effect.forkChild(a.prompt(id, text("steer"), { whenBusy: "steer", requestId: "steer-placed" }));
+          yield* waitFor(a.queue(id), (queue) => queue.length === 1);
+          // The journal with the steer still queued, as a crash just after the steer reached the log leaves it.
+          saved = yield* Effect.promise(() => fs.readFile(journal(id), "utf8"));
+          yield* Deferred.succeed(gate, undefined);
+          // The next step asks the model: the steer is in the log.
+          yield* waitFor(
+            Effect.sync(() => requests.length),
+            (asked) => asked === 2,
+          );
+          return id;
+        }),
+    );
+    await fs.writeFile(journal(id), saved);
+    // No model to resume the turn on: the queue is checked against the log all the same.
+    await withAgent({ scripts: [], models: [] }, () =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        expect(yield* a.queue(id)).toEqual([]);
+        expect(yield* a.withdraw(id, "steer-placed")).toBe(false);
+        expect((yield* readJournals(dir)).get(id)?.queue).toEqual([]);
+      }),
+    );
+    await withAgent({ scripts: [reply("done")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        yield* waitFor(a.busy(id), (busy) => !busy);
+        expect(requests[0]!.messages.filter((message) => message.role === "user").map((message) => message.content)).toEqual([text("go"), text("steer")]);
+        expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "done" }]);
+      }),
+    );
+  });
+
+  it("will not tell a restored session's queue while its log cannot be read: queue, view and withdraw fail rather than guess", async () => {
+    const id = await suspendTurn(["q1"]);
+    await withAgent({ sessions: unreadableSessions({ reads: () => true }), scripts: [] }, () =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        expect(yield* Effect.flip(a.withdraw(id, "q1"))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
+        expect(yield* Effect.flip(a.queue(id))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
+        expect(yield* Effect.flip(a.view(id))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
+        expect((yield* readJournals(dir)).get(id)?.queue).toMatchObject([{ requestId: "q1" }]);
       }),
     );
   });
