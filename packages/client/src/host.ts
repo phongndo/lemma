@@ -193,7 +193,7 @@ export interface Host {
   readonly status: () => ConnectionStatus;
   /** Called immediately with the current status, then on every change. */
   readonly onStatus: (listener: (status: ConnectionStatus) => void) => () => void;
-  /** Live `Host.Events`. Losable: repair from `Session.Events` (see `SessionLog`). */
+  /** Live `Host.Events`, the runtime's own events. Losable: a slow client loses the oldest. */
   readonly onEvent: (listener: (event: HostEvent) => void) => () => void;
   readonly close: () => Promise<void>;
 }
