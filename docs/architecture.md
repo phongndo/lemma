@@ -22,7 +22,9 @@ plugin can be turned off or replaced by id ([configuration](configuration.md)).
 | [`examples/*`](../examples)                                   | Plugin files written as a user writes them                                                                  |
 
 Clients reach the host through the [transport](../plugins/transport/README.md)
-plugin's RPC, over a WebSocket or HTTP.
+plugin's RPC, over a WebSocket or HTTP. A host plugin serves its own calls and
+streams there as [channels](../packages/contracts/src/channels.ts), with no
+change to the contracts or the transport.
 
 The [session log](../plugins/sessions/README.md) is the source of truth: every
 model request can be rebuilt from it (`rebuildRequest` in the contracts), along

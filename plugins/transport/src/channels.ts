@@ -115,10 +115,11 @@ const Opened = Context.Reference<Opened | undefined>("lemma/transport/Opened", {
 /**
  * Serves each `Channel.Open` request as work with its channel's contribution
  * (`Registries.run`), so the plugin's finalizers wait for the stream. It wraps
- * the whole request rather than the stream: the RPC server waits for the
- * client to acknowledge each chunk before it pulls the next, and only this
- * wrapper can end a request blocked there. When the contribution leaves, the
- * request ends `Withdrawn` at once, stopping the stream whether or not the
+ * the whole request rather than the stream: the RPC server pulls the next
+ * chunk only once the client acknowledged the last (WebSocket) or the
+ * response drained (streaming HTTP), and only this wrapper can end a request
+ * blocked there. When the contribution leaves, or another answers for its id,
+ * the request ends `Withdrawn` at once, stopping the stream whether or not the
  * client is reading.
  */
 export class ChannelLifetime extends RpcMiddleware.Service<ChannelLifetime>()("lemma/transport/ChannelLifetime", { error: HostError }) {}
