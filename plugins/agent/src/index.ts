@@ -205,8 +205,9 @@ export default definePlugin({
     const admit = yield* Semaphore.make(1);
     /**
      * The session held (`Sessions.hold`) for a turn about to start, in a scope `start` closes once the turn has
-     * stopped: the session cannot be deleted under it. Fails `Session` when the session is gone, once a deletion
-     * under way has ended.
+     * stopped: the session cannot be deleted under it. Fails `Session` when the session is gone. Taken under
+     * `admit` only while the session is held already (before admission, or by the turn ending), so it never waits
+     * there on a deletion, which would hold up every session.
      */
     const holdFor = (sessionId: string) =>
       Effect.flatMap(Scope.make(), (lease) =>
@@ -501,10 +502,16 @@ export default definePlugin({
     const prompt = (sessionId: string, content: PromptContent, options: PromptOptions = {}) =>
       Effect.gen(function* () {
         const { requestId } = options;
+        // What the last instance left in the session comes first, as it would have had this one started with it.
+        const left = unresumed.get(sessionId);
+        if (left !== undefined) yield* recover(sessionId, left);
         // Outside the lock: the first exactly-once check of a session reads its log.
         if (requestId !== undefined) yield* requests.load(sessionId);
+        // Held before admission, until it ends, so a wait for the session's deletion to end holds up no other
+        // session and can be interrupted.
+        const held = sessions.hold(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
         // Admission cannot be split by the caller's interruption, or a prompt could be queued and forgotten.
-        const waitOn = yield* admit.withPermits(1)(
+        const admitted = admit.withPermits(1)(
           Effect.uninterruptible(
             Effect.gen(function* () {
               const state = stateOf(sessionId);
@@ -542,7 +549,6 @@ export default definePlugin({
                 yield* queueChanged(sessionId);
                 return item.done;
               }
-              // A session gone starts no turn.
               const lease = yield* holdFor(sessionId);
               // Prompts held after a failed or cancelled turn go first, then this one.
               const item = yield* makeItem(content, options, "follow-up");
@@ -554,6 +560,7 @@ export default definePlugin({
             }),
           ),
         );
+        const waitOn = yield* Effect.scoped(Effect.andThen(held, admitted));
         // Awaiting, not joining: a caller that goes away leaves the turn running. A cancelled turn resolves normally.
         if (waitOn !== undefined) yield* Deferred.await(waitOn);
       });
@@ -603,6 +610,7 @@ export default definePlugin({
       Effect.gen(function* () {
         const state = states.get(sessionId);
         states.delete(sessionId);
+        unresumed.delete(sessionId);
         requests.drop(sessionId);
         for (const item of state?.queue ?? []) {
           yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
@@ -610,6 +618,70 @@ export default definePlugin({
         // After a journal write under way, which would bring the file back.
         yield* writing.withPermits(1)(removeState(home, sessionId));
       });
+
+    /**
+     * The journals the last instance left that this one has not acted on yet (`recover`). One whose session could
+     * not be read stays, for the session's next prompt or the next start, rather than be lost.
+     */
+    const unresumed = new Map<string, Journal>();
+
+    /**
+     * Acts on what the last instance left in a session (`unresumed`): resumes its turn, or runs its queue on. Prompts
+     * the log has were placed before that instance stopped, whatever the journal says. A session gone takes its state
+     * with it; one that cannot be read fails this, its journal kept.
+     */
+    const recover = (sessionId: string, journal: Journal): Effect.Effect<void, AgentError> =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const read = yield* Effect.result(
+            Effect.gen(function* () {
+              yield* sessions.get(sessionId);
+              const log = yield* sessions.events(sessionId);
+              // Held before admission when a turn may start, as `prompt` holds it.
+              if (journal.turn !== undefined || (journal.queue.length > 0 && journal.held !== true)) yield* sessions.hold(sessionId);
+              return log;
+            }),
+          );
+          if (Result.isFailure(read) && read.failure.reason !== "NotFound") return yield* failedAs(sessionId, "Session")(read.failure);
+          yield* admit.withPermits(1)(
+            // Uninterruptible from the hold until the turn has it.
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                // Acted on meanwhile, or heard deleted.
+                if (unresumed.get(sessionId) !== journal) return;
+                if (Result.isFailure(read)) return yield* removed(sessionId);
+                requests.index(sessionId, read.success);
+                const placed = requests.of(sessionId);
+                const queue = yield* Effect.forEach(
+                  journal.queue.filter((prompt) => !placed.has(prompt.requestId)),
+                  restore,
+                );
+                const { turn } = journal;
+                const held = journal.held === true;
+                // Before anything changes, as it can fail.
+                const lease = turn !== undefined || (queue.length > 0 && !held) ? yield* holdFor(sessionId) : undefined;
+                unresumed.delete(sessionId);
+                const state = stateOf(sessionId);
+                state.queue = queue;
+                state.held = held;
+                if (lease === undefined) return yield* persist(sessionId);
+                if (turn !== undefined) {
+                  const prompts = yield* Effect.forEach(turn.prompts, restore);
+                  yield* start(sessionId, turn.turnId, prompts, lease, {
+                    resume: true,
+                    cancelling: turn.cancelling === true,
+                    marked: turn.marked === true,
+                  });
+                  return;
+                }
+                const next = state.queue.slice(0, 1);
+                setQueue(state, state.queue.slice(1));
+                yield* start(sessionId, newId(), next, lease);
+              }),
+            ),
+          );
+        }),
+      );
 
     const view = (sessionId: string): Effect.Effect<AgentView> =>
       Effect.sync(() => {
@@ -635,45 +707,14 @@ export default definePlugin({
     // say) is found gone when the next starts.
     yield* owner.observe(SessionRemoved, ({ sessionId }) => removed(sessionId), { overflow: "suspend" });
 
-    // What the last instance left: turns to resume, and queues to run on. Prompts the log already has were placed
-    // before it stopped, whatever the journal says.
-    for (const [sessionId, journal] of yield* readJournals(home)) {
-      const exists = yield* Effect.result(sessions.get(sessionId));
-      if (Result.isFailure(exists)) {
-        yield* removeState(home, sessionId);
-        continue;
-      }
-      const log = yield* sessions.events(sessionId).pipe(Effect.orElseSucceed(() => []));
-      requests.index(sessionId, log);
-      const placed = requests.of(sessionId);
-      const state = stateOf(sessionId);
-      state.queue = yield* Effect.forEach(
-        journal.queue.filter((prompt) => !placed.has(prompt.requestId)),
-        restore,
-      );
-      state.held = journal.held === true;
-      yield* admit.withPermits(1)(
-        // Uninterruptible from the hold until the turn has it.
-        Effect.uninterruptible(
-          Effect.gen(function* () {
-            const { turn } = journal;
-            if (turn === undefined && (state.queue.length === 0 || state.held)) return yield* persist(sessionId);
-            const lease = yield* Effect.result(holdFor(sessionId));
-            // Deleted since it was found: no turn starts in it, and its state goes.
-            if (Result.isFailure(lease)) return yield* removed(sessionId);
-            if (turn !== undefined) {
-              const prompts = yield* Effect.forEach(turn.prompts, restore);
-              yield* start(sessionId, turn.turnId, prompts, lease.success, {
-                resume: true,
-                cancelling: turn.cancelling === true,
-                marked: turn.marked === true,
-              });
-              return;
-            }
-            const next = state.queue.slice(0, 1);
-            setQueue(state, state.queue.slice(1));
-            yield* start(sessionId, newId(), next, lease.success);
-          }),
+    // What the last instance left, acted on now; a session that cannot be read is acted on when it is next prompted,
+    // or at the next start.
+    const journals = yield* readJournals(home);
+    for (const [sessionId, journal] of journals) unresumed.set(sessionId, journal);
+    for (const [sessionId, journal] of journals) {
+      yield* recover(sessionId, journal).pipe(
+        Effect.catch((error) =>
+          Effect.logWarning(`agent: could not resume session ${sessionId}: ${error.message}; it resumes when it is next prompted, or the agent starts again`),
         ),
       );
     }

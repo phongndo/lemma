@@ -187,6 +187,12 @@ The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
 restart can be awaited again with their `requestId`.
 
+A journal goes with its session only once the store says the session does not
+exist (`NotFound`). One whose session cannot be read or held as the agent starts
+(another error) is kept and logged as a warning, and acted on when the session
+is next prompted (a prompt that still cannot read it fails `Session`), or at the
+next start.
+
 ## Stopping
 
 When the agent closes (the host stopping, or a reload of it or of a plugin it
