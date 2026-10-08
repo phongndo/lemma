@@ -142,8 +142,9 @@ describe("commands", () => {
 
 /**
  * The channels the commands plugin serves, as the transport finds them, to be
- * driven as it drives them (`resultOf`, `elementsOf`). Not through a running
- * transport: its own tests run this plugin, so depending on it would be a cycle.
+ * driven as it drives them (`resultOf`, `elementsOf`). The transport's tests,
+ * which run this plugin, drive them over the wire; depending on the transport
+ * here would be a cycle.
  */
 const served = Effect.map(
   Effect.flatMap(Registries, (registries) => registries.items(Channels)),
@@ -186,7 +187,8 @@ describe("channels", () => {
     );
     expect(listed).toEqual([{ id: "p.where", title: "p.where", source: "p" }]);
     expect([here, there]).toEqual([{ message: "/project" }, { message: "/elsewhere" }]);
-    expect(seen).toEqual([
+    // Strictly: a run with no session has no `sessionId` key at all.
+    expect(seen).toStrictEqual([
       { context: { cwd: "/project" }, origin: undefined },
       { context: { cwd: "/elsewhere", sessionId: "s1" }, origin: "palette-1" },
     ]);

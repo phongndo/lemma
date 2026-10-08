@@ -4,8 +4,20 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { Duration, Effect, Exit, Fiber, Layer, Option, Schedule, Scope, Stream } from "effect";
-import { CommandsChanged, HOST_PROTOCOL, HostError, Inspectors, Interaction, InteractionError, Notice, SUBSCRIBED_HEADER } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schedule, Scope, Stream } from "effect";
+import {
+  Commands,
+  CommandsChanged,
+  HOST_PROTOCOL,
+  HostError,
+  Inspectors,
+  Interaction,
+  InteractionError,
+  InteractionOrigin,
+  Notice,
+  SUBSCRIBED_HEADER,
+} from "@lemma/contracts";
+import type { CommandInfo } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { definePlugin, Events, PluginContext } from "@lemma/core";
 import { loadToken } from "../src/token.ts";
@@ -465,6 +477,68 @@ describe("transport", () => {
       ),
     30_000,
   );
+
+  test("serves the commands plugin's channels: the list, a run where and for whom the caller says, and the list again when it changes", () => {
+    const later = Deferred.makeUnsafe<void>();
+    // `test.where` answers where it ran and for whom; `test.later` comes once `later` is done.
+    const where = definePlugin({
+      id: "where",
+      requires: [Commands],
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const commands = yield* Commands;
+          yield* commands.register({
+            id: "test.where",
+            title: "Where",
+            category: "Test",
+            run: ({ cwd, sessionId }) =>
+              Effect.map(Effect.service(InteractionOrigin), (origin) => ({ message: [cwd, sessionId ?? "-", origin ?? "-"].join(" ") })),
+          });
+          const added = commands.register({ id: "test.later", title: "Later", category: "Test", run: () => Effect.void });
+          yield* Effect.forkScoped(Effect.andThen(Deferred.await(later), Effect.orDie(added)));
+        }),
+      ),
+    });
+    const ids = (list: unknown) => (list as readonly CommandInfo[]).map((info) => info.id);
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          const events = yield* subscribe(client);
+          const changes = yield* Queue.unbounded<unknown>();
+          yield* Effect.forkChild(Stream.runForEach(client["Channel.Open"]({ id: "commands.changes" }), (list) => Queue.offer(changes, list)));
+          // The first list is every command now: the stream is live, and a client resyncs from it.
+          expect(ids(yield* Queue.take(changes))).toEqual(["test.greet", "test.where"]);
+          expect(yield* client["Channel.Call"]({ id: "commands.list" })).toEqual([
+            { id: "test.greet", title: "Greet…", category: "Test", source: "greeter" },
+            { id: "test.where", title: "Where", category: "Test", source: "where" },
+          ]);
+
+          // In the host's directory unless the caller names one, and with the caller's origin.
+          expect(yield* client["Channel.Call"]({ id: "commands.run", payload: { id: "test.where" } })).toEqual({ message: "/work - -" });
+          expect(
+            yield* client["Channel.Call"]({ id: "commands.run", payload: { id: "test.where", cwd: "/project", sessionId: "s1", origin: "palette-1" } }),
+          ).toEqual({ message: "/project s1 palette-1" });
+
+          // A refused run's reason is the code, and its command the subject.
+          const dismissed = yield* Effect.forkChild(client["Channel.Call"]({ id: "commands.run", payload: { id: "test.greet" } }));
+          const [asked] = (yield* waitFor(events, (event) => event.type === "interaction")).slice(-1);
+          if (asked?.type !== "interaction") throw new Error("expected an interaction");
+          yield* client["Interaction.Dismiss"]({ id: asked.request.id });
+          expect(hostError(yield* Fiber.await(dismissed))).toMatchObject({ code: "Cancelled", subject: "test.greet" });
+          expect(hostError(yield* Effect.exit(client["Channel.Call"]({ id: "commands.run", payload: { id: "nope" } })))).toMatchObject({
+            code: "NotFound",
+            subject: "nope",
+          });
+
+          yield* Deferred.succeed(later, undefined);
+          expect(ids(yield* Queue.take(changes))).toEqual(["test.greet", "test.later", "test.where"]);
+        }),
+      {},
+      undefined,
+      [where],
+    );
+  }, 30_000);
 
   test(
     "a login RPC asks its question through the event stream",

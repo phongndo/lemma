@@ -23,10 +23,10 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
   readonly kind: Kind;
   /**
    * `<subsystem>.<name>`, a multiword name in kebab-case. The subsystem is the
-   * capability the channel serves, whichever plugin provides it
-   * (`sessions.set-title`), or else the plugin (`ticker.prices`). Unique by
-   * convention: of channels with one id, the first by order answers (see
-   * `Channels`).
+   * capability the channel serves, whichever plugin provides it, bundled or a
+   * replacement (`sessions.set-title`, `files.search`), or else the plugin
+   * (`ticker.prices`). Unique by convention: of channels with one id, the
+   * first by order answers (see `Channels`).
    */
   readonly id: string;
   readonly title?: string;

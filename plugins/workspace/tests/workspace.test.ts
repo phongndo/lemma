@@ -357,7 +357,8 @@ describe("channels", () => {
           truncated: false,
         });
         expect(await client.channel.call(FileChannels.search, { cwd: "/work", query: "", within: "src" })).toMatchObject({ root: "/work" });
-        expect(searcher.asked).toEqual([
+        // Strictly: an option the caller left out is no key at all.
+        expect(searcher.asked).toStrictEqual([
           { cwd: "/work", query: "app", options: { limit: 5, kind: "file" } },
           { cwd: "/work", query: "", options: { within: "src" } },
         ]);
