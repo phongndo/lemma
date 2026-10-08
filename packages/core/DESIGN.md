@@ -22,15 +22,15 @@ holds the rationale and constraints.
 
 ## Primitives
 
-| Primitive       | Declared by                | Contract                                                                                                                                                                          |
-| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capability      | `Context.Service`          | A named service. One provider per composition: a plugin, which can be replaced, or the application.                                                                               |
-| Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `restart`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`. |
-| Hook            | `Hook.make`                | Around middleware on the critical path. Sequential, ordered, awaited. A handler may call `next` at most once. A handler failure fails the operation.                              |
-| Event           | `Event.make`               | Notification with isolated observer failures. Bounded queue, default drop-oldest without waiting; explicit `suspend` applies backpressure.                                        |
-| Registry        | `Registry.make`            | A collection plugins contribute items to (`PluginContext.add`). Ordered, attributed, staged and swapped with its contributor, removed when the contributor's scope closes.        |
-| Background work | `PluginContext.background` | Supervised work owned by the plugin scope; its exit is reported. `required` work failing fails the plugin.                                                                        |
-| Loader          | `makeLoader`               | Runs a composition described by data (`Composition`) and changes it at runtime.                                                                                                   |
+| Primitive       | Declared by                | Contract                                                                                                                                                                                                                    |
+| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capability      | `Context.Service`          | A named service. One provider per composition: a plugin, which can be replaced, or the application.                                                                                                                         |
+| Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `restart`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`.                                           |
+| Hook            | `Hook.make`                | Around middleware on the critical path. Sequential, ordered, awaited. A handler may call `next` at most once. A handler failure fails the operation.                                                                        |
+| Event           | `Event.make`               | Notification with isolated observer failures. Bounded queue, default drop-oldest without waiting; explicit `suspend` applies backpressure.                                                                                  |
+| Registry        | `Registry.make`            | A collection plugins contribute items to (`PluginContext.add`). Ordered, attributed, staged and swapped with its contributor, removed when the contributor's scope closes; work with an item (`Registries.run`) ends first. |
+| Background work | `PluginContext.background` | Supervised work owned by the plugin scope; its exit is reported. `required` work failing fails the plugin.                                                                                                                  |
+| Loader          | `makeLoader`               | Runs a composition described by data (`Composition`) and changes it at runtime.                                                                                                                                             |
 
 **Rule for choosing a primitive:** an _operation_ others may change is a hook; _news_ others may react to is an event; a _thing a plugin offers_ (an entry in a list others read) is a registry item. If the caller must learn when it fails, use a hook or a direct capability call. Events carry only information that is safe to lose. Applications own authoritative state and recovery after missed notifications.
 
@@ -99,9 +99,12 @@ unique name kept in a plugin's own data structure) makes its plugin
 `exclusive`, stopped before its replacement starts: that gap is explicit rather
 than pretending the swap was transactional. A core registry's items follow
 their contributor through the swap, so a contributor to one needs no such gap.
-Work a reader runs with an item, outside any `core.run` task, is not drained:
-the reader ends it when the item leaves, which happens before the old
-instance's finalizers run, so it never runs on against a retired instance.
+Work a reader runs with an item belongs to the item's contributor instead
+(`Registries.run`): it is admitted only while the item is there and told when
+the item leaves, and the old instance's finalizers wait for it, up to the
+dispose deadline, then interrupt it. Such work may finish on the retired
+instance, as in-flight `core.run` work does, but never runs once its
+finalizers have begun.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 

@@ -1,5 +1,6 @@
 import { Context } from "effect";
 import type { Effect, Stream } from "effect";
+import type { RegistryError } from "./errors.ts";
 import { token } from "./internal/tokens.ts";
 
 const RegistryTypeId: unique symbol = Symbol("@lemma/core/Registry");
@@ -42,7 +43,7 @@ export interface Contribution<Item> {
   readonly order: number;
 }
 
-/** Reading registries; contributing goes through `PluginContext.add`. */
+/** Reading registries, and running work with what they hold; contributing goes through `PluginContext.add`. */
 export class Registries extends Context.Service<
   Registries,
   {
@@ -50,5 +51,21 @@ export class Registries extends Context.Service<
     readonly items: <I>(registry: Registry<I>) => Effect.Effect<readonly Contribution<I>[]>;
     /** The visible items now, then again after each change; a slow reader sees the latest, never a backlog. */
     readonly changes: <I>(registry: Registry<I>) => Stream.Stream<readonly Contribution<I>[]>;
+    /**
+     * Runs `work` with a contribution, as part of its contributor's lifetime.
+     * It is admitted only while the contribution is there, checked in the same
+     * step (otherwise `RegistryError` "Absent"). `left` completes when the
+     * contribution leaves: removed, its plugin retired, failed, or stopped, or
+     * the core closing, and is heard once the change that removed it is
+     * complete. Work that must not outlive it stops then; other work
+     * may finish. The contributor's disposal waits for admitted work before its
+     * finalizers run, for at most the core's dispose deadline, then interrupts
+     * it, and `run` fails `RegistryError` ("Expired"). The work runs on its own
+     * fiber, with the caller's context; interrupting `run` interrupts it.
+     */
+    readonly run: <I, A, E, R>(
+      contribution: Contribution<I>,
+      work: (left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | RegistryError, R>;
   }
 >()("@lemma/core/Registries") {}

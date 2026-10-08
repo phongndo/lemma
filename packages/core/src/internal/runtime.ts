@@ -376,12 +376,22 @@ function assemble<E>(
         }),
       );
 
-    const dispose = (instance: Instance, exit: Exit.Exit<unknown, unknown>, final: "closed" | "failed"): Effect.Effect<void> =>
+    /** Returns how much work run with its registry items outlived the dispose deadline and was interrupted. */
+    const dispose = (instance: Instance, exit: Exit.Exit<unknown, unknown>, final: "closed" | "failed"): Effect.Effect<number> =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           instance.hooks.stop();
           instance.observers.retire();
           instance.contributions.stop();
+          // Work readers run with its items (`Registries.run`) ends before its finalizers: waited for, as drained
+          // `core.run` tasks are, then interrupted.
+          let expired = 0;
+          if (instance.contributions.working() && Option.isNone(yield* withDeadline(instance.contributions.idle, defaults.dispose, "abandon"))) {
+            expired = Option.match(yield* withDeadline(instance.contributions.expire, defaults.dispose, "abandon"), {
+              onNone: () => 0,
+              onSome: (done) => (Exit.isSuccess(done) ? done.value : 0),
+            });
+          }
           const limit = Duration.fromInputUnsafe(instance.plugin.deadlines?.dispose ?? defaults.dispose);
           const settled = yield* Deferred.make<void>();
           pendingDisposals.add(settled);
@@ -402,6 +412,7 @@ function assemble<E>(
             yield* report(instance, fault);
           }
           if (instance.state !== "failed") instance.state = final;
+          return expired;
         }),
       );
 
@@ -575,7 +586,7 @@ function assemble<E>(
               interrupted += yield* drain(previous);
               // An exclusive plugin hands over once its work has drained and before it stops: everything it did is included.
               for (const id of gapped) carried.set(id, yield* takeHandoff(instances.get(id)));
-              for (const id of [...previousOrder].reverse()) if (gapped.has(id)) yield* dispose(instances.get(id)!, Exit.void, "closed");
+              for (const id of [...previousOrder].reverse()) if (gapped.has(id)) interrupted += yield* dispose(instances.get(id)!, Exit.void, "closed");
             }
 
             // Stage replacements while unchanged instances keep serving.
@@ -649,7 +660,7 @@ function assemble<E>(
             for (const id of [...previousOrder].reverse()) {
               const instance = oldById.get(id);
               if (!instance) continue;
-              yield* dispose(instance, Exit.void, "closed");
+              interrupted += yield* dispose(instance, Exit.void, "closed");
               if (instance.fault?.phase === "dispose") reloadFaults.push(instance.fault);
             }
             const activated = staged.filter((instance) => instance.state === "active");
