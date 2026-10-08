@@ -28,10 +28,10 @@ import {
   WhenBusy,
 } from "@lemma/contracts";
 import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
-import { channelsOver, makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
+import { makeHostRpcHttp } from "@lemma/client";
 import type { HostRpcClient } from "@lemma/client";
 import { resolvePaths } from "@lemma/host/paths";
-import { call, ofChannel, received, refined, starting } from "./channels.ts";
+import { call, ofChannel, openHost, over, received, refined, starting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
@@ -210,8 +210,8 @@ Options
   -h, --help  Show this help
 
 Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
-2 usage error, 3 no running host, it could not be reached, or it is still starting,
-130 interrupted (Ctrl+C).`;
+2 usage error, 3 no running host, it could not be reached (or the connection to it
+was lost), or it is still starting, 130 interrupted (Ctrl+C).`;
 
 /** `90s`, `1m30s`, `500ms`, `2m`, or bare seconds, in milliseconds. */
 export const parseOffset = (text: string): number | undefined => {
@@ -433,7 +433,12 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
   }
 };
 
-/** `channels`: the list, a call, or a stream, followed over the WebSocket as `events` is, so a connection that dies fails it rather than hanging. */
+/**
+ * `channels`: the list, a call, or a stream. The stream is read once over
+ * the command's `Host`, printing what it sends as it is: a connection that
+ * drops ends it (exit 3), as its plugin's reload does (`Withdrawn`), rather
+ * than opening it again.
+ */
 const channelsCommand = (sub: string | undefined, id: string | undefined, rest: readonly string[]): Command | CliError => {
   if (sub === undefined || sub === "list") {
     if (id !== undefined) return usage(`Unexpected argument "${id}"`);
@@ -458,10 +463,10 @@ const channelsCommand = (sub: string | undefined, id: string | undefined, rest: 
         result === null ? { json: null, text: `called ${id}: no result` } : { json: result, text: formatSnapshot(result) },
       );
   }
-  return ({ live }, io) =>
+  return (connection, io) =>
     Effect.gen(function* () {
-      const rpc = yield* live;
-      const elements = yield* received<unknown>((onElement, onEnd) => channelsOver(rpc).open(id, request.payload, onElement, onEnd));
+      const host = yield* connection.host();
+      const elements = yield* received<unknown>((onElement, onEnd) => host.channel.open(id, request.payload, onElement, onEnd));
       yield* Stream.runForEach(Stream.mapError(elements, refined(id)), (element) =>
         Effect.andThen(
           Effect.sync(() => io.out(JSON.stringify(element))),
@@ -542,7 +547,7 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
       return ({ rpc }) =>
         Effect.gen(function* () {
-          const [info, events] = yield* readSession(rpc, arg);
+          const [info, events] = yield* readSession(over(rpc), arg);
           const branch = branchOf(events, info.leaf);
           return { json: { info, branch }, text: formatSession(info, branch) };
         });
@@ -609,7 +614,7 @@ const inspectCommand = (sessionId: string, options: Options): Command | CliError
   }
   return ({ rpc }) =>
     Effect.gen(function* () {
-      const [info, events] = yield* readSession(rpc, sessionId);
+      const [info, events] = yield* readSession(over(rpc), sessionId);
       const branch = branchOf(events, info.leaf);
       const turns = trajectory(branch);
       if (listing) {
@@ -679,16 +684,17 @@ const findStep = (turns: readonly TrajectoryTurn[], selector: string): { turn: T
 
 /**
  * The host commands go to (see `findTarget`): one-shot HTTP calls for most
- * commands, and a WebSocket (opened only when a command follows events) for
- * streaming and questions, as the web app uses.
+ * commands, and `@lemma/client`'s reconnecting `Host` (opened only by a
+ * command that watches the host) for its events, questions, and streams, as
+ * the web app has it.
  */
 const connect = (io: Io) =>
   Effect.gen(function* () {
     const target = yield* findTarget(io);
     if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
     const rpc = yield* makeHostRpcHttp(target.url, target.token);
-    const live = yield* Effect.cached(makeHostRpc(rpcUrl(target.url, target.token)));
-    return { target, rpc, live };
+    const host = (options: { readonly events?: boolean } = {}) => openHost({ url: target.url, token: target.token, ...options }, rpc);
+    return { target, rpc, host };
   });
 
 /**

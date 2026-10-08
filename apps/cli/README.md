@@ -24,6 +24,24 @@ so the two show the same records and accept the same queries.
   ([remote access](../../docs/remote.md)), else the local one. With none, a
   command fails with `NoHost` rather than starting one: a second host would
   break the sessions store's single writer.
+- **Connections.** A command that makes a call or two does so over HTTP, and
+  fails at once (exit 3) when no host answers. One that watches the host
+  (`run`, `events`, `do`, `login`, `channels open`) holds `@lemma/client`'s
+  reconnecting WebSocket, as the web app does; its first connection failing
+  fails it the same way. When that connection drops, a client makes again
+  what the host makes again when a plugin reloads: the calls declared
+  repeatable, and streams. So `run` and `events` go on once it is back,
+  saying on stderr that it dropped and came back (stdout, `--json` too,
+  shows nothing twice and skips nothing): their streams open again where
+  they were, and `run` sends its prompt again with its request id. `do` and
+  `login` fail (exit 3), since a command or a login made again could run
+  twice or ask anew: run the command again. `channels open`, which prints a
+  stream as it is sent, ends, as it does when its plugin reloads. Questions
+  still open reach a command again once it is back (the host sends them to
+  each client that subscribes), and a prompt for one that closed meanwhile
+  closes. A command gives up after 16 attempts in a row to reconnect fail,
+  about a minute with the default backoff (counted rather than timed, so a
+  laptop that wakes from sleep tries as long), and exits 3.
 - **Channels.** Sessions, turns, models, the workspace, and commands are
   reached through the channels their plugins serve (`sessions.*`, `agent.*`,
   `llm.*`, `workspace.*`, `files.search`, `commands.*`), typed by their
@@ -44,7 +62,11 @@ so the two show the same records and accept the same queries.
   `--questions ask` prompts at the terminal (the default when stdin is one),
   `ignore` leaves them to another client and prints how to answer from the CLI
   (the default otherwise, so an agent never answers for the person), and
-  `dismiss` fails them.
+  `dismiss` fails them. A `run` with nothing to answer them with (no
+  `--answer`, `--questions`, terminal, or `--follow`) does not hear the
+  host's events, so the host does not ask it: its questions go to another
+  client, or fail as unanswerable, which a tool asking for approval takes as
+  a no.
 - **Logins.** `lemma login` prints a sign-in's link and one-time code on lines
   of their own, so they copy whole into a browser on any machine. With a
   browser here (a display, not over SSH) it opens the link, and, when it
@@ -57,8 +79,11 @@ so the two show the same records and accept the same queries.
   [agent](../../plugins/agent/README.md#busy-sessions) defines. Each `run`
   sends a request id (`--request-id` to choose it), so retrying with the same
   id reports the turn that placed the prompt rather than placing it twice. A
-  `run` whose connection fails once the prompt may be sent prints the id it
-  chose (without `--json`), and exits 3: a dropped connection is not reopened.
+  `run` that loses sight of its turn once the prompt may be placed (it gave
+  up on the connection, or the agent stopped and nothing answers for
+  `agent.prompt` once its reload is over, while the agent may still resume
+  the prompt) prints the id it chose (without `--json`) and exits 3:
+  running it again with that id, not a new one, rejoins the turn.
 - **Following a turn.** `run --follow` opens `agent.activity` and the
   session's `sessions.log` before it sends the prompt, and shows the turn
   that places it from the prompt on: the log says what the turn did, in
@@ -66,7 +91,8 @@ so the two show the same records and accept the same queries.
   not reached yet waits for it, so one step's answer never prints after the
   next one's; what the activity lost, the log's answer has. Retried with the
   same `--request-id` while its turn runs, it shows what the turn has said so
-  far (from the log and `agent.view`), then the rest. With `--json` it prints
+  far (from the log and `agent.view`), then the rest; so too after a dropped
+  connection, with the log from the last event shown. With `--json` it prints
   the turn's `agent.activity` elements and its `sessions.log` events (as
   `appended` elements) as the channels send them, and the host's notices;
   a step's deltas that its answer in the log overtook are left out, since the
@@ -76,12 +102,15 @@ so the two show the same records and accept the same queries.
   streams: `agent.activity`, `sessions.changes`, `llm.changes`, and
   `commands.changes`. `--session <id>` keeps that session's turns and changes
   and adds its `sessions.log` from now on. A stream that its plugin's reload
-  withdrew is opened again at once, and one that is not served once the host
-  lists it, as every client follows a stream (`follow` in
+  withdrew is opened again at once, one that is not served once the host
+  lists it, and each once a dropped connection is back, as every client
+  follows a stream (`follow` in
   [`@lemma/client`](../../packages/client/src/follow.ts)); any other ending
-  stops it. With `--json`, each line is `{"from", "element"}`: `from` is `host`
-  for the host's own events, else the channel, and `element` is what it
-  sent.
+  stops it. Opened again, a stream says `subscribed` anew, and the log goes
+  on from the last event printed; the host's own events while the
+  connection was down are lost. With `--json`, each line is
+  `{"from", "element"}`: `from` is `host` for the host's own events, else the
+  channel, and `element` is what it sent.
 - **Machine-readable output.** With `--json`, results are the contract shapes
   (`HostInfo`, `SessionInfo`, `SessionEvent`, …) on stdout, and failures are
   `{"error": {"code", "message", "subject"?}}` on stderr. Streams

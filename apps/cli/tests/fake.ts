@@ -1,8 +1,12 @@
-import { Cause, Deferred, Effect, Exit, Queue, Stream } from "effect";
-import type { Scope } from "effect";
+import { Cause, Effect, Exit, Layer, Queue, Schema, Stream } from "effect";
+import type { Fiber } from "effect";
+import { Rpc } from "effect/rpc";
+import { Socket } from "effect/socket";
 import { HostError } from "@lemma/contracts";
-import type { RuntimeEvent } from "@lemma/contracts";
+import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
+import { RuntimeRpcs } from "@lemma/contracts/runtime";
 import type { HostRpcClient } from "@lemma/client";
+import { openHost } from "../src/channels.ts";
 import type { Connection } from "../src/command.ts";
 
 /**
@@ -29,84 +33,198 @@ export const fed = <A>(...first: readonly A[]): Fed<A> => {
 
 const notFound = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
 
-/** As many of a stream's elements as the RPC client holds unread (Effect's `streamBufferSize`). */
-const BUFFER = 16;
+/** What `Host.Info` answers: `connect` asks it of every connection. */
+const info = { version: "0.0.0", cwd: "/", home: "/", composition: { id: "fake", plugins: [] }, runtime: [] };
 
-/**
- * The host over a WebSocket, as the RPC client reads one: what the host sends,
- * in the order it sent it, by one reader. A stream's elements go into a
- * buffer of `BUFFER` the command reads from, and a full one holds the reader
- * back, so what was sent after it, a call's reply among it, waits until the
- * command reads that stream.
- */
-const socket = (host: HostRpcClient): Effect.Effect<HostRpcClient, never, Scope.Scope> =>
-  Effect.gen(function* () {
-    const wire = yield* Queue.unbounded<Effect.Effect<void>>();
-    yield* Effect.forkScoped(Effect.forever(Effect.flatten(Queue.take(wire))));
-    const send = (frame: Effect.Effect<unknown>) => void Queue.offerUnsafe(wire, Effect.asVoid(frame));
-    const reply = <A, E>(effect: Effect.Effect<A, E>) =>
-      Effect.gen(function* () {
-        const exit = yield* Effect.exit(effect);
-        const answered = yield* Deferred.make<A, E>();
-        send(Deferred.done(answered, exit));
-        return yield* Deferred.await(answered);
-      });
-    const stream = <A, E>(source: Stream.Stream<A, E>) =>
-      Stream.unwrap(
-        Effect.gen(function* () {
-          const buffer = yield* Queue.bounded<A, E | Cause.Done>(BUFFER);
-          // A stream the command closed takes nothing more, as the client's does: what was sent for it is dropped.
-          yield* Effect.addFinalizer(() => Queue.shutdown(buffer));
-          yield* Effect.forkScoped(
-            Stream.runForEach(source, (element) => Effect.sync(() => send(Queue.offer(buffer, element)))).pipe(
-              Effect.exit,
-              Effect.map((exit) => send(Exit.isSuccess(exit) ? Queue.end(buffer) : Queue.failCause(buffer, exit.cause))),
-            ),
-          );
-          return Stream.fromQueue(buffer);
-        }),
-      );
-    return new Proxy(host, {
-      get: (target, name: string) => {
-        const rpc = (target as unknown as Record<string, (...args: unknown[]) => unknown>)[name];
-        if (rpc === undefined) return undefined;
-        return (...args: unknown[]) => {
-          const answer = rpc(...args);
-          return Stream.isStream(answer) ? stream(answer as Stream.Stream<unknown, unknown>) : reply(answer as Effect.Effect<unknown, unknown>);
-        };
-      },
-    });
-  });
+/** A message of Effect RPC's JSON protocol, one to a frame. */
+interface Frame {
+  readonly _tag: string;
+  readonly id?: string | number;
+  readonly tag?: string;
+  readonly payload?: any;
+  readonly requestId?: string | number;
+}
+
+/** How the host's answer to an RPC goes on the wire: its schemas' JSON codecs, as the transport encodes it. */
+const exitOf = (tag: string, exit: Exit.Exit<unknown, unknown>): unknown =>
+  Schema.encodeUnknownSync(Schema.toCodecJson(Rpc.exitSchema(RuntimeRpcs.requests.get(tag) as Rpc.Any)) as unknown as Schema.Codec<unknown, unknown>)(exit);
+
+/** The client's end of a connection, as `globalThis.WebSocket` has it; the fake host answers what it sends. */
+class Wire extends EventTarget {
+  readyState = 0;
+  /** What runs for each request, by its id: stopped when the client stops it or the connection drops. */
+  readonly running = new Map<string | number, Fiber.Fiber<unknown, unknown>>();
+  private readonly onFrame: (wire: Wire, frame: Frame) => void;
+  private readonly onClose: (wire: Wire) => void;
+  constructor(onFrame: (wire: Wire, frame: Frame) => void, onClose: (wire: Wire) => void) {
+    super();
+    this.onFrame = onFrame;
+    this.onClose = onClose;
+  }
+  send(data: string) {
+    for (const frame of [JSON.parse(data) as Frame | Frame[]].flat()) this.onFrame(this, frame);
+  }
+  close() {
+    this.readyState = 3;
+    this.onClose(this);
+  }
+  /** Sends a message, after what was sent before it; one the connection dropped first is lost. */
+  deliver(message: unknown) {
+    setTimeout(() => {
+      if (this.readyState === 1) this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
+    }, 0);
+  }
+  /** Ends it as a network that fails does. */
+  fail() {
+    this.readyState = 3;
+    this.dispatchEvent(new Event("error"));
+    this.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }));
+  }
+}
+
+/** A connection the test can drop: `drop` cuts it, and every new one fails until `restore`. */
+export interface FakeHost extends Connection {
+  readonly drop: () => void;
+  readonly restore: () => void;
+  /** How many times `Host.Events` was subscribed to: the host asks its questions of a subscriber. */
+  readonly subscriptions: () => number;
+}
 
 /**
  * A host as a command reaches it, over both of its connections: `calls`
  * answers `Channel.Call` and `streams` serves `Channel.Open`, by channel id,
  * with payloads and results as they cross the wire (JSON); `Channel.List`
- * lists both. `events` is `Host.Events` after its `subscribed`; `rpcs`, any
- * other RPC. Over HTTP (`rpc`) each call is answered as it comes; over the
- * WebSocket (`live`) what the host sends is read in order (`socket`).
+ * lists both. `events` is `Host.Events` after its `subscribed` and the
+ * questions still open, sent to whoever is subscribed when an event comes
+ * (none while the connection is down); `rpcs`, any other RPC
+ * (`Interaction.List` among them). Over HTTP (`rpc`) each call is answered as it
+ * comes. The `Host` (`host`) is `@lemma/client`'s, over a WebSocket that
+ * speaks Effect RPC's JSON protocol, so what the command reads is what the
+ * client reads from a host: `drop` cuts that connection. `backoff` is the
+ * client's delay between attempts to reconnect (milliseconds): the socket
+ * itself dials again half a second after it drops.
  */
 export const fakeHost = (host: {
   readonly calls?: Readonly<Record<string, (payload: any) => Effect.Effect<unknown, HostError>>>;
   readonly streams?: Readonly<Record<string, (payload: any) => Stream.Stream<unknown, HostError>>>;
   readonly events?: Stream.Stream<RuntimeEvent, HostError>;
   readonly rpcs?: Readonly<Record<string, (payload: any) => unknown>>;
-}): Connection => {
+  readonly backoff?: number;
+}): FakeHost => {
   const calls = host.calls ?? {};
   const streams = host.streams ?? {};
-  const rpc = {
+  const listing = () =>
+    Effect.succeed([
+      ...Object.keys(calls).map((id) => ({ id, kind: "call", source: "fake" })),
+      ...Object.keys(streams).map((id) => ({ id, kind: "stream", source: "fake" })),
+    ]);
+  // No result crosses as `null`, as `Schema.Void` encodes.
+  const call = ({ id, payload }: { id: string; payload?: unknown }) =>
+    calls[id]?.(payload).pipe(Effect.map((result) => result ?? null)) ??
+    Effect.fail(id in streams ? new HostError({ code: "NotFound", subject: id, message: `"${id}" is a stream, not a call: open it` }) : notFound(id));
+  const rpcs: Readonly<Record<string, (payload: any) => unknown>> = {
+    "Host.Info": () => Effect.succeed(info),
+    "Interaction.List": () => Effect.succeed([]),
+    "Interaction.Answer": () => Effect.void,
+    "Interaction.Dismiss": () => Effect.void,
+    "Channel.List": listing,
+    "Channel.Call": call,
     ...host.rpcs,
-    "Host.Events": () => Stream.concat(Stream.succeed<RuntimeEvent | { readonly type: "subscribed" }>({ type: "subscribed" }), host.events ?? Stream.never),
-    "Channel.List": () =>
-      Effect.succeed([
-        ...Object.keys(calls).map((id) => ({ id, kind: "call", source: "fake" })),
-        ...Object.keys(streams).map((id) => ({ id, kind: "stream", source: "fake" })),
-      ]),
-    // No result crosses as `null`, as `Schema.Void` encodes.
-    "Channel.Call": ({ id, payload }: { id: string; payload?: unknown }) =>
-      calls[id]?.(payload).pipe(Effect.map((result) => result ?? null)) ??
-      Effect.fail(id in streams ? new HostError({ code: "NotFound", subject: id, message: `"${id}" is a stream, not a call: open it` }) : notFound(id)),
-    "Channel.Open": ({ id, payload }: { id: string; payload?: unknown }) => streams[id]?.(payload) ?? Stream.fail(notFound(id)),
-  } as unknown as HostRpcClient;
-  return { target: { url: "http://host.test", token: "t" } as Connection["target"], rpc, live: socket(rpc) };
+  };
+  const answer = (tag: string, payload: unknown): Effect.Effect<unknown, unknown> => {
+    const handler = rpcs[tag];
+    if (handler === undefined) return Effect.die(new Error(`The fake host does not answer ${tag}`));
+    const answered = handler(payload);
+    return Effect.isEffect(answered) ? (answered as Effect.Effect<unknown, unknown>) : Effect.succeed(answered);
+  };
+  const rpc = new Proxy({} as HostRpcClient, { get: (_, tag: string) => (payload: unknown) => answer(tag, payload) });
+
+  /**
+   * Who is subscribed to `Host.Events` now: each event goes to them as it comes, from the first subscription on. As
+   * the transport does, a subscription says `subscribed`, then the questions still open (`Interaction.List`).
+   */
+  const subscribers = new Set<(event: RuntimeEvent) => void>();
+  let publishing = false;
+  let subscriptions = 0;
+  const subscribe = () =>
+    Stream.unwrap(
+      Effect.gen(function* () {
+        subscriptions++;
+        const queue = yield* Queue.unbounded<RuntimeEvent>();
+        const listener = (event: RuntimeEvent) => void Queue.offerUnsafe(queue, event);
+        subscribers.add(listener);
+        yield* Effect.addFinalizer(() => Effect.sync(() => subscribers.delete(listener)));
+        const open = (yield* Effect.orDie(answer("Interaction.List", undefined))) as readonly InteractionRequest[];
+        if (!publishing) {
+          publishing = true;
+          Effect.runFork(
+            Stream.runForEach(host.events ?? Stream.never, (event) =>
+              Effect.sync(() => {
+                for (const each of subscribers) each(event);
+              }),
+            ),
+          );
+        }
+        return Stream.concat(
+          Stream.fromIterable<RuntimeEvent | { readonly type: "subscribed" }>([
+            { type: "subscribed" },
+            ...open.map((request): RuntimeEvent => ({ type: "interaction", request })),
+          ]),
+          Stream.fromQueue(queue),
+        );
+      }),
+    );
+
+  let up = true;
+  const wires = new Set<Wire>();
+  const hangUp = (wire: Wire) => {
+    wires.delete(wire);
+    for (const fiber of wire.running.values()) fiber.interruptUnsafe();
+  };
+  const serve = (wire: Wire, id: string | number, tag: string, payload: any) => {
+    const stream =
+      tag === "Host.Events" ? subscribe() : tag === "Channel.Open" ? (streams[payload.id]?.(payload.payload) ?? Stream.fail(notFound(payload.id))) : undefined;
+    const work =
+      stream === undefined
+        ? answer(tag, payload)
+        : Stream.runForEach(stream as Stream.Stream<unknown, unknown>, (element) =>
+            Effect.sync(() => wire.deliver({ _tag: "Chunk", requestId: id, values: [element] })),
+          );
+    const fiber = Effect.runFork(Effect.exit(work).pipe(Effect.map((exit) => wire.deliver({ _tag: "Exit", requestId: id, exit: exitOf(tag, exit) }))));
+    wire.running.set(id, fiber);
+    fiber.addObserver(() => wire.running.delete(id));
+  };
+  const receive = (wire: Wire, frame: Frame) => {
+    if (frame._tag === "Ping") wire.deliver({ _tag: "Pong" });
+    else if (frame._tag === "Interrupt") wire.running.get(frame.requestId!)?.interruptUnsafe();
+    else if (frame._tag === "Request") serve(wire, frame.id!, frame.tag!, frame.payload);
+  };
+  const dial = () => {
+    const wire = new Wire(receive, hangUp);
+    setTimeout(() => {
+      if (wire.readyState !== 0) return;
+      if (!up) return wire.fail();
+      wire.readyState = 1;
+      wires.add(wire);
+      wire.dispatchEvent(new Event("open"));
+    }, 0);
+    return wire as unknown as globalThis.WebSocket;
+  };
+  return {
+    target: { url: "http://host.test", token: "t" } as Connection["target"],
+    rpc,
+    host: (options = {}) =>
+      openHost({ url: "http://host.test", backoff: () => host.backoff ?? 100, webSocket: Layer.succeed(Socket.WebSocketConstructor, dial), ...options }, rpc),
+    subscriptions: () => subscriptions,
+    drop: () => {
+      up = false;
+      for (const wire of wires) {
+        hangUp(wire);
+        wire.fail();
+      }
+    },
+    restore: () => {
+      up = true;
+    },
+  };
 };

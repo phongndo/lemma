@@ -1,9 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Effect } from "effect";
-import { RpcClientError } from "effect/rpc";
+import { Cause, Deferred, Effect } from "effect";
 import { emptyUsage, HostError } from "@lemma/contracts";
-import type { AgentActivity, AgentView, AssistantMessage, EventData, RuntimeEvent, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
-import type { Options } from "../src/command.ts";
+import type { AgentActivity, AgentView, AssistantMessage, EventData, InteractionRequest, RuntimeEvent, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
+import { GIVE_UP } from "../src/channels.ts";
+import { ExitCode } from "../src/command.ts";
+import type { Io, Options } from "../src/command.ts";
 import { runCommand } from "../src/run.ts";
 import { fakeHost, fed } from "./fake.ts";
 import type { Fed } from "./fake.ts";
@@ -58,18 +59,24 @@ interface Host {
   readonly showing: (text: string) => Effect.Effect<void>;
   /** Publishes the host's own events, and resolves once they have gone out to the command. */
   readonly publish: (...events: readonly RuntimeEvent[]) => Effect.Effect<void>;
+  /** Cuts the command's connection: what is in flight on it is lost, and it cannot connect again until `restore`. */
+  readonly drop: () => void;
+  readonly restore: () => void;
 }
 
 /**
  * A host whose `agent.prompt` runs `prompt` (its `n`th call), with the
  * session's log as `log` has it and `agent.view` answering `view`.
- * `streamed` is sent on each `agent.activity` after its `subscribed`.
+ * `streamed` is sent on each `agent.activity` after its `subscribed`. `rpcs`
+ * and `backoff` are `fakeHost`'s.
  */
 const scripted = (script: {
   readonly log?: readonly EventData[];
   readonly view?: AgentView | ((host: Host) => Effect.Effect<AgentView>);
   readonly streamed?: readonly AgentActivity[];
   readonly prompt: (host: Host, n: number) => Effect.Effect<void, HostError>;
+  readonly rpcs?: Readonly<Record<string, (payload: any) => unknown>>;
+  readonly backoff?: number;
 }) => {
   const logged: SessionEvent[] = [];
   const activities: Fed<AgentActivity>[] = [];
@@ -109,6 +116,8 @@ const scripted = (script: {
         Effect.sync(() => events.push(...published)),
         events.sent,
       ),
+    drop: () => connection.drop(),
+    restore: () => connection.restore(),
   };
   const view = script.view ?? { output: [], queue: [], queueRevision: 0 };
   const connection = fakeHost({
@@ -143,8 +152,10 @@ const scripted = (script: {
       },
     },
     events: events.stream,
+    ...(script.rpcs === undefined ? {} : { rpcs: script.rpcs }),
+    ...(script.backoff === undefined ? {} : { backoff: script.backoff }),
   });
-  return { connection, prompts, screen, show };
+  return { connection, logged, prompts, screen, show };
 };
 
 const options: Options = {
@@ -162,11 +173,25 @@ const options: Options = {
   requestId,
 };
 
-/** `lemma run s1 ramble --follow` against `host`: what it showed, and its result. */
+/** `lemma run s1 ramble --follow` (or as `fields` say) against `host`, at a terminal that asks with `ask`: what it showed, and said on stderr, and its result or failure. */
+const run = async (host: ReturnType<typeof scripted>, fields: Partial<Options> = {}, ask?: Io["ask"]) => {
+  const said: string[] = [];
+  const io: Io = {
+    env: {},
+    cwd: "/",
+    out: (text) => host.show(`${text}\n`),
+    write: host.show,
+    err: (text) => void said.push(text),
+    ...(ask === undefined ? {} : { ask }),
+  };
+  const exit = await Effect.runPromise(Effect.exit(Effect.scoped(runCommand(sessionId, ["ramble"])(host.connection, io, { ...options, ...fields }))));
+  return { shown: host.screen.text, said, exit };
+};
+
 const follow = async (host: ReturnType<typeof scripted>) => {
-  const io = { env: {}, cwd: "/", out: (text: string) => host.show(`${text}\n`), write: host.show, err: () => {} };
-  const output = await Effect.runPromise(Effect.scoped(runCommand(sessionId, ["ramble"])(host.connection, io, options)));
-  return { shown: host.screen.text, output };
+  const { shown, exit } = await run(host);
+  if (exit._tag === "Failure") throw new Error(`run failed: ${String(exit.cause)}`);
+  return { shown, output: exit.value };
 };
 
 describe("run --follow", () => {
@@ -331,27 +356,190 @@ describe("run --follow", () => {
   });
 });
 
-describe("run", () => {
-  test("a run whose connection fails says the request id it chose, which rejoins its turn", async () => {
-    const lost = new RpcClientError.RpcClientError({ reason: new RpcClientError.RpcClientDefect({ message: "socket closed", cause: undefined }) });
-    let sent: string | undefined;
-    const connection = fakeHost({
-      calls: {
-        "agent.prompt": (payload: { requestId: string }) => {
-          sent = payload.requestId;
-          return Effect.fail(lost as never);
-        },
-      },
+/** What a run failed with. */
+const failed = (exit: Awaited<ReturnType<typeof run>>["exit"]) => {
+  if (exit._tag === "Success") throw new Error("the run succeeded");
+  return Cause.squash(exit.cause) as { readonly code?: string; readonly exit?: number; readonly message: string };
+};
+
+/** The request ids `agent.prompt` was called with. */
+const ids = (prompts: readonly unknown[]) => prompts.map((payload) => (payload as { readonly requestId: string }).requestId);
+
+const lostLine = "lemma: lost the connection to the host; reconnecting…";
+const backLine = "lemma: reconnected to the host";
+
+describe("a run whose connection drops", () => {
+  test("--follow goes on once it is back: the rest of the turn shows, none of it twice, and the prompt, sent again with its request id, is placed once", async () => {
+    for (const json of [false, true]) {
+      const host = scripted({
+        prompt: ({ act, append, drop, restore, reopened, showing }, n) =>
+          n === 1
+            ? Effect.gen(function* () {
+                act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1));
+                append(...started, { type: "step-start", turnId, stepId: "t1.1" });
+                yield* showing("word1 ");
+                // What the agent says while the connection is down is lost with it; what the log gets meanwhile waits there.
+                drop();
+                act(word("t1.1", 2));
+                append({ type: "message", turnId, stepId: "t1.1", message: answer("word1 word2 ") }, { type: "step-end", turnId, stepId: "t1.1" });
+                append({ type: "step-start", turnId, stepId: "t1.2" });
+                restore();
+                return yield* Effect.never;
+              })
+            : // Made again on the new connection: the host rejoins the turn that placed the prompt, and answers when it ends.
+              Effect.gen(function* () {
+                yield* reopened;
+                act(word("t1.2", 1, "more "));
+                yield* showing(json ? '"delta":"more "' : "word1 word2 more ");
+                append({ type: "message", turnId, stepId: "t1.2", message: answer("more ") }, { type: "step-end", turnId, stepId: "t1.2" }, ended);
+                act(turnEnded);
+              }),
+      });
+      const { shown, said, exit } = await run(host, { json });
+      expect(exit._tag).toBe("Success");
+      expect(ids(host.prompts)).toEqual([requestId, requestId]);
+      expect(said).toEqual([lostLine, backLine]);
+      if (!json) {
+        expect(shown).toBe("word1 word2 more \n");
+        continue;
+      }
+      const lines = shown
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { type: string; event?: SessionEvent; stepId?: string; seq?: number });
+      // Every event of the log from the prompt's message on, once and in order, those it got while the connection was down among them.
+      const placed = host.logged.findIndex((event) => event.data.type === "message" && event.data.requestId === requestId);
+      expect(lines.filter((line) => line.type === "appended").map((line) => line.event!.seq)).toEqual(host.logged.slice(placed).map((event) => event.seq));
+      expect(lines.filter((line) => line.type === "delta").map((line) => `${line.stepId}:${line.seq}`)).toEqual(["t1.1:1", "t1.2:1"]);
+      expect(exit._tag === "Success" && exit.value?.json).toMatchObject({ type: "result", reason: "done", text: "more " });
+    }
+  });
+
+  test("without --follow goes on once it is back, and ends with the turn's result", async () => {
+    const host = scripted({
+      prompt: ({ append, drop, restore }, n) =>
+        n === 1
+          ? Effect.andThen(
+              Effect.sync(() => {
+                append(...started, ...step("t1.1", "first "));
+                drop();
+                append(...step("t1.2", "second "));
+                restore();
+              }),
+              Effect.never,
+            )
+          : Effect.sync(() => append(ended)),
     });
-    const said: string[] = [];
-    const io = { env: {}, cwd: "/", out: () => {}, err: (text: string) => void said.push(text) };
-    const run = (fields: Partial<Options>) =>
-      Effect.runPromise(Effect.flip(Effect.scoped(runCommand(sessionId, ["ramble"])(connection, io, { ...options, follow: false, ...fields }))));
-    expect(await run({ requestId: undefined })).toBe(lost);
-    expect(said).toEqual([expect.stringContaining(`\`lemma run ${sessionId} --request-id ${sent}\``)]);
+    const { said, exit } = await run(host, { follow: false, json: true });
+    if (exit._tag === "Failure") throw new Error(String(exit.cause));
+    expect(exit.value?.json).toMatchObject({ session: sessionId, turn: turnId, reason: "done", steps: 2, text: "second " });
+    expect(ids(host.prompts)).toEqual([requestId, requestId]);
+    expect(said).toEqual([lostLine, backLine]);
+    // With nothing to answer them with, it never heard the host's events: the host asks it no questions, which go to
+    // another client or fail as unanswerable.
+    expect(host.connection.subscriptions()).toBe(0);
+  });
+
+  test("answers a question asked while it was down, which the host still waits on", async () => {
+    const approval: InteractionRequest = { type: "confirm", id: "q1", origin: `session:${sessionId}`, title: "Run rm -rf build?" };
+    const waiting: InteractionRequest[] = [];
+    const answered = Deferred.makeUnsafe<unknown>();
+    const host = scripted({
+      rpcs: {
+        "Interaction.List": () => Effect.sync(() => [...waiting]),
+        "Interaction.Answer": ({ id, answer: given }: { id: string; answer: unknown }) =>
+          Effect.sync(() => {
+            waiting.splice(
+              waiting.findIndex((request) => request.id === id),
+              1,
+            );
+            Deferred.doneUnsafe(answered, Effect.succeed(given));
+          }),
+      },
+      prompt: ({ append, drop, restore }, n) =>
+        n === 1
+          ? Effect.andThen(
+              Effect.sync(() => {
+                append(...started);
+                drop();
+                // Asked with no client connected: its event reaches no one.
+                waiting.push(approval);
+                restore();
+              }),
+              Effect.never,
+            )
+          : Effect.andThen(
+              Deferred.await(answered),
+              Effect.sync(() => append(...step("t1.1", "removed "), ended)),
+            ),
+    });
+    const { exit } = await run(host, { follow: false, answers: ["yes"] });
+    expect(exit._tag).toBe("Success");
+    expect(await Effect.runPromise(Deferred.await(answered))).toEqual({ type: "confirm", value: true });
+  });
+
+  test("closes the prompt of a question that closed while it was down, whose closing it never heard", async () => {
+    const approval: InteractionRequest = { type: "confirm", id: "q1", origin: `session:${sessionId}`, title: "Run rm -rf build?" };
+    const waiting: InteractionRequest[] = [];
+    const asking = Deferred.makeUnsafe<AbortSignal>();
+    const closed = Deferred.makeUnsafe<void>();
+    const host = scripted({
+      rpcs: { "Interaction.List": () => Effect.sync(() => [...waiting]) },
+      prompt: ({ append, drop, publish, restore }, n) =>
+        n === 1
+          ? Effect.gen(function* () {
+              append(...started);
+              waiting.push(approval);
+              yield* publish({ type: "interaction", request: approval });
+              yield* Deferred.await(asking);
+              drop();
+              // Answered in the web app, say: its `interaction-closed` goes to no one here.
+              waiting.length = 0;
+              restore();
+              return yield* Effect.never;
+            })
+          : Effect.andThen(
+              Deferred.await(closed),
+              Effect.sync(() => append(...step("t1.1", "kept "), ended)),
+            ),
+    });
+    const { said, exit } = await run(host, { follow: false }, (_question, _secret, signal) => {
+      signal?.addEventListener("abort", () => Deferred.doneUnsafe(closed, Effect.void));
+      Deferred.doneUnsafe(asking, Effect.succeed(signal!));
+      return new Promise<string>(() => {});
+    });
+    expect(exit._tag).toBe("Success");
+    expect(said).toEqual([lostLine, backLine, "(answered elsewhere)"]);
+  });
+
+  test(`gives up after ${GIVE_UP} attempts in a row fail, exiting 3 with the request id it chose, which rejoins the turn`, async () => {
+    const lost = async (fields: Partial<Options>) => {
+      const host = scripted({
+        backoff: 1,
+        prompt: ({ drop }) => Effect.andThen(Effect.sync(drop), Effect.never),
+      });
+      const { said, exit } = await run(host, { follow: false, ...fields });
+      return { said, error: failed(exit), sent: ids(host.prompts) };
+    };
+    const { said, error, sent } = await lost({ requestId: undefined });
+    expect(error).toMatchObject({ code: "Disconnected", exit: ExitCode.unavailable });
+    expect(error.message).toContain(`${GIVE_UP} attempts`);
+    expect(sent).toHaveLength(1);
+    expect(said).toEqual([lostLine, expect.stringContaining(`\`lemma run ${sessionId} --request-id ${sent[0]}\``)]);
     // One it was given, it does not repeat.
-    said.length = 0;
-    expect(await run({ requestId: "mine" })).toBe(lost);
-    expect(said).toEqual([]);
+    expect((await lost({ requestId: "mine" })).said).toEqual([lostLine]);
+  });
+
+  test("whose prompt the agent never came back for, after the host's own repeat, says the prompt may be taken, as when it gives up", async () => {
+    const host = scripted({
+      prompt: () => Effect.fail(new HostError({ code: "Withdrawn", subject: "agent.prompt", message: "agent.prompt was withdrawn" })),
+    });
+    const { said, exit } = await run(host, { follow: false, requestId: undefined });
+    const error = failed(exit);
+    expect(error).toMatchObject({ code: "Withdrawn", exit: ExitCode.unavailable });
+    expect(error.message).toContain("may take the prompt still");
+    // Running it again would choose another id, and place the prompt twice: the one it chose rejoins its turn.
+    const [sent] = ids(host.prompts);
+    expect(said).toEqual([expect.stringContaining(`\`lemma run ${sessionId} --request-id ${sent}\``)]);
   });
 });

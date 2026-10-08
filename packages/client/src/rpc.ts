@@ -1,5 +1,5 @@
 import { Effect, Layer } from "effect";
-import type { Scope } from "effect";
+import type { Context, Scope } from "effect";
 import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
@@ -13,8 +13,8 @@ export type RawHostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeR
  * The typed Effect surface of what the host serves (`RuntimeRpcs`), as
  * clients get it: `rpc["Host.Info"]()`, `rpc["Channel.Call"]({ id })`, ...
  * Its streams' RPCs, `Host.Events` and `Channel.Open`, are left out, so a
- * client reads them only through `eventsOver` and `channelsOver` (see
- * `makeHostRpc`); reading one raw fails to compile.
+ * client reads them only through `connect`'s `Host` (see `makeHostRpc`);
+ * reading one raw fails to compile.
  */
 export type HostRpcClient = Omit<RawHostRpcClient, "Host.Events" | "Channel.Open">;
 
@@ -40,16 +40,18 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * Transient errors are not retried silently: a ping timeout (a connection
  * that died across sleep or a network change) must fail the `Host.Events`
  * subscription, or it would wait forever on a stream the server has dropped.
+ * `socket` hears each connection of the socket open and close.
  *
- * Its streams (`Host.Events`, `Channel.Open`) are read only through this
- * package, which hands each element to a callback at once: `eventsOver`, and
- * `channelsOver`'s `open`, which `connect` and `follow` use. Effect's RPC
- * client reads the socket on one fiber, which puts a stream's chunk into that
- * request's bounded queue (16 elements) and only then acknowledges it, so a
- * consumer that stops taking a stream's elements suspends that fiber, and
- * every call and stream on the socket waits behind it: a reply its consumer
- * waits for never arrives. A client that orders or paces what it reads (the
- * CLI) does so in a queue of its own, after the callback. The rule holds by
+ * What `connect` holds. Its streams (`Host.Events`, `Channel.Open`) are read
+ * only through this package, which hands each element to a callback at
+ * once: the `Host`'s `onEvent` and `channel.open`, which `follow` uses.
+ * Effect's RPC client reads the socket on one fiber, which puts a stream's
+ * chunk into that request's bounded queue (16 elements) and only then
+ * acknowledges it, so a consumer that stops taking a stream's elements
+ * suspends that fiber, and every call and stream on the socket waits behind
+ * it: a reply its consumer waits for never arrives. A client that orders or
+ * paces what it reads (the CLI) does so in a queue of its own, after the
+ * callback. The rule holds by
  * construction: the client this hands out has no stream RPCs
  * (`HostRpcClient`), and `scripts/check-boundaries.ts` finds a client made
  * elsewhere. The owner is reporting the reader's behavior to Effect.
@@ -57,12 +59,14 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
 export const makeHostRpc = (
   url: string,
   webSocket: Layer.Layer<Socket.WebSocketConstructor> = Socket.layerWebSocketConstructorGlobal,
+  socket: Context.Service.Shape<typeof RpcClient.ConnectionHooks> = { onConnect: Effect.void, onDisconnect: Effect.void },
 ): Effect.Effect<HostRpcClient, never, Scope.Scope> =>
   Effect.gen(function* () {
     const protocol = RpcClient.layerProtocolSocket({ retryTransientErrors: false }).pipe(
       Layer.provide(Socket.layerWebSocket(url)),
       Layer.provide(webSocket),
       Layer.provide(RpcSerialization.layerJson),
+      Layer.provide(Layer.succeed(RpcClient.ConnectionHooks, socket)),
     );
     const context = yield* Layer.build(protocol);
     return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));

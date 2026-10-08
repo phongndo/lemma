@@ -17,10 +17,11 @@ import type {
   TextContent,
   TurnOptions,
 } from "@lemma/contracts";
-import type { HostRpcClient } from "@lemma/client";
-import { call, follow, followable } from "./channels.ts";
+import type { Host } from "@lemma/client";
+import { callOn, follow, ofChannel, on, reconnecting } from "./channels.ts";
+import type { Calls } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Command, Connection, Failure, Io, Options, Output } from "./command.ts";
+import type { Command, Failure, Io, Options, Output } from "./command.ts";
 import { formatTurnResult } from "./format.ts";
 import { hostEvents, noticeLine, questionHandler } from "./live.ts";
 
@@ -49,11 +50,35 @@ type Prompt = typeof AgentChannels.prompt extends ChannelDeclaration<"call", inf
 
 /**
  * `agent.prompt`, which answers when the turn that places the prompt ends.
- * When the agent reloads meanwhile, the host makes it again on the
- * replacement (it is `repeatable`), where the same `requestId` waits for that
- * turn, or places the prompt if it never was, and never places it twice.
+ * It is `repeatable`: made again with the same `requestId`, it waits for that
+ * turn, or places the prompt if it never was, and never places it twice. So
+ * when the agent reloads meanwhile, the host makes it again on the
+ * replacement, and when the connection drops, this command makes it again
+ * once it is back (`callOn`). Withdrawn all the same, nothing answered for it
+ * once the reload was over (the agent failed or was turned off, or the host
+ * stopped), and the prompt may be taken, or be once the agent is back and
+ * resumes what it had: as when the connection is given up on, the request id
+ * is the way to its turn (`lost`), where running the command again would
+ * place it twice.
  */
-const prompt = (rpc: HostRpcClient, payload: Prompt) => call(rpc, AgentChannels.prompt, payload);
+const prompt = (host: Host, payload: Prompt) =>
+  callOn(host, AgentChannels.prompt, payload).pipe(
+    Effect.mapError((error) =>
+      ofChannel(error, AgentChannels.prompt.id, "Withdrawn")
+        ? new CliError({
+            code: "Withdrawn",
+            message: `"${AgentChannels.prompt.id}" was withdrawn: the agent stopped while it had the prompt, and nothing answers for it now; it may take the prompt still, once it is back`,
+            subject: AgentChannels.prompt.id,
+            exit: ExitCode.unavailable,
+          })
+        : error,
+    ),
+  );
+
+/** The prompt may be placed, but how its turn goes this command cannot say: the connection was given up on, or the agent did not come back (`prompt`). */
+const lost = (error: Failure): boolean =>
+  error instanceof CliError &&
+  (error.code === "Disconnected" || (error.exit === ExitCode.unavailable && ofChannel(error, AgentChannels.prompt.id, "Withdrawn")));
 
 // ------------------------------------------------------------------ the result
 
@@ -85,8 +110,8 @@ const summarize = (info: SessionInfo, events: readonly SessionEvent[], requestId
 export type TurnResult = ReturnType<typeof summarize>;
 
 /** The session's info and log, read once. */
-export const readSession = (rpc: HostRpcClient, sessionId: string) =>
-  Effect.all([call(rpc, SessionChannels.get, { sessionId }), call(rpc, SessionChannels.events, { sessionId })], { concurrency: "unbounded" });
+export const readSession = (calls: Calls, sessionId: string) =>
+  Effect.all([calls(SessionChannels.get, { sessionId }), calls(SessionChannels.events, { sessionId })], { concurrency: "unbounded" });
 
 const result = (turn: TurnResult, options: Options, streamed: boolean): Output => ({
   json: options.json && streamed ? { type: "result", ...turn } : turn,
@@ -97,7 +122,12 @@ const result = (turn: TurnResult, options: Options, streamed: boolean): Output =
 
 // ------------------------------------------------------------------ run
 
-/** `lemma run <session|new> <prompt…>`: send a prompt and wait for the turn; `--follow` streams it. */
+/**
+ * `lemma run <session|new> <prompt…>`: send a prompt and wait for the turn;
+ * `--follow` streams it. A dropped connection is reconnected
+ * (`reconnecting`): the prompt is sent again with its request id, and the
+ * turn's streams go on from what was shown.
+ */
 export const runCommand =
   (target: string, words: readonly string[]): Command =>
   (connection, io, options) =>
@@ -108,7 +138,13 @@ export const runCommand =
       if (text === "" && images.length === 0) return yield* usage("run needs a prompt");
       const content: PromptContent = [...(text === "" ? [] : [{ type: "text", text } satisfies TextContent]), ...images];
 
-      const sessionId = target === "new" ? (yield* call(connection.rpc, SessionChannels.create, { cwd: resolve(io.cwd, options.cwd ?? ".") })).id : target;
+      // The turn's questions (a tool asking for approval, say) are answered here when there is something to answer
+      // with: --answer, --questions, or a terminal; `--follow` shows them, or how to answer them. Otherwise the CLI does
+      // not hear the host's events, so they go to another client (an open web app) or, with none, fail as
+      // unanswerable, which a tool asking for approval takes as a no.
+      const answers = options.answers.length > 0 || options.questions !== undefined || io.ask !== undefined;
+      const host = yield* connection.host({ events: answers || options.follow });
+      const sessionId = target === "new" ? (yield* callOn(host, SessionChannels.create, { cwd: resolve(io.cwd, options.cwd ?? ".") })).id : target;
       if (target === "new" && !options.json) io.err(`lemma: session ${sessionId}`);
       // Always an id: the result and `--follow` are about the turn that places this prompt, which a queue can delay.
       const payload: Prompt = {
@@ -118,11 +154,11 @@ export const runCommand =
         ...(Object.keys(turn).length ? { options: turn } : {}),
         ...(options.whenBusy === undefined ? {} : { whenBusy: options.whenBusy }),
       };
-      return yield* send(connection, io, options, payload).pipe(
-        // The connection failed with the prompt perhaps placed: the id this command chose is the way back to its turn.
+      return yield* reconnecting(host, io, send(host, io, options, payload, answers)).pipe(
+        // The prompt perhaps placed, and its turn out of sight: the id this command chose is the way back to that turn.
         Effect.tapError((error) =>
           Effect.sync(() => {
-            if (error._tag !== "RpcClientError" || options.requestId !== undefined || options.json) return;
+            if (!lost(error) || options.requestId !== undefined || options.json) return;
             io.err(
               `lemma: prompt ${payload.requestId} may be running: \`lemma run ${sessionId} --request-id ${payload.requestId}\` with the same prompt rejoins its turn without placing it twice`,
             );
@@ -131,21 +167,14 @@ export const runCommand =
       );
     });
 
-/** Sends the prompt and waits for its turn: shown as it runs with `--follow`, else its result once it ends. */
-const send = (connection: Connection, io: Io, options: Options, payload: Prompt) =>
+/** Sends the prompt and waits for its turn: shown as it runs with `--follow`, else its result once it ends, answering the turn's questions if it `answers` them. */
+const send = (host: Host, io: Io, options: Options, payload: Prompt, answers: boolean) =>
   Effect.gen(function* () {
     const { sessionId } = payload;
-    if (options.follow) return yield* followed(connection, io, options, payload);
-
-    // The turn's questions (a tool asking for approval, say) are answered here when there is something to answer
-    // with: --answer, --questions, or a terminal. Otherwise the CLI stays unattached, so they go to another client
-    // (an open web app) or, with none, fail as unanswerable, which a tool asking for approval takes as a no.
-    if (options.answers.length > 0 || options.questions !== undefined || io.ask !== undefined) {
-      const rpc = yield* connection.live;
-      yield* hostEvents(rpc, yield* questionHandler(rpc, io, options, `session:${sessionId}`));
-    }
-    yield* prompt(connection.rpc, payload);
-    const [info, events] = yield* readSession(connection.rpc, sessionId);
+    if (options.follow) return yield* followed(host, io, options, payload);
+    if (answers) yield* hostEvents(host, yield* questionHandler(host, io, options, `session:${sessionId}`));
+    yield* prompt(host, payload);
+    const [info, events] = yield* readSession(on(host), sessionId);
     return result(summarize(info, events, payload.requestId), options, false);
   });
 
@@ -154,41 +183,41 @@ const send = (connection: Connection, io: Io, options: Options, payload: Prompt)
  * from before the prompt is sent, so nothing of its turn is missed, and the
  * turn is shown as they report it (`turnView`). Once the prompt's call has
  * answered, what the log has beyond what was followed shows, read once with
- * what the result reads.
+ * what the result reads. After a dropped connection, both are opened again,
+ * the log from the last event shown, and the activity, whose output meanwhile
+ * was lost, caught up from `agent.view`.
  */
-const followed = (connection: Connection, io: Io, options: Options, payload: Prompt) =>
+const followed = (host: Host, io: Io, options: Options, payload: Prompt) =>
   Effect.gen(function* () {
     const { sessionId, requestId } = payload;
-    const rpc = yield* connection.live;
-    const view = turnView(io, options, sessionId, requestId, call(rpc, AgentChannels.view, { sessionId }));
-    const questions = yield* questionHandler(rpc, io, options, `session:${sessionId}`);
+    const view = turnView(io, options, sessionId, requestId, callOn(host, AgentChannels.view, { sessionId }));
+    const questions = yield* questionHandler(host, io, options, `session:${sessionId}`);
     // One element at a time, whichever stream it comes from, so what is shown stays in order.
     const lock = yield* Semaphore.make(1);
     const serial = <E>(effect: Effect.Effect<void, E>) => lock.withPermits(1)(effect);
-    const host = yield* hostEvents(rpc, (event) => (event.type === "notice" ? serial(Effect.sync(() => view.notice(event))) : questions(event)));
-    const followed = followable(rpc, host);
+    yield* hostEvents(host, (event) => (event.type === "notice" ? serial(Effect.sync(() => view.notice(event))) : questions(event)));
     // The output first, so whatever the log then has, the output of what follows it is heard.
     const activity = yield* follow(
-      followed,
+      host,
       AgentChannels.activity,
       () => undefined,
       (element) => serial(view.activity(element)),
     );
     const log = yield* follow(
-      followed,
+      host,
       SessionChannels.log,
       () => ({ sessionId, after: view.logSeq() }),
       (update) => serial(view.log(update)),
     );
     yield* Effect.raceFirst(
-      prompt(rpc, payload),
-      // Either stream failing (not just withdrawn, which reopens it) fails the command.
+      prompt(host, payload),
+      // Either stream failing (not withdrawn or cut off, which reopens it) fails the command.
       Effect.andThen(Effect.raceFirst(Fiber.join(activity), Fiber.join(log)), Effect.never),
     );
     // `turn-ended` may trail the reply (each kind of the agent's output comes in its own order): what came before it too.
     yield* view.ended.pipe(Effect.timeout(Duration.seconds(2)), Effect.ignore);
     yield* serial(Effect.andThen(Fiber.interrupt(activity), Fiber.interrupt(log)));
-    const [info, events] = yield* readSession(connection.rpc, sessionId);
+    const [info, events] = yield* readSession(on(host), sessionId);
     view.catchUp(events);
     view.close();
     return result(summarize(info, events, requestId), options, options.json || view.streamed());
@@ -215,7 +244,8 @@ const indexed = (content: AssistantMessage["content"]) => content.map((block, in
  * joined) is skipped, and what the log has of an answer that was not shown
  * shows when the log has it; output after that is skipped too. A turn joined
  * running (the prompt was placed before: a retry), or whose activity was
- * withdrawn meanwhile, is caught up from `agent.view`.
+ * withdrawn or cut off by a dropped connection meanwhile, is caught up from
+ * `agent.view`.
  *
  * With `--json`, the activity of the turn and its events in the log print as
  * their channels send them; what the log has of an answer is in its message.
@@ -453,7 +483,7 @@ const turnView = (io: Io, options: Options, sessionId: string, requestId: string
     activity: (element: AgentActivity): Effect.Effect<void, Failure> =>
       Effect.suspend(() => {
         if (element.type === "subscribed") {
-          // Opened again after the agent reloaded: what its turn did meanwhile was missed.
+          // Opened again after the agent reloaded or the connection dropped: what its turn did meanwhile was missed.
           return activityOpens++ > 0 && ours !== undefined && !over ? rejoin : Effect.void;
         }
         if (place(element)) release();

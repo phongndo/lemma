@@ -46,10 +46,11 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
    * the call waits (stops, fails, or is replaced, as a reload does), the host
    * makes it again on what answers for the id next, a replacement or what
    * the change left (`withChannel`), and its client gets `Withdrawn` only
-   * when nothing does.
-   * A call that is not (it writes, or asks the person something) ends
-   * `Withdrawn`, and its client decides whether to make it again. A stream is
-   * never repeatable: its client reopens it (`follow` in `@lemma/client`).
+   * when nothing does. For the same reason a client may make it again when
+   * its connection drops while it waits (the CLI does). A call that is not
+   * (it writes, or asks the person something) ends `Withdrawn`, and its
+   * client decides whether to make it again. A stream is never repeatable:
+   * its client reopens it (`follow` in `@lemma/client`).
    */
   readonly repeatable?: Kind extends "call" ? boolean : never;
 }

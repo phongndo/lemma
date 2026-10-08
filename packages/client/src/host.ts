@@ -116,7 +116,7 @@ export interface Host {
   readonly status: () => ConnectionStatus;
   /** Called immediately with the current status, then on every change. */
   readonly onStatus: (listener: (status: ConnectionStatus) => void) => () => void;
-  /** Live `Host.Events`, the runtime's own events. Losable but for questions: a slow client loses the oldest. */
+  /** Live `Host.Events`, the runtime's own events (none when connected without them: `ConnectOptions.events`). Losable but for questions: a slow client loses the oldest. */
   readonly onEvent: (listener: (event: RuntimeEvent) => void) => () => void;
   readonly close: () => Promise<void>;
 }
@@ -131,6 +131,15 @@ export interface ConnectOptions {
   readonly probeTimeoutMs?: number;
   /** The WebSocket implementation; default the platform's (tests script one). */
   readonly webSocket?: Layer.Layer<Socket.WebSocketConstructor>;
+  /**
+   * Whether to hear the host's events (`Host.Events`); default true. The host
+   * asks its questions of the clients that hear them, and waits on their
+   * answers, so a client that will answer none (a script that only calls)
+   * connects without: the questions go to another client, or fail as
+   * unanswerable. `onEvent` then hears nothing, and each connection is
+   * confirmed by `Host.Info` alone and lost when its socket closes.
+   */
+  readonly events?: boolean;
 }
 
 export const defaultBackoff = (attempt: number): number => Math.min(5_000, 250 * 2 ** Math.max(0, attempt - 1));
@@ -239,12 +248,8 @@ const drain = <A>(stream: Stream.Stream<A, unknown>, onElement: (element: A) => 
   };
 };
 
-/**
- * `Host.channel` over an Effect client (`makeHostRpc`, `makeHostRpcHttp`):
- * what `connect` gives, and what a client with a connection of its own (the
- * CLI's) calls, opens, and `follow`s channels with.
- */
-export const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
+/** `Host.channel` over the connection's Effect client: what `connect` gives. */
+const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
   list: () => runPromise(rpc["Channel.List"]()),
   call: (target: string | ChannelDeclaration, payload?: unknown) => runPromise(callOver(rpc, target, payload)),
   open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: StreamEnd) =>
@@ -252,24 +257,23 @@ export const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
 });
 
 /** What `Host.Events` sends: `subscribed` once the subscription has joined, so the client hears all that is published from then on, then the runtime's events. */
-export type HostEventsElement = { readonly type: "subscribed" } | RuntimeEvent;
+type HostEventsElement = { readonly type: "subscribed" } | RuntimeEvent;
 
 /**
- * The host's own events (`Host.Events`) over an Effect client, read into
- * callbacks as `Host.channel.open` reads a stream: `onEvent` hears
+ * The host's own events (`Host.Events`) over the connection's Effect client,
+ * read into callbacks as `Host.channel.open` reads a stream: `onEvent` hears
  * `subscribed`, then each event; `onEnd` hears how it ended, if by itself
  * (the connection dropped, say). Returns `close`, after which neither is
- * called. What `connect` subscribes with, and what a client with a connection
- * of its own (the CLI's) reads the host's events through.
+ * called. What `connect` subscribes with.
  */
-export const eventsOver = (rpc: HostRpcClient, onEvent: (event: HostEventsElement) => void, onEnd?: StreamEnd): (() => void) =>
+const eventsOver = (rpc: HostRpcClient, onEvent: (event: HostEventsElement) => void, onEnd?: StreamEnd): (() => void) =>
   drain(raw(rpc)["Host.Events"](), onEvent, onEnd, "Host event listener failed");
 
 /**
- * One call to a declared channel over an Effect client (`makeHostRpc`,
- * `makeHostRpcHttp`), typed as `Host.channel.call` is: the payload encoded
- * and the result decoded with its schemas' JSON codecs. Fails as that
- * rejects: a `HostError`, or an `RpcClientError` when the connection failed.
+ * One call to a declared channel over an Effect client (`makeHostRpcHttp`),
+ * typed as `Host.channel.call` is: the payload encoded and the result decoded
+ * with its schemas' JSON codecs. Fails as that rejects: a `HostError`, or an
+ * `RpcClientError` when the connection failed.
  */
 export const callChannel = <Payload, Success>(
   rpc: Pick<HostRpcClient, "Channel.Call">,
@@ -289,10 +293,20 @@ export const describeError = (error: unknown): string => {
  * backoff. Each (re)connect is confirmed with `Host.Info`, and by the host's
  * `subscribed` (not passed to listeners), before the status turns `connected`,
  * so `generation` changes only when calls can succeed and events arrive.
+ * Without events (`ConnectOptions.events`), `Host.Info` confirms it, and the
+ * socket's closing ends it.
  */
 export const connect = async (options: ConnectOptions): Promise<Host> => {
+  /** The end of the socket's current connection: why it closed, once it has; a new one opens a new end. */
+  let closed = Deferred.makeUnsafe<string>();
+  const socket = {
+    onConnect: Effect.sync(() => {
+      if (Deferred.isDoneUnsafe(closed)) closed = Deferred.makeUnsafe<string>();
+    }),
+    onDisconnect: Effect.sync(() => void Deferred.doneUnsafe(closed, Effect.succeed("Connection closed"))),
+  };
   const scope = await runPromise(Scope.make());
-  const rpc: HostRpcClient = await runPromise(Scope.provide(makeHostRpc(rpcUrl(options.url, options.token), options.webSocket), scope));
+  const rpc: HostRpcClient = await runPromise(Scope.provide(makeHostRpc(rpcUrl(options.url, options.token), options.webSocket, socket), scope));
   const backoff = options.backoff ?? defaultBackoff;
   const probeTimeout = Duration.millis(options.probeTimeoutMs ?? 8_000);
 
@@ -307,8 +321,20 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
     for (const listener of eventListeners) safely(listener, event, "Host event listener failed");
   };
 
+  const probe = rpc["Host.Info"]().pipe(Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.fail(new Error("Timed out")) }), Effect.result);
+
+  /** One probe, for as long as the socket it went over stays open: why it closed, or why the probe failed. */
+  const quietly = Effect.gen(function* () {
+    const answered = yield* probe;
+    if (answered._tag === "Failure") return describeError(toError(answered.failure));
+    // The probe's socket opened before it answered, so its end is the current one.
+    const end = closed;
+    if (!Deferred.isDoneUnsafe(end)) setStatus({ state: "connected", generation: status.generation + 1, attempts: 0 });
+    return yield* Deferred.await(end);
+  });
+
   /** One subscription and probe, for as long as the subscription lasts: why it ended, or why it could not start. */
-  const attempt = Effect.gen(function* () {
+  const subscribing = Effect.gen(function* () {
     // Subscribe first so nothing published after the probe is missed.
     const subscribed = yield* Deferred.make<void>();
     const ended = yield* Deferred.make<string>();
@@ -322,11 +348,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       ),
       (close) => Effect.sync(close),
     );
-    const probe = yield* rpc["Host.Info"]().pipe(
-      Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.fail(new Error("Timed out")) }),
-      Effect.result,
-    );
-    if (probe._tag === "Failure") return describeError(toError(probe.failure));
+    const answered = yield* probe;
+    if (answered._tag === "Failure") return describeError(toError(answered.failure));
     // Connected once `subscribed` arrives, not on a subscription that ended, or stayed silent, before it did.
     const ready = yield* Effect.raceFirst(Effect.as(Deferred.await(subscribed), true), Effect.as(Deferred.await(ended), false)).pipe(
       Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.succeed(undefined) }),
@@ -336,6 +359,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
     if (ready && !Deferred.isDoneUnsafe(ended)) setStatus({ state: "connected", generation: status.generation + 1, attempts: 0 });
     return yield* Deferred.await(ended);
   }).pipe(Effect.scoped);
+
+  const attempt = options.events === false ? quietly : subscribing;
 
   const loop = Effect.gen(function* () {
     for (;;) {

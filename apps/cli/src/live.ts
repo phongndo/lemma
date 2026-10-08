@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { Deferred, Duration, Effect, Fiber, FiberMap } from "effect";
+import { Deferred, Duration, Effect, FiberMap, Stream } from "effect";
 import type { Scope } from "effect";
 import { AgentChannels, CommandChannels, LlmChannels, SessionChannels } from "@lemma/contracts";
 import type {
@@ -15,17 +15,15 @@ import type {
   SessionsChange,
   UiComposition,
 } from "@lemma/contracts";
-import { eventsOver } from "@lemma/client";
-import type { HostEventsElement, HostRpcClient } from "@lemma/client";
-import { call, followable, following, ofChannel, received, subscribe } from "./channels.ts";
-import type { HostEvents } from "./channels.ts";
+import type { Host } from "@lemma/client";
+import { call, callOn, dropped, following, ofChannel, received, reconnecting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options } from "./command.ts";
 import { formatCommands, formatModels, formatProviders, formatQueue, formatQuestions } from "./format.ts";
 
 /**
- * Commands that act on the host and watch it: they subscribe to the host's
- * own events over a WebSocket, as the web app does, to answer the questions
+ * Commands that act on the host and watch it: they hear the host's own events
+ * over `@lemma/client`'s `Host`, as the web app does, to answer the questions
  * it asks and show its notices, and follow its subsystems' streams.
  */
 
@@ -84,11 +82,16 @@ interface QuestionView {
  * from `origin` are handled, so answers never reach another session's or
  * client's question; `undefined` handles every question (`events --answer`).
  *
- * The handler takes every subscribed event. Each question is answered in its
- * own fiber, so events keep flowing while the terminal waits, and its prompt
- * closes when the question is answered elsewhere or the command ends.
+ * The handler takes every event the command hears. Each question is
+ * answered in its own fiber, so events keep flowing while the terminal waits,
+ * and its prompt closes when the question is answered elsewhere or the
+ * command ends. A dropped connection loses the events meanwhile. The host
+ * sends the questions still open to every client that subscribes, so one
+ * asked during the drop (a tool's approval) reaches the person once the
+ * connection is back; the prompt of one that closed meanwhile closes then,
+ * as `Interaction.List` no longer has it.
  */
-export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
+export const questionHandler = (host: Host, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
   Effect.gen(function* () {
     const answers = [...options.answers];
     const seen = new Set<string>();
@@ -99,7 +102,7 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
       Effect.gen(function* () {
         const policy = policyOf(io, options);
         if (next === undefined && policy === "dismiss") {
-          yield* rpc["Interaction.Dismiss"]({ id: request.id }).pipe(Effect.ignore);
+          yield* Effect.promise(() => host.interaction.dismiss(request.id).catch(() => {}));
           io.err(`lemma: dismissed question "${request.title}"`);
           return;
         }
@@ -121,7 +124,7 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
           const answer = toAnswer(request, raw);
           if (typeof answer !== "string") {
             // Someone else may have answered first; that is not an error here.
-            yield* rpc["Interaction.Answer"]({ id: request.id, answer }).pipe(Effect.ignore);
+            yield* Effect.promise(() => host.interaction.answer(request.id, answer).catch(() => {}));
             return;
           }
           io.err(`lemma: ${answer}`);
@@ -148,43 +151,38 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
       // `--answer` values go to questions in the order they arrive.
       return Effect.asVoid(FiberMap.run(prompts, request.id, handle(request, answers.shift())));
     };
+    /** Those waiting at the terminal that closed while the connection was down: their `interaction-closed` was lost with it. */
+    const catchUp = Effect.gen(function* () {
+      const asking = [...prompting.keys()];
+      const waiting = yield* Effect.promise(() => host.interaction.list().catch(() => undefined));
+      // Dropped again: the next connection catches up.
+      if (waiting === undefined) return;
+      for (const id of asking) if (!waiting.some((request) => request.id === id)) yield* handler({ type: "interaction-closed", id });
+    });
+    let generation = host.status().generation;
+    const reconnected = yield* received<void>((onElement) =>
+      host.onStatus((status) => {
+        if (status.state !== "connected" || status.generation === generation) return;
+        generation = status.generation;
+        onElement(undefined);
+      }),
+    );
+    yield* Effect.forkScoped(Stream.runForEach(reconnected, () => catchUp));
     return handler;
   });
 
 /**
- * Subscribes to the host's own events and returns once the host says it is
- * `subscribed`, so nothing the command causes next is missed (a question it
- * asks among them). A call's reply is no such sign: the host handles calls on
- * one socket concurrently. `onEvent` takes them in order, from the command's
- * own queue (`received`), so it may wait (on a lock, a prompt) without
- * holding back the connection. A handler's failure is its event's alone.
+ * Hears the host's own events from now on, for as long as the scope lasts.
+ * The `Host` is connected, so its subscription has joined: nothing the
+ * command causes next is missed (a question it asks among them). `onEvent`
+ * takes them in order, from the command's own queue (`received`), so it may
+ * wait (on a lock, a prompt) without holding back the connection. A
+ * handler's failure is its event's alone.
  */
-export const hostEvents = (
-  rpc: HostRpcClient,
-  onEvent: (event: RuntimeEvent) => Effect.Effect<void, Failure>,
-): Effect.Effect<HostEvents, Failure, Scope.Scope> =>
+export const hostEvents = (host: Host, onEvent: (event: RuntimeEvent) => Effect.Effect<void, Failure>): Effect.Effect<void, never, Scope.Scope> =>
   Effect.gen(function* () {
-    const listeners = new Set<(event: RuntimeEvent) => void>();
-    const events = yield* received<HostEventsElement>((onElement, onEnd) =>
-      eventsOver(
-        rpc,
-        (event) => {
-          if (event.type !== "subscribed") for (const listener of listeners) listener(event);
-          onElement(event);
-        },
-        onEnd,
-      ),
-    );
-    const fiber = yield* subscribe("its events", events, (event) =>
-      event.type === "subscribed" ? Effect.void : onEvent(event).pipe(Effect.catchCause(() => Effect.void)),
-    );
-    return {
-      fiber,
-      onEvent: (listener) => {
-        listeners.add(listener);
-        return () => void listeners.delete(listener);
-      },
-    };
+    const events = yield* received<RuntimeEvent>((onElement) => host.onEvent(onElement));
+    yield* Effect.forkScoped(Stream.runForEach(events, (event) => onEvent(event).pipe(Effect.catchCause(() => Effect.void))));
   });
 
 export const noticeLine = (event: Extract<RuntimeEvent, { type: "notice" }>) => {
@@ -236,15 +234,23 @@ export const withdrawCommand =
  * session's elements of the first two, and adds its log from now
  * (`sessions.log`). A stream that is not served, or that its plugin's reload
  * withdrew, is followed again once it is served (`follow` in
- * `@lemma/client`). With `--json`, each line is `{"from", "element"}`:
- * `from` is `host` for the host's own events, else the channel.
+ * `@lemma/client`). A dropped connection is reconnected (`reconnecting`):
+ * each stream opens again, saying `subscribed` anew, and the log goes on
+ * from the last event printed; the host's own events while it was down are
+ * lost. With `--json`, each line is `{"from", "element"}`: `from` is `host`
+ * for the host's own events, else the channel.
  */
 export const eventsCommand: Command = (connection, io, options) =>
   Effect.gen(function* () {
-    const rpc = yield* connection.live;
+    const host = yield* connection.host();
+    return yield* reconnecting(host, io, watch(host, io, options));
+  });
+
+const watch = (host: Host, io: Io, options: Options) =>
+  Effect.gen(function* () {
     const session = options.session;
     // A session's log from now: what it has already, `lemma session show` prints.
-    let after = session === undefined ? 0 : (yield* call(connection.rpc, SessionChannels.get, { sessionId: session })).lastSeq;
+    let after = session === undefined ? 0 : (yield* callOn(host, SessionChannels.get, { sessionId: session })).lastSeq;
     const ofSession = (sessionId: string) => session === undefined || sessionId === session;
     const print = (from: string, element: unknown, text: string | undefined) => {
       if (options.json) io.out(JSON.stringify({ from, element }));
@@ -253,17 +259,19 @@ export const eventsCommand: Command = (connection, io, options) =>
     const note = (text: string) => {
       if (!options.json) io.out(text);
     };
-    const questions = yield* questionHandler(rpc, io, options, session === undefined ? undefined : `session:${session}`);
-    const host = yield* hostEvents(rpc, (event) => {
+    // Watching never answers unless asked to.
+    const questions =
+      options.questions === undefined ? undefined : yield* questionHandler(host, io, options, session === undefined ? undefined : `session:${session}`);
+    yield* hostEvents(host, (event) => {
       // What the subsystems report, their own streams carry; the host's stream is followed for its own events.
       print("host", event, hostLine(event));
-      // Watching never answers unless asked to.
-      return options.questions === undefined ? Effect.void : questions(event);
+      return questions === undefined ? Effect.void : questions(event);
     });
-    const followed = followable(rpc, host);
-    /** Follows `channel` while the command runs, again once it is served when it was not or its plugin withdrew it; any other ending stops it. */
+    /** Follows `channel` while the command runs, again once it is served when it was not, its plugin withdrew it, or the connection dropped; any other ending stops it. */
     const keep = <Payload, Success>(channel: ChannelDeclaration<"stream", Payload, Success>, payload: () => Payload, show: (element: Success) => void) =>
-      following(followed, channel, payload, show, (error) => {
+      following(host, channel, payload, show, (error) => {
+        // Said once for every stream (`reconnecting`), and opened again on the next connection.
+        if (dropped(error)) return true;
         if (ofChannel(error, channel.id, "Withdrawn")) note(`${channel.id} withdrawn: its plugin stopped or reloaded; following it again`);
         else if (ofChannel(error, channel.id, "NotFound")) note(`${channel.id} not served: following it once it is`);
         else {
@@ -307,8 +315,8 @@ export const eventsCommand: Command = (connection, io, options) =>
         },
       );
     }
-    yield* Fiber.join(host.fiber).pipe(Effect.ignore);
-    return undefined;
+    // Until interrupted, or the connection is given up on.
+    return yield* Effect.never;
   });
 
 /** One of the host's own events as a line. */
@@ -406,8 +414,9 @@ export const providersCommand: Command = ({ rpc }) =>
  * in it and Enter opens a code's page. A browser on another machine ends on a
  * page that cannot reach the host, so the paste prompt asks for that page's
  * address. Ctrl+C cancels the login on the host, which otherwise outlives the
- * command. A login its provider's reload ended fails (`refined`): running the
- * command again starts one on the replacement, asking its questions anew.
+ * command. A login its provider's reload ended fails (`refined`), as does
+ * one whose connection dropped (`callOn`): running the command again starts
+ * one anew, asking its questions again.
  */
 export const loginCommand =
   (provider: string): Command =>
@@ -420,7 +429,7 @@ export const loginCommand =
       if (method !== "api_key" && method !== "oauth") return yield* usage(`--method must be one of ${info.auth.map((auth) => auth.type).join(", ")}`);
       if (!info.auth.some((auth) => auth.type === method))
         return yield* usage(`${provider} does not offer ${method}; it offers ${info.auth.map((auth) => auth.type).join(", ")}`);
-      const rpc = yield* connection.live;
+      const host = yield* connection.host();
       const origin = `login:${provider}`;
       /** The paste-the-address fallback of a sign-in page, as the host marks it. */
       const isPaste = (request: InteractionRequest) => request.type === "ask" && request.kind === "sign-in-code";
@@ -428,7 +437,7 @@ export const loginCommand =
       let cancelling = false;
       /** The login's link, once shown. */
       const linkShown = yield* Deferred.make<void>();
-      const questions = yield* questionHandler(rpc, io, options, origin, {
+      const questions = yield* questionHandler(host, io, options, origin, {
         // Questions and notices reach a client on separate streams: the paste prompt can overtake the link it follows.
         before: (request) =>
           isPaste(request) ? Deferred.await(linkShown).pipe(Effect.timeoutOrElse({ duration: Duration.millis(500), orElse: () => Effect.void })) : Effect.void,
@@ -440,7 +449,7 @@ export const loginCommand =
       const asks = policyOf(io, options) === "ask" && io.ask !== undefined;
       /** Enter opens a device code's page; the prompt closes when the login ends. */
       const opener = yield* FiberMap.make<string>();
-      yield* hostEvents(rpc, (event) =>
+      yield* hostEvents(host, (event) =>
         Effect.gen(function* () {
           if (event.type === "notice") {
             if (options.json || event.notice.origin !== origin) io.err(noticeLine(event));
@@ -471,14 +480,14 @@ export const loginCommand =
           yield* questions(event);
         }),
       );
-      yield* call(rpc, LlmChannels.login, { provider, type: method }).pipe(
+      yield* callOn(host, LlmChannels.login, { provider, type: method }).pipe(
         Effect.onInterrupt(() =>
           Effect.andThen(
             Effect.sync(() => {
               cancelling = true;
             }),
             Effect.andThen(
-              call(rpc, LlmChannels.cancelLogin, { provider }).pipe(Effect.ignore),
+              callOn(host, LlmChannels.cancelLogin, { provider }).pipe(Effect.ignore),
               Effect.sync(() => io.err(`Cancelled the ${info.name} login.`)),
             ),
           ),
@@ -551,23 +560,24 @@ export const listCommandsCommand: Command = ({ rpc }) =>
 
 /**
  * `lemma do <id>`: runs one, answering its questions per the policy. One its
- * plugin's reload stopped fails (`refined`), since a command run twice need
- * not do what it does once: whether to run it again is the person's call.
+ * plugin's reload stopped fails (`refined`), as does one whose connection
+ * dropped (`callOn`), since a command run twice need not do what it does
+ * once: whether to run it again is the person's call.
  */
 export const doCommand =
   (id: string): Command =>
   (connection, io, options) =>
     Effect.gen(function* () {
-      const rpc = yield* connection.live;
+      const host = yield* connection.host();
       const origin = `command:${randomUUID()}`;
-      const questions = yield* questionHandler(rpc, io, options, origin);
-      yield* hostEvents(rpc, (event) =>
+      const questions = yield* questionHandler(host, io, options, origin);
+      yield* hostEvents(host, (event) =>
         Effect.gen(function* () {
           if (event.type === "notice") io.err(noticeLine(event));
           yield* questions(event);
         }),
       );
       const cwd = resolve(io.cwd, options.cwd ?? ".");
-      const result = yield* call(rpc, CommandChannels.run, { id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
+      const result = yield* callOn(host, CommandChannels.run, { id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
       return { json: { command: id, ...result }, text: result.message ?? `${id}: done` };
     });

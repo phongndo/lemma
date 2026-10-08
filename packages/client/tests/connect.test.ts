@@ -102,4 +102,41 @@ describe("connect", () => {
     ]);
     expect(statuses[1]?.error).toBe("Timed out waiting for the host's events");
   });
+
+  test("without events, is connected by Host.Info alone, never subscribes, and connects anew once its socket closes", async () => {
+    const tags: string[] = [];
+    const sockets: ScriptedWebSocket[] = [];
+    const webSocket = Layer.succeed(Socket.WebSocketConstructor, () => {
+      const socket = new ScriptedWebSocket((request, reply) => {
+        if (request._tag !== "Request") return;
+        tags.push(request.tag!);
+        if (request.tag === "Host.Info") reply({ _tag: "Exit", requestId: request.id, exit: { _tag: "Success", value: info } });
+      });
+      sockets.push(socket);
+      return socket as unknown as globalThis.WebSocket;
+    });
+    const host = await connect({ url: "http://host.invalid", backoff: () => 1, webSocket, events: false });
+    const statuses: ConnectionStatus[] = [];
+    const generation = (n: number) =>
+      new Promise<void>((resolve) => {
+        const stop = host.onStatus((status) => {
+          if (status.state !== "connected" || status.generation !== n) return;
+          queueMicrotask(stop);
+          resolve();
+        });
+      });
+    host.onStatus((status) => void statuses.push(status));
+    try {
+      await generation(1);
+      // A network that fails: the socket closes, with nothing in flight on it.
+      sockets[0]!.readyState = 3;
+      sockets[0]!.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }));
+      await generation(2);
+    } finally {
+      await host.close();
+    }
+    expect(statuses.map(({ state, generation }) => `${state} ${generation}`)).toContain("reconnecting 1");
+    expect(statuses.find((status) => status.state === "reconnecting")?.error).toBe("Connection closed");
+    expect(new Set(tags)).toEqual(new Set(["Host.Info"]));
+  });
 });

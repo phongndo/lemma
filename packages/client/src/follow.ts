@@ -5,8 +5,8 @@ import type { Host } from "./host.ts";
 
 /**
  * What `follow` uses of a connection: its status, its `channels-changed`
- * events, and opening a stream. A `Host` is one; so is a connection that
- * lasts a command, connected throughout (the CLI's).
+ * events, and opening a stream. A `Host` is one (the web app's and the
+ * CLI's); so is a test's fake.
  */
 export type Followable = Pick<Host, "status" | "onStatus" | "onEvent"> & { readonly channel: Pick<Host["channel"], "open"> };
 

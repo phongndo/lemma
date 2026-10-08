@@ -16,21 +16,24 @@ const question = (request: Record<string, unknown>, id = "q1"): RuntimeEvent =>
   ({ type: "interaction", request: { ...request, id, origin: "login:github-copilot" } as InteractionRequest }) as RuntimeEvent;
 
 /**
- * A host whose login publishes `events` and runs until the test calls `finish`, recording the calls
- * it is sent. Cancelling withdraws the login's open questions, as the transport does.
+ * A host whose login publishes `events` as it starts and runs until the test calls `finish`, recording
+ * the calls it is sent. Cancelling withdraws the login's open questions, as the transport does.
  */
 const fakeLogin = (events: readonly RuntimeEvent[]) => {
   const calls: string[] = [];
   const answers: unknown[] = [];
   const done = Effect.runSync(Deferred.make<void>());
   const answered = Effect.runSync(Deferred.make<void>());
-  const stream = fed<RuntimeEvent>(...events);
+  const stream = fed<RuntimeEvent>();
   const connection = fakeHost({
     calls: {
       "llm.providers": () => Effect.succeed([copilot]),
       "llm.login": () =>
         Effect.andThen(
-          Effect.sync(() => calls.push("login")),
+          Effect.sync(() => {
+            calls.push("login");
+            stream.push(...events);
+          }),
           Deferred.await(done),
         ),
       // The transport withdraws the question before it replies, so the client hears of that first.

@@ -250,7 +250,7 @@ for (const dir of ["apps", "examples", "packages", "plugins", "scripts"]) {
     for (const match of text.matchAll(rpcImport)) {
       if (!importsRpcClient(match[1]!, match[2])) continue;
       clientProblems.push(
-        `${file}:${text.slice(0, match.index).split("\n").length}: makes an RPC client of its own: connect through @lemma/client (makeHostRpc, makeHostRpcHttp, connect), whose client reads the host's streams only into callbacks, since a reader that waits stalls every request on its connection`,
+        `${file}:${text.slice(0, match.index).split("\n").length}: makes an RPC client of its own: connect through @lemma/client (connect, or makeHostRpcHttp for one-shot calls), whose client reads the host's streams only into callbacks, since a reader that waits stalls every request on its connection`,
       );
     }
   }

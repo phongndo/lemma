@@ -2,7 +2,7 @@ import { Data } from "effect";
 import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
 import type { HostError, ThinkingLevel, WhenBusy } from "@lemma/contracts";
-import type { HostRpcClient } from "@lemma/client";
+import type { Host, HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/contracts/discovery";
 
 /** Exit codes a calling script or agent can branch on; `--json` errors also carry a `code`. */
@@ -87,8 +87,16 @@ export interface Connection {
   readonly target: Target;
   /** One-shot HTTP calls: never subscribes to events, so never answers questions. */
   readonly rpc: HostRpcClient;
-  /** A WebSocket client for streams (the host's events, channels' streams) and the calls made while following them, opened on first use and closed with the command. */
-  readonly live: Effect.Effect<HostRpcClient, never, Scope.Scope>;
+  /**
+   * `@lemma/client`'s `Host`, the reconnecting WebSocket the web app has, for
+   * a command that watches the host (its events and questions, its
+   * subsystems' streams) and the calls it makes meanwhile: opened once
+   * connected (`openHost`), and closed with the command; a command opens one.
+   * `events: false` opens it without the host's events, so the host asks it
+   * none of its questions (`ConnectOptions.events`): a `run` with nothing to
+   * answer them with.
+   */
+  readonly host: (options?: { readonly events?: boolean }) => Effect.Effect<Host, Failure, Scope.Scope>;
 }
 
 /** `json` is printed with `--json`, `text` otherwise; a command that streamed its output returns undefined. */
