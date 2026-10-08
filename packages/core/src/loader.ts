@@ -37,7 +37,7 @@ export interface ReloadReport {
 }
 
 export interface LoaderOptions<Provides extends readonly Capability[] = readonly Capability[]> extends Pick<
-  CoreOptions<Provides>,
+  CoreOptions<Provides, unknown>,
   "deadlines" | "shutdownTimeout" | "provide"
 > {
   readonly source: PluginSource;

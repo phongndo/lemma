@@ -29,7 +29,7 @@ import type { ReloadReport } from "../loader.ts";
 import type { Capability, Plugin } from "../plugin.ts";
 import { EventBus } from "./events.ts";
 import type { ObserverHandle } from "./events.ts";
-import { plan, reservedByApplication } from "./graph.ts";
+import { applicationProblems, plan } from "./graph.ts";
 import { attributes, HookRegistry } from "./hooks.ts";
 import type { OwnerHandle } from "./hooks.ts";
 import { makeOwnServices } from "./own.ts";
@@ -152,9 +152,8 @@ function assemble<E>(
       dispose: Duration.fromInputUnsafe(options.deadlines?.dispose ?? DEFAULTS.dispose),
     };
     const providedKeys = options.provide?.provides.map((tag) => tag.key) ?? [];
-    const providedSet: ReadonlySet<string> = new Set(providedKeys);
     // Merged over the built-ins below, an application key such as Hooks would replace the core's own.
-    const refused = reservedByApplication(providedKeys);
+    const refused = applicationProblems(providedKeys);
     if (refused.length) return yield* new PlanError({ errors: refused as [CompositionError, ...CompositionError[]] });
     const faults = yield* PubSub.sliding<ReportedFault>(256);
     const shutdownLimit = Duration.fromInputUnsafe(options.shutdownTimeout ?? defaults.dispose);
@@ -519,7 +518,7 @@ function assemble<E>(
             const planned = plan(
               members.map((member) => member.plugin),
               (id) => raw.get(id),
-              providedSet,
+              providedKeys,
             );
             if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
             const { ordered, configs, providers: nextProviders } = planned.success;

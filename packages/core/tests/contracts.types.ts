@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
 import { definePlugin, Event, Events, Hook, Hooks, makeCore, makeLoader, PluginContext } from "../src/index.ts";
-import type { CompositionError, PluginFault } from "../src/index.ts";
+import type { ApplicationServices, Core, CompositionError, CoreOptions, PluginFault } from "../src/index.ts";
 
 class Value extends Context.Service<Value, string>()("types/Value") {}
 class Other extends Context.Service<Other, number>()("types/Other") {}
@@ -195,8 +195,15 @@ export function applications() {
   const typed: Effect.Effect<unknown, "down" | CompositionError | PluginFault, Scope.Scope> = failing;
   // @ts-expect-error It can fail with the layer's error.
   const untyped: Effect.Effect<unknown, CompositionError | PluginFault, Scope.Scope> = failing;
-  return [typed, untyped];
+  // Options written with an annotation keep the core typed: by default they provide nothing and cannot fail.
+  const options: CoreOptions = { deadlines: { activate: "1 second" } };
+  const plain: Effect.Effect<Core<Value>, CompositionError | PluginFault, Scope.Scope> = makeCore([provider()], options);
+  const annotated: ApplicationServices<readonly [typeof Value]> = { provides: [Value], layer: Layer.succeed(Value, "v") };
+  const withApplication: Effect.Effect<Core<Value>, CompositionError | PluginFault, Scope.Scope> = makeCore([], { provide: annotated });
+  return [typed, untyped, plain, withApplication];
 }
+
+const provider = () => definePlugin({ id: "value", provides: [Value], layer: Layer.succeed(Value, "value") });
 
 // The promise-based view of services: what plain plugins see.
 const Point = Hook.make<string, number>("types/plain-point");

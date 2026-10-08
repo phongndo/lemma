@@ -346,6 +346,7 @@ describe("loader", () => {
       { reason: "ReservedCapability", plugins: ["db"], capability: Db.key },
     ]);
     expect(checkComposition([], {}, { provided: [Hooks] })).toMatchObject([{ reason: "ReservedCapability", plugins: [], capability: Hooks.key }]);
+    expect(checkComposition([], {}, { provided: [Db, Db] })).toMatchObject([{ reason: "DuplicateCapability", plugins: [], capability: Db.key }]);
     expect(log).toEqual([]);
   });
 

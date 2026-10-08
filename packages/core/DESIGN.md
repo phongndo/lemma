@@ -134,8 +134,8 @@ Plugins are trusted, in-process code. Dependency visibility and scopes organize 
 
 An application's runtime is the API its plugins are written against: what
 every plugin may assume, such as the connection to a host or a way to ask its
-user. Written as plugins, those pieces became rows nobody could turn off; the
-application pinned them, and the pins spread to whatever they required. The
+user. Written as plugins, they were plugins the application could never let be
+turned off, which forced it to keep everything they required as well. The
 application provides them instead (`provide`): plugins require them as before,
 and planning counts them as present.
 

@@ -53,7 +53,7 @@ See [`examples/hello.ts`](examples/hello.ts) for a capability implementation ext
 - `layer` is an ordinary Effect `Layer`, the form `setup` is built on. Use `Layer.effect` (its Effect may use the layer's `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared. `layer` may be a function of the decoded config.
 - The manifest is needed for runtime graph inspection and validation: Effect's type-level requirements alone cannot describe a dynamically supplied composition. Construction and cleanup still belong to Effect, not a second dependency-injection system.
 
-The complete graph is validated before Layers execute. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`, as does a plugin providing what the runtime or the application provides (`ReservedCapability`); what the application provides is present for every plugin. `checkComposition(plugins, configs, { provided })` returns the same errors without running anything, `provided` being the application's `provide.provides`, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.
+The complete graph is validated before any plugin's Layer executes; the application's services (below) are built first, and released if validation fails. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`, as does a plugin providing what the runtime or the application provides (`ReservedCapability`); what the application provides is present for every plugin. `checkComposition(plugins, configs, { provided })` returns the same errors without running anything, `provided` being the application's `provide.provides`, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.
 
 Each Layer's actual exports must exactly match `provides`. A mismatch, startup failure, defect, or deadline produces a `PluginFault` (phase `activate`) with the plugin id and original Effect cause. Pure interruption stays interruption. TypeScript checks declared inputs and outputs; runtime validation also covers untyped plugins.
 
@@ -87,14 +87,16 @@ const core = makeCore(plugins, { provide }); // makeLoader({ source, composition
 ```
 
 - `provides` lists what it provides, known without building anything, so
-  planning and `checkComposition` can count on it. `layer` builds the services,
-  which must match the list exactly: TypeScript checks it, and a mismatch at
-  runtime is a defect naming the missing and undeclared keys. Several services
-  are `Layer.mergeAll(…)`; what the layer needs from the application is provided
-  into it beforehand (`Layer.provide`).
+  planning and `checkComposition` can count on it; each is listed once. `layer`
+  builds exactly those services: TypeScript catches a listed one it does not
+  build, and the core an unlisted extra when it builds them, as a defect from
+  `makeCore` or a `ReloadError` diagnostic from `makeLoader`, naming the missing
+  and undeclared keys. Several services are `Layer.mergeAll(…)`; what the layer
+  needs from the application is provided into it beforehand (`Layer.provide`).
 - Plugins require them as any other capability, and `core.run` supplies them.
   A plugin that provides one is a `CompositionError` (`ReservedCapability`),
-  never an override; so is an application that provides a built-in or `Scope`.
+  never an override; so is an application that provides a built-in or `Scope`,
+  or lists a capability twice (`DuplicateCapability`).
 - The layer may use `Hooks`, `Events`, and `Registries`: a service can invoke a
   hook plugins handle, publish an event, or read a registry. It has no
   `PluginContext`, because it uses extension points rather than contributing to

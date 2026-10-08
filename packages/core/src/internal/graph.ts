@@ -17,34 +17,46 @@ interface Planned {
   readonly providers: ReadonlyMap<string, string>;
 }
 
-/** The application's capabilities that name one the runtime supplies itself. */
-export function reservedByApplication(provided: Iterable<string>): CompositionError[] {
-  return [...provided].flatMap((key) =>
-    reserved.has(key)
-      ? [
-          new CompositionError({
-            reason: "ReservedCapability",
-            message: `The application cannot provide runtime capability "${key}"`,
-            plugins: [],
-            capability: key,
-          }),
-        ]
-      : [],
-  );
+/** What is wrong with the application's capabilities: one the runtime supplies itself, or one listed twice. */
+export function applicationProblems(provided: readonly string[]): CompositionError[] {
+  const seen = new Set<string>();
+  return provided.flatMap((key) => {
+    if (reserved.has(key))
+      return [
+        new CompositionError({
+          reason: "ReservedCapability",
+          message: `The application cannot provide runtime capability "${key}"`,
+          plugins: [],
+          capability: key,
+        }),
+      ];
+    if (seen.has(key))
+      return [
+        new CompositionError({
+          reason: "DuplicateCapability",
+          message: `The application lists capability "${key}" more than once`,
+          plugins: [],
+          capability: key,
+        }),
+      ];
+    seen.add(key);
+    return [];
+  });
 }
 
 /**
  * Validate a whole composition before executing any plugin code. Every problem
  * is collected so a reload can report them all at once; the first is enough to
- * reject a fixed composition. `provided` keys are the application's: present
+ * reject a fixed composition. `providedKeys` are the application's: present
  * for every plugin, and provided by none.
  */
 export function plan(
   plugins: readonly Plugin[],
   rawConfigs: (id: string) => unknown,
-  provided: ReadonlySet<string> = new Set(),
+  providedKeys: readonly string[] = [],
 ): Result.Result<Planned, readonly [CompositionError, ...CompositionError[]]> {
-  const errors: CompositionError[] = reservedByApplication(provided);
+  const errors: CompositionError[] = applicationProblems(providedKeys);
+  const provided = new Set(providedKeys);
   const byId = new Map<string, Plugin>();
   const providers = new Map<string, Plugin>();
 

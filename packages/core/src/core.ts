@@ -52,8 +52,11 @@ export interface CoreSnapshot {
  * other; none may provide one. Fixed for the life of the core or loader:
  * never stopped, replaced, or revoked while plugins come and go.
  */
-export interface ApplicationServices<Provides extends readonly Capability[] = readonly Capability[], E = unknown> {
-  /** What it provides, known without building it (planning, `checkComposition`). The built services must match exactly. */
+export interface ApplicationServices<Provides extends readonly Capability[] = readonly Capability[], E = never> {
+  /**
+   * What it provides, known without building it (planning, `checkComposition`), each once. The built services must
+   * be exactly these: TypeScript catches a listed one the layer lacks, and the core an unlisted extra when it builds.
+   */
   readonly provides: Provides;
   /**
    * Built once, before the first plugin activates, with the core's `Hooks`,
@@ -63,7 +66,7 @@ export interface ApplicationServices<Provides extends readonly Capability[] = re
   readonly layer: Layer.Layer<NoInfer<Identifiers<Provides>>, E, Hooks | Events | Registries>;
 }
 
-export interface CoreOptions<Provides extends readonly Capability[] = readonly Capability[], E = unknown> {
+export interface CoreOptions<Provides extends readonly Capability[] = readonly [], E = never> {
   /** Config per plugin id, decoded with each plugin's schema before any activation. */
   readonly configs?: Readonly<Record<string, unknown>>;
   /** Applied to plugins that declare none. Defaults: activate 30s, dispose 10s. */
@@ -134,7 +137,11 @@ export function checkComposition(
   } = {},
 ): readonly CompositionError[] {
   return Result.match(
-    plan(plugins, (id) => configs[id], new Set(options.provided?.map((tag) => tag.key))),
+    plan(
+      plugins,
+      (id) => configs[id],
+      options.provided?.map((tag) => tag.key),
+    ),
     { onFailure: (errors) => errors, onSuccess: () => [] },
   );
 }

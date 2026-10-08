@@ -603,6 +603,11 @@ describe("capabilities the application provides", () => {
     const refused = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([marker], { provide: { provides: [Hooks], layer: hooks } }))));
     expect(refused).toMatchObject({ _tag: "CompositionError", reason: "ReservedCapability", plugins: [], capability: Hooks.key });
     expect([starts, built]).toEqual([0, 1]);
+
+    // A key listed twice is refused as a plugin's would be, also before anything is built.
+    const twice = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([marker], { provide: { provides: [Clock, Clock], layer: counted } }))));
+    expect(twice).toMatchObject({ _tag: "CompositionError", reason: "DuplicateCapability", plugins: [], capability: Clock.key });
+    expect([starts, built]).toEqual([0, 1]);
   });
 
   test("their layer uses the core's hooks, events, and registries, and nothing of the caller's", async () => {
