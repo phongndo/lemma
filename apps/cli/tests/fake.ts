@@ -1,7 +1,7 @@
 import { Cause, Deferred, Effect, Exit, Queue, Stream } from "effect";
 import type { Scope } from "effect";
 import { HostError } from "@lemma/contracts";
-import type { HostEvent } from "@lemma/contracts";
+import type { RuntimeEvent } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
 import type { Connection } from "../src/command.ts";
 
@@ -89,14 +89,14 @@ const socket = (host: HostRpcClient): Effect.Effect<HostRpcClient, never, Scope.
 export const fakeHost = (host: {
   readonly calls?: Readonly<Record<string, (payload: any) => Effect.Effect<unknown, HostError>>>;
   readonly streams?: Readonly<Record<string, (payload: any) => Stream.Stream<unknown, HostError>>>;
-  readonly events?: Stream.Stream<HostEvent, HostError>;
+  readonly events?: Stream.Stream<RuntimeEvent, HostError>;
   readonly rpcs?: Readonly<Record<string, (payload: any) => unknown>>;
 }): Connection => {
   const calls = host.calls ?? {};
   const streams = host.streams ?? {};
   const rpc = {
     ...host.rpcs,
-    "Host.Events": () => Stream.concat(Stream.succeed<HostEvent>({ type: "subscribed" }), host.events ?? Stream.never),
+    "Host.Events": () => Stream.concat(Stream.succeed<RuntimeEvent | { readonly type: "subscribed" }>({ type: "subscribed" }), host.events ?? Stream.never),
     "Channel.List": () =>
       Effect.succeed([
         ...Object.keys(calls).map((id) => ({ id, kind: "call", source: "fake" })),

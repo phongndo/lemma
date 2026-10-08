@@ -1,11 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, SchemaTransformation, Stream } from "effect";
-import { Channels, FileSearchers, serveChannel } from "@lemma/contracts";
-import type { Channel, ChannelInfo, HostEvent } from "@lemma/contracts";
+import { Channels, serveChannel } from "@lemma/contracts";
+import type { Channel, ChannelInfo } from "@lemma/contracts";
 import { Admitted, definePlugin, PluginContext, Registries } from "@lemma/core";
 import { settled } from "../../../scripts/e2e.ts";
 import { callChannel } from "../src/channels.ts";
-import type { Client, Kind } from "./harness.ts";
+import type { Client, HostEvent, Kind } from "./harness.ts";
 import { hostError, subscribe, waitFor, withHost } from "./harness.ts";
 
 /** The channels a test's own plugins serve: the harness's `commands` plugin serves its own beside them. */
@@ -33,14 +33,6 @@ const open = (client: Client, id: string) =>
 
 describe("channels", () => {
   test("a handler that dies fails its own request, and the connection's other requests go on", () => {
-    const broken = definePlugin({
-      id: "broken-search",
-      layer: Layer.effectDiscard(
-        Effect.flatMap(PluginContext, (owner) => owner.add(FileSearchers, { id: "broken-search", search: () => Effect.die(new Error("searcher bug")) })).pipe(
-          Effect.orDie,
-        ),
-      ),
-    });
     const steady = serving(
       "steady",
       serveChannel({ kind: "stream", id: "steady.ticks", payload: Schema.Void, success: Schema.Number }, () => Stream.concat(Stream.make(1), Stream.never)),
@@ -52,10 +44,11 @@ describe("channels", () => {
           const client = yield* host.connect("websocket");
           const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]()));
           const sibling = yield* open(client, "steady.ticks");
-          const exit = yield* Effect.exit(client["Files.Search"]({ cwd: "/tmp", query: "x" }));
+          // The fake host control dies restarting "defect".
+          const exit = yield* Effect.exit(client["Host.RestartPlugin"]({ pluginId: "defect" }));
           // The caller gets the defect, with its message, as its request's failure.
           expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(true);
-          expect(Exit.isFailure(exit) && (Cause.squash(exit.cause) as Error).message).toBe("searcher bug");
+          expect(Exit.isFailure(exit) && (Cause.squash(exit.cause) as Error).message).toBe("restart bug");
           // The connection still answers, and nothing else on it ended.
           expect((yield* client["Host.Info"]()).version).toBeDefined();
           expect(events.pollUnsafe()).toBeUndefined();
@@ -65,7 +58,7 @@ describe("channels", () => {
         }),
       {},
       undefined,
-      [broken, steady],
+      [steady],
     );
   }, 30_000);
 

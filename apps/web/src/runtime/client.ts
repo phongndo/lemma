@@ -1,35 +1,15 @@
 import { createSignal } from "solid-js";
-import type { ConnectionStatus } from "@lemma/client";
-import { HostError } from "@lemma/contracts";
-import type { ChannelDeclaration, HostEvent, HostInfo } from "@lemma/contracts";
-import type { ClientService, HostConnection, RuntimeEvent } from "../ui/runtime.ts";
-
-/** What `Client.onEvent` passes on. */
-const RUNTIME_EVENTS: ReadonlySet<HostEvent["type"]> = new Set<RuntimeEvent["type"]>([
-  "notice",
-  "plugins-changed",
-  "channels-changed",
-  "ui-changed",
-  "interaction",
-  "interaction-closed",
-]);
-const isRuntime = (event: HostEvent): event is RuntimeEvent => RUNTIME_EVENTS.has(event.type);
-
-/** Calls a listener of a plugin's; one that throws is logged, and never ends what feeds it. */
-const safely = <A>(listener: (value: A) => void, value: A) => {
-  try {
-    listener(value);
-  } catch (error) {
-    console.error("lemma ui: a listener failed", error);
-  }
-};
+import { follow } from "@lemma/client";
+import type { ConnectionStatus, Host } from "@lemma/client";
+import type { HostError, HostInfo } from "@lemma/contracts";
+import type { ClientService } from "../ui/runtime.ts";
 
 /**
  * The page's one connection as the runtime's `Client`, for as long as the
  * page runs: nothing a plugin does reconnects it. Models resync on every
  * reconnect, and follow the subsystems' streams through it.
  */
-export function createClient(host: HostConnection): { readonly client: ClientService; readonly dispose: () => void } {
+export function createClient(host: Host): { readonly client: ClientService; readonly dispose: () => void } {
   const [status, setStatus] = createSignal<ConnectionStatus>(host.status());
   const [info, setInfo] = createSignal<HostInfo>();
   const syncs = new Set<() => void>();
@@ -55,77 +35,17 @@ export function createClient(host: HostConnection): { readonly client: ClientSer
     if (connected()) run(sync);
     return () => void syncs.delete(sync);
   };
-  const onEvent = (listener: (event: RuntimeEvent) => void) =>
-    host.onEvent((event) => {
-      if (isRuntime(event)) listener(event);
-    });
-
-  const follow = (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: (error?: HostError | Error) => void) => {
-    const id = typeof target === "string" ? target : target.id;
-    /** The open stream's close, while one is open. */
-    let current: (() => void) | undefined;
-    /** The open stream has sent nothing yet, so it may still fail for want of a channel. */
-    let pending = false;
-    /** A `channels-changed` listed it while the open was pending: one that then fails crossed that listing, and opens again. */
-    let listed = false;
-    let stopped = false;
-    const open = () => {
-      current?.();
-      current = undefined;
-      listed = false;
-      if (stopped || !connected()) return;
-      let live = true;
-      pending = true;
-      const close = host.channel.open(
-        target as string,
-        typeof payload === "function" ? (payload as () => unknown)() : payload,
-        (element) => {
-          if (!live) return;
-          pending = false;
-          listed = false;
-          safely(onElement, element);
-        },
-        (error) => {
-          if (!live) return;
-          live = false;
-          current = undefined;
-          if (onEnd !== undefined) safely(onEnd, error);
-          // Its plugin left: whatever answers for it now, at once. Listed while this open was on its way (an exclusive
-          // replacement listed as nothing served the open): at once too. Else `channels-changed` says when one does.
-          if ((error instanceof HostError && error.code === "Withdrawn") || listed) open();
-        },
-      );
-      if (live)
-        current = () => {
-          live = false;
-          close();
-        };
-    };
-    const stops = [
-      onConnect(open),
-      host.onEvent((event) => {
-        if (event.type !== "channels-changed" || !event.channels.some((channel) => channel.id === id)) return;
-        if (current === undefined) open();
-        else if (pending) listed = true;
-      }),
-    ];
-    return () => {
-      stopped = true;
-      current?.();
-      current = undefined;
-      for (const stop of stops) stop();
-    };
-  };
-
   return {
     client: {
       status,
       connected,
       info,
-      onEvent,
+      onEvent: host.onEvent,
       onConnect,
       channel: host.channel,
-      follow,
+      // The reopen policy every client of the host's streams shares, over this connection.
+      follow: ((target: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void) =>
+        follow(host, target, payload, onElement, onEnd)) as ClientService["follow"],
       plugins: () => host.host.plugins(),
       restartPlugin: (pluginId, options) => host.host.restartPlugin(pluginId, options?.force === undefined ? undefined : { force: options.force }),
       reload: () => host.host.reload(),

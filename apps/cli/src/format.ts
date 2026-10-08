@@ -202,9 +202,12 @@ export const formatUi = (ui: UiComposition): string => {
   ].join("\n\n");
 };
 
-/** What a change did; a deferred one restarts `restarts`, the transport among them, once its reply has left. */
-export const formatReload = (report: ReloadResult, restarts = "the plugins that use it"): string =>
-  report.deferred ? `applying: the host restarts ${restarts}, the transport among them, so clients reconnect` : (describeReload(report) ?? "nothing changed");
+/**
+ * What a change did. One the host defers restarts the transport serving the request: it applies once the reply has
+ * left, restarting `restarts`.
+ */
+export const formatReload = (report: ReloadResult, restarts = "the transport"): string =>
+  report.deferred ? `applying: the host restarts ${restarts}, so clients reconnect` : (describeReload(report) ?? "nothing changed");
 
 export const formatSessions = (sessions: readonly SessionInfo[], withCwd: boolean): string =>
   pad(

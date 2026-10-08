@@ -1,4 +1,4 @@
-import type { ConnectionStatus } from "@lemma/client";
+import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import {
   AgentChannels,
@@ -33,6 +33,7 @@ import type {
   PromptContent,
   QueuedPrompt,
   ProviderInfo,
+  RuntimeEvent,
   SessionEvent,
   SessionInfo,
   SessionsChange,
@@ -41,7 +42,6 @@ import type {
   UiComposition,
   Usage,
 } from "@lemma/contracts";
-import type { HostConnection, RuntimeEvent } from "./ui/runtime.ts";
 
 /**
  * Dev-only in-browser fake of the host (`?mock`, or `?mock=fresh` for a first
@@ -289,7 +289,7 @@ const serveStream = <Payload, Success>(
   handle: (payload: Payload, send: (element: Success) => void, fail: (error: HostError) => void) => () => void,
 ): Served => ({ kind: "stream", declaration, source, handle });
 
-export const createMockHost = (): HostConnection => {
+export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
   const oauth = (name: string) => ({ type: "oauth", name, interactive: true }) as const;
@@ -339,7 +339,6 @@ export const createMockHost = (): HostConnection => {
     state: "active",
     ...extra,
   });
-  const needed = "Needed by transport";
   // Mirrors of real config Schemas, so the Plugins page shows settings forms.
   const configs: Record<string, Schema.Codec<any, any>> = {
     agent: Schema.Struct({
@@ -382,26 +381,27 @@ export const createMockHost = (): HostConnection => {
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
   const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@2"];
   const plugins: PluginStatus[] = [
-    bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"], locked: needed }),
-    bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"], locked: needed }),
-    bundled("tools", { provides: ["lemma/Tools"], locked: needed }),
+    bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
+    bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
+    bundled("tools", { provides: ["lemma/Tools"] }),
     bundled("read", { requires: ["lemma/Tools"] }),
     bundled("write", { requires: ["lemma/Tools"] }),
     bundled("edit", { requires: ["lemma/Tools"] }),
     bundled("bash", { requires: ["lemma/Tools"] }),
     bundled("codemode", { requires: ["lemma/Tools"] }),
-    bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"], locked: needed }),
-    bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"], locked: needed }),
+    bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] }),
+    bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"] }),
     bundled("compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
     bundled("project-context", { requires: ["lemma/Paths"] }),
-    bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"], locked: needed }),
+    bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] }),
     bundled("file-search", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["file-search"] }] }),
-    bundled("commands", { provides: ["lemma/Commands"], locked: needed }),
+    bundled("commands", { provides: ["lemma/Commands"] }),
     bundled("commands-host", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/HostControl"] }),
     bundled("commands-llm", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
     bundled("commands-workspace", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Workspace"] }),
+    // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     bundled("transport", {
-      requires: ["lemma/Paths", "lemma/Sessions", "lemma/Agent", "lemma/Llm", "lemma/HostControl", "lemma/Workspace", "lemma/Commands"],
+      requires: ["lemma/Paths", "lemma/HostControl"],
       locked: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
     }),
   ];
@@ -413,14 +413,7 @@ export const createMockHost = (): HostConnection => {
     agent: { hooks: [{ name: "lemma/agent.request", order: 0 }] },
     transport: {
       hooks: [{ name: "lemma/interaction.request", order: 0 }],
-      observes: [
-        "lemma/agent.turn.started",
-        "lemma/agent.turn.ended",
-        "lemma/session.appended",
-        "lemma/session.changed",
-        "lemma/notice",
-        "lemma/plugins.changed",
-      ],
+      observes: ["lemma/notice", "lemma/plugins.changed", "lemma/ui.changed"],
     },
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
@@ -1465,8 +1458,8 @@ export const createMockHost = (): HostConnection => {
     },
     channel: {
       list: async () => served.map(infoOf),
-      call: call as HostConnection["channel"]["call"],
-      open: open as HostConnection["channel"]["open"],
+      call: call as Host["channel"]["call"],
+      open: open as Host["channel"]["open"],
     },
     host: {
       info: async () => ({
@@ -1516,12 +1509,14 @@ export const createMockHost = (): HostConnection => {
             }
             configRows[id] = next;
             plugins[i] = withConfig(plugins[i]!);
-            // Like the host: the transport needs every configurable plugin here, so the change applies after the reply.
-            setTimeout(() => {
-              restart(id);
-              emit({ type: "plugins-changed", plugins: plugins.slice() });
-            }, 300);
-            return { started: [], restarted: [], stopped: [], deferred: true };
+            // Like the host: a change that restarts the transport serving this call applies after the reply; any other at once.
+            if (id === "transport") {
+              setTimeout(() => emit({ type: "plugins-changed", plugins: plugins.slice() }), 300);
+              return { started: [], restarted: [], stopped: [], deferred: true };
+            }
+            restart(id);
+            emit({ type: "plugins-changed", plugins: plugins.slice() });
+            return { started: [], restarted: [id], stopped: [] };
           }
           if (row.enabled === undefined) continue;
           if (row.enabled) {

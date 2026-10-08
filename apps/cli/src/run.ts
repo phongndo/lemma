@@ -8,9 +8,9 @@ import type {
   AgentView,
   AssistantMessage,
   ChannelDeclaration,
-  HostEvent,
   ImageContent,
   PromptContent,
+  RuntimeEvent,
   SessionEvent,
   SessionInfo,
   SessionLogUpdate,
@@ -18,7 +18,7 @@ import type {
   TurnOptions,
 } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
-import { again, call, follow } from "./channels.ts";
+import { again, call, follow, followable } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Connection, Failure, Io, Options, Output } from "./command.ts";
 import { formatTurnResult } from "./format.ts";
@@ -167,16 +167,17 @@ const followed = (connection: Connection, io: Io, options: Options, payload: Pro
     // One element at a time, whichever stream it comes from, so what is shown stays in order.
     const lock = yield* Semaphore.make(1);
     const serial = <E>(effect: Effect.Effect<void, E>) => lock.withPermits(1)(effect);
-    yield* hostEvents(rpc, (event) => (event.type === "notice" ? serial(Effect.sync(() => view.notice(event))) : questions(event)));
+    const host = yield* hostEvents(rpc, (event) => (event.type === "notice" ? serial(Effect.sync(() => view.notice(event))) : questions(event)));
+    const followed = followable(rpc, host);
     // The output first, so whatever the log then has, the output of what follows it is heard.
     const activity = yield* follow(
-      rpc,
+      followed,
       AgentChannels.activity,
       () => undefined,
       (element) => serial(view.activity(element)),
     );
     const log = yield* follow(
-      rpc,
+      followed,
       SessionChannels.log,
       () => ({ sessionId, after: view.logSeq() }),
       (update) => serial(view.log(update)),
@@ -450,7 +451,7 @@ const turnView = (io: Io, options: Options, sessionId: string, requestId: string
     ended: Deferred.await(ended),
     logSeq: () => logSeq,
     streamed: () => streamed,
-    notice: (event: Extract<HostEvent, { readonly type: "notice" }>) => (options.json ? json(event) : line(noticeLine(event))),
+    notice: (event: Extract<RuntimeEvent, { readonly type: "notice" }>) => (options.json ? json(event) : line(noticeLine(event))),
     activity: (element: AgentActivity): Effect.Effect<void, Failure> =>
       Effect.suspend(() => {
         if (element.type === "subscribed") {

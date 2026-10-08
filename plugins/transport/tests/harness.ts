@@ -7,20 +7,19 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
-import { ChannelRpcs, HostError, HostRpcs, SUBSCRIBED_HEADER } from "@lemma/contracts";
-import type { HostEvent } from "@lemma/contracts";
+import { HostError, RuntimeRpcs } from "@lemma/contracts";
+import type { RuntimeEvent } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { makeCore } from "@lemma/core";
 import type { Core, CoreOptions, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
 import transport from "../src/index.ts";
-import { fakeAgent, fakeGreeter, fakeHostControl, fakeInteraction, fakeLlm, fakePaths, fakeSessions, fakeWorkspace } from "./fakes.ts";
+import { fakeGreeter, fakeHostControl, fakeInteraction, fakePaths } from "./fakes.ts";
 import type { ControlHolder } from "./fakes.ts";
 
-/** What a client of the transport reaches: `HostRpcs` and `ChannelRpcs`. */
-const ClientRpcs = HostRpcs.merge(ChannelRpcs);
-
-export type Client = RpcClient.RpcClient<RpcGroup.Rpcs<typeof ClientRpcs>, RpcClientError.RpcClientError>;
+export type Client = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;
+/** What `Host.Events` sends. */
+export type HostEvent = RuntimeEvent | { readonly type: "subscribed" };
 export type EventBox = Queue.Dequeue<HostEvent, RpcClientError.RpcClientError | Cause.Done>;
 export type Kind = "websocket" | "http";
 
@@ -57,7 +56,7 @@ export const connect = (url: string, token: string, kind: Kind): Effect.Effect<C
             Layer.provide(RpcSerialization.layerNdjson),
           );
     const context = yield* Layer.build(protocol);
-    return yield* RpcClient.make(ClientRpcs).pipe(Effect.provide(context));
+    return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
   });
 
 /** A holder for the core the fake `HostControl` delegates to, once there is one. */
@@ -68,16 +67,12 @@ export const makeHolder: Effect.Effect<ControlHolder> = Effect.map(Deferred.make
   ui: { plugins: {}, enabledIn: {}, configIn: {}, files: [] },
 }));
 
-/** The transport, the fakes behind it, and the bundled `commands`, homed in `home`. */
+/** The transport, fakes of the host's runtime behind it, and the bundled `commands` with a command of a plugin's, homed in `home`. */
 export const hostPlugins = (home: string, holder: ControlHolder): readonly Plugin[] => [
   transport,
-  fakeAgent,
-  fakeSessions,
-  fakeLlm,
   fakeInteraction,
   fakeHostControl(holder),
   fakePaths(home),
-  fakeWorkspace,
   commands,
   fakeGreeter,
 ];
@@ -121,7 +116,7 @@ export const waitFor = (events: EventBox, done: (event: HostEvent) => boolean) =
 /** Subscribes and waits for the host's `subscribed`: from then on the subscription receives everything. */
 export const subscribe = (client: Client) =>
   Effect.gen(function* () {
-    const events = yield* client["Host.Events"](undefined, { asQueue: true, headers: { [SUBSCRIBED_HEADER]: "1" } });
+    const events = yield* client["Host.Events"](undefined, { asQueue: true });
     yield* waitFor(events, (event) => event.type === "subscribed");
     return events;
   });

@@ -178,7 +178,8 @@ describe("formatReload", () => {
     const report = { started: [], restarted: ["llm"], stopped: [] };
     expect(formatReload(report)).toBe("restarted llm");
     expect(formatReload({ started: [], restarted: [], stopped: [] })).toBe("nothing changed");
-    expect(formatReload({ ...report, restarted: [], deferred: true }, "the plugins the reload changes")).toBe(
+    expect(formatReload({ ...report, restarted: [], deferred: true })).toBe("applying: the host restarts the transport, so clients reconnect");
+    expect(formatReload({ ...report, restarted: [], deferred: true }, "the plugins the reload changes, the transport among them")).toBe(
       "applying: the host restarts the plugins the reload changes, the transport among them, so clients reconnect",
     );
   });

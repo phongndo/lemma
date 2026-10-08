@@ -2,10 +2,10 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
 import { AgentChannels, CommandChannels, LlmChannels, SessionChannels } from "@lemma/contracts";
-import type { AgentActivity, CommandInfo, LlmChange, SessionsChange } from "@lemma/contracts";
+import type { AgentActivity, CommandInfo, LlmChange, RuntimeEvent, SessionsChange } from "@lemma/contracts";
 import { clockTime } from "../../model/format.ts";
 import { ThreadRoute } from "../../ui/contracts.ts";
-import type { ClientService, DevtoolsPanel, RouterService, RuntimeEvent } from "../../ui/contracts.ts";
+import type { ClientService, DevtoolsPanel, RouterService } from "../../ui/contracts.ts";
 import { XIcon } from "../../ui/parts.tsx";
 import type { SlotItem } from "../../ui/slots.ts";
 

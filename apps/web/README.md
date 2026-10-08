@@ -222,7 +222,8 @@ plugin serves its own UI the same way. A UI plugin requires `Client` and calls
 `client.channel.call(id, payload)`, or follows a stream with
 `client.follow(id, payload, onElement, onEnd)`, which keeps it open: again on
 every reconnect, at once when it ends `Withdrawn` (its plugin restarted), and
-when a `channels-changed` event lists it after nothing served it. A
+when a `channels-changed` event lists it after nothing served it, the policy
+every client of the host shares (`follow` in `@lemma/client`). A
 subsystem's stream starts with `subscribed`, from which its reader resyncs.
 Passing a channel's declaration instead of its id (`api.channels` holds the
 bundled subsystems', `@lemma/contracts` all of them) types the call: the

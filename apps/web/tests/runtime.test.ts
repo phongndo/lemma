@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ConnectionStatus } from "@lemma/client";
+import type { ConnectionStatus, Host } from "@lemma/client";
 import { HostError } from "@lemma/contracts";
-import type { ChannelDeclaration, HostEvent, HostInfo, InteractionRequest, PluginStatus } from "@lemma/contracts";
+import type { ChannelDeclaration, HostInfo, InteractionRequest, PluginStatus, RuntimeEvent } from "@lemma/contracts";
 import { createClient } from "../src/runtime/client.ts";
 import { createHostPlugins } from "../src/runtime/host-plugins.ts";
 import { createInteractions } from "../src/runtime/interactions.ts";
 import { createNotify } from "../src/runtime/notify.ts";
-import type { HostConnection } from "../src/ui/runtime.ts";
 
 /** A stream the client opened on the fake connection. */
 interface Opened {
@@ -22,7 +21,7 @@ interface Opened {
 const fakeHost = () => {
   let status: ConnectionStatus = { state: "connected", generation: 1, attempts: 0 };
   const statusListeners = new Set<(status: ConnectionStatus) => void>();
-  const eventListeners = new Set<(event: HostEvent) => void>();
+  const eventListeners = new Set<(event: RuntimeEvent) => void>();
   const calls: unknown[][] = [];
   const info: HostInfo = { version: "0", cwd: "/work", home: "/home", composition: { id: "c", plugins: [] }, runtime: ["lemma/Paths"] };
   let plugins: readonly PluginStatus[] = [];
@@ -53,7 +52,7 @@ const fakeHost = () => {
       listener(status);
       return () => void statusListeners.delete(listener);
     },
-    onEvent: (listener: (event: HostEvent) => void) => {
+    onEvent: (listener: (event: RuntimeEvent) => void) => {
       eventListeners.add(listener);
       return () => void eventListeners.delete(listener);
     },
@@ -69,7 +68,7 @@ const fakeHost = () => {
     },
   };
   return {
-    host: host as unknown as HostConnection,
+    host: host as unknown as Host,
     calls,
     lists,
     opened,
@@ -78,7 +77,7 @@ const fakeHost = () => {
       status = { ...status, ...next };
       for (const listener of statusListeners) listener(status);
     },
-    emit: (event: HostEvent) => {
+    emit: (event: RuntimeEvent) => {
       for (const listener of eventListeners) listener(event);
     },
     listeners: () => statusListeners.size + eventListeners.size,
@@ -124,87 +123,22 @@ describe("createClient", () => {
     errors.mockRestore();
   });
 
-  it("passes on the host's own events only: each subsystem streams its own", () => {
+  it("follows a stream over the page's connection: opened while connected, and again after a reconnect and when withdrawn", () => {
     const fake = fakeHost();
-    const { client } = createClient(fake.host);
-    const heard: string[] = [];
-    const stop = client.onEvent((event) => void heard.push(event.type));
-    fake.emit({ type: "plugins-changed", plugins: [] });
-    fake.emit({ type: "models-changed" });
-    fake.emit({ type: "turn-started", sessionId: "s", turnId: "t" });
-    fake.emit({ type: "channels-changed", channels: [] });
-    expect(heard).toEqual(["plugins-changed", "channels-changed"]);
-    stop();
-  });
-
-  it("follows a stream: opened while connected, again after a reconnect and when withdrawn, and once listed after nothing served it", () => {
-    const fake = fakeHost();
-    fake.setStatus({ state: "reconnecting" });
     const { client } = createClient(fake.host);
     const elements: unknown[] = [];
-    const ends: (string | undefined)[] = [];
-    let after = 0;
-    const close = client.follow(
-      "test.feed",
-      () => ({ after }),
-      (element) => void elements.push(element),
-      (error) => void ends.push(error instanceof HostError ? error.code : error?.message),
-    );
-    expect(fake.opened).toEqual([]);
-    fake.setStatus({ state: "connected", generation: 2 });
-    expect(fake.opened.map((stream) => [stream.id, stream.payload])).toEqual([["test.feed", { after: 0 }]]);
+    const close = client.follow("test.feed", undefined, (element) => void elements.push(element));
+    expect(fake.opened.map((stream) => stream.id)).toEqual(["test.feed"]);
     fake.opened[0]!.send("a");
-    after = 1;
-    // Its plugin reloads: opened again at once, from where its reader is.
     fake.opened[0]!.end(new HostError({ code: "Withdrawn", subject: "test.feed", message: "withdrawn" }));
-    expect(fake.opened.map((stream) => stream.payload)).toEqual([{ after: 0 }, { after: 1 }]);
-    // The replacement is not there yet: it waits for a `channels-changed` that lists it.
-    fake.opened[1]!.end(new HostError({ code: "NotFound", subject: "test.feed", message: "none" }));
-    fake.emit({ type: "channels-changed", channels: [{ id: "other", kind: "stream", source: "x" }] });
     expect(fake.opened).toHaveLength(2);
-    fake.emit({ type: "channels-changed", channels: [{ id: "test.feed", kind: "stream", source: "x" }] });
-    expect(fake.opened).toHaveLength(3);
-    fake.opened[2]!.send("b");
-    // A channels-changed while it is open, and an element from a stream it left, change nothing.
-    fake.emit({ type: "channels-changed", channels: [{ id: "test.feed", kind: "stream", source: "x" }] });
-    fake.opened[0]!.send("stale");
-    expect(fake.opened).toHaveLength(3);
-    // The connection drops and comes back: the stream it had is replaced by a new one.
     fake.setStatus({ state: "reconnecting" });
-    fake.opened[2]!.end(new Error("Error in socket"));
-    fake.setStatus({ state: "connected", generation: 3 });
-    expect(fake.opened).toHaveLength(4);
-    expect(elements).toEqual(["a", "b"]);
-    expect(ends).toEqual(["Withdrawn", "NotFound", "Error in socket"]);
-    close();
-    expect(fake.opened[3]!.closed).toBe(true);
-    fake.setStatus({ state: "connected", generation: 4 });
-    expect(fake.opened).toHaveLength(4);
-    expect(fake.listeners()).toBe(1);
-  });
-
-  it("opens a stream again at once when the listing that names it crossed the failed opening", () => {
-    const fake = fakeHost();
-    const { client } = createClient(fake.host);
-    const withdrawn = new HostError({ code: "Withdrawn", subject: "test.feed", message: "withdrawn" });
-    const notFound = new HostError({ code: "NotFound", subject: "test.feed", message: "none" });
-    const listing: HostEvent = { type: "channels-changed", channels: [{ id: "test.feed", kind: "stream", source: "x" }] };
-    const close = client.follow("test.feed", undefined, () => {});
-    // Its plugin is replaced: the opening made at once finds nothing, but the replacement is listed before that is heard.
-    fake.opened[0]!.end(withdrawn);
-    fake.emit(listing);
-    expect(fake.opened).toHaveLength(2);
-    fake.opened[1]!.end(notFound);
+    fake.opened[1]!.end(new Error("Error in socket"));
+    fake.setStatus({ state: "connected", generation: 2 });
     expect(fake.opened).toHaveLength(3);
-    // Once the stream has sent something, a listing heard before or since says nothing about how it ends: it waits for the next.
-    fake.emit(listing);
-    fake.opened[2]!.send("subscribed");
-    fake.emit(listing);
-    fake.opened[2]!.end(notFound);
-    expect(fake.opened).toHaveLength(3);
-    fake.emit(listing);
-    expect(fake.opened).toHaveLength(4);
+    expect(elements).toEqual(["a"]);
     close();
+    expect(fake.opened[2]!.closed).toBe(true);
   });
 });
 

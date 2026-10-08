@@ -1,29 +1,29 @@
 import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, test } from "vitest";
 import { HostError } from "@lemma/contracts";
-import type { HostEvent, InteractionRequest, NoticePayload } from "@lemma/contracts";
+import type { InteractionRequest, NoticePayload, RuntimeEvent } from "@lemma/contracts";
 import type { Io, Options } from "../src/command.ts";
 import { loginCommand } from "../src/live.ts";
 import { fakeHost, fed } from "./fake.ts";
 
 const copilot = { id: "github-copilot", name: "GitHub Copilot", configured: false, auth: [{ type: "oauth", name: "GitHub Copilot", interactive: true }] };
-const notice = (fields: Partial<NoticePayload>): HostEvent => ({
+const notice = (fields: Partial<NoticePayload>): RuntimeEvent => ({
   type: "notice",
   notice: { level: "info", message: "", origin: "login:github-copilot", ...fields },
 });
-const question = (request: Record<string, unknown>, id = "q1"): HostEvent =>
-  ({ type: "interaction", request: { ...request, id, origin: "login:github-copilot" } as InteractionRequest }) as HostEvent;
+const question = (request: Record<string, unknown>, id = "q1"): RuntimeEvent =>
+  ({ type: "interaction", request: { ...request, id, origin: "login:github-copilot" } as InteractionRequest }) as RuntimeEvent;
 
 /**
  * A host whose login publishes `events` and runs until the test calls `finish`, recording the calls
  * it is sent. Cancelling withdraws the login's open questions, as the transport does.
  */
-const fakeLogin = (events: readonly HostEvent[]) => {
+const fakeLogin = (events: readonly RuntimeEvent[]) => {
   const calls: string[] = [];
   const answers: unknown[] = [];
   const done = Effect.runSync(Deferred.make<void>());
   const answered = Effect.runSync(Deferred.make<void>());
-  const stream = fed<HostEvent>(...events);
+  const stream = fed<RuntimeEvent>(...events);
   const connection = fakeHost({
     calls: {
       "llm.providers": () => Effect.succeed([copilot]),
@@ -113,7 +113,7 @@ describe("lemma login", () => {
   });
 
   test("a login its provider's reload withdrew starts again, its questions asked anew and the old one's prompt closed", async () => {
-    const events = fed<HostEvent>();
+    const events = fed<RuntimeEvent>();
     const done = Effect.runSync(Deferred.make<void>());
     const firstAsked = Effect.runSync(Deferred.make<void>());
     let logins = 0;

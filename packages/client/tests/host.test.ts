@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { Agent, Channels, Commands, defineChannel, HostControl, HostError, Llm, serveChannel, Sessions, Workspace } from "@lemma/contracts";
+import { Channels, defineChannel, HostControl, HostError, serveChannel } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
@@ -14,18 +14,11 @@ import { callChannel, connect, openChannel } from "../src/host.ts";
 import type { Host } from "../src/host.ts";
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "../src/rpc.ts";
 
-/** What else the transport requires, as far as these tests reach it: `Host.Info` for the connect probe, nothing more. */
-const stubs = definePlugin({
-  id: "stubs",
-  provides: [Sessions, Agent, Llm, HostControl, Workspace, Commands],
-  layer: Layer.mergeAll(
-    Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }) } as never),
-    Layer.succeed(Sessions, {} as never),
-    Layer.succeed(Agent, {} as never),
-    Layer.succeed(Llm, {} as never),
-    Layer.succeed(Workspace, {} as never),
-    Layer.succeed(Commands, {} as never),
-  ),
+/** What the host provides the transport besides `Paths`, as far as these tests reach it: `Host.Info` for the connect probe. */
+const control = definePlugin({
+  id: "host",
+  provides: [HostControl],
+  layer: Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
 });
 
 // The declarations, as a contract module would export them for clients to import.
@@ -71,7 +64,7 @@ const withHost = (body: (host: Host, core: Core<any>, found: { readonly url: str
           Effect.promise(() => mkdtemp(join(tmpdir(), "lemma-client-"))),
           (dir) => Effect.promise(() => rm(dir, { recursive: true, force: true })),
         );
-        const core = yield* makeCore([transport, pathsPlugin(home), stubs, doubler], { configs: { transport: { port: 0 } } });
+        const core = yield* makeCore([transport, pathsPlugin(home), control, doubler], { configs: { transport: { port: 0 } } });
         const found = yield* readDiscovery(home);
         if (found === undefined) return yield* Effect.die(new Error("no discovery file"));
         const host = yield* Effect.acquireRelease(

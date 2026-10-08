@@ -348,7 +348,11 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "reload":
       return (
         extra(1) ??
-        (({ rpc }) => Effect.map(rpc["Host.Reload"](), (report) => ({ json: report, text: formatReload(report, "the plugins the reload changes") })))
+        (({ rpc }) =>
+          Effect.map(rpc["Host.Reload"](), (report) => ({
+            json: report,
+            text: formatReload(report, "the plugins the reload changes, the transport among them"),
+          })))
       );
     case "events":
       return extra(1) ?? eventsCommand;

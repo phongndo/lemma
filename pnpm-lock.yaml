@@ -794,9 +794,6 @@ importers:
       '@lemma/plugin-commands':
         specifier: workspace:*
         version: link:../commands
-      '@lemma/testing':
-        specifier: workspace:*
-        version: link:../../packages/testing
       '@types/node':
         specifier: 24.19.0
         version: 24.19.0

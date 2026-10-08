@@ -1,12 +1,11 @@
 import { Duration, Effect, Layer, Schema } from "effect";
-import { Agent, appUrl, Commands, HostControl, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
+import { appUrl, HostControl, InteractionHook, Notice, Paths, secret } from "@lemma/contracts";
 import { definePlugin, Events, Registries } from "@lemma/core";
 import { ChannelLifetime, channelLifetime, ServedRpcs } from "./channels.ts";
 import { makeHandlers } from "./handlers.ts";
 import { makeHub } from "./hub.ts";
 import type { Hub } from "./hub.ts";
 import { makeInteractions } from "./interactions.ts";
-import { makeLogins } from "./logins.ts";
 import { publishDiscovery } from "./discovery.ts";
 import { startServer } from "./server.ts";
 import { Startup, startupGate } from "./startup.ts";
@@ -55,13 +54,15 @@ export default definePlugin({
   id: "transport",
   version: VERSION,
   config: TransportConfig,
-  requires: { paths: Paths, sessions: Sessions, agent: Agent, llm: Llm, host: HostControl, workspace: Workspace, commands: Commands },
+  // The runtime only: a subsystem serves its own calls and streams as channels, read at each request, so it stops,
+  // reloads, or is off without this plugin noticing.
+  requires: { paths: Paths, host: HostControl },
   // Owns the listening port: a reload stops this instance before starting its replacement.
   exclusive: true,
   setup: function* (_, owner) {
     const config = owner.config;
     const events = yield* Events;
-    const [paths, sessions, agent, llm, control, workspace, commands] = yield* Effect.all([Paths, Sessions, Agent, Llm, HostControl, Workspace, Commands]);
+    const [paths, control] = yield* Effect.all([Paths, HostControl]);
     const registries = yield* Registries;
 
     let hub: Hub | undefined;
@@ -70,10 +71,9 @@ export default definePlugin({
     yield* owner.on(InteractionHook, interactions.handle);
 
     const token = config.token ?? (yield* loadToken(paths.home));
-    const logins = makeLogins(llm, yield* Effect.scope);
     const startup = yield* startupGate(owner, control.composition, Duration.millis(config.startupTimeoutMs));
     const handlers = Layer.mergeAll(
-      ServedRpcs.toLayer(makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins })),
+      ServedRpcs.toLayer(makeHandlers({ version: VERSION, hub, interactions, paths, control, registries })),
       Layer.succeed(ChannelLifetime, channelLifetime(registries)),
       Layer.succeed(Startup, startup),
     );

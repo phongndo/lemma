@@ -166,6 +166,22 @@ describe("startPrompt", () => {
     expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
   });
 
+  test("withdrawn, it waits for the agent's channels only while they are not served: a NotFound naming its session fails at once", async () => {
+    const fake = fakeConnection();
+    const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    fake.calls[0]!.reject(withdrawn("agent.prompt"));
+    await tick();
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    // The replacement answers, and the session is gone meanwhile: no listing of the agent's channels changes that.
+    fake.calls[1]!.reject(new HostError({ code: "NotFound", subject: "s1", message: 'No session "s1"' }));
+    await expect(started.done).rejects.toThrow('No session "s1"');
+    await expect(started.accepted).rejects.toThrow('No session "s1"');
+    expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
+  });
+
   test("with no agent to listen to, it is refused unsent", async () => {
     const fake = fakeConnection();
     const missing = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);

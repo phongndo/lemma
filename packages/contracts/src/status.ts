@@ -4,10 +4,8 @@ import { CompositionInfo, ConfigScope, FaultRecord, faultMessage, HookUse, Plugi
 import type { PluginInfo } from "./host.ts";
 
 /*
- * The host as clients see it, apart from the domain calls in `HostRpcs`: who it
- * is, what its plugins are doing, and what a reload changed. Kept out of
- * `rpc.ts`, which reaches every domain's contracts, so the runtime contracts
- * (`@lemma/contracts/runtime`) reach none.
+ * The host as clients see it through `RuntimeRpcs`: who it is, what its
+ * plugins are doing, what a reload changed, and how its errors read.
  */
 
 /**
@@ -106,9 +104,6 @@ export const describeReload = (result: Pick<ReloadResult, "started" | "restarted
   return parts.length > 0 ? parts.join("; ") : undefined;
 };
 
-/** Sent with `Host.Events` to receive `{ type: "subscribed" }` first. */
-export const SUBSCRIBED_HEADER = "lemma-subscribed";
-
 export const HostInfo = Schema.Struct({
   version: Schema.String,
   cwd: Schema.String,
@@ -120,9 +115,9 @@ export const HostInfo = Schema.Struct({
 export type HostInfo = typeof HostInfo.Type;
 
 /**
- * The version of what the host serves on the wire (`HostRpcs`, `ChannelRpcs`, and their encoding, which Effect's RPC
- * owns): 3 since it serves channels, 2 since Lemma moved to Effect 4, 1 before (a host whose `/api/health` names
- * none). A client and a host speaking different versions cannot talk, so a client whose calls fail asks `/api/health`
- * to say why.
+ * The version of what the host serves on the wire (`RuntimeRpcs`, and its encoding, which Effect's RPC owns): 3 since
+ * it serves the runtime's calls and events only, each subsystem reached through its channels, 2 since Lemma moved to
+ * Effect 4, 1 before (a host whose `/api/health` names none). A client and a host speaking different versions cannot
+ * talk, so a client whose calls fail asks `/api/health` to say why.
  */
 export const HOST_PROTOCOL = 3;

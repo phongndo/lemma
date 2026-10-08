@@ -8,36 +8,27 @@ import type { HostError } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { makeCore } from "@lemma/core";
-import type { Core, Plugin } from "@lemma/core";
-import commands from "../../commands/src/index.ts";
+import type { Core, CoreOptions, Plugin } from "@lemma/core";
 import transport from "../../transport/src/index.ts";
-import { fakeAgent, fakeHostControl, fakeInteraction, fakeLlm, fakeSessions, fakeWorkspace } from "../../transport/tests/fakes.ts";
-import type { ControlHolder } from "../../transport/tests/fakes.ts";
+import { fakeHostControl } from "../../transport/tests/fakes.ts";
 import { connect, makeHolder } from "../../transport/tests/harness.ts";
 import type { Client } from "../../transport/tests/harness.ts";
 
 export type { Client } from "../../transport/tests/harness.ts";
 export { hostError } from "../../transport/tests/harness.ts";
 
-/** What the transport requires besides what a test runs, by the id of the plugin that would provide it: its own tests' stand-ins. */
-const standIns = (holder: ControlHolder): Record<string, readonly Plugin[]> => ({
-  sessions: [fakeSessions],
-  agent: [fakeAgent],
-  llm: [fakeLlm, fakeInteraction],
-  host: [fakeHostControl(holder)],
-  workspace: [fakeWorkspace],
-  commands: [commands],
-});
-
 /**
  * Runs `plugins` (given a fresh home) behind the transport, as a host does,
  * and hands `body` a client connected over a WebSocket: what it calls and
  * opens goes through the transport's channel serving, the way any client's
- * requests do. `Paths` is the home's unless `plugins` has a `paths` plugin.
+ * requests do. The transport needs only the runtime: `Paths` is the home's,
+ * and `HostControl` a stand-in's, unless `plugins` has a `paths` or a `host`
+ * plugin. `options` are the core's (`configs`, `deadlines`).
  */
 export const served = <A, E>(
   plugins: (home: string) => readonly Plugin[],
   body: (client: Client, core: Core<any>) => Effect.Effect<A, E, Scope.Scope>,
+  options: Pick<CoreOptions, "configs" | "deadlines"> = {},
 ): Promise<A> =>
   Effect.runPromise(
     Effect.scoped(
@@ -50,9 +41,10 @@ export const served = <A, E>(
         const ids = new Set(own.map((plugin) => plugin.id));
         // The transport holds requests until the composition is up, which the host control says once it has the core.
         const holder = yield* makeHolder;
-        const missing = Object.entries(standIns(holder)).flatMap(([id, standIn]) => (ids.has(id) ? [] : standIn));
-        const core = yield* makeCore([transport, ...(ids.has("paths") ? [] : [pathsPlugin(home)]), ...own, ...missing], {
-          configs: { transport: { port: 0 } },
+        const runtime = [...(ids.has("paths") ? [] : [pathsPlugin(home)]), ...(ids.has("host") ? [] : [fakeHostControl(holder)])];
+        const core = yield* makeCore([transport, ...runtime, ...own], {
+          ...options,
+          configs: { ...options.configs, transport: { port: 0 } },
         });
         yield* Deferred.succeed(holder.core, core);
         const found = yield* readDiscovery(home);

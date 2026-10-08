@@ -4,8 +4,8 @@ import { TestClock } from "effect/testing";
 import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/contracts";
-import type { EventData, SessionError, SessionEvent } from "@lemma/contracts";
+import { SessionAppended, SessionChanged, SessionError, SessionRemoved, SessionRemoveHook, Sessions } from "@lemma/contracts";
+import type { EventData, SessionEvent } from "@lemma/contracts";
 
 type Store = Context.Service.Shape<typeof Sessions>;
 
@@ -142,6 +142,23 @@ export function sessionsConformance(name: string, compose: () => readonly Plugin
         }),
       ));
 
+    test("remove asks SessionRemoveHook first: a handler's refusal fails it with that error and keeps the session", () =>
+      run((store, seen) =>
+        Effect.gen(function* () {
+          const { id } = yield* store.create({ cwd: "/work/a" });
+          yield* store.append(id, note("one"));
+          seen.kept.add(id);
+          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
+          expect((yield* store.get(id)).lastSeq).toBe(1);
+          expect((yield* store.events(id)).length).toBe(1);
+          expect((yield* store.list()).map((info) => info.id)).toEqual([id]);
+          // Let go, it is removed.
+          seen.kept.delete(id);
+          yield* store.remove(id);
+          expect(reason(yield* Effect.result(store.get(id)))).toBe("NotFound");
+        }),
+      ));
+
     test("refusals: a missing session or event, an unknown parent", () =>
       run((store) =>
         Effect.gen(function* () {
@@ -179,15 +196,23 @@ interface Seen {
   readonly appended: { readonly sessionId: string; readonly event: SessionEvent }[];
   readonly changed: { readonly id: string; readonly lastSeq: number }[];
   readonly removed: string[];
+  /** Sessions whose removal it refuses, `Busy`, as a plugin using one does (the agent, while a turn runs). */
+  readonly kept: Set<string>;
 }
 
+/** Another plugin beside the store: it records what the store publishes, and refuses to remove what it keeps. */
 function recorder(): Seen {
-  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [] };
+  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], kept: new Set() };
   const plugin = definePlugin({
     id: "conformance-recorder",
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
+        yield* owner.on(SessionRemoveHook, (input, next) =>
+          seen.kept.has(input.sessionId)
+            ? Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: `"${input.sessionId}" is in use` }))
+            : next(input),
+        );
         yield* owner.observe(SessionAppended, (payload) => Effect.sync(() => void seen.appended.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionChanged, ({ info }) => Effect.sync(() => void seen.changed.push(info)), { buffer: 256 });
         yield* owner.observe(SessionRemoved, ({ sessionId }) => Effect.sync(() => void seen.removed.push(sessionId)), { buffer: 256 });

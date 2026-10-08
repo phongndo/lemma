@@ -3,6 +3,7 @@ import type { Context } from "effect";
 import { Show, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
+import type { Host } from "@lemma/client";
 import { faultMessage, toPluginStatus } from "@lemma/contracts";
 import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
@@ -16,7 +17,7 @@ import { routesOf } from "./define.ts";
 import { First, SlotsContext } from "./draw.tsx";
 import { createFileLoader } from "./files.ts";
 import { Root, Slots } from "./runtime.ts";
-import type { HostConnection, UiPluginsService } from "./runtime.ts";
+import type { UiPluginsService } from "./runtime.ts";
 import type { SlotsService } from "./slots.ts";
 
 /**
@@ -37,7 +38,7 @@ const EMPTY: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: 
 const FIRST_ROWS_MS = 3_000;
 
 export interface BootOptions {
-  readonly host: HostConnection;
+  readonly host: Host;
   readonly token: string | undefined;
   /** The app's own plugins, in order. The runtime they are written against is the boot's (`src/runtime/`), not among them. */
   readonly bundled: readonly Plugin[];

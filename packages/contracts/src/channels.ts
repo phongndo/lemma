@@ -1,6 +1,5 @@
 import { Cause, Effect, Fiber, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import type { Context } from "effect";
-import { Rpc, RpcGroup } from "effect/rpc";
 import { awaitable, isExpectedFailure, Registry } from "@lemma/core";
 import type { Awaitable, Contribution, Registries } from "@lemma/core";
 import { HostError } from "./status.ts";
@@ -103,11 +102,11 @@ export interface ChannelStream<Payload = any, Success = any> extends ChannelDecl
 /**
  * A call or a stream a host plugin serves to clients: its own web plugin, a
  * UI file, a script, or the CLI (`lemma channels`). The transport serves every
- * channel through `ChannelRpcs`, so a plugin offers its own data without a
- * change to these contracts or the transport. A plugin adds one to `Channels`
- * with `PluginContext.add`; it belongs to that plugin and leaves with it,
- * which ends its open streams. Nothing has to provide anything for it to be
- * added.
+ * channel through `RuntimeRpcs`' `Channel.*`, so a plugin offers its own data
+ * without a change to these contracts or the transport. A plugin adds one to
+ * `Channels` with `PluginContext.add`; it belongs to that plugin and leaves
+ * with it, which ends its open streams. Nothing has to provide anything for it
+ * to be added.
  */
 export type Channel = ChannelCall | ChannelStream;
 
@@ -358,51 +357,3 @@ export const ChannelInfo = Schema.Struct({
   source: Schema.String,
 });
 export type ChannelInfo = typeof ChannelInfo.Type;
-
-/**
- * How clients reach `Channels`, by id with the payload and results as JSON;
- * `@lemma/client` encodes and decodes them with a declaration's schemas. The
- * transport serves these beside `HostRpcs`. While the host starts, a request
- * waits until its plugins are up, so a client that has just found the host
- * reaches the channels they serve; one still waiting at the transport's
- * startup timeout fails `Unavailable` (a `HostError`, whose `subject` is the
- * channel when the request names one).
- */
-export class ChannelRpcs extends RpcGroup.make(
-  /** What host plugins serve: the channel that answers for each id. Fails `Unavailable` while the host starts, as above. */
-  Rpc.make("Channel.List", { success: Schema.Array(ChannelInfo), error: HostError }),
-  /**
-   * Calls a channel. `payload` is its payload schema's JSON form (absent is
-   * `null`, what `Schema.Void` takes), and the result is its success schema's
-   * JSON form. The call that answers for the id when the request arrives
-   * serves it; one in flight when its plugin stops or is replaced finishes on
-   * that instance before the instance's finalizers run. Fails with a
-   * `HostError` whose `subject` is the channel, unless the handler's domain
-   * error names its own (a session, a path): `NotFound` (no call answers for
-   * the id, as when its plugin has gone), `InvalidPayload`, the handler's
-   * domain error's code (its `reason` or tag), `Failed` (any other failure, a
-   * defect, or a result its success schema cannot send), `Withdrawn` (its
-   * plugin left while it waited on that plugin, see `CallLifetime`, or it was
-   * still running at the plugin's dispose deadline and was interrupted: call
-   * again to reach the replacement), or `Unavailable` (the host still
-   * starting at the transport's startup timeout, as above; a handler's domain
-   * error may be `Unavailable` too).
-   */
-  Rpc.make("Channel.Call", { payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) }, success: Schema.Unknown, error: HostError }),
-  /**
-   * Opens a channel stream: its elements, encoded as for `Channel.Call`, until
-   * it ends. Fails as `Channel.Call` does, except that it ends `Withdrawn` as
-   * soon as its plugin stops or is replaced, or another plugin's channel takes
-   * over its id, whether or not the client is reading, and is stopped before
-   * that plugin's finalizers run: open it again to reach whatever answers for
-   * the id now. It ends with the connection and nothing resumes it, so a
-   * client reopens it when it reconnects and receives what the channel sends
-   * from then on.
-   */
-  Rpc.make("Channel.Open", {
-    payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) },
-    success: Schema.Unknown,
-    error: HostError,
-    stream: true,
-  }),
-) {}

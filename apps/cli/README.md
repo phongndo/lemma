@@ -74,9 +74,11 @@ so the two show the same records and accept the same queries.
   questions, plugin, channel, and UI changes) and the bundled subsystems'
   streams: `agent.activity`, `sessions.changes`, `llm.changes`, and
   `commands.changes`. `--session <id>` keeps that session's turns and changes
-  and adds its `sessions.log` from now on. A stream that is not served, or
-  that its plugin's reload withdrew, is followed again once the host lists
-  it. With `--json`, each line is `{"from", "element"}`: `from` is `host`
+  and adds its `sessions.log` from now on. A stream that its plugin's reload
+  withdrew is opened again at once, and one that is not served once the host
+  lists it, as every client follows a stream (`follow` in
+  [`@lemma/client`](../../packages/client/src/follow.ts)); any other ending
+  stops it. With `--json`, each line is `{"from", "element"}`: `from` is `host`
   for the host's own events, else the channel, and `element` is what it
   sent.
 - **Machine-readable output.** With `--json`, results are the contract shapes

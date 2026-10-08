@@ -752,7 +752,9 @@ export default defineUiPlugin({
         setBusy(undefined);
       }
     };
-    const deferredNote = "the host restarts it and the plugins that use it, and this page reconnects";
+    // The host defers a change asked for here only when it restarts the transport serving the request: it applies once
+    // the reply is out, dropping the connection.
+    const deferredNote = "the host restarts the transport once this reply is out, and this page reconnects";
 
     const inspector: Inspector = {
       client,
@@ -852,7 +854,7 @@ export default defineUiPlugin({
           notify.toast({
             level: "info",
             message: result.deferred
-              ? "Reloading config: the host restarts the plugins it changes, and this page reconnects"
+              ? "Reloading config: the host restarts the plugins it changes, the transport among them, and this page reconnects"
               : summary === undefined
                 ? "Config reloaded; nothing changed"
                 : `Config reloaded: ${summary}`,

@@ -31,7 +31,7 @@ export const hostCommands = (control: Context.Service.Shape<typeof HostControl>,
     description: "Restart a failed plugin and what it halted, or a running plugin the host does not depend on",
     run: () =>
       Effect.gen(function* () {
-        // Restarting a running plugin restarts its dependents; excluded when those include the transport serving this call.
+        // A running plugin restarts with its dependents, so one the host pins, or that a pinned plugin needs, is left out.
         const plugins = (yield* control.plugins).filter((plugin) => recoverable(plugin) || (plugin.state === "active" && plugin.locked === undefined));
         if (plugins.length === 0) return yield* nothing("host.restart-plugin", "No plugin can be restarted");
         const id = yield* ask.select(
@@ -62,8 +62,8 @@ export const hostCommands = (control: Context.Service.Shape<typeof HostControl>,
         const enabled = !chosen.enabled;
         const verb = enabled ? "on" : "off";
         const report = yield* control.configure({ [id]: { enabled } }, chosen.scope === "project" ? { scope: "project" } : undefined);
-        // It restarts the transport, so it applies once this answer is out.
-        if (report.deferred) return { message: `Turning ${id} ${verb}: the host restarts the plugins that use it, and clients reconnect` };
+        // It restarts what runs this command, so it applies once this answer is out.
+        if (report.deferred) return { message: `Turning ${id} ${verb} once this command has ended` };
         // What runs is what the files say; if another file still decides the other way, say so rather than claim success.
         const after = (yield* control.plugins).find((plugin) => plugin.id === id);
         if (after !== undefined && after.enabled !== enabled) {

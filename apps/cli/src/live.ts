@@ -1,21 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
-import { Deferred, Duration, Effect, Fiber, FiberMap, PubSub, Stream } from "effect";
-import { AgentChannels, CommandChannels, LlmChannels, SessionChannels, SUBSCRIBED_HEADER } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Fiber, FiberMap } from "effect";
+import type { Scope } from "effect";
+import { AgentChannels, CommandChannels, LlmChannels, SessionChannels } from "@lemma/contracts";
 import type {
   AgentActivity,
   ChannelDeclaration,
-  HostEvent,
   InteractionAnswer,
   InteractionRequest,
   LlmChange,
   NoticePayload,
+  RuntimeEvent,
   SessionLogUpdate,
   SessionsChange,
   UiComposition,
 } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
-import { again, call, ofChannel, open, subscribe } from "./channels.ts";
+import { again, call, followable, following, ofChannel, subscribe } from "./channels.ts";
+import type { HostEvents } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options } from "./command.ts";
 import { formatCommands, formatModels, formatProviders, formatQueue, formatQuestions } from "./format.ts";
@@ -130,7 +132,7 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
           raw = undefined;
         }
       });
-    const handler = (event: HostEvent): Effect.Effect<void> => {
+    const handler = (event: RuntimeEvent): Effect.Effect<void> => {
       if (event.type === "interaction-closed") {
         const asking = prompting.get(event.id);
         return FiberMap.remove(prompts, event.id).pipe(
@@ -164,12 +166,27 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
  * asks among them). A call's reply is no such sign: the host handles calls on
  * one socket concurrently. A handler's failure is its event's alone.
  */
-export const hostEvents = (rpc: HostRpcClient, onEvent: (event: HostEvent) => Effect.Effect<void, Failure>) =>
-  subscribe("its events", rpc["Host.Events"](undefined, { headers: { [SUBSCRIBED_HEADER]: "1" } }), (event) =>
-    event.type === "subscribed" ? Effect.void : onEvent(event).pipe(Effect.catchCause(() => Effect.void)),
-  );
+export const hostEvents = (
+  rpc: HostRpcClient,
+  onEvent: (event: RuntimeEvent) => Effect.Effect<void, Failure>,
+): Effect.Effect<HostEvents, Failure, Scope.Scope> =>
+  Effect.gen(function* () {
+    const listeners = new Set<(event: RuntimeEvent) => void>();
+    const fiber = yield* subscribe("its events", rpc["Host.Events"](), (event) => {
+      if (event.type === "subscribed") return Effect.void;
+      for (const listener of listeners) listener(event);
+      return onEvent(event).pipe(Effect.catchCause(() => Effect.void));
+    });
+    return {
+      fiber,
+      onEvent: (listener) => {
+        listeners.add(listener);
+        return () => void listeners.delete(listener);
+      },
+    };
+  });
 
-export const noticeLine = (event: Extract<HostEvent, { type: "notice" }>) => {
+export const noticeLine = (event: Extract<RuntimeEvent, { type: "notice" }>) => {
   const notice = event.notice;
   const links = notice.links?.map((link) => ` ${link.label === undefined ? link.url : `${link.label}: ${link.url}`}`).join("") ?? "";
   return `[${notice.level}]${notice.source === undefined ? "" : ` ${notice.source}:`} ${notice.message}${notice.code === undefined ? "" : ` (code: ${notice.code})`}${links}`;
@@ -212,14 +229,14 @@ export const withdrawCommand =
 
 /**
  * `lemma events`: what the host publishes, as it happens. Its own events
- * (`HostEvent`: notices, questions, and plugin, channel, and UI changes), and
- * the bundled subsystems' streams: `agent.activity`, `sessions.changes`,
+ * (`RuntimeEvent`: notices, questions, and plugin, channel, and UI changes),
+ * and the bundled subsystems' streams: `agent.activity`, `sessions.changes`,
  * `llm.changes`, and `commands.changes`. `--session <id>` keeps only that
  * session's elements of the first two, and adds its log from now
  * (`sessions.log`). A stream that is not served, or that its plugin's reload
- * withdrew, is followed again once it is served. With `--json`, each line is
- * `{"from", "element"}`: `from` is `host` for the host's own events, else the
- * channel.
+ * withdrew, is followed again once it is served (`follow` in
+ * `@lemma/client`). With `--json`, each line is `{"from", "element"}`:
+ * `from` is `host` for the host's own events, else the channel.
  */
 export const eventsCommand: Command = (connection, io, options) =>
   Effect.gen(function* () {
@@ -235,54 +252,25 @@ export const eventsCommand: Command = (connection, io, options) =>
     const note = (text: string) => {
       if (!options.json) io.out(text);
     };
-    /** The channels served, each time the host says they changed. */
-    const changes = yield* PubSub.unbounded<readonly string[]>();
     const questions = yield* questionHandler(rpc, io, options, session === undefined ? undefined : `session:${session}`);
-    const host = yield* hostEvents(rpc, (event) =>
-      Effect.gen(function* () {
-        if (event.type === "channels-changed")
-          yield* PubSub.publish(
-            changes,
-            event.channels.map((channel) => channel.id),
-          );
-        // What the subsystems report, their own streams carry; the host's stream is followed for its own events.
-        const line = hostLine(event);
-        if (line !== undefined) print("host", event, line);
-        // Watching never answers unless asked to.
-        if (options.questions !== undefined) yield* questions(event);
-      }),
-    );
-    /** Follows `channel` while the command runs, again once it is served when it was not or its plugin withdrew it. */
+    const host = yield* hostEvents(rpc, (event) => {
+      // What the subsystems report, their own streams carry; the host's stream is followed for its own events.
+      print("host", event, hostLine(event));
+      // Watching never answers unless asked to.
+      return options.questions === undefined ? Effect.void : questions(event);
+    });
+    const followed = followable(rpc, host);
+    /** Follows `channel` while the command runs, again once it is served when it was not or its plugin withdrew it; any other ending stops it. */
     const keep = <Payload, Success>(channel: ChannelDeclaration<"stream", Payload, Success>, payload: () => Payload, show: (element: Success) => void) =>
-      Effect.forkScoped(
-        Effect.gen(function* () {
-          for (;;) {
-            const ended = yield* Effect.result(
-              Stream.runForEach(
-                Stream.suspend(() => open(rpc, channel, payload())),
-                (element) => Effect.sync(() => show(element)),
-              ),
-            );
-            if (ended._tag === "Success") return note(`${channel.id} ended`);
-            const error = ended.failure;
-            if (ofChannel(error, channel.id, "Withdrawn"))
-              note(`${channel.id} withdrawn: its plugin stopped or reloaded; following it again once it is served`);
-            else if (ofChannel(error, channel.id, "NotFound")) note(`${channel.id} not served: following it once it is`);
-            else return note(`${channel.id} ended: ${error.message}`);
-            // Listed now, or by a change heard from here on; after a moment, so one that answers wrongly is not opened in a loop.
-            const served = yield* Effect.scoped(
-              Effect.gen(function* () {
-                const heard = yield* PubSub.subscribe(changes);
-                if ((yield* rpc["Channel.List"]()).some((listed) => listed.id === channel.id)) return;
-                for (;;) if ((yield* PubSub.take(heard)).includes(channel.id)) return;
-              }),
-            ).pipe(Effect.result);
-            if (served._tag === "Failure") return note(`${channel.id} ended: ${served.failure.message}`);
-            yield* Effect.sleep(Duration.millis(250));
-          }
-        }),
-        { startImmediately: true },
-      );
+      following(followed, channel, payload, show, (error) => {
+        if (ofChannel(error, channel.id, "Withdrawn")) note(`${channel.id} withdrawn: its plugin stopped or reloaded; following it again`);
+        else if (ofChannel(error, channel.id, "NotFound")) note(`${channel.id} not served: following it once it is`);
+        else {
+          note(error === undefined ? `${channel.id} ended` : `${channel.id} ended: ${error.message}`);
+          return false;
+        }
+        return true;
+      });
     yield* keep(
       AgentChannels.activity,
       () => undefined,
@@ -318,12 +306,12 @@ export const eventsCommand: Command = (connection, io, options) =>
         },
       );
     }
-    yield* Fiber.join(host).pipe(Effect.ignore);
+    yield* Fiber.join(host.fiber).pipe(Effect.ignore);
     return undefined;
   });
 
-/** One of the host's own events as a line; undefined for what a subsystem reports. */
-const hostLine = (event: HostEvent): string | undefined => {
+/** One of the host's own events as a line. */
+const hostLine = (event: RuntimeEvent): string => {
   switch (event.type) {
     case "notice":
       return noticeLine(event);
@@ -337,8 +325,6 @@ const hostLine = (event: HostEvent): string | undefined => {
       return `channels: ${event.channels.map((channel) => channel.id).join(" ")}`;
     case "ui-changed":
       return uiLine(event.ui);
-    default:
-      return undefined;
   }
 };
 

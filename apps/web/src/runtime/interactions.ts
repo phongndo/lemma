@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
+import type { Host } from "@lemma/client";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
-import type { ClientService, HostConnection, InteractionsService, NotifyService } from "../ui/runtime.ts";
+import type { ClientService, InteractionsService, NotifyService } from "../ui/runtime.ts";
 
 /**
  * The runtime's `Interactions`: the questions the host is waiting on. Plugins
@@ -8,7 +9,7 @@ import type { ClientService, HostConnection, InteractionsService, NotifyService 
  * so the host's `Interaction` calls are this service's alone.
  */
 export function createInteractions(
-  host: HostConnection,
+  host: Host,
   client: ClientService,
   notify: NotifyService,
 ): { readonly interactions: InteractionsService; readonly dispose: () => void } {

@@ -5,7 +5,6 @@ import type {
   ChannelDeclaration,
   ConfigScope,
   HostError,
-  HostEvent,
   HostInfo,
   InspectorInfo,
   InteractionAnswer,
@@ -14,6 +13,7 @@ import type {
   PluginChange,
   PluginStatus,
   ReloadResult,
+  RuntimeEvent,
   UiComposition,
   UiFile,
 } from "@lemma/contracts";
@@ -58,19 +58,6 @@ export const Root = defineSlot<Region>("root", { shows: "first" });
 
 // ------------------------------------------------------------------ the host
 
-/**
- * What the page reaches the host with: `@lemma/client`'s `Host`, as far as
- * the runtime uses it (the connection, the runtime's calls and events, and
- * channels). `?mock` stands a fake in for it.
- */
-export type HostConnection = Pick<Host, "status" | "onStatus" | "onEvent" | "close" | "host" | "ui" | "interaction" | "channel">;
-
-/** The host's own events, as `Client.onEvent` passes them on: each subsystem streams its own on a channel. */
-export type RuntimeEvent = Extract<
-  HostEvent,
-  { readonly type: "notice" | "plugins-changed" | "channels-changed" | "ui-changed" | "interaction" | "interaction-closed" }
->;
-
 type StreamEnd = (error?: HostError | Error) => void;
 
 /**
@@ -86,7 +73,7 @@ export interface ClientService {
   readonly connected: Accessor<boolean>;
   /** `Host.Info`, fetched on every (re)connect. */
   readonly info: Accessor<HostInfo | undefined>;
-  /** The host's own events as they arrive (`RuntimeEvent`). Returns the unsubscribe. */
+  /** The host's own events as they arrive (`RuntimeEvent`): each subsystem streams its own on a channel. Returns the unsubscribe. */
   readonly onEvent: (listener: (event: RuntimeEvent) => void) => () => void;
   /**
    * Runs `sync` now if connected, then after every reconnect: where a model
@@ -97,12 +84,11 @@ export interface ClientService {
   /** Lists, calls, and opens what host plugins serve, as `@lemma/client`'s `Host.channel` does. */
   readonly channel: Host["channel"];
   /**
-   * Keeps a channel stream open until the returned close: opened now if
-   * connected, and anew after every reconnect, since a stream ends with its
-   * connection; again at once when it ends `Withdrawn`, its plugin stopped or
-   * replaced; and, after it ended otherwise (nothing served it, say), when a
-   * `channels-changed` lists it, or at once if one listed it while that
-   * opening was on its way. Each opening starts afresh, so a subsystem's
+   * Keeps a channel stream open until the returned close, as `@lemma/client`'s
+   * `follow` does over the page's connection: anew after every reconnect,
+   * again at once when it ends `Withdrawn`, its plugin stopped or replaced,
+   * and, after it ended otherwise (nothing served it, say), when a
+   * `channels-changed` lists it. Each opening starts afresh, so a subsystem's
    * stream begins with `subscribed`, from which its reader resyncs. `payload`
    * may be a function, read at each opening (`sessions.log` resumes `after`
    * the last event its reader has). `onEnd` hears each ending.

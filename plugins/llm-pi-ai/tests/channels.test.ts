@@ -1,39 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Duration, Effect, Schema, Stream } from "effect";
 import { connect } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import { Agent, Channels, Commands, defineChannel, HostError, LlmChannels, serveChannel, Sessions, Workspace } from "@lemma/contracts";
+import { Channels, defineChannel, HostError, LlmChannels, serveChannel } from "@lemma/contracts";
 import type { LlmChange } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { definePlugin, makeCore } from "@lemma/core";
-import type { Plugin } from "@lemma/core";
+import type { Core, CoreOptions, Plugin } from "@lemma/core";
 import transport from "@lemma/plugin-transport";
 import { settled } from "../../../scripts/e2e.ts";
 import { makeLlmPlugin } from "../src/index.ts";
 import { envContext, fakeCredentials, fakeHost, fakeInteraction, offline } from "./helpers.ts";
 
-/** What else the transport requires, which llm's channels never reach. */
-const stubs = definePlugin({
-  id: "stubs",
-  provides: [Sessions, Agent, Workspace, Commands],
-  layer: Layer.mergeAll(
-    Layer.succeed(Sessions, {} as never),
-    Layer.succeed(Agent, {} as never),
-    Layer.succeed(Workspace, {} as never),
-    Layer.succeed(Commands, {} as never),
-  ),
-});
-
 /**
- * Runs `plugins` behind the transport and a fake host, and hands `body` a way
- * to connect clients, which reach the llm plugin's channels as any client does.
+ * Runs `plugins` behind the transport and a fake host, which gives the
+ * transport the runtime it needs, and hands `body` a way to connect clients,
+ * which reach the llm plugin's channels as any client does.
  */
-const served = (plugins: readonly Plugin[], body: (client: () => Promise<Host>, host: ReturnType<typeof fakeHost>) => Promise<void>, configs = {}) =>
+const served = (
+  plugins: readonly Plugin[],
+  body: (client: () => Promise<Host>, host: ReturnType<typeof fakeHost>, core: Core<any>) => Promise<void>,
+  configs = {},
+  deadlines?: CoreOptions["deadlines"],
+) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const host = fakeHost();
-        yield* makeCore([transport, stubs, host.plugin, ...plugins], { configs: { transport: { port: 0 }, ...configs } });
+        const core = yield* makeCore([transport, host.plugin, ...plugins], {
+          configs: { transport: { port: 0 }, ...configs },
+          ...(deadlines === undefined ? {} : { deadlines }),
+        });
         const found = yield* readDiscovery(host.home);
         if (found === undefined) return yield* Effect.die(new Error("no discovery file"));
         const clients: Host[] = [];
@@ -43,7 +40,7 @@ const served = (plugins: readonly Plugin[], body: (client: () => Promise<Host>, 
           clients.push(opened);
           return opened;
         };
-        yield* Effect.promise(() => body(client, host));
+        yield* Effect.promise(() => body(client, host, core));
       }),
     ).pipe(Effect.timeout("20 seconds")),
   );
@@ -208,6 +205,34 @@ describe("llm's channels, through the transport", () => {
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-late" });
       },
       { llm: gateway },
+    );
+  }, 30_000);
+
+  it("ends a login call waiting on its question Withdrawn at once when llm leaves, despite a long dispose deadline; called again, it logs in on the replacement", () => {
+    let logins = 0;
+    let withdrawn = false;
+    // The first login's question is never answered: only llm stopping ends it.
+    const { plugins, interaction, credentials } = gatewayLlm(() =>
+      ++logins === 1 ? Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void (withdrawn = true)))) : Effect.succeed("sk-again"),
+    );
+    return served(
+      plugins,
+      async (client, _, core) => {
+        const host = await client();
+        const login = rejection(host.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" }));
+        await until(() => interaction.asked.length === 1);
+        // The transport needs nothing llm provides, so the connection stays: llm alone restarts.
+        const started = Date.now();
+        await Effect.runPromise(core.restart("llm", { force: true }));
+        expect(await login).toMatchObject({ code: "Withdrawn", subject: "llm.login" });
+        expect(Date.now() - started).toBeLessThan(5_000);
+        expect(withdrawn).toBe(true);
+        await host.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
+        expect(interaction.asked).toHaveLength(2);
+        expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-again" });
+      },
+      { llm: gateway },
+      { dispose: Duration.seconds(30) },
     );
   }, 30_000);
 

@@ -8,20 +8,7 @@ import { connect } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import {
-  Agent,
-  Commands,
-  FileChannels,
-  FileSearchError,
-  FileSearchers,
-  HostControl,
-  HostError,
-  Llm,
-  Sessions,
-  Workspace,
-  WorkspaceChannels,
-  WorkspaceError,
-} from "@lemma/contracts";
+import { FileChannels, FileSearchError, FileSearchers, HostControl, HostError, Workspace, WorkspaceChannels, WorkspaceError } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import transport from "@lemma/plugin-transport";
@@ -240,17 +227,11 @@ describe("plugin", () => {
   });
 });
 
-/** What else the transport requires; these tests reach none of it but `HostControl.composition`, the client's probe. */
-const stubs = definePlugin({
-  id: "stubs",
-  provides: [Sessions, Agent, Llm, HostControl, Commands],
-  layer: Layer.mergeAll(
-    Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
-    Layer.succeed(Sessions, {} as never),
-    Layer.succeed(Agent, {} as never),
-    Layer.succeed(Llm, {} as never),
-    Layer.succeed(Commands, {} as never),
-  ),
+/** What the host provides the transport besides `Paths`; these tests reach only `HostControl.composition`, the client's probe. */
+const control = definePlugin({
+  id: "host",
+  provides: [HostControl],
+  layer: Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
 });
 
 /** The plugin behind a real transport, with `extra` beside it, and `body` given a client of that host. */
@@ -260,7 +241,7 @@ const served = (body: (client: Host) => Promise<void>, extra: readonly Plugin[] 
       Effect.gen(function* () {
         const home = path.join(dir, "home");
         yield* Effect.promise(() => fs.mkdir(home));
-        yield* makeCore([transport, pathsPlugin(home), stubs, workspace, ...extra], {
+        yield* makeCore([transport, pathsPlugin(home), control, workspace, ...extra], {
           configs: { transport: { port: 0 }, workspace: { worktrees: path.join(dir, "trees") } },
         });
         const found = yield* readDiscovery(home);

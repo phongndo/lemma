@@ -3,7 +3,7 @@ import { RpcGroup, RpcMiddleware } from "effect/rpc";
 import type { Rpc } from "effect/rpc";
 import { Admitted } from "@lemma/core";
 import type { Contribution, Registries } from "@lemma/core";
-import { answering, ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
+import { answering, Channels, elementsOf, HostError, resultOf, RuntimeRpcs, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
 import { Startup } from "./startup.ts";
@@ -118,15 +118,14 @@ export class ChannelLifetime extends RpcMiddleware.Service<ChannelLifetime>()("l
 const pick = <R extends Rpc.Any, const Tags extends ReadonlyArray<R["_tag"]>>(group: RpcGroup.RpcGroup<R>, tags: Tags) =>
   RpcGroup.make(...tags.map((tag) => group.requests.get(tag)!)) as unknown as RpcGroup.RpcGroup<Extract<R, { readonly _tag: Tags[number] }>>;
 
-/** The runtime RPCs that answer from a registry, which shows what a starting composition contributes only once it is up. */
+/** The channels' RPCs, each request served with `ChannelLifetime` around it (it passes all but `Channel.Open` through). */
+const channelRpcs = ["Channel.List", "Channel.Call", "Channel.Open"] as const;
+/** The other RPCs that answer from a registry, which shows what a starting composition contributes only once it is up. */
 const registryReaders = ["Host.Inspectors", "Host.Inspect"] as const;
 
-/**
- * What the transport serves: `HostRpcs`, and `ChannelRpcs` with `ChannelLifetime` around each request (it passes all
- * but `Channel.Open` through). The channels and the registry readers are held at the `Startup` gate first.
- */
-export const ServedRpcs = HostRpcs.omit(...registryReaders).merge(
-  pick(HostRpcs, registryReaders).merge(ChannelRpcs.middleware(ChannelLifetime)).middleware(Startup),
+/** What the transport serves: `RuntimeRpcs`, the channels and the registry readers held at the `Startup` gate first. */
+export const ServedRpcs = RuntimeRpcs.omit(...channelRpcs, ...registryReaders).merge(
+  pick(RuntimeRpcs, registryReaders).merge(pick(RuntimeRpcs, channelRpcs).middleware(ChannelLifetime)).middleware(Startup),
 );
 
 export const channelLifetime =

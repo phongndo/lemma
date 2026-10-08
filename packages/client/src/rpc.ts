@@ -4,13 +4,10 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
-import { ChannelRpcs, HostRpcs } from "@lemma/contracts";
+import { RuntimeRpcs } from "@lemma/contracts";
 
-/** What the host serves: `HostRpcs`, and `ChannelRpcs` for what host plugins serve. */
-const ServedRpcs = HostRpcs.merge(ChannelRpcs);
-
-/** The typed Effect surface: `rpc["Session.List"]({})`, `rpc["Host.Events"]()`, `rpc["Channel.Call"]({ id })`, ... */
-export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof ServedRpcs>, RpcClientError.RpcClientError>;
+/** The typed Effect surface of what the host serves (`RuntimeRpcs`): `rpc["Host.Info"]()`, `rpc["Host.Events"]()`, `rpc["Channel.Call"]({ id })`, ... */
+export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;
 
 /**
  * `ws(s)://<origin>/rpc?token=…` for a page or host base URL. `http:` maps to
@@ -43,7 +40,7 @@ export const makeHostRpc = (
       Layer.provide(RpcSerialization.layerJson),
     );
     const context = yield* Layer.build(protocol);
-    return yield* RpcClient.make(ServedRpcs).pipe(Effect.provide(context));
+    return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
   });
 
 /**
@@ -68,5 +65,5 @@ export const makeHostRpcHttp = (base: string, token: string | undefined): Effect
       Layer.provide(RpcSerialization.layerNdjson),
     );
     const context = yield* Layer.build(protocol);
-    return yield* RpcClient.make(ServedRpcs).pipe(Effect.provide(context));
+    return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
   });
