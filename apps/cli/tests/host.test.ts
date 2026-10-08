@@ -477,8 +477,8 @@ describe("a change a plugin's own call asks for", () => {
   let home: string;
   /**
    * Its own calls change its config, restart it, and reload the host, each answering whether the change was deferred
-   * (`set` with the value it still serves); its stream changes its config and stays open. `edition` tells its file's
-   * versions apart, and `activation` counts its starts from one file.
+   * (`set` with the value it still serves); its streams change its config, or reload the host, and stay open. `edition`
+   * (its version too) tells its file's versions apart, and `activation` counts its starts from one file.
    */
   const selfconf = (edition: number) => `import { Effect, Schema, Stream } from "effect";
 import { definePlugin } from "@lemma/core";
@@ -488,6 +488,7 @@ const answer = (deferred) => ({ deferred: deferred === true });
 const Answer = Schema.Struct({ deferred: Schema.Boolean });
 export default definePlugin({
   id: "selfconf",
+  version: "${edition}",
   config: { value: 0 },
   requires: { host: HostControl },
   setup: function* ({ host }, owner) {
@@ -508,6 +509,24 @@ export default definePlugin({
     yield* owner.add(Channels, serveChannel({ kind: "stream", id: "selfconf.watch", payload: Schema.Number, success: Answer }, (value) =>
       Stream.concat(Stream.fromEffect(Effect.map(host.configure({ selfconf: { config: { value } } }), (report) => answer(report.deferred)).pipe(Effect.orDie)), Stream.never),
     ));
+    yield* owner.add(Channels, serveChannel({ kind: "stream", id: "selfconf.reloading", payload: Schema.Void, success: Answer }, () =>
+      Stream.concat(Stream.fromEffect(Effect.map(host.reload, (report) => answer(report.deferred)).pipe(Effect.orDie)), Stream.never),
+    ));
+  },
+});
+`;
+  /** What clients last heard of selfconf: its version in the last plugin list published. */
+  const heard = `import { Effect, Schema } from "effect";
+import { definePlugin } from "@lemma/core";
+import { Channels, PluginsChanged, serveChannel } from "@lemma/contracts";
+export default definePlugin({
+  id: "heard",
+  setup: function* (_, owner) {
+    let version = null;
+    yield* owner.observe(PluginsChanged, ({ plugins }) => Effect.sync(() => {
+      version = plugins.find((plugin) => plugin.id === "selfconf")?.version ?? null;
+    }));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "heard.selfconf", payload: Schema.Void, success: Schema.NullOr(Schema.String) }, () => version));
   },
 });
 `;
@@ -516,6 +535,7 @@ export default definePlugin({
       prepare: async (home) => {
         await mkdir(join(home, "plugins"));
         await writeFile(join(home, "plugins", "selfconf.ts"), selfconf(1));
+        await writeFile(join(home, "plugins", "heard.ts"), heard);
       },
     });
     home = lemma.home;
@@ -569,7 +589,7 @@ export default definePlugin({
   });
 
   // A stream ends as soon as its plugin leaves, so it holds nothing up: deferred, the change would wait until its client closed it.
-  test("a change a stream asks for applies at once, ending the stream Withdrawn", async () => {
+  test("a change a stream asks for applies at once, ending the stream Withdrawn, and clients hear it", async () => {
     const opened = await invoke(["channels", "open", "selfconf.watch", "9", "--json"], home);
     expect(opened.code).toBe(ExitCode.failed);
     expect(JSON.parse(opened.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.watch" });
@@ -579,6 +599,18 @@ export default definePlugin({
         (now) => now === 9,
       ),
     ).toBe(9);
+
+    // Ended midway through the reload it asked for, which still runs to its end and publishes the new plugin list.
+    await writeFile(join(home, "plugins", "selfconf.ts"), selfconf(3));
+    const reloaded = await invoke(["channels", "open", "selfconf.reloading", "--json"], home);
+    expect(reloaded.code).toBe(ExitCode.failed);
+    expect(JSON.parse(reloaded.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.reloading" });
+    expect(
+      await settled(
+        () => call("heard.selfconf"),
+        (now) => now === "3",
+      ),
+    ).toBe("3");
   });
 
   // Through the transport's own rule for now: the transport requires llm, so this change restarts it too. It covers the

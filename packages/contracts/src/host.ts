@@ -201,7 +201,9 @@ export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, num
  * it would wait on itself until the dispose deadline. A plugin's disposal
  * also waits for the work run with its items, such as the channel calls it
  * serves: a change that would restart the plugin whose work asks for it is
- * deferred until that work has ended (see `ChangeReport`).
+ * deferred until that work has ended (see `ChangeReport`). Once asked, a
+ * change runs to its end and publishes `PluginsChanged` even if its caller
+ * stops waiting, as a stream does when the change restarts its plugin.
  */
 export class HostControl extends Context.Service<
   HostControl,

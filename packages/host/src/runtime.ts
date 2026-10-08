@@ -1,4 +1,4 @@
-import { Cause, Effect, Layer, Stream } from "effect";
+import { Cause, Effect, Fiber, Layer, Stream } from "effect";
 import type { Context } from "effect";
 import { HOST_API, HostApi, HostControl, Interaction, Notice, Paths, PluginsChanged } from "@lemma/contracts";
 import { Events } from "@lemma/core";
@@ -39,28 +39,34 @@ const logFailure =
  * change made through it, so clients refresh: after a reload, and after a
  * restart or configure even when it fails (a failed restart can leave
  * dependents failed; a rejected configure can leave a stopped exclusive plugin
- * down).
+ * down). Each change runs to its end on its own fiber, publishing then: a
+ * caller that stops waiting, as a stream does when the change restarts its
+ * plugin, neither stops it nor keeps clients from hearing it.
  */
 export function hostRuntime(options: { readonly paths: PathsService; readonly control: HostControlHandle }): ApplicationServices<typeof runtimeCapabilities> {
   const { control } = options;
   const runtime = runtimeCapabilities.map((tag) => tag.key);
   const hostControl = Layer.effect(
     HostControl,
-    Effect.map(Events, (events): HostControlService => {
+    Effect.gen(function* () {
+      const events = yield* Events;
+      // The runtime's scope, closed once the last plugin is disposed: a change still running then ends with the core.
+      const scope = yield* Effect.scope;
       const changed = Effect.flatMap(control.plugins, (plugins) => events.publish(PluginsChanged, { plugins })).pipe(
         Effect.catchCause(logFailure("could not publish the plugin list")),
       );
+      const detached = <A, E>(change: Effect.Effect<A, E>): Effect.Effect<A, E> => Effect.flatMap(Effect.forkIn(change, scope), Fiber.join);
       return {
         runtime,
         plugins: control.plugins,
         composition: control.composition,
-        restart: (pluginId, options) => control.restart(pluginId, options).pipe(Effect.ensuring(changed)),
+        restart: (pluginId, options) => detached(control.restart(pluginId, options).pipe(Effect.ensuring(changed))),
         // A failed reload leaves the composition untouched; a report may still carry dispose faults.
-        reload: control.reload.pipe(Effect.tap(() => changed)),
-        configure: (plugins, options) => control.configure(plugins, options).pipe(Effect.ensuring(changed)),
+        reload: detached(control.reload.pipe(Effect.tap(() => changed))),
+        configure: (plugins, options) => detached(control.configure(plugins, options).pipe(Effect.ensuring(changed))),
         ui: control.ui,
         configureUi: control.configureUi,
-      };
+      } satisfies HostControlService;
     }),
   );
   return {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Layer, Schedule } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer, Schedule } from "effect";
 import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
 import type { CompositionInfo, NoticePayload, PluginInfo, UiComposition } from "@lemma/contracts";
 import { definePlugin, Diagnostic, makeLoader, PluginContext } from "@lemma/core";
@@ -38,8 +38,11 @@ function recorder() {
 const until = (condition: () => boolean) =>
   Effect.repeat(Effect.sync(condition), { until: (done) => done, schedule: Schedule.spaced(Duration.millis(2)) }).pipe(Effect.timeout(Duration.seconds(5)));
 
-/** Mirrors main.ts: the runtime is built inside makeLoader, so the handle binds to the loader through a Deferred. */
-const start = (plugins: readonly Plugin[], composition: Composition) =>
+/**
+ * Mirrors main.ts: the runtime is built inside makeLoader, so the handle binds to the loader through a Deferred. A
+ * reload runs `reloading` before it applies.
+ */
+const start = (plugins: readonly Plugin[], composition: Composition, reloading: Effect.Effect<void> = Effect.void) =>
   Effect.gen(function* () {
     const ready = yield* Deferred.make<Loader>();
     const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
@@ -57,7 +60,7 @@ const start = (plugins: readonly Plugin[], composition: Composition) =>
         Effect.zipWith(loader.composition, loader.core.inspect, (composition, snapshot) => compositionInfo(composition, snapshot.plugins)),
       ),
       restart: (id, options) => withLoader((loader) => Effect.as(loader.core.restart(id, options), {})),
-      reload: withLoader((loader) => loader.apply(composition)),
+      reload: withLoader((loader) => Effect.andThen(reloading, loader.apply(composition))),
       configure: (rows) =>
         withLoader((loader) => {
           configured.push(rows);
@@ -122,6 +125,29 @@ describe("host runtime", () => {
             [["recorder", "active"]],
             [["recorder", "active"]],
           ]);
+        }),
+      ),
+    );
+  });
+
+  test("a change runs to its end, and publishes, though its caller stops waiting", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const heard = recorder();
+          const entered = yield* Deferred.make<void>();
+          const gate = yield* Deferred.make<void>();
+          const { control } = yield* start(
+            [heard.plugin],
+            { plugins: { recorder: {} } },
+            Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(gate)),
+          );
+          // Interrupted midway, as a stream is when the reload it asked for restarts its plugin.
+          const caller = yield* Effect.forkScoped(control.reload);
+          yield* Deferred.await(entered);
+          yield* Fiber.interrupt(caller);
+          yield* Deferred.succeed(gate, undefined);
+          yield* until(() => heard.changes.length === 1);
         }),
       ),
     );
