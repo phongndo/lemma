@@ -1,9 +1,9 @@
 import * as path from "node:path";
 import { Clock, Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
-import { Events, PluginContext } from "@lemma/core";
+import { Events, Hooks, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
-import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved } from "@lemma/contracts";
+import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, SessionRemoveHook } from "@lemma/contracts";
 import type { SessionInfo, Sessions } from "@lemma/contracts";
 import { errorCode } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
@@ -89,10 +89,11 @@ interface Options {
   readonly fs: FileSystem;
 }
 
-export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | PluginContext | Scope.Scope> =>
+export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | Hooks | PluginContext | Scope.Scope> =>
   Effect.gen(function* () {
     const paths = yield* Paths;
     const events = yield* Events;
+    const hooks = yield* Hooks;
     const owner = yield* PluginContext;
     const root = paths.sessions;
     // Taken first, so it is released last, after every file is closed.
@@ -375,7 +376,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         );
       });
 
-    const remove: Service["remove"] = (sessionId) =>
+    /** What `remove` does once every `SessionRemoveHook` handler let it. */
+    const removeNow = (sessionId: string) =>
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         yield* entry.lock.withPermits(1)(
@@ -396,6 +398,14 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         );
         yield* events.publish(SessionRemoved, { sessionId });
       });
+
+    const remove: Service["remove"] = (sessionId) =>
+      hooks
+        .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
+        .pipe(
+          // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
+          Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
+        );
 
     const branch: Service["branch"] = (sessionId, options) =>
       Effect.flatMap(opened(sessionId), (open) => {

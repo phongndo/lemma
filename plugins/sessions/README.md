@@ -1,7 +1,10 @@
 # @lemma/plugin-sessions
 
 Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
-`SessionEvent`s stored as one JSONL file. Requires `Paths`.
+`SessionEvent`s stored as one JSONL file. Requires `Paths`. Serves the
+`sessions.*` channels (`SessionsChannels`, through `serveSessions`): the calls
+clients make on sessions, and `sessions.changes`, every append, change, and
+removal.
 
 ```ts
 Effect.gen(function* () {
@@ -116,10 +119,12 @@ costs re-reading the files.
   and a session larger than the longest string Node allows still opens (each line
   must still fit in one). Opening validates every line; listing uses `JSON.parse`
   alone.
-- **Removal.** `remove` deletes the file and closes it, then fsyncs its directory
-  so a power loss does not bring the session back (best effort: on a failing disk
-  it may come back, whole); the session is gone from memory and listings, and
-  `SessionRemoved` is published.
+- **Removal.** `remove` runs through `SessionRemoveHook`, so a plugin using the
+  session can refuse whoever asks (the agent fails `Busy` while a turn runs in
+  it) and the session stays. Otherwise it deletes the file and closes it, then
+  fsyncs its directory so a power loss does not bring the session back (best
+  effort: on a failing disk it may come back, whole); the session is gone from
+  memory and listings, and `SessionRemoved` is published.
 - `SessionAppended` and `SessionChanged` are published after each write. They are
   losable; the file is the source of truth.
 

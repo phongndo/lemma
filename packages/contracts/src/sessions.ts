@@ -1,7 +1,9 @@
-import { Context, Data, Schema } from "effect";
-import type { Effect } from "effect";
-import { Event } from "@lemma/core";
+import { Context, Data, Effect, Schema, Stream } from "effect";
+import { Event, Hook } from "@lemma/core";
+import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
+import { defineChannel, eventFeed, serveChannel } from "./channels.ts";
+import type { Channel } from "./channels.ts";
 import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "./llm.ts";
 
 /**
@@ -144,7 +146,8 @@ export type SessionInfo = typeof SessionInfo.Type;
 
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
-  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent";
+  /** `Busy`: a `SessionRemoveHook` handler refused to remove the session while it is in use. */
+  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -153,15 +156,26 @@ export const SessionAppended = Event.make<{ readonly sessionId: string; readonly
 export const SessionChanged = Event.make<{ readonly info: SessionInfo }>("lemma/session.changed");
 export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/session.removed");
 
+/**
+ * Around every `Sessions.remove`, whoever calls it; the terminal deletes the
+ * session. A handler that must not see a session go while it uses it refuses
+ * by failing instead of calling `next`: the agent fails `Busy` while a turn
+ * runs in the session. A provider of `Sessions` runs each removal through it,
+ * so the rule holds for every client and every plugin.
+ */
+export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
+
 /** A change to how a session is filed; an absent field keeps its value. */
 export interface SessionMarks {
   readonly pinned?: boolean;
   readonly archived?: boolean;
 }
 
+/** Sessions, stored as logs. Its provider serves them to clients too: it adds `serveSessions` to `Channels`. */
 export class Sessions extends Context.Service<
   Sessions,
   {
+    /** A new, empty session in `cwd`, the host's (`Paths.cwd`) when absent. */
     readonly create: (options?: { readonly cwd?: string }) => Effect.Effect<SessionInfo, SessionError>;
     /** Most recently updated first. */
     readonly list: (options?: { readonly cwd?: string }) => Effect.Effect<readonly SessionInfo[], SessionError>;
@@ -179,10 +193,138 @@ export class Sessions extends Context.Service<
     readonly checkout: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /** Pins or archives it. Neither moves the leaf nor `updatedAt`: filing a session is not activity in it. */
     readonly mark: (sessionId: string, marks: SessionMarks) => Effect.Effect<SessionInfo, SessionError>;
-    /** Deletes it from disk, for good. */
+    /** Deletes it from disk, for good, unless a `SessionRemoveHook` handler refuses. */
     readonly remove: (sessionId: string) => Effect.Effect<void, SessionError>;
   }
 >()("lemma/Sessions") {}
+
+/** What `sessions.changes` sends: `subscribed` first, then each change to any session. */
+export const SessionsChange = Schema.Union([
+  /** First: from here on the stream hears every change; a client reads what it shows (`sessions.list`, `sessions.events`) after it. */
+  Schema.Struct({ type: Schema.Literal("subscribed") }),
+  Schema.Struct({ type: Schema.Literal("session-appended"), sessionId: Schema.String, event: SessionEvent }),
+  Schema.Struct({ type: Schema.Literal("session-changed"), info: SessionInfo }),
+  Schema.Struct({ type: Schema.Literal("session-removed"), sessionId: Schema.String }),
+]);
+export type SessionsChange = typeof SessionsChange.Type;
+
+const sessionField = { sessionId: Schema.String };
+
+/**
+ * How clients reach `Sessions`, served by its provider (`serveSessions`). A
+ * call that fails with a `SessionError` reaches the client with its `reason`
+ * as the code (`NotFound`, `Corrupt`, `Io`, `InvalidParent`, `Busy`) and the
+ * session as the subject.
+ */
+export const SessionsChannels = {
+  list: defineChannel({
+    kind: "call",
+    id: "sessions.list",
+    title: "List sessions",
+    description: "Every session, or those in a directory (cwd), most recently updated first",
+    payload: Schema.Struct({ cwd: Schema.optional(Schema.String) }),
+    success: Schema.Array(SessionInfo),
+  }),
+  get: defineChannel({
+    kind: "call",
+    id: "sessions.get",
+    title: "Get a session",
+    description: "One session's info",
+    payload: Schema.Struct(sessionField),
+    success: SessionInfo,
+  }),
+  create: defineChannel({
+    kind: "call",
+    id: "sessions.create",
+    title: "Create a session",
+    description: "A new, empty session in a directory (cwd), the host's when absent",
+    payload: Schema.Struct({ cwd: Schema.optional(Schema.String) }),
+    success: SessionInfo,
+  }),
+  /** Losable notifications leave gaps (`sessions.changes`); a client repairs them from here, by `seq`. */
+  events: defineChannel({
+    kind: "call",
+    id: "sessions.events",
+    title: "Read a session's log",
+    description: "A session's log in file order: every event, or those past a seq (after)",
+    payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
+    success: Schema.Array(SessionEvent),
+  }),
+  checkout: defineChannel({
+    kind: "call",
+    id: "sessions.checkout",
+    title: "Check out an event",
+    description: "Points a session's leaf at one of its events: later turns branch from there",
+    payload: Schema.Struct({ ...sessionField, eventId: Schema.String }),
+    success: SessionInfo,
+  }),
+  setTitle: defineChannel({
+    kind: "call",
+    id: "sessions.set-title",
+    title: "Rename a session",
+    description: "Appends a title event and answers with the session's info",
+    payload: Schema.Struct({ ...sessionField, title: Schema.String }),
+    success: SessionInfo,
+  }),
+  mark: defineChannel({
+    kind: "call",
+    id: "sessions.mark",
+    title: "Pin or archive a session",
+    description: "Sets how a session is filed; an absent mark keeps its value",
+    payload: Schema.Struct({ ...sessionField, pinned: Schema.optional(Schema.Boolean), archived: Schema.optional(Schema.Boolean) }),
+    success: SessionInfo,
+  }),
+  /** Through `SessionRemoveHook`: fails `Busy` while a turn runs in the session. */
+  delete: defineChannel({
+    kind: "call",
+    id: "sessions.delete",
+    title: "Delete a session",
+    description: "Deletes a session for good; fails Busy while a turn runs in it",
+    payload: Schema.Struct(sessionField),
+    success: Schema.Void,
+  }),
+  /**
+   * Every change to any session, as `SessionAppended`, `SessionChanged`, and
+   * `SessionRemoved` report it, after `subscribed` (see `eventFeed`). Losable:
+   * a client that falls behind loses the oldest, and one reopening it after a
+   * reconnect has missed what came between; either way it rereads, by `seq`,
+   * from `sessions.events`, and lists again.
+   */
+  changes: defineChannel({
+    kind: "stream",
+    id: "sessions.changes",
+    title: "Session changes",
+    description: "Every session appended to, changed, or removed, after a subscribed acknowledgement",
+    payload: Schema.Void,
+    success: SessionsChange,
+  }),
+};
+
+/** What each source of a client's `sessions.changes` holds: as much as the client does (see `eventFeed`). */
+const FEED = { buffer: 1024 };
+
+/** `SessionsChannels` served from `sessions`: what a provider of `Sessions` adds to `Channels`, each with `PluginContext.add`. */
+export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
+  serveChannel(SessionsChannels.list, ({ cwd }) => sessions.list(cwd === undefined ? undefined : { cwd })),
+  serveChannel(SessionsChannels.get, ({ sessionId }) => sessions.get(sessionId)),
+  serveChannel(SessionsChannels.create, ({ cwd }) => sessions.create(cwd === undefined ? undefined : { cwd })),
+  serveChannel(SessionsChannels.events, ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after })),
+  serveChannel(SessionsChannels.checkout, ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId)),
+  serveChannel(SessionsChannels.setTitle, ({ sessionId, title }) =>
+    Effect.andThen(sessions.append(sessionId, { type: "title", title }), sessions.get(sessionId)),
+  ),
+  serveChannel(SessionsChannels.mark, ({ sessionId, pinned, archived }) =>
+    sessions.mark(sessionId, { ...(pinned === undefined ? {} : { pinned }), ...(archived === undefined ? {} : { archived }) }),
+  ),
+  serveChannel(SessionsChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
+  serveChannel(SessionsChannels.changes, () =>
+    eventFeed(Effect.succeed<SessionsChange>({ type: "subscribed" }), [
+      Stream.map(events.stream(SessionAppended, FEED), ({ sessionId, event }): SessionsChange => ({ type: "session-appended", sessionId, event })),
+      Stream.map(events.stream(SessionChanged, FEED), ({ info }): SessionsChange => ({ type: "session-changed", info })),
+      Stream.map(events.stream(SessionRemoved, FEED), ({ sessionId }): SessionsChange => ({ type: "session-removed", sessionId })),
+    ]),
+  ),
+];
 
 /*
  * A session's addresses in the web app, which shows it as a thread: the app

@@ -2,7 +2,9 @@
 
 Provides `Agent` (`@lemma/contracts`): the turn loop. Requires `Sessions`, `Llm`,
 `Tools`, `HostControl`, and `Paths`. Exclusive: a reload stops it, suspending
-its turns, before the new instance resumes them.
+its turns, before the new instance resumes them. Serves the `agent.*` channels
+(`AgentChannels`, through `serveAgent`): the calls clients make, and
+`agent.activity`, its live output and each turn's and queue's change.
 
 ```ts
 Effect.gen(function* () {
@@ -112,6 +114,9 @@ A prompt sent while the session's turn runs does what its `whenBusy` says:
   finishes (`done` or `max-steps`), one queued prompt per turn.
 - `steer`: queued; placed in the running turn after its current step (step 6).
 - `reject`: fails `Busy`.
+
+A session with a turn running cannot be deleted: the agent handles
+`SessionRemoveHook` and fails `Busy`, whoever asks.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Withdrawn`), and `QueueChanged` reports every change with a revision that only

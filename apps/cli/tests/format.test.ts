@@ -3,6 +3,7 @@ import { kernelOf, ledger, promptDiff, trajectory } from "@lemma/contracts";
 import type { PluginStatus, SessionEvent, SessionInfo } from "@lemma/contracts";
 import {
   formatCapabilities,
+  formatChannels,
   formatDiff,
   formatPlugin,
   formatPlugins,
@@ -162,6 +163,12 @@ describe("inspect formatting", () => {
     expect(output).toMatch(/ {2}bash {2}from bash {2}\d+ chars {2}\(changed\)/);
     expect(output).toContain("composition  abc");
     expect(output).toMatch(/Tool runs:\n {2}bash {2}ok {2}300ms/);
+  });
+});
+
+describe("formatChannels", () => {
+  test("says so when no plugin serves one", () => {
+    expect(formatChannels([])).toBe("No channels: no running plugin serves one.");
   });
 });
 

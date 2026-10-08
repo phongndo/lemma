@@ -1,4 +1,4 @@
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Queue, Schema, Stream } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { awaitable, isExpectedFailure, Registry } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
@@ -92,6 +92,36 @@ export const serveChannel = <const Kind extends ChannelKind, Payload, Success>(
   declaration: ChannelDeclaration<Kind, Payload, Success>,
   handle: ChannelHandler<Kind, Payload, Success>,
 ): Extract<Channel, { readonly kind: Kind }> => ({ ...declaration, handle }) as unknown as Extract<Channel, { readonly kind: Kind }>;
+
+/**
+ * What a stream that reports a subsystem's changes sends each client who opens
+ * it: `first`, then what `sources` send, in order within each source but not
+ * across them. Every source starts before `first` runs, so one that subscribes
+ * when it starts (as `Events.stream` does) misses nothing published after
+ * `first`: a client that has it acts knowing it hears the rest, and `first` may
+ * carry a snapshot to resync from. Each client holds the latest `buffer`
+ * elements: one that falls behind loses the oldest, never the publisher's time
+ * or another client's elements, and repairs from what the subsystem keeps. A
+ * source holds its own too (`Events.stream`'s `buffer`): give it as many, since
+ * a burst can fill it before its elements move on.
+ */
+export const eventFeed = <A, E, R>(first: Effect.Effect<A, E, R>, sources: readonly Stream.Stream<A>[], buffer = 1024): Stream.Stream<A, E, R> =>
+  Stream.unwrap(
+    Effect.gen(function* () {
+      const feed = yield* Effect.acquireRelease(Queue.sliding<A>(buffer), Queue.shutdown);
+      // Started at once: each source has subscribed by the time `forkScoped` returns.
+      yield* Effect.forEach(
+        sources,
+        (source) =>
+          Effect.forkScoped(
+            Stream.runForEach(source, (element) => Queue.offer(feed, element)),
+            { startImmediately: true },
+          ),
+        { discard: true },
+      );
+      return Stream.concat(Stream.fromEffect(first), Stream.fromQueue(feed));
+    }),
+  );
 
 const codecs = new WeakMap<Schema.Top, Schema.Codec<unknown, unknown>>();
 

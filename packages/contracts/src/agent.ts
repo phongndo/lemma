@@ -1,9 +1,13 @@
-import { Context, Data, Schema } from "effect";
-import type { Effect } from "effect";
+import { Context, Data, Effect, Schema, Stream } from "effect";
 import { Event, Hook } from "@lemma/core";
+import type { Events } from "@lemma/core";
+import { defineChannel, eventFeed, serveChannel } from "./channels.ts";
+import type { Channel } from "./channels.ts";
 import { AssistantMessage, ImageContent, Message, ModelRef, StreamEvent, TextContent, ThinkingLevel, Usage } from "./llm.ts";
 import type { ToolResultMessage } from "./llm.ts";
-import type { EventData, SessionEvent, TurnEndReason } from "./sessions.ts";
+import { TurnEndReason } from "./sessions.ts";
+import type { EventData, SessionEvent } from "./sessions.ts";
+import { ToolOutput } from "./tools.ts";
 import type { ToolContribution } from "./tools.ts";
 
 export class AgentError extends Data.TaggedError("AgentError")<{
@@ -173,6 +177,7 @@ export interface PromptOptions extends TurnOptions {
   readonly whenBusy?: WhenBusy;
 }
 
+/** The turn loop. Its provider serves it to clients too: it adds `serveAgent` to `Channels`. */
 export class Agent extends Context.Service<
   Agent,
   {
@@ -197,3 +202,174 @@ export class Agent extends Context.Service<
     readonly view: (sessionId: string) => Effect.Effect<AgentView>;
   }
 >()("lemma/Agent") {}
+
+/** What `agent.activity` sends: `subscribed` first, then the agent's live output and each turn's and queue's change, in any session. */
+export const AgentActivity = Schema.Union([
+  /** First: from here on the stream hears everything. `running` is the sessions with a turn running as of then (`Agent.running`). */
+  Schema.Struct({ type: Schema.Literal("subscribed"), running: Schema.Array(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("turn-started"), sessionId: Schema.String, turnId: Schema.String }),
+  /** `AssistantDelta`: model output, numbered by `seq` within its step. */
+  Schema.Struct({
+    type: Schema.Literal("delta"),
+    sessionId: Schema.String,
+    turnId: Schema.String,
+    stepId: Schema.String,
+    seq: Schema.Number,
+    event: StreamEvent,
+  }),
+  /** `ToolOutput`: a running tool's output, `offset` being how much it had printed before `chunk`. */
+  Schema.Struct({ type: Schema.Literal("tool-output"), sessionId: Schema.String, toolCallId: Schema.String, chunk: Schema.String, offset: Schema.Number }),
+  Schema.Struct({ type: Schema.Literal("queue-changed"), sessionId: Schema.String, queue: Schema.Array(QueuedPrompt), revision: Schema.Number }),
+  Schema.Struct({ type: Schema.Literal("turn-ended"), sessionId: Schema.String, turnId: Schema.String, usage: Usage, reason: TurnEndReason }),
+]);
+export type AgentActivity = typeof AgentActivity.Type;
+
+const sessionField = { sessionId: Schema.String };
+
+/**
+ * How clients reach `Agent`, served by its provider (`serveAgent`). A call
+ * that fails with an `AgentError` reaches the client with its `reason` as the
+ * code and the session as the subject.
+ */
+export const AgentChannels = {
+  /**
+   * `Agent.prompt` for a client: answers when the turn that places the prompt
+   * ends. A client that lost the call (its connection dropped, say) calls again
+   * with the same `requestId` to wait again, never placing the prompt twice.
+   * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`, or
+   * `Withdrawn` with the session as its subject when `agent.withdraw` took the
+   * prompt out of the queue. The channel's own `Withdrawn` (its subject
+   * `agent.prompt`) says instead that the agent stopped while the call
+   * waited, and the turn resumes when it starts again: call again with the
+   * same `requestId`. A client that clears its input once the prompt is taken
+   * reads that from `agent.activity`, opened first: `turn-started` for the
+   * session, or the `requestId` in a `queue-changed`; or its message on
+   * `sessions.changes`.
+   */
+  prompt: defineChannel({
+    kind: "call",
+    id: "agent.prompt",
+    title: "Prompt",
+    description: "Sends a prompt to a session and answers when the turn that places it ends; whenBusy says what it does while a turn runs",
+    payload: Schema.Struct({
+      ...sessionField,
+      content: PromptContent,
+      options: Schema.optional(TurnOptions),
+      requestId: Schema.optional(Schema.String),
+      whenBusy: Schema.optional(WhenBusy),
+    }),
+    success: Schema.Void,
+  }),
+  cancel: defineChannel({
+    kind: "call",
+    id: "agent.cancel",
+    title: "Cancel a turn",
+    description: "Cancels the session's running turn, if any, and answers once it has ended",
+    payload: Schema.Struct(sessionField),
+    success: Schema.Void,
+  }),
+  running: defineChannel({
+    kind: "call",
+    id: "agent.running",
+    title: "Running turns",
+    description: "The sessions with a turn running",
+    payload: Schema.Void,
+    success: Schema.Array(Schema.String),
+  }),
+  queue: defineChannel({
+    kind: "call",
+    id: "agent.queue",
+    title: "Queued prompts",
+    description: "The session's prompts waiting for a turn, oldest first",
+    payload: Schema.Struct(sessionField),
+    success: Schema.Array(QueuedPrompt),
+  }),
+  withdraw: defineChannel({
+    kind: "call",
+    id: "agent.withdraw",
+    title: "Withdraw a prompt",
+    description: "Takes a queued prompt out, failing its prompt call Withdrawn; false when it was no longer queued",
+    payload: Schema.Struct({ ...sessionField, requestId: Schema.String }),
+    success: Schema.Boolean,
+  }),
+  view: defineChannel({
+    kind: "call",
+    id: "agent.view",
+    title: "View a session",
+    description: "What a client joining now shows of the session beyond its log: the running turn's model and tool output so far, and the queue",
+    payload: Schema.Struct(sessionField),
+    success: AgentView,
+  }),
+  /**
+   * The agent's live output and each turn's and queue's change, as
+   * `TurnStarted`, `AssistantDelta`, `ToolOutput`, `QueueChanged`, and
+   * `TurnEnded` report them, after `subscribed` (see `eventFeed`). Each kind
+   * comes in its own order, not across kinds: `turn-ended` can overtake the
+   * turn's last `delta`. Losable: a client that falls behind loses the oldest,
+   * and one reopening it after a reconnect has missed what came between; it
+   * resyncs from `subscribed`'s `running`, `agent.view`, and the log.
+   */
+  activity: defineChannel({
+    kind: "stream",
+    id: "agent.activity",
+    title: "Agent activity",
+    description: "Turns starting and ending, model and tool output, and queue changes in every session, after a subscribed acknowledgement",
+    payload: Schema.Void,
+    success: AgentActivity,
+  }),
+};
+
+/** What each source of a client's `agent.activity` holds: as much as the client does (see `eventFeed`). */
+const FEED = { buffer: 1024 };
+
+/** `AgentChannels` served from `agent`: what a provider of `Agent` adds to `Channels`, each with `PluginContext.add`. */
+export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
+  serveChannel(AgentChannels.prompt, ({ sessionId, content, options, requestId, whenBusy }) =>
+    agent.prompt(sessionId, content, {
+      ...options,
+      ...(requestId === undefined ? {} : { requestId }),
+      ...(whenBusy === undefined ? {} : { whenBusy }),
+    }),
+  ),
+  serveChannel(AgentChannels.cancel, ({ sessionId }) => agent.cancel(sessionId)),
+  serveChannel(AgentChannels.running, () => agent.running),
+  serveChannel(AgentChannels.queue, ({ sessionId }) => agent.queue(sessionId)),
+  serveChannel(AgentChannels.withdraw, ({ sessionId, requestId }) => agent.withdraw(sessionId, requestId)),
+  serveChannel(AgentChannels.view, ({ sessionId }) => agent.view(sessionId)),
+  serveChannel(AgentChannels.activity, () =>
+    eventFeed(
+      Effect.map(agent.running, (running): AgentActivity => ({ type: "subscribed", running })),
+      [
+        Stream.map(events.stream(TurnStarted, FEED), ({ sessionId, turnId }): AgentActivity => ({ type: "turn-started", sessionId, turnId })),
+        Stream.map(events.stream(AssistantDelta, FEED), ({ sessionId, turnId, stepId, seq, event }): AgentActivity => ({
+          type: "delta",
+          sessionId,
+          turnId,
+          stepId,
+          seq,
+          event,
+        })),
+        Stream.map(events.stream(ToolOutput, FEED), ({ sessionId, toolCallId, chunk, offset }): AgentActivity => ({
+          type: "tool-output",
+          sessionId,
+          toolCallId,
+          chunk,
+          offset,
+        })),
+        Stream.map(events.stream(QueueChanged, FEED), ({ sessionId, queue, revision }): AgentActivity => ({
+          type: "queue-changed",
+          sessionId,
+          queue,
+          revision,
+        })),
+        Stream.map(events.stream(TurnEnded, FEED), ({ sessionId, turnId, usage, reason }): AgentActivity => ({
+          type: "turn-ended",
+          sessionId,
+          turnId,
+          usage,
+          reason,
+        })),
+      ],
+    ),
+  ),
+];

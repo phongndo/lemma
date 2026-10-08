@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
-import { definePlugin } from "@lemma/core";
-import { Paths, Sessions } from "@lemma/contracts";
+import { definePlugin, Events } from "@lemma/core";
+import { Channels, Paths, serveSessions, Sessions } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { make } from "./sessions.ts";
@@ -28,7 +28,12 @@ export const makeSessionsPlugin = (options: { readonly fs?: FileSystem } = {}) =
     // Two instances must not write one directory: a reload stops this one (closing its files and releasing the
     // lock) before it starts the next.
     exclusive: true,
-    setup: (_, { config }) => Effect.map(make({ ...config, fs: options.fs ?? nodeFileSystem }), (sessions) => ({ sessions })),
+    setup: function* (_, owner) {
+      const sessions = yield* make({ ...owner.config, fs: options.fs ?? nodeFileSystem });
+      // How clients reach them: the transport serves what `Channels` holds.
+      for (const channel of serveSessions(sessions, yield* Events)) yield* owner.add(Channels, channel);
+      return { sessions };
+    },
   });
 
 export default makeSessionsPlugin();

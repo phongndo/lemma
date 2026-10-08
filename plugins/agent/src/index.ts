@@ -1,15 +1,20 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
+import type { Context } from "effect";
 import { definePlugin, Events, Hooks } from "@lemma/core";
 import {
   Agent,
   AgentError,
+  Channels,
   HostControl,
   Inspectors,
   InteractionOrigin,
   Llm,
   Paths,
   QueueChanged,
+  serveAgent,
+  SessionError,
   SessionRemoved,
+  SessionRemoveHook,
   Sessions,
   ToolOutput,
   Tools,
@@ -591,6 +596,17 @@ export default definePlugin({
         }),
       { buffer: 1024, overflow: "suspend" },
     );
+    // Deleting a session cuts off a turn running in it, so it is refused, whoever asks. A prompt admitted before the
+    // check has its turn by then; one admitted after it finds the session gone, and fails.
+    yield* owner.on(SessionRemoveHook, (input, next) =>
+      Effect.gen(function* () {
+        const { sessionId } = input;
+        if (yield* admit.withPermits(1)(Effect.sync(() => states.get(sessionId)?.turn !== undefined))) {
+          return yield* new SessionError({ sessionId, reason: "Busy", message: "A turn is running in this session; stop it before deleting" });
+        }
+        return yield* next(input);
+      }),
+    );
     // A deleted session's queue and journal go with it.
     yield* owner.observe(SessionRemoved, ({ sessionId }) =>
       admit.withPermits(1)(
@@ -671,16 +687,17 @@ export default definePlugin({
       })
       .pipe(Effect.ignore);
 
-    return {
-      agent: {
-        prompt,
-        cancel,
-        busy: (sessionId: string) => Effect.sync(() => states.get(sessionId)?.turn !== undefined),
-        running: Effect.sync(() => [...states].flatMap(([sessionId, state]) => (state.turn === undefined ? [] : [sessionId]))),
-        queue: (sessionId: string) => Effect.sync(() => (states.get(sessionId)?.queue ?? []).map((item) => item.prompt)),
-        withdraw,
-        view,
-      },
+    const agent: Context.Service.Shape<typeof Agent> = {
+      prompt,
+      cancel,
+      busy: (sessionId: string) => Effect.sync(() => states.get(sessionId)?.turn !== undefined),
+      running: Effect.sync(() => [...states].flatMap(([sessionId, state]) => (state.turn === undefined ? [] : [sessionId]))),
+      queue: (sessionId: string) => Effect.sync(() => (states.get(sessionId)?.queue ?? []).map((item) => item.prompt)),
+      withdraw,
+      view,
     };
+    // How clients reach it: the transport serves what `Channels` holds.
+    for (const channel of serveAgent(agent, events)) yield* owner.add(Channels, channel);
+    return { agent };
   },
 });

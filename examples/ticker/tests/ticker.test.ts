@@ -117,7 +117,7 @@ describe("as a plugin file in a real host", () => {
   });
 
   test("lists its channels, quotes a symbol, and streams prices", async () => {
-    expect(JSON.parse(await lemma("channels", "--json"))).toEqual([
+    expect(JSON.parse(await lemma("channels", "--json")).filter((channel: { source: string }) => channel.source === "ticker")).toEqual([
       { id: "ticker.prices", kind: "stream", title: "Prices", description: "Every symbol's quote now, then on each tick", source: "ticker" },
       { id: "ticker.quote", kind: "call", title: "Quote", description: "One symbol's quote now", source: "ticker" },
     ]);

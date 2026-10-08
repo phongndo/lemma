@@ -170,9 +170,9 @@ describe("against a running host", () => {
   });
 
   test("channels lists what host plugins serve; an unknown one is NotFound, for a call and a stream alike", async () => {
-    // No bundled plugin serves a channel; a plugin file's are below, and examples/ticker uses one in a real host.
-    expect((await invoke(["channels"], home)).out).toBe("No channels: no running plugin serves one.");
-    expect(JSON.parse((await invoke(["channels", "--json"], home)).out)).toEqual([]);
+    // The bundled subsystems serve theirs; a plugin file's are below, and examples/ticker uses one in a real host.
+    expect((await invoke(["channels"], home)).out).toMatch(/^sessions\.list +call +List sessions +sessions /m);
+    expect(JSON.parse((await invoke(["channels", "--json"], home)).out)).toContainEqual(expect.objectContaining({ id: "sessions.list", source: "sessions" }));
     for (const sub of ["call", "open"]) {
       const result = await invoke(["channels", sub, "nope.nothing", "{}", "--json"], home);
       expect(result.code).toBe(ExitCode.failed);
@@ -354,7 +354,8 @@ export default definePlugin({
   printOnFailure(() => lemma?.output());
 
   test("channels lists, calls, and opens them, and prints a call with no result, or an empty one, as something", async () => {
-    expect(JSON.parse((await invoke(["channels", "--json"], home)).out).map((channel: { id: string }) => channel.id)).toEqual([
+    const listed = JSON.parse((await invoke(["channels", "--json"], home)).out) as { id: string; source: string }[];
+    expect(listed.filter((channel) => channel.source === "bulk").map((channel) => channel.id)).toEqual([
       "bulk.stats",
       "bulk.nothing",
       "bulk.empty",
