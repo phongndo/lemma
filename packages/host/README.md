@@ -18,7 +18,7 @@ const paths = resolvePaths({ env: process.env, cwd: process.cwd() });
 reads, how project rows merge over user rows, project trust, and what happens
 to a plugin that cannot run. What runs is planned by
 [`@lemma/composition`](../composition/README.md), which the web app plans with
-too. Each export's doc comment gives its contract: `loadComposition` never
+too. The modules' doc comments give their contracts: `loadComposition` never
 fails and reports bad files as diagnostics; `patchConfig` and `updateConfig`
 edit rows in place, keeping comments, and write the file whole (through a
 link, to the file it points to); `compositionInfo`'s id is stable across

@@ -477,13 +477,9 @@ function Faults(props: { plugin: PluginStatus }) {
 /** A plugin's line in the summary, drawn contained: one that throws leaves, a fault of the plugin that added it. */
 function Fact(props: { fact: PluginsFact }) {
   return (
-    <Show when={props.fact.value()}>
-      {(value) => (
-        <>
-          <dt>{props.fact.label}</dt>
-          <dd data-tip={props.fact.tip}>{value()}</dd>
-        </>
-      )}
+    <Show when={props.fact.value() !== undefined}>
+      <dt>{props.fact.label}</dt>
+      <dd data-tip={props.fact.tip}>{props.fact.value()}</dd>
     </Show>
   );
 }

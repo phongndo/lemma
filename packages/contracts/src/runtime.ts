@@ -1,8 +1,9 @@
 /*
- * The runtime's contracts, without any domain's: what the host and the web app
- * give every plugin (paths, host control, interaction, inspectors, addresses),
- * config forms, and the host's status and kernel views. Nothing here reaches
- * sessions, models, or tools: `@lemma/contracts/runtime`.
+ * The runtime's contracts: what the host and the web app give every plugin
+ * (paths, host control, interaction, inspectors, addresses), config forms, and
+ * the host's status and kernel views. Their imports reach no domain module
+ * (sessions, models, tools); `addresses` does declare the web app's routes,
+ * the thread routes among them. `@lemma/contracts/runtime`.
  */
 
 export * from "./addresses.ts";
