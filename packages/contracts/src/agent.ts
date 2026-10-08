@@ -245,8 +245,8 @@ export const AgentChannels = {
    * the channel answers again, to wait for that turn or place the prompt if it
    * never was. A client that clears its input once the prompt is taken reads
    * that from `agent.activity`, opened first: `turn-started` for the session,
-   * or the `requestId` in a `queue-changed`; or its message on
-   * `sessions.changes`.
+   * or the `requestId` in a `queue-changed`; or its message on the session's
+   * `sessions.log`.
    */
   prompt: defineChannel({
     kind: "call",

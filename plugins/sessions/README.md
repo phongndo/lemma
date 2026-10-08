@@ -3,8 +3,8 @@
 Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
 `SessionEvent`s stored as one JSONL file. Requires `Paths`. Serves the
 `sessions.*` channels (`SessionsChannels`, through `serveSessions`): the calls
-clients make on sessions, and `sessions.changes`, every append, change, and
-removal.
+clients make on sessions; `sessions.log`, one session's log as it grows; and
+`sessions.changes`, every session created, changed, or removed.
 
 ```ts
 Effect.gen(function* () {
@@ -126,7 +126,8 @@ costs re-reading the files.
   effort: on a failing disk it may come back, whole); the session is gone from
   memory and listings, and `SessionRemoved` is published.
 - `SessionAppended` and `SessionChanged` are published after each write. They are
-  losable; the file is the source of truth.
+  losable; the file is the source of truth, from which `sessions.log` reads
+  what its client missed.
 
 ## Testing
 

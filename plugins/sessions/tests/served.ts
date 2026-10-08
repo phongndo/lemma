@@ -65,12 +65,13 @@ export const served = <A, E>(
 /** A channel's answer, as JSON (`Channel.Call`). */
 export const call = (client: Client, id: string, payload?: unknown) => client["Channel.Call"](payload === undefined ? { id } : { id, payload });
 
-/** A channel stream opened (`Channel.Open`): its elements, as JSON, taken one at a time. */
+/** A channel stream opened (`Channel.Open`): its elements, as JSON, taken one at a time, or how it ended in their place. */
 export const open = (client: Client, id: string, payload?: unknown) =>
   Effect.map(
     client["Channel.Open"](payload === undefined ? { id } : { id, payload }, { asQueue: true }),
     (elements: Queue.Dequeue<unknown, HostError | RpcClientError.RpcClientError | Cause.Done>) => ({
       next: Queue.take(elements).pipe(Effect.timeout(Duration.seconds(5)), Effect.orDie),
+      end: Effect.exit(Queue.take(elements).pipe(Effect.timeout(Duration.seconds(5)))),
     }),
   );
 

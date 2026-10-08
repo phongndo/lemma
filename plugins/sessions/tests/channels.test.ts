@@ -101,7 +101,7 @@ describe("the sessions channels, through the transport", () => {
     );
   });
 
-  test("changes start with subscribed, then report every session appended to, changed, and removed", () =>
+  test("changes start with subscribed, then report every session created, changed, and removed, an append as its new lastSeq", () =>
     withSessions((client) =>
       Effect.gen(function* () {
         const changes = yield* open(client, "sessions.changes");
@@ -112,15 +112,41 @@ describe("the sessions channels, through the transport", () => {
         yield* call(client, "sessions.delete", { sessionId: id });
         // Each kind keeps its own order; kinds may interleave either way.
         const count = (seen: readonly any[], type: string) => seen.filter((change) => change.type === type).length;
-        const seen = yield* collect(
-          changes,
-          (seen) => count(seen, "session-changed") === 2 && count(seen, "session-appended") === 1 && count(seen, "session-removed") === 1,
-        );
-        expect(seen.filter((change) => change.type === "session-appended")).toEqual([
-          { type: "session-appended", sessionId: id, event: expect.objectContaining({ seq: 1, data: { type: "title", title: "Named" } }) },
+        const seen = yield* collect(changes, (seen) => count(seen, "session-changed") === 2 && count(seen, "session-removed") === 1);
+        expect(seen.length).toBe(3);
+        expect(seen.filter((change) => change.type === "session-changed").map((change) => [change.info.title, change.info.lastSeq])).toEqual([
+          [undefined, 0],
+          ["Named", 1],
         ]);
-        expect(seen.filter((change) => change.type === "session-changed").map((change) => change.info.title)).toEqual([undefined, "Named"]);
         expect(seen.filter((change) => change.type === "session-removed")).toEqual([{ type: "session-removed", sessionId: id }]);
+      }),
+    ));
+
+  test("log follows one session: subscribed with its log after `after`, then each event appended to it, and no other's, until it is deleted", () =>
+    withSessions((client) =>
+      Effect.gen(function* () {
+        const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        const { id: other } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        yield* call(client, "sessions.set-title", { sessionId: id, title: "First" });
+        yield* call(client, "sessions.set-title", { sessionId: id, title: "Second" });
+        const log = (yield* call(client, "sessions.events", { sessionId: id })) as SessionEvent[];
+
+        const whole = yield* open(client, "sessions.log", { sessionId: id });
+        expect(yield* whole.next).toEqual({ type: "subscribed", events: log });
+        // As a client reopening it after a reconnect does, from the last event it has.
+        const rest = yield* open(client, "sessions.log", { sessionId: id, after: 1 });
+        expect(yield* rest.next).toEqual({ type: "subscribed", events: [log[1]] });
+
+        yield* call(client, "sessions.set-title", { sessionId: other, title: "Elsewhere" });
+        yield* call(client, "sessions.set-title", { sessionId: id, title: "Third" });
+        const third = yield* whole.next;
+        expect(third).toEqual({ type: "appended", event: expect.objectContaining({ seq: 3, parent: log[1]!.id, data: { type: "title", title: "Third" } }) });
+        expect(yield* rest.next).toEqual(third);
+
+        yield* call(client, "sessions.delete", { sessionId: id });
+        expect(hostError(yield* whole.end)).toMatchObject({ code: "NotFound", subject: id });
+        expect(hostError(yield* rest.end)).toMatchObject({ code: "NotFound", subject: id });
+        expect(hostError(yield* (yield* open(client, "sessions.log", { sessionId: id })).end)).toMatchObject({ code: "NotFound", subject: id });
       }),
     ));
 });

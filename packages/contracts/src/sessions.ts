@@ -152,7 +152,13 @@ export class SessionError extends Data.TaggedError("SessionError")<{
   readonly cause?: unknown;
 }> {}
 
+/**
+ * An event appended, published by a provider of `Sessions` after each append,
+ * in `seq` order within a session, and followed by `SessionChanged`.
+ * `sessions.log` follows a session from it.
+ */
 export const SessionAppended = Event.make<{ readonly sessionId: string; readonly event: SessionEvent }>("lemma/session.appended");
+/** A session created, or its info changed: by an append (its `lastSeq` and `updatedAt`), a checkout, or its marks. */
 export const SessionChanged = Event.make<{ readonly info: SessionInfo }>("lemma/session.changed");
 export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/session.removed");
 
@@ -198,15 +204,24 @@ export class Sessions extends Context.Service<
   }
 >()("lemma/Sessions") {}
 
-/** What `sessions.changes` sends: `subscribed` first, then each change to any session. */
+/** What `sessions.changes` sends: `subscribed` first, then each session created, changed, or removed. */
 export const SessionsChange = Schema.Union([
-  /** First: from here on the stream hears every change; a client reads what it shows (`sessions.list`, `sessions.events`) after it. */
+  /** First: from here on the stream hears every change; a client lists what it shows (`sessions.list`) after it. */
   Schema.Struct({ type: Schema.Literal("subscribed") }),
-  Schema.Struct({ type: Schema.Literal("session-appended"), sessionId: Schema.String, event: SessionEvent }),
+  /** Created, or changed: an append moves its `lastSeq` and `updatedAt`, a checkout its `leaf`. */
   Schema.Struct({ type: Schema.Literal("session-changed"), info: SessionInfo }),
   Schema.Struct({ type: Schema.Literal("session-removed"), sessionId: Schema.String }),
 ]);
 export type SessionsChange = typeof SessionsChange.Type;
+
+/** What `sessions.log` sends: `subscribed` first, with the log so far, then each event appended to the session. */
+export const SessionLogUpdate = Schema.Union([
+  /** First: the log after `after`, in file order, read once the stream was hearing appends, so what is appended since follows. */
+  Schema.Struct({ type: Schema.Literal("subscribed"), events: Schema.Array(SessionEvent) }),
+  /** The event after the last one the stream sent (or after `after`): `seq`s run on without a gap or a repeat. */
+  Schema.Struct({ type: Schema.Literal("appended"), event: SessionEvent }),
+]);
+export type SessionLogUpdate = typeof SessionLogUpdate.Type;
 
 const sessionField = { sessionId: Schema.String };
 
@@ -241,7 +256,11 @@ export const SessionsChannels = {
     payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
     success: SessionInfo,
   }),
-  /** Losable notifications leave gaps (`sessions.changes`); a client repairs them from here, by `seq`. */
+  /**
+   * One read of the log, for a client that shows it once (`lemma show`, or a
+   * log fetched before its thread opens). One that shows the session as it
+   * grows follows it with `sessions.log` instead.
+   */
   events: defineChannel({
     kind: "call",
     id: "sessions.events",
@@ -249,6 +268,25 @@ export const SessionsChannels = {
     description: "A session's log in file order: every event, or those past a seq (after)",
     payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
     success: Schema.Array(SessionEvent),
+  }),
+  /**
+   * Follows one session's log: `subscribed` with the log after `after` (all of
+   * it when absent), then each event appended, as `SessionAppended` reports
+   * it. In `seq` order, without gaps or repeats: what the stream falls behind
+   * on (its client is slow, say) it reads from the log, so a client applies
+   * each event as it comes and never repairs. A client reopening it, after a
+   * reconnect or when it ends `Withdrawn` as its plugin reloads, passes the
+   * last `seq` it has as `after`. A session that does not exist, or is deleted
+   * while followed, ends it `NotFound`, the session as its subject; a log it
+   * cannot read fails it as `sessions.events` fails.
+   */
+  log: defineChannel({
+    kind: "stream",
+    id: "sessions.log",
+    title: "Follow a session's log",
+    description: "A session's log past a seq (after), then each event appended to it, in order and without gaps, after a subscribed acknowledgement",
+    payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
+    success: SessionLogUpdate,
   }),
   checkout: defineChannel({
     kind: "call",
@@ -284,24 +322,69 @@ export const SessionsChannels = {
     success: Schema.Void,
   }),
   /**
-   * Every change to any session, as `SessionAppended`, `SessionChanged`, and
-   * `SessionRemoved` report it, after `subscribed` (see `eventFeed`). Losable:
-   * a client that falls behind loses the oldest, and one reopening it after a
-   * reconnect has missed what came between; either way it rereads, by `seq`,
-   * from `sessions.events`, and lists again.
+   * Every session created, changed, or removed, as `SessionChanged` and
+   * `SessionRemoved` report it, after `subscribed` (see `eventFeed`): what a
+   * list of sessions shows. An append comes as its session's new `lastSeq`;
+   * the event itself only to a client following that session (`sessions.log`),
+   * so a client receives the events of the sessions it shows, not of every
+   * session. Losable: a client that falls behind loses the oldest, and one
+   * reopening it after a reconnect has missed what came between; either way it
+   * lists again.
    */
   changes: defineChannel({
     kind: "stream",
     id: "sessions.changes",
     title: "Session changes",
-    description: "Every session appended to, changed, or removed, after a subscribed acknowledgement",
+    description: "Every session created, changed, or removed, after a subscribed acknowledgement",
     payload: Schema.Void,
     success: SessionsChange,
   }),
 };
 
-/** What each source of a client's `sessions.changes` holds: as much as the client does (see `eventFeed`). */
+/** What each source of a client's `sessions.changes` or `sessions.log` holds: as much as the client does (see `eventFeed`). */
 const FEED = { buffer: 1024 };
+
+/** What `sessions.log` hears before checking it against what it has sent: an update, or that the session was deleted. */
+type Heard = SessionLogUpdate | { readonly type: "removed" };
+
+/** `sessions.log` for `sessionId`, from `sessions` and the appends its provider publishes. */
+const follow = (
+  sessions: Context.Service.Shape<typeof Sessions>,
+  events: Context.Service.Shape<typeof Events>,
+  sessionId: string,
+  after: number,
+): Stream.Stream<SessionLogUpdate, SessionError> =>
+  eventFeed<Heard, SessionError, never>(
+    Effect.map(sessions.events(sessionId, { after }), (log) => ({ type: "subscribed", events: log })),
+    [
+      events.stream(SessionAppended, FEED).pipe(
+        Stream.filter((appended) => appended.sessionId === sessionId),
+        Stream.map(({ event }): Heard => ({ type: "appended", event })),
+      ),
+      events.stream(SessionRemoved, FEED).pipe(
+        Stream.filter((removed) => removed.sessionId === sessionId),
+        Stream.map((): Heard => ({ type: "removed" })),
+      ),
+    ],
+  ).pipe(
+    // The state is the last `seq` sent.
+    Stream.mapAccumEffect(
+      () => after,
+      (last, heard): Effect.Effect<readonly [number, readonly SessionLogUpdate[]], SessionError> => {
+        if (heard.type === "removed") return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `Session ${sessionId} was deleted` }));
+        if (heard.type === "subscribed") return Effect.succeed([heard.events.at(-1)?.seq ?? last, [heard]]);
+        const { seq } = heard.event;
+        // Appended while the log was read, or read already to fill a gap.
+        if (seq <= last) return Effect.succeed([last, []]);
+        if (seq === last + 1) return Effect.succeed([seq, [heard]]);
+        // Appends dropped on the way, as a slow client's are: the log has them.
+        return Effect.map(sessions.events(sessionId, { after: last }), (missed) => [
+          missed.at(-1)?.seq ?? last,
+          missed.map((event): SessionLogUpdate => ({ type: "appended", event })),
+        ]);
+      },
+    ),
+  );
 
 /** `SessionsChannels` served from `sessions`: what a provider of `Sessions` adds to `Channels`, each with `PluginContext.add`. */
 export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
@@ -309,6 +392,7 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
   serveChannel(SessionsChannels.get, ({ sessionId }) => sessions.get(sessionId)),
   serveChannel(SessionsChannels.create, ({ cwd }) => sessions.create(cwd === undefined ? undefined : { cwd })),
   serveChannel(SessionsChannels.events, ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after })),
+  serveChannel(SessionsChannels.log, ({ sessionId, after }) => follow(sessions, events, sessionId, after ?? 0)),
   serveChannel(SessionsChannels.checkout, ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId)),
   serveChannel(SessionsChannels.setTitle, ({ sessionId, title }) =>
     Effect.andThen(sessions.append(sessionId, { type: "title", title }), sessions.get(sessionId)),
@@ -319,7 +403,6 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
   serveChannel(SessionsChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
   serveChannel(SessionsChannels.changes, () =>
     eventFeed(Effect.succeed<SessionsChange>({ type: "subscribed" }), [
-      Stream.map(events.stream(SessionAppended, FEED), ({ sessionId, event }): SessionsChange => ({ type: "session-appended", sessionId, event })),
       Stream.map(events.stream(SessionChanged, FEED), ({ info }): SessionsChange => ({ type: "session-changed", info })),
       Stream.map(events.stream(SessionRemoved, FEED), ({ sessionId }): SessionsChange => ({ type: "session-removed", sessionId })),
     ]),
