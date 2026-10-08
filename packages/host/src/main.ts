@@ -391,8 +391,8 @@ const program = Effect.gen(function* () {
       withLoader((loader) =>
         Effect.gen(function* () {
           const snapshot = yield* loader.core.inspect;
-          // Force-restarting a locked plugin, the pinned transport (which needs only the runtime), drops the client that asked;
-          // refuse rather than surprise.
+          // Force-restarting a locked plugin (the pinned transport, or a plugin it needs) restarts the transport and drops the
+          // client that asked; refuse rather than surprise.
           if (options?.force) {
             const entry = catalogOf(snapshot).find((candidate) => candidate.id === pluginId);
             if (entry?.locked !== undefined && entry.state === "active") {

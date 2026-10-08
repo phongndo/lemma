@@ -10,12 +10,11 @@ import type { EventData, SessionEvent } from "@lemma/contracts";
 type Store = Context.Service.Shape<typeof Sessions>;
 
 /**
- * The `Sessions` contract as tests, run against every implementation: the
- * plugin (on a real and a simulated disk) and each test's fake, so a fake
- * cannot drift from what the plugin does, and a plugin someone writes to
- * replace it meets the same bar. `compose` returns, fresh for each test, the
- * plugins that provide `Sessions` (and what they require). Time is Effect's
- * test clock, which the body moves.
+ * The `Sessions` contract as tests. The sessions plugin runs them on a real
+ * and a simulated disk, and a plugin written to replace it can run them to
+ * meet the same bar. `compose` returns, fresh for each test, the plugins that
+ * provide `Sessions` (and what they require). Time is Effect's test clock,
+ * which the body moves.
  */
 export function sessionsConformance(name: string, compose: () => readonly Plugin[] | Promise<readonly Plugin[]>): void {
   describe(`Sessions contract: ${name}`, () => {
