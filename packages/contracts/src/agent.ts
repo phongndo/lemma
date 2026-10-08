@@ -192,6 +192,13 @@ export class Agent extends Context.Service<
      * starts again.
      */
     readonly prompt: (sessionId: string, content: PromptContent, options?: PromptOptions) => Effect.Effect<void, AgentError>;
+    /**
+     * Cancels the session's turn, if it has one. A running turn stops and
+     * closes as cancelled, and this answers once it has ended. A turn a restart
+     * cut off that has not resumed yet is recorded as cancelled and closes as
+     * cancelled, asking the model nothing, when it resumes: this answers once
+     * it has, or, if it cannot resume yet, once the cancellation is recorded.
+     */
     readonly cancel: (sessionId: string) => Effect.Effect<void>;
     readonly busy: (sessionId: string) => Effect.Effect<boolean>;
     /** Sessions with a running turn. */
@@ -271,11 +278,13 @@ export const AgentChannels = {
     success: Schema.Void,
     repeatable: true,
   }),
+  /** `Agent.cancel`. */
   cancel: defineChannel({
     kind: "call",
     id: "agent.cancel",
     title: "Cancel a turn",
-    description: "Cancels the session's running turn, if any, and answers once it has ended",
+    description:
+      "Cancels the session's turn, if any, and answers once it has ended; for a turn a restart cut off that cannot resume yet, once the cancellation is recorded",
     payload: Schema.Struct(sessionField),
     success: Schema.Void,
   }),

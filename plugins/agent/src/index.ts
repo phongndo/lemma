@@ -114,11 +114,14 @@ interface Suspended {
   cancelling: boolean;
 }
 
-/** How a suspended turn resumes, as its log says (`prepare`), with the model it continues on. */
+/**
+ * How a suspended turn resumes, as its log says (`prepare`), with the model it continues on: none when it was being
+ * cancelled, as it then only closes, asking nothing.
+ */
 type Resumption =
   | { readonly kind: "ended"; readonly reason: TurnEndReason }
-  | { readonly kind: "not-started"; readonly model: ModelInfo }
-  | { readonly kind: "open"; readonly plan: ResumePlan; readonly model: ModelInfo };
+  | { readonly kind: "not-started"; readonly model: ModelInfo | undefined }
+  | { readonly kind: "open"; readonly plan: ResumePlan; readonly model: ModelInfo | undefined };
 
 /** What taking up a restored session needs from the store and the models, read once (`prepare`). */
 interface Prepared {
@@ -423,8 +426,10 @@ export default definePlugin({
         ]);
         if (!up) return yield* Effect.interrupt;
         const cancelling = yield* begin(entry);
-        // Cut off before its first event: cancelled meanwhile, it never runs.
-        if (resumption.kind === "not-started") return cancelling ? ("cancelled" as const) : yield* begun(sessionId, entry, info, resumption.model);
+        // Cut off before its first event: cancelled meanwhile, it never runs. (It has no model only if cancelled.)
+        if (resumption.kind === "not-started") {
+          return cancelling || resumption.model === undefined ? ("cancelled" as const) : yield* begun(sessionId, entry, info, resumption.model);
+        }
         if (resumption.kind === "ended") return resumption.reason;
         const { plan, model } = resumption;
         const restored = yield* readLive(home, sessionId);
@@ -435,7 +440,7 @@ export default definePlugin({
         };
         return yield* runTurn(services, settings, {
           ...turnInput(sessionId, entry, info),
-          model,
+          ...(model === undefined ? {} : { model }),
           prompts: entry.prompts.filter((prompt) => !plan.placed.has(prompt.requestId)).map(({ requestId, content }) => ({ requestId, content })),
           resume: turnResume,
           ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
@@ -688,20 +693,21 @@ export default definePlugin({
         const log = yield* sessions.events(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
         if (suspended === undefined) return { info, log };
         const resume = planResume(log, suspended.turnId, suspended.marked);
+        if (resume.kind === "ended") return { info, log, turn: { suspended, resumption: resume } };
+        // Being cancelled, it only closes, so no model need resolve.
+        if (suspended.cancelling) return { info, log, turn: { suspended, resumption: { ...resume, model: undefined } } };
         const resumption: Resumption =
-          resume.kind === "ended"
-            ? resume
-            : resume.kind === "not-started"
-              ? { kind: "not-started", model: yield* resolveModel(sessionId, suspended.prompts.at(-1)?.prompt.options) }
-              : {
-                  kind: "open",
-                  plan: resume.plan,
-                  // The model it ran on, if it still exists; else the default, as a new turn would get.
-                  model:
-                    resume.plan.model === undefined
-                      ? yield* resolveModel(sessionId)
-                      : yield* llm.model(resume.plan.model).pipe(Effect.catch(() => resolveModel(sessionId))),
-                };
+          resume.kind === "not-started"
+            ? { kind: "not-started", model: yield* resolveModel(sessionId, suspended.prompts.at(-1)?.prompt.options) }
+            : {
+                kind: "open",
+                plan: resume.plan,
+                // The model it ran on, if it still exists; else the default, as a new turn would get.
+                model:
+                  resume.plan.model === undefined
+                    ? yield* resolveModel(sessionId)
+                    : yield* llm.model(resume.plan.model).pipe(Effect.catch(() => resolveModel(sessionId))),
+              };
         return { info, log, turn: { suspended, resumption } };
       });
 

@@ -722,6 +722,22 @@ describe("agent", () => {
     );
   });
 
+  it("closes a cancelled suspended turn with no model to be had: it asks the model nothing, and names its cut-off call as its request did", async () => {
+    const id = await suspendTurn();
+    await withAgent({ sessions: unreadableSessions({ holds: () => true }), scripts: [] }, () => Effect.flatMap(Agent, (a) => a.cancel(id)));
+    await withAgent({ scripts: [], models: [] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        yield* waitFor(a.busy(id), (busy) => !busy);
+        const events = yield* log(id);
+        expect(ofType(events, "attempt")).toMatchObject([{ message: { stopReason: "aborted", provider: "fake", model: "m1" } }]);
+        expect(ofType(events, "turn-end")).toMatchObject([{ reason: "cancelled" }]);
+        expect(requests).toHaveLength(0);
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
   it("shows a suspended session's queue, not running, and withdraws from it; deleting the session drops the turn", async () => {
     const id = await suspendTurn(["q1"]);
     await withAgent({ sessions: unreadableSessions({ holds: () => true }), scripts: [] }, () =>

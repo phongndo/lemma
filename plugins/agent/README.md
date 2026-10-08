@@ -163,13 +163,14 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 When the agent starts, each journal becomes its session's state as it was: the
 queue, and the turn, _suspended_. Then the agent takes each session up: it
 holds the session and reads it and its log, once, and the model a suspended
-turn continues on. The log is the truth: a queued prompt the log already has
-was placed, and a turn the log ended is over. A suspended turn then resumes once
-the composition is up, from where its log stops, after a `custom` event
-(`agent.resumed`); a session without one runs its queue on, unless the queue
-waits for the next prompt (see [Busy sessions](#busy-sessions)). Where a turn
-stops is the last event that names it, reached back to its `turn-start` by
-parents, so titles a rename hung off the turn meanwhile do not mislead it.
+turn continues on, unless it is being cancelled. The log is the truth: a queued
+prompt the log already has was placed, and a turn the log ended is over. A
+suspended turn then resumes once the composition is up, from where its log
+stops, after a `custom` event (`agent.resumed`); a session without one runs its
+queue on, unless the queue waits for the next prompt (see
+[Busy sessions](#busy-sessions)). Where a turn stops is the last event that
+names it, reached back to its `turn-start` by parents, so titles a rename hung
+off the turn meanwhile do not mislead it.
 
 - A model call cut off (its `request` logged, no answer) is logged as an
   `attempt` with what it had produced (from the live file), the error
@@ -184,24 +185,26 @@ parents, so titles a rename hung off the turn meanwhile do not mislead it.
   started runs. In a turn an older agent started, which logged no such events,
   every call without a result counts as started.
 - A turn whose `cancel` was asked for closes as cancelled (one cut off before
-  its first event never runs); one whose model call had failed closes the way
-  it was closing. Steers it had placed before the restart are answered.
+  its first event never runs), needing no model: a cut-off call's `attempt`
+  names the model its `request` did, without the wire API (`api` is empty). One
+  whose model call had failed closes the way it was closing. Steers it had
+  placed before the restart are answered.
 
 The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
 restart can be awaited again with their `requestId`.
 
-Taking a session up changes nothing until the session, its log and the model
-have been read. A session the store says does not exist (`NotFound`) goes,
-journal and all. One that cannot be taken up otherwise (the store fails, or no
-model resolves) stays as it was, its journal untouched, with a warning in the
-log; it is taken up when it is next prompted, the prompt failing as the reading
-did if it still cannot be, or at the next start. Until then its turn stays
-suspended, and is not running: `busy`, `running` and `view` leave it out, and
-nothing holds the session for it, so the session can be deleted, which drops
-the turn. `queue` and `withdraw` see the session's queue. `cancel` marks the
-turn cancelling in the journal, so it closes as cancelled, without asking the
-model again, when it is taken up: at once, if it can be.
+Taking a session up changes nothing until all of that has been read. A session
+the store says does not exist (`NotFound`) goes, journal and all. One that
+cannot be taken up otherwise (the store fails, or no model resolves) stays as it
+was, its journal untouched, with a warning in the log; it is taken up when it
+is next prompted, the prompt failing as the reading did if it still cannot be,
+or at the next start. Until then its turn stays suspended, and is not running:
+`busy`, `running` and `view` leave it out, and nothing holds the session for it,
+so the session can be deleted, which drops the turn. `queue` and `withdraw` see
+the session's queue. `cancel` records the cancellation in the journal, then
+takes the session up at once if it can (see `Agent.cancel` for when it
+answers).
 
 ## Stopping
 
