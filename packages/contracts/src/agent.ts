@@ -169,8 +169,10 @@ export interface PromptOptions extends TurnOptions {
    * Makes the submission exactly-once: a prompt with an id the session has
    * seen (queued, placed in the running turn, or in its log) is not placed
    * again; the call waits for the turn that placed it, or returns at once
-   * when that turn has ended. A client retrying after a lost connection
-   * reuses the id.
+   * when that turn has ended. A caller that may have to call again (a client
+   * whose connection drops, or whose `agent.prompt` ends `Withdrawn`) reuses
+   * the id, and `agent.prompt` requires one; without one, the agent gives the
+   * prompt an id of its own.
    */
   readonly requestId?: string;
   /** Default `follow-up`. */
@@ -234,30 +236,36 @@ const sessionField = { sessionId: Schema.String };
 export const AgentChannels = {
   /**
    * `Agent.prompt` for a client: answers when the turn that places the prompt
-   * ends. A client that lost the call (its connection dropped, say) calls again
-   * with the same `requestId` to wait again, never placing the prompt twice.
+   * ends. The call can end sooner, when its connection drops or the agent
+   * reloads (`Withdrawn`, below), as it does whenever its configuration or a
+   * plugin it requires changes; the client then calls again with the same
+   * `requestId`, which waits for the turn that placed the prompt, or places it
+   * if it never was, and never places it twice. So every call names one, new
+   * for each prompt (`PromptOptions.requestId`): a retry without it would
+   * place the prompt again.
+   *
    * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`, or
    * `Retracted` when `agent.withdraw` took the prompt out of the queue, each
    * with the session as its subject. `Withdrawn` (its subject `agent.prompt`)
    * says instead that the agent stopped or was replaced while the call
    * waited, and the call ends at once: a prompt it took stays taken, its turn
    * resuming in the replacement, so call again with the same `requestId` once
-   * the channel answers again, to wait for that turn or place the prompt if it
-   * never was. A client that clears its input once the prompt is taken reads
-   * that from `agent.activity`, opened first: `turn-started` for the session,
-   * or the `requestId` in a `queue-changed`; or its message on the session's
-   * `sessions.log`.
+   * the channel answers again. A client that clears its input once the prompt
+   * is taken reads that from `agent.activity`, opened first: `turn-started`
+   * for the session, or the `requestId` in a `queue-changed`; or its message
+   * on the session's `sessions.log`.
    */
   prompt: defineChannel({
     kind: "call",
     id: "agent.prompt",
     title: "Prompt",
-    description: "Sends a prompt to a session and answers when the turn that places it ends; whenBusy says what it does while a turn runs",
+    description:
+      "Sends a prompt to a session and answers when the turn that places it ends; whenBusy says what it does while a turn runs, and calling again with the same requestId never places it twice",
     payload: Schema.Struct({
       ...sessionField,
       content: PromptContent,
       options: Schema.optional(TurnOptions),
-      requestId: Schema.optional(Schema.String),
+      requestId: Schema.NonEmptyString,
       whenBusy: Schema.optional(WhenBusy),
     }),
     success: Schema.Void,
@@ -329,14 +337,7 @@ export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: C
   // The turn is the agent's, not the call's: when the agent leaves, the call stops waiting, and the turn resumes in
   // the replacement, where calling again with the same `requestId` waits for it.
   serveChannel(AgentChannels.prompt, ({ sessionId, content, options, requestId, whenBusy }, { left }) =>
-    Effect.raceFirst(
-      agent.prompt(sessionId, content, {
-        ...options,
-        ...(requestId === undefined ? {} : { requestId }),
-        ...(whenBusy === undefined ? {} : { whenBusy }),
-      }),
-      left,
-    ),
+    Effect.raceFirst(agent.prompt(sessionId, content, { ...options, requestId, ...(whenBusy === undefined ? {} : { whenBusy }) }), left),
   ),
   serveChannel(AgentChannels.cancel, ({ sessionId }) => agent.cancel(sessionId)),
   serveChannel(AgentChannels.running, () => agent.running),

@@ -132,8 +132,11 @@ turn that placed its prompt ends.
 A `requestId` makes a submission exactly-once. A prompt whose id the session
 has seen (queued, placed in the running turn, or in a user message in its log)
 is not placed again: the call waits for that turn, or returns at once when it
-has ended. Without one, the agent gives the prompt an id of its own. Clients
-reuse the id when they retry after a lost connection.
+has ended. Clients must give one (`agent.prompt` refuses a call without):
+their call ends whenever their connection drops or the agent reloads (see
+[Stopping](#stopping)), and they call again with the same id. A plugin calling
+`Agent.prompt` may leave it out, and the agent gives the prompt an id of its
+own.
 
 `view` is what a client joining the session now needs beyond its log: the
 running turn's model output so far (`draft`, through the stream event numbered

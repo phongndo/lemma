@@ -30,13 +30,19 @@ describe("the agent channels, through the transport", () => {
       }),
     ));
 
-  test("a prompt answers when its turn ends, which activity reports after subscribed; sent again with its id, it is not placed twice", () =>
+  test("a prompt answers when its turn ends, which activity reports after subscribed and the log shows with its id; sent again with it, it is not placed twice", () =>
     withAgent([reply("hello there")], (client) =>
       Effect.gen(function* () {
         const activity = yield* open(client, "agent.activity");
         expect(yield* activity.next).toEqual({ type: "subscribed", running: [] });
         const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        const followed = yield* open(client, "sessions.log", { sessionId: id });
+        expect(yield* followed.next).toEqual({ type: "subscribed", events: [] });
         expect(yield* call(client, "agent.prompt", { sessionId: id, content: text("hi"), requestId: "r1" })).toBeNull();
+        // The session's log, as it is appended: its message carries the request id, which tells a client the prompt was taken.
+        const appended = (yield* collect(followed, (seen) => seen.at(-1)?.event.data.type === "turn-end")).map((element) => element.event);
+        expect(appended.map((event) => event.seq)).toEqual(appended.map((_, index) => index + 1));
+        expect(appended.find((event) => event.data.type === "message" && event.data.message.role === "user")?.data).toMatchObject({ requestId: "r1" });
 
         // Each kind keeps its own order; `turn-ended` can overtake the last delta.
         const seen = yield* collect(activity, (seen) => count(seen, "turn-ended") === 1 && count(seen, "delta") === 4);
@@ -76,7 +82,9 @@ describe("the agent channels, through the transport", () => {
         expect(yield* call(client, "agent.running")).toEqual([id]);
         expect(yield* call(client, "agent.view", { sessionId: id })).toMatchObject({ turnId: started.turnId, queue: [] });
 
-        expect(hostError(yield* Effect.exit(call(client, "agent.prompt", { sessionId: id, content: text("no"), whenBusy: "reject" })))).toMatchObject({
+        expect(
+          hostError(yield* Effect.exit(call(client, "agent.prompt", { sessionId: id, content: text("no"), requestId: "r0", whenBusy: "reject" }))),
+        ).toMatchObject({
           code: "Busy",
           subject: id,
         });
@@ -111,14 +119,28 @@ describe("the agent channels, through the transport", () => {
   test("a prompt's error keeps its reason as the code and names the session; a malformed payload names the channel", () =>
     withAgent([], (client) =>
       Effect.gen(function* () {
-        expect(hostError(yield* Effect.exit(call(client, "agent.prompt", { sessionId: "nope", content: text("hi") })))).toMatchObject({
+        expect(hostError(yield* Effect.exit(call(client, "agent.prompt", { sessionId: "nope", content: text("hi"), requestId: "r1" })))).toMatchObject({
           code: "Session",
           subject: "nope",
         });
-        expect(hostError(yield* Effect.exit(call(client, "agent.prompt", { sessionId: "nope", content: "hi" })))).toMatchObject({
+        expect(hostError(yield* Effect.exit(call(client, "agent.prompt", { sessionId: "nope", content: "hi", requestId: "r1" })))).toMatchObject({
           code: "InvalidPayload",
           subject: "agent.prompt",
         });
+      }),
+    ));
+
+  test("a prompt without a request id is refused before it reaches the agent: a retry of it could place it twice", () =>
+    withAgent([reply("unasked")], (client) =>
+      Effect.gen(function* () {
+        const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        for (const payload of [
+          { sessionId: id, content: text("hi") },
+          { sessionId: id, content: text("hi"), requestId: "" },
+        ]) {
+          expect(hostError(yield* Effect.exit(call(client, "agent.prompt", payload)))).toMatchObject({ code: "InvalidPayload", subject: "agent.prompt" });
+        }
+        expect(yield* call(client, "sessions.events", { sessionId: id })).toEqual([]);
       }),
     ));
 });
