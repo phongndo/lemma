@@ -1,5 +1,5 @@
 import { batch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
-import { startPrompt } from "@lemma/client";
+import { startPrompt } from "@lemma/client/prompt";
 import { AgentChannels, branchOf, HostError, SessionChannels } from "@lemma/contracts";
 import { isRoute } from "@lemma/router";
 import type { AgentActivity, AgentView, PromptContent, SessionEvent, SessionInfo, SessionMarks, SessionsChange, TurnOptions } from "@lemma/contracts";

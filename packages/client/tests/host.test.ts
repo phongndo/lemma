@@ -10,7 +10,7 @@ import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Core } from "@lemma/core";
 import transport from "@lemma/plugin-transport";
 import { settled } from "../../../scripts/e2e.ts";
-import { callChannel, connect, openChannel } from "../src/host.ts";
+import { callChannel, connect } from "../src/host.ts";
 import type { Host } from "../src/host.ts";
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "../src/rpc.ts";
 
@@ -121,7 +121,7 @@ describe("the channel facade", () => {
       close();
     }));
 
-  test("calls and opens a declared channel typed over an Effect client, on HTTP and the socket alike", () =>
+  test("calls a declared channel typed over an Effect client, on HTTP and the socket alike", () =>
     withHost((_, __, found) =>
       Effect.runPromise(
         Effect.scoped(
@@ -130,8 +130,6 @@ describe("the channel facade", () => {
               const doubled: number = yield* callChannel(rpc, double, 21);
               expect(doubled).toBe(42);
               expect(yield* callChannel(rpc, later, { from: new Date(0) })).toEqual(new Date(86_400_000));
-              const first = yield* openChannel(rpc, instanceOf, undefined).pipe(Stream.take(1), Stream.runCollect);
-              expect(typeof first[0]).toBe("number");
               const older = defineChannel({ kind: "call", id: "doubler.double", payload: Schema.Number, success: Schema.String });
               expect(yield* Effect.flip(callChannel(rpc, older, 21))).toMatchObject({ code: "Mismatch", subject: "doubler.double" });
             }

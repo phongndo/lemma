@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 import type { Host } from "@lemma/client";
-import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
+import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts/runtime";
 import type { ClientService, InteractionsService, NotifyService } from "../ui/runtime.ts";
 
 /**

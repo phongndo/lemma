@@ -33,7 +33,6 @@ regular files and directories, POSIX paths.
 ## Conformance suites
 
 `sessionsConformance(name, compose)` registers the `Sessions` contract as Vitest
-tests, against whatever plugins `compose` returns: the plugin runs it on a
-simulated and a real disk, and a test's fake runs it so it cannot drift from
-what the plugin does. A plugin written to replace one of Lemma's can run the
+tests, against whatever plugins `compose` returns: the sessions plugin runs it
+on a simulated and a real disk, and a plugin written to replace it can run the
 same suite.

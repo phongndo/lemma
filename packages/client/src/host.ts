@@ -2,7 +2,7 @@ import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, Stream }
 import type { Layer } from "effect";
 import type { RpcClientError } from "effect/rpc";
 import type { Socket } from "effect/socket";
-import { HostError, wireCodec } from "@lemma/contracts";
+import { HostError, wireCodec } from "@lemma/contracts/runtime";
 import type {
   ChannelDeclaration,
   ChannelInfo,
@@ -16,7 +16,7 @@ import type {
   ReloadResult,
   RuntimeEvent,
   UiComposition,
-} from "@lemma/contracts";
+} from "@lemma/contracts/runtime";
 import { makeHostRpc, rpcUrl } from "./rpc.ts";
 import type { HostRpcClient } from "./rpc.ts";
 
@@ -204,7 +204,7 @@ const callOver = (rpc: Pick<HostRpcClient, "Channel.Call">, target: string | Cha
   return Effect.flatMap(Effect.flatMap(access.request(payload), rpc["Channel.Call"]), access.read);
 };
 
-/** A channel's stream, by declaration or by id, over an Effect client: what `openChannel` and `Host.channel.open` read. */
+/** A channel's stream, by declaration or by id, over an Effect client: what `Host.channel.open` reads. */
 const openOver = (rpc: Pick<HostRpcClient, "Channel.Open">, target: string | ChannelDeclaration, payload: unknown) => {
   const access = channelOf(target);
   return Stream.unwrap(Effect.map(access.request(payload), rpc["Channel.Open"])).pipe(Stream.mapEffect(access.read));
@@ -252,19 +252,6 @@ export const callChannel = <Payload, Success>(
   payload: Payload,
 ): Effect.Effect<Success, HostError | RpcClientError.RpcClientError> =>
   callOver(rpc, channel, payload) as Effect.Effect<Success, HostError | RpcClientError.RpcClientError>;
-
-/**
- * A declared channel's stream over an Effect client, typed as
- * `Host.channel.open` is. It ends as that does: by itself, with a `HostError`
- * (`Withdrawn` says to open it again), or with an `RpcClientError` when the
- * connection dropped. Nothing resumes it.
- */
-export const openChannel = <Payload, Success>(
-  rpc: Pick<HostRpcClient, "Channel.Open">,
-  channel: ChannelDeclaration<"stream", Payload, Success>,
-  payload: Payload,
-): Stream.Stream<Success, HostError | RpcClientError.RpcClientError> =>
-  openOver(rpc, channel, payload) as Stream.Stream<Success, HostError | RpcClientError.RpcClientError>;
 
 export const describeError = (error: unknown): string => {
   if (error instanceof HostError) return error.message;

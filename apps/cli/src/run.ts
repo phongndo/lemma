@@ -160,8 +160,9 @@ const followed = (connection: Connection, io: Io, options: Options, payload: Pro
   Effect.gen(function* () {
     const { sessionId, requestId } = payload;
     const rpc = yield* connection.live;
-    // Over HTTP: `turnView` asks for it holding `serial`, so neither stream is read meanwhile, and the socket's reader,
-    // which reads in order, stalls once one of them fills its buffer: a reply on the socket behind it would never come.
+    // Over HTTP: `turnView` asks for it holding `serial`, which the host's notices wait for, so the host's events are not
+    // read meanwhile. On the socket, whose reader reads in order, a burst of them would fill their buffer and stall it,
+    // and the reply would wait behind them. (The channels' streams never hold it back: `follow` queues them without bound.)
     const view = turnView(io, options, sessionId, requestId, call(connection.rpc, AgentChannels.view, { sessionId }));
     const questions = yield* questionHandler(rpc, io, options, `session:${sessionId}`);
     // One element at a time, whichever stream it comes from, so what is shown stays in order.

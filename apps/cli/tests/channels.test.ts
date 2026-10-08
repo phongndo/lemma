@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Stream } from "effect";
 import { AgentChannels, emptyUsage, FileChannels, HostError, SessionChannels } from "@lemma/contracts";
 import type { AgentActivity, SessionsChange } from "@lemma/contracts";
 import { settled } from "../../../scripts/e2e.ts";
-import { again, call, refined } from "../src/channels.ts";
+import { again, call, follow, followable, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
 import type { Io, Options } from "../src/command.ts";
-import { eventsCommand } from "../src/live.ts";
+import { eventsCommand, hostEvents } from "../src/live.ts";
 import { fakeHost, fed } from "./fake.ts";
 import type { Fed } from "./fake.ts";
 
@@ -58,6 +58,33 @@ describe("a channel's failure", () => {
     expect(calls).toBe(3);
     // Not found without having been withdrawn is an answer, not a wait.
     expect(await failure(again(host.rpc, SessionChannels.list.id, call(host.rpc, SessionChannels.list, {})))).toMatchObject({ code: "NotFound" });
+  });
+});
+
+describe("following a stream", () => {
+  test("interrupting the fiber that reads it closes the stream, while the command's scope goes on", async () => {
+    const closed = Deferred.makeUnsafe<void>();
+    const host = fakeHost({
+      streams: {
+        "agent.activity": () => fed<AgentActivity>({ type: "subscribed", running: [] }).stream.pipe(Stream.ensuring(Deferred.succeed(closed, undefined))),
+      },
+    });
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const rpc = yield* host.live;
+          const connection = followable(rpc, yield* hostEvents(rpc, () => Effect.void));
+          const reader = yield* follow(
+            connection,
+            AgentChannels.activity,
+            () => undefined,
+            () => Effect.void,
+          );
+          yield* Fiber.interrupt(reader);
+          yield* Deferred.await(closed);
+        }),
+      ),
+    );
   });
 });
 

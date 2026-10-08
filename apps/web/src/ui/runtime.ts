@@ -16,7 +16,7 @@ import type {
   RuntimeEvent,
   UiComposition,
   UiFile,
-} from "@lemma/contracts";
+} from "@lemma/contracts/runtime";
 import type {
   AnyRoute,
   BlockOptions,

@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import { follow } from "@lemma/client";
 import type { ConnectionStatus, Host } from "@lemma/client";
-import type { HostError, HostInfo } from "@lemma/contracts";
+import type { HostError, HostInfo } from "@lemma/contracts/runtime";
 import type { ClientService } from "../ui/runtime.ts";
 
 /**

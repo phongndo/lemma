@@ -1,5 +1,5 @@
-import { HostError } from "@lemma/contracts";
-import type { ChannelDeclaration } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts/runtime";
+import type { ChannelDeclaration } from "@lemma/contracts/runtime";
 import { safely } from "./host.ts";
 import type { Host } from "./host.ts";
 
@@ -108,7 +108,5 @@ export function follow(
       open();
     }),
   );
-  // Closed from an `onEnd` heard while that first opening was made.
-  if (stopped) stop();
   return stop;
 }

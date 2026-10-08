@@ -12,21 +12,21 @@ const plugin = (id: string, extra: Partial<PluginStatus> = {}): PluginStatus => 
   ...extra,
 });
 
-// transport needs agent, agent needs llm and tools, bash and edit plug into tools.
+// gateway needs agent, agent needs llm and tools, bash and edit plug into tools.
 const plugins: PluginStatus[] = [
-  plugin("llm", { provides: ["lemma/Llm"], locked: "Needed by transport" }),
+  plugin("llm", { provides: ["lemma/Llm"], locked: "Needed by gateway" }),
   plugin("tools", { provides: ["lemma/Tools"] }),
   plugin("bash", { requires: ["lemma/Tools"] }),
   plugin("edit", { requires: ["lemma/Tools"], enabled: false, state: "disabled", scope: "user" }),
   plugin("agent", { provides: ["lemma/Agent"], requires: ["lemma/Llm", "lemma/Tools"] }),
-  plugin("transport", { requires: ["lemma/Agent"], locked: "Serves the clients" }),
+  plugin("gateway", { requires: ["lemma/Agent"], locked: "Serves the clients" }),
   plugin("notes", { source: "user", requires: ["lemma/Tools"], state: "failed", fault: { phase: "activate", message: "boom" } }),
 ];
 
 describe("dependentsOf", () => {
   it("follows provided capabilities through running plugins only, nearest first", () => {
-    expect(dependentsOf(plugins, "tools")).toEqual(["bash", "agent", "notes", "transport"]);
-    expect(dependentsOf(plugins, "llm")).toEqual(["agent", "transport"]);
+    expect(dependentsOf(plugins, "tools")).toEqual(["bash", "agent", "notes", "gateway"]);
+    expect(dependentsOf(plugins, "llm")).toEqual(["agent", "gateway"]);
     expect(dependentsOf(plugins, "bash")).toEqual([]);
   });
 });
@@ -45,10 +45,10 @@ describe("waitingOn", () => {
     const off = [
       plugin("tools", { provides: ["lemma/Tools"], enabled: false, state: "disabled" }),
       plugin("agent", { provides: ["lemma/Agent"], requires: ["lemma/Tools"], state: "disabled", haltedBy: "tools" }),
-      plugin("transport", { requires: ["lemma/Agent"], state: "disabled", haltedBy: "agent" }),
+      plugin("gateway", { requires: ["lemma/Agent"], state: "disabled", haltedBy: "agent" }),
       plugin("edit", { requires: ["lemma/Tools"], enabled: false, state: "disabled" }),
     ];
-    expect(waitingOn(off, "tools")).toEqual(["agent", "transport"]);
+    expect(waitingOn(off, "tools")).toEqual(["agent", "gateway"]);
   });
 });
 

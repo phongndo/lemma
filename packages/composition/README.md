@@ -3,7 +3,9 @@
 Decides what runs from the plugins an app knows and the rows its config files
 set, and describes the result for clients. The host
 ([`packages/host`](../host/README.md)) and the web app plan with the same
-functions, so both decide alike. Browser-safe: it imports no Node API.
+functions, so both decide alike. Browser-safe: it imports no Node API, nor,
+being part of the runtime, any domain contract; `scripts/check-boundaries.ts`
+fails on either.
 
 ## Use
 

@@ -4,7 +4,9 @@
  * the host by (`RuntimeRpcs`, `RuntimeEvent`), the ways into the web app from
  * outside (`addresses`), config forms, and the host's status and kernel
  * views. They declare no domain's routes and reach no domain module
- * (sessions, models, tools). `@lemma/contracts/runtime`.
+ * (sessions, models, tools), nor does the runtime code that imports them:
+ * `scripts/check-boundaries.ts` fails on any import that does.
+ * `@lemma/contracts/runtime`.
  */
 
 export * from "./addresses.ts";

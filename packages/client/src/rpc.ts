@@ -4,7 +4,7 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
-import { RuntimeRpcs } from "@lemma/contracts";
+import { RuntimeRpcs } from "@lemma/contracts/runtime";
 
 /** The typed Effect surface of what the host serves (`RuntimeRpcs`): `rpc["Host.Info"]()`, `rpc["Host.Events"]()`, `rpc["Channel.Call"]({ id })`, ... */
 export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;

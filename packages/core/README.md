@@ -1,6 +1,6 @@
 # @lemma/core
 
-An Effect-native, domain-neutral plugin runtime. It composes typed capabilities,
+An Effect-native, domain-neutral plugin kernel. It composes typed capabilities,
 plugin-defined hooks and events, configuration, and scoped lifetimes. Applications
 and plugin authors define their own contracts and behavior.
 [`DESIGN.md`](DESIGN.md) holds the design rationale.

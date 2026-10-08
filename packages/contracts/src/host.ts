@@ -8,7 +8,7 @@ import type { PluginStatus } from "./status.ts";
  * Locations the host resolves once: Lemma's home, the config files, and the
  * working directory. Defaults: `~/.lemma` for user data; `<cwd>/.lemma` for
  * project data. A plugin keeps its own files in `home`, under a name of its
- * own that its README gives (`<home>/sessions`, `<home>/auth.json`).
+ * own that its README gives.
  */
 export class Paths extends Context.Service<
   Paths,

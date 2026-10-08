@@ -129,7 +129,7 @@ report("Host plugin boundary violations", pluginProblems, "host plugin boundary:
 // runtime by its `requires` instead.
 const contracts = join(root, "packages/contracts/src");
 const runtimeContracts = ["addresses", "channels", "config", "discovery", "fs", "host", "inspectors", "interaction", "kernel", "rpc", "runtime", "status"];
-const isCode = (path: string) => /\.(ts|tsx|mts)$/.test(path);
+const isCode = (path: string) => /\.(ts|tsx|mts|js|jsx|mjs)$/.test(path);
 const bundledList = join(root, "packages/host/src/bundled.ts");
 const runtimeCode = [
   ...walk(join(root, "packages/host/src")).filter((path) => path !== bundledList),
@@ -138,22 +138,6 @@ const runtimeCode = [
   ...["boot.tsx", "define.ts", "draw.tsx", "files.ts", "runtime.ts", "slots.ts"].map((name) => join(root, "apps/web/src/ui", name)),
   join(contracts, "runtime.ts"),
 ].filter(isCode);
-// What the runtime still reaches of the domain, by the import that crosses into it, and why it is left. Rows only
-// ever leave: a crossing not listed fails, and a row whose crossing is gone asks to be removed.
-const webEvents = "the web runtime imports the contracts barrel for `HostEvent` (rpc.ts), whose domain kinds are leaving the wire";
-const clientRpcs = "the client's `Host` and RPC client still carry the domain RPCs (`HostRpcs`), which are leaving the wire";
-const runtimeExceptions: Readonly<Record<string, string>> = {
-  "apps/web/src/runtime/client.ts → packages/contracts/src/index.ts": webEvents,
-  "apps/web/src/runtime/host-plugins.ts → packages/contracts/src/index.ts": webEvents,
-  "apps/web/src/runtime/interactions.ts → packages/contracts/src/index.ts": webEvents,
-  "apps/web/src/ui/boot.tsx → packages/contracts/src/index.ts": webEvents,
-  "apps/web/src/ui/files.ts → packages/contracts/src/index.ts": webEvents,
-  "apps/web/src/ui/runtime.ts → packages/contracts/src/index.ts": webEvents,
-  "packages/client/src/host.ts → packages/contracts/src/index.ts": clientRpcs,
-  "packages/client/src/rpc.ts → packages/contracts/src/index.ts": clientRpcs,
-  "packages/client/src/prompt.ts → packages/contracts/src/index.ts":
-    "@lemma/client's entry, which the web runtime imports for the connection, also exports `startPrompt`, which prompts over the agent's channels",
-};
 const workspacePackages = new Map<string, { readonly dir: string; readonly exports: Readonly<Record<string, unknown>> }>();
 for (const group of ["apps", "examples", "packages", "plugins"]) {
   for (const name of readdirSync(join(root, group))) {
@@ -164,13 +148,21 @@ for (const group of ["apps", "examples", "packages", "plugins"]) {
   }
 }
 const unresolved: string[] = [];
+/** What a relative import may name besides code, which the walk does not enter. */
+const isAsset = (path: string) => /\.(css|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|json|wasm)$/.test(path);
+/** Bundler resolution and Vite read `./a.js` as `./a.ts` (or `.tsx`), `.jsx` as `.tsx`, and `.mjs` as `.mts`, when that source exists. */
+const sourcesOf: Readonly<Record<string, readonly string[]>> = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"] };
 /** The module `specifier` names from `from`: a file, `node:<name>` for Node's own, or none for an asset or a package from outside. */
 const resolveImport = (from: string, specifier: string): string | undefined => {
   if (isBuiltin(specifier)) return specifier.startsWith("node:") ? specifier : `node:${specifier}`;
   if (specifier.startsWith(".")) {
     const path = resolve(dirname(from), specifier.replace(/\?.*$/, ""));
-    if (isCode(path) && existsSync(path)) return path;
-    if (isCode(path) || extname(path) === "") unresolved.push(`${relative(root, from)}: imports "${specifier}", which names no file`);
+    const extension = extname(path);
+    const sources = (sourcesOf[extension] ?? []).map((source) => path.slice(0, -extension.length) + source);
+    const found = [...sources, path].find((candidate) => isCode(candidate) && existsSync(candidate));
+    if (found !== undefined) return found;
+    if (isCode(path) || extension === "") unresolved.push(`${relative(root, from)}: imports "${specifier}", which names no file`);
+    else if (!isAsset(path)) unresolved.push(`${relative(root, from)}: imports "${specifier}", which is neither code nor a known asset`);
     return undefined;
   }
   const [first = "", ...rest] = specifier.split("/");
@@ -222,16 +214,13 @@ const compositionChain = followImports(walk(join(root, "packages/composition/src
   return true;
 });
 const runtimeProblems = [...new Set(unresolved)];
-for (const [crossing, { from, to }] of crossings) {
-  if (crossing in runtimeExceptions) continue;
+for (const { from, to } of crossings.values()) {
   const what = relative(contracts, to) === "index.ts" ? "every contract, the domain's too (import @lemma/contracts/runtime)" : "a domain contract";
   runtimeProblems.push(`${[...runtimeChain(from), relative(root, to)].join(" → ")}: ${what}`);
 }
 for (const { from, to } of nodeImports) {
   runtimeProblems.push(`${[...compositionChain(from), to].join(" → ")}: Node's, in @lemma/composition, which the web app bundles`);
 }
-const gone = Object.keys(runtimeExceptions).filter((crossing) => !crossings.has(crossing));
-if (gone.length) console.log(`Crossings gone from the runtime, to remove from runtimeExceptions:\n${gone.map((crossing) => `  ${crossing}`).join("\n")}`);
 report("Runtime boundary violations (scripts/check-boundaries.ts)", runtimeProblems, "runtime boundary: ok");
 
 // The web app is replaceable piece by piece: everything it shows comes from a

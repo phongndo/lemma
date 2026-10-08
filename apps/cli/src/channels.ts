@@ -191,7 +191,8 @@ export const subscribe = <A>(name: string, stream: Stream.Stream<A, Failure>, on
  * elements are handled in turn, those of each opening after the last's, as
  * `subscribe` does, and this returns once the first has been. The fiber fails
  * with any other ending (the channel's error or the connection's, or nothing
- * serving it before it was ever withdrawn), and ends when the stream does.
+ * serving it before it was ever withdrawn), and ends when the stream does. It
+ * is followed for as long as the fiber runs: interrupting it closes the stream.
  */
 export const follow = <Payload, Success>(
   connection: Followable,
@@ -199,24 +200,26 @@ export const follow = <Payload, Success>(
   payload: () => Payload,
   onElement: (element: Success) => Effect.Effect<void, Failure>,
 ): Effect.Effect<Fiber.Fiber<void, Failure>, Failure, Scope.Scope> =>
-  Effect.gen(function* () {
-    const elements = yield* Queue.unbounded<Success, Failure | Cause.Done>();
-    let withdrawn = false;
-    yield* following(
-      connection,
-      channel,
-      payload,
-      (element) => void Queue.offerUnsafe(elements, element),
-      (error) => {
-        if (ofChannel(error, channel.id, "Withdrawn")) return (withdrawn = true);
-        // Since withdrawn, nothing serving it yet is its replacement on its way.
-        if (withdrawn && ofChannel(error, channel.id, "NotFound")) return true;
-        if (error === undefined) Queue.endUnsafe(elements);
-        else Queue.failCauseUnsafe(elements, Cause.fail(refined(channel.id)(error)));
-        return false;
-      },
-    );
-    return yield* subscribed(`"${channel.id}"`, (handled) =>
-      Stream.runForEach(Stream.fromQueue(elements), (element) => Effect.andThen(onElement(element), handled)),
-    );
-  });
+  subscribed(`"${channel.id}"`, (handled) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const elements = yield* Queue.unbounded<Success, Failure | Cause.Done>();
+        let withdrawn = false;
+        yield* following(
+          connection,
+          channel,
+          payload,
+          (element) => void Queue.offerUnsafe(elements, element),
+          (error) => {
+            if (ofChannel(error, channel.id, "Withdrawn")) return (withdrawn = true);
+            // Since withdrawn, nothing serving it yet is its replacement on its way.
+            if (withdrawn && ofChannel(error, channel.id, "NotFound")) return true;
+            if (error === undefined) Queue.endUnsafe(elements);
+            else Queue.failCauseUnsafe(elements, Cause.fail(refined(channel.id)(error)));
+            return false;
+          },
+        );
+        yield* Stream.runForEach(Stream.fromQueue(elements), (element) => Effect.andThen(onElement(element), handled));
+      }),
+    ),
+  );

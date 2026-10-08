@@ -1,4 +1,4 @@
-import type { UiFile } from "@lemma/contracts";
+import type { UiFile } from "@lemma/contracts/runtime";
 import type { Plugin } from "@lemma/core";
 import type { LocalPlugin } from "@lemma/composition";
 import { extractCandidates } from "../model/candidates.ts";

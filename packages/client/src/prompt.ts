@@ -1,3 +1,9 @@
+/*
+ * Sending a prompt over the agent's channels: `@lemma/client/prompt`. An entry
+ * of its own, since the main one is the connection the web app's runtime
+ * imports, which reaches no domain contract (scripts/check-boundaries.ts).
+ */
+
 import { AgentChannels, HostError } from "@lemma/contracts";
 import type { PromptContent, TurnOptions, WhenBusy } from "@lemma/contracts";
 import type { Host } from "./host.ts";
@@ -7,8 +13,10 @@ export const newRequestId = (): string =>
   Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
 /** What `startPrompt` uses of a connection: a `Host` has it, as does anything offering its channels and events (the web app's `Client`). */
-export interface PromptConnection extends Pick<Host, "onEvent"> {
-  /** The host's events (`onEvent`): a `channels-changed` listing the agent's channels says a withdrawn prompt can be sent again. */
+export interface PromptConnection {
+  /** The host's events: a `channels-changed` listing the agent's channels says a withdrawn prompt can be sent again. */
+  readonly onEvent: Host["onEvent"];
+  /** The agent's channels: `agent.activity` opened to see the prompt taken, `agent.prompt` called to send it. */
   readonly channel: Pick<Host["channel"], "call" | "open">;
 }
 

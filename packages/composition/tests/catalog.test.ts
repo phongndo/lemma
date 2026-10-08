@@ -14,13 +14,13 @@ class Slots extends Context.Service<Slots, string>()("test/Slots") {}
 const pages: KnownPlugin = { plugin: definePlugin({ id: "pages", requires: [Slots], layer: Layer.empty }), source: "bundled" };
 const stray: KnownPlugin = { plugin: definePlugin({ id: "stray", provides: [Slots], layer: Layer.succeed(Slots, "stray") }), source: "user" };
 
-/** transport needs agent, which needs llm and tools; bash (a project plugin shadowing the bundled one) plugs into tools; my-llm is a second Llm provider. */
+/** gateway needs agent, which needs llm and tools; bash (a project plugin shadowing the bundled one) plugs into tools; my-llm is a second Llm provider. */
 const known: KnownPlugin[] = [
   { plugin: definePlugin({ id: "llm", version: "1", provides: [Llm], layer: Layer.succeed(Llm, "llm") }), source: "bundled" },
   { plugin: definePlugin({ id: "tools", version: "1", provides: [Tools], layer: Layer.succeed(Tools, "tools") }), source: "bundled" },
   { plugin: definePlugin({ id: "bash", requires: [Tools], layer: Layer.empty }), source: "project", shadows: true },
   { plugin: definePlugin({ id: "agent", version: "1", provides: [Agent], requires: [Llm, Tools], layer: Layer.succeed(Agent, "agent") }), source: "bundled" },
-  { plugin: definePlugin({ id: "transport", requires: [Agent], layer: Layer.empty }), source: "bundled" },
+  { plugin: definePlugin({ id: "gateway", requires: [Agent], layer: Layer.empty }), source: "bundled" },
   { plugin: definePlugin({ id: "my-llm", provides: [Llm], layer: Layer.succeed(Llm, "my-llm") }), source: "user" },
 ];
 
@@ -41,7 +41,7 @@ describe("resolveComposition", () => {
     expect([...resolved.haltedBy]).toEqual([
       ["bash", "tools"],
       ["agent", "tools"],
-      ["transport", "agent"],
+      ["gateway", "agent"],
     ]);
     expect(Object.keys(resolved.composition.plugins)).toEqual(["llm", "tools", "my-llm"]);
     expect(resolved.composition.plugins.tools).toEqual({ enabled: false });
@@ -83,40 +83,40 @@ describe("catalog", () => {
 
   test("joins definitions, config rows, and core snapshots, locking what a pinned plugin needs", () => {
     const composition = everyone({ "my-llm": { enabled: false }, bash: { enabled: false } });
-    const resolved = resolveComposition(known, composition, { pinned: ["transport"] });
+    const resolved = resolveComposition(known, composition, { pinned: ["gateway"] });
     const entries = catalog({
       known,
       composition,
       resolved,
-      snapshots: [snapshot("llm", "active"), snapshot("tools", "active"), snapshot("agent", "failed"), snapshot("transport", "closed", { haltedBy: "agent" })],
+      snapshots: [snapshot("llm", "active"), snapshot("tools", "active"), snapshot("agent", "failed"), snapshot("gateway", "closed", { haltedBy: "agent" })],
       enabledIn: { bash: "project" },
-      pinned: { transport: "Serves the clients" },
+      pinned: { gateway: "Serves the clients" },
     });
     expect(entries.map((entry) => [entry.id, entry.enabled, entry.state ?? "-", entry.locked ?? "-", entry.haltedBy ?? "-"])).toEqual([
-      ["llm", true, "active", "Needed by transport", "-"],
-      ["tools", true, "active", "Needed by transport", "-"],
+      ["llm", true, "active", "Needed by gateway", "-"],
+      ["tools", true, "active", "Needed by gateway", "-"],
       ["bash", false, "-", "-", "-"],
-      ["agent", true, "failed", "Needed by transport", "-"],
-      ["transport", true, "closed", "Serves the clients", "agent"],
+      ["agent", true, "failed", "Needed by gateway", "-"],
+      ["gateway", true, "closed", "Serves the clients", "agent"],
       ["my-llm", false, "-", "-", "-"],
     ]);
     expect(entries.find((entry) => entry.id === "bash")).toMatchObject({ source: "project", shadows: true, scope: "project", requires: ["test/Tools"] });
     expect(entries.find((entry) => entry.id === "agent")).toMatchObject({ version: "1", provides: ["test/Agent"], requires: ["test/Llm", "test/Tools"] });
-    expect(entries.find((entry) => entry.id === "transport")?.version).toBeUndefined();
+    expect(entries.find((entry) => entry.id === "gateway")?.version).toBeUndefined();
   });
 
   test("a pinned plugin keeps on what it needs, whatever the rows say, and reports the rows it overrode", () => {
-    const resolved = resolveComposition(known, everyone({ "my-llm": { enabled: false }, tools: { enabled: false }, transport: { enabled: false } }), {
-      pinned: ["transport"],
+    const resolved = resolveComposition(known, everyone({ "my-llm": { enabled: false }, tools: { enabled: false }, gateway: { enabled: false } }), {
+      pinned: ["gateway"],
     });
-    expect([...resolved.overridden].sort()).toEqual(["tools", "transport"]);
+    expect([...resolved.overridden].sort()).toEqual(["gateway", "tools"]);
     expect(resolved.haltedBy.size).toBe(0);
     expect(Object.entries(resolved.composition.plugins).filter(([, row]) => row.enabled === false)).toEqual([["my-llm", { enabled: false }]]);
     expect([...resolved.locked]).toEqual([
-      ["transport", "transport"],
-      ["agent", "transport"],
-      ["llm", "transport"],
-      ["tools", "transport"],
+      ["gateway", "gateway"],
+      ["agent", "gateway"],
+      ["llm", "gateway"],
+      ["tools", "gateway"],
     ]);
   });
 
@@ -126,7 +126,7 @@ describe("catalog", () => {
     const entries = catalog({ known, composition, resolved, snapshots: [snapshot("llm", "active")], enabledIn: {}, pinned: {} });
     expect(entries.find((entry) => entry.id === "agent")).toMatchObject({ enabled: true, haltedBy: "tools" });
     expect(entries.find((entry) => entry.id === "agent")?.state).toBeUndefined();
-    expect(entries.find((entry) => entry.id === "transport")).toMatchObject({ enabled: true, haltedBy: "agent" });
+    expect(entries.find((entry) => entry.id === "gateway")).toMatchObject({ enabled: true, haltedBy: "agent" });
     // Nothing is pinned, so nothing is locked.
     expect(entries.every((entry) => entry.locked === undefined)).toBe(true);
   });
@@ -205,7 +205,7 @@ describe("wiring and faults", () => {
           ],
         },
       ],
-      events: [{ name: "lemma/turn.ended", observers: ["agent", "transport"] }],
+      events: [{ name: "lemma/turn.ended", observers: ["agent", "gateway"] }],
       faults: history.get(),
       enabledIn: {},
       pinned: {},
@@ -223,10 +223,10 @@ describe("wiring and faults", () => {
 
 describe("restartedBy", () => {
   test("follows provided capabilities to every dependent, transitively", () => {
-    expect([...restartedBy(known, ["tools"])].sort()).toEqual(["agent", "bash", "tools", "transport"]);
+    expect([...restartedBy(known, ["tools"])].sort()).toEqual(["agent", "bash", "gateway", "tools"]);
     expect([...restartedBy(known, ["bash"])]).toEqual(["bash"]);
     // A second provider of the same capability counts too: turning it on replaces the first.
-    expect(restartedBy(known, ["my-llm"]).has("transport")).toBe(true);
+    expect(restartedBy(known, ["my-llm"]).has("gateway")).toBe(true);
   });
 
   test("a plugin offering what the app provides restarts nothing through it", () => {
