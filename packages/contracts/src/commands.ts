@@ -101,9 +101,11 @@ export const CommandChannels = {
   }),
   /**
    * Answers when the command ends, and interrupting the call (a client that
-   * leaves) interrupts the command. It runs in `cwd`, the host's when absent;
-   * its questions carry `origin` as their `InteractionOrigin`, so the client
-   * that ran it can tell them from others'.
+   * leaves) interrupts the command, as does its provider leaving (stopping or
+   * reloading): the call then fails `Withdrawn`, and running it again reaches
+   * the replacement. It runs in `cwd`, the host's when absent; its questions
+   * carry `origin` as their `InteractionOrigin`, so the client that ran it can
+   * tell them from others'.
    */
   run: defineChannel({
     kind: "call",
@@ -142,9 +144,10 @@ export const CommandChannels = {
  */
 export const serveCommands = (commands: Context.Service.Shape<typeof Commands>, defaults: { readonly cwd: string }): readonly Channel[] => [
   serveChannel(CommandChannels.list, () => commands.list),
-  serveChannel(CommandChannels.run, ({ id, cwd, sessionId, origin }) => {
+  // A command can wait on a question for good: it stops when the provider leaves rather than hold that up.
+  serveChannel(CommandChannels.run, ({ id, cwd, sessionId, origin }, { left }) => {
     const run = commands.run(id, { cwd: cwd ?? defaults.cwd, ...(sessionId === undefined ? {} : { sessionId }) });
-    return origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin);
+    return Effect.raceFirst(origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin), left);
   }),
   serveChannel(CommandChannels.changes, () => commands.changes),
 ];

@@ -82,11 +82,11 @@ const failed = (id: string, cause: Cause.Cause<unknown>): HostError => {
   return new HostError({ code: "Failed", subject: id, message: reason(cause) });
 };
 
-const withdrawn = (id: string) =>
+const withdrawn = (id: string, kind: Channel["kind"]) =>
   new HostError({
     code: "Withdrawn",
     subject: id,
-    message: `"${id}" was withdrawn: its plugin stopped or was replaced; open it again to reach its replacement`,
+    message: `"${id}" was withdrawn: its plugin stopped or was replaced; ${kind === "call" ? "call" : "open"} it again to reach its replacement`,
   });
 
 /**
@@ -112,7 +112,7 @@ const serve = <Kind extends Channel["kind"], A, E, R>(
           .run(contribution, (left) => Effect.exit(work(contribution, left)))
           .pipe(
             Effect.matchEffect({
-              onFailure: (error) => (error.reason === "Absent" ? serve(registries, id, kind, work, contribution) : Effect.fail(withdrawn(id))),
+              onFailure: (error) => (error.reason === "Absent" ? serve(registries, id, kind, work, contribution) : Effect.fail(withdrawn(id, kind))),
               onSuccess: (exit) => exit,
             }),
           ),
@@ -121,16 +121,17 @@ const serve = <Kind extends Channel["kind"], A, E, R>(
 /**
  * One call, served with its channel (`serve`): when its plugin stops or is
  * replaced, the call is drained, finishing on the instance it started on
- * before that instance's finalizers run, and is interrupted, `Withdrawn`, only
- * if it outlives the dispose deadline. Its failure or defect is the caller's
+ * before that instance's finalizers run, unless its handler stops for the
+ * plugin leaving (`CallLifetime`), and is interrupted, `Withdrawn`, only if
+ * it outlives the dispose deadline. Its failure or defect is the caller's
  * error, never the transport's.
  */
 export const callChannel = (registries: Reader, id: string, payload: unknown): Effect.Effect<unknown, HostError> =>
-  serve(registries, id, "call", ({ item: channel }) =>
+  serve(registries, id, "call", ({ item: channel }, left) =>
     decode(channel, payload).pipe(
       Effect.flatMap((input) =>
         contained(
-          () => resultOf(channel, input),
+          () => resultOf(channel, input, { left, withdrawn: withdrawn(id, "call") }),
           (cause) => failed(id, cause),
         ),
       ),
@@ -194,7 +195,7 @@ const openChannel = <A, E, R>(registries: Reader, request: { readonly id: string
         Effect.as(Effect.raceFirst(left, overridden), Option.none<Exit.Exit<A, E>>()),
       );
       // Stopped, or ended once its channel no longer answered (its plugin stopping its source): withdrawn, not finished.
-      if (Option.isNone(ended) || answering(yield* registries.items(Channels), id) !== contribution) return yield* Effect.fail(withdrawn(id));
+      if (Option.isNone(ended) || answering(yield* registries.items(Channels), id) !== contribution) return yield* Effect.fail(withdrawn(id, "stream"));
       return yield* ended.value;
     }),
   );

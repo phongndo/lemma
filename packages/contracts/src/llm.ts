@@ -342,7 +342,9 @@ export const llmModels = defineChannel({
  * for the same provider and type waits for the same login. Fails `Busy` while
  * a login of the other type to that provider runs, `Cancelled` when
  * `llm.cancel-login` stops it, and as `Llm.login` does (`UnknownProvider`,
- * `LoginFailed`, `Cancelled` when its question is dismissed).
+ * `LoginFailed`, `Cancelled` when its question is dismissed). When the
+ * provider stops or reloads, the call fails `Withdrawn` at once, and the login
+ * ends with the provider: calling again starts one on the replacement.
  */
 export const llmLogin = defineChannel({
   kind: "call",
@@ -497,7 +499,8 @@ export const llmChannels = (llm: Context.Service.Shape<typeof Llm>): Effect.Effe
     return [
       serveChannel(llmProviders, () => llm.providers),
       serveChannel(llmModels, ({ available }) => llm.models(available === undefined ? undefined : { available })),
-      serveChannel(llmLogin, ({ provider, type }) => logins.login(provider, type)),
+      // The login ends only with the provider, so the call stops waiting when it leaves rather than hold that up.
+      serveChannel(llmLogin, ({ provider, type }, { left }) => Effect.raceFirst(logins.login(provider, type), left)),
       serveChannel(llmCancelLogin, ({ provider }) => logins.cancel(provider)),
       serveChannel(llmLogout, ({ provider }) => llm.logout(provider)),
       serveChannel(llmAddCustom, ({ spec }) => llm.addCustom(spec)),

@@ -72,7 +72,7 @@ type AgentConfig = typeof AgentConfig.Type;
 /** A submitted prompt, queued or placed in a turn. */
 interface Item {
   readonly prompt: QueuedPrompt;
-  /** Settles when the turn that placed it ends; fails `Withdrawn` when it is taken out of the queue first. */
+  /** Settles when the turn that placed it ends; fails `Retracted` when it is taken out of the queue first. */
   readonly done: Deferred.Deferred<void, AgentError>;
   /** A queued steer the running turn is placing: it can no longer be withdrawn. */
   placing: boolean;
@@ -574,7 +574,7 @@ export default definePlugin({
             state,
             state.queue.filter((candidate) => candidate !== item),
           );
-          yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Withdrawn", message: "The prompt was withdrawn from the queue" }));
+          yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Retracted", message: "The prompt was withdrawn from the queue" }));
           forget(sessionId, state);
           yield* persist(sessionId);
           yield* queueChanged(sessionId);

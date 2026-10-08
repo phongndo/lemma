@@ -1,4 +1,4 @@
-import { Effect, Queue, Schema, SchemaTransformation, Stream } from "effect";
+import { Cause, Effect, Fiber, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { awaitable, isExpectedFailure, Registry } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
@@ -49,9 +49,32 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
  * replaced finishes on that instance before the instance's finalizers run, so
  * it may use the plugin's resources to the end; one still running at the
  * dispose deadline is interrupted, and its client gets `Withdrawn`.
+ *
+ * A call that waits on what only its plugin's stopping would end (a turn, a
+ * login, a running command) would hold that stop until the deadline: it
+ * stops waiting when its plugin leaves instead, as its second argument
+ * (`CallLifetime`) tells it, and its client gets `Withdrawn` at once and
+ * calls again, reaching the replacement.
  */
 export interface ChannelCall<Payload = any, Success = any> extends ChannelDeclaration<"call", Payload, Success> {
-  readonly handle: (payload: Payload) => Awaitable<Success, unknown>;
+  readonly handle: (payload: Payload, lifetime: CallLifetime) => Awaitable<Success, unknown>;
+}
+
+/**
+ * What a call's handler hears of its plugin leaving: stopping, failing, or
+ * being replaced, or the host closing. A handler that stops for it ends with
+ * the call's `Withdrawn`, which both carry. One that takes no notice finishes
+ * as before.
+ */
+export interface CallLifetime {
+  /** Fails with the call's `Withdrawn` once the plugin has left: race what waits with it, `Effect.raceFirst(wait, left)`. */
+  readonly left: Effect.Effect<never, HostError>;
+  /**
+   * Aborts then, with that `Withdrawn` as its reason, for promise code: a
+   * handler that rejects with it (`signal.throwIfAborted()`, `fetch`), or
+   * with an error it caused (Node's `AbortError`), ends `Withdrawn` too.
+   */
+  readonly signal: AbortSignal;
 }
 
 /**
@@ -165,8 +188,52 @@ export const wireCodec = (schema: Schema.Top): Schema.Codec<unknown, unknown> =>
   return codec;
 };
 
-/** A call's result, however its handler gives it (see `ChannelCall.handle`). */
-export const resultOf = (channel: ChannelCall, payload: unknown): Effect.Effect<unknown, unknown> => awaitable(() => channel.handle(payload));
+/** Whether `cause` is a handler stopping for `reason`: failing or dying with it, or with an error it caused. */
+const stoppedFor = (cause: Cause.Cause<unknown>, reason: unknown): boolean => {
+  const error = Cause.squash(cause);
+  return error === reason || (typeof error === "object" && error !== null && (error as { readonly cause?: unknown }).cause === reason);
+};
+
+/**
+ * A call's result, however its handler gives it (see `ChannelCall.handle`).
+ * `served` is the lifetime of the plugin serving it: `left` completes when
+ * that plugin leaves (`Registries.run`'s), and a handler that stops for it
+ * fails with `withdrawn`. Without it, the plugin never leaves.
+ */
+export const resultOf = (
+  channel: ChannelCall,
+  payload: unknown,
+  served?: { readonly left: Effect.Effect<void>; readonly withdrawn: HostError },
+): Effect.Effect<unknown, unknown> =>
+  Effect.suspend(() => {
+    if (served === undefined) return awaitable(() => channel.handle(payload, staying));
+    const { left, withdrawn } = served;
+    // The signal, and the fiber that aborts it, are made only for a handler that reads it.
+    let controller: AbortController | undefined;
+    let aborter: Fiber.Fiber<void> | undefined;
+    const lifetime: CallLifetime = {
+      left: Effect.andThen(left, Effect.fail(withdrawn)),
+      get signal() {
+        if (controller === undefined) {
+          const made = (controller = new AbortController());
+          aborter = Effect.runFork(
+            Effect.andThen(
+              left,
+              Effect.sync(() => made.abort(withdrawn)),
+            ),
+          );
+        }
+        return controller.signal;
+      },
+    };
+    return awaitable(() => channel.handle(payload, lifetime)).pipe(
+      Effect.catchCause((cause) => (stoppedFor(cause, withdrawn) ? Effect.fail(withdrawn) : Effect.failCause(cause))),
+      Effect.ensuring(Effect.suspend(() => (aborter === undefined ? Effect.void : Fiber.interrupt(aborter)))),
+    );
+  });
+
+/** The lifetime of a call whose plugin never leaves: one run outside a host, as in a test. */
+const staying: CallLifetime = { left: Effect.never, signal: new AbortController().signal };
 
 /**
  * A stream's elements, however its handler gives them (see
@@ -243,10 +310,12 @@ export class ChannelRpcs extends RpcGroup.make(
    * error names its own (a session, a path): `NotFound` (no call answers for
    * the id, as when its plugin has gone), `InvalidPayload`, the handler's
    * domain error's code (its `reason` or tag), `Failed` (any other failure, a
-   * defect, or a result its success schema cannot send), `Withdrawn` (still
-   * running at its plugin's dispose deadline, and interrupted), or
-   * `Unavailable` (the host still starting at the transport's startup
-   * timeout, as above; a handler's domain error may be `Unavailable` too).
+   * defect, or a result its success schema cannot send), `Withdrawn` (its
+   * plugin left while it waited on that plugin, see `CallLifetime`, or it was
+   * still running at the plugin's dispose deadline and was interrupted: call
+   * again to reach the replacement), or `Unavailable` (the host still
+   * starting at the transport's startup timeout, as above; a handler's domain
+   * error may be `Unavailable` too).
    */
   Rpc.make("Channel.Call", { payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) }, success: Schema.Unknown, error: HostError }),
   /**

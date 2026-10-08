@@ -1,12 +1,15 @@
+import { rm } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
-import { Effect, Exit, Fiber } from "effect";
+import { Cause, Duration, Effect, Exit, Fiber } from "effect";
 import { AgentChannels, Sessions } from "@lemma/contracts";
 import type { AgentView, ChannelInfo, QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
+import { callServed } from "@lemma/contracts/testing";
+import { makeCore, Registries } from "@lemma/core";
 import sessions from "../../sessions/src/index.ts";
 import { call, collect, hostError, open, served } from "../../sessions/tests/served.ts";
 import tools from "../../tools/src/index.ts";
 import agent from "../src/index.ts";
-import { fakeLlm, hang, host, paths, reply, testTools, text } from "./fakes.ts";
+import { fakeLlm, hang, host, log, newSession, paths, reply, tempDir, testTools, text, waitFor } from "./fakes.ts";
 import type { Script } from "./fakes.ts";
 
 /** The agent with the sessions store, behind the transport, its model playing `scripts`. */
@@ -85,8 +88,8 @@ describe("the agent channels, through the transport", () => {
         expect(yield* call(client, "agent.queue", { sessionId: id })).toEqual([expect.objectContaining({ requestId: "r2", mode: "follow-up" })]);
         expect(yield* call(client, "agent.withdraw", { sessionId: id, requestId: "r2" })).toBe(true);
         expect(yield* call(client, "agent.withdraw", { sessionId: id, requestId: "r2" })).toBe(false);
-        // The prompt's own `Withdrawn` names the session, not the channel (which would say the agent stopped).
-        expect(hostError(yield* Fiber.await(queued))).toMatchObject({ code: "Withdrawn", subject: id });
+        // Taken out of the queue, the prompt fails `Retracted`, naming the session: not the channel's `Withdrawn`, which would say the agent left.
+        expect(hostError(yield* Fiber.await(queued))).toMatchObject({ code: "Retracted", subject: id });
 
         // Refused by the agent through `SessionRemoveHook`, for a client and for a plugin alike.
         expect(hostError(yield* Effect.exit(call(client, "sessions.delete", { sessionId: id })))).toMatchObject({ code: "Busy", subject: id });
@@ -118,4 +121,46 @@ describe("the agent channels, through the transport", () => {
         });
       }),
     ));
+});
+
+// The transport restarts with the agent while it requires it, so these call as it does (`callServed`), not over the wire.
+describe("the agent leaving", () => {
+  test(
+    "ends a prompt call waiting on its turn Withdrawn at once, despite a long dispose deadline; called again, it waits for the resumed turn",
+    () =>
+      Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const dir = yield* Effect.acquireRelease(Effect.promise(tempDir), (made) => Effect.promise(() => rm(made, { recursive: true, force: true })));
+            // The first model call never answers; the resumed turn's does.
+            const llm = fakeLlm([hang("thinking"), reply("done")]);
+            const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, testTools().plugin, llm.plugin, agent], {
+              configs: { agent: { stopGrace: 0 } },
+              deadlines: { dispose: Duration.seconds(30) },
+            });
+            const registries = yield* core.run(Registries);
+            const { id } = yield* core.run(newSession);
+            const prompt = { sessionId: id, content: text("go"), requestId: "r1" };
+            const waiting = yield* Effect.forkChild(Effect.exit(callServed(registries, "agent.prompt", prompt)));
+            // The turn waits on the model, which only the agent stopping ends.
+            yield* waitFor(
+              Effect.sync(() => llm.requests.length),
+              (asked) => asked === 1,
+            );
+
+            const restarting = yield* Effect.forkChild(core.restart("agent", { force: true }));
+            const ended = yield* Fiber.join(waiting).pipe(Effect.timeout(Duration.seconds(3)));
+            expect(Exit.isFailure(ended) && Cause.squash(ended.cause)).toMatchObject({ code: "Withdrawn", subject: "agent.prompt" });
+            yield* Fiber.join(restarting);
+
+            // The prompt stayed taken: the replacement resumes its turn, and the call waits for it, placing nothing twice.
+            expect(yield* callServed(registries, "agent.prompt", prompt)).toBeUndefined();
+            expect(llm.requests).toHaveLength(2);
+            const users = (yield* core.run(log(id))).filter((event) => event.data.type === "message" && event.data.message.role === "user");
+            expect(users).toHaveLength(1);
+          }),
+        ).pipe(Effect.timeout(Duration.seconds(20))),
+      ),
+    30_000,
+  );
 });

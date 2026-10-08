@@ -359,7 +359,7 @@ export default defineUiPlugin({
       );
       // Accepted, the turn is the host's: a dropped connection only ends this wait (the page reconnects and catches up),
       // and a withdrawn prompt fails it on purpose. What the host reports otherwise is shown.
-      if (accepted) void prompt.done.catch((error) => (error instanceof HostError && error.code !== "Withdrawn" ? notify.report(error) : undefined));
+      if (accepted) void prompt.done.catch((error) => (error instanceof HostError && error.code !== "Retracted" ? notify.report(error) : undefined));
       return accepted;
     };
 

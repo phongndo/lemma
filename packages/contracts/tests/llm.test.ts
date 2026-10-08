@@ -6,6 +6,7 @@ import { channelProblem, Channels, elementsOf, resultOf } from "../src/channels.
 import type { Channel, ChannelCall, ChannelStream } from "../src/channels.ts";
 import { InteractionOrigin } from "../src/interaction.ts";
 import { Llm, llmChannels, LlmError, ModelsChanged } from "../src/llm.ts";
+import { callServed } from "../src/testing.ts";
 import type { AuthType } from "../src/llm.ts";
 
 /** An `Llm` whose login is `login`, serving its channels as a provider does. */
@@ -138,6 +139,25 @@ describe("llmChannels", () => {
         expect(held.seen.interrupted).toBe(true);
         expect(failure(yield* Fiber.join(waiting))).toMatchObject({ reason: "Cancelled", provider: "p" });
         expect((yield* core.inspect).state).toBe("active");
+      }),
+    ));
+
+  test("a client's call waiting on a login ends Withdrawn when its provider leaves, despite a long dispose deadline; called again, it logs in anew", () =>
+    run(
+      Effect.gen(function* () {
+        const held = yield* heldLogin;
+        const core = yield* makeCore([provider(held.login)], { deadlines: { dispose: Duration.seconds(30) } });
+        const registries = yield* core.run(Registries);
+        const login = { provider: "p", type: "oauth" };
+        // As the transport calls it: within the provider's lifetime, which ends only once the call does.
+        const waiting = yield* Effect.forkChild(Effect.exit(callServed(registries, "llm.login", login)));
+        yield* Deferred.await(held.started);
+        yield* core.restart("llm", { force: true });
+        expect(failure(yield* Fiber.join(waiting))).toMatchObject({ _tag: "HostError", code: "Withdrawn", subject: "llm.login" });
+        expect(held.seen.interrupted).toBe(true);
+        yield* Deferred.succeed(held.release, undefined);
+        yield* callServed(registries, "llm.login", login);
+        expect(held.seen.starts).toBe(2);
       }),
     ));
 

@@ -1,7 +1,8 @@
+import { EventEmitter, once } from "node:events";
 import { describe, expect, test } from "vitest";
-import { Cause, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import { definePlugin, fail, makeCore, PluginContext, Registries } from "@lemma/core";
-import { elementsOf, FileSearchers, Inspectors, resultOf, searchFiles, serveChannel, snapshotOf } from "../src/index.ts";
+import { elementsOf, FileSearchers, HostError, Inspectors, resultOf, searchFiles, serveChannel, snapshotOf } from "../src/index.ts";
 import type { FileSearcher, Inspector } from "../src/index.ts";
 
 /** Runs `body` in a core where one plugin contributed `searcher` and `inspectors`. */
@@ -76,6 +77,56 @@ describe("callbacks a plugin hands the contracts", () => {
     expect(Exit.isFailure(unmarked) && Cause.hasDies(unmarked.cause)).toBe(true);
     const marked = await Effect.runPromiseExit(Stream.runDrain(elementsOf(broken(fail(new Error("expected"))), 0)));
     expect(Exit.isFailure(marked) && Cause.hasFails(marked.cause)).toBe(true);
+  });
+
+  test("a call hears its plugin leave: one that stops for it, an Effect or a promise, fails with its Withdrawn; one that takes no notice finishes", async () => {
+    const declaration = { kind: "call", id: "plain.wait", payload: Schema.Void, success: Schema.String } as const;
+    const withdrawn = new HostError({ code: "Withdrawn", subject: "plain.wait", message: "left" });
+    const finish = Deferred.makeUnsafe<void>();
+    /** Until `signal` aborts, at once if it has. */
+    const aborted = (signal: AbortSignal) => new Promise<void>((resolve) => (signal.aborted ? resolve() : signal.addEventListener("abort", () => resolve())));
+    const calls = [
+      serveChannel(declaration, (_, { left }) => Effect.raceFirst(Effect.never, left)),
+      // As `signal.throwIfAborted()` and `fetch` do: rejects with the signal's reason.
+      serveChannel(declaration, async (_, { signal }) => {
+        await aborted(signal);
+        throw signal.reason;
+      }),
+      // As Node's timers and events do: rejects with an `AbortError` the reason caused.
+      serveChannel(declaration, async (_, { signal }) => String(await once(new EventEmitter(), "never", { signal }))),
+      serveChannel(declaration, () => Effect.as(Deferred.await(finish), "finished")),
+      serveChannel(declaration, async (_, { signal }) => {
+        await aborted(signal);
+        throw fail(new Error("its own failure"));
+      }),
+    ];
+    const outcomes = await Effect.runPromise(
+      Effect.forEach(calls, (channel) =>
+        Effect.gen(function* () {
+          const leaves = yield* Deferred.make<void>();
+          // Started at once, so it is waiting by the time its plugin leaves.
+          const call = yield* Effect.forkChild(Effect.exit(resultOf(channel, undefined, { left: Deferred.await(leaves), withdrawn })), {
+            startImmediately: true,
+          });
+          yield* Deferred.succeed(leaves, undefined);
+          yield* Deferred.succeed(finish, undefined);
+          const exit = yield* Fiber.join(call);
+          return Exit.isSuccess(exit) ? exit.value : Cause.squash(exit.cause);
+        }),
+      ),
+    );
+    expect(outcomes.slice(0, 3)).toEqual([withdrawn, withdrawn, withdrawn]);
+    expect(outcomes[3]).toBe("finished");
+    expect(outcomes[4]).toMatchObject({ message: "its own failure" });
+    // Outside a host the plugin never leaves: the signal never aborts.
+    expect(
+      await Effect.runPromise(
+        resultOf(
+          serveChannel(declaration, (_, { signal }) => String(signal.aborted)),
+          undefined,
+        ),
+      ),
+    ).toBe("false");
   });
 
   test("an inspector's snapshot method is called on its inspector", async () => {

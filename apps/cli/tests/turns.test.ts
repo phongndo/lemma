@@ -72,7 +72,7 @@ describe("turns against a running host", () => {
     expect((await invoke(["withdraw", session, "q1"], home)).code).toBe(ExitCode.ok);
     const withdrawn = await queued;
     expect(withdrawn.code).toBe(ExitCode.failed);
-    expect(JSON.parse(withdrawn.err).error.code).toBe("Withdrawn");
+    expect(JSON.parse(withdrawn.err).error.code).toBe("Retracted");
     expect((await invoke(["withdraw", session, "q1", "--json"], home)).code).toBe(ExitCode.failed);
 
     // A steer joins the running turn: both runs report that one turn.

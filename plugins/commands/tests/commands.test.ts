@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Exit, Fiber, Layer, Queue, Stream } from "effect";
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Stream } from "effect";
 import { Channels, CommandChannels, Commands, CommandsChanged, elementsOf, InteractionError, InteractionOrigin, resultOf } from "@lemma/contracts";
 import type { Channel, ChannelCall, ChannelStream, Command, CommandError, CommandInfo } from "@lemma/contracts";
-import { pathsPlugin } from "@lemma/contracts/testing";
+import { callServed, pathsPlugin } from "@lemma/contracts/testing";
 import { definePlugin, Events, makeCore, makeLoader, Registries } from "@lemma/core";
 import commands from "../src/index.ts";
 
@@ -208,6 +208,34 @@ describe("channels", () => {
       { _tag: "CommandError", reason: "NotFound", command: "nope" },
       { _tag: "CommandError", reason: "Cancelled", command: "p.asks" },
     ]);
+  });
+
+  test("a client's run ends Withdrawn when the commands plugin leaves, despite a long dispose deadline, and stops the command; run again, it reaches the replacement", async () => {
+    const started = Deferred.makeUnsafe<void>();
+    let runs = 0;
+    let stopped = false;
+    // The first run waits for good, as on a question nobody answers; later ones answer at once.
+    const waits = command("p.waits", () =>
+      ++runs === 1
+        ? Effect.andThen(Deferred.succeed(started, undefined), Effect.never).pipe(Effect.onInterrupt(() => Effect.sync(() => void (stopped = true))))
+        : Effect.succeed({ message: "done" }),
+    );
+    const [ended, again] = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths, commands, contributor("p", [waits])], { deadlines: { dispose: Duration.seconds(30) } });
+          const registries = yield* core.run(Registries);
+          // As the transport calls it: within the plugin's lifetime, which ends only once the call does.
+          const running = yield* Effect.forkChild(Effect.exit(callServed(registries, "commands.run", { id: "p.waits" })));
+          yield* Deferred.await(started);
+          yield* core.restart("commands", { force: true });
+          return [yield* Fiber.join(running), yield* callServed(registries, "commands.run", { id: "p.waits" })] as const;
+        }),
+      ).pipe(Effect.timeout(Duration.seconds(5))),
+    );
+    expect(Exit.isFailure(ended) && Cause.squash(ended.cause)).toMatchObject({ code: "Withdrawn", subject: "commands.run" });
+    expect(stopped).toBe(true);
+    expect(again).toEqual({ message: "done" });
   });
 
   test("the changes stream starts with every command now, then sends the list after each change", async () => {

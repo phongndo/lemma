@@ -926,7 +926,7 @@ export const createMockHost = (): Host => {
           sessionId,
           queueOf(sessionId).filter((queued) => queued !== found),
         );
-        found.fail(new HostError({ code: "Withdrawn", subject: sessionId, message: "The prompt was withdrawn from the queue" }));
+        found.fail(new HostError({ code: "Retracted", subject: sessionId, message: "The prompt was withdrawn from the queue" }));
         queueChanged(sessionId);
         return true;
       },

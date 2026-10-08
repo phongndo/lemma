@@ -649,6 +649,59 @@ describe("channels", () => {
     );
   }, 30_000);
 
+  test("a call that waits on its plugin hears it leave: Effect and promise handlers alike end Withdrawn at once, despite a long dispose deadline, and calling again reaches the replacement", () => {
+    let instances = 0;
+    const waiting = { effect: Deferred.makeUnsafe<void>(), promise: Deferred.makeUnsafe<void>() };
+    const declaration = (id: string) => ({ kind: "call", id, payload: Schema.Void, success: Schema.Number }) as const;
+    // The first instance's calls wait on what only its stopping would end; the replacement's answer at once.
+    const patient = definePlugin({
+      id: "patient",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          const instance = ++instances;
+          const never = yield* Deferred.make<number>();
+          yield* owner.add(
+            Channels,
+            serveChannel(declaration("patient.effect"), (_, { left }) =>
+              instance === 1 ? Effect.raceFirst(Effect.andThen(Deferred.succeed(waiting.effect, undefined), Deferred.await(never)), left) : instance,
+            ),
+          );
+          yield* owner.add(
+            Channels,
+            serveChannel(declaration("patient.promise"), async (_, { signal }) => {
+              if (instance !== 1) return instance;
+              Deferred.doneUnsafe(waiting.promise, Effect.void);
+              return await new Promise<number>((_, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+            }),
+          );
+        }),
+      ),
+    });
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          const calls = yield* Effect.forEach(["patient.effect", "patient.promise"], (id) => Effect.forkChild(Effect.exit(client["Channel.Call"]({ id }))));
+          yield* Deferred.await(waiting.effect);
+          yield* Deferred.await(waiting.promise);
+          yield* host.core.restart("patient", { force: true });
+          const ended = yield* Effect.forEach(calls, (call) => Effect.map(Fiber.join(call), hostError));
+          expect(ended).toMatchObject([
+            { code: "Withdrawn", subject: "patient.effect" },
+            { code: "Withdrawn", subject: "patient.promise" },
+          ]);
+          expect(ended[0]?.message).toContain("call it again to reach its replacement");
+          expect(yield* client["Channel.Call"]({ id: "patient.effect" })).toBe(2);
+          expect(yield* client["Channel.Call"]({ id: "patient.promise" })).toBe(2);
+        }).pipe(Effect.timeout(Duration.seconds(5))),
+      {},
+      undefined,
+      [patient],
+      { dispose: Duration.seconds(30) },
+    );
+  }, 30_000);
+
   test("a call reaches what answers for its id across a reload: one still decoding finishes on its instance, one that found a replaced channel runs on the replacement", () => {
     let instances = 0;
     const decoding = Deferred.makeUnsafe<void>();

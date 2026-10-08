@@ -12,8 +12,8 @@ import type { ToolContribution } from "./tools.ts";
 
 export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
-  /** `Withdrawn`: the prompt was taken out of the queue before a turn placed it. */
-  readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Withdrawn";
+  /** `Retracted`: `withdraw` took the prompt out of the queue before a turn placed it. */
+  readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -196,7 +196,7 @@ export class Agent extends Context.Service<
     readonly running: Effect.Effect<readonly string[]>;
     /** Prompts waiting for a turn, oldest first. */
     readonly queue: (sessionId: string) => Effect.Effect<readonly QueuedPrompt[]>;
-    /** Takes a queued prompt out; its `prompt` call fails `Withdrawn`. False when it was not queued (placed already). */
+    /** Takes a queued prompt out; its `prompt` call fails `Retracted`. False when it was not queued (placed already). */
     readonly withdraw: (sessionId: string, requestId: string) => Effect.Effect<boolean>;
     /** The session as a client joining now should show it (see `AgentView`). */
     readonly view: (sessionId: string) => Effect.Effect<AgentView>;
@@ -237,13 +237,15 @@ export const AgentChannels = {
    * ends. A client that lost the call (its connection dropped, say) calls again
    * with the same `requestId` to wait again, never placing the prompt twice.
    * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`, or
-   * `Withdrawn` with the session as its subject when `agent.withdraw` took the
-   * prompt out of the queue. The channel's own `Withdrawn` (its subject
-   * `agent.prompt`) says instead that the agent stopped while the call
-   * waited, and the turn resumes when it starts again: call again with the
-   * same `requestId`. A client that clears its input once the prompt is taken
-   * reads that from `agent.activity`, opened first: `turn-started` for the
-   * session, or the `requestId` in a `queue-changed`; or its message on
+   * `Retracted` when `agent.withdraw` took the prompt out of the queue, each
+   * with the session as its subject. `Withdrawn` (its subject `agent.prompt`)
+   * says instead that the agent stopped or was replaced while the call
+   * waited, and the call ends at once: a prompt it took stays taken, its turn
+   * resuming in the replacement, so call again with the same `requestId` once
+   * the channel answers again, to wait for that turn or place the prompt if it
+   * never was. A client that clears its input once the prompt is taken reads
+   * that from `agent.activity`, opened first: `turn-started` for the session,
+   * or the `requestId` in a `queue-changed`; or its message on
    * `sessions.changes`.
    */
   prompt: defineChannel({
@@ -288,7 +290,7 @@ export const AgentChannels = {
     kind: "call",
     id: "agent.withdraw",
     title: "Withdraw a prompt",
-    description: "Takes a queued prompt out, failing its prompt call Withdrawn; false when it was no longer queued",
+    description: "Takes a queued prompt out, failing its prompt call Retracted; false when it was no longer queued",
     payload: Schema.Struct({ ...sessionField, requestId: Schema.String }),
     success: Schema.Boolean,
   }),
@@ -324,12 +326,17 @@ const FEED = { buffer: 1024 };
 
 /** `AgentChannels` served from `agent`: what a provider of `Agent` adds to `Channels`, each with `PluginContext.add`. */
 export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
-  serveChannel(AgentChannels.prompt, ({ sessionId, content, options, requestId, whenBusy }) =>
-    agent.prompt(sessionId, content, {
-      ...options,
-      ...(requestId === undefined ? {} : { requestId }),
-      ...(whenBusy === undefined ? {} : { whenBusy }),
-    }),
+  // The turn is the agent's, not the call's: when the agent leaves, the call stops waiting, and the turn resumes in
+  // the replacement, where calling again with the same `requestId` waits for it.
+  serveChannel(AgentChannels.prompt, ({ sessionId, content, options, requestId, whenBusy }, { left }) =>
+    Effect.raceFirst(
+      agent.prompt(sessionId, content, {
+        ...options,
+        ...(requestId === undefined ? {} : { requestId }),
+        ...(whenBusy === undefined ? {} : { whenBusy }),
+      }),
+      left,
+    ),
   ),
   serveChannel(AgentChannels.cancel, ({ sessionId }) => agent.cancel(sessionId)),
   serveChannel(AgentChannels.running, () => agent.running),

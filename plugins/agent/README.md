@@ -122,7 +122,7 @@ session as it goes; its queued prompts fail `Session` too, and its journal goes
 with it.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
-`Withdrawn`), and `QueueChanged` reports every change with a revision that only
+`Retracted`), and `QueueChanged` reports every change with a revision that only
 grows, across restarts too (`view` carries it as well), so a client keeps the
 newest queue it has heard of whichever arrives first. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
@@ -188,7 +188,10 @@ open, without a `turn-end`; a turn waiting to ask again stops at once. Calls
 already running get `stopGrace` seconds to finish and log their results; what
 still runs after that is interrupted, as a crash would cut it off. Either way
 the turn resumes when the agent starts again (see [Durability](#durability)),
-and the calls of its step that had not started run then.
+and the calls of its step that had not started run then. A client waiting on
+`agent.prompt` gets `Withdrawn` as soon as the agent starts closing, before its
+turns are suspended: it calls again with the same `requestId` once the new
+instance serves the channel.
 
 A host stopping shuts the core's hooks before it closes the agent (they fail
 closed, so no guard is skipped), and a turn can take no step without them: one

@@ -130,7 +130,7 @@ describe("queue", () => {
     );
   });
 
-  it("withdraws a queued prompt: its caller fails Withdrawn and no turn runs it", async () => {
+  it("withdraws a queued prompt: its caller fails Retracted and no turn runs it", async () => {
     const gate = Effect.runSync(Deferred.make<void>());
     await run({ scripts: [gated(gate, reply("a"))] }, () =>
       Effect.gen(function* () {
@@ -141,7 +141,7 @@ describe("queue", () => {
         const second = yield* Effect.forkChild(a.prompt(id, text("two"), { requestId: "w" }));
         yield* waitFor(a.queue(id), (queue) => queue.length === 1);
         expect(yield* a.withdraw(id, "w")).toBe(true);
-        expect((yield* Effect.flip(Fiber.join(second))).reason).toBe("Withdrawn");
+        expect((yield* Effect.flip(Fiber.join(second))).reason).toBe("Retracted");
         expect(yield* a.withdraw(id, "w")).toBe(false);
         yield* Deferred.succeed(gate, undefined);
         yield* Fiber.join(first);
