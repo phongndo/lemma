@@ -173,14 +173,15 @@ export class ChannelRpcs extends RpcGroup.make(
   /**
    * Calls a channel. `payload` is its payload schema's JSON form (absent is
    * `null`, what `Schema.Void` takes), and the result is its success schema's
-   * JSON form. A call
-   * in flight when its plugin stops or is replaced finishes on that instance
-   * before the instance's finalizers run. Fails, with the channel as
-   * `subject`: `NotFound` (no call by that id, including one whose plugin has
-   * gone), `InvalidPayload`, the handler's domain error's code (its `reason`
-   * or tag), `Failed` (any other failure, a defect, or a result its success
-   * schema cannot send), or `Withdrawn` (still running at its plugin's dispose
-   * deadline, and interrupted).
+   * JSON form. The call that answers for the id when the request arrives
+   * serves it; one in flight when its plugin stops or is replaced finishes on
+   * that instance before the instance's finalizers run. Fails with a
+   * `HostError` whose `subject` is the channel, unless the handler's domain
+   * error names its own (a session, a path): `NotFound` (no call answers for
+   * the id, as when its plugin has gone), `InvalidPayload`, the handler's
+   * domain error's code (its `reason` or tag), `Failed` (any other failure, a
+   * defect, or a result its success schema cannot send), or `Withdrawn` (still
+   * running at its plugin's dispose deadline, and interrupted).
    */
   Rpc.make("Channel.Call", { payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) }, success: Schema.Unknown, error: HostError }),
   /**
@@ -189,9 +190,9 @@ export class ChannelRpcs extends RpcGroup.make(
    * soon as its plugin stops or is replaced, or another plugin's channel takes
    * over its id, whether or not the client is reading, and is stopped before
    * that plugin's finalizers run: open it again to reach whatever answers for
-   * the id now. It ends with the connection and nothing resumes
-   * it, so a client reopens it when it reconnects and receives what the
-   * channel sends from then on.
+   * the id now. It ends with the connection and nothing resumes it, so a
+   * client reopens it when it reconnects and receives what the channel sends
+   * from then on.
    */
   Rpc.make("Channel.Open", {
     payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) },

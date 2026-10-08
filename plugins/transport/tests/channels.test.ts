@@ -4,6 +4,7 @@ import { Channels, FileSearchers, serveChannel } from "@lemma/contracts";
 import type { Channel, HostEvent } from "@lemma/contracts";
 import { definePlugin, PluginContext, Registries } from "@lemma/core";
 import { settled } from "../../../scripts/e2e.ts";
+import { callChannel } from "../src/channels.ts";
 import type { Client, Kind } from "./harness.ts";
 import { hostError, subscribe, waitFor, withHost } from "./harness.ts";
 
@@ -271,6 +272,7 @@ describe("channels", () => {
 
   test("serves host plugins' channels with their own schemas; a failing one is an error naming it, not a crash", () => {
     class ProbeError extends Data.TaggedError("ProbeError")<{ readonly reason: "Busy"; readonly message: string }> {}
+    class ProbeMissing extends Data.TaggedError("ProbeMissing")<{ readonly reason: "NotFound"; readonly path: string; readonly message: string }> {}
     // Adds channels without requiring anything, and with no change to the contracts or the transport.
     const probe = serving(
       "probe",
@@ -288,6 +290,9 @@ describe("channels", () => {
       serveChannel({ kind: "call", id: "probe.busy", payload: Schema.Void, success: Schema.Void }, () =>
         Effect.fail(new ProbeError({ reason: "Busy", message: "Busy right now" })),
       ),
+      serveChannel({ kind: "call", id: "probe.missing", payload: Schema.Void, success: Schema.Void }, () =>
+        Effect.fail(new ProbeMissing({ reason: "NotFound", path: "/nowhere", message: "No file /nowhere" })),
+      ),
       serveChannel({ kind: "call", id: "probe.dies", payload: Schema.Void, success: Schema.Void }, () => Effect.die(new Error("no state here"))),
       serveChannel({ kind: "call", id: "probe.throws", payload: Schema.Void, success: Schema.Void }, () => {
         throw new Error("thrown");
@@ -304,6 +309,7 @@ describe("channels", () => {
           expect(yield* client["Channel.List"]()).toEqual([
             { id: "probe.repeat", kind: "call", title: "Repeat", description: "The text, repeated", source: "probe" },
             { id: "probe.busy", kind: "call", source: "probe" },
+            { id: "probe.missing", kind: "call", source: "probe" },
             { id: "probe.dies", kind: "call", source: "probe" },
             { id: "probe.throws", kind: "call", source: "probe" },
             { id: "probe.count", kind: "stream", source: "probe" },
@@ -326,6 +332,8 @@ describe("channels", () => {
           expect(invalid).toMatchObject({ code: "InvalidPayload", subject: "probe.repeat" });
           expect(invalid.message).toContain("times");
           expect(hostError(yield* call("probe.busy"))).toMatchObject({ code: "Busy", subject: "probe.busy", message: "Busy right now" });
+          // An error that names what it concerns keeps that as its subject.
+          expect(hostError(yield* call("probe.missing"))).toMatchObject({ code: "NotFound", subject: "/nowhere", message: "No file /nowhere" });
           expect(hostError(yield* call("probe.dies"))).toMatchObject({ code: "Failed", subject: "probe.dies", message: "no state here" });
           expect(hostError(yield* call("probe.throws"))).toMatchObject({ code: "Failed", subject: "probe.throws", message: "thrown" });
           const elements: unknown[] = [];
@@ -635,6 +643,68 @@ describe("channels", () => {
       undefined,
       [resource],
       { dispose: Duration.millis(600) },
+    );
+  }, 30_000);
+
+  test("a call reaches what answers for its id across a reload: one still decoding finishes on its instance, one that found a replaced channel runs on the replacement", () => {
+    let instances = 0;
+    const decoding = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const echo = definePlugin({
+      id: "echo",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          const instance = ++instances;
+          // The first instance's payload decodes once the test lets it, so a call is still decoding across the reload.
+          const slow = Schema.String.pipe(
+            Schema.decodeTo(
+              Schema.String,
+              SchemaTransformation.transformEffect({
+                decode: (text: string) =>
+                  instance === 1 ? Effect.as(Effect.andThen(Deferred.succeed(decoding, undefined), Deferred.await(release)), text) : Effect.succeed(text),
+                encode: (text: string) => Effect.succeed(text),
+              }),
+            ),
+          );
+          yield* owner.add(
+            Channels,
+            serveChannel({ kind: "call", id: "echo.say", payload: slow, success: Schema.String }, (text) => `${instance}:${text}`),
+          );
+        }).pipe(Effect.orDie),
+      ),
+    });
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const registries = yield* host.core.run(Registries);
+          const first = yield* registries.items(Channels);
+          const client = yield* host.connect("websocket");
+          const call = yield* Effect.forkChild(Effect.exit(client["Channel.Call"]({ id: "echo.say", payload: "hi" })));
+          yield* Deferred.await(decoding);
+          const replacing = yield* Effect.forkChild(host.core.restart("echo", { force: true }));
+          // The replacement answers new calls while the old instance waits for the one decoding.
+          yield* Stream.runHead(registries.changes(Channels).pipe(Stream.filter((items) => items[0] !== first[0])));
+          expect(yield* client["Channel.Call"]({ id: "echo.say", payload: "again" })).toBe("2:again");
+          expect(replacing.pollUnsafe()).toBeUndefined();
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(call)).toEqual(Exit.succeed("1:hi"));
+          yield* Fiber.join(replacing);
+
+          // A request that found the channel just before a reload replaced it: a reader whose first look is from before the reload.
+          const stale = yield* registries.items(Channels);
+          yield* host.core.restart("echo", { force: true });
+          let looks = 0;
+          const reader: typeof registries = {
+            items: (registry) => (looks++ === 0 ? Effect.succeed(stale as never) : registries.items(registry)),
+            changes: registries.changes,
+            run: registries.run,
+          };
+          expect(yield* callChannel(reader, "echo.say", "late")).toBe("3:late");
+        }),
+      {},
+      undefined,
+      [echo],
     );
   }, 30_000);
 

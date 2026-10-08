@@ -51,25 +51,25 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
   JSON through the channel's own schemas' JSON codecs, inside the request, so a
   schema or handler that throws fails that request alone (`InvalidPayload`,
   `Failed`), and a value its codec cannot send fails `Failed` rather than
-  reaching the protocol's serializer. Each call and stream
-  runs as work with its channel's contribution (`Registries.run` in the core),
-  so the plugin's finalizers wait for it. When the plugin stops or is
-  replaced, a call in flight finishes on its own instance and is interrupted,
-  `Withdrawn`, only if it outlives the dispose deadline; a stream is stopped at
-  once and ends `Withdrawn`. A request arriving after its channel left is
-  `NotFound`. A middleware around each `Channel.Open` request
-  (`ChannelLifetime`) does the stopping, because the RPC server sends the next
-  chunk only once the client acknowledged the last (WebSocket) or the response
-  drained (streaming HTTP), and only a wrapper around the whole request can end
-  one blocked there: a client that stopped reading cannot keep a withdrawn
-  stream running. A stream also ends `Withdrawn` when another plugin's
-  channel takes over its id (a lower order), so a client that reopens reaches
-  the one answering now; a call in flight is left to finish. A stream is
-  pulled at its client's pace over either
-  protocol: one chunk ahead of the client over the WebSocket, as far as the
-  connection's buffers allow over HTTP. Effect's RPC client reads a WebSocket in
-  order, so a client that stops taking a stream's elements stalls its own
-  connection, never the host.
+  reaching the protocol's serializer. Each call and stream runs as work with
+  the channel answering for its id when it arrives (`Registries.run` in the
+  core), from decoding its payload to encoding what it sends, so the plugin's
+  finalizers wait for it; a request is `NotFound` only when nothing answers.
+  When the plugin stops or is replaced, a call in flight finishes on its own
+  instance and is interrupted, `Withdrawn`, only if it outlives the dispose
+  deadline; a stream is stopped at once and ends `Withdrawn`. A middleware
+  around each `Channel.Open` request (`ChannelLifetime`) does the stopping,
+  because the RPC server sends the next chunk only once the client
+  acknowledged the last (WebSocket) or the response drained (streaming HTTP),
+  and only a wrapper around the whole request can end one blocked there: a
+  client that stopped reading cannot keep a withdrawn stream running. A stream
+  also ends `Withdrawn` when another plugin's channel takes over its id (a
+  lower order), so a client that reopens reaches the one answering now; a call
+  in flight is left to finish. A stream is pulled at its client's pace over
+  either protocol: one chunk ahead of the client over the WebSocket, as far as
+  the connection's buffers allow over HTTP. Effect's RPC client reads a
+  WebSocket in order, so a client that stops taking a stream's elements stalls
+  its own connection, never the host.
 - **`Host.Events`.** The kernel events behind each [`HostEvent`](../../packages/contracts/src/rpc.ts) are observed once, at activation, and copied into every subscriber's drop-oldest buffer (1024 events): a slow client loses old events, never the publisher's time, and repairs from `Session.Events`. `channels-changed` comes from watching `Channels` itself, whenever a different contribution answers for any id, so a client hears that a channel is back even when no plugin event says so (a scheduled restart publishes none). Each kind has its own observer queue, so order holds within a kind but not across kinds (`turn-ended` can overtake the last `delta`). A subscription that asks for it with the `lemma-subscribed` header (`SUBSCRIBED_HEADER`) opens with `{ type: "subscribed" }`, sent once the subscriber has joined: a client that must see the effects of its own next call (a question a command asks) waits for it. Opt-in, so a client from before it never receives an event it cannot decode. A call's reply is no such sign, since the host handles the calls on one socket concurrently and the RPC client sends a stream request asynchronously.
 - **Interaction.** With at least one subscriber, an `InteractionHook` request is broadcast as an `interaction` event through a per-subscriber queue that never drops, and replayed to clients that subscribe while it is open. The first `Interaction.Answer` wins; `Interaction.Dismiss` fails it `Dismissed`. Once it settles, or the asking fiber is interrupted, every client receives `interaction-closed`. With no subscriber the request passes to the next handler (and the interaction plugin's terminal reports `Unavailable`). If all clients leave and none returns within `interactionGraceMs`, it fails `Unavailable`.
 - **Shutdown** closes the listener and destroys open sockets, including upgraded WebSockets, before any other cleanup: `server.close` and the platform's WebSocket server would each wait for connected clients, so a reload with a UI attached would miss its deadline and leave the port bound.
