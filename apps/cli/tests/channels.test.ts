@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
+import type { Scope } from "effect";
 import { RpcClientError } from "effect/rpc";
 import { AgentChannels, emptyUsage, FileChannels, HostError, SessionChannels } from "@lemma/contracts";
-import type { AgentActivity, EventData, InteractionRequest, SessionEvent, SessionLogUpdate, SessionsChange } from "@lemma/contracts";
+import type { AgentActivity, EventData, InteractionRequest, RuntimeEvent, SessionEvent, SessionLogUpdate, SessionsChange } from "@lemma/contracts";
 import { settled } from "../../../scripts/e2e.ts";
 import { call, follow, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
@@ -219,7 +220,7 @@ describe("lemma events", () => {
     const host: ReturnType<typeof fakeHost> = fakeHost({
       rpcs: {
         // The connect probe answers only once the client has passed on the question: it comes before the connection is confirmed.
-        "Host.Info": () => Effect.andThen(host.heard, Effect.succeed(info)),
+        "Host.Info": () => Effect.andThen(host.heard(1), Effect.succeed(info)),
         "Interaction.List": () => Effect.sync(() => [...waiting]),
         "Interaction.Answer": (given: unknown) =>
           Effect.sync(() => {
@@ -288,5 +289,139 @@ describe("lemma events", () => {
     const subscribed = (source: string) => lines.filter((line) => line.from === source && line.element.type === "subscribed").length;
     expect(["agent.activity", "sessions.changes", "llm.changes", "sessions.log"].map(subscribed)).toEqual([2, 2, 2, 2]);
     expect(said).toEqual(["lemma: lost the connection to the host; reconnecting…", "lemma: reconnected to the host"]);
+  });
+});
+
+describe("a command's --answer values", () => {
+  const options = { json: true, answers: [] } as unknown as Options;
+  const confirm = (id: string): InteractionRequest => ({ type: "confirm", id, title: `${id}?` });
+
+  /**
+   * A host asking the questions `open`, answered as the host's are: an answer
+   * closes its question, and one for a question no longer open fails
+   * `NotFound`. What `meanwhile` is given runs as the next subscription reads
+   * what is open, so what it does comes right after what that subscription
+   * starts with: a question that closes elsewhere, or another asked, while the
+   * command connects. The connect probe answers once the client has passed on
+   * `beforeProbe` of the host's events.
+   */
+  const asking = (open: readonly InteractionRequest[], beforeProbe = 0) => {
+    const waiting = new Map(open.map((request) => [request.id, request]));
+    const answered: (readonly [string, unknown])[] = [];
+    const events = fed<RuntimeEvent>();
+    const ask = (request: InteractionRequest) => {
+      waiting.set(request.id, request);
+      events.push({ type: "interaction", request });
+    };
+    const close = (id: string) => {
+      waiting.delete(id);
+      events.push({ type: "interaction-closed", id });
+    };
+    let next: (() => void) | undefined;
+    const connection: ReturnType<typeof fakeHost> = fakeHost({
+      events: events.stream,
+      rpcs: {
+        "Host.Info": () => Effect.andThen(connection.heard(beforeProbe), Effect.succeed(info)),
+        "Interaction.List": () =>
+          Effect.sync(() => {
+            const now = [...waiting.values()];
+            const then = next;
+            next = undefined;
+            then?.();
+            return now;
+          }),
+        "Interaction.Answer": ({ id, answer }: { id: string; answer: { value: unknown } }) =>
+          Effect.suspend(() => {
+            if (!waiting.has(id)) return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `No open interaction "${id}"` }));
+            answered.push([id, answer.value]);
+            close(id);
+            return Effect.void;
+          }),
+      },
+    });
+    return { connection, answered, ask, close, publish: (event: RuntimeEvent) => events.push(event), meanwhile: (run: () => void) => void (next = run) };
+  };
+
+  /** Runs `command` in the background: `until` waits for a condition, two seconds at most, and `stop` ends it. */
+  const started = (command: Effect.Effect<unknown, unknown, Scope.Scope>) => {
+    const running = Effect.runFork(Effect.scoped(command));
+    return {
+      until: (done: () => boolean) =>
+        settled(
+          async () => done() || undefined,
+          () => true,
+          2_000,
+        ),
+      stop: () => Effect.runPromise(Fiber.interrupt(running)),
+    };
+  };
+
+  /** Closes the question `old` before the answer to it comes, and asks `live`, as the next subscription starts with what is open. */
+  const closingOld = (host: ReturnType<typeof asking>) =>
+    host.meanwhile(() => {
+      host.close("old");
+      host.ask(confirm("live"));
+    });
+
+  const quiet: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
+
+  test("one that reached a question already closed goes to the next question, as the command connects", async () => {
+    const host = asking([confirm("old")], 3);
+    closingOld(host);
+    const command = started(eventsCommand(host.connection, quiet, { ...options, questions: "ignore", answers: ["yes"] }));
+    await command.until(() => host.answered.length > 0);
+    await command.stop();
+    expect(host.answered).toEqual([["live", true]]);
+  });
+
+  test("one that reached a question already closed goes to the next question, after a reconnect", async () => {
+    const host = asking([]);
+    const printed: string[] = [];
+    const said: string[] = [];
+    const io: Io = { ...quiet, out: (text) => void printed.push(text), err: (text) => void said.push(text) };
+    const command = started(eventsCommand(host.connection, io, { ...options, questions: "ignore", answers: ["yes"] }));
+    // Connected, and hearing the host: its notice prints.
+    host.publish({ type: "notice", notice: { level: "info", message: "hello" } });
+    await command.until(() => printed.length > 0);
+    host.connection.drop();
+    await command.until(() => said.length > 0);
+    // Asked while the command is away: the next subscription starts with it.
+    host.ask(confirm("old"));
+    closingOld(host);
+    host.connection.restore();
+    await command.until(() => host.answered.length > 0);
+    await command.stop();
+    expect(host.answered).toEqual([["live", true]]);
+  });
+
+  test("keep their order past a question that closed before its answer came", async () => {
+    const host = asking([confirm("first"), confirm("old")], 4);
+    closingOld(host);
+    const command = started(eventsCommand(host.connection, quiet, { ...options, questions: "ignore", answers: ["yes", "no"] }));
+    await command.until(() => host.answered.length > 1);
+    await command.stop();
+    expect(host.answered).toEqual([
+      ["first", true],
+      ["live", false],
+    ]);
+  });
+
+  test("run out, a question whose closing came with it does not stay at the terminal", async () => {
+    const host = asking([confirm("old")], 3);
+    closingOld(host);
+    const asked: { readonly question: string; readonly signal: AbortSignal | undefined }[] = [];
+    const io: Io = {
+      ...quiet,
+      ask: (question, _secret, signal) => {
+        asked.push({ question, signal });
+        return new Promise<string>(() => {});
+      },
+    };
+    const waiting = () => asked.filter(({ signal }) => signal?.aborted !== true).map(({ question }) => question);
+    const command = started(eventsCommand(host.connection, io, { ...options, questions: "ask" }));
+    await command.until(() => waiting().length > 0);
+    const open = waiting();
+    await command.stop();
+    expect(open).toEqual(["live? [y/n] "]);
   });
 });

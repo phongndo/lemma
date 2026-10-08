@@ -90,8 +90,8 @@ export interface FakeHost extends Connection {
   readonly refuseTooLarge: () => void;
   /** What each `Host.Events` subscription said it does: whether it answers questions. */
   readonly subscriptions: () => readonly boolean[];
-  /** Resolves once the client has passed on one of the host's events to its listeners (`ConnectOptions.onEvent`). */
-  readonly heard: Effect.Effect<void>;
+  /** Resolves once the client has passed on `count` of the host's events to its listeners (`ConnectOptions.onEvent`). */
+  readonly heard: (count: number) => Effect.Effect<void>;
 }
 
 /**
@@ -180,7 +180,9 @@ export const fakeHost = (host: {
     );
 
   let up = true;
-  const heard = Deferred.makeUnsafe<void>();
+  /** How many of the host's events the client has passed on, and what waits for a count of them. */
+  let told = 0;
+  const awaited: { readonly count: number; readonly reached: Deferred.Deferred<void> }[] = [];
   const wires = new Set<Wire>();
   const hangUp = (wire: Wire) => {
     wires.delete(wire);
@@ -229,16 +231,23 @@ export const fakeHost = (host: {
           backoff: () => host.backoff ?? 100,
           webSocket: Layer.succeed(Socket.WebSocketConstructor, dial),
           ...options,
-          // `heard` hears it, whether or not the command listens.
+          // Counted for `heard`, whether or not the command listens.
           onEvent: (event) => {
-            Deferred.doneUnsafe(heard, Effect.void);
+            told++;
+            for (const { count, reached } of awaited) if (told >= count) Deferred.doneUnsafe(reached, Effect.void);
             options.onEvent?.(event);
           },
         },
         rpc,
       ),
     subscriptions: () => [...subscriptions],
-    heard: Deferred.await(heard),
+    heard: (count) =>
+      Effect.suspend(() => {
+        if (told >= count) return Effect.void;
+        const reached = Deferred.makeUnsafe<void>();
+        awaited.push({ count, reached });
+        return Deferred.await(reached);
+      }),
     drop: () => {
       up = false;
       for (const wire of wires) {

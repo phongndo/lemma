@@ -388,7 +388,7 @@ describe("a run's questions", () => {
       const host: ReturnType<typeof scripted> = scripted({
         rpcs: {
           // The connect probe answers only once the client has passed on the question: it comes before the connection is confirmed.
-          "Host.Info": () => Effect.andThen(host.connection.heard, Effect.succeed(info)),
+          "Host.Info": () => Effect.andThen(host.connection.heard(1), Effect.succeed(info)),
           "Interaction.List": () => Effect.sync(() => [...waiting]),
           "Interaction.Answer": ({ answer: given }: { answer: unknown }) =>
             Effect.sync(() => {
