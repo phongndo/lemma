@@ -12,18 +12,19 @@ import {
   HostPlugins,
   Notify,
   PluginTabs,
+  PluginsFacts,
   SectionIds,
-  Threads,
   Settings,
   SettingsGroups,
   SettingsSections,
   Slots,
+  TogglePart,
   UiPlugins,
 } from "../ui/contracts.ts";
-import type { ClientService, PluginTab, PluginsService, ThreadsService, UiPluginsService } from "../ui/contracts.ts";
+import type { ClientService, PluginTab, PluginsFact, PluginsService, ToggleProps, UiPluginsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { ConfigForm, Contained, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "../ui/parts.tsx";
+import { ConfigForm, Contained, First, PuzzleIcon, RefreshIcon, SearchField, Spinner, XIcon } from "../ui/parts.tsx";
 import styles from "./plugins-page.css?inline";
 
 const SECTION = SectionIds.plugins;
@@ -63,7 +64,6 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-dig
 /** Everything the inspector's parts share. */
 interface Inspector {
   readonly client: ClientService;
-  readonly threads: ThreadsService;
   readonly ui: UiPluginsService;
   readonly slots: SlotsService;
   readonly services: Readonly<Record<PluginKind, PluginsService>>;
@@ -152,6 +152,33 @@ function Confirm(props: { inspector: Inspector; plugin: PluginStatus; pending: C
   );
 }
 
+/**
+ * A plugin's switch: the `toggle` part, or a plain checkbox while nothing
+ * provides it (`kit` off), so the switch that turns it back on is still here.
+ */
+function PluginToggle(props: ToggleProps) {
+  return (
+    <First
+      slot={TogglePart}
+      props={props}
+      fallback={
+        <input
+          type="checkbox"
+          aria-label={props.label}
+          checked={props.checked}
+          disabled={props.disabled}
+          onChange={(event) => {
+            const checked = event.currentTarget.checked;
+            // It shows the plugin's state, which the change may not alter (a confirmation, a failure), not the click.
+            event.currentTarget.checked = props.checked;
+            props.onChange(checked);
+          }}
+        />
+      }
+    />
+  );
+}
+
 function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
   const { inspector } = props;
   const plugin = () => props.entry.plugin;
@@ -193,7 +220,7 @@ function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
             </button>
           </Show>
           <span data-tip={plugin().locked ?? (plugin().enabled ? `Turn ${plugin().id} off` : `Turn ${plugin().id} on`)}>
-            <Toggle
+            <PluginToggle
               label={`${plugin().id} on`}
               checked={plugin().enabled}
               disabled={plugin().locked !== undefined || inspector.busy() !== undefined}
@@ -447,8 +474,21 @@ function Faults(props: { plugin: PluginStatus }) {
   );
 }
 
-function HostFacts(props: { client: ClientService; threads: ThreadsService; ui: UiPluginsService }) {
-  const running = () => props.threads.running();
+/** A plugin's line in the summary, drawn contained: one that throws leaves, a fault of the plugin that added it. */
+function Fact(props: { fact: PluginsFact }) {
+  return (
+    <Show when={props.fact.value()}>
+      {(value) => (
+        <>
+          <dt>{props.fact.label}</dt>
+          <dd data-tip={props.fact.tip}>{value()}</dd>
+        </>
+      )}
+    </Show>
+  );
+}
+
+function HostFacts(props: { client: ClientService; slots: SlotsService; ui: UiPluginsService }) {
   const files = () => props.ui.files();
   return (
     <Show when={props.client.info()}>
@@ -478,8 +518,7 @@ function HostFacts(props: { client: ClientService; threads: ThreadsService; ui: 
           <dd class="mono" data-tip={info().composition.id}>
             {info().composition.id.slice(0, 16)}
           </dd>
-          <dt>Running</dt>
-          <dd>{running().length === 0 ? "no turns" : `${running().length} turn${running().length === 1 ? "" : "s"}`}</dd>
+          <For each={props.slots.list(PluginsFacts)}>{(fact) => <Contained slot={PluginsFacts} item={fact} component={Fact} props={{ fact }} />}</For>
         </dl>
       )}
     </Show>
@@ -504,7 +543,7 @@ function Summary(props: { inspector: Inspector; entries: readonly KindedPlugin[]
           ],
         ]}
       />
-      <HostFacts client={props.inspector.client} threads={props.inspector.threads} ui={props.inspector.ui} />
+      <HostFacts client={props.inspector.client} slots={props.inspector.slots} ui={props.inspector.ui} />
     </div>
   );
 }
@@ -643,8 +682,8 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
 export default defineUiPlugin({
   id: "plugins-page",
   styles,
-  requires: { client: Client, threads: Threads, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: UiPlugins },
-  setup: ({ client, threads, notify, settings, slots, host, ui }) => {
+  requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: UiPlugins },
+  setup: ({ client, notify, settings, slots, host, ui }) => {
     // In the address (`?plugin=agent&kind=host&tab=…&filter=…`): a link, a reload, and back and forward return to them, and
     // settings reopen the section as it was left.
     const params = () => (settings.section() === SECTION ? settings.params() : {});
@@ -675,7 +714,6 @@ export default defineUiPlugin({
 
     const inspector: Inspector = {
       client,
-      threads,
       ui,
       slots,
       services,

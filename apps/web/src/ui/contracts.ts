@@ -779,6 +779,20 @@ export interface PluginTab {
 }
 export const PluginTabs = defineSlot<PluginTab>("plugins.tabs");
 
+/**
+ * A line of the Plugins page's summary, beside the host's facts: something
+ * worth knowing before a switch or a reload restarts plugins, such as the
+ * turns running. It leaves with the plugin that adds it.
+ */
+export interface PluginsFact {
+  readonly label: string;
+  /** What it says now; undefined leaves the line out. Reactive. */
+  readonly value: () => string | undefined;
+  /** Its tooltip. */
+  readonly tip?: string;
+}
+export const PluginsFacts = defineSlot<PluginsFact>("plugins.facts");
+
 // ------------------------------------------------------------------ actions
 
 /**

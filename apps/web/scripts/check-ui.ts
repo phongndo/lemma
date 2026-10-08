@@ -17,7 +17,10 @@ import { createServer } from "vite";
  * 1. The app boots without errors.
  * 2. Every part declared in `ui/contracts.ts` has a provider.
  * 3. Every plugin that is not pinned turns off and back on, as the Plugins
- *    page does it, and the page stays up and error-free either way.
+ *    page does it, and the page stays up and error-free either way. The
+ *    Plugins page needs none of them: a line its summary shows leaves with the
+ *    plugin that adds it, and with `kit` off its switches are plain ones that
+ *    turn `kit` back on.
  * 4. A part replaced by a lower-order item changes what renders, and the
  *    default returns when the replacement goes, or when the replacement throws
  *    (named for its plugin, the rest of the app updating on).
@@ -208,7 +211,35 @@ const toggling = async () => {
     [],
     "turning plugins off warned about the plugins that need them",
   );
-  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")})`;
+
+  // The Plugins page needs no plugin that can be turned off: a line of its summary leaves with the plugin that adds it
+  // (the turns running, with threads), and its switches work without the toggle part (kit off), from the page itself.
+  await page.evaluate(async () => {
+    const { Settings } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Settings)).open("plugins");
+  });
+  const running = page.locator(".host-facts dt:text-is('Running')");
+  await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the Plugins page does not show the turns running"));
+  assert.notEqual(await switchTo(page, "threads", false), "active", "threads did not turn off");
+  await running.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("the turns running outlived threads"));
+  await switchTo(page, "threads", true);
+  await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the turns running did not return with threads"));
+  const kit = page.locator(".inspector-row[data-key='web:kit']");
+  const kitState = () => page.evaluate(() => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === "kit").state);
+  await kit.locator("[role=switch]").click();
+  await kit
+    .locator("input[type=checkbox]")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("with kit off, the Plugins page has no switch to turn it back on"));
+  assert.notEqual(await kitState(), "active", "kit did not turn off from its switch");
+  await kit.locator("input[type=checkbox]").click();
+  await kit
+    .locator("[role=switch]")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("the plain switch did not turn kit back on"));
+  assert.equal(await kitState(), "active", "kit is not back on");
+  expectNoErrors("turning threads and kit off and on with the Plugins page open");
+  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page keeps its switches without kit`;
 };
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.

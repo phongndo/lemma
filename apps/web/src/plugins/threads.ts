@@ -7,7 +7,7 @@ import { appendOutput, applyDelta, beginJoin, dropOutput, emptyLive, endTurn, jo
 import type { LiveState } from "../model/live.ts";
 import { newerQueue, resolveLeaf, trackTurn, upsertSession } from "../model/threads.ts";
 import type { KnownQueue } from "../model/threads.ts";
-import { Client, NewThreadRoute, Notify, Router, ThreadRoute, Threads } from "../ui/contracts.ts";
+import { Client, NewThreadRoute, Notify, PluginsFacts, Router, Slots, ThreadRoute, Threads } from "../ui/contracts.ts";
 import type { LogState } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 
@@ -32,9 +32,9 @@ const hashThread = (): string | undefined => {
  */
 export default defineUiPlugin({
   id: "threads",
-  requires: { client: Client, notify: Notify, router: Router },
+  requires: { client: Client, notify: Notify, router: Router, slots: Slots },
   provides: { threads: Threads },
-  setup: ({ client, notify, router }, plugin) => {
+  setup: ({ client, notify, router, slots }, plugin) => {
     const host = client.host;
     const [list, setList] = createSignal<readonly SessionInfo[]>([]);
     const [loaded, setLoaded] = createSignal(false);
@@ -299,6 +299,16 @@ export default defineUiPlugin({
         }
       }),
     );
+
+    // The turns running, on the Plugins page: its reload restarts host plugins mid-turn.
+    slots.add(PluginsFacts, {
+      id: "threads.running",
+      label: "Running",
+      value: () => {
+        const count = running().length;
+        return count === 0 ? "no turns" : `${count} turn${count === 1 ? "" : "s"}`;
+      },
+    });
 
     const send = async (
       content: PromptContent,
