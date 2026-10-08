@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Duration, Effect, Queue } from "effect";
+import { Deferred, Duration, Effect, Queue } from "effect";
 import type { Cause, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
 import type { HostError } from "@lemma/contracts";
@@ -12,18 +12,19 @@ import type { Core, Plugin } from "@lemma/core";
 import commands from "../../commands/src/index.ts";
 import transport from "../../transport/src/index.ts";
 import { fakeAgent, fakeHostControl, fakeInteraction, fakeLlm, fakeSessions, fakeWorkspace } from "../../transport/tests/fakes.ts";
-import { connect } from "../../transport/tests/harness.ts";
+import type { ControlHolder } from "../../transport/tests/fakes.ts";
+import { connect, makeHolder } from "../../transport/tests/harness.ts";
 import type { Client } from "../../transport/tests/harness.ts";
 
 export type { Client } from "../../transport/tests/harness.ts";
 export { hostError } from "../../transport/tests/harness.ts";
 
 /** What the transport requires besides what a test runs, by the id of the plugin that would provide it: its own tests' stand-ins. */
-const standIns = (): Record<string, readonly Plugin[]> => ({
+const standIns = (holder: ControlHolder): Record<string, readonly Plugin[]> => ({
   sessions: [fakeSessions],
   agent: [fakeAgent],
   llm: [fakeLlm, fakeInteraction],
-  host: [fakeHostControl({ restarted: [], off: {}, ui: { plugins: {}, enabledIn: {}, configIn: {}, files: [] } })],
+  host: [fakeHostControl(holder)],
   workspace: [fakeWorkspace],
   commands: [commands],
 });
@@ -47,10 +48,13 @@ export const served = <A, E>(
         );
         const own = plugins(home);
         const ids = new Set(own.map((plugin) => plugin.id));
-        const missing = Object.entries(standIns()).flatMap(([id, standIn]) => (ids.has(id) ? [] : standIn));
+        // The transport holds requests until the composition is up, which the host control says once it has the core.
+        const holder = yield* makeHolder;
+        const missing = Object.entries(standIns(holder)).flatMap(([id, standIn]) => (ids.has(id) ? [] : standIn));
         const core = yield* makeCore([transport, ...(ids.has("paths") ? [] : [pathsPlugin(home)]), ...own, ...missing], {
           configs: { transport: { port: 0 } },
         });
+        yield* Deferred.succeed(holder.core, core);
         const found = yield* readDiscovery(home);
         if (found === undefined) return yield* Effect.die(new Error("the transport wrote no discovery file"));
         return yield* body(yield* connect(found.url, found.token, "websocket"), core);
