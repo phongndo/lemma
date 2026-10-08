@@ -4,6 +4,7 @@ import { HostError, configValues, describeConfig, emptyUsage, providerOf, secret
 import { fuzzy } from "./model/palette.ts";
 import type {
   AssistantMessage,
+  ChannelDeclaration,
   EventData,
   HostEvent,
   InteractionAnswer,
@@ -215,6 +216,12 @@ const MOCK_COMMANDS = [
   },
   { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands-host" },
 ];
+
+/** The bundled plugins serve no channels, so neither does the mock. */
+const noChannel = (channel: string | ChannelDeclaration) => {
+  const id = typeof channel === "string" ? channel : channel.id;
+  return new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
+};
 
 export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
@@ -1167,15 +1174,14 @@ export const createMockHost = (): Host => {
         }
       },
     },
-    // The bundled plugins serve no channels, so neither does the mock.
     channel: {
       list: async () => [],
-      call: async (channelId) => {
-        throw new HostError({ code: "NotFound", subject: channelId, message: `No channel "${channelId}"` });
+      call: async (channel: string | ChannelDeclaration) => {
+        throw noChannel(channel);
       },
-      open: (channelId, _payload, _onElement, onEnd) => {
+      open: (channel: string | ChannelDeclaration, _payload: unknown, _onElement: unknown, onEnd?: (error?: HostError | Error) => void) => {
         let live = true;
-        setTimeout(() => live && onEnd?.(new HostError({ code: "NotFound", subject: channelId, message: `No channel "${channelId}"` })), 0);
+        setTimeout(() => live && onEnd?.(noChannel(channel)), 0);
         return () => {
           live = false;
         };

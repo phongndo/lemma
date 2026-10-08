@@ -6,6 +6,8 @@ serving its own UI: [`ticker.ts`](ticker.ts) adds two
 [channels](../../packages/contracts/src/channels.ts), and
 [`ticker-ui.js`](ticker-ui.js) reads them through the `Client` capability.
 Neither needs a change to Lemma's contracts, its transport, or the web app.
+`ticker.ts` declares its channels (`prices`, `quote`) apart from serving them,
+so a client with a build step imports the declarations and calls them typed.
 
 | Channel         | Kind   | Payload             | Result                                            |
 | --------------- | ------ | ------------------- | ------------------------------------------------- |

@@ -83,6 +83,19 @@ export const serveChannel = <const Kind extends ChannelKind, Payload, Success>(
   handle: ChannelHandler<Kind, Payload, Success>,
 ): Extract<Channel, { readonly kind: Kind }> => ({ ...declaration, handle }) as unknown as Extract<Channel, { readonly kind: Kind }>;
 
+const codecs = new WeakMap<Schema.Top, Schema.Codec<unknown, unknown>>();
+
+/**
+ * A channel schema's form on the wire, its JSON codec (`Schema.toCodecJson`),
+ * made once per schema: the transport decodes payloads and encodes results
+ * with it, and a typed client does the reverse, so both agree on what crosses.
+ */
+export const wireCodec = (schema: Schema.Top): Schema.Codec<unknown, unknown> => {
+  let codec = codecs.get(schema);
+  if (codec === undefined) codecs.set(schema, (codec = Schema.toCodecJson(schema) as unknown as Schema.Codec<unknown, unknown>));
+  return codec;
+};
+
 /** A call's result, however its handler gives it (see `ChannelCall.handle`). */
 export const resultOf = (channel: ChannelCall, payload: unknown): Effect.Effect<unknown, unknown> => awaitable(() => channel.handle(payload));
 

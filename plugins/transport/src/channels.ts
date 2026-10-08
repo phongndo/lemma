@@ -1,7 +1,7 @@
 import { Cause, Context, Effect, Exit, Option, Schema, Stream } from "effect";
 import { RpcMiddleware } from "effect/rpc";
 import type { Contribution, Registries, RegistryError } from "@lemma/core";
-import { ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf } from "@lemma/contracts";
+import { ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf, wireCodec } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
 
@@ -37,14 +37,6 @@ const find = <Kind extends Channel["kind"]>(registries: Reader, id: string, kind
     return Effect.succeed(found as Contribution<Extract<Channel, { readonly kind: Kind }>>);
   });
 
-/** A channel's payloads and results cross as JSON, through each schema's JSON codec (see `ChannelDeclaration`). */
-const codecs = new WeakMap<Schema.Top, Schema.Codec<unknown, unknown>>();
-const json = (schema: Schema.Top) => {
-  let codec = codecs.get(schema);
-  if (codec === undefined) codecs.set(schema, (codec = Schema.toCodecJson(schema) as unknown as Schema.Codec<unknown, unknown>));
-  return codec;
-};
-
 const reason = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.squash(cause);
   return error instanceof Error ? error.message : String(error);
@@ -63,13 +55,13 @@ const contained = <A, E>(step: () => Effect.Effect<A, E>, error: (cause: Cause.C
 /** An absent payload is JSON's `null`, what `Schema.Void` takes. */
 const decode = (channel: Channel, payload: unknown) =>
   contained(
-    () => Schema.decodeUnknownEffect(json(channel.payload))(payload === undefined ? null : payload),
+    () => Schema.decodeUnknownEffect(wireCodec(channel.payload))(payload === undefined ? null : payload),
     (cause) => new HostError({ code: "InvalidPayload", subject: channel.id, message: `Invalid payload for "${channel.id}": ${reason(cause)}` }),
   );
 
 const encode = (channel: Channel, value: unknown) =>
   contained(
-    () => Schema.encodeUnknownEffect(json(channel.success))(value),
+    () => Schema.encodeUnknownEffect(wireCodec(channel.success))(value),
     (cause) =>
       new HostError({ code: "Failed", subject: channel.id, message: `"${channel.id}" produced a value its success schema cannot send: ${reason(cause)}` }),
   );

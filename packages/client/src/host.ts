@@ -1,10 +1,11 @@
-import { Cause, Deferred, Duration, Effect, Exit, Fiber, Scope, Stream } from "effect";
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, Stream } from "effect";
 import type { Layer } from "effect";
 import type { Socket } from "effect/socket";
-import { HostError, SUBSCRIBED_HEADER } from "@lemma/contracts";
+import { HostError, SUBSCRIBED_HEADER, wireCodec } from "@lemma/contracts";
 import type {
   AgentView,
   AuthType,
+  ChannelDeclaration,
   ChannelInfo,
   CustomProviderSpec,
   CommandInfo,
@@ -130,24 +131,41 @@ export interface Host {
     /** What host plugins serve (see `Channels`): the channel that answers for each id. */
     readonly list: () => Promise<readonly ChannelInfo[]>;
     /**
-     * One call, by id with its payload as JSON; resolves with its result as
-     * JSON (`null` for none). Rejects with a `HostError` (`NotFound`,
-     * `InvalidPayload`, the channel's own code, `Failed` for its defects, or
-     * `Withdrawn`; see `Channel.Call`) or, when the connection failed, an
-     * `RpcClientError`.
+     * One call. Given its declaration, typed: the payload is encoded and the
+     * result decoded with its schemas' JSON codecs (`wireCodec`), and a result
+     * the declaration does not decode rejects `Mismatch` (the host serves
+     * another version of the channel). Given an id, with plain JSON: resolves
+     * with the result as JSON (`null` for none). Rejects with a `HostError`
+     * (`NotFound`, `InvalidPayload`, the channel's own code, `Failed` for its
+     * defects, or `Withdrawn`; see `Channel.Call`) or, when the connection
+     * failed, an `RpcClientError`.
      */
-    readonly call: (id: string, payload?: unknown) => Promise<unknown>;
+    readonly call: {
+      <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload): Promise<Success>;
+      (id: string, payload?: unknown): Promise<unknown>;
+    };
     /**
-     * Opens a stream: `onElement` receives each element as JSON. `onEnd` is
-     * called once if it ends by itself: with nothing when it finished; with a
-     * `HostError` when the host ended it (`Withdrawn`: its plugin stopped or
-     * was replaced, so open it again; `Failed`, including the handler's
-     * defects; `NotFound`; `InvalidPayload`; the channel's own code); or with
+     * Opens a stream, typed by its declaration or by id with JSON, as `call`:
+     * `onElement` receives each element. `onEnd` is called once if it ends by
+     * itself: with nothing when it finished; with a `HostError` when the host
+     * ended it (`Withdrawn`: its plugin stopped or was replaced, or another
+     * plugin took over its id, so open it again; `Failed`, including the
+     * handler's defects; `NotFound`; `InvalidPayload`; the channel's own code)
+     * or an element did not decode (`Mismatch`, which also closes it); or with
      * an `RpcClientError` (an `Error`, `_tag` "RpcClientError") when the
-     * connection dropped. Nothing resumes it: open it again on reconnect.
-     * Returns `close`, after which neither is called.
+     * connection dropped. Nothing resumes it: open it again on reconnect, and
+     * on a `channels-changed` event listing it. Returns `close`, after which
+     * neither is called.
      */
-    readonly open: (id: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void) => () => void;
+    readonly open: {
+      <Payload, Success>(
+        channel: ChannelDeclaration<"stream", Payload, Success>,
+        payload: Payload,
+        onElement: (element: Success) => void,
+        onEnd?: (error?: HostError | Error) => void,
+      ): () => void;
+      (id: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void): () => void;
+    };
   };
   readonly host: {
     readonly info: () => Promise<HostInfo>;
@@ -207,6 +225,50 @@ const safely = <A>(listener: (value: A) => void, value: A, what: string) => {
   } catch (error) {
     console.error(what, error);
   }
+};
+
+/** A channel by declaration or by id: how its request is made and its answers read (see `Host.channel`). */
+interface ChannelAccess {
+  readonly id: string;
+  readonly request: (payload: unknown) => Effect.Effect<{ readonly id: string; readonly payload?: unknown }, HostError>;
+  readonly read: (value: unknown) => Effect.Effect<unknown, HostError>;
+}
+
+const channelOf = (target: string | ChannelDeclaration): ChannelAccess => {
+  if (typeof target === "string") {
+    return {
+      id: target,
+      request: (payload: unknown) => Effect.succeed(payload === undefined ? { id: target } : { id: target, payload }),
+      read: (value: unknown): Effect.Effect<unknown, HostError> => Effect.succeed(value),
+    };
+  }
+  const { id } = target;
+  const reason = (cause: Cause.Cause<unknown>) => {
+    const error = Cause.squash(cause);
+    return error instanceof Error ? error.message : String(error);
+  };
+  return {
+    id,
+    request: (payload: unknown) =>
+      Effect.suspend(() => Schema.encodeUnknownEffect(wireCodec(target.payload))(payload)).pipe(
+        Effect.map((encoded) => ({ id, payload: encoded })),
+        Effect.catchCause((cause) =>
+          Effect.fail(new HostError({ code: "InvalidPayload", subject: id, message: `Invalid payload for "${id}": ${reason(cause)}` })),
+        ),
+      ),
+    read: (value: unknown) =>
+      Effect.suspend(() => Schema.decodeUnknownEffect(wireCodec(target.success))(value)).pipe(
+        Effect.catchCause((cause) =>
+          Effect.fail(
+            new HostError({
+              code: "Mismatch",
+              subject: id,
+              message: `The host's "${id}" sent what this client's declaration of it does not read (are they from different versions?): ${reason(cause)}`,
+            }),
+          ),
+        ),
+      ),
+  };
 };
 
 export const describeError = (error: unknown): string => {
@@ -360,11 +422,17 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
     },
     channel: {
       list: () => runPromise(rpc["Channel.List"]()),
-      call: (id, payload) => runPromise(rpc["Channel.Call"](payload === undefined ? { id } : { id, payload })),
-      open: (id, payload, onElement, onEnd) => {
+      call: (target: string | ChannelDeclaration, payload?: unknown) => {
+        const channel = channelOf(target);
+        return runPromise(Effect.flatMap(Effect.flatMap(channel.request(payload), rpc["Channel.Call"]), channel.read));
+      },
+      open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: (error?: HostError | Error) => void) => {
+        const channel = channelOf(target);
+        const { id } = channel;
         let live = true;
         const fiber = Effect.runFork(
-          rpc["Channel.Open"](payload === undefined ? { id } : { id, payload }).pipe(
+          Stream.unwrap(Effect.map(channel.request(payload), rpc["Channel.Open"])).pipe(
+            Stream.mapEffect(channel.read),
             Stream.runForEach((element) => Effect.sync(() => live && safely(onElement, element, `Channel "${id}" listener failed`))),
             Effect.exit,
             Effect.map((exit) => {

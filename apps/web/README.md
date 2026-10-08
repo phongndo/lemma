@@ -211,7 +211,9 @@ A host plugin serves its own UI through
 `Client` and calls `client.host.channel.call(id, payload)`, or follows a
 stream with `client.host.channel.open(id, payload, onElement, onEnd)`, opening
 it again on `client.onConnect`, when it ends `Withdrawn`, and on a
-`channels-changed` host event that lists it while it is closed.
+`channels-changed` host event that lists it while it is closed. A plugin with a
+build step passes the channel's declaration instead of its id and is typed by
+it: the payload and the results go through its schemas.
 [`examples/ticker`](../../examples/ticker/README.md) is a host plugin file and a
 UI file that shows its prices at `/ticker`.
 
