@@ -1,6 +1,6 @@
 # @lemma/plugin-file-search-fff
 
-Searches files (plugin id `file-search`) with [fff](https://github.com/dmtrKovalenko/fff), a fuzzy file finder in Rust, through `@ff-labs/fff-node`. It contributes the bundled entry of `FileSearchers` (`@lemma/contracts`) at order 100 and requires nothing. Clients search through the transport's `Files.Search`, and host plugins through `searchFiles`, both of which ask `FileSearchers`, so this plugin can be turned off (searches then fail `Unavailable`, and nothing else stops) or replaced by a plugin contributing below order 100.
+Searches files (plugin id `file-search`) with [fff](https://github.com/dmtrKovalenko/fff), a fuzzy file finder in Rust, through `@ff-labs/fff-node`. It contributes the bundled entry of `FileSearchers` (`@lemma/contracts`) at order 100 and requires nothing. Clients search through `files.search`, a channel the workspace plugin serves, and host plugins through `searchFiles`, both of which ask `FileSearchers` at each search, so this plugin can be turned off (searches then fail `Unavailable`, and nothing else stops) or replaced by a plugin contributing below order 100.
 
 ```jsonc
 { "plugins": { "file-search": { "config": { "idleMinutes": 15 } } } }

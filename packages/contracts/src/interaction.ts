@@ -5,7 +5,7 @@ import { Hook } from "@lemma/core";
 /**
  * Who is asking, so a client answers only the questions it caused: `session:<id>`
  * inside a turn, `login:<provider>` during a login, or the `origin` a client
- * passed with `Command.Run`. `Interaction` copies it onto each request.
+ * passed to `commands.run`. `Interaction` copies it onto each request.
  */
 export const InteractionOrigin: Context.Reference<string | undefined> = Context.Reference<string | undefined>("lemma/InteractionOrigin", {
   defaultValue: () => undefined,

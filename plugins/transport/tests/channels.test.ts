@@ -1,12 +1,18 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import { Channels, FileSearchers, serveChannel } from "@lemma/contracts";
-import type { Channel, HostEvent } from "@lemma/contracts";
+import type { Channel, ChannelInfo, HostEvent } from "@lemma/contracts";
 import { definePlugin, PluginContext, Registries } from "@lemma/core";
 import { settled } from "../../../scripts/e2e.ts";
 import { callChannel } from "../src/channels.ts";
 import type { Client, Kind } from "./harness.ts";
 import { hostError, subscribe, waitFor, withHost } from "./harness.ts";
+
+/** The channels a test's own plugins serve: the harness's `commands` plugin serves its own beside them. */
+const theirs = (channels: readonly ChannelInfo[]) => channels.filter((channel) => channel.source !== "commands");
+
+/** The channels a `channels-changed` event lists, of the test's own plugins. */
+const changed = (event: HostEvent | undefined) => (event?.type === "channels-changed" ? theirs(event.channels) : undefined);
 
 /** A plugin that adds `channels` when it starts. */
 const serving = (id: string, ...channels: readonly Channel[]) =>
@@ -167,7 +173,7 @@ describe("channels", () => {
         Effect.gen(function* () {
           expect(refused).toEqual(['Invalid item for lemma/channels: "good.thing": its `kind` must be "call" or "stream", not "subscription"']);
           const client = yield* host.connect("websocket");
-          expect(yield* client["Channel.List"]()).toEqual([{ id: "good.thing", kind: "call", source: "good" }]);
+          expect(theirs(yield* client["Channel.List"]())).toEqual([{ id: "good.thing", kind: "call", source: "good" }]);
           expect(yield* client["Channel.Call"]({ id: "good.thing" })).toBe("good");
         }),
       {},
@@ -254,13 +260,10 @@ describe("channels", () => {
           const restarting = yield* Effect.forkChild(host.core.restart("lockholder", { force: true }));
           expect(hostError(yield* Fiber.await(before.fiber))).toMatchObject({ code: "Withdrawn" });
           const listed = (event: HostEvent) => event.type === "channels-changed" && event.channels.some((channel) => channel.id === "lock.state");
-          expect((yield* waitFor(events, (event) => event.type === "channels-changed")).at(-1)).toEqual({ type: "channels-changed", channels: [] });
+          expect(changed((yield* waitFor(events, (event) => event.type === "channels-changed")).at(-1))).toEqual([]);
           yield* Deferred.succeed(proceed, undefined);
           // Back, served by the new instance.
-          expect((yield* waitFor(events, listed)).at(-1)).toEqual({
-            type: "channels-changed",
-            channels: [{ id: "lock.state", kind: "stream", source: "lockholder" }],
-          });
+          expect(changed((yield* waitFor(events, listed)).at(-1))).toEqual([{ id: "lock.state", kind: "stream", source: "lockholder" }]);
           expect((yield* open(client, "lock.state")).first).toBe(2);
           yield* Fiber.join(restarting);
         }),
@@ -306,7 +309,7 @@ describe("channels", () => {
       (host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          expect(yield* client["Channel.List"]()).toEqual([
+          expect(theirs(yield* client["Channel.List"]())).toEqual([
             { id: "probe.repeat", kind: "call", title: "Repeat", description: "The text, repeated", source: "probe" },
             { id: "probe.busy", kind: "call", source: "probe" },
             { id: "probe.missing", kind: "call", source: "probe" },
@@ -678,13 +681,14 @@ describe("channels", () => {
       (host) =>
         Effect.gen(function* () {
           const registries = yield* host.core.run(Registries);
-          const first = yield* registries.items(Channels);
+          const echoing = (items: readonly { readonly item: Channel }[]) => items.find(({ item }) => item.id === "echo.say");
+          const first = echoing(yield* registries.items(Channels));
           const client = yield* host.connect("websocket");
           const call = yield* Effect.forkChild(Effect.exit(client["Channel.Call"]({ id: "echo.say", payload: "hi" })));
           yield* Deferred.await(decoding);
           const replacing = yield* Effect.forkChild(host.core.restart("echo", { force: true }));
           // The replacement answers new calls while the old instance waits for the one decoding.
-          yield* Stream.runHead(registries.changes(Channels).pipe(Stream.filter((items) => items[0] !== first[0])));
+          yield* Stream.runHead(registries.changes(Channels).pipe(Stream.filter((items) => echoing(items) !== first)));
           expect(yield* client["Channel.Call"]({ id: "echo.say", payload: "again" })).toBe("2:again");
           expect(replacing.pollUnsafe()).toBeUndefined();
           yield* Deferred.succeed(release, undefined);

@@ -2,11 +2,29 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect, Result } from "effect";
+import { Effect, Layer, Result } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { makeCore } from "@lemma/core";
-import { Workspace, WorkspaceError } from "@lemma/contracts";
+import { connect } from "@lemma/client";
+import type { Host } from "@lemma/client";
+import { definePlugin, makeCore, PluginContext } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
+import {
+  Agent,
+  Commands,
+  FileChannels,
+  FileSearchError,
+  FileSearchers,
+  HostControl,
+  HostError,
+  Llm,
+  Sessions,
+  Workspace,
+  WorkspaceChannels,
+  WorkspaceError,
+} from "@lemma/contracts";
+import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
+import transport from "@lemma/plugin-transport";
 import workspace, { makeWorkspace, matchName } from "../src/index.ts";
 
 // Isolate every git call, ours and the plugin's, from the machine's config.
@@ -219,6 +237,159 @@ describe("plugin", () => {
       ),
     );
     expect(state).toEqual({ path: dir, exists: true });
+  });
+});
+
+/** What else the transport requires; these tests reach none of it but `HostControl.composition`, the client's probe. */
+const stubs = definePlugin({
+  id: "stubs",
+  provides: [Sessions, Agent, Llm, HostControl, Commands],
+  layer: Layer.mergeAll(
+    Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
+    Layer.succeed(Sessions, {} as never),
+    Layer.succeed(Agent, {} as never),
+    Layer.succeed(Llm, {} as never),
+    Layer.succeed(Commands, {} as never),
+  ),
+});
+
+/** The plugin behind a real transport, with `extra` beside it, and `body` given a client of that host. */
+const served = (body: (client: Host) => Promise<void>, extra: readonly Plugin[] = []) =>
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const home = path.join(dir, "home");
+        yield* Effect.promise(() => fs.mkdir(home));
+        yield* makeCore([transport, pathsPlugin(home), stubs, workspace, ...extra], {
+          configs: { transport: { port: 0 }, workspace: { worktrees: path.join(dir, "trees") } },
+        });
+        const found = yield* readDiscovery(home);
+        if (found === undefined) return yield* Effect.die(new Error("no discovery file"));
+        const client = yield* Effect.acquireRelease(
+          Effect.promise(() => connect({ url: found.url, token: found.token })),
+          (client) => Effect.promise(() => client.close()),
+        );
+        yield* Effect.promise(() => body(client));
+      }),
+    ),
+  );
+
+/** The host's refusal of a call that should fail. */
+const refusal = (call: Promise<unknown>): Promise<HostError> =>
+  call.then(
+    () => Promise.reject(new Error("expected the call to fail")),
+    (error: unknown) => (error instanceof HostError ? error : Promise.reject(error)),
+  );
+
+/** A file searcher that records what it is asked, and the effect that takes it out of `FileSearchers`. */
+const fakeSearcher = () => {
+  const asked: unknown[] = [];
+  let remove: Effect.Effect<void> = Effect.void;
+  const plugin = definePlugin({
+    id: "fake-search",
+    layer: Layer.effectDiscard(
+      Effect.gen(function* () {
+        const owner = yield* PluginContext;
+        remove = yield* owner.add(FileSearchers, {
+          id: "fake-search",
+          search: (cwd, query, options) => {
+            asked.push({ cwd, query, options });
+            if (cwd === "/missing") return Effect.fail(new FileSearchError({ path: cwd, reason: "NotFound", message: `"${cwd}" is not a directory` }));
+            return { root: cwd, entries: [{ path: `${query}.ts`, kind: "file" }], truncated: false };
+          },
+        });
+      }).pipe(Effect.orDie),
+    ),
+  });
+  return { plugin, asked, remove: () => Effect.runPromise(remove) };
+};
+
+describe("channels", () => {
+  it("serves every workspace call and file search, each with what it does", () =>
+    served(async (client) => {
+      const listed = (await client.channel.list()).filter((channel) => channel.source === "workspace");
+      const declared = [...Object.values(WorkspaceChannels), ...Object.values(FileChannels)];
+      expect(listed.map(({ id, kind }) => `${kind} ${id}`).sort()).toEqual(declared.map(({ id, kind }) => `${kind} ${id}`).sort());
+      for (const channel of listed) expect(channel).toMatchObject({ title: expect.any(String), description: expect.any(String) });
+    }));
+
+  it("answers each workspace call as the service does, typed by its declaration", () =>
+    served(async (client) => {
+      const root = await repo();
+      expect(await client.channel.call(WorkspaceChannels.status, { path: root })).toMatchObject({ path: root, exists: true, git: { root, branch: "main" } });
+      expect((await client.channel.call(WorkspaceChannels.browse, { partialPath: `${dir}/re` })).entries.map((entry) => entry.path)).toEqual([root]);
+      sh(root, "branch", "dev");
+      expect((await client.channel.call(WorkspaceChannels.branches, { path: root })).map((branch) => branch.name).sort()).toEqual(["dev", "main"]);
+      expect((await client.channel.call(WorkspaceChannels.checkout, { path: root, branch: "dev" })).git?.branch).toBe("dev");
+      expect((await client.channel.call(WorkspaceChannels.checkout, { path: root, branch: "topic", create: true })).git?.branch).toBe("topic");
+      // Into the worktree root the plugin's config names.
+      const tree = await client.channel.call(WorkspaceChannels.createWorktree, { path: root, branch: "feat/x", base: "main" });
+      expect(tree).toMatchObject({ path: path.join(dir, "trees", "repo", "feat-x"), git: { branch: "feat/x", worktreeOf: root } });
+      const made = path.join(dir, "made", "deep");
+      expect(await client.channel.call(WorkspaceChannels.createDirectory, { path: made })).toEqual({ path: made, exists: true });
+    }));
+
+  it("fails a refused call with its reason as the code and the path as the subject", () =>
+    served(async (client) => {
+      const root = await repo();
+      const plain = path.join(dir, "plain");
+      await fs.mkdir(plain);
+      expect(await refusal(client.channel.call(WorkspaceChannels.branches, { path: plain }))).toMatchObject({ code: "NotRepository", subject: plain });
+      expect(await refusal(client.channel.call(WorkspaceChannels.createDirectory, { path: plain }))).toMatchObject({ code: "Exists", subject: plain });
+      expect(await refusal(client.channel.call(WorkspaceChannels.createWorktree, { path: root, branch: "bad..name" }))).toMatchObject({
+        code: "InvalidName",
+        subject: root,
+      });
+      expect(await refusal(client.channel.call(WorkspaceChannels.checkout, { path: root, branch: "nope" }))).toMatchObject({
+        code: "Failed",
+        subject: root,
+        message: expect.stringContaining("invalid reference: nope"),
+      });
+    }));
+
+  it("searches files with the first file searcher, passing only the options the caller gave", () => {
+    const searcher = fakeSearcher();
+    return served(
+      async (client) => {
+        expect(await client.channel.call(FileChannels.search, { cwd: "/work", query: "app", limit: 5, kind: "file" })).toEqual({
+          root: "/work",
+          entries: [{ path: "app.ts", kind: "file" }],
+          truncated: false,
+        });
+        expect(await client.channel.call(FileChannels.search, { cwd: "/work", query: "", within: "src" })).toMatchObject({ root: "/work" });
+        expect(searcher.asked).toEqual([
+          { cwd: "/work", query: "app", options: { limit: 5, kind: "file" } },
+          { cwd: "/work", query: "", options: { within: "src" } },
+        ]);
+        expect(await refusal(client.channel.call(FileChannels.search, { cwd: "/missing", query: "" }))).toMatchObject({
+          code: "NotFound",
+          subject: "/missing",
+        });
+        // Refused by the host, before any searcher sees it.
+        expect(await refusal(client.channel.call("files.search", { cwd: "/work", query: "", limit: 0 }))).toMatchObject({
+          code: "InvalidPayload",
+          subject: "files.search",
+        });
+        expect(searcher.asked).toHaveLength(3);
+      },
+      [searcher.plugin],
+    );
+  });
+
+  it("answers file search Unavailable while no plugin searches files, rather than going away", () => {
+    const searcher = fakeSearcher();
+    return served(
+      async (client) => {
+        expect(await client.channel.call(FileChannels.search, { cwd: "/work", query: "app" })).toMatchObject({ root: "/work" });
+        await searcher.remove();
+        expect(await refusal(client.channel.call(FileChannels.search, { cwd: "/work", query: "app" }))).toMatchObject({
+          code: "Unavailable",
+          subject: "/work",
+        });
+        expect((await client.channel.list()).map((channel) => channel.id)).toContain("files.search");
+      },
+      [searcher.plugin],
+    );
   });
 });
 

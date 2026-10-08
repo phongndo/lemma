@@ -1,7 +1,7 @@
 import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries, Registry } from "@lemma/core";
-import { CommandError, Commands, CommandsChanged, Inspectors, InteractionError } from "@lemma/contracts";
+import { Channels, CommandError, Commands, CommandsChanged, Inspectors, InteractionError, Paths, serveCommands } from "@lemma/contracts";
 import type { Command, CommandInfo } from "@lemma/contracts";
 
 type Service = Context.Service.Shape<typeof Commands>;
@@ -96,16 +96,22 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
     })
     .pipe(Effect.ignore);
 
-  return { register, list: snapshot, run } satisfies Service;
+  return { register, list: snapshot, changes: Stream.map(registries.changes(Entries), infoOf), run } satisfies Service;
 });
 
 /**
  * Provides `Commands`, the registry every client lists and runs commands
- * through. Command plugins require `Commands` and register during activation.
+ * through, and serves it to them as channels. Command plugins require
+ * `Commands` and register during activation.
  */
 export default definePlugin({
   id: "commands",
   version: "0.1.0",
   provides: { commands: Commands },
-  setup: () => Effect.map(makeRegistry, (commands) => ({ commands })),
+  requires: { paths: Paths },
+  setup: function* ({ paths }, owner) {
+    const commands = yield* makeRegistry;
+    yield* Effect.forEach(serveCommands(commands, paths), (channel) => owner.add(Channels, channel));
+    return { commands };
+  },
 });

@@ -1,7 +1,10 @@
-import { Context, Data, Schema } from "effect";
-import type { Effect, Scope } from "effect";
+import { Context, Data, Effect, Schema } from "effect";
+import type { Scope, Stream } from "effect";
 import { Event } from "@lemma/core";
 import type { Awaitable, PluginContext } from "@lemma/core";
+import { defineChannel, serveChannel } from "./channels.ts";
+import type { Channel } from "./channels.ts";
+import { InteractionOrigin } from "./interaction.ts";
 
 /** Where a command runs: the client's working directory and, when it has one open, its session. */
 export const CommandContext = Schema.Struct({
@@ -56,6 +59,10 @@ export interface Command extends Omit<CommandInfo, "source"> {
 /** Published whenever a command is registered or removed. */
 export const CommandsChanged = Event.make<{ readonly commands: readonly CommandInfo[] }>("lemma/commands.changed");
 
+/**
+ * The commands plugins register and clients list and run. Its provider serves
+ * it to clients as `CommandChannels` (`serveCommands`).
+ */
 export class Commands extends Context.Service<
   Commands,
   {
@@ -67,7 +74,77 @@ export class Commands extends Context.Service<
     readonly register: (command: Command) => Effect.Effect<void, CommandError, Scope.Scope | PluginContext>;
     /** Sorted by category, then title. */
     readonly list: Effect.Effect<readonly CommandInfo[]>;
+    /**
+     * `list` now, then again after each registration or removal, once it is
+     * live. A slow reader skips to the latest list and never holds back a
+     * registration.
+     */
+    readonly changes: Stream.Stream<readonly CommandInfo[]>;
     /** Interruption stays interruption; every failure becomes a `CommandError`. */
     readonly run: (id: string, context: CommandContext) => Effect.Effect<CommandResult, CommandError>;
   }
 >()("lemma/Commands") {}
+
+/**
+ * What clients call on `Commands`, served by its provider (`serveCommands`).
+ * A refused run fails with its `CommandError`'s reason as the code
+ * (`NotFound`, `Cancelled`, `Failed`) and the command's id as the subject.
+ */
+export const CommandChannels = {
+  list: defineChannel({
+    kind: "call",
+    id: "commands.list",
+    title: "Commands",
+    description: "Every command clients can run, by category then title",
+    payload: Schema.Void,
+    success: Schema.Array(CommandInfo),
+  }),
+  /**
+   * Answers when the command ends, and interrupting the call (a client that
+   * leaves) interrupts the command. It runs in `cwd`, the host's when absent;
+   * its questions carry `origin` as their `InteractionOrigin`, so the client
+   * that ran it can tell them from others'.
+   */
+  run: defineChannel({
+    kind: "call",
+    id: "commands.run",
+    title: "Run command",
+    description: "Runs a command in `cwd` (default: the host's) and answers when it ends; its questions carry `origin`",
+    payload: Schema.Struct({
+      id: Schema.String,
+      cwd: Schema.optional(Schema.String),
+      sessionId: Schema.optional(Schema.String),
+      origin: Schema.optional(Schema.String),
+    }),
+    success: CommandResult,
+  }),
+  /**
+   * Every command now, then the whole list again after each registration or
+   * removal (`Commands.changes`). The first list says the stream is live and
+   * resyncs a client that reconnects. A client that falls behind receives the
+   * latest list, skipping the ones in between; it never holds back the
+   * commands.
+   */
+  changes: defineChannel({
+    kind: "stream",
+    id: "commands.changes",
+    title: "Command changes",
+    description: "Every command now, then the whole list again whenever one is registered or removed",
+    payload: Schema.Void,
+    success: Schema.Array(CommandInfo),
+  }),
+};
+
+/**
+ * `CommandChannels` served by `commands`: what a provider of `Commands` adds
+ * to `Channels`. A run naming no `cwd` runs in `defaults.cwd`, the host's
+ * (`Paths`).
+ */
+export const serveCommands = (commands: Context.Service.Shape<typeof Commands>, defaults: { readonly cwd: string }): readonly Channel[] => [
+  serveChannel(CommandChannels.list, () => commands.list),
+  serveChannel(CommandChannels.run, ({ id, cwd, sessionId, origin }) => {
+    const run = commands.run(id, { cwd: cwd ?? defaults.cwd, ...(sessionId === undefined ? {} : { sessionId }) });
+    return origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin);
+  }),
+  serveChannel(CommandChannels.changes, () => commands.changes),
+];

@@ -1,5 +1,7 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
+import { defineChannel, serveChannel } from "./channels.ts";
+import type { Channel } from "./channels.ts";
 
 /** A directory's version-control state. `branch` is null on a detached HEAD. */
 export const GitStatus = Schema.Struct({
@@ -75,6 +77,7 @@ export class WorkspaceError extends Data.TaggedError("WorkspaceError")<{
  * The directories sessions run in. Paths may start with `~`. Reads never
  * change the repository (no index refresh, no fetch); `checkout` is the only
  * write and does what `git switch` would, refusing rather than discarding work.
+ * Its provider serves it to clients as `WorkspaceChannels` (`serveWorkspace`).
  */
 export class Workspace extends Context.Service<
   Workspace,
@@ -97,3 +100,74 @@ export class Workspace extends Context.Service<
     readonly checkout: (path: string, branch: string, options?: { readonly create?: boolean }) => Effect.Effect<WorkspaceStatus, WorkspaceError>;
   }
 >()("lemma/Workspace") {}
+
+const AtPath = Schema.Struct({ path: Schema.String });
+
+/**
+ * What clients call on `Workspace`, a channel per operation, served by its
+ * provider (`serveWorkspace`). A refused call fails with its `WorkspaceError`'s
+ * reason as the code (`NotRepository`, `Exists`) and the expanded path as the
+ * subject.
+ */
+export const WorkspaceChannels = {
+  status: defineChannel({
+    kind: "call",
+    id: "workspace.status",
+    title: "Workspace status",
+    description: "Whether a directory exists, and its git state when it is in a work tree; never fails",
+    payload: AtPath,
+    success: WorkspaceStatus,
+  }),
+  browse: defineChannel({
+    kind: "call",
+    id: "workspace.browse",
+    title: "Browse directories",
+    description: "The directories a partly typed path completes to (`~/code/ba`), best match first; never fails",
+    payload: Schema.Struct({ partialPath: Schema.String }),
+    success: DirectoryListing,
+  }),
+  createDirectory: defineChannel({
+    kind: "call",
+    id: "workspace.create-directory",
+    title: "Create directory",
+    description: "Creates a directory and its missing parents, and gives its status; fails Exists when something is there already",
+    payload: AtPath,
+    success: WorkspaceStatus,
+  }),
+  createWorktree: defineChannel({
+    kind: "call",
+    id: "workspace.create-worktree",
+    title: "Create worktree",
+    description: "Creates a linked worktree of the repository at `path` on a new branch started from `base` (default HEAD), and gives its status",
+    payload: Schema.Struct({ path: Schema.String, branch: Schema.String, base: Schema.optional(Schema.String) }),
+    success: WorkspaceStatus,
+  }),
+  branches: defineChannel({
+    kind: "call",
+    id: "workspace.branches",
+    title: "Branches",
+    description: "Local branches by recency, then remote-tracking ones without a local counterpart",
+    payload: AtPath,
+    success: Schema.Array(GitBranch),
+  }),
+  checkout: defineChannel({
+    kind: "call",
+    id: "workspace.checkout",
+    title: "Switch branch",
+    description: "Switches to `branch` as `git switch` would, creating it from HEAD with `create`, and gives the new status",
+    payload: Schema.Struct({ path: Schema.String, branch: Schema.String, create: Schema.optional(Schema.Boolean) }),
+    success: WorkspaceStatus,
+  }),
+};
+
+/** `WorkspaceChannels` served by `workspace`: what a provider of `Workspace` adds to `Channels`. */
+export const serveWorkspace = (workspace: Context.Service.Shape<typeof Workspace>): readonly Channel[] => [
+  serveChannel(WorkspaceChannels.status, ({ path }) => workspace.status(path)),
+  serveChannel(WorkspaceChannels.browse, ({ partialPath }) => workspace.browse(partialPath)),
+  serveChannel(WorkspaceChannels.createDirectory, ({ path }) => workspace.createDirectory(path)),
+  serveChannel(WorkspaceChannels.createWorktree, ({ path, branch, base }) =>
+    workspace.createWorktree(path, base === undefined ? { branch } : { branch, base }),
+  ),
+  serveChannel(WorkspaceChannels.branches, ({ path }) => workspace.branches(path)),
+  serveChannel(WorkspaceChannels.checkout, ({ path, branch, create }) => workspace.checkout(path, branch, create === undefined ? undefined : { create })),
+];
