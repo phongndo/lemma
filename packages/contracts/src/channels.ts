@@ -35,7 +35,10 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
  * Answers once, with its result, a promise of it, or an Effect (`Awaitable`).
  * A domain error it fails with (one with a `_tag`; promise code throws it
  * marked with `fail`) keeps its `reason` or tag as the client's error code;
- * anything else is `Failed`.
+ * anything else is `Failed`. A call in flight when its plugin stops or is
+ * replaced finishes on that instance before the instance's finalizers run, so
+ * it may use the plugin's resources to the end; one still running at the
+ * dispose deadline is interrupted, and its client gets `Withdrawn`.
  */
 export interface ChannelCall<Payload = any, Success = any> extends ChannelDeclaration<"call", Payload, Success> {
   readonly handle: (payload: Payload) => Awaitable<Success, unknown>;
@@ -43,10 +46,17 @@ export interface ChannelCall<Payload = any, Success = any> extends ChannelDeclar
 
 /**
  * Sends elements until it ends, fails as a call does, or the client stops it:
- * a Stream, or an async iterable (an `async function*`) from promise code.
- * Elements go out as the client takes them, so a slow client holds the stream
- * back: one that must not wait (live prices) drops what the client has not
- * taken, as `Stream.buffer({ capacity: 1, strategy: "sliding" })` does.
+ * a Stream, or an async iterable (an `async function*`) from promise code. It
+ * is stopped as soon as its plugin stops or is replaced (its client gets
+ * `Withdrawn`), and before that plugin's finalizers run.
+ *
+ * Each open stream is pulled at its own client's pace: a slow client holds
+ * its stream back. A stream fed from a source others share must therefore
+ * slide or drop for each subscriber, never wait on the source: the ticker
+ * example gives each one `SubscriptionRef.changes` behind
+ * `Stream.buffer({ capacity: 1, strategy: "sliding" })`. A back-pressured
+ * shared `PubSub` would let one stalled client stop the plugin, and with it
+ * every other client.
  */
 export interface ChannelStream<Payload = any, Success = any> extends ChannelDeclaration<"stream", Payload, Success> {
   readonly handle: (payload: Payload) => Stream.Stream<Success, unknown> | AsyncIterable<Success>;
