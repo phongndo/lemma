@@ -158,9 +158,18 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Host.Events", { success: HostEvent, stream: true }),
   /** Every known plugin, enabled or not. */
   Rpc.make("Host.Plugins", { success: Schema.Array(PluginStatus) }),
-  /** What host plugins let you look into (see `Inspectors`). */
-  Rpc.make("Host.Inspectors", { success: Schema.Array(InspectorInfo) }),
-  /** One inspector's snapshot: plain JSON, `null` for none. Fails `NotFound`, or `Failed` when the inspector fails or dies, or its snapshot is not JSON. */
+  /**
+   * What host plugins let you look into (see `Inspectors`). While the host
+   * starts, it waits until its plugins are up, as `ChannelRpcs` do, and fails
+   * `Unavailable` if still waiting at the transport's startup timeout.
+   */
+  Rpc.make("Host.Inspectors", { success: Schema.Array(InspectorInfo), error: HostError }),
+  /**
+   * One inspector's snapshot: plain JSON, `null` for none. Waits while the
+   * host starts as `Host.Inspectors` does. Fails `NotFound`, `Unavailable`
+   * (still starting, naming the inspector), or `Failed` when the inspector
+   * fails or dies, or its snapshot is not JSON.
+   */
   Rpc.make("Host.Inspect", { payload: { id: Schema.String }, success: Schema.Unknown, error: HostError }),
   /** A failed or halted plugin and its dependents; `force` also replaces a running one. */
   Rpc.make("Host.RestartPlugin", { payload: { pluginId: Schema.String, force: Schema.optional(Schema.Boolean) }, error: HostError }),

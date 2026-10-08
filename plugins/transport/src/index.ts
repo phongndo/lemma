@@ -39,7 +39,7 @@ const TransportConfig = Schema.Struct({
   startupTimeoutMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 60_000)))
     .annotate({
-      description: "How long a channel request made while the host starts waits for its plugins before failing Unavailable.",
+      description: "How long a request held while the host starts waits for its plugins before failing Unavailable.",
     }),
 });
 type TransportConfig = typeof TransportConfig.Type;
@@ -82,7 +82,7 @@ export default definePlugin({
       handlers,
     );
     const url = `http://${clientHost(address.hostname)}:${address.port}`;
-    // Before the composition is up, which waits on this setup: channel requests wait at the startup gate meanwhile.
+    // Before the composition is up, which waits on this setup: requests for channels and inspectors wait at the startup gate meanwhile.
     yield* publishDiscovery(paths.home, { url, token, pid: process.pid, startedAt: Date.now() });
     yield* events.publish(Notice, {
       level: "info",

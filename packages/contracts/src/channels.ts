@@ -172,7 +172,7 @@ export type ChannelInfo = typeof ChannelInfo.Type;
  * channel when the request names one).
  */
 export class ChannelRpcs extends RpcGroup.make(
-  /** What host plugins serve: the channel that answers for each id. */
+  /** What host plugins serve: the channel that answers for each id. Fails `Unavailable` while the host starts, as above. */
   Rpc.make("Channel.List", { success: Schema.Array(ChannelInfo), error: HostError }),
   /**
    * Calls a channel. `payload` is its payload schema's JSON form (absent is
@@ -184,8 +184,10 @@ export class ChannelRpcs extends RpcGroup.make(
    * error names its own (a session, a path): `NotFound` (no call answers for
    * the id, as when its plugin has gone), `InvalidPayload`, the handler's
    * domain error's code (its `reason` or tag), `Failed` (any other failure, a
-   * defect, or a result its success schema cannot send), or `Withdrawn` (still
-   * running at its plugin's dispose deadline, and interrupted).
+   * defect, or a result its success schema cannot send), `Withdrawn` (still
+   * running at its plugin's dispose deadline, and interrupted), or
+   * `Unavailable` (the host still starting at the transport's startup
+   * timeout, as above; a handler's domain error may be `Unavailable` too).
    */
   Rpc.make("Channel.Call", { payload: { id: Schema.String, payload: Schema.optional(Schema.Unknown) }, success: Schema.Unknown, error: HostError }),
   /**

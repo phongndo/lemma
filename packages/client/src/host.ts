@@ -171,7 +171,10 @@ export interface Host {
     readonly info: () => Promise<HostInfo>;
     /** Every known plugin, enabled or not. */
     readonly plugins: () => Promise<readonly PluginStatus[]>;
-    /** What host plugins let you look into, and one's snapshot (plain JSON). */
+    /**
+     * What host plugins let you look into, and one's snapshot (plain JSON).
+     * Both reject `Unavailable` as `channel.call` does while the host starts.
+     */
     readonly inspectors: () => Promise<readonly InspectorInfo[]>;
     readonly inspect: (id: string) => Promise<unknown>;
     /** A failed or halted plugin and its dependents; `force` also replaces a running one. */

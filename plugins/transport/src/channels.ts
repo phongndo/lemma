@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Exit, Option, Schema, Stream } from "effect";
-import { RpcMiddleware } from "effect/rpc";
+import { RpcGroup, RpcMiddleware } from "effect/rpc";
+import type { Rpc } from "effect/rpc";
 import type { Contribution, Registries } from "@lemma/core";
 import { ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf, wireCodec } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
@@ -157,11 +158,20 @@ const Opened = Context.Reference<Opened | undefined>("lemma/transport/Opened", {
  */
 export class ChannelLifetime extends RpcMiddleware.Service<ChannelLifetime>()("lemma/transport/ChannelLifetime", { error: HostError }) {}
 
+/** `group`'s RPCs named `tags`, as a group of their own. */
+const pick = <R extends Rpc.Any, const Tags extends ReadonlyArray<R["_tag"]>>(group: RpcGroup.RpcGroup<R>, tags: Tags) =>
+  RpcGroup.make(...tags.map((tag) => group.requests.get(tag)!)) as unknown as RpcGroup.RpcGroup<Extract<R, { readonly _tag: Tags[number] }>>;
+
+/** The runtime RPCs that answer from a registry, which shows what a starting composition contributes only once it is up. */
+const registryReaders = ["Host.Inspectors", "Host.Inspect"] as const;
+
 /**
  * What the transport serves: `HostRpcs`, and `ChannelRpcs` with `ChannelLifetime` around each request (it passes all
- * but `Channel.Open` through), held at the `Startup` gate first.
+ * but `Channel.Open` through). The channels and the registry readers are held at the `Startup` gate first.
  */
-export const ServedRpcs = HostRpcs.merge(ChannelRpcs.middleware(ChannelLifetime).middleware(Startup));
+export const ServedRpcs = HostRpcs.omit(...registryReaders).merge(
+  pick(HostRpcs, registryReaders).merge(ChannelRpcs.middleware(ChannelLifetime)).middleware(Startup),
+);
 
 export const channelLifetime =
   (registries: Reader): Context.Service.Shape<typeof ChannelLifetime> =>
