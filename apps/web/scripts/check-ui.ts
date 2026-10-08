@@ -253,6 +253,18 @@ const toggling = async () => {
   await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the turns running did not return with threads"));
   const kit = page.locator(".inspector-row[data-key='web:kit']");
   const kitState = () => page.evaluate(() => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === "kit").state);
+  // A UI file can neither change a bundled part's fallback nor give its own part one: its `definePart` takes none.
+  const fallbacks = await page.evaluate(async () => {
+    const [{ api }, { fallbackOf }, { TogglePart }] = await Promise.all([
+      import("/src/ui/api.ts" as string),
+      import("/src/ui/slots.ts" as string),
+      import("/src/ui/contracts.ts" as string),
+    ]);
+    const declared = fallbackOf(TogglePart);
+    const mine = () => "a UI file's";
+    return { kept: fallbackOf(api.definePart("toggle", mine)) === declared, own: fallbackOf(api.definePart("check.own", mine)) === undefined };
+  });
+  assert.deepEqual(fallbacks, { kept: true, own: true }, "a UI file set a part's fallback");
   await kit.locator("[role=switch]").click();
   await kit
     .locator("input[type=checkbox]")

@@ -1,3 +1,6 @@
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { Context, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { createEffect, createRoot, createSignal } from "solid-js";
@@ -6,10 +9,11 @@ import type { ApplicationServices, Loader, Plugin } from "@lemma/core";
 import { planComposition } from "@lemma/composition";
 import { defineRoute } from "@lemma/router";
 import { makeSlots } from "../src/runtime/slots.ts";
-import { ConfigFormPart, IconPart, Notify, SearchFieldPart, Slots, TogglePart, UI_API, UiApi } from "../src/ui/contracts.ts";
+import * as contracts from "../src/ui/contracts.ts";
+import { Notify, Slots, TogglePart, UI_API, UiApi } from "../src/ui/contracts.ts";
 import { defineUiPlugin, extendUiPlugin, routesOf } from "../src/ui/define.ts";
 import { definePart, defineSlot, fallbackOf } from "../src/ui/slots.ts";
-import type { SlotsService } from "../src/ui/slots.ts";
+import type { Part, SlotsService } from "../src/ui/slots.ts";
 
 /** Resolves once `ready` holds; slot changes from a plugin starting or stopping arrive asynchronously. */
 const waitFor = async (ready: () => boolean) => {
@@ -136,19 +140,43 @@ describe("slots", () => {
     });
   });
 
-  it("keeps a part's fallback with its declaration: defining it again without one keeps it, with one replaces it", () => {
-    const plain = () => null;
-    const part = definePart<{ readonly label: string }>("test.fallback", plain);
-    expect(fallbackOf(part)).toBe(plain);
-    expect(fallbackOf(definePart("test.fallback"))).toBe(plain);
-    const other = () => null;
-    definePart("test.fallback", other);
-    expect(fallbackOf(part)).toBe(other);
+  it("fixes a bundled part's fallback by its declaration: a UI file defining the part again cannot change it", () => {
+    const declared = fallbackOf(TogglePart);
+    expect(declared).toBeDefined();
+    // `api.definePart` passes no fallback, and one passed anyway is refused.
+    expect(fallbackOf(definePart("toggle"))).toBe(declared);
+    expect(() => definePart("toggle", () => null)).toThrow("part.toggle has a fallback from its declaration");
+    expect(fallbackOf(TogglePart)).toBe(declared);
     expect(fallbackOf(definePart("test.bare"))).toBeUndefined();
   });
 
-  it("declares a fallback for each part the always-on plugins draw", () => {
-    for (const part of [TogglePart, SearchFieldPart, ConfigFormPart, IconPart]) expect(fallbackOf(part), part.name).toBeDefined();
+  it("gives a fallback to every part the always-on plugins draw, as their imports of ui/parts.tsx name them", () => {
+    const src = fileURLToPath(new URL("../src/", import.meta.url));
+    // What each export of ui/parts.tsx draws: the parts its definition names, directly or through another export
+    // (`PlusIcon` through `Icon`).
+    const exports = new Map<string, string>();
+    for (const [, name, body] of readFileSync(join(src, "ui/parts.tsx"), "utf8").matchAll(/^export const (\w+)\s*=([\s\S]*?);$/gm)) exports.set(name!, body!);
+    const partsOf = (name: string, seen = new Set<string>()): string[] => {
+      if (seen.has(name)) return [];
+      seen.add(name);
+      return [...(exports.get(name) ?? "").matchAll(/\w+/g)].flatMap(([word]) =>
+        /^[A-Z]\w*Part$/.test(word) ? [word] : exports.has(word) ? partsOf(word, seen) : [],
+      );
+    };
+    // The plugins kept on: `PINNED` in ui/boot.tsx and what they need (ui:check asserts the list).
+    const drawn = new Set<string>();
+    for (const id of ["shell", "pages", "settings", "plugins-page"]) {
+      const dir = join(src, "plugins", id);
+      const files = existsSync(dir) ? readdirSync(dir, { recursive: true }).map((file) => join(dir, String(file))) : [join(src, "plugins", `${id}.tsx`)];
+      for (const file of files.filter((path) => /\.tsx?$/.test(path))) {
+        for (const [, names] of readFileSync(file, "utf8").matchAll(/import\s*\{([^}]*)\}\s*from\s*["'](?:\.\.\/)+ui\/parts\.tsx["']/g)) {
+          for (const name of names!.split(",").map((entry) => entry.trim().split(/\s+as\s+/)[0]!)) for (const part of partsOf(name)) drawn.add(part);
+        }
+      }
+    }
+    // What they draw today, so a reading that finds nothing cannot pass.
+    expect([...drawn]).toEqual(expect.arrayContaining(["ConfigFormPart", "IconPart", "SearchFieldPart", "TogglePart"]));
+    for (const part of drawn) expect(fallbackOf((contracts as unknown as Readonly<Record<string, Part<any>>>)[part]!), part).toBeDefined();
   });
 
   it("ignores an add from a plugin that has stopped", async () => {

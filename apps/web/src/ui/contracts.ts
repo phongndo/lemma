@@ -788,7 +788,7 @@ export interface ToggleProps {
   readonly disabled?: boolean;
   readonly onChange: (checked: boolean) => void;
 }
-/** An on/off switch. Its fallback is a plain checkbox, so the Plugins page can turn `kit` back on. */
+/** An on/off switch. Its fallback is a plain checkbox. */
 export const TogglePart = definePart<ToggleProps>("toggle", ToggleFallback);
 
 export interface SettingRowProps {

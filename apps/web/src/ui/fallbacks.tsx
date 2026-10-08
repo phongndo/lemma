@@ -4,14 +4,13 @@ import { configEdit, configText } from "../model/config.ts";
 import type { ConfigFormProps, IconName, IconProps, SearchFieldProps, ToggleProps } from "./contracts.ts";
 
 /*
- * The plain fallbacks of the parts the always-on plugins draw (`shell`,
- * `pages`, `settings`, and `plugins-page`), which `ui/contracts.ts` declares
- * with each part: what renders while no plugin provides it, so with `kit` off
- * the page that turns it back on still searches, switches, and configures. Native
- * markup, with no styling beyond the foundation's base styles. Handlers bind
- * to their element (`on:input`), not through Solid's page-wide delegation
- * (`onInput`), which runs when the module loads: the contracts that declare
- * these load without a page too, in the tests.
+ * The fallbacks `ui/contracts.ts` declares with its parts (which parts have
+ * one, and why, is said there). Each is native markup with no styling beyond
+ * the foundation's base styles, and draws no component or part
+ * (`check-boundaries` holds this file and the contracts to that). Handlers
+ * bind to their element (`on:input`), not through Solid's page-wide
+ * delegation (`onInput`), which runs when the module loads: the contracts
+ * that declare these load without a page too, in the tests.
  */
 
 /** A checkbox. It shows the value it is given, not the click: a change may not take (a confirmation asked first, a failure). */
@@ -96,55 +95,56 @@ export function ConfigFormFallback(props: ConfigFormProps) {
   );
 }
 
+/** Glyphs from the blocks system fonts cover: Latin, punctuation, arrows, math operators, geometric shapes, and the stars. */
 const GLYPHS: Readonly<Record<IconName, string>> = {
   plus: "+",
   stop: "■",
   send: "↑",
   chevron: "›",
   "chevron-down": "▾",
-  check: "✓",
+  check: "√",
   x: "×",
-  key: "⚷",
+  key: "⊸",
   puzzle: "◇",
   copy: "⊡",
   code: "</>",
   image: "▣",
   alert: "!",
   sidebar: "◧",
-  menu: "☰",
-  log: "≡",
+  menu: "≡",
+  log: "▤",
   refresh: "↻",
   external: "↗",
   file: "▯",
   folder: "▭",
   "folder-open": "▱",
   filter: "▽",
-  search: "⚲",
-  "folder-plus": "+",
-  "pen-square": "✎",
-  gear: "⚙",
-  "git-branch": "⎇",
+  search: "○",
+  "folder-plus": "▭+",
+  "pen-square": "+",
+  gear: "⊛",
+  "git-branch": "⋔",
   worktree: "⊞",
   laptop: "▬",
   star: "☆",
   more: "⋯",
   pin: "⊙",
-  archive: "▤",
-  trash: "⌫",
-  pencil: "✎",
+  archive: "⊟",
+  trash: "⊠",
+  pencil: "/",
   brain: "※",
   chat: "▢",
   trajectory: "⋮",
-  command: "⌘",
+  command: "»",
   terminal: ">_",
-  hammer: "⚒",
-  sliders: "⚌",
+  hammer: "⊤",
+  sliders: "≑",
   palette: "◐",
   "arrow-left": "←",
   spinner: "…",
 };
 
-/** The icon as a text glyph, hidden from assistive technology as the icons are: the control it marks carries the name. */
+/** The icon as a text glyph (★ for a filled star), hidden from assistive technology as the icons are: the control it marks carries the name. */
 export function IconFallback(props: IconProps) {
-  return <span aria-hidden="true">{GLYPHS[props.name]}</span>;
+  return <span aria-hidden="true">{props.name === "star" && props.filled ? "★" : GLYPHS[props.name]}</span>;
 }

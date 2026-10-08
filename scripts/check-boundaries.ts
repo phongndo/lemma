@@ -274,6 +274,10 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
       // The boot and the app's frame know plugins only as the bundled list: what runs is up to the composition.
       rule(`imports the plugin "${specifier}" (only plugins/index.ts, the bundled list)`);
     }
+    // A part's fallback is plain markup that draws while no plugin provides the part, so neither it nor the contracts
+    // declaring it reach a component (`kit`'s, gone with it) or a part (`ui/parts.tsx` imports the contracts: a cycle).
+    if (["ui/contracts.ts", "ui/fallbacks.tsx"].includes(name) && (to.startsWith("components/") || to === "ui/parts.tsx"))
+      rule(`imports "${specifier}" (a part's fallback is plain markup: it draws no component and no part)`);
   }
   if (within(file, "model") && name.endsWith(".tsx")) rule("is a .tsx model (models are pure data)");
   if (within(file, "plugins")) {

@@ -49,15 +49,19 @@ export interface Region<P extends Record<string, any> = {}> {
  * lower order than the default's; `P` is the props every provider takes.
  *
  * `fallback` renders wherever the part is drawn while no plugin provides it:
- * plain native markup, belonging to no plugin, so a page whose pieces must
- * work with every plugin off but its own (the Plugins page, with `kit` off)
- * still works. Without one, a part nothing provides renders nothing. Defining
- * the part again without a fallback keeps the one it has.
+ * plain native markup, belonging to no plugin. Without one, a part nothing
+ * provides renders nothing. The declaration that gives a fallback fixes it:
+ * defining the part again keeps it, and refuses another. A UI file's
+ * `definePart` (`api.definePart`) takes none, since a part of its own is its
+ * plugin's to provide.
  */
 export type Part<P extends Record<string, any>> = Slot<Region<P>>;
 export const definePart = <P extends Record<string, any>>(name: string, fallback?: Component<P>): Part<P> => {
   const part = defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
-  if (fallback !== undefined) named.get(part.name)!.fallback = fallback;
+  if (fallback === undefined) return part;
+  const entry = named.get(part.name)!;
+  if (entry.fallback !== undefined && entry.fallback !== fallback) throw new Error(`${part.name} has a fallback from its declaration, which nothing changes`);
+  entry.fallback = fallback;
   return part;
 };
 

@@ -24,6 +24,7 @@ import { defineUiPlugin, extendUiPlugin } from "./define.ts";
 import * as parts from "./parts.tsx";
 import { UiSchema } from "./schema.ts";
 import { DEFAULT_PART_ORDER, definePart, defineSlot } from "./slots.ts";
+import type { Part } from "./slots.ts";
 
 /**
  * What a UI file's default export receives when it is a function: the page's
@@ -58,8 +59,8 @@ export const api = {
   defineRoute,
   /** Narrows `router.match()` to a route, with its typed params and search. */
   isRoute,
-  /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. */
-  definePart,
+  /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. It has no fallback: the plugin provides it. */
+  definePart: <P extends Record<string, any>>(name: string): Part<P> => definePart<P>(name),
   /** The order bundled parts are added at: add with a lower one to replace a part. */
   DEFAULT_PART_ORDER,
   contracts,

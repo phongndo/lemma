@@ -42,7 +42,8 @@ replace it.
   no styling of its own, used while nothing provides the part. The parts the
   always-on plugins draw (`shell`, `pages`, `settings`, `plugins-page`) have
   one, in `ui/fallbacks.tsx`, so with `kit` off the Plugins page still works;
-  give one to any part they start to draw.
+  give one to any part they start to draw (`tests/ui.test.ts` fails until
+  you do).
 - **A component** (`src/components/`) is a default implementation of a part.
   It draws other parts through `ui/parts.tsx`.
 - **A model** (`src/model/`) is pure data and functions, tested in `tests/`.
@@ -115,5 +116,7 @@ nix develop .#browser -c node apps/web/scripts/shots.ts /tmp/shots/after    # af
 nix develop .#browser -c node apps/web/scripts/compare-shots.ts /tmp/shots/before /tmp/shots/after
 ```
 
-The Plugins page shows the dev server's port and the chat a turn's duration, so
-those differ between runs by a hundredth of a percent.
+A few screens show what changes from run to run: the Plugins page the dev
+server's port, the devtools' Navigation and Host events panels their times and
+keys, and the trajectory a turn's timings. Those differ between runs by up to
+about a quarter of a percent; every other screen matches exactly.
