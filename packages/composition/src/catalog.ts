@@ -1,7 +1,7 @@
 import { configValues, describeConfig, faultMessage } from "@lemma/contracts";
 import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, PluginSource } from "@lemma/contracts";
 import { Events, Hooks, PluginContext, Registries } from "@lemma/core";
-import type { Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
+import type { Capability, Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
 
 /** The plugin that loads every other one. Defined here, in the browser-safe package, so the web app's catalog and the host share it. */
 export const HOST_PLUGIN_ID = "host";
@@ -17,15 +17,22 @@ export interface KnownPlugin {
 /** Runtime capabilities the core supplies to every plugin; not dependencies between plugins. */
 const builtins = new Set<string>([Hooks.key, PluginContext.key, Events.key, Registries.key]);
 
+/**
+ * Keys no plugin provides to another: the core's builtins and what the app
+ * provides itself (its `provide.provides`). The kernel refuses a plugin
+ * offering one, so that plugin is nobody's provider.
+ */
+export const reservedKeys = (provided: readonly Capability[]): ReadonlySet<string> => new Set([...builtins, ...provided.map((tag) => tag.key)]);
+
 const isEnabled = (composition: Composition, id: string): boolean => composition.plugins[id]?.enabled !== false;
 
 /** Capability key to the plugin id providing it. An enabled provider wins over a disabled one with the same capability. */
-function providersOf(known: readonly KnownPlugin[], composition: Composition): Map<string, string> {
+function providersOf(known: readonly KnownPlugin[], composition: Composition, reserved: ReadonlySet<string>): Map<string, string> {
   const providers = new Map<string, string>();
   for (const pass of [true, false]) {
     for (const { plugin } of known) {
       if (isEnabled(composition, plugin.id) !== pass) continue;
-      for (const tag of plugin.provides) if (!providers.has(tag.key)) providers.set(tag.key, plugin.id);
+      for (const tag of plugin.provides) if (!reserved.has(tag.key) && !providers.has(tag.key)) providers.set(tag.key, plugin.id);
     }
   }
   return providers;
@@ -47,17 +54,29 @@ export interface Resolved {
  * failing the whole change on a missing capability; they return when it does.
  * A pinned plugin, and a provider of everything it needs, stays on whatever
  * the rows say (the providers that are on, else the ones that are off).
- * Unknown ids and capabilities nobody provides are left to the planner, which
- * reports them.
+ * What the app provides itself has no provider here: a plugin offering it is
+ * neither locked nor halts anything. Unknown ids, capabilities nobody
+ * provides, and a plugin offering what the app provides are left to the
+ * planner, which reports them.
  */
-export function resolveComposition(known: readonly KnownPlugin[], rows: Composition, pinned: readonly string[] = []): Resolved {
-  const locked = lockedBy(known, rows, pinned);
+export function resolveComposition(
+  known: readonly KnownPlugin[],
+  rows: Composition,
+  options: {
+    /** Plugins that always run (`PlanInput.pinned`). */
+    readonly pinned?: readonly string[];
+    /** What the app provides itself (`PlanInput.provided`). */
+    readonly provided?: readonly Capability[];
+  } = {},
+): Resolved {
+  const reserved = reservedKeys(options.provided ?? []);
+  const locked = lockedBy(known, rows, options.pinned ?? [], reserved);
   const overridden = [...locked.keys()].filter((id) => rows.plugins[id]?.enabled === false);
   const composition: Composition =
     overridden.length === 0
       ? rows
       : { plugins: { ...rows.plugins, ...Object.fromEntries(overridden.map((id) => [id, { ...rows.plugins[id], enabled: true }])) } };
-  const providers = providersOf(known, composition);
+  const providers = providersOf(known, composition, reserved);
   const haltedBy = new Map<string, string>();
   const loaded = (id: string) => isEnabled(composition, id) && !haltedBy.has(id);
   let changed = true;
@@ -67,7 +86,7 @@ export function resolveComposition(known: readonly KnownPlugin[], rows: Composit
       if (!loaded(plugin.id) || composition.plugins[plugin.id] === undefined) continue;
       for (const tag of plugin.requires) {
         const provider = providers.get(tag.key);
-        if (provider === undefined || builtins.has(tag.key) || loaded(provider)) continue;
+        if (provider === undefined || loaded(provider)) continue;
         haltedBy.set(plugin.id, provider);
         changed = true;
         break;
@@ -81,14 +100,17 @@ export function resolveComposition(known: readonly KnownPlugin[], rows: Composit
 /**
  * What a change to `ids` restarts: those plugins and, transitively, every
  * known plugin requiring a capability one of them provides, since the loader
- * reconstructs dependents along with what they depend on.
+ * reconstructs dependents along with what they depend on. A plugin offering
+ * what the app provides (`provided`) restarts nothing through it: the app's
+ * own service is what its dependents get.
  */
-export function restartedBy(known: readonly KnownPlugin[], ids: readonly string[]): Set<string> {
+export function restartedBy(known: readonly KnownPlugin[], ids: readonly string[], provided: readonly Capability[] = []): Set<string> {
+  const reserved = reservedKeys(provided);
   const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
   const found = new Set(ids);
   const queue = [...ids];
   while (queue.length) {
-    const provides = new Set(byId.get(queue.shift()!)?.provides.map((tag) => tag.key) ?? []);
+    const provides = new Set(byId.get(queue.shift()!)?.provides.flatMap((tag) => (reserved.has(tag.key) ? [] : [tag.key])) ?? []);
     for (const { plugin } of known) {
       if (found.has(plugin.id) || !plugin.requires.some((tag) => provides.has(tag.key))) continue;
       found.add(plugin.id);
@@ -99,9 +121,9 @@ export function restartedBy(known: readonly KnownPlugin[], ids: readonly string[
 }
 
 /** Each pinned plugin (to itself) and every plugin it needs, directly or through other plugins, to the pinned plugin's id. */
-function lockedBy(known: readonly KnownPlugin[], composition: Composition, pinned: readonly string[]): Map<string, string> {
+function lockedBy(known: readonly KnownPlugin[], composition: Composition, pinned: readonly string[], reserved: ReadonlySet<string>): Map<string, string> {
   const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
-  const providers = providersOf(known, composition);
+  const providers = providersOf(known, composition, reserved);
   const locked = new Map<string, string>();
   for (const root of pinned) if (byId.has(root)) locked.set(root, root);
   for (const root of pinned) {

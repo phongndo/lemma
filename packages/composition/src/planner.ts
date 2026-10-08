@@ -1,8 +1,8 @@
 import { Predicate, Result, Schema, SchemaIssue } from "effect";
 import type { PluginRow } from "@lemma/contracts";
 import { checkComposition, Diagnostic } from "@lemma/core";
-import type { Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
-import { resolveComposition } from "./catalog.ts";
+import type { Capability, Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
+import { reservedKeys, resolveComposition } from "./catalog.ts";
 import type { KnownPlugin, Resolved } from "./catalog.ts";
 
 /*
@@ -31,6 +31,8 @@ export interface PlanInput {
   readonly fixed?: Readonly<Record<string, PluginEntry>>;
   /** Whether plugins from files must start unless their row says `required: false` (the host's policy). */
   readonly localRequired?: boolean;
+  /** What the app provides itself (its `provide.provides`): every plugin has it, and a plugin providing it cannot run. */
+  readonly provided?: readonly Capability[];
 }
 
 export interface Plan {
@@ -60,15 +62,20 @@ const API_KEY = /^(.+)\/api@(\d+)$/;
  * decides, so adding a file is enough to replace a part. Rows then patch by id.
  *
  * A plugin that cannot run (its config does not decode, it is written for an
- * API version nobody provides, it competes with another provider) is left out
- * with the plugins that need it, and the problem is a warning; one that is
- * required (pinned, a row's `required: true`, or a file's plugin under
- * `localRequired`) or needed by one makes the problem an error instead. A
- * replacement left out is never swapped back for the bundled plugin it
- * replaced: what runs only ever shrinks from what was asked for.
+ * API version nobody provides, it competes with another provider, it provides
+ * what the app provides itself) is left out with the plugins that need it, and
+ * the problem is a warning; one that is required (pinned, a row's `required:
+ * true`, or a file's plugin under `localRequired`) or needed by one makes the
+ * problem an error instead. What the app provides needs no plugin, so
+ * requiring it never makes a plugin offering it needed. A replacement left
+ * out is never swapped back for the bundled plugin it replaced: what runs
+ * only ever shrinks from what was asked for.
  */
 export function planComposition(input: PlanInput): Plan {
   const pinned = new Set(input.pinned ?? []);
+  const provided = input.provided ?? [];
+  const appKeys = new Set(provided.map((tag) => tag.key));
+  const reserved = reservedKeys(provided);
   const rows = input.rows;
   const diagnostics: Diagnostic[] = [];
 
@@ -126,43 +133,45 @@ export function planComposition(input: PlanInput): Plan {
   // Leave out what cannot run until the rest plans, as the kernel would plan it.
   const problems = new Map<string, string>();
   const suggestions = new Map<string, string>();
-  const fatal = new Map<string, string>();
+  // Per plugin that must run and cannot: the problem, and what to do about it.
+  const fatal = new Map<string, { readonly problem: string; readonly fix: string }>();
   const effective = (): Composition => ({
     plugins: Object.fromEntries(Object.entries(plugins).map(([id, entry]) => [id, problems.has(id) ? { ...entry, enabled: false } : entry])),
   });
-  let resolved = resolveComposition(known, effective(), [...pinned]);
+  let resolved = resolveComposition(known, effective(), { pinned: [...pinned], provided });
   for (let round = 0; round <= known.length; round++) {
     const running = known.filter(({ plugin }) => isRunning(resolved.composition, plugin.id)).map(({ plugin }) => plugin);
     const configs = Object.fromEntries(running.map((plugin) => [plugin.id, resolved.composition.plugins[plugin.id]?.config]));
-    const errors = checkComposition(running, configs);
+    const errors = checkComposition(running, configs, { provided });
     if (errors.length === 0) break;
-    const needed = closure(known, effective(), requested);
+    const needed = closure(known, effective(), requested, reserved);
     let progressed = false;
     for (const error of errors) {
-      const problem = describe(error, running, configs, known);
+      const problem = describe(error, running, configs, known, appKeys);
       const target = targetOf(error, (id) => !needed.has(id), sourceOf);
       if (target === undefined) {
-        for (const id of error.plugins.length ? error.plugins.slice(0, 1) : [""]) fatal.set(id, problem);
+        // An error naming no plugin is the app's own: what it provides is reserved, or listed twice.
+        for (const id of error.plugins.length ? error.plugins.slice(0, 1) : [""]) fatal.set(id, { problem, fix: fixFor(error, appKeys) });
         continue;
       }
       if (!problems.has(target)) {
         problems.set(target, problem);
-        suggestions.set(target, suggestionFor(error));
+        suggestions.set(target, suggestionFor(error, appKeys));
         progressed = true;
       }
     }
     if (!progressed) break;
-    resolved = resolveComposition(known, effective(), [...pinned]);
+    resolved = resolveComposition(known, effective(), { pinned: [...pinned], provided });
   }
 
-  for (const [id, problem] of fatal) {
+  for (const [id, { problem, fix }] of fatal) {
     const why = pinned.has(id) ? "the app cannot run without it" : requested.has(id) ? "it is required" : "a required plugin needs it";
     diagnostics.push(
       new Diagnostic({
         severity: "error",
         ...(id === "" ? {} : { pluginId: id }),
-        message: `"${id}" cannot run, and ${why}: ${problem}`,
-        suggestion: requested.has(id) && !pinned.has(id) ? `Fix it, or set "required": false in its row to start without it` : `Fix it`,
+        message: id === "" ? problem : `"${id}" cannot run, and ${why}: ${problem}`,
+        suggestion: requested.has(id) && !pinned.has(id) ? `${fix}, or set "required": false in its row to start without it` : fix,
       }),
     );
   }
@@ -238,13 +247,13 @@ function entryOf(entry: PluginEntry, row: PluginRow, base: Readonly<Record<strin
 
 const isRunning = (composition: Composition, id: string) => composition.plugins[id] !== undefined && composition.plugins[id]?.enabled !== false;
 
-/** `ids` and every plugin providing what they need, transitively: what must start for them to. */
-function closure(known: readonly KnownPlugin[], composition: Composition, ids: ReadonlySet<string>): Set<string> {
+/** `ids` and every plugin providing what they need, transitively: what must start for them to. No plugin provides a `reserved` key. */
+function closure(known: readonly KnownPlugin[], composition: Composition, ids: ReadonlySet<string>, reserved: ReadonlySet<string>): Set<string> {
   const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
   const providers = new Map<string, string>();
   for (const { plugin } of known) {
     if (!isRunning(composition, plugin.id)) continue;
-    for (const tag of plugin.provides) if (!providers.has(tag.key)) providers.set(tag.key, plugin.id);
+    for (const tag of plugin.provides) if (!reserved.has(tag.key) && !providers.has(tag.key)) providers.set(tag.key, plugin.id);
   }
   const found = new Set<string>();
   const stack = [...ids];
@@ -281,8 +290,15 @@ function targetOf(error: CompositionError, optional: (id: string) => boolean, so
   }
 }
 
-/** The problem in a line, for the plugin it leaves out. */
-function describe(error: CompositionError, running: readonly Plugin[], configs: Readonly<Record<string, unknown>>, known: readonly KnownPlugin[]): string {
+/** The problem in a line, for the plugin it leaves out. `appKeys` are what the app provides itself. */
+function describe(
+  error: CompositionError,
+  running: readonly Plugin[],
+  configs: Readonly<Record<string, unknown>>,
+  known: readonly KnownPlugin[],
+  appKeys: ReadonlySet<string>,
+): string {
+  if (error.plugins.length === 0) return error.message;
   switch (error.reason) {
     case "InvalidConfig": {
       const plugin = running.find((candidate) => candidate.id === error.plugins[0]);
@@ -295,20 +311,26 @@ function describe(error: CompositionError, running: readonly Plugin[], configs: 
     case "MissingCapability": {
       const api = API_KEY.exec(error.capability ?? "");
       if (api === null) return `it needs "${error.capability}", which no plugin provides`;
-      const offered = known
-        .flatMap(({ plugin }) => plugin.provides.map((tag) => API_KEY.exec(tag.key)))
+      const offered = [...known.flatMap(({ plugin }) => plugin.provides.map((tag) => tag.key)), ...appKeys]
+        .map((key) => API_KEY.exec(key))
         .filter((match): match is RegExpExecArray => match !== null && match[1] === api[1])
         .map((match) => match[2]!);
       return `it is written for version ${api[2]} of the ${api[1]} API, and this Lemma provides ${offered.length ? `version ${[...new Set(offered)].join(", ")}` : "no version of it"}`;
     }
     case "DuplicateCapability":
       return `it provides "${error.capability}", as ${error.plugins.map((id) => `"${id}"`).join(" and ")} both do`;
+    case "ReservedCapability":
+      return appKeys.has(error.capability ?? "") ? `it provides "${error.capability}", which the app provides itself` : error.message;
     default:
       return error.message;
   }
 }
 
-function suggestionFor(error: CompositionError): string {
+/** For a plugin offering what the app provides: it cannot replace the app's service, only change what that service does. */
+const handleInstead = (capability: string | undefined) => `Handle the hooks of "${capability}" instead of providing it`;
+
+/** What to do about `error` for the plugin it leaves out. */
+function suggestionFor(error: CompositionError, appKeys: ReadonlySet<string>): string {
   switch (error.reason) {
     case "InvalidConfig":
       return `Fix its "config" row (its README lists the current settings)`;
@@ -316,9 +338,16 @@ function suggestionFor(error: CompositionError): string {
       return API_KEY.test(error.capability ?? "") ? "Update the plugin for this version of Lemma, or turn it off" : "Fix the plugin, or turn it off";
     case "DuplicateCapability":
       return "Turn one of them off";
+    case "ReservedCapability":
+      return appKeys.has(error.capability ?? "") ? `${handleInstead(error.capability)}, or turn it off` : "Fix the plugin, or turn it off";
     default:
       return "Fix the plugin, or turn it off";
   }
+}
+
+/** What to do about `error` for a plugin that must run, so cannot simply be turned off. */
+function fixFor(error: CompositionError, appKeys: ReadonlySet<string>): string {
+  return error.reason === "ReservedCapability" && error.plugins.length > 0 && appKeys.has(error.capability ?? "") ? handleInstead(error.capability) : "Fix it";
 }
 
 /** The plugin a halted one ultimately waits on: the first in its chain that is off or left out. */

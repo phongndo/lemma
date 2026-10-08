@@ -9,6 +9,10 @@ import type { KnownPlugin } from "../src/catalog.ts";
 class Llm extends Context.Service<Llm, string>()("test/Llm") {}
 class Tools extends Context.Service<Tools, string>()("test/Tools") {}
 class Agent extends Context.Service<Agent, string>()("test/Agent") {}
+/** What the app provides itself, in the tests that pass `provided`: pages requires it, and a stray file's plugin offers it too. */
+class Slots extends Context.Service<Slots, string>()("test/Slots") {}
+const pages: KnownPlugin = { plugin: definePlugin({ id: "pages", requires: [Slots], layer: Layer.empty }), source: "bundled" };
+const stray: KnownPlugin = { plugin: definePlugin({ id: "stray", provides: [Slots], layer: Layer.succeed(Slots, "stray") }), source: "user" };
 
 /** transport needs agent, which needs llm and tools; bash (a project plugin shadowing the bundled one) plugs into tools; my-llm is a second Llm provider. */
 const known: KnownPlugin[] = [
@@ -54,6 +58,18 @@ describe("resolveComposition", () => {
     expect(resolved.haltedBy.size).toBe(0);
     expect(Object.keys(resolved.composition.plugins)).toEqual(["lonely"]);
   });
+
+  test("a plugin offering what the app provides is nobody's provider: it is not locked, and halts nothing when off", () => {
+    const withStray = [pages, stray];
+    const rows: Composition = { plugins: { pages: {}, stray: { enabled: false } } };
+    // Taken for the provider, it would be forced on for a pinned plugin, and turned off it would halt what requires it.
+    expect(resolveComposition(withStray, rows, { pinned: ["pages"] }).overridden).toEqual(["stray"]);
+    expect(resolveComposition(withStray, rows).haltedBy.get("pages")).toBe("stray");
+    const pinned = resolveComposition(withStray, rows, { pinned: ["pages"], provided: [Slots] });
+    expect([...pinned.locked]).toEqual([["pages", "pages"]]);
+    expect(pinned.overridden).toEqual([]);
+    expect(resolveComposition(withStray, rows, { provided: [Slots] }).haltedBy.size).toBe(0);
+  });
 });
 
 describe("catalog", () => {
@@ -67,7 +83,7 @@ describe("catalog", () => {
 
   test("joins definitions, config rows, and core snapshots, locking what a pinned plugin needs", () => {
     const composition = everyone({ "my-llm": { enabled: false }, bash: { enabled: false } });
-    const resolved = resolveComposition(known, composition, ["transport"]);
+    const resolved = resolveComposition(known, composition, { pinned: ["transport"] });
     const entries = catalog({
       known,
       composition,
@@ -90,9 +106,9 @@ describe("catalog", () => {
   });
 
   test("a pinned plugin keeps on what it needs, whatever the rows say, and reports the rows it overrode", () => {
-    const resolved = resolveComposition(known, everyone({ "my-llm": { enabled: false }, tools: { enabled: false }, transport: { enabled: false } }), [
-      "transport",
-    ]);
+    const resolved = resolveComposition(known, everyone({ "my-llm": { enabled: false }, tools: { enabled: false }, transport: { enabled: false } }), {
+      pinned: ["transport"],
+    });
     expect([...resolved.overridden].sort()).toEqual(["tools", "transport"]);
     expect(resolved.haltedBy.size).toBe(0);
     expect(Object.entries(resolved.composition.plugins).filter(([, row]) => row.enabled === false)).toEqual([["my-llm", { enabled: false }]]);
@@ -210,5 +226,10 @@ describe("restartedBy", () => {
     expect([...restartedBy(known, ["bash"])]).toEqual(["bash"]);
     // A second provider of the same capability counts too: turning it on replaces the first.
     expect(restartedBy(known, ["my-llm"]).has("transport")).toBe(true);
+  });
+
+  test("a plugin offering what the app provides restarts nothing through it", () => {
+    expect([...restartedBy([pages, stray], ["stray"])].sort()).toEqual(["pages", "stray"]);
+    expect([...restartedBy([pages, stray], ["stray"], [Slots])]).toEqual(["stray"]);
   });
 });

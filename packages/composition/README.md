@@ -10,7 +10,7 @@ functions, so both decide alike. Browser-safe: it imports no Node API.
 ```ts
 import { catalog, faultHistory, planComposition } from "@lemma/composition";
 
-const plan = planComposition({ bundled, local, rows, pinned: ["transport"] });
+const plan = planComposition({ bundled, local, rows, pinned: ["transport"], provided: provide.provides });
 const { composition, diagnostics, required } = plan;
 ```
 
@@ -22,3 +22,10 @@ leaving out what cannot and saying why, with `required` naming what must start;
 off does to the plugins around it; `restartedBy` is what a change restarts;
 `catalog` joins each known plugin with its row and core snapshot for the
 Plugins page and the CLI, with the recent faults `faultHistory` keeps.
+
+An app that provides capabilities itself (`provide` on `makeCore` or
+`makeLoader`, in the [core README](../core/README.md#capabilities-the-application-provides))
+passes the same list as `provided` to `planComposition`, `resolveComposition`
+and `restartedBy`. Like the core's own capabilities, what it provides needs no
+plugin: a plugin offering it too, which the core refuses, cannot run like any
+other, and neither keeps on nor halts the plugins requiring it.

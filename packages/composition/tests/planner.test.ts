@@ -9,6 +9,8 @@ import type { Plan, PlanInput } from "../src/planner.ts";
 class Llm extends Context.Service<Llm, string>()("test/Llm") {}
 class Agent extends Context.Service<Agent, string>()("test/Agent") {}
 class Server extends Context.Service<Server, string>()("test/Server") {}
+/** What the app provides itself, in the tests that pass `provided`. */
+class Slots extends Context.Service<Slots, string>()("test/Slots") {}
 
 const host = definePlugin({ id: "host", provides: [HostApi(1)], layer: Layer.succeed(HostApi(1), 1) });
 const llm = definePlugin({
@@ -161,6 +163,55 @@ describe("planComposition", () => {
     });
     expect(planned.problems.get("later")).toBe("it is written for version 2 of the lemma API, and this Lemma provides version 1");
     expect(running(planned)).toContain("current");
+    // The versions the app provides itself count too, and a plugin requiring one needs no plugin for it.
+    const appProvided = plan({
+      bundled: bundled.filter((plugin) => plugin.id !== "host"),
+      pinned: ["transport"],
+      provided: [HostApi(2)],
+      local: [
+        { plugin: later, source: "user" },
+        { plugin: current, source: "user" },
+      ],
+    });
+    expect(appProvided.problems.get("current")).toBe("it is written for version 1 of the lemma API, and this Lemma provides version 2");
+    expect(running(appProvided)).toContain("later");
+  });
+
+  test("a plugin providing what the app provides is left out, even when a pinned plugin requires that", () => {
+    const pages = definePlugin({ id: "pages", requires: [Slots], layer: Layer.empty });
+    const stray = definePlugin({ id: "stray", provides: [Slots], layer: Layer.succeed(Slots, "stray") });
+    const local = [{ plugin: stray, source: "user" as const }];
+    // Pinned or not, what requires the app's capability runs, and the stray plugin is neither needed by it nor halts it.
+    for (const pinsPages of [true, false]) {
+      const planned = plan({ bundled: [...bundled, pages], local, pinned: ["host", "transport", ...(pinsPages ? ["pages"] : [])], provided: [Slots] });
+      expect(running(planned)).toContain("pages");
+      expect(running(planned)).not.toContain("stray");
+      expect(planned.diagnostics).toEqual([
+        expect.objectContaining({
+          severity: "warning",
+          pluginId: "stray",
+          message: `"stray" is left out: it provides "test/Slots", which the app provides itself`,
+          suggestion: `Handle the hooks of "test/Slots" instead of providing it, or turn it off`,
+        }),
+      ]);
+    }
+    // Under localRequired (the host), a file's plugin must start, so it stops the start.
+    const required = plan({ local, localRequired: true, provided: [Slots] });
+    expect(required.diagnostics).toEqual([
+      expect.objectContaining({
+        severity: "error",
+        pluginId: "stray",
+        message: `"stray" cannot run, and it is required: it provides "test/Slots", which the app provides itself`,
+        suggestion: `Handle the hooks of "test/Slots" instead of providing it, or set "required": false in its row to start without it`,
+      }),
+    ]);
+  });
+
+  test("what the app provides wrongly stops the start, naming no plugin", () => {
+    const { diagnostics } = plan({ provided: [Slots, Slots] });
+    expect(diagnostics.map(({ severity, pluginId, message }) => [severity, pluginId, message])).toEqual([
+      ["error", undefined, `The application lists capability "test/Slots" more than once`],
+    ]);
   });
 
   test("of two plugins providing one capability, leaves out the replacement rather than the bundled one", () => {
