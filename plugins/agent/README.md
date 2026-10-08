@@ -116,7 +116,10 @@ A prompt sent while the session's turn runs does what its `whenBusy` says:
 - `reject`: fails `Busy`.
 
 A session with a turn running cannot be deleted: the agent handles
-`SessionRemoveHook` and fails `Busy`, whoever asks.
+`SessionRemoveHook` and fails `Busy`, whoever asks. While a deletion it let
+through runs, a prompt to the session fails `Session`, so no turn starts in a
+session as it goes; its queued prompts fail `Session` too, and its journal goes
+with it.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Withdrawn`), and `QueueChanged` reports every change with a revision that only

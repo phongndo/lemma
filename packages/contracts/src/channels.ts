@@ -1,4 +1,4 @@
-import { Effect, Queue, Schema, Stream } from "effect";
+import { Effect, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { awaitable, isExpectedFailure, Registry } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
@@ -21,11 +21,21 @@ export type ChannelKind = "call" | "stream";
 export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payload = any, Success = any> {
   /** A call answers once; a stream sends elements until it ends. */
   readonly kind: Kind;
-  /** Unique across plugins by convention: `<plugin>.<name>` (`ticker.prices`). */
+  /**
+   * `<subsystem>.<name>`, a multiword name in kebab-case. The subsystem is the
+   * capability the channel serves, whichever plugin provides it
+   * (`sessions.set-title`), or else the plugin (`ticker.prices`). Unique by
+   * convention: of channels with one id, the first by order answers (see
+   * `Channels`).
+   */
   readonly id: string;
   readonly title?: string;
   readonly description?: string;
-  /** Decodes what a client sends; a payload it rejects fails `InvalidPayload` before the handler runs. `Schema.Void` takes none. */
+  /**
+   * Decodes what a client sends; a payload it rejects fails `InvalidPayload`
+   * before the handler runs. `Schema.Void` takes none; `optionalPayload` lets
+   * a client leave out one whose fields are all optional.
+   */
   readonly payload: Schema.Codec<Payload, any>;
   /** Encodes a call's result, or each element of a stream, for the wire. */
   readonly success: Schema.Codec<Success, any>;
@@ -77,6 +87,25 @@ export type Channel = ChannelCall | ChannelStream;
 export const defineChannel = <const Kind extends ChannelKind, Payload, Success>(
   declaration: ChannelDeclaration<Kind, Payload, Success>,
 ): ChannelDeclaration<Kind, Payload, Success> => declaration;
+
+/**
+ * A payload of `fields` that a client may leave out: none (`null` on the wire)
+ * decodes as `{}`. For a call whose fields are all optional, such as a
+ * listing's filters, so a client calling it by id needs no `{}`
+ * (`lemma channels call sessions.list`). A typed client still passes an object.
+ */
+export const optionalPayload = <const Fields extends Schema.Struct.Fields>(fields: Fields) => {
+  const struct = Schema.Struct(fields);
+  return Schema.NullOr(struct).pipe(
+    Schema.decodeTo(
+      Schema.toType(struct),
+      SchemaTransformation.transform({
+        decode: (payload) => payload ?? ({} as typeof struct.Type),
+        encode: (payload) => payload,
+      }),
+    ),
+  );
+};
 
 /** What serves a channel of `Kind`: the `handle` of a `ChannelCall` or a `ChannelStream`. */
 export type ChannelHandler<Kind extends ChannelKind, Payload, Success> = Kind extends "call"

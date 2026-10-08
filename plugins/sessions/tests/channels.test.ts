@@ -39,8 +39,9 @@ describe("the sessions channels, through the transport", () => {
       Effect.gen(function* () {
         const made = (yield* call(client, "sessions.create", { cwd: "/work/app" })) as SessionInfo;
         expect(made).toMatchObject({ cwd: "/work/app", lastSeq: 0 });
-        // No `cwd`: the host's.
+        // No `cwd`, or no payload at all: the host's.
         expect(yield* call(client, "sessions.create", {})).toMatchObject({ cwd: "/work" });
+        expect(yield* call(client, "sessions.create")).toMatchObject({ cwd: "/work" });
 
         const titled = (yield* call(client, "sessions.set-title", { sessionId: made.id, title: "First" })) as SessionInfo;
         expect(titled).toMatchObject({ id: made.id, title: "First", lastSeq: 1 });
@@ -57,7 +58,9 @@ describe("the sessions channels, through the transport", () => {
         expect(yield* call(client, "sessions.mark", { sessionId: made.id, pinned: true })).toMatchObject({ pinned: true });
         expect(yield* call(client, "sessions.mark", { sessionId: made.id, archived: true })).toMatchObject({ pinned: true, archived: true });
 
-        expect(((yield* call(client, "sessions.list", {})) as SessionInfo[]).map((info) => info.cwd).sort()).toEqual(["/work", "/work/app"]);
+        expect(((yield* call(client, "sessions.list", {})) as SessionInfo[]).map((info) => info.cwd).sort()).toEqual(["/work", "/work", "/work/app"]);
+        // Called as `lemma channels` lists it, with no payload: every session.
+        expect(((yield* call(client, "sessions.list")) as SessionInfo[]).length).toBe(3);
         expect(((yield* call(client, "sessions.list", { cwd: "/work/app" })) as SessionInfo[]).map((info) => info.id)).toEqual([made.id]);
 
         expect(yield* call(client, "sessions.delete", { sessionId: made.id })).toBeNull();

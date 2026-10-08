@@ -2,7 +2,7 @@ import { Context, Data, Effect, Schema, Stream } from "effect";
 import { Event, Hook } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
-import { defineChannel, eventFeed, serveChannel } from "./channels.ts";
+import { defineChannel, eventFeed, optionalPayload, serveChannel } from "./channels.ts";
 import type { Channel } from "./channels.ts";
 import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "./llm.ts";
 
@@ -222,7 +222,7 @@ export const SessionsChannels = {
     id: "sessions.list",
     title: "List sessions",
     description: "Every session, or those in a directory (cwd), most recently updated first",
-    payload: Schema.Struct({ cwd: Schema.optional(Schema.String) }),
+    payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
     success: Schema.Array(SessionInfo),
   }),
   get: defineChannel({
@@ -238,7 +238,7 @@ export const SessionsChannels = {
     id: "sessions.create",
     title: "Create a session",
     description: "A new, empty session in a directory (cwd), the host's when absent",
-    payload: Schema.Struct({ cwd: Schema.optional(Schema.String) }),
+    payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
     success: SessionInfo,
   }),
   /** Losable notifications leave gaps (`sessions.changes`); a client repairs them from here, by `seq`. */

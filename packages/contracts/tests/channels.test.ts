@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Schema, Stream } from "effect";
+import { Deferred, Effect, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { Event, Events, makeCore } from "@lemma/core";
-import { channelProblem, eventFeed, serveChannel } from "../src/channels.ts";
+import { channelProblem, eventFeed, optionalPayload, serveChannel, wireCodec } from "../src/channels.ts";
 
 describe("channelProblem", () => {
   const good = { kind: "call", id: "probe.call", payload: Schema.Void, success: Schema.Void, handle: () => Effect.void };
@@ -45,15 +45,30 @@ describe("eventFeed", () => {
     ));
 
   test("keeps each source's order, and a client that falls behind loses the oldest", () =>
-    withEvents((events) =>
+    Effect.runPromise(
       Effect.gen(function* () {
-        // Five published before the client reads any: it keeps the latest three.
-        const first = Effect.as(
-          Effect.forEach([1, 2, 3, 4, 5], (n) => events.publish(Ping, n), { discard: true }),
-          0,
-        );
-        const feed = eventFeed(first, [events.stream(Ping, { buffer: 3 })], 3);
+        // Five moved on from the source before the client reads any: the feed keeps the latest three.
+        const sent = yield* Deferred.make<void>();
+        const source = Stream.concat(Stream.make(1, 2, 3, 4, 5), Stream.drain(Stream.fromEffect(Deferred.succeed(sent, undefined))));
+        const feed = eventFeed(Effect.as(Deferred.await(sent), 0), [source], 3);
         expect(yield* take(feed, 4)).toEqual([0, 3, 4, 5]);
       }),
     ));
+});
+
+describe("optionalPayload", () => {
+  const filters = wireCodec(optionalPayload({ cwd: Schema.optional(Schema.String) }));
+  const decode = (payload: unknown) => Schema.decodeUnknownSync(filters)(payload);
+
+  test("takes no payload (null on the wire) as no fields, and a payload as its fields", () => {
+    expect(decode(null)).toEqual({});
+    expect(decode({})).toEqual({});
+    expect(decode({ cwd: "/work" })).toEqual({ cwd: "/work" });
+    expect(Schema.encodeUnknownSync(filters)({ cwd: "/work" })).toEqual({ cwd: "/work" });
+  });
+
+  test("still rejects a malformed one", () => {
+    expect(() => decode({ cwd: 1 })).toThrow();
+    expect(() => decode("all")).toThrow();
+  });
 });

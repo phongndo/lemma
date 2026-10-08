@@ -13,7 +13,6 @@ import {
   QueueChanged,
   serveAgent,
   SessionError,
-  SessionRemoved,
   SessionRemoveHook,
   Sessions,
   ToolOutput,
@@ -205,6 +204,8 @@ export default definePlugin({
     };
     /** Serializes queue and turn changes: admission, placement, a turn ending and the next starting. */
     const admit = yield* Semaphore.make(1);
+    /** Sessions being deleted, with how many removals of each are under way: a prompt to one fails `Session`. */
+    const removing = new Map<string, number>();
     /** Serializes journal writes, so the last one written is the latest state. */
     const writing = yield* Semaphore.make(1);
 
@@ -492,6 +493,9 @@ export default definePlugin({
         const waitOn = yield* admit.withPermits(1)(
           Effect.uninterruptible(
             Effect.gen(function* () {
+              if (removing.has(sessionId)) {
+                return yield* new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} is being deleted` });
+              }
               const state = stateOf(sessionId);
               if (requestId !== undefined) {
                 // Dropped meanwhile if the session went idle: read again, under the lock, so the check is complete.
@@ -578,6 +582,22 @@ export default definePlugin({
         }),
       );
 
+    /** A deleted session's queue and journal go with it. */
+    const removed = (sessionId: string) =>
+      admit.withPermits(1)(
+        Effect.gen(function* () {
+          const state = states.get(sessionId);
+          // Only a turn resumed as the agent started can be here (none starts while `removing`): it ends on its own.
+          if (state?.turn !== undefined) return;
+          states.delete(sessionId);
+          requests.drop(sessionId);
+          for (const item of state?.queue ?? []) {
+            yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
+          }
+          yield* removeState(home, sessionId);
+        }),
+      );
+
     const view = (sessionId: string): Effect.Effect<AgentView> =>
       Effect.sync(() => {
         // A session never prompted here gets no state: a view keeps nothing.
@@ -596,32 +616,31 @@ export default definePlugin({
         }),
       { buffer: 1024, overflow: "suspend" },
     );
-    // Deleting a session cuts off a turn running in it, so it is refused, whoever asks. A prompt admitted before the
-    // check has its turn by then; one admitted after it finds the session gone, and fails.
-    yield* owner.on(SessionRemoveHook, (input, next) =>
-      Effect.gen(function* () {
-        const { sessionId } = input;
-        if (yield* admit.withPermits(1)(Effect.sync(() => states.get(sessionId)?.turn !== undefined))) {
-          return yield* new SessionError({ sessionId, reason: "Busy", message: "A turn is running in this session; stop it before deleting" });
-        }
-        return yield* next(input);
-      }),
-    );
-    // A deleted session's queue and journal go with it.
-    yield* owner.observe(SessionRemoved, ({ sessionId }) =>
-      admit.withPermits(1)(
-        Effect.gen(function* () {
-          const state = states.get(sessionId);
-          if (state?.turn !== undefined) return;
-          states.delete(sessionId);
-          requests.drop(sessionId);
-          for (const item of state?.queue ?? []) {
-            yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
-          }
-          yield* removeState(home, sessionId);
-        }),
-      ),
-    );
+    // Deleting a session cuts off a turn running in it, so it is refused, whoever asks. Once the check passes, no prompt
+    // is admitted to the session until the removal ends (`removing`), and by then its queue and journal are gone with
+    // it: no turn starts in a session being deleted, or deleted. The lock is not held while the removal runs, since a
+    // later handler calling the agent would wait on it for good.
+    yield* owner.on(SessionRemoveHook, (input, next) => {
+      const { sessionId } = input;
+      return Effect.acquireUseRelease(
+        admit.withPermits(1)(
+          Effect.suspend(() => {
+            if (states.get(sessionId)?.turn !== undefined) {
+              return Effect.fail(new SessionError({ sessionId, reason: "Busy", message: "A turn is running in this session; stop it before deleting" }));
+            }
+            removing.set(sessionId, (removing.get(sessionId) ?? 0) + 1);
+            return Effect.void;
+          }),
+        ),
+        () => Effect.andThen(next(input), removed(sessionId)),
+        () =>
+          Effect.sync(() => {
+            const left = (removing.get(sessionId) ?? 1) - 1;
+            if (left === 0) removing.delete(sessionId);
+            else removing.set(sessionId, left);
+          }),
+      );
+    });
 
     // What the last instance left: turns to resume, and queues to run on. Prompts the log already has were placed
     // before it stopped, whatever the journal says.

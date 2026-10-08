@@ -12,11 +12,13 @@ import {
   Paths,
   rebuildRequest,
   SessionError,
+  SessionRemoveHook,
   Sessions,
   ToolResult,
 } from "@lemma/contracts";
 import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
+import { readJournals } from "../src/state.ts";
 import { BRANCHED_CALL, unansweredCalls } from "../src/turn.ts";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
 import type { AgentSetup } from "./fakes.ts";
@@ -452,6 +454,56 @@ describe("agent", () => {
           (n) => n === 1,
         );
         expect(ofType(yield* log(id), "turn-end")[0]!.reason).toBe("done");
+      }),
+    );
+  });
+
+  it("refuses deleting a session while its turn runs; admits no prompt while a deletion runs, and drops the queue with it", async () => {
+    const entered = Effect.runSync(Deferred.make<void>());
+    const release = Effect.runSync(Deferred.make<void>());
+    // Inside the agent's handler (a later order): past the agent's check, a deletion waits for `release`, as on a slow disk.
+    const slowRemoval = definePlugin({
+      id: "slow-removal",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(
+            SessionRemoveHook,
+            (input, next) =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(entered, undefined);
+                yield* Deferred.await(release);
+                return yield* next(input);
+              }),
+            { order: 1 },
+          ),
+        ).pipe(Effect.orDie),
+      ),
+    });
+    await withAgent({ plugins: [slowRemoval], scripts: [hang("thinking")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const store = yield* Sessions;
+        const first = yield* Effect.forkChild(a.prompt(id, text("go")));
+        yield* waitFor(a.busy(id), (busy) => busy);
+        const queued = yield* Effect.forkChild(Effect.flip(a.prompt(id, text("next"))));
+        yield* waitFor(a.queue(id), (queue) => queue.length === 1);
+        expect(yield* Effect.flip(store.remove(id))).toMatchObject({ reason: "Busy", sessionId: id });
+        // Cancelled, the turn leaves its follow-up queued for the next prompt.
+        yield* a.cancel(id);
+        yield* Fiber.join(first);
+        expect(yield* a.queue(id)).toHaveLength(1);
+
+        const removal = yield* Effect.forkChild(store.remove(id));
+        yield* Deferred.await(entered);
+        // The session is still there, but no turn starts in it.
+        expect(yield* Effect.flip(a.prompt(id, text("too late")))).toMatchObject({ reason: "Session", sessionId: id });
+        expect(yield* a.busy(id)).toBe(false);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(removal);
+        expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: id });
+        expect(yield* a.queue(id)).toEqual([]);
+        expect((yield* readJournals(dir)).has(id)).toBe(false);
       }),
     );
   });
