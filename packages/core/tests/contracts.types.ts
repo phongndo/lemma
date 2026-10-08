@@ -1,7 +1,9 @@
 // Checked by core:check, not executed. These assertions protect the public seam.
 import { Context, Effect, Layer, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
-import { definePlugin, Event, Events, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
+import { definePlugin, Event, Events, Hook, Hooks, makeCore, makeLoader, PluginContext } from "../src/index.ts";
+import type { CompositionError, PluginFault } from "../src/index.ts";
 
 class Value extends Context.Service<Value, string>()("types/Value") {}
 class Other extends Context.Service<Other, number>()("types/Other") {}
@@ -147,6 +149,53 @@ export function setups() {
       }),
     ),
   );
+}
+
+// Capabilities the application provides: checked against its layer, and satisfied in the core like a plugin's.
+export function applications() {
+  const consumer = definePlugin({
+    id: "consumer",
+    requires: [Value],
+    provides: [Other],
+    layer: Layer.effect(
+      Other,
+      Effect.map(Value, (value) => value.length),
+    ),
+  });
+  Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const core = yield* makeCore([consumer], { provide: { provides: [Value], layer: Layer.succeed(Value, "v") } });
+        const value: string = yield* core.run(Value);
+        const other: number = yield* core.run(Other);
+        // @ts-expect-error Nothing provides Prefix.
+        Effect.runPromise(core.run(Prefix));
+        return value.length + other;
+      }),
+    ),
+  );
+  // Its layer may use the core's built-ins.
+  makeCore([], { provide: { provides: [Value], layer: Layer.effect(Value, Effect.as(Hooks, "v")) } });
+  makeCore([], {
+    // @ts-expect-error The layer does not provide Value.
+    provide: { provides: [Value], layer: Layer.succeed(Other, 1) },
+  });
+  makeCore([], {
+    // @ts-expect-error The layer may use only Hooks, Events, and Registries.
+    provide: { provides: [Value], layer: Layer.effect(Value, Prefix) },
+  });
+  makeLoader({
+    source: { resolve: () => Effect.die("unused") },
+    composition: { plugins: {} },
+    // @ts-expect-error The layer does not provide Value.
+    provide: { provides: [Value], layer: Layer.succeed(Other, 1) },
+  });
+  // The layer's failure is makeCore's.
+  const failing = makeCore([], { provide: { provides: [Value], layer: Layer.effect(Value, Effect.fail("down" as const)) } });
+  const typed: Effect.Effect<unknown, "down" | CompositionError | PluginFault, Scope.Scope> = failing;
+  // @ts-expect-error It can fail with the layer's error.
+  const untyped: Effect.Effect<unknown, CompositionError | PluginFault, Scope.Scope> = failing;
+  return [typed, untyped];
 }
 
 // The promise-based view of services: what plain plugins see.

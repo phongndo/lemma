@@ -133,6 +133,47 @@ describe("supervision", () => {
     );
   });
 
+  test("a failure never revokes what the application provides, nor drains work that used only that", async () => {
+    class Clock extends Context.Service<Clock, { readonly now: () => number }>()("test/Clock") {}
+    const clock = { now: () => 1 };
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const triggers: Deferred.Deferred<void>[] = [];
+        const timer = definePlugin({ id: "timer", requires: [Clock], layer: Layer.empty });
+        const watcher = definePlugin({ id: "watcher", requires: [Clock, Db], layer: Layer.empty });
+        const core = yield* makeCore([flaky({ required: true, log, triggers }), api(log), timer, watcher], {
+          provide: { provides: [Clock], layer: Layer.succeed(Clock, clock) },
+        });
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const task = yield* Effect.forkChild(
+          core.run(
+            Effect.gen(function* () {
+              const service = yield* Clock;
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              return service.now();
+            }),
+          ),
+        );
+        yield* Deferred.await(entered);
+        yield* Deferred.succeed(triggers[0]!, undefined);
+        // Failing does not wait for the task: it used none of the failed capabilities.
+        const snapshot = yield* waitFor(core.inspect, (s) => s.plugins.find((p) => p.id === "db")?.state === "failed");
+        expect(Object.fromEntries(snapshot.plugins.map((p) => [p.id, [p.state, p.haltedBy]]))).toEqual({
+          db: ["failed", undefined],
+          api: ["closed", "db"],
+          timer: ["active", undefined],
+          watcher: ["closed", "db"],
+        });
+        expect(yield* core.run(Clock)).toBe(clock);
+        yield* Deferred.succeed(release, undefined);
+        expect(yield* Fiber.join(task)).toBe(1);
+      }),
+    );
+  });
+
   test("a restart schedule retries a failed plugin and stops when exhausted", async () => {
     await run(
       Effect.gen(function* () {

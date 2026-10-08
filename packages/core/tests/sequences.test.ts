@@ -6,14 +6,17 @@ import type { Composition, CoreSnapshot, Loader, Plugin, PluginFault } from "../
 import { waitFor } from "./support.ts";
 
 /**
- * Model: four plugins (b needs a, c needs b, d is independent). Each activation
- * acquires one resource, registers one hook handler and one observer, and runs
- * one required background task the test can fail on demand. Fault switches make
- * activation or disposal fail. Random command sequences must keep the invariants
- * in `check` true after every step; fast-check shrinks any counterexample.
+ * Model: four plugins (b needs a, c needs b, d is independent), and a capability
+ * the application provides, with one resource of its own, that c and d use. Each
+ * activation acquires one resource, registers one hook handler and one observer,
+ * and runs one required background task the test can fail on demand. Fault
+ * switches make activation or disposal fail. Random command sequences must keep
+ * the invariants in `check` true after every step; fast-check shrinks any
+ * counterexample.
  */
 class A extends Context.Service<A, string>()("seq/A") {}
 class B extends Context.Service<B, string>()("seq/B") {}
+class App extends Context.Service<App, string>()("seq/App") {}
 const Ping = Hook.make<number, number>("seq/ping");
 const Tick = Event.make<number>("seq/tick");
 const ids = ["a", "b", "c", "d"] as const;
@@ -26,9 +29,26 @@ interface World {
   /** Background-failure trigger per instance key. */
   readonly triggers: Map<string, Deferred.Deferred<void>>;
   generation: number;
+  /** The application's resource: how many are live, and how many were ever acquired. */
+  readonly application: { live: number; acquired: number };
 }
 
 const Config = Schema.Struct({ version: Schema.Number });
+
+const application = (world: World) => ({
+  provides: [App],
+  layer: Layer.effect(
+    App,
+    Effect.acquireRelease(
+      Effect.sync(() => {
+        world.application.live++;
+        world.application.acquired++;
+        return "app";
+      }),
+      () => Effect.sync(() => void world.application.live--),
+    ),
+  ),
+});
 
 function fixtures(world: World): Record<Id, Plugin> {
   // Raw manifests model the untyped package seam; the runtime validates exports and inputs.
@@ -63,7 +83,7 @@ function fixtures(world: World): Record<Id, Plugin> {
         }),
       ) as Layer.Layer<never, unknown, unknown>,
   });
-  return { a: make("a", [A], []), b: make("b", [B], [A]), c: make("c", [], [B]), d: make("d", [], []) };
+  return { a: make("a", [A], []), b: make("b", [B], [A]), c: make("c", [], [B, App]), d: make("d", [], [App]) };
 }
 
 type Command =
@@ -113,10 +133,13 @@ function check(world: World, snapshot: CoreSnapshot, faults: readonly PluginFaul
   expect(snapshot.events.flatMap((e) => e.observers).sort()).toEqual([...active].sort());
   // No active plugin depends on an inactive one.
   for (const id of active) expect(requires[id] === undefined || active.includes(requires[id])).toBe(true);
-  // A halted plugin names an inactive root.
-  for (const p of snapshot.plugins) if (p.haltedBy) expect(active.includes(p.haltedBy as Id)).toBe(false);
+  // A halted plugin names an inactive root, always a plugin, never the application.
+  for (const p of snapshot.plugins) if (p.haltedBy) expect([ids.includes(p.haltedBy as Id), active.includes(p.haltedBy as Id)]).toEqual([true, false]);
   // Every fault is attributed to a known plugin.
   for (const fault of faults) expect(ids.includes(fault.pluginId as Id)).toBe(true);
+  // The application's capability stays, its one resource acquired once, whatever plugins do.
+  expect(snapshot.provided).toEqual([App.key]);
+  expect(world.application).toEqual({ live: 1, acquired: 1 });
 }
 
 const settle = (loader: Loader) => waitFor(loader.core.inspect, (s) => s.plugins.every((p) => ["active", "failed", "closed"].includes(p.state)));
@@ -125,7 +148,13 @@ describe("command sequences", () => {
   test("random load/reload/fail/restart sequences preserve ownership, registration, and dependency invariants", async () => {
     await fc.assert(
       fc.asyncProperty(fc.array(command, { minLength: 1, maxLength: 12 }), async (commands) => {
-        const world: World = { live: new Set(), faults: { activate: new Set(), dispose: new Set() }, triggers: new Map(), generation: 0 };
+        const world: World = {
+          live: new Set(),
+          faults: { activate: new Set(), dispose: new Set() },
+          triggers: new Map(),
+          generation: 0,
+          application: { live: 0, acquired: 0 },
+        };
         const all = fixtures(world);
         const source = {
           resolve: (id: string) =>
@@ -140,6 +169,7 @@ describe("command sequences", () => {
                 source,
                 composition: composition(["a", "b"], 1),
                 deadlines: { activate: Duration.seconds(1), dispose: Duration.millis(200) },
+                provide: application(world),
               });
               let applied = new Map<Id, number>([
                 ["a", 1],
@@ -250,6 +280,7 @@ describe("command sequences", () => {
                 );
                 yield* settle(loader);
                 check(world, yield* loader.core.inspect, faults);
+                expect(yield* loader.core.run(App)).toBe("app");
               }
             }),
           ).pipe(
@@ -262,6 +293,7 @@ describe("command sequences", () => {
           ),
         );
         expect(world.live.size).toBe(0);
+        expect(world.application).toEqual({ live: 0, acquired: 1 });
       }),
       {
         numRuns: Number(process.env.LEMMA_SEQUENCE_RUNS ?? 60),

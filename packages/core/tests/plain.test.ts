@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Effect, Exit, Fiber, Option, Result, Stream } from "effect";
-import { definePlugin as defineEffectPlugin, Event, Hook, Hooks, makeCore, PluginFault, PluginStopped, Registry } from "../src/index.ts";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Result, Stream } from "effect";
+import { definePlugin as defineEffectPlugin, Event, Hook, Hooks, makeCore, makeLoader, PluginFault, PluginStopped, Registry } from "../src/index.ts";
+import type { Plugin } from "../src/index.ts";
 import { asEffect, awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
 import type { PlainSetup } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
@@ -244,6 +245,28 @@ describe("a plugin written with promises", () => {
     expect(await kept!.get("a")).toBe("1");
     await tested.close();
     await expect(kept!.get("a")).rejects.toBeInstanceOf(PluginStopped);
+  });
+
+  test("a view of what the application provides is the plugin's own: it refuses once that plugin stops, and others' still work", async () => {
+    const { store } = makeStore({ a: "1" });
+    const kept = new Map<string, { readonly get: (key: string) => Promise<string> }>();
+    const keeper = (id: string) => definePlugin({ id, requires: { store: Store }, setup: ({ store }) => void kept.set(id, store) });
+    const plugins: Record<string, Plugin> = { first: keeper("first"), second: keeper("second") };
+    await run(
+      Effect.gen(function* () {
+        const loader = yield* makeLoader({
+          source: { resolve: (id) => Effect.succeed(plugins[id]!) },
+          composition: { plugins: { first: {}, second: {} } },
+          provide: { provides: [Store], layer: Layer.succeed(Store, store) },
+        });
+        yield* loader.apply({ plugins: { second: {} } });
+        yield* Effect.promise(async () => {
+          await expect(kept.get("first")!.get("a")).rejects.toBeInstanceOf(PluginStopped);
+          expect(await kept.get("second")!.get("a")).toBe("1");
+        });
+        expect(yield* loader.core.run(Effect.flatMap(Store, (service) => service.get("a")))).toBe("1");
+      }),
+    );
   });
 
   test("a failed call nobody awaited is reported as its fault, not an unhandled rejection", async () => {

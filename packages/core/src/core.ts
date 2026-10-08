@@ -1,5 +1,5 @@
 import { Effect, Result } from "effect";
-import type { Duration, Scope, Stream } from "effect";
+import type { Duration, Layer, Scope, Stream } from "effect";
 import type { CompositionError, CoreClosed, PluginFault, ReloadError, ReportedFault, ShutdownTimeout } from "./errors.ts";
 import type { Events } from "./events.ts";
 import type { Hooks } from "./hooks.ts";
@@ -8,8 +8,8 @@ import type { HookSnapshot } from "./internal/hooks.ts";
 import type { RegistrySnapshot } from "./internal/registries.ts";
 import type { Registries } from "./registries.ts";
 import { plan } from "./internal/graph.ts";
-import { makeRuntime } from "./internal/runtime.ts";
-import type { Deadlines, Identifiers, Plugin } from "./plugin.ts";
+import { makeRuntime, PlanError } from "./internal/runtime.ts";
+import type { Capability, Deadlines, Identifiers, Plugin } from "./plugin.ts";
 
 /**
  * Lifecycle, distinct from health. "draining" no longer admits work while
@@ -36,6 +36,8 @@ export interface CoreSnapshot {
   readonly faultSequence: number;
   /** Retained even if cleanup subsequently finishes. */
   readonly shutdownFault?: ShutdownTimeout;
+  /** Capability keys the application provides (`provide`), in declared order. They have no plugin row. */
+  readonly provided: readonly string[];
   /** Dependency order; independent plugins use code-unit id order. */
   readonly plugins: readonly PluginSnapshot[];
   readonly hooks: readonly HookSnapshot[];
@@ -44,13 +46,32 @@ export interface CoreSnapshot {
   readonly registries: readonly RegistrySnapshot[];
 }
 
-export interface CoreOptions {
+/**
+ * Capabilities the embedding application provides itself: its runtime, which
+ * plugins are written against. Plugins require them as they require any
+ * other; none may provide one. Fixed for the life of the core or loader:
+ * never stopped, replaced, or revoked while plugins come and go.
+ */
+export interface ApplicationServices<Provides extends readonly Capability[] = readonly Capability[], E = unknown> {
+  /** What it provides, known without building it (planning, `checkComposition`). The built services must match exactly. */
+  readonly provides: Provides;
+  /**
+   * Built once, before the first plugin activates, with the core's `Hooks`,
+   * `Events`, and `Registries` and nothing of the caller's but its runtime
+   * settings. Its scope closes after the last plugin is disposed.
+   */
+  readonly layer: Layer.Layer<NoInfer<Identifiers<Provides>>, E, Hooks | Events | Registries>;
+}
+
+export interface CoreOptions<Provides extends readonly Capability[] = readonly Capability[], E = unknown> {
   /** Config per plugin id, decoded with each plugin's schema before any activation. */
   readonly configs?: Readonly<Record<string, unknown>>;
   /** Applied to plugins that declare none. Defaults: activate 30s, dispose 10s. */
   readonly deadlines?: Deadlines;
   /** Total closing-caller wait; defaults to the core dispose deadline (10s). Cleanup continues on timeout. */
   readonly shutdownTimeout?: Duration.Input;
+  /** Capabilities the application provides itself; see `ApplicationServices`. */
+  readonly provide?: ApplicationServices<Provides, E>;
 }
 
 export interface RestartOptions {
@@ -73,16 +94,18 @@ export interface Core<Capabilities = never> {
 }
 
 /**
- * Mount a fixed composition in the caller's Scope. Validation precedes activation;
- * failed/interrupted activation unwinds immediately, even if the caller catches it.
- * Close the owning scope to interrupt work, then dispose plugins in reverse order.
+ * Mount a fixed composition in the caller's Scope. The application's services
+ * are built first, and fail it with their layer's error. Validation precedes
+ * activation; failed/interrupted activation unwinds immediately, even if the
+ * caller catches it. Close the owning scope to interrupt work, then dispose
+ * plugins in reverse order, and the application's services last.
  */
-export function makeCore<const Plugins extends readonly Plugin[]>(
+export function makeCore<const Plugins extends readonly Plugin[], const Provides extends readonly Capability[] = readonly [], E = never>(
   plugins: Plugins,
-  options: CoreOptions = {},
-): Effect.Effect<Core<Identifiers<Plugins[number]["provides"]>>, CompositionError | PluginFault, Scope.Scope> {
+  options: CoreOptions<Provides, E> = {},
+): Effect.Effect<Core<Identifiers<Plugins[number]["provides"]> | Identifiers<Provides>>, CompositionError | PluginFault | E, Scope.Scope> {
   return Effect.gen(function* () {
-    const runtime = yield* makeRuntime(options);
+    const runtime = yield* makeRuntime(options).pipe(Effect.mapError((error) => (error instanceof PlanError ? error.errors[0] : error)));
     const members = plugins.map((plugin) => {
       const config = options.configs?.[plugin.id];
       return { plugin, ...(config === undefined ? {} : { config }) };
@@ -102,9 +125,16 @@ export function makeCore<const Plugins extends readonly Plugin[]>(
  * capabilities, cycles, and configs their Schemas reject. Empty when it would
  * plan. An application decides from it what to leave out before starting.
  */
-export function checkComposition(plugins: readonly Plugin[], configs: Readonly<Record<string, unknown>> = {}): readonly CompositionError[] {
+export function checkComposition(
+  plugins: readonly Plugin[],
+  configs: Readonly<Record<string, unknown>> = {},
+  options: {
+    /** What the application provides (its `provide.provides`): present for every plugin, and provided by none. */
+    readonly provided?: readonly Capability[];
+  } = {},
+): readonly CompositionError[] {
   return Result.match(
-    plan(plugins, (id) => configs[id]),
+    plan(plugins, (id) => configs[id], new Set(options.provided?.map((tag) => tag.key))),
     { onFailure: (errors) => errors, onSuccess: () => [] },
   );
 }

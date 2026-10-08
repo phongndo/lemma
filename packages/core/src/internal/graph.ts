@@ -17,16 +17,34 @@ interface Planned {
   readonly providers: ReadonlyMap<string, string>;
 }
 
+/** The application's capabilities that name one the runtime supplies itself. */
+export function reservedByApplication(provided: Iterable<string>): CompositionError[] {
+  return [...provided].flatMap((key) =>
+    reserved.has(key)
+      ? [
+          new CompositionError({
+            reason: "ReservedCapability",
+            message: `The application cannot provide runtime capability "${key}"`,
+            plugins: [],
+            capability: key,
+          }),
+        ]
+      : [],
+  );
+}
+
 /**
  * Validate a whole composition before executing any plugin code. Every problem
  * is collected so a reload can report them all at once; the first is enough to
- * reject a fixed composition.
+ * reject a fixed composition. `provided` keys are the application's: present
+ * for every plugin, and provided by none.
  */
 export function plan(
   plugins: readonly Plugin[],
   rawConfigs: (id: string) => unknown,
+  provided: ReadonlySet<string> = new Set(),
 ): Result.Result<Planned, readonly [CompositionError, ...CompositionError[]]> {
-  const errors: CompositionError[] = [];
+  const errors: CompositionError[] = reservedByApplication(provided);
   const byId = new Map<string, Plugin>();
   const providers = new Map<string, Plugin>();
 
@@ -58,6 +76,17 @@ export function plan(
           new CompositionError({
             reason: "ReservedCapability",
             message: `Plugin "${plugin.id}" cannot provide runtime capability "${tag.key}"`,
+            plugins: [plugin.id],
+            capability: tag.key,
+          }),
+        );
+        continue;
+      }
+      if (provided.has(tag.key)) {
+        errors.push(
+          new CompositionError({
+            reason: "ReservedCapability",
+            message: `Plugin "${plugin.id}" cannot provide "${tag.key}": the application provides it`,
             plugins: [plugin.id],
             capability: tag.key,
           }),
@@ -106,7 +135,7 @@ export function plan(
   for (const plugin of byId.values()) {
     const required = new Set<Plugin>();
     for (const tag of plugin.requires) {
-      if (builtins.has(tag.key)) continue;
+      if (builtins.has(tag.key) || provided.has(tag.key)) continue;
       const provider = providers.get(tag.key);
       if (!provider) {
         errors.push(

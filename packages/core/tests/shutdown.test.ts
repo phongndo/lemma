@@ -1,7 +1,7 @@
-import { expect, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect";
 import { definePlugin, makeCore } from "../src/index.ts";
 import { waitFor } from "./support.ts";
 
@@ -99,4 +99,69 @@ test("a dependent's disposal deadline retains its provider until actual cleanup 
       expect(disposed).toEqual(["dependent", "provider"]);
     }),
   );
+});
+
+describe("the application's services", () => {
+  class Resource extends Context.Service<Resource, string>()("shutdown/Application") {}
+  /** Releases once `release` is done (at once without one), then runs `after`. */
+  const application = (log: string[], release?: Deferred.Deferred<void>, after: Effect.Effect<void> = Effect.void) => ({
+    provides: [Resource] as const,
+    layer: Layer.effect(
+      Resource,
+      Effect.acquireRelease(Effect.succeed("resource"), () =>
+        (release === undefined ? Effect.void : Deferred.await(release)).pipe(
+          Effect.andThen(Effect.sync(() => void log.push("application"))),
+          Effect.andThen(after),
+        ),
+      ),
+    ),
+  });
+  const user = (log: string[]) =>
+    definePlugin({ id: "user", requires: [Resource], layer: Layer.effectDiscard(Effect.addFinalizer(() => Effect.sync(() => void log.push("user")))) });
+
+  test("are released after the last plugin, and a defect releasing them surfaces from scope closure", async () => {
+    const log: string[] = [];
+    const exit = await Effect.runPromiseExit(Effect.scoped(makeCore([user(log)], { provide: application(log, undefined, Effect.die("release failed")) })));
+    expect(log).toEqual(["user", "application"]);
+    expect(Exit.isFailure(exit) && Cause.pretty(exit.cause)).toContain("release failed");
+  });
+
+  test("a release past the shutdown timeout is a ShutdownTimeout, and the core stays closing until it finishes", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const release = yield* Deferred.make<void>();
+        const scope = yield* Scope.make();
+        const core = yield* Scope.provide(makeCore([user(log)], { shutdownTimeout: "20 millis", provide: application(log, release) }), scope);
+        expect(Exit.isFailure(yield* Effect.exit(Scope.close(scope, Exit.void)))).toBe(true);
+        expect((yield* core.inspect).shutdownFault?._tag).toBe("ShutdownTimeout");
+        expect((yield* core.inspect).state).toBe("closing");
+        expect(log).toEqual(["user"]);
+        yield* Deferred.succeed(release, undefined);
+        yield* waitFor(core.inspect, (snapshot) => snapshot.state === "closed");
+        expect(log).toEqual(["user", "application"]);
+      }),
+    );
+  });
+
+  test("a release past the dispose deadline surfaces at once, and the core stays closing until it finishes", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const release = yield* Deferred.make<void>();
+        const scope = yield* Scope.make();
+        const options = { deadlines: { dispose: "20 millis" }, shutdownTimeout: "5 seconds", provide: application(log, release) } as const;
+        const core = yield* Scope.provide(makeCore([user(log)], options), scope);
+        const started = Date.now();
+        const exit = yield* Effect.exit(Scope.close(scope, Exit.void));
+        expect(Date.now() - started).toBeLessThan(1000);
+        expect(Exit.isFailure(exit) && Cause.pretty(exit.cause)).toContain("did not release within");
+        expect((yield* core.inspect).shutdownFault).toBeUndefined();
+        expect((yield* core.inspect).state).toBe("closing");
+        yield* Deferred.succeed(release, undefined);
+        yield* waitFor(core.inspect, (snapshot) => snapshot.state === "closed");
+        expect(log).toEqual(["user", "application"]);
+      }),
+    );
+  });
 });

@@ -29,7 +29,10 @@ describe("testPlugin", () => {
       const fault = await tested.waitForFault((candidate) => candidate.phase === "background");
       expect(fault.pluginId).toBe("stamper");
       expect(fault.operation).toBe("audit");
-      expect((await tested.inspect()).plugins.map((plugin) => plugin.id)).toEqual(["test-double test/Clock", "stamper"]);
+      // A stand-in is the application's, with no plugin row.
+      const snapshot = await tested.inspect();
+      expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(["stamper"]);
+      expect(snapshot.provided).toEqual(["test/Clock"]);
     } finally {
       await tested.close();
     }
@@ -40,6 +43,14 @@ describe("testPlugin", () => {
     await expect(testPlugin(stamper)).rejects.toBeInstanceOf(CompositionError);
     const broken = definePlugin({ id: "broken", setup: () => Effect.fail("no") });
     await expect(testPlugin(broken)).rejects.toBeInstanceOf(PluginFault);
+    // What a stand-in provides, no plugin may.
+    const clock = definePlugin({ id: "clock", provides: { clock: Clock }, setup: () => Effect.succeed({ clock: { now: () => 1 } }) });
+    await expect(testPlugin(clock, { provide: [[Clock, { now: () => 0 }]] })).rejects.toMatchObject({
+      _tag: "CompositionError",
+      reason: "ReservedCapability",
+      plugins: ["clock"],
+      capability: "test/Clock",
+    });
   });
 
   test("waitForFault rejects, naming what was reported, when nothing matches in time", async () => {

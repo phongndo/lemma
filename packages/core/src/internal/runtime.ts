@@ -18,7 +18,7 @@ import {
   Tracer,
 } from "effect";
 import type { Pull } from "effect";
-import type { Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState } from "../core.ts";
+import type { ApplicationServices, Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState } from "../core.ts";
 import { CapabilityMismatch, CompositionError, CoreClosed, DeadlineExceeded, Diagnostic, PluginFault, ReloadError, ShutdownTimeout } from "../errors.ts";
 import type { ReportedFault } from "../errors.ts";
 import { Events } from "../events.ts";
@@ -26,10 +26,10 @@ import { Hooks, PluginContext } from "../hooks.ts";
 import { Registries } from "../registries.ts";
 import type { PluginIdentity } from "../hooks.ts";
 import type { ReloadReport } from "../loader.ts";
-import type { Plugin } from "../plugin.ts";
+import type { Capability, Plugin } from "../plugin.ts";
 import { EventBus } from "./events.ts";
 import type { ObserverHandle } from "./events.ts";
-import { plan } from "./graph.ts";
+import { plan, reservedByApplication } from "./graph.ts";
 import { attributes, HookRegistry } from "./hooks.ts";
 import type { OwnerHandle } from "./hooks.ts";
 import { makeOwnServices } from "./own.ts";
@@ -45,7 +45,7 @@ export interface Member {
 }
 
 /** Planning found problems; nothing was activated. */
-class PlanError extends Data.TaggedError("PlanError")<{
+export class PlanError extends Data.TaggedError("PlanError")<{
   readonly errors: readonly [CompositionError, ...CompositionError[]];
 }> {}
 
@@ -129,12 +129,33 @@ class TrackedServices extends Map<string, unknown> {
   }
 }
 
-export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTimeout"> = {}): Effect.Effect<Runtime, never, Scope.Scope> {
+type RuntimeOptions<E> = Pick<CoreOptions<readonly Capability[], E>, "deadlines" | "shutdownTimeout" | "provide">;
+
+/**
+ * A runtime with the application's services built. They are refused (a
+ * `PlanError`) when they name a runtime capability, and fail it with their
+ * layer's error. Only their build can be interrupted: once built, they are
+ * released by the runtime's finalizer, which an interruption before it is
+ * registered would skip.
+ */
+export function makeRuntime<E = never>(options: RuntimeOptions<E> = {}): Effect.Effect<Runtime, PlanError | E, Scope.Scope> {
+  return Effect.uninterruptibleMask((restore) => assemble(options, restore));
+}
+
+function assemble<E>(
+  options: RuntimeOptions<E>,
+  restore: <A, E2, R>(effect: Effect.Effect<A, E2, R>) => Effect.Effect<A, E2, R>,
+): Effect.Effect<Runtime, PlanError | E, Scope.Scope> {
   return Effect.gen(function* () {
     const defaults = {
       activate: Duration.fromInputUnsafe(options.deadlines?.activate ?? DEFAULTS.activate),
       dispose: Duration.fromInputUnsafe(options.deadlines?.dispose ?? DEFAULTS.dispose),
     };
+    const providedKeys = options.provide?.provides.map((tag) => tag.key) ?? [];
+    const providedSet: ReadonlySet<string> = new Set(providedKeys);
+    // Merged over the built-ins below, an application key such as Hooks would replace the core's own.
+    const refused = reservedByApplication(providedKeys);
+    if (refused.length) return yield* new PlanError({ errors: refused as [CompositionError, ...CompositionError[]] });
     const faults = yield* PubSub.sliding<ReportedFault>(256);
     const shutdownLimit = Duration.fromInputUnsafe(options.shutdownTimeout ?? defaults.dispose);
     let shutdownFault: ShutdownTimeout | undefined;
@@ -149,7 +170,11 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
     const registry = new HookRegistry();
     const bus = new EventBus();
     const store = new RegistryStore();
-    const base = Context.empty().pipe(Context.add(Hooks, registry), Context.add(Events, bus), Context.add(Registries, store)) as Context.Context<never>;
+    const builtins = Context.empty().pipe(Context.add(Hooks, registry), Context.add(Events, bus), Context.add(Registries, store)) as Context.Context<never>;
+    /** Owns the application's services: closed after the last plugin is disposed. */
+    const application = yield* Scope.make();
+    const provided = options.provide === undefined ? Context.empty() : yield* restore(provision(options.provide, builtins, application));
+    const base = Context.merge(builtins, provided);
     /** Owns lifecycle fibers: apply bodies, restart loops, background watchers. */
     const supervisor = yield* Scope.make();
     /** Owns core.run fibers. */
@@ -494,6 +519,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
             const planned = plan(
               members.map((member) => member.plugin),
               (id) => raw.get(id),
+              providedSet,
             );
             if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
             const { ordered, configs, providers: nextProviders } = planned.success;
@@ -683,6 +709,25 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
               }
               yield* awaitDisposals;
             }
+            // The application's services outlive every plugin. Their deadline surfaces
+            // promptly, as a plugin's does; the core stays closing until they are released.
+            if (options.provide !== undefined) {
+              const released = yield* Deferred.make<void>();
+              const release = yield* withDeadline(
+                Scope.close(application, Exit.void).pipe(Effect.ensuring(Deferred.succeed(released, undefined))),
+                defaults.dispose,
+                "continue",
+              );
+              const failure = Option.match(release, {
+                onNone: () => Cause.die(new Error(`The application's services did not release within ${Duration.format(defaults.dispose)}`)),
+                onSome: (exit) => (Exit.isFailure(exit) ? exit.cause : undefined),
+              });
+              if (failure !== undefined) cause = cause ? Cause.combine(cause, failure) : failure;
+              if (Option.isNone(release)) {
+                yield* Deferred.failCause(closed, cause!);
+                yield* Deferred.await(released);
+              }
+            }
             yield* PubSub.shutdown(faults);
             state = "closed";
             if (cause) return yield* Effect.failCause(cause);
@@ -734,6 +779,7 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
         state,
         faultSequence,
         ...(shutdownFault === undefined ? {} : { shutdownFault }),
+        provided: [...providedKeys],
         plugins: order.map((id) => snapshot(instances.get(id)!)),
         hooks: registry.inspect(),
         events: bus.inspect(),
@@ -763,6 +809,35 @@ export function makeRuntime(options: Pick<CoreOptions, "deadlines" | "shutdownTi
       shutdown,
     };
   });
+}
+
+/**
+ * Build the application's services in `scope`, from the built-ins and the
+ * caller's runtime settings only (as a plugin's activation sees them). A build
+ * that fails, or whose services differ from what it declares, closes `scope`.
+ */
+function provision<E>(provide: ApplicationServices<readonly Capability[], E>, builtins: Context.Context<never>, scope: Scope.Closeable) {
+  return Layer.buildWithScope(provide.layer, scope).pipe(
+    Effect.updateContext((caller: Context.Context<never>) => {
+      const inputs = new Map([...caller.mapUnsafe].filter(([key]) => runtimeSettings.has(key) || key === Tracer.ParentSpan.key));
+      for (const [key, value] of builtins.mapUnsafe) inputs.set(key, value);
+      return Context.makeUnsafe<unknown>(inputs);
+    }),
+    // Building records the memo map it used in the output; that is not a service.
+    Effect.map(Context.omit(Layer.CurrentMemoMap)),
+    Effect.flatMap((output) => {
+      const declared = new Set(provide.provides.map((tag) => tag.key));
+      const missing = [...declared].filter((key) => !output.mapUnsafe.has(key));
+      const undeclared = [...output.mapUnsafe.keys()].filter((key) => !declared.has(key));
+      if (missing.length || undeclared.length) {
+        const detail = `missing: ${missing.join(", ") || "none"}; undeclared: ${undeclared.join(", ") || "none"}`;
+        return Effect.die(new Error(`The application's services do not match provide.provides (${detail})`));
+      }
+      return Effect.succeed(output as Context.Context<never>);
+    }),
+    Effect.onError((cause) => Scope.close(scope, Exit.failCause(cause))),
+    Effect.withSpan("core.provide"),
+  );
 }
 
 /** `ids` and, transitively, the providers of everything they require: what must activate for them to. */
@@ -844,6 +919,8 @@ function suggestionFor(error: CompositionError): string | undefined {
       return `Restart "${error.plugins[1]}"`;
     case "InvalidConfig":
       return `Fix the config for "${error.plugins[0]}"`;
+    case "ReservedCapability":
+      return error.plugins[0] === undefined ? undefined : `Remove "${error.capability}" from the provides of "${error.plugins[0]}"`;
     default:
       return undefined;
   }

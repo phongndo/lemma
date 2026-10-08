@@ -1,9 +1,7 @@
-import { Effect, Exit, Layer, Scope, Stream } from "effect";
-import type { Context } from "effect";
+import { Context, Effect, Exit, Layer, Scope, Stream } from "effect";
 import type { CoreSnapshot } from "./core.ts";
 import { makeCore } from "./core.ts";
 import type { ReportedFault } from "./errors.ts";
-import { definePlugin } from "./plugin.ts";
 import type { Capability, Plugin } from "./plugin.ts";
 
 export interface TestPluginOptions {
@@ -13,7 +11,10 @@ export interface TestPluginOptions {
   readonly with?: readonly Plugin[];
   /** Configs of the plugins in `with`, by id. */
   readonly configs?: Readonly<Record<string, unknown>>;
-  /** Stand-ins for capabilities it requires, each provided by a plugin of its own: `[[Store, fakeStore]]`. */
+  /**
+   * Stand-ins for capabilities it requires, provided as the application would
+   * provide them (`makeCore`'s `provide`), with no plugin rows: `[[Store, fakeStore]]`.
+   */
   readonly provide?: ReadonlyArray<readonly [Capability, unknown]>;
 }
 
@@ -46,17 +47,19 @@ export interface TestedPlugin extends AsyncDisposable {
  *   await tested.close();
  */
 export async function testPlugin(plugin: Plugin, options: TestPluginOptions = {}): Promise<TestedPlugin> {
-  const fakes = (options.provide ?? []).map(([tag, service]) =>
-    definePlugin({ id: `test-double ${tag.key}`, provides: [tag], layer: Layer.succeed(tag, service) as never }),
-  );
+  const standIns = options.provide ?? [];
   const scope = Scope.makeUnsafe();
   const faults: ReportedFault[] = [];
   const waiting = new Set<() => void>();
   const close = () => Effect.runPromise(Scope.close(scope, Exit.void));
   try {
     const core = await Effect.runPromise(
-      makeCore([...fakes, ...(options.with ?? []), plugin], {
+      makeCore([...(options.with ?? []), plugin], {
         configs: { ...options.configs, ...(options.config === undefined ? {} : { [plugin.id]: options.config }) },
+        provide: {
+          provides: standIns.map(([tag]) => tag),
+          layer: Layer.succeedContext(Context.makeUnsafe<any>(new Map(standIns.map(([tag, service]) => [tag.key, service])))),
+        },
       }).pipe(Scope.provide(scope)),
     );
     const heard = (fault: ReportedFault) => {

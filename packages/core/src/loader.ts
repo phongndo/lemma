@@ -1,11 +1,11 @@
-import { Effect, Result } from "effect";
+import { Cause, Effect, Option, Result } from "effect";
 import type { Scope } from "effect";
 import type { Core, CoreOptions } from "./core.ts";
 import { Diagnostic, ReloadError } from "./errors.ts";
 import type { PluginFault } from "./errors.ts";
-import { makeRuntime, toReloadError } from "./internal/runtime.ts";
+import { makeRuntime, PlanError, toReloadError } from "./internal/runtime.ts";
 import type { Member, PartialStart } from "./internal/runtime.ts";
-import type { Plugin } from "./plugin.ts";
+import type { Capability, Plugin } from "./plugin.ts";
 
 /** One row of a composition, keyed by plugin id. Config is validated by the plugin's schema. */
 export interface PluginEntry {
@@ -36,7 +36,10 @@ export interface ReloadReport {
   readonly faults: readonly PluginFault[];
 }
 
-export interface LoaderOptions extends Pick<CoreOptions, "deadlines" | "shutdownTimeout"> {
+export interface LoaderOptions<Provides extends readonly Capability[] = readonly Capability[]> extends Pick<
+  CoreOptions<Provides>,
+  "deadlines" | "shutdownTimeout" | "provide"
+> {
   readonly source: PluginSource;
   readonly composition: Composition;
   /**
@@ -59,6 +62,10 @@ export interface LoaderOptions extends Pick<CoreOptions, "deadlines" | "shutdown
  * Staging failures preserve the running composition, except for `exclusive`
  * plugins: they stop before their replacement starts and remain failed if it
  * cannot activate. Disposal faults after a swap are returned in the report.
+ *
+ * `apply` changes plugins only: the application's services (`provide`) are
+ * fixed for the loader's life, built before its first composition starts and
+ * released after its last plugin is disposed.
  */
 export interface Loader {
   /** Compositions are checked when planned, so the core's capabilities are not statically typed. */
@@ -67,9 +74,20 @@ export interface Loader {
   readonly apply: (next: Composition) => Effect.Effect<ReloadReport, ReloadError>;
 }
 
-export function makeLoader(options: LoaderOptions): Effect.Effect<Loader, ReloadError, Scope.Scope> {
+export function makeLoader<const Provides extends readonly Capability[] = readonly []>(
+  options: LoaderOptions<Provides>,
+): Effect.Effect<Loader, ReloadError, Scope.Scope> {
   return Effect.gen(function* () {
-    const runtime = yield* makeRuntime(options);
+    const runtime = yield* makeRuntime(options).pipe(
+      Effect.catchCause((cause) => {
+        if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
+        const error = Option.getOrUndefined(Cause.findErrorOption(cause));
+        if (error instanceof PlanError) return Effect.fail(toReloadError(error));
+        // Not a plugin's: the diagnostic names none.
+        const message = `The application's services failed to build:\n${Cause.pretty(cause)}`;
+        return Effect.fail(new ReloadError({ diagnostics: [new Diagnostic({ severity: "error", message })] }));
+      }),
+    );
     let current = options.composition;
 
     const resolve = (composition: Composition): Effect.Effect<readonly Member[], ReloadError> =>

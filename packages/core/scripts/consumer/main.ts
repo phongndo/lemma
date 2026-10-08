@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { Context, Effect, Layer } from "effect";
 import { definePlugin, Diagnostic, makeLoader } from "@lemma/core";
-import type { Composition, Plugin } from "@lemma/core";
+import type { ApplicationServices, Composition, Plugin } from "@lemma/core";
 import { definePlugin as definePlainPlugin } from "@lemma/core/plain";
 import { testPlugin } from "@lemma/core/testing";
 import { Formatter, Message } from "./contracts.js";
@@ -84,6 +84,36 @@ await Effect.runPromise(
 assert.equal(active.size, 0);
 assert.deepEqual(closed, ["consumer", "lower", "consumer", "upper"]);
 console.log("External consumer: provider replacement and cleanup passed.");
+
+// A capability the application provides itself: built before its plugins, released after them, and never replaced.
+{
+  const before = closed.length;
+  const formatter: ApplicationServices<readonly [typeof Formatter]> = {
+    provides: [Formatter],
+    layer: Layer.effect(
+      Formatter,
+      Effect.acquireRelease(Effect.succeed({ format: async (text: string) => `[${text}]` }), () => Effect.sync(() => void closed.push("application"))),
+    ),
+  };
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const loader = yield* makeLoader({
+          source: { resolve: (id) => Effect.succeed(plugins[id]!) },
+          composition: { plugins: { consumer: {} } },
+          provide: formatter,
+        });
+        const render = Effect.flatMap(Message, (message) => Effect.promise(() => message.render("Hello")));
+        assert.equal(yield* loader.core.run(render), "Message: [Hello]");
+        assert.deepEqual((yield* loader.core.inspect).provided, [Formatter.key]);
+        const refused = yield* Effect.flip(loader.apply({ plugins: { consumer: {}, upper: {} } }));
+        assert.match(refused.diagnostics[0]!.message, /the application provides it/);
+      }),
+    ),
+  );
+  assert.deepEqual(closed.slice(before), ["consumer", "application"]);
+  console.log("External consumer: application-provided capabilities passed.");
+}
 
 // The package's other entry points, as a consumer imports them: plugins written with promises, and the test harness.
 {
