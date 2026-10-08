@@ -9,9 +9,8 @@ import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/c
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
 import { settlePaint } from "../lib/paint.ts";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, faultHistory, withReplacements } from "@lemma/plugin-host/catalog";
-import { planComposition } from "@lemma/plugin-host/planner";
-import type { Plan } from "@lemma/plugin-host/planner";
+import { catalog, faultHistory, planComposition, withReplacements } from "@lemma/composition";
+import type { Plan } from "@lemma/composition";
 import type { AnyRoute } from "@lemma/router";
 import { createClientPlugin } from "./client.ts";
 import { Notify, Root, Slots, UI_API, UiApi, UiPlugins } from "./contracts.ts";

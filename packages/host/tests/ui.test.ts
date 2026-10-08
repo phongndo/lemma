@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
-import { listUiFiles, projectUiDir, resolvePaths, userUiDir } from "../src/index.ts";
+import { resolvePaths } from "../src/paths.ts";
+import { listUiFiles, projectUiDir, userUiDir } from "../src/ui.ts";
 
 describe("listUiFiles", () => {
   test("lists scripts and stylesheets, user files first, and a project's only when trusted", async () => {

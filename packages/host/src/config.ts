@@ -8,11 +8,8 @@ import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
 import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
 import { Diagnostic } from "@lemma/core";
 import type { Composition, PluginEntry } from "@lemma/core";
+import { HOST_PLUGIN_ID } from "@lemma/composition";
 import type { PathsService } from "./paths.ts";
-
-import { HOST_PLUGIN_ID } from "./catalog.ts";
-
-export { HOST_PLUGIN_ID };
 
 interface LoadedComposition {
   /** Always contains the `host` row carrying `paths`; the host plugin cannot be disabled by a file. */

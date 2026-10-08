@@ -6,8 +6,8 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { appUrl } from "@lemma/contracts";
-import { resolvePaths } from "@lemma/plugin-host";
-import { readDiscovery } from "@lemma/plugin-transport";
+import { readDiscovery } from "@lemma/contracts/discovery";
+import { resolvePaths } from "../src/paths.ts";
 
 /**
  * `pnpm dev`: the host, the web app's dev server, and the desktop window on

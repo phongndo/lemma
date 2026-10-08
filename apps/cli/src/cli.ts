@@ -27,7 +27,7 @@ import {
 } from "@lemma/contracts";
 import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
-import { resolvePaths } from "@lemma/plugin-host";
+import { resolvePaths } from "@lemma/host/paths";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {

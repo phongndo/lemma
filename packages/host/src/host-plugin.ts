@@ -3,7 +3,7 @@ import type { Context } from "effect";
 import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
 import { definePlugin, Events } from "@lemma/core";
 import type { Plugin, PluginFault } from "@lemma/core";
-import { HOST_PLUGIN_ID } from "./config.ts";
+import { HOST_PLUGIN_ID } from "@lemma/composition";
 import { PathsSchema } from "./paths.ts";
 
 export type HostControlService = Context.Service.Shape<typeof HostControl>;

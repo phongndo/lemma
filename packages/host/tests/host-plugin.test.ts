@@ -4,8 +4,10 @@ import { HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
 import type { UiComposition } from "@lemma/contracts";
 import { definePlugin, Diagnostic, Events, makeLoader, PluginContext } from "@lemma/core";
 import type { Loader, Plugin, PluginSource } from "@lemma/core";
-import { compositionInfo, hostPlugin, resolvePaths } from "../src/index.ts";
-import type { HostControlService } from "../src/index.ts";
+import { compositionInfo } from "../src/composition.ts";
+import { hostPlugin } from "../src/host-plugin.ts";
+import type { HostControlService } from "../src/host-plugin.ts";
+import { resolvePaths } from "../src/paths.ts";
 
 const paths = resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work" });
 
@@ -15,7 +17,7 @@ const flaky = definePlugin({
   layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.background("work", Effect.fail("boom"), { required: true }))),
 });
 
-/** Mirrors packages/host: the plugin activates inside makeLoader, so the handle binds to the loader through a Deferred. */
+/** Mirrors main.ts: the plugin activates inside makeLoader, so the handle binds to the loader through a Deferred. */
 const start = Effect.gen(function* () {
   const ready = yield* Deferred.make<Loader>();
   const configured: Record<string, unknown>[] = [];

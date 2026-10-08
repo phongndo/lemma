@@ -10,10 +10,6 @@ import { publishDiscovery } from "./discovery.ts";
 import { startServer } from "./server.ts";
 import { loadToken } from "./token.ts";
 
-export { Discovery, discoveryPath, readDiscovery } from "./discovery.ts";
-export { clearRemote, findTarget, normalizeUrl, remotePath, writeRemote } from "./target.ts";
-export type { Target } from "./target.ts";
-
 /** Reported by `Host.Info` and as the plugin version. */
 const VERSION = "0.1.0";
 

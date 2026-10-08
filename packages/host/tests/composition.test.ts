@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { compositionInfo } from "../src/index.ts";
+import { compositionInfo } from "../src/composition.ts";
 
 describe("compositionInfo", () => {
   const composition = { plugins: { a: { config: { x: 1, y: [1, 2] } }, b: {}, off: { enabled: false, config: { z: 1 } } } };

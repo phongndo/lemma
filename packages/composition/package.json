@@ -1,12 +1,10 @@
 {
-  "name": "@lemma/plugin-host",
+  "name": "@lemma/composition",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts",
-    "./catalog": "./src/catalog.ts",
-    "./planner": "./src/planner.ts"
+    ".": "./src/index.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -15,8 +13,7 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "effect": "4.0.1",
-    "jsonc-parser": "3.3.1"
+    "effect": "4.0.1"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

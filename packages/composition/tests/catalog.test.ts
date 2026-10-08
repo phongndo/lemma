@@ -3,8 +3,8 @@ import { Cause, Context, Effect, Layer, Schema } from "effect";
 import { secret } from "@lemma/contracts";
 import { definePlugin, PluginFault } from "@lemma/core";
 import type { Composition, PluginSnapshot } from "@lemma/core";
-import { catalog, faultHistory, resolveComposition, restartedBy, withReplacements } from "../src/index.ts";
-import type { KnownPlugin } from "../src/index.ts";
+import { catalog, faultHistory, resolveComposition, restartedBy, withReplacements } from "../src/catalog.ts";
+import type { KnownPlugin } from "../src/catalog.ts";
 
 class Llm extends Context.Service<Llm, string>()("test/Llm") {}
 class Tools extends Context.Service<Tools, string>()("test/Tools") {}

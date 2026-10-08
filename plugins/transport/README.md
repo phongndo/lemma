@@ -25,7 +25,7 @@ Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser 
 
 Without a configured `token`, the host's token is the one in `<Paths.home>/token`. The first start creates that file with a random token (mode 0600, in a 0700 home; never starting with `-`, which `--token <token>` would read as an option), complete before it appears and never replacing one another host created at the same moment; later starts read it, so clients on other machines stay valid across host restarts. Surrounding whitespace is ignored; an empty or unreadable file fails the plugin's activation. Delete the file and restart the host to rotate the token. Remote access is described in [docs/remote.md](../../docs/remote.md).
 
-After listening it writes `<Paths.home>/transport.json` as `{ url, token, pid, startedAt }` (mode 0600) and removes it on shutdown unless another host has replaced it. `readDiscovery(home)` returns that entry, or `undefined` when the file is absent, invalid, or its process is gone. It also publishes a `Notice` with the URL (and a tokenized link to the web app when `staticDir` is set).
+After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry by which clients find the host (`Discovery` in `@lemma/contracts/discovery`), and removes it on shutdown unless another host has replaced it. It also publishes a `Notice` with the URL (and a tokenized link to the web app when `staticDir` is set).
 
 ## Behavior
 

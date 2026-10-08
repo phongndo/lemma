@@ -5,29 +5,20 @@ import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, Schema
 import { appUrl, describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import {
-  catalog,
-  compositionInfo,
-  faultHistory,
-  HOST_PLUGIN_ID,
-  hostPlugin,
-  listUiFiles,
-  loadComposition,
-  planComposition,
-  projectPluginsDir,
-  readConfigText,
-  resolvePaths,
-  restartedBy,
-  updateConfig,
-  watchConfig,
-  watchUi,
-  withReplacements,
-} from "@lemma/plugin-host";
-import type { ConfigSection, HostControlService, KnownPlugin, Resolved } from "@lemma/plugin-host";
+import { catalog, faultHistory, HOST_PLUGIN_ID, planComposition, restartedBy, withReplacements } from "@lemma/composition";
+import type { KnownPlugin, Resolved } from "@lemma/composition";
 import type { ConfigScope, ConfigureReport, PluginChange, PluginRow, UiComposition } from "@lemma/contracts";
-import { readDiscovery } from "@lemma/plugin-transport";
+import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
+import { compositionInfo } from "./composition.ts";
+import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
+import type { ConfigSection } from "./config.ts";
+import { hostPlugin } from "./host-plugin.ts";
+import type { HostControlService } from "./host-plugin.ts";
 import { loadLocalPlugins } from "./local.ts";
+import { resolvePaths } from "./paths.ts";
+import { listUiFiles } from "./ui.ts";
+import { watchConfig, watchUi } from "./watch.ts";
 
 const args = new Set(process.argv.slice(2));
 /**

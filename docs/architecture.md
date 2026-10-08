@@ -10,7 +10,8 @@ plugin can be turned off or replaced by id ([configuration](configuration.md)).
 | [`packages/core`](../packages/core/README.md)                 | The plugin runtime: capabilities, hooks, events, registries, reloads ([design](../packages/core/DESIGN.md)) |
 | [`packages/contracts`](../packages/contracts/src/index.ts)    | Capabilities, events, the host RPC, and projections every reader shares (`rebuildRequest`)                  |
 | [`packages/client`](../packages/client/src/index.ts)          | The host RPC client the web app and CLI share: reconnecting, session logs kept in order                     |
-| [`packages/host`](../packages/host/src/main.ts)               | Reads config, loads plugins, hot-reloads on config change                                                   |
+| [`packages/host`](../packages/host/README.md)                 | Reads config, loads plugins, hot-reloads on config change                                                   |
+| [`packages/composition`](../packages/composition/README.md)   | Plans what runs from the known plugins and config rows, for the host and the web app alike                  |
 | [`plugins/*`](../plugins)                                     | The host's bundled plugins, one README each                                                                 |
 | [`apps/web`](../apps/web/README.md)                           | The web client: plugins on the same kernel, served by the `transport` plugin                                |
 | [`apps/cli`](../apps/cli/README.md)                           | The `lemma` command: everything the web app does, from a shell                                              |

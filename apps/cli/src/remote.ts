@@ -1,15 +1,15 @@
 import { Duration, Effect } from "effect";
 import type { RpcClientError } from "effect/rpc";
 import { makeHostRpcHttp } from "@lemma/client";
-import { resolvePaths } from "@lemma/plugin-host";
-import { clearRemote, discoveryPath, findTarget as resolveTarget, normalizeUrl, readDiscovery, remotePath, writeRemote } from "@lemma/plugin-transport";
-import type { Target } from "@lemma/plugin-transport";
+import { clearRemote, discoveryPath, findTarget as resolveTarget, normalizeUrl, readDiscovery, remotePath, writeRemote } from "@lemma/contracts/discovery";
+import type { Target } from "@lemma/contracts/discovery";
+import { resolvePaths } from "@lemma/host/paths";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Io, Options, Unattached } from "./command.ts";
 
 /*
  * `lemma remote` and `lemma token`: which host commands go to, as
- * `findTarget` in the transport plugin resolves it for the CLI and the
+ * `findTarget` in `@lemma/contracts/discovery` resolves it for the CLI and the
  * desktop app alike (docs/remote.md).
  */
 

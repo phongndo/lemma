@@ -6,6 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./discovery": "./src/discovery.ts",
     "./fs": "./src/fs.ts",
     "./runtime": "./src/runtime.ts",
     "./testing": "./src/testing.ts"

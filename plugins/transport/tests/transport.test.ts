@@ -12,10 +12,11 @@ import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { CommandsChanged, HOST_PROTOCOL, HostError, HostRpcs, Inspectors, Interaction, InteractionError, Notice, SUBSCRIBED_HEADER } from "@lemma/contracts";
 import type { HostEvent } from "@lemma/contracts";
+import { readDiscovery } from "@lemma/contracts/discovery";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Core, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
-import transport, { readDiscovery } from "../src/index.ts";
+import transport from "../src/index.ts";
 import { loadToken } from "../src/token.ts";
 import {
   fakeAgent,

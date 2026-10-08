@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
-import { isTrusted, loadComposition, patchConfig, projectPluginsDir, resolvePaths, updateConfig } from "../src/index.ts";
-import type { PathsService } from "../src/index.ts";
+import { isTrusted, loadComposition, patchConfig, projectPluginsDir, updateConfig } from "../src/config.ts";
+import { resolvePaths } from "../src/paths.ts";
+import type { PathsService } from "../src/paths.ts";
 
 async function withPaths<A>(body: (paths: PathsService) => Promise<A>): Promise<A> {
   const root = await mkdtemp(join(tmpdir(), "lemma-host-"));

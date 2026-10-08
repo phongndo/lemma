@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Layer, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import type { PluginRow } from "@lemma/contracts";
-import { planComposition } from "@lemma/plugin-host";
+import { planComposition } from "@lemma/composition";
 import { appDefaults, cliCommand, webDist } from "../src/bundled.ts";
 
 const plugin = (id: string) => definePlugin({ id, config: Schema.Record(Schema.String, Schema.Unknown), layer: Layer.empty });

@@ -3,7 +3,7 @@ import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, P
 import { Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import type { Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
 
-/** The plugin that loads every other one. Defined here, not in config.ts, so this module stays free of Node APIs for the web app. */
+/** The plugin that loads every other one. Defined here, in the browser-safe package, so the web app's catalog and the host share it. */
 export const HOST_PLUGIN_ID = "host";
 
 /** A plugin definition the app can load, with where it came from. */

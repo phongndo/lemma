@@ -5,9 +5,9 @@ import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "elec
 import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
-import { resolvePaths } from "@lemma/plugin-host";
-import { findTarget, readDiscovery } from "@lemma/plugin-transport";
-import type { Discovery, Target } from "@lemma/plugin-transport";
+import { findTarget, readDiscovery } from "@lemma/contracts/discovery";
+import type { Discovery, Target } from "@lemma/contracts/discovery";
+import { resolvePaths } from "@lemma/host/paths";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
 // It finds its host like the CLI does: one on another machine (`LEMMA_URL`, or `remote.json`), else a running local

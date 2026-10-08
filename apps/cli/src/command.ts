@@ -3,7 +3,7 @@ import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
 import type { HostError, ThinkingLevel, WhenBusy } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
-import type { Target } from "@lemma/plugin-transport";
+import type { Target } from "@lemma/contracts/discovery";
 
 /** Exit codes a calling script or agent can branch on; `--json` errors also carry a `code`. */
 export const ExitCode = { ok: 0, failed: 1, usage: 2, unavailable: 3, interrupted: 130 } as const;
@@ -72,7 +72,7 @@ export interface Options {
 }
 
 /** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */
-export type { Target } from "@lemma/plugin-transport";
+export type { Target } from "@lemma/contracts/discovery";
 
 export interface Connection {
   readonly target: Target;

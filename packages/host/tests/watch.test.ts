@@ -3,7 +3,9 @@ import { mkdtemp, mkdir, rm, rmdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duration, Effect, Fiber, Schedule, Stream } from "effect";
-import { resolvePaths, userUiDir, watchConfig, watchUi } from "../src/index.ts";
+import { resolvePaths } from "../src/paths.ts";
+import { userUiDir } from "../src/ui.ts";
+import { watchConfig, watchUi } from "../src/watch.ts";
 
 describe("watchConfig", () => {
   test("emits the changed file after a quiet period, for creation and later edits", async () => {

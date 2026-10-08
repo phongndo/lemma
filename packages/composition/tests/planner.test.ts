@@ -3,8 +3,8 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { HostApi } from "@lemma/contracts";
 import { definePlugin } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { planComposition } from "../src/index.ts";
-import type { Plan, PlanInput } from "../src/index.ts";
+import { planComposition } from "../src/planner.ts";
+import type { Plan, PlanInput } from "../src/planner.ts";
 
 class Llm extends Context.Service<Llm, string>()("test/Llm") {}
 class Agent extends Context.Service<Agent, string>()("test/Agent") {}

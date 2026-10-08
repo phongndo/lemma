@@ -277,13 +277,13 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "packages/core/tests/supervision.test.ts": 3,
   "packages/core/tests/support.ts": 1,
   "packages/host/scripts/dev.ts": 2,
+  "packages/host/tests/watch.test.ts": 5,
   "plugins/agent/tests/crash.ts": 1,
   "plugins/agent/tests/fakes.ts": 1,
   "plugins/agent/tests/recovery.test.ts": 5,
   "plugins/compaction/tests/compaction.test.ts": 1,
   "plugins/credentials/tests/credentials.test.ts": 1,
   "plugins/file-search-fff/tests/file-search.test.ts": 1,
-  "plugins/host/tests/watch.test.ts": 5,
   "plugins/llm-pi-ai/tests/llm.test.ts": 2,
   "plugins/sessions/tests/sessions.test.ts": 7,
   "plugins/sessions/tests/simulation.test.ts": 1,
@@ -294,7 +294,7 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "scripts/mock-openai.ts": 1,
 };
 const tempNameCeilings: Readonly<Record<string, number>> = {
-  "plugins/host/tests/ui.test.ts": 2,
+  "packages/host/tests/ui.test.ts": 2,
   "plugins/transport/tests/transport.test.ts": 2,
 };
 const fixedWaits = [
