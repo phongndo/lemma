@@ -2,7 +2,7 @@ import { Cause, Effect, Schema } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { HostError, Inspectors, InteractionOrigin, searchFiles, snapshotOf, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
-import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
+import type { Agent, ChangeReport, Commands, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
 import { callChannel, listChannels, openedStream, ServedRpcs } from "./channels.ts";
 import { toHostError } from "./errors.ts";
 import type { Hub } from "./hub.ts";
@@ -156,7 +156,7 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     "Ui.Configure": ({ plugins, scope }) => control.configureUi(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.mapError(toHostError)),
   });
 
-const toReloadResult = (report: ConfigureReport): ReloadResult => ({
+const toReloadResult = (report: ChangeReport): ReloadResult => ({
   started: report.started,
   restarted: report.restarted,
   stopped: report.stopped,

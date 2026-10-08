@@ -82,7 +82,7 @@ The file is written as soon as the transport listens, before the plugins after i
   stream is stopped at once and ends `Withdrawn`, so it never holds its
   plugin's disposal, and it runs outside its plugin's `Admitted` work: a
   change it asks for that restarts its own plugin applies at once rather than
-  wait for its client to close it (see `ConfigureReport`). A middleware
+  wait for its client to close it (see `ChangeReport`). A middleware
   around each `Channel.Open` request (`ChannelLifetime`) does the stopping,
   because the RPC server sends the next chunk only once the client
   acknowledged the last (WebSocket) or the response drained (streaming HTTP),

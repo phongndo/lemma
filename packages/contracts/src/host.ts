@@ -166,11 +166,11 @@ export const Notice = Event.make<NoticePayload>("lemma/notice");
  * file. A stream a plugin serves is no such work: it ends as soon as its
  * plugin leaves, so a change it asks for applies at once, ending it.
  */
-export interface ConfigureReport extends ReloadReport {
+export interface ChangeReport extends ReloadReport {
   readonly deferred?: boolean;
 }
 
-/** What a restart did. `deferred`: as for a configure (`ConfigureReport`), the plugin restarting once the work asking for it has ended. */
+/** What a restart did. `deferred`: as for a configure or reload (`ChangeReport`), the plugin restarting once the work asking for it has ended. */
 export interface RestartReport {
   readonly deferred?: boolean;
 }
@@ -201,14 +201,14 @@ export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, num
  * it would wait on itself until the dispose deadline. A plugin's disposal
  * also waits for the work run with its items, such as the channel calls it
  * serves: a change that would restart the plugin whose work asks for it is
- * deferred until that work has ended (see `ConfigureReport`).
+ * deferred until that work has ended (see `ChangeReport`).
  */
 export class HostControl extends Context.Service<
   HostControl,
   {
     /**
-     * What the host provides itself, by capability key: `Paths`, `HostControl`, `Interaction`, and each `HostApi`
-     * version. Any plugin may require them; none provides them, and none has a row. Fixed for the host's life.
+     * What the host provides itself, by capability key: `Paths`, `HostControl`, `Interaction`, and
+     * `HostApi(HOST_API)`. Any plugin may require them; none provides them, and none has a row. Fixed for the host's life.
      */
     readonly runtime: readonly string[];
     /** Every known plugin, enabled or not. */
@@ -216,11 +216,11 @@ export class HostControl extends Context.Service<
     readonly composition: Effect.Effect<CompositionInfo>;
     /**
      * A failed plugin and what it halted; with `force`, a running one too, and what needs it, unless the app depends
-     * on it (a `ReloadError` says so). Deferred as `ConfigureReport` says.
+     * on it (a `ReloadError` says so). Deferred as `ChangeReport` says.
      */
     readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<RestartReport, ReloadError | CoreClosed>;
-    /** Re-read the config files and apply the resulting composition. Deferred as `ConfigureReport` says. */
-    readonly reload: Effect.Effect<ConfigureReport, ReloadError>;
+    /** Re-read the config files and apply the resulting composition. Deferred as `ChangeReport` says. */
+    readonly reload: Effect.Effect<ChangeReport, ReloadError>;
     /**
      * Write plugin rows into a config file (the user's by default) and apply the
      * result. A change the host rejects is undone in the file, so a bad row never
@@ -229,7 +229,7 @@ export class HostControl extends Context.Service<
     readonly configure: (
       plugins: Readonly<Record<string, PluginChange>>,
       options?: { readonly scope?: ConfigScope },
-    ) => Effect.Effect<ConfigureReport, ReloadError>;
+    ) => Effect.Effect<ChangeReport, ReloadError>;
     /** The web app's rows and files. */
     readonly ui: Effect.Effect<UiComposition>;
     /** Write `ui` rows into a config file; web apps apply them when `UiChanged` arrives. */

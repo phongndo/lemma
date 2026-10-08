@@ -7,7 +7,7 @@ import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ConfigScope, ConfigureReport, PluginChange, UiComposition } from "@lemma/contracts";
+import type { ChangeReport, ConfigScope, PluginChange, UiComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
@@ -288,7 +288,7 @@ const program = Effect.gen(function* () {
   /**
    * A change that restarts a plugin whose work is making it would wait on that
    * work or cut it off (`deferral`), so it is checked at once and `change`
-   * runs once `after` (see `ConfigureReport`). Clients then hear the plugin
+   * runs once `after` (see `ChangeReport`). Clients then hear the plugin
    * list (`change` logs what it did) or, if it failed, `failure` and why, once
    * `undo` has run.
    */
@@ -317,7 +317,7 @@ const program = Effect.gen(function* () {
       programScope,
     );
   /** The report of a change that applies later: it has changed nothing yet. */
-  const deferred: ConfigureReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
+  const deferred: ChangeReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
   /** Writes rows now, checked as the loader will check them, and applies them once `after` (`applyLater`); if that fails, the file is put back. */
   const writeDeferred = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, after: Effect.Effect<void>) =>
     Effect.gen(function* () {
