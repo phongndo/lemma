@@ -10,6 +10,13 @@ export interface RegistryOptions<Item> {
   readonly key?: (item: Item) => string;
   /** Adding an item whose key another plugin holds fails with `RegistryError` ("Conflict"). Requires `key`. */
   readonly unique?: boolean;
+  /**
+   * Why a value cannot be an item, or `undefined` when it can. It sees what
+   * was added, typed or not, before `key` does; a value it refuses fails `add`
+   * with `RegistryError` ("Invalid") for the plugin adding it, and never
+   * reaches readers.
+   */
+  readonly check?: (value: unknown) => string | undefined;
 }
 
 /**

@@ -8,6 +8,7 @@ interface Entry {
   readonly token: object;
   readonly name: string;
   readonly key: ((item: unknown) => string) | undefined;
+  readonly check: ((value: unknown) => string | undefined) | undefined;
   readonly unique: boolean;
   /** Visible, sorted; readers get this array, which is replaced, never changed. */
   visible: readonly Contribution<unknown>[];
@@ -140,6 +141,15 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
             });
           }
           const entry = yield* this.entry(registry);
+          const problem = entry.check?.(value);
+          if (problem !== undefined) {
+            return yield* new RegistryError({
+              reason: "Invalid",
+              registry: registry.name,
+              pluginId: identity.id,
+              message: `Invalid item for ${registry.name}: ${problem}`,
+            });
+          }
           const key = entry.key?.(value);
           if (entry.unique) {
             // Another plugin's item under this key, visible or staged; this plugin's own earlier instance is being replaced.
@@ -320,7 +330,7 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
         }
         return Effect.succeed(existing);
       }
-      const { key, unique = false } = registry.options;
+      const { key, unique = false, check } = registry.options;
       if (unique && key === undefined) {
         return Effect.fail(
           new RegistryError({ reason: "MissingKey", registry: registry.name, message: `Registry "${registry.name}" is unique but has no key` }),
@@ -330,6 +340,7 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
         token: registry,
         name: registry.name,
         key: key as ((item: unknown) => string) | undefined,
+        check,
         unique,
         visible: [],
         all: [],

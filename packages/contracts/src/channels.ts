@@ -101,11 +101,31 @@ export const elementsOf = (channel: ChannelStream, payload: unknown): Stream.Str
   });
 
 /**
+ * Why a value is not a well-formed channel, or `undefined` when it is: what
+ * `Channels` checks of every item added, since a plugin file may have no
+ * types. A malformed item fails the plugin's `add` with this reason.
+ */
+export const channelProblem = (value: unknown): string | undefined => {
+  if (typeof value !== "object" || value === null) return "a channel is an object";
+  const channel = value as Record<string, unknown>;
+  if (typeof channel.id !== "string" || channel.id === "") return "its `id` must be a non-empty string";
+  const named = (problem: string) => `"${channel.id}": ${problem}`;
+  if (channel.kind !== "call" && channel.kind !== "stream")
+    return named(`its \`kind\` must be "call" or "stream", not ${JSON.stringify(channel.kind) ?? "undefined"}`);
+  if (channel.title !== undefined && typeof channel.title !== "string") return named("its `title` must be a string");
+  if (channel.description !== undefined && typeof channel.description !== "string") return named("its `description` must be a string");
+  if (!Schema.isSchema(channel.payload)) return named("its `payload` must be a Schema");
+  if (!Schema.isSchema(channel.success)) return named("its `success` must be a Schema");
+  if (typeof channel.handle !== "function") return named("its `handle` must be a function");
+  return undefined;
+};
+
+/**
  * The channels host plugins serve, read at each call: the transport does not
  * require them. The first by order answers for an id, so a plugin replaces
  * another's channel by adding one with its id and a lower order.
  */
-export const Channels = Registry.make<Channel>("lemma/channels", { key: (channel) => channel.id });
+export const Channels = Registry.make<Channel>("lemma/channels", { key: (channel) => channel.id, check: channelProblem });
 
 /** A channel as clients list it: `source` is the plugin that added it. */
 export const ChannelInfo = Schema.Struct({

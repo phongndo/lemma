@@ -384,6 +384,40 @@ describe("registries", () => {
     expect(log.indexOf("stopped lasting")).toBeLessThan(log.indexOf("finalizer lasting"));
   });
 
+  test("a registry's check refuses a malformed item from the plugin adding it, before its key, and readers never see it", async () => {
+    await run(
+      Effect.gen(function* () {
+        const Labels = Registry.make<Entry>("test/labels", {
+          key: (entry) => entry.label.toUpperCase(),
+          check: (value) => (typeof (value as Entry | null)?.label === "string" ? undefined : "an entry needs a string `label`"),
+        });
+        const refused: unknown[] = [];
+        const sloppy = definePlugin({
+          id: "sloppy",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              yield* owner.add(Labels, { label: "fine" });
+              // An untyped plugin's item: `key` would throw on it, so the check must come first.
+              refused.push(yield* Effect.flip(owner.add(Labels, { name: "no label" } as unknown as Entry)));
+            }),
+          ),
+        });
+        const core = yield* makeCore([sloppy]);
+        expect(refused).toMatchObject([
+          {
+            _tag: "RegistryError",
+            reason: "Invalid",
+            registry: "test/labels",
+            pluginId: "sloppy",
+            message: "Invalid item for test/labels: an entry needs a string `label`",
+          },
+        ]);
+        expect(yield* core.run(labels(Labels))).toEqual(["fine"]);
+      }),
+    );
+  });
+
   test("two tokens cannot share a name, a unique registry needs a key, and order must be finite", async () => {
     await run(
       Effect.gen(function* () {

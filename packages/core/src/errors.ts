@@ -69,12 +69,13 @@ export class HookError extends Data.TaggedError("HookError")<{
 }> {}
 
 /**
- * `Absent`: `Registries.run` was given a contribution that is not there.
- * `Expired`: work `run` admitted was still running at its contributor's
- * dispose deadline, and was interrupted.
+ * `Invalid`: the registry's `check` refused the value. `Absent`:
+ * `Registries.run` was given a contribution that is not there. `Expired`: work
+ * `run` admitted was still running at its contributor's dispose deadline, and
+ * was interrupted.
  */
 export class RegistryError extends Data.TaggedError("RegistryError")<{
-  readonly reason: "PointConflict" | "InvalidOrder" | "OwnerClosed" | "Conflict" | "MissingKey" | "Absent" | "Expired";
+  readonly reason: "PointConflict" | "InvalidOrder" | "OwnerClosed" | "Conflict" | "MissingKey" | "Invalid" | "Absent" | "Expired";
   readonly registry: string;
   readonly pluginId?: string;
   /** For a "Conflict": the key, and the plugin that holds it. */

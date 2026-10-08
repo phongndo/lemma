@@ -140,6 +140,41 @@ describe("channels", () => {
     );
   }, 30_000);
 
+  test("a malformed channel is refused to the plugin adding it, so it never breaks the list or shadows a good one", () => {
+    const refused: string[] = [];
+    const sloppy = definePlugin({
+      id: "sloppy",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          // A plugin file without types: a misspelt kind, under an id a good channel also uses, with a lower order.
+          const error = yield* Effect.flip(
+            owner.add(Channels, { kind: "subscription", id: "good.thing", payload: Schema.Void, success: Schema.Void, handle: () => Effect.void } as never, {
+              order: -1,
+            }),
+          );
+          refused.push(error.message);
+        }),
+      ),
+    });
+    const good = serving(
+      "good",
+      serveChannel({ kind: "call", id: "good.thing", payload: Schema.Void, success: Schema.String }, () => Effect.succeed("good")),
+    );
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          expect(refused).toEqual(['Invalid item for lemma/channels: "good.thing": its `kind` must be "call" or "stream", not "subscription"']);
+          const client = yield* host.connect("websocket");
+          expect(yield* client["Channel.List"]()).toEqual([{ id: "good.thing", kind: "call", source: "good" }]);
+          expect(yield* client["Channel.Call"]({ id: "good.thing" })).toBe("good");
+        }),
+      {},
+      undefined,
+      [sloppy, good],
+    );
+  }, 30_000);
+
   test("serves host plugins' channels with their own schemas; a failing one is an error naming it, not a crash", () => {
     class ProbeError extends Data.TaggedError("ProbeError")<{ readonly reason: "Busy"; readonly message: string }> {}
     // Adds channels without requiring anything, and with no change to the contracts or the transport.
