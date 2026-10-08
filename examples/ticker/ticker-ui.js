@@ -17,7 +17,7 @@ export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pag
 
   return defineUiPlugin({
     id: "ticker",
-    api: 1,
+    api: 2,
     routes: [TickerRoute],
     styles,
     requires: { slots: Slots, client: Client, router: Router },

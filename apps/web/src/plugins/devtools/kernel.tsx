@@ -10,6 +10,8 @@ import type { Slot, SlotItem, SlotsService } from "../../ui/slots.ts";
 
 type Kind = "web" | "host";
 const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host" };
+/** Who provides a runtime capability: the app itself, not a plugin. */
+const RUNTIME_LABEL: Readonly<Record<Kind, string>> = { web: "the web app", host: "the host" };
 const INSPECTORS_PANEL = "devtools.inspectors";
 
 /** What the kernel's panels read. */
@@ -20,7 +22,12 @@ interface Deps {
   readonly client: ClientService;
   /** Every plugin of each kernel, with what it provides, requires, intercepts, observes, and contributes. */
   readonly lists: Readonly<Record<Kind, Accessor<readonly PluginStatus[]>>>;
+  /** What each kernel's app provides itself, its runtime (`PluginsService.runtime`). */
+  readonly runtime: Readonly<Record<Kind, Accessor<readonly string[]>>>;
 }
+
+/** The kernel view of `kind`, its runtime marked (`kernelOf`). */
+const kernelFor = (deps: Deps, kind: Kind) => kernelOf(deps.lists[kind](), deps.runtime[kind]());
 
 const stateClass = (state: string, enabled = true) =>
   !enabled || state === "disabled" ? "dt-muted" : state === "active" ? "dt-ok" : state === "failed" ? "dt-err" : "dt-warn";
@@ -240,7 +247,16 @@ function PluginView(props: {
                     <tr data-row>
                       <td class="dt-code">{key}</td>
                       <td class="dt-wrap">
-                        <Show when={providers(key).length > 0} fallback={<span class="dt-err">nothing provides it</span>}>
+                        <Show
+                          when={providers(key).length > 0}
+                          fallback={
+                            props.kernel.capabilities.find((capability) => capability.key === key)?.runtime ? (
+                              <span class="dt-muted">{RUNTIME_LABEL[props.kind]}</span>
+                            ) : (
+                              <span class="dt-err">nothing provides it</span>
+                            )
+                          }
+                        >
                           <For each={providers(key)}>
                             {(provider) => (
                               <span>
@@ -400,7 +416,7 @@ function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly Inspect
     setSelected(rest.join(":"));
   });
   const plugins = () => deps.lists[kind()]();
-  const kernel = createMemo(() => kernelOf(plugins()));
+  const kernel = createMemo(() => kernelFor(deps, kind()));
   const shown = () => {
     const words = filter().trim().toLowerCase();
     const test = STATES.find((option) => option.id === state())!.test;
@@ -480,7 +496,9 @@ function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly Inspect
         <span>{plugins().filter((plugin) => plugin.state === "active").length} running</span>
         <span>{plugins().filter((plugin) => plugin.state === "failed").length} failed</span>
         <span>{plugins().filter((plugin) => !plugin.enabled).length} off</span>
-        <span>{kernel().capabilities.filter((capability) => capability.providers.length === 0).length} capabilities without a provider</span>
+        <span>
+          {kernel().capabilities.filter((capability) => capability.providers.length === 0 && !capability.runtime).length} capabilities without a provider
+        </span>
       </div>
     </div>
   );
@@ -492,7 +510,7 @@ function HooksPanel(props: { deps: Deps }) {
   const [kind, setKind] = createSignal<Kind>("host");
   const [what, setWhat] = createSignal<"hooks" | "events">("hooks");
   const [selected, setSelected] = createSignal<string>();
-  const kernel = createMemo(() => kernelOf(deps.lists[kind()]()));
+  const kernel = createMemo(() => kernelFor(deps, kind()));
   const rows = () =>
     what() === "hooks"
       ? kernel().hooks.map((hook) => ({
@@ -858,7 +876,7 @@ export function kernelPanels(deps: Deps): readonly SlotItem<contracts.DevtoolsPa
       order: 30,
       title: "Hooks",
       component: () => <HooksPanel deps={deps} />,
-      snapshot: () => ({ web: kernelOf(deps.lists.web()), host: kernelOf(deps.lists.host()) }),
+      snapshot: () => ({ web: kernelFor(deps, "web"), host: kernelFor(deps, "host") }),
     },
     {
       id: "devtools.registries",

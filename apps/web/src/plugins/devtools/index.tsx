@@ -137,7 +137,7 @@ export default defineUiPlugin({
     const panelsMade = [
       ...routePanels(router, slots, devtools),
       hostEventsPanel(client, router, plugin.onCleanup),
-      ...kernelPanels({ slots, router, devtools, client, lists: { web: ui.list, host: host.list } }),
+      ...kernelPanels({ slots, router, devtools, client, lists: { web: ui.list, host: host.list }, runtime: { web: ui.runtime, host: host.runtime } }),
     ];
     for (const item of panelsMade) slots.add(DevtoolsPanels, item);
     slots.add(Actions, {

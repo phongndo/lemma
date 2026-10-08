@@ -6,6 +6,7 @@ import { preloadPaint } from "./lib/paint.ts";
 import { takeToken } from "./lib/token.ts";
 import { bundled } from "./plugins/index.ts";
 import { boot } from "./ui/boot.tsx";
+import { NewThreadRoute, SettingsRoute, ThreadRoute } from "./ui/contracts.ts";
 import "./styles.css";
 
 const start = async () => {
@@ -25,7 +26,9 @@ const start = async () => {
   // `?safe` runs the app as shipped, ignoring `ui` rows and UI files: the way back from a broken customization.
   // The api for UI files loads only when one needs it, keeping it out of the app's own bundle.
   const api = () => import("./ui/api.ts").then((module) => module.api);
-  await boot({ host, token, bundled, api, element: document.getElementById("root")!, safe: params.has("safe") });
+  // The addresses links from outside the page name: the thread routes `lemma open` and deep links use, and settings.
+  const appRoutes = [NewThreadRoute, ThreadRoute, SettingsRoute];
+  await boot({ host, token, bundled, appRoutes, api, element: document.getElementById("root")!, safe: params.has("safe") });
 };
 
 start().catch((error) => {

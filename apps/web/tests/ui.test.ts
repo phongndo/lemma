@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { Context, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { createEffect, createRoot, createSignal } from "solid-js";
-import { definePlugin, makeLoader } from "@lemma/core";
-import type { Loader, Plugin } from "@lemma/core";
+import { checkComposition, definePlugin, makeLoader } from "@lemma/core";
+import type { ApplicationServices, Loader, Plugin } from "@lemma/core";
+import { planComposition } from "@lemma/composition";
 import { defineRoute } from "@lemma/router";
-import { Slots, UiApi } from "../src/ui/contracts.ts";
+import { makeSlots } from "../src/runtime/slots.ts";
+import { Notify, Slots, UI_API, UiApi } from "../src/ui/contracts.ts";
 import { defineUiPlugin, extendUiPlugin, routesOf } from "../src/ui/define.ts";
-import slotsPlugin from "../src/plugins/slots.ts";
 import { defineSlot } from "../src/ui/slots.ts";
 import type { SlotsService } from "../src/ui/slots.ts";
 
@@ -40,7 +41,6 @@ describe("slots", () => {
     });
     await run(
       [
-        slotsPlugin,
         adding("b", [
           { id: "b1", label: "B" },
           { id: "b2", label: "B" },
@@ -61,7 +61,7 @@ describe("slots", () => {
   });
 
   it("attributes each item to its plugin and drops them when it stops, cleanup or not", async () => {
-    await run([slotsPlugin, adding("sidebar", [{ id: "a", label: "A" }]), adding("palette", [{ id: "b", label: "B" }])], async (loader) => {
+    await run([adding("sidebar", [{ id: "a", label: "A" }]), adding("palette", [{ id: "b", label: "B" }])], async (loader) => {
       const slots = await Effect.runPromise(loader.core.run(Slots));
       const snapshot = await Effect.runPromise(loader.core.inspect);
       expect(snapshot.registries.find((registry) => registry.name === "test.items")?.items).toEqual([
@@ -69,14 +69,14 @@ describe("slots", () => {
         { pluginId: "sidebar", order: 0, key: "a" },
       ]);
       // `adding` registers no cleanup: the core removes the items with the plugin.
-      await Effect.runPromise(loader.apply({ plugins: { slots: {}, palette: {}, sidebar: { enabled: false } } }));
+      await Effect.runPromise(loader.apply({ plugins: { palette: {}, sidebar: { enabled: false } } }));
       await waitFor(() => slots.list(Items).length === 1);
       expect(slots.list(Items).map((item) => item.id)).toEqual(["b"]);
     });
   });
 
   it("an item that fails while drawing leaves the slot's views, named for its plugin, until the plugin adds it again", async () => {
-    await run([slotsPlugin, adding("custom", [{ id: "mine", label: "M" }]), adding("kit", [{ id: "default", label: "D", order: 100 }])], async (loader) => {
+    await run([adding("custom", [{ id: "mine", label: "M" }]), adding("kit", [{ id: "default", label: "D", order: 100 }])], async (loader) => {
       const slots = await Effect.runPromise(loader.core.run(Slots));
       const shown: (string | undefined)[] = [];
       const dispose = createRoot((dispose) => {
@@ -107,7 +107,7 @@ describe("slots", () => {
           slots.add(defineSlot<{ readonly label: string }>("test.shared"), { id, label: id });
         },
       });
-    await run([slotsPlugin, own("x"), own("y")], async (loader) => {
+    await run([own("x"), own("y")], async (loader) => {
       const slots = await Effect.runPromise(loader.core.run(Slots));
       expect(slots.list(defineSlot("test.shared")).map((item) => item.id)).toEqual(["x", "y"]);
     });
@@ -122,12 +122,23 @@ describe("slots", () => {
         captured = slots;
       },
     });
-    await run([slotsPlugin, keeper], async (loader) => {
+    await run([keeper], async (loader) => {
       const slots = await Effect.runPromise(loader.core.run(Slots));
-      await Effect.runPromise(loader.apply({ plugins: { slots: {}, keeper: { enabled: false } } }));
+      await Effect.runPromise(loader.apply({ plugins: { keeper: { enabled: false } } }));
       const remove = captured!.add(Items, { id: "late", label: "L" });
       remove();
       expect(slots.list(Items)).toEqual([]);
+    });
+  });
+
+  it("refuses an add through the page's own view, which belongs to no plugin", async () => {
+    await run([adding("a", [{ id: "a", label: "A" }])], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      expect(() => slots.add(Items, { id: "orphan", label: "O" })).toThrow(/add through a plugin's own slots/);
+      expect(slots.list(Items).map((item) => item.id)).toEqual(["a"]);
+      // It still reads, and still blames a failing item on the plugin that added it.
+      slots.fail(Items, slots.first(Items)!, new Error("draw failed"));
+      expect(slots.failures(Items)).toMatchObject([{ item: { id: "a" }, pluginId: "a" }]);
     });
   });
 });
@@ -143,7 +154,13 @@ const counter = defineUiPlugin({
   },
 });
 
-/** Runs `plugins` on the kernel the way the boot does, starting with those in `running`, and closes it. */
+/** The runtime these tests need, as the boot provides it: the page's slots, and the contracts' version. */
+const runtime: ApplicationServices<readonly [typeof Slots, ReturnType<typeof UiApi>]> = {
+  provides: [Slots, UiApi(UI_API)],
+  layer: Layer.effectContext(Effect.map(makeSlots, (slots) => Context.make(Slots, slots).pipe(Context.add(UiApi(UI_API), UI_API)))),
+};
+
+/** Runs `plugins` on the kernel the way the boot does, over the runtime, starting with those in `running`, and closes it. */
 const run = async (plugins: readonly Plugin[], body: (loader: Loader) => Promise<void>, running = plugins.map((plugin) => plugin.id)) => {
   const scope = Effect.runSync(Scope.make());
   try {
@@ -152,6 +169,7 @@ const run = async (plugins: readonly Plugin[], body: (loader: Loader) => Promise
         makeLoader({
           source: { resolve: (id) => Effect.succeed(plugins.find((plugin) => plugin.id === id)!) },
           composition: { plugins: Object.fromEntries(running.map((id) => [id, {}])) },
+          provide: runtime,
         }),
         scope,
       ),
@@ -174,7 +192,7 @@ describe("defineUiPlugin", () => {
         slots.add(Items, { id: "reader", label: String(counter.count()) });
       },
     });
-    await run([counter, slotsPlugin, reader], async (loader) => {
+    await run([counter, reader], async (loader) => {
       expect(seen).toEqual([1]);
       const slots = await Effect.runPromise(loader.core.run(Slots));
       expect(slots.list(Items).map((item) => item.label)).toEqual(["1"]);
@@ -182,7 +200,7 @@ describe("defineUiPlugin", () => {
       const snapshot = await Effect.runPromise(loader.core.inspect);
       expect(snapshot.registries.find((registry) => registry.name === "test.items")?.items.map((item) => item.pluginId)).toEqual(["reader"]);
       // Turning it off runs its cleanups: its item leaves the slot.
-      await Effect.runPromise(loader.apply({ plugins: { counter: {}, slots: {}, reader: { enabled: false } } }));
+      await Effect.runPromise(loader.apply({ plugins: { counter: {}, reader: { enabled: false } } }));
       await waitFor(() => slots.list(Items).length === 0);
     });
   });
@@ -234,8 +252,8 @@ describe("defineUiPlugin", () => {
   it("extends a definition, declares routes, and requires the API version it is written for", async () => {
     const Note = defineRoute("test.note", { path: "/notes/:id" });
     const calls: string[] = [];
-    const base = defineUiPlugin({ id: "notes", api: 1, routes: [Note], setup: () => void calls.push("base") });
-    expect(base.requires.map((tag) => tag.key)).toEqual(["lemma-ui/api@1"]);
+    const base = defineUiPlugin({ id: "notes", api: UI_API, routes: [Note], setup: () => void calls.push("base") });
+    expect(base.requires.map((tag) => tag.key)).toEqual([`lemma-ui/api@${UI_API}`]);
     expect(routesOf(base)).toEqual([Note]);
     const extended = extendUiPlugin(base, (definition) => ({
       ...definition,
@@ -246,10 +264,33 @@ describe("defineUiPlugin", () => {
     }));
     expect([extended.id, routesOf(extended)]).toEqual(["notes", [Note]]);
     expect(() => extendUiPlugin(definePlugin({ id: "raw", layer: Layer.empty }), (definition) => definition)).toThrow(/not made with defineUiPlugin/);
-    const app = defineUiPlugin({ id: "app", provides: { api: UiApi(1) }, setup: () => ({ api: 1 }) });
-    await run([app, extended], async () => {
+    // `api.bundled.notify`: the runtime is not a plugin.
+    expect(() => extendUiPlugin(undefined, (definition) => definition)).toThrow(/the web app's runtime, not plugins/);
+    await run([extended], async () => {
       expect(calls).toEqual(["mine", "base"]);
     });
+  });
+
+  it("refuses a plugin that provides what the runtime provides: the boot leaves it out, and the page keeps its own", () => {
+    const slots = defineUiPlugin({ id: "my-slots", provides: { slots: Slots }, setup: () => ({ slots: {} as SlotsService }) });
+    const version = defineUiPlugin({ id: "old-app", provides: { api: UiApi(UI_API) }, setup: () => ({ api: UI_API }) });
+    const notify = defineUiPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} as never }) });
+    const keeps = adding("keeps", []);
+    expect(checkComposition([slots], {}, { provided: runtime.provides }).map((error) => error.reason)).toEqual(["ReservedCapability"]);
+    const plan = planComposition({
+      bundled: [keeps],
+      local: [slots, version, notify].map((plugin) => ({ plugin, source: "user" as const })),
+      rows: {},
+      provided: [...runtime.provides, Notify],
+    });
+    const runs = Object.entries(plan.resolved.composition.plugins).filter(([, entry]) => entry.enabled !== false);
+    expect(runs.map(([id]) => id)).toEqual(["keeps"]);
+    expect([...plan.problems.keys()]).toEqual(["my-slots", "old-app", "my-notify"]);
+    expect(plan.diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.suggestion])).toEqual([
+      ["warning", 'Stop providing "lemma-ui/Slots": the app provides it, or turn it off'],
+      ["warning", `Stop providing "lemma-ui/api@${UI_API}": the app provides it, or turn it off`],
+      ["warning", 'Stop providing "lemma-ui/Notify": the app provides it, or turn it off'],
+    ]);
   });
 
   it("a setup that throws fails only its own plugin, releasing what it added", async () => {
@@ -262,16 +303,16 @@ describe("defineUiPlugin", () => {
       },
     });
     await run(
-      [slotsPlugin, broken],
+      [broken],
       async (loader) => {
         const slots = await Effect.runPromise(loader.core.run(Slots));
-        const applied = await Effect.runPromiseExit(loader.apply({ plugins: { slots: {}, broken: {} } }));
+        const applied = await Effect.runPromiseExit(loader.apply({ plugins: { broken: {} } }));
         expect(applied._tag).toBe("Failure");
         expect(slots.list(Items)).toEqual([]);
         // The rest keeps running.
         expect(await Effect.runPromise(loader.core.run(Slots))).toBe(slots);
       },
-      ["slots"],
+      [],
     );
   });
 });

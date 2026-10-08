@@ -1,6 +1,7 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
 import { Event } from "@lemma/core";
+import { defineRoute } from "@lemma/router";
 import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "./llm.ts";
 
 /**
@@ -182,3 +183,14 @@ export class Sessions extends Context.Service<
     readonly remove: (sessionId: string) => Effect.Effect<void, SessionError>;
   }
 >()("lemma/Sessions") {}
+
+/*
+ * A session's addresses in the web app, which shows it as a thread: the app
+ * knows them whatever plugins run, the desktop app opens them from deep links
+ * (`lemma://threads/<id>`), and the CLI prints them (`lemma open`).
+ */
+
+/** A new thread. */
+export const NewThreadRoute = defineRoute("thread.new", { path: "/" });
+/** A thread, in one of its views (the web app's `Views` item ids; the first when absent). */
+export const ThreadRoute = defineRoute("thread", { path: "/threads/:id/:view?" });

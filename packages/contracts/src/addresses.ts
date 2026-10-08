@@ -1,22 +1,9 @@
-import { Schema } from "effect";
-import { defineRoute } from "@lemma/router";
-
 /*
- * The web app's addresses: one grammar for every way into it. The web app
- * matches them (`@lemma/router`), the desktop app opens them from deep links
- * (`lemma://threads/<id>`), and the CLI prints them (`lemma open`). A thread
- * is a session as the web app shows it.
+ * Ways into the web app from outside it: an address on the host that serves
+ * it, and a desktop deep link (`lemma://threads/<id>`). The addresses
+ * themselves are routes (`@lemma/router`), declared by what they name: a
+ * session's in `sessions.ts`, a web app plugin's own with `defineRoute`.
  */
-
-/** A new thread. */
-export const NewThreadRoute = defineRoute("thread.new", { path: "/" });
-/** A thread, in one of its views (the web app's `Views` item ids; the first when absent). */
-export const ThreadRoute = defineRoute("thread", { path: "/threads/:id/:view?" });
-/** A settings section (General when absent); its search is the section's own state, as strings. */
-export const SettingsRoute = defineRoute("settings", {
-  path: "/settings/:section?",
-  search: Schema.Record(Schema.String, Schema.String),
-});
 
 /** The scheme of desktop deep links: `lemma://threads/<id>` opens that address in the app. */
 export const DEEP_LINK_SCHEME = "lemma";

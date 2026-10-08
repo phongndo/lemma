@@ -17,10 +17,13 @@ import { createServer } from "vite";
  * 1. The app boots without errors.
  * 2. Every part declared in `ui/contracts.ts` has a provider.
  * 3. Every plugin that is not pinned turns off and back on, as the Plugins
- *    page does it, and the page stays up and error-free either way. The
- *    Plugins page needs none of them: a line its summary shows leaves with the
- *    plugin that adds it, and with `kit` off its switches are plain ones that
- *    turn `kit` back on.
+ *    page does it, and the page stays up and error-free either way; only the
+ *    pinned ones and what they need stay on, and the runtime is no row at all.
+ *    The Plugins page needs none of them: a line its summary shows leaves with
+ *    the plugin that adds it, and with `kit` off its switches are plain ones
+ *    that turn `kit` back on. With every plugin off that can be, the runtime
+ *    still answers, and a UI file providing part of it is left out, saying so,
+ *    while the app's own goes on.
  * 4. A part replaced by a lower-order item changes what renders, and the
  *    default returns when the replacement goes, or when the replacement throws
  *    (named for its plugin, the rest of the app updating on).
@@ -37,7 +40,8 @@ import { createServer } from "vite";
  *    that throws fails alone; routes in conflict are reported; a hovered
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
- * 8. The devtools dock under the app, and each panel shows it as it runs.
+ * 8. The devtools dock under the app, and each panel shows it as it runs: a
+ *    capability the runtime provides is the web app's, not a missing one.
  * 9. While a turn runs, the composer steers it or queues a prompt for after
  *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
  *    a steer shows in its turn. A send that fails is retried with its request
@@ -137,6 +141,21 @@ const boot = async () => {
   expectNoErrors("while booting");
   return { page, errors, warnings, expectNoErrors };
 };
+/**
+ * Loads the `check` UI file, a plugin like a user's, and puts its own slots on `window.checkSlots`: what the checks
+ * add, they add through it, since the page's own slots belong to no plugin and refuse to add. Each item is the check
+ * plugin's, and leaves with it. A reload drops it, as it drops the mock host's files.
+ */
+const checkPlugin = async (page: Page) => {
+  await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
+  await page.evaluate(() => {
+    const source = `export default ({ defineUiPlugin, contracts: { Slots } }) =>
+      defineUiPlugin({ id: "check", requires: { slots: Slots }, setup: ({ slots }) => { window.checkSlots = slots; } });`;
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setUiFiles([{ name: "check.js", source: "user", kind: "script", path: "/check/check.js", url }]);
+  });
+  await page.waitForFunction(() => "checkSlots" in window, undefined, { timeout: 10_000 });
+};
 /** Turns a plugin on or off the way the Plugins page switches it, and says what state it is in after. */
 const switchTo = (page: Page, id: string, enabled: boolean) =>
   page.evaluate(
@@ -178,7 +197,6 @@ const toggling = async () => {
   const toggled: string[] = [];
   const locked: string[] = [];
   for (const { id, locked: isLocked } of plugins) {
-    if (id === "client") continue;
     const stylesheets = () => page.evaluate((plugin) => document.head.querySelectorAll(`style[data-plugin="${plugin}"]`).length, id);
     const styled = await stylesheets();
     const stateOff = await switchTo(page, id, false);
@@ -205,6 +223,10 @@ const toggling = async () => {
       .map((plugin: any) => plugin.id),
   );
   assert.deepEqual(off, [], "plugins not back on after the round trip");
+  // Only the pinned plugins and what they need stay on; the runtime is the app's, with no row to switch.
+  assert.deepEqual([...locked].sort(), ["pages", "plugins-page", "settings", "shell"], "the plugins kept on");
+  const runtimeRows = plugins.filter(({ id }) => ["client", "app", "slots", "router", "notify", "host-plugins", "interactions"].includes(id));
+  assert.deepEqual(runtimeRows, [], "the runtime has rows among the plugins");
   // Turning a plugin off takes what needs it along, as the Plugins page shows: nothing to warn about.
   assert.deepEqual(
     warnings.filter((warning) => warning.includes("is not loaded")),
@@ -239,12 +261,75 @@ const toggling = async () => {
     .catch(() => assert.fail("the plain switch did not turn kit back on"));
   assert.equal(await kitState(), "active", "kit is not back on");
   expectNoErrors("turning threads and kit off and on with the Plugins page open");
-  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page keeps its switches without kit`;
+
+  // The runtime is not a plugin: with every plugin off that can be, the router and the messages still answer.
+  const unlocked = plugins.filter((plugin) => !plugin.locked).map((plugin) => plugin.id);
+  const configureAll = (enabled: boolean) =>
+    page.evaluate(
+      async ({ ids, enabled }) => {
+        const { Client } = await import("/src/ui/contracts.ts" as string);
+        await (await (window as any).lemma.service(Client)).host.ui.configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
+      },
+      { ids: unlocked, enabled },
+    );
+  const active = () =>
+    page.evaluate(() =>
+      (window as any).lemma.plugins
+        .list()
+        .filter((plugin: any) => plugin.state === "active")
+        .map((plugin: any) => plugin.id),
+    );
+  await configureAll(false);
+  await page.waitForFunction((count) => (window as any).lemma.plugins.list().filter((plugin: any) => plugin.state === "active").length === count, 4);
+  assert.deepEqual([...(await active())].sort(), ["pages", "plugins-page", "settings", "shell"], "plugins still running with every plugin off");
+  const answers = await page.evaluate(async () => {
+    const { Notify, Router } = await import("/src/ui/contracts.ts" as string);
+    const lemma = (window as any).lemma;
+    const notify = await lemma.service(Notify);
+    const id = notify.toast({ level: "info", message: "the runtime answers" });
+    return { path: (await lemma.service(Router)).location().pathname, kept: notify.toasts().some((toast: any) => toast.id === id) };
+  });
+  assert.deepEqual(answers, { path: "/settings/plugins", kept: true }, "with every plugin off, the runtime does not answer");
+  await configureAll(true);
+  await page.waitForFunction(
+    (count) => (window as any).lemma.plugins.list().filter((plugin: any) => plugin.state === "active").length === count,
+    plugins.length,
+  );
+  expectNoErrors("turning every plugin off and on at once");
+
+  // A UI file providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
+  await page.evaluate(() => {
+    const source = `export default ({ defineUiPlugin, contracts: { Notify } }) =>
+      defineUiPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`;
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setUiFiles([{ name: "my-notify.js", source: "user", kind: "script", path: "/check/my-notify.js", url }]);
+  });
+  await page
+    .waitForFunction(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
+      timeout: 10_000,
+    })
+    .catch(() => assert.fail("a UI file providing Notify was not left out"));
+  assert(
+    warnings.some((warning) => warning.includes('"my-notify" is left out') && warning.includes('Stop providing "lemma-ui/Notify"')),
+    "a UI file providing Notify was left out without a warning",
+  );
+  await page.evaluate(async () => {
+    const { Notify } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Notify)).toast({ level: "info", message: "still the app's own" });
+  });
+  await page
+    .waitForSelector(".toast >> text=still the app's own", { timeout: 5_000 })
+    .catch(() => assert.fail("toasts stopped with a UI file providing Notify"));
+  await page.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
+  await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
+  expectNoErrors("a UI file providing part of the runtime");
+  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page keeps its switches without kit; the runtime answers with every plugin off, and a UI file providing Notify is left out`;
 };
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
 const parts = async () => {
   const { page, errors, expectNoErrors } = await boot();
+  await checkPlugin(page);
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
   await page.fill("textarea", "hello");
@@ -257,7 +342,7 @@ const parts = async () => {
   assert((await page.locator(".turn .md").count()) > 0, "the default markdown part renders");
   await page.evaluate(async () => {
     const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
-    const remove = (window as any).lemma.slots().add(MarkdownPart, {
+    const remove = (window as any).checkSlots.add(MarkdownPart, {
       id: "check.markdown",
       order: 0,
       component: (props: { text: string }) => {
@@ -279,7 +364,7 @@ const parts = async () => {
   // app keeps updating: a later turn still draws.
   await page.evaluate(async () => {
     const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
-    (window as any).removeBroken = (window as any).lemma.slots().add(MarkdownPart, {
+    (window as any).removeBroken = (window as any).checkSlots.add(MarkdownPart, {
       id: "check.broken-markdown",
       order: 0,
       component: () => {
@@ -299,7 +384,7 @@ const parts = async () => {
         .failures(MarkdownPart)
         .map((failure: any) => [failure.item.id, failure.pluginId, failure.error.message]);
     }),
-    [["check.broken-markdown", "slots", "check markdown boom"]],
+    [["check.broken-markdown", "check", "check markdown boom"]],
     "the failing part is not named for its plugin",
   );
   await page.waitForSelector(".turn .md");
@@ -326,7 +411,7 @@ const parts = async () => {
           element.textContent = slot;
           return element;
         };
-        const remove = (window as any).lemma.slots().add(contracts[slot], { id: `check.${slot}`, order: 1_000, component, ...extra });
+        const remove = (window as any).checkSlots.add(contracts[slot], { id: `check.${slot}`, order: 1_000, component, ...extra });
         ((window as any).removals ??= []).push(remove);
       },
       { slot, extra },
@@ -341,7 +426,7 @@ const parts = async () => {
   // A palette source: its items come up in the palette, and its prefix narrows to it.
   await page.evaluate(async () => {
     const { PaletteSources } = await import("/src/ui/contracts.ts" as string);
-    const remove = (window as any).lemma.slots().add(PaletteSources, {
+    const remove = (window as any).checkSlots.add(PaletteSources, {
       id: "check.source",
       order: 1_000,
       label: "checks",
@@ -376,7 +461,7 @@ const parts = async () => {
   // A plugin's source answers its own trigger; Escape closes the menu until the word is left, and Tab picks.
   await page.evaluate(async () => {
     const { ComposerCompletions, ComposerSuggestionPart } = await import("/src/ui/contracts.ts" as string);
-    const slots = (window as any).lemma.slots();
+    const slots = (window as any).checkSlots;
     ((window as any).removals ??= []).push(
       slots.add(ComposerCompletions, {
         id: "check.completion",
@@ -463,7 +548,12 @@ const parts = async () => {
   await page.evaluate(async () => {
     const { PluginTabs, Settings } = await import("/src/ui/contracts.ts" as string);
     const lemma = (window as any).lemma;
-    const remove = lemma.slots().add(PluginTabs, { id: "check.tab", order: 1_000, label: () => "Checked", component: () => document.createElement("span") });
+    const remove = (window as any).checkSlots.add(PluginTabs, {
+      id: "check.tab",
+      order: 1_000,
+      label: () => "Checked",
+      component: () => document.createElement("span"),
+    });
     ((window as any).removals ??= []).push(remove);
     (await lemma.service(Settings)).open("plugins");
   });
@@ -507,9 +597,10 @@ const parts = async () => {
   await page.reload();
   await page.waitForSelector(".turn", { timeout: 10_000 }).catch(() => assert.fail("a reload does not reopen the thread"));
   // A tool view with a summary and no body retitles its calls and leaves the body to the chat's own.
+  await checkPlugin(page);
   await page.evaluate(async () => {
     const { ToolViews } = await import("/src/ui/contracts.ts" as string);
-    (window as any).removeToolView = (window as any).lemma.slots().add(ToolViews, { id: "bash", summary: () => ({ primary: "summarized by a plugin" }) });
+    (window as any).removeToolView = (window as any).checkSlots.add(ToolViews, { id: "bash", summary: () => ({ primary: "summarized by a plugin" }) });
   });
   if ((await page.locator(".work-head[aria-expanded=false]").count()) > 0) await page.click(".work-head[aria-expanded=false] >> nth=0");
   // Calls made one after another sit in a group of the fold.
@@ -713,6 +804,7 @@ const parts = async () => {
   // A plugin's own route and page, reached by an ordinary link without reloading.
   await page.goto(`${url}/?mock`);
   await settled(page);
+  await checkPlugin(page);
   await page.evaluate(async () => {
     const { api } = await import("/src/ui/api.ts" as string);
     const { Pages, Router, SidebarFooter } = api.contracts;
@@ -733,8 +825,8 @@ const parts = async () => {
       return element;
     };
     (window as any).removals = [
-      lemma.slots().add(Pages, { id: "check.note", route: Note, component: page }),
-      lemma.slots().add(SidebarFooter, { id: "check.link", order: 1_000, component: link }),
+      (window as any).checkSlots.add(Pages, { id: "check.note", route: Note, component: page }),
+      (window as any).checkSlots.add(SidebarFooter, { id: "check.link", order: 1_000, component: link }),
     ];
     (window as any).stayed = true;
   });
@@ -766,14 +858,14 @@ const parts = async () => {
       });
     });
     check.removals = [
-      lemma.slots().add(Pages, {
+      check.checkSlots.add(Pages, {
         id: "check.broken",
         route: Broken,
         component: () => {
           throw new Error("check boom");
         },
       }),
-      lemma.slots().add(Pages, { id: "check.twin", route: Twin, component: () => document.createElement("div") }),
+      check.checkSlots.add(Pages, { id: "check.twin", route: Twin, component: () => document.createElement("div") }),
     ];
     router.navigate(Broken, { id: "1" });
   });
@@ -877,9 +969,12 @@ const devtools = async () => {
   await page.click("[aria-label=Routes] tr:has(td:text-is('/threads/:id/:view?')) button:text-is('thread-view')");
   await page.waitForSelector("[aria-label='Plugin details'] .dt-details-title >> text=thread-view");
   await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('pages')):has(td:text-is('thread-view.new'))");
-  await page.fill("[aria-label='Filter plugins']", "router");
-  await page.click("[aria-label=Plugins] tr:has(td:first-child:text-is('router'))");
-  await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('lemma-ui/Router')) >> button:text-is('threads')");
+  // What the runtime provides is the web app's, not missing: no capability lacks a provider.
+  await page.fill("[aria-label='Filter plugins']", "threads");
+  await page.click("[aria-label=Plugins] tr:has(td:first-child:text-is('threads'))");
+  await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('lemma-ui/Router')) >> text=the web app");
+  await page.fill("[aria-label='Filter plugins']", "");
+  await page.waitForSelector(".dt-status >> text=/^0 capabilities without a provider$/");
   // The host's plugins too, and each hook's chain in run order.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Hooks");
   await page.click("[aria-label=Hooks] tr:has(td:text-is('lemma/agent.request'))");
@@ -938,9 +1033,10 @@ const devtools = async () => {
   await page.keyboard.press("Alt+Enter");
   await page.waitForSelector(".queued:has-text('for later') .queued-mode >> text=Next");
   // The row is a part: a plugin's own replaces it, and the default returns when that goes.
+  await checkPlugin(page);
   await page.evaluate(async () => {
     const { ComposerQueuedPart } = await import("/src/ui/contracts.ts" as string);
-    (window as any).removeRow = (window as any).lemma.slots().add(ComposerQueuedPart, {
+    (window as any).removeRow = (window as any).checkSlots.add(ComposerQueuedPart, {
       id: "check.queued",
       order: 0,
       component: (props: { prompt: { requestId: string } }) => {

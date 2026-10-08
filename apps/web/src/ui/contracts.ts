@@ -1,6 +1,6 @@
-import { Context } from "effect";
+import { Context, Schema } from "effect";
 import type { Accessor, Component, JSX } from "solid-js";
-import type { ConnectionStatus, Host } from "@lemma/client";
+import type { Host } from "@lemma/client";
 import type {
   AuthType,
   CommandInfo,
@@ -8,57 +8,40 @@ import type {
   ConfigValues,
   CustomProviderSpec,
   ImageContent,
-  HostEvent,
-  HostInfo,
-  InteractionAnswer,
-  InteractionRequest,
   LedgerRecord,
   ModelInfo,
-  NoticePayload,
-  PluginChange,
   PluginStatus,
   PromptContent,
   QueuedPrompt,
   ProviderInfo,
-  ReloadResult,
   SessionEvent,
   SessionInfo,
   SessionMarks,
   TextContent,
   ThinkingLevel,
   TurnOptions,
-  UiFile,
   WorkspaceStatus,
 } from "@lemma/contracts";
-import { NewThreadRoute, SettingsRoute, ThreadRoute } from "@lemma/contracts";
-import type {
-  AnyRoute,
-  BlockOptions,
-  Explanation,
-  HistoryLocation,
-  Match,
-  Navigate,
-  ParamsOf,
-  RouterEvent,
-  RouterSnapshot,
-  SearchOf,
-  Transition,
-} from "@lemma/router";
+import { NewThreadRoute, ThreadRoute } from "@lemma/contracts";
+import { defineRoute } from "@lemma/router";
 import type { CodeBlock } from "../lib/markdown.ts";
 import type { ToolSummary } from "../model/format.ts";
 import type { ProjectSettings } from "../model/prefs.ts";
 import type { LiveState } from "../model/live.ts";
 import type { ToolResultView, TurnView } from "../model/transcript.ts";
 import { definePart, defineSlot } from "./slots.ts";
-import type { Region, SlotItem, SlotsService } from "./slots.ts";
+import type { Region } from "./slots.ts";
 
 /*
  * The web app's contracts. Capabilities are services one plugin provides and
  * others require; slots are places any number of plugins contribute to; parts
- * are the replaceable pieces plugins draw with. Every bundled plugin is
- * written against these alone, so any of them can be replaced by a plugin
- * that provides the same capability or fills the same slot. Keys are
- * namespaced `lemma-ui/…`.
+ * are the replaceable pieces plugins draw with. The runtime's contracts (the
+ * connection, slots, the router, messages, the plugins, questions:
+ * `runtime.ts`, re-exported here) are the app's own; every other capability,
+ * and every slot item, comes from a plugin. Every bundled plugin is written
+ * against these alone, so any of them can be replaced by a plugin that
+ * provides the same capability or fills the same slot. Keys are namespaced
+ * `lemma-ui/…`.
  *
  * A few contracts are in the DOM rather than in code, because every plugin's
  * markup takes part in them:
@@ -83,61 +66,9 @@ import type { Region, SlotItem, SlotsService } from "./slots.ts";
  *   README). The `reload` plugin uses it; a replacement can too.
  */
 
-// ------------------------------------------------------------------ slots
-
-/** The contribution registry every slot lives in. */
-export class Slots extends Context.Service<Slots, SlotsService>()("lemma-ui/Slots") {}
+export * from "./runtime.ts";
 
 // ------------------------------------------------------------------ host models
-
-export interface ClientService {
-  /** The host connection: every RPC as a promise. */
-  readonly host: Host;
-  readonly status: Accessor<ConnectionStatus>;
-  readonly connected: Accessor<boolean>;
-  /** `Host.Info`, fetched on every (re)connect. */
-  readonly info: Accessor<HostInfo | undefined>;
-  /** Every host event as it arrives. Returns the unsubscribe. */
-  readonly onEvent: (listener: (event: HostEvent) => void) => () => void;
-  /**
-   * Runs `sync` now if connected, then after every reconnect: where a model
-   * loads what it shows, since events may have been missed in between.
-   */
-  readonly onConnect: (sync: () => void) => () => void;
-}
-export class Client extends Context.Service<Client, ClientService>()("lemma-ui/Client") {}
-
-export interface Toast {
-  readonly id: number;
-  readonly level: NoticePayload["level"];
-  readonly message: string;
-  readonly source?: string;
-  readonly links?: NoticePayload["links"];
-  readonly code?: string;
-  /** What it belongs to (`login:<provider>`), as the host's notice says. */
-  readonly origin?: string;
-  /** What a login's notice is (`sign-in`, `device-code`, …), as the host's notice says. */
-  readonly kind?: NoticePayload["kind"];
-}
-
-export interface NotifyService {
-  readonly toasts: Accessor<readonly Toast[]>;
-  /** Shows a message; one with a code or links stays until dismissed. Returns its id. */
-  readonly toast: (notice: Omit<Toast, "id">) => number;
-  readonly dismiss: (id: number) => void;
-  /** Dismisses every toast `drop` is true for. */
-  readonly dismissWhere: (drop: (toast: Toast) => boolean) => void;
-  /** Shows a failure; `context` says what failed. */
-  readonly report: (error: unknown, context?: string) => void;
-  /**
-   * Shows messages somewhere else: those `which` picks (a sign-in dialog, its
-   * login's link and code). The toasts leave them undrawn until released.
-   */
-  readonly claim: (which: (toast: Toast) => boolean) => () => void;
-  /** Some view shows this message itself. */
-  readonly claimed: (toast: Toast) => boolean;
-}
-export class Notify extends Context.Service<Notify, NotifyService>()("lemma-ui/Notify") {}
 
 export interface LogState {
   readonly loaded: boolean;
@@ -279,49 +210,6 @@ export interface WorkspaceService {
 }
 export class Workspace extends Context.Service<Workspace, WorkspaceService>()("lemma-ui/Workspace") {}
 
-/** Plugins and the changes the Plugins page makes. Changes reject when refused; whoever asked reports it. */
-export interface PluginsService {
-  readonly list: Accessor<readonly PluginStatus[]>;
-  readonly refresh: () => Promise<void>;
-  readonly restart: (plugin: PluginStatus, options?: { force?: boolean }) => Promise<void>;
-  /** Writes `enabled` where it is set now (the user file unless the project file decides). */
-  readonly setEnabled: (plugin: PluginStatus, enabled: boolean) => Promise<ReloadResult>;
-  /** Sets config fields (null unsets one) in the file that sets the plugin's config. */
-  readonly setConfig: (plugin: PluginStatus, values: Readonly<Record<string, unknown>>) => Promise<ReloadResult>;
-}
-export interface HostPluginsService extends PluginsService {
-  readonly reload: () => Promise<ReloadResult>;
-  /** Adds or removes items of a list config key by their `id`, in the file that sets the plugin's config, without reading the list. */
-  readonly edit: (plugin: PluginStatus, change: Pick<PluginChange, "add" | "remove">) => Promise<ReloadResult>;
-}
-/** The host's plugins. */
-export class HostPlugins extends Context.Service<HostPlugins, HostPluginsService>()("lemma-ui/HostPlugins") {}
-
-export interface UiPluginsService extends PluginsService {
-  /** Files loaded from `~/.lemma/ui` and a trusted project's `.lemma/ui`. */
-  readonly files: Accessor<readonly UiFile[]>;
-  /** The routes known plugins declare (`defineUiPlugin({ routes })`), running or not, with the plugin declaring each. */
-  readonly routes: Accessor<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>;
-  /** What went wrong loading UI files or planning the composition; each names its file or plugin. */
-  readonly problems: Accessor<readonly string[]>;
-  /** Opened with `?safe`: `ui` rows and UI files are ignored. */
-  readonly safe: boolean;
-}
-/** The web app's own plugins, which this page runs. */
-export class UiPlugins extends Context.Service<UiPlugins, UiPluginsService>()("lemma-ui/UiPlugins") {}
-
-/**
- * The version of these contracts: a major number that changes when one of
- * them changes incompatibly. A plugin says which it is written for with
- * `defineUiPlugin({ api })`, which requires `UiApi(api)`; the app provides
- * each version it supports, so a plugin written for another is left out,
- * saying so, rather than failing at some later call. As with `HostApi`, a
- * breaking change gives the changed capability, slot, or part a new key.
- */
-export const UI_API = 1;
-/** Required by a plugin written for version `version` of these contracts (see `UI_API`). */
-export const UiApi = (version: number): Context.Key<`lemma-ui/api@${number}`, number> => Context.Service(`lemma-ui/api@${version}`);
-
 export interface CommandsService {
   /** What host plugins offer to run (`lemma do`). */
   readonly list: Accessor<readonly CommandInfo[]>;
@@ -329,22 +217,6 @@ export interface CommandsService {
   readonly run: (command: CommandInfo) => Promise<boolean>;
 }
 export class Commands extends Context.Service<Commands, CommandsService>()("lemma-ui/Commands") {}
-
-export interface InteractionsService {
-  /** Questions the host is waiting on, oldest first. */
-  readonly open: Accessor<readonly InteractionRequest[]>;
-  readonly answer: (id: string, answer: InteractionAnswer) => void;
-  readonly dismiss: (id: string) => void;
-  /**
-   * Shows questions somewhere else: all of them (the palette does while open)
-   * or those `which` picks (the Providers page, its logins' questions). The
-   * question dialog leaves them alone until released.
-   */
-  readonly claim: (which?: (request: InteractionRequest) => boolean) => () => void;
-  /** Some view shows this question itself. */
-  readonly claimed: (request: InteractionRequest) => boolean;
-}
-export class Interactions extends Context.Service<Interactions, InteractionsService>()("lemma-ui/Interactions") {}
 
 // ------------------------------------------------------------------ screen state
 
@@ -370,6 +242,11 @@ export interface SettingsService {
   readonly setParams: (patch: Readonly<Record<string, string | undefined>>) => void;
 }
 export class Settings extends Context.Service<Settings, SettingsService>()("lemma-ui/Settings") {}
+/** A settings section (General when absent); its search is the section's own state, as strings. */
+export const SettingsRoute = defineRoute("settings", {
+  path: "/settings/:section?",
+  search: Schema.Record(Schema.String, Schema.String),
+});
 
 export interface LayoutService {
   readonly toggleSidebar: () => void;
@@ -380,76 +257,8 @@ export class Layout extends Context.Service<Layout, LayoutService>()("lemma-ui/L
 
 // ------------------------------------------------------------------ addresses
 
-/*
- * The page's address names what it shows (`@lemma/router`). A route is an
- * address and the Schemas its params and search decode through; a page is
- * what a plugin shows at one. The app's routes are declared in
- * `@lemma/contracts`, apart from any plugin, so a link to one works while
- * nothing shows it: the page then says its plugin is off, and returns with
- * it. A UI file declares its own with `api.defineRoute` and adds a `Pages`
- * item for it.
- */
-
-/** The app's own routes (`@lemma/contracts`, shared with the desktop app's deep links and `lemma open`). */
-export { NewThreadRoute, SettingsRoute, ThreadRoute };
-/** The app's own routes: known while nothing shows them. */
-export const KnownRoutes: readonly AnyRoute[] = [NewThreadRoute, ThreadRoute, SettingsRoute];
-
-/**
- * What a plugin shows at a route: the main region's content while the address is there. The first item per route shows.
- * Items with the same component keep one instance across their routes (a new thread becoming the thread, mid-send).
- */
-export interface Page {
-  readonly route: AnyRoute;
-  readonly component: Component;
-  /**
-   * A link to this page is about to be followed (hovered or focused): start fetching what it will show, so it is there
-   * on arrival. `isRoute(match, route)` gives the typed params. Only warms: the page must work without it.
-   */
-  readonly preload?: (match: Extract<PageMatch, { readonly status: "matched" }>) => void;
-}
-export const Pages = defineSlot<Page>("pages");
-
-export type PageMatch = Match<SlotItem<Page>>;
-
-export interface RouterService {
-  /** Where the page is: path, search, and the history entry's `key` and `index`. */
-  readonly location: Accessor<HistoryLocation>;
-  /** What the location shows: a page, a route whose page's plugin is off (`unavailable`), or nothing (`unmatched`). */
-  readonly match: Accessor<PageMatch>;
-  /** What an address would show, without going there. */
-  readonly matchHref: (href: string) => PageMatch;
-  /** The params and search when the location is `route`, else undefined. Reactive: runs again only when `route`'s match changes. */
-  readonly matchOf: <R extends AnyRoute>(route: R) => { readonly params: ParamsOf<R>; readonly search: SearchOf<R> } | undefined;
-  /** `route`'s address for these values (keeping `?safe`). For `<a href>`: plain clicks on links to the app navigate in place. */
-  readonly href: <R extends AnyRoute>(route: R, params: ParamsOf<R>, search?: Partial<SearchOf<R>>) => string;
-  /**
-   * Goes to a route with its values (`navigate(ThreadRoute, { id })`), or to an address; false when a blocker refused or
-   * the values do not encode (reported as a toast, never thrown).
-   */
-  readonly navigate: Navigate;
-  readonly back: () => void;
-  readonly go: (delta: number) => void;
-  /**
-   * Asked before every navigation (back and forward too) and before the page unloads (`action: "unload"`: closing or
-   * reloading the tab, where false has the browser ask the user); false stops it. Returns the removal.
-   */
-  readonly block: (blocker: (transition: Transition) => boolean, options?: BlockOptions) => () => void;
-  /**
-   * State kept with the current history entry (a scroll position), under
-   * `name`: back or forward to the entry finds it again, a reload too.
-   */
-  readonly entry: <T>(name: string) => { readonly get: () => T | undefined; readonly set: (value: T) => void };
-  /** Why an address shows what it does: every route's verdict on it. */
-  readonly explain: (href: string) => Explanation;
-  /** The router now, as plain data: routes with who is registered at each, conflicts, blockers. Reactive. */
-  readonly inspect: Accessor<RouterSnapshot>;
-  /** What the router did lately (navigations, matches, refusals, failures), oldest first. Reactive. */
-  readonly journal: Accessor<readonly RouterEvent[]>;
-  /** The state kept with history entries, by entry key (see `entry`). Reactive. */
-  readonly entryStates: Accessor<Readonly<Record<string, Readonly<Record<string, unknown>>>>>;
-}
-export class Router extends Context.Service<Router, RouterService>()("lemma-ui/Router") {}
+/** A session's addresses, where the web app shows it as a thread (`@lemma/contracts`, shared with the desktop app's deep links and `lemma open`). */
+export { NewThreadRoute, ThreadRoute };
 
 // ------------------------------------------------------------------ devtools
 
@@ -488,8 +297,6 @@ export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemm
 
 export type { Region } from "./slots.ts";
 
-/** What the page renders. Empty: a blank page. */
-export const Root = defineSlot<Region>("root", { shows: "first" });
 /** Mounted over the whole app in order: dialogs, the palette, toasts, tooltips. Each shows itself when it should. */
 export const Layers = defineSlot<Region>("layers");
 /** Panels docked under the app (the devtools), in order: the app shrinks to the space above them. Each sizes itself and shows itself when it should. */

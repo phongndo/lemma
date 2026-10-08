@@ -123,7 +123,10 @@ report("Host plugin boundary violations", pluginProblems, "host plugin boundary:
 // through `ui/contracts.ts` (capabilities, slots, parts). So a plugin imports
 // no other plugin and no rendering component: it draws shared pieces through
 // `ui/parts.tsx`, whose providers anyone can replace. Only `kit` supplies the
-// shared parts' defaults, so only it imports `components/`. See apps/web/AGENTS.md.
+// shared parts' defaults, so only it imports `components/`. The runtime
+// (`runtime/`) is what plugins are written against: they reach it through its
+// capabilities, and it knows only its own contracts (`ui/runtime.ts`), never a
+// plugin, a component, or what plugins provide. See apps/web/AGENTS.md.
 const web = join(root, "apps/web/src");
 const uiProblems: string[] = [];
 const within = (file: string, dir: string) => relative(join(web, dir), file).split("/")[0] !== "..";
@@ -140,7 +143,12 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
       continue;
     }
     const to = target(file, specifier);
-    if (within(file, "plugins")) {
+    if (to.startsWith("runtime/") && !within(file, "runtime") && name !== "ui/boot.tsx") {
+      rule(`imports the runtime "${specifier}" (require its capability from ui/contracts)`);
+    } else if (within(file, "runtime")) {
+      if (!to.startsWith("runtime/") && !["ui/runtime.ts", "ui/slots.ts"].includes(to) && !to.startsWith("lib/"))
+        rule(`imports "${specifier}" (the runtime uses its own files, ui/runtime, ui/slots, and lib/)`);
+    } else if (within(file, "plugins")) {
       if (name === "plugins/index.ts") continue;
       // A plugin is a file with its own stylesheet beside it (`plugins/<id>.tsx`, `plugins/<id>.css`), or a directory
       // (`plugins/<id>/`) whose files are all its own; anything else under plugins/ is another plugin.

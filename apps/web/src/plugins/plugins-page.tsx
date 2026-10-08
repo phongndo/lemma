@@ -30,6 +30,8 @@ import styles from "./plugins-page.css?inline";
 const SECTION = SectionIds.plugins;
 const DEFAULT_TAB = "plugins.overview";
 const KIND_LABEL: Readonly<Record<PluginKind, string>> = { host: "host", web: "web app" };
+/** Who provides a runtime capability: the app itself, which no plugin replaces. */
+const RUNTIME_LABEL: Readonly<Record<PluginKind, string>> = { web: "the web app", host: "the host" };
 
 /** A tab's id in the `plugins.tabs` slot. */
 type Tab = string;
@@ -372,7 +374,10 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
                     {capabilityName(key)}
                   </span>
                   <span class="muted"> from </span>
-                  <Show when={providerOf(all(), key)} fallback={<span class="muted">no plugin</span>}>
+                  <Show
+                    when={providerOf(all(), key)}
+                    fallback={<span class="muted">{inspector.services[props.kind].runtime().includes(key) ? RUNTIME_LABEL[props.kind] : "no plugin"}</span>}
+                  >
                     {(provider) => <PluginLink inspector={inspector} kind={props.kind} id={provider().id} />}
                   </Show>
                 </li>
@@ -521,6 +526,47 @@ function HostFacts(props: { client: ClientService; slots: SlotsService; ui: UiPl
   );
 }
 
+/** What each app provides itself, and who uses each: the runtime plugins are written against, which has no row. */
+function Runtime(props: { inspector: Inspector }) {
+  const { inspector } = props;
+  const kinds = () => (["web", "host"] as const).filter((kind) => inspector.services[kind].runtime().length > 0);
+  return (
+    <section class="inspector-wiring inspector-runtime">
+      <h3>Runtime</h3>
+      <For each={kinds()}>
+        {(kind) => (
+          <>
+            <p class="muted small">Provided by {RUNTIME_LABEL[kind]} itself, for its plugins to require; none replaces it, and it has no switch.</p>
+            <ul>
+              <For each={inspector.services[kind].runtime()}>
+                {(key) => {
+                  const users = () => usersOf(inspector.services[kind].list(), key);
+                  return (
+                    <li>
+                      <details>
+                        <summary>
+                          <span class="capability" data-tip={key}>
+                            {capabilityName(key)}
+                          </span>
+                          <span class="muted"> used by {users().length === 1 ? "1 plugin" : `${users().length} plugins`}</span>
+                        </summary>
+                        <div class="inspector-runtime-users">
+                          <Links inspector={inspector} kind={kind} ids={users()} none="no plugin" />
+                        </div>
+                      </details>
+                    </li>
+                  );
+                }}
+              </For>
+            </ul>
+          </>
+        )}
+      </For>
+      <HostFacts client={inspector.client} slots={inspector.slots} ui={inspector.ui} />
+    </section>
+  );
+}
+
 /** With nothing selected: the composition as a whole. */
 function Summary(props: { inspector: Inspector; entries: readonly KindedPlugin[] }) {
   const count = (test: (plugin: PluginStatus) => boolean) => props.entries.filter((entry) => test(entry.plugin)).length;
@@ -539,7 +585,7 @@ function Summary(props: { inspector: Inspector; entries: readonly KindedPlugin[]
           ],
         ]}
       />
-      <HostFacts client={props.inspector.client} slots={props.inspector.slots} ui={props.inspector.ui} />
+      <Runtime inspector={props.inspector} />
     </div>
   );
 }

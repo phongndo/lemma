@@ -39,7 +39,8 @@ decides; [approvals](../examples/approvals/README.md) is an example. A file whos
 default export is a function receives `{ bundled }`, the bundled plugins by
 id, so a replacement can wrap the plugin it replaces and keep its updates
 rather than copy it. The web app is composed the same way from its own
-plugins, through `"ui"` rows and files in `~/.lemma/ui/`: see
+plugins, through `"ui"` rows and files in `~/.lemma/ui/`; the runtime they
+are written against is the app's own, with no row: see
 [its README](../apps/web/README.md).
 
 ## When something cannot run

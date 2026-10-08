@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { appUrl, deepLinkPath, NewThreadRoute, SettingsRoute, ThreadRoute } from "../src/addresses.ts";
+import { appUrl, deepLinkPath } from "../src/addresses.ts";
+import { NewThreadRoute, ThreadRoute } from "../src/sessions.ts";
 
 describe("addresses", () => {
-  test("threads and settings have readable paths", () => {
+  test("threads have readable paths", () => {
     expect(NewThreadRoute.href({})).toBe("/");
     expect(ThreadRoute.href({ id: "s1" })).toBe("/threads/s1");
     expect(ThreadRoute.href({ id: "s1", view: "trajectory" })).toBe("/threads/s1/trajectory");
-    expect(SettingsRoute.href({ section: "plugins" }, { plugin: "agent", kind: "host" })).toBe("/settings/plugins?plugin=agent&kind=host");
   });
 
   test("appUrl puts the token in the query", () => {

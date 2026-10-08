@@ -3,8 +3,10 @@
 The web app, and how to change any part of it. It is a composition of plugins
 on the same kernel as the host: the models of host state, the frame, the
 sidebar, the chat, the composer, the palette, and each settings section are
-plugins that can be turned off or replaced. With every plugin off, the page is
-blank.
+plugins that can be turned off or replaced. They are written against the
+app's runtime, which no plugin replaces: the connection to the host, slots,
+the router, messages, the plugins, and the host's questions. With every
+plugin off, the page is blank, and the runtime still runs.
 
 ```sh
 nix develop -c pnpm --filter @lemma/web dev    # http://127.0.0.1:5173/?mock runs against an in-browser fake host
@@ -30,17 +32,19 @@ and Alt with the send key queues the prompt for after the turn.
 Edits apply without a reload: the plugins that changed, and what depends on
 them, restart. Change rows from the Plugins settings page or with
 `lemma ui enable|disable|config`. Keyboard shortcuts are the `keymap`
-plugin's config, which Settings › Keyboard records.
+plugin's config, which Settings › Keyboard records. The runtime is not a
+plugin: it has no row, and the Plugins page lists what it provides in its
+summary.
 
 A customization that breaks fails alone. A plugin that cannot run (a file
 that does not load, a config that does not decode, a plugin written for
-another `api`) is left out with what needs it, and one that fails to start is
-left failed; the Plugins page says why. A slot item that throws while it draws
-is reported as its plugin's fault and leaves the slot, so a replaced part
-shows its default again, and a plugin whose own effects throw stops, with what
-needs it, while the rest of the page keeps updating. Open the app with `?safe`
-to ignore rows and files, the way back from a customization that broke the
-frame itself.
+another `api`, a plugin providing what the runtime provides) is left out with
+what needs it, and one that fails to start is left failed; the Plugins page
+says why. A slot item that throws while it draws is reported as its plugin's
+fault and leaves the slot, so a replaced part shows its default again, and a
+plugin whose own effects throw stops, with what needs it, while the rest of
+the page keeps updating. Open the app with `?safe` to ignore rows and files,
+the way back from a customization that broke the frame itself.
 
 ### The look
 
@@ -129,12 +133,15 @@ A plugin requires and provides capabilities, and adds items to slots.
 [`ui/contracts.ts`](src/ui/contracts.ts) declares them all, and the bundled
 plugins use nothing else:
 
-- **Capabilities** are services with one provider, such as `Threads`,
-  `Models`, or `Router`.
+- **Capabilities** are services with one provider, such as `Threads` or
+  `Models`. The runtime's ([`ui/runtime.ts`](src/ui/runtime.ts): `Client`,
+  `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `UiPlugins`)
+  the app provides itself; every other comes from a plugin.
 - **Slots** are places any number of plugins add to: regions of the screen,
   where the first item by `order` shows, and lists such as `Actions` (the
-  palette and shortcuts) or `ComposerCompletions`. An item leaves when the
-  plugin that added it stops.
+  palette and shortcuts) or `ComposerCompletions`. A plugin adds through the
+  `Slots` its setup receives, and an item leaves when the plugin that added it
+  stops.
 - **Parts** are the pieces plugins draw with, such as `icon`, `dialog`, or
   `chat.tool`. Replace one everywhere by adding an item with an `order` below
   `DEFAULT_PART_ORDER`; `api.defaults` holds the bundled implementations.
@@ -196,7 +203,7 @@ release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
 `Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
 `propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps
 working) becomes the plugin's settings form. `styles` apply while it runs.
-`api: 1` says which version of
+`api: 2` says which version of
 the contracts it is written for (`contracts.UI_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while
@@ -220,6 +227,9 @@ UI file that shows its prices at `/ticker`.
 A replacement with a bundled plugin's id can wrap it rather than copy it, and
 so keep what it gains in later versions: `api.bundled` holds the bundled
 plugins, and `api.extendUiPlugin` makes a plugin from another's definition.
+The runtime is not in `api.bundled`, and a plugin providing one of its
+capabilities is left out: draw messages differently by replacing `toasts`,
+which decides how long each shows, rather than `Notify`.
 
 ```js
 // ~/.lemma/ui/toasts.js: the bundled toasts, logging each one too
@@ -237,9 +247,11 @@ export default ({ bundled, extendUiPlugin }) =>
 ## Addresses
 
 The page's address names what it shows, so links, reloads, and back and
-forward return to it. The routes are declared in
-[`@lemma/contracts`](../../packages/contracts/src/addresses.ts), shared with
-the desktop app's `lemma://` links and `lemma open`:
+forward return to it. The app's own routes are known whatever plugins run (the
+boot's `appRoutes`): a session's in
+[`@lemma/contracts`](../../packages/contracts/src/sessions.ts), shared with the
+desktop app's `lemma://` links and `lemma open`, and settings' in
+[`ui/contracts.ts`](src/ui/contracts.ts):
 
 | Address                                 | Shows                                                                                 |
 | --------------------------------------- | ------------------------------------------------------------------------------------- |
@@ -271,7 +283,8 @@ plugin, until it returns, and a page that throws fails alone.
 
 `mod+shift+d` docks the devtools under the app: routes, navigation, host
 events, and, for the web app and the host alike, plugins, hooks, registries,
-and inspectors. They show the app as it runs; the Plugins page is where things
-change. A web plugin adds a panel with a `DevtoolsPanels` item, and a host
-plugin adds an inspector to the `Inspectors` registry (`@lemma/contracts`),
-which also shows in `lemma inspectors`.
+and inspectors. A capability the runtime provides shows as the web app's or
+the host's, not as missing. They show the app as it runs; the Plugins page is
+where things change. A web plugin adds a panel with a `DevtoolsPanels` item,
+and a host plugin adds an inspector to the `Inspectors` registry
+(`@lemma/contracts`), which also shows in `lemma inspectors`.

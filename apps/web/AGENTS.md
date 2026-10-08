@@ -2,8 +2,11 @@
 
 Every piece of the web app is **replaceable**: a user can turn it off, turn it
 on, configure it, or swap it for their own, without editing this repository.
-The bundled plugins are defaults that sit on the same footing as a user's UI
-file. Build every default so a user could have written it and could replace it.
+Every piece is a plugin, written against the runtime (`src/runtime/`), which
+the boot provides and nothing replaces: the connection, slots, the router,
+messages, the plugins, and questions. The bundled plugins are defaults that
+sit on the same footing as a user's UI file. Build every default so a user
+could have written it and could replace it.
 
 ## Where each kind of code goes
 
@@ -18,6 +21,14 @@ file. Build every default so a user could have written it and could replace it.
   service with one provider), a slot (a list or region many fill), a part, a
   shared id (`ActionIds`, `SectionIds`), or a DOM convention listed at the top
   of the file. When one plugin needs something from another, add it here.
+- **The runtime** (`src/runtime/`, its contracts in `src/ui/runtime.ts`) is
+  what every plugin is written against, the app's own: no plugin provides
+  it, replaces it, or turns it off. It imports no plugin, component, or
+  contract plugins provide, adds to no slot, and needs nothing a plugin
+  contributes but reactively (the router with no pages matches nothing). It
+  never throws into the page: a bad item from a plugin is that plugin's fault
+  (`slots.fail`), and its own failures are logged and reported. Add to it
+  only what no plugin could provide, since nothing can replace it.
 - **A slot** is a core registry (`defineSlot`): an item belongs to the plugin
   that added it, leaves when that plugin stops, and shows on the Plugins page.
 - **A part** is a replaceable piece plugins draw with (`definePart`): the first
@@ -67,9 +78,9 @@ file. Build every default so a user could have written it and could replace it.
    `lib/paint.ts`; what covers the page stacks by the `--z-*` tokens.
 4. Make it a plugin of its own only when someone would turn it off or replace
    it on its own (`highlight`, `palette`); when it is a model other plugins
-   need beside a view a user might drop, which is then two plugins (`notify`
-   and `toasts`); or when what it requires can be missing while the rest still
-   works. Size, tidiness, or being one more panel, tab, or section is no
+   need beside a view a user might drop, which is then two plugins (`models`
+   and `model-picker`); or when what it requires can be missing while the rest
+   still works. Size, tidiness, or being one more panel, tab, or section is no
    reason: those are files in a plugin's directory and items one plugin adds to
    a slot, as the devtools add their panels.
 5. Document new contracts where they are declared: `ui/contracts.ts` is the
@@ -83,8 +94,12 @@ nix develop .#browser -c pnpm --filter @lemma/web ui:check  # the real compositi
 ```
 
 `ui:check` boots the app and fails when a part has no provider, a plugin cannot
-turn off and on without errors or leaves its stylesheet behind, a replaced part
-does not show, or an extension slot does not render what a plugin adds.
+turn off and on without errors or leaves its stylesheet behind, more than the
+pinned plugins and what they need stay on, the runtime stops answering with
+every plugin off, a UI file providing part of the runtime is not left out, a
+replaced part does not show, or an extension slot does not render what a
+plugin adds. What it adds to slots it adds through a UI file's plugin
+(`check`), as a user's code does.
 
 For a change to how things look, compare screenshots of the main screens:
 

@@ -37,7 +37,11 @@ export const api = {
   defineUiPlugin,
   /** A plugin made from another's definition, such as a bundled one's: a replacement that keeps the original's later updates. */
   extendUiPlugin,
-  /** The bundled plugins by id: what a replacement with the same id wraps (`extendUiPlugin`) rather than copies. */
+  /**
+   * The bundled plugins by id: what a replacement with the same id wraps (`extendUiPlugin`) rather than copies. The
+   * runtime (`Client`, `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `UiPlugins`) is not among them:
+   * the app provides it, and no plugin replaces or provides it. Requiring it is as before, by its tag in `contracts`.
+   */
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
   defineSlot,
   /** A route of the plugin's own (`/notes/:id`), for a `Pages` item; links to it are `router.href(route, params)`. */
@@ -84,7 +88,7 @@ export const api = {
     SearchField: DefaultSearchField,
   },
   copyText,
-  /** For plugins written against the kernel directly. */
+  /** For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's context. */
   core: { definePlugin, Event, Hook },
   /** Enough of Effect Schema to declare a config and a route's params and search (see `UiSchema`). */
   Schema: UiSchema,
