@@ -33,10 +33,11 @@ so the two show the same records and accept the same queries.
   host is still starting, a command fails `Unavailable` naming what it called
   (exit 3, as for a host it cannot reach); a subsystem's own `Unavailable`
   (no plugin searches files, say) names what it concerns and exits 1. A
-  prompt, a login, or a command that its plugin's reload withdrew is made
-  again once the channel is served (for at most 30 seconds): a prompt with
-  its request id, so it is never placed twice; a login or a command from the
-  start, its questions asked anew.
+  prompt that the agent's reload cut off the host makes again on the
+  replacement, with its request id, so it is never placed twice, as it does
+  any call that only reads. A login or a command its plugin's reload cut off
+  fails `Withdrawn` (exit 1), since making it again would ask its questions
+  anew or run it twice: run the command again.
 - **Questions.** While `run`, `do`, `events`, or `login` watches the host,
   it is offered the host's questions, such as a login's API key or a tool
   asking to confirm. `--answer <value>` answers them in order; otherwise
@@ -86,10 +87,11 @@ so the two show the same records and accept the same queries.
   `{"error": {"code", "message", "subject"?}}` on stderr. Streams
   (`run --follow --json`, `events --json`, `channels open`) are NDJSON, and
   `run --follow` ends with a `{"type": "result", …}` line. `channels open`
-  waits while its reader is behind (an unread pipe, a paused `less`), so the
-  host stops producing for it rather than output piling up in memory; a reader
-  that stays behind for more than a few seconds drops the connection, which
-  the RPC client reads in order, and the command ends unavailable (exit 3).
+  prints at its reader's pace (an unread pipe, a paused `less`), holding what
+  the host sent meanwhile in memory: the host's stream never waits for it,
+  since a command reads the host's streams only through `@lemma/client`, which
+  never holds the connection back
+  ([`makeHostRpc`](../../packages/client/src/rpc.ts) says why).
 - **Directory scope.** `session list`, `session new`, `run new`, and
   `workspace` default to the directory the command runs in (`--all` lists
   every session). With a remote host that directory is this machine's: give

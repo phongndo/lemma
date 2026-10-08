@@ -117,6 +117,7 @@ export const WorkspaceChannels = {
     description: "Whether a directory exists, and its git state when it is in a work tree; never fails",
     payload: AtPath,
     success: WorkspaceStatus,
+    repeatable: true,
   }),
   browse: defineChannel({
     kind: "call",
@@ -125,6 +126,7 @@ export const WorkspaceChannels = {
     description: "The directories a partly typed path completes to (`~/code/ba`), best match first; never fails",
     payload: Schema.Struct({ partialPath: Schema.String }),
     success: DirectoryListing,
+    repeatable: true,
   }),
   createDirectory: defineChannel({
     kind: "call",
@@ -149,6 +151,7 @@ export const WorkspaceChannels = {
     description: "Local branches by recency, then remote-tracking ones without a local counterpart",
     payload: AtPath,
     success: Schema.Array(GitBranch),
+    repeatable: true,
   }),
   checkout: defineChannel({
     kind: "call",

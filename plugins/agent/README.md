@@ -191,10 +191,11 @@ open, without a `turn-end`; a turn waiting to ask again stops at once. Calls
 already running get `stopGrace` seconds to finish and log their results; what
 still runs after that is interrupted, as a crash would cut it off. Either way
 the turn resumes when the agent starts again (see [Durability](#durability)),
-and the calls of its step that had not started run then. A client waiting on
-`agent.prompt` gets `Withdrawn` as soon as the agent starts closing, before its
-turns are suspended: it calls again with the same `requestId` once the new
-instance serves the channel.
+and the calls of its step that had not started run then. A call waiting on
+`agent.prompt` stops waiting as soon as the agent starts closing, before its
+turns are suspended, so it never holds the agent's stop; the call is
+`repeatable`, so the host makes it again with the same `requestId` once the
+new instance serves the channel, and its client waits on.
 
 A host stopping shuts the core's hooks before it closes the agent (they fail
 closed, so no guard is skipped), and a turn can take no step without them: one

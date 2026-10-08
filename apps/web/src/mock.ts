@@ -257,8 +257,8 @@ const feed = <A>() => {
 /**
  * A channel as the mock serves it, for the plugin `source`. A call that
  * `waits` on what its plugin leaving would end (a turn, a login, a command)
- * ends `Withdrawn` when that plugin restarts, as the host's do; a stream does
- * whatever it is.
+ * ends `Withdrawn` when that plugin restarts, as the host's do, and is made
+ * again if it is `repeatable` (a prompt); a stream does whatever it is.
  */
 type Served =
   | {
@@ -1376,25 +1376,36 @@ export const createMockHost = (): Host => {
     error instanceof HostError ? error : new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) });
   /** Open streams, and calls that wait on their plugin, so its restart ends them `Withdrawn`. */
   const inFlight = new Set<{ readonly source: string; readonly withdraw: () => void }>();
-  /** A plugin restarts, as a reload or the Plugins page restarts it: what it serves ends `Withdrawn`, to be asked again. */
+  /** A plugin restarts, as a reload or the Plugins page restarts it: what it serves ends `Withdrawn`, to be asked again (by `call` itself, if repeatable). */
   const restart = (pluginId: string) => {
     for (const entry of inFlight) if (entry.source === pluginId) entry.withdraw();
     emit({ type: "channels-changed", channels: served.map(infoOf) });
   };
 
+  /** One answer from a call, `Withdrawn` if it `waits` and its plugin restarts meanwhile. */
+  const answer = (channel: Extract<Served, { readonly kind: "call" }>, decoded: unknown): Promise<unknown> => {
+    const { id } = channel.declaration;
+    const answered = channel.handle(decoded).catch((error: unknown) => Promise.reject(failed(id, error)));
+    if (!channel.waits) return answered;
+    return new Promise((resolve, reject) => {
+      const entry = { source: channel.source, withdraw: () => reject(withdrawnFrom(id, "call")) };
+      inFlight.add(entry);
+      answered.then(resolve, reject).finally(() => inFlight.delete(entry));
+    });
+  };
   const call = async (target: string | ChannelDeclaration, payload?: unknown): Promise<unknown> => {
     const id = typeof target === "string" ? target : target.id;
     const channel = channels.get(id);
     if (channel === undefined || channel.kind !== "call") throw noChannel(id);
-    const answer = channel.handle(request(target, channel, payload)).catch((error: unknown) => Promise.reject(failed(id, error)));
-    const result = !channel.waits
-      ? await answer
-      : await new Promise((resolve, reject) => {
-          const entry = { source: channel.source, withdraw: () => reject(withdrawnFrom(id, "call")) };
-          inFlight.add(entry);
-          answer.then(resolve, reject).finally(() => inFlight.delete(entry));
-        });
-    return reply(target, channel, result);
+    const decoded = request(target, channel, payload);
+    for (;;) {
+      try {
+        return reply(target, channel, await answer(channel, decoded));
+      } catch (error) {
+        // As the host does: a repeatable call its plugin's restart withdrew is made again, on the plugin started anew.
+        if (!(channel.declaration.repeatable === true && error instanceof HostError && error.code === "Withdrawn")) throw error;
+      }
+    }
   };
   const open = (target: string | ChannelDeclaration, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void) => {
     const id = typeof target === "string" ? target : target.id;

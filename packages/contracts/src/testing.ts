@@ -31,12 +31,14 @@ export const pathsPlugin = (home: string, paths: Partial<Context.Service.Shape<t
  * Calls the channel that answers for `id` as the transport serves a client's
  * call (`withChannel`, `resultOf`), with values rather than JSON: within its
  * plugin's lifetime, so the plugin's disposal waits for it and its handler
- * hears the plugin leave (`CallLifetime`). Fails as a client's call does,
+ * hears the plugin leave (`CallLifetime`), and a `repeatable` call withdrawn
+ * so is made again on what answers next. Fails as a client's call does,
  * `NotFound` when no call answers and `Withdrawn` when the handler stopped
- * for its plugin leaving or outlived its dispose deadline, except that the
- * handler's own failure is left as it is, where a client gets it as a
- * `HostError` with its code. Call it outside `core.run`, as the transport
- * does: a reload drains `core.run` work too.
+ * for its plugin leaving or outlived its dispose deadline (and, repeatable,
+ * nothing answered again in time), except that the handler's own failure is
+ * left as it is, where a client gets it as a `HostError` with its code. Call
+ * it outside `core.run`, as the transport does: a reload drains `core.run`
+ * work too.
  */
 export const callServed = (registries: Context.Service.Shape<typeof Registries>, id: string, payload: unknown): Effect.Effect<unknown, unknown> =>
   withChannel(registries, id, "call", ({ item }, left) => resultOf(item, payload, { left, withdrawn: withdrawnFrom(id, "call") }));

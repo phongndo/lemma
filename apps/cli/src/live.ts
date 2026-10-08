@@ -15,8 +15,9 @@ import type {
   SessionsChange,
   UiComposition,
 } from "@lemma/contracts";
-import type { HostRpcClient } from "@lemma/client";
-import { again, call, followable, following, ofChannel, subscribe } from "./channels.ts";
+import { eventsOver } from "@lemma/client";
+import type { HostEventsElement, HostRpcClient } from "@lemma/client";
+import { call, followable, following, ofChannel, received, subscribe } from "./channels.ts";
 import type { HostEvents } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options } from "./command.ts";
@@ -86,14 +87,10 @@ interface QuestionView {
  * The handler takes every subscribed event. Each question is answered in its
  * own fiber, so events keep flowing while the terminal waits, and its prompt
  * closes when the question is answered elsewhere or the command ends.
- * `restart` begins again for work made again (a login its provider's reload
- * withdrew): it closes the prompts of the questions asked so far, which that
- * work's end closes on the host in its own time, and the `--answer` values
- * go to the new questions from the first.
  */
 export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
   Effect.gen(function* () {
-    let answers = [...options.answers];
+    const answers = [...options.answers];
     const seen = new Set<string>();
     const prompts = yield* FiberMap.make<string>();
     /** Questions waiting at the terminal now. */
@@ -151,20 +148,16 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
       // `--answer` values go to questions in the order they arrive.
       return Effect.asVoid(FiberMap.run(prompts, request.id, handle(request, answers.shift())));
     };
-    const restart = Effect.andThen(
-      FiberMap.clear(prompts),
-      Effect.sync(() => {
-        answers = [...options.answers];
-      }),
-    );
-    return Object.assign(handler, { restart });
+    return handler;
   });
 
 /**
  * Subscribes to the host's own events and returns once the host says it is
  * `subscribed`, so nothing the command causes next is missed (a question it
  * asks among them). A call's reply is no such sign: the host handles calls on
- * one socket concurrently. A handler's failure is its event's alone.
+ * one socket concurrently. `onEvent` takes them in order, from the command's
+ * own queue (`received`), so it may wait (on a lock, a prompt) without
+ * holding back the connection. A handler's failure is its event's alone.
  */
 export const hostEvents = (
   rpc: HostRpcClient,
@@ -172,11 +165,19 @@ export const hostEvents = (
 ): Effect.Effect<HostEvents, Failure, Scope.Scope> =>
   Effect.gen(function* () {
     const listeners = new Set<(event: RuntimeEvent) => void>();
-    const fiber = yield* subscribe("its events", rpc["Host.Events"](), (event) => {
-      if (event.type === "subscribed") return Effect.void;
-      for (const listener of listeners) listener(event);
-      return onEvent(event).pipe(Effect.catchCause(() => Effect.void));
-    });
+    const events = yield* received<HostEventsElement>((onElement, onEnd) =>
+      eventsOver(
+        rpc,
+        (event) => {
+          if (event.type !== "subscribed") for (const listener of listeners) listener(event);
+          onElement(event);
+        },
+        onEnd,
+      ),
+    );
+    const fiber = yield* subscribe("its events", events, (event) =>
+      event.type === "subscribed" ? Effect.void : onEvent(event).pipe(Effect.catchCause(() => Effect.void)),
+    );
     return {
       fiber,
       onEvent: (listener) => {
@@ -405,8 +406,8 @@ export const providersCommand: Command = ({ rpc }) =>
  * in it and Enter opens a code's page. A browser on another machine ends on a
  * page that cannot reach the host, so the paste prompt asks for that page's
  * address. Ctrl+C cancels the login on the host, which otherwise outlives the
- * command. A login its provider's reload ended is started again on the
- * replacement, its questions asked anew.
+ * command. A login its provider's reload ended fails (`refined`): running the
+ * command again starts one on the replacement, asking its questions anew.
  */
 export const loginCommand =
   (provider: string): Command =>
@@ -426,7 +427,7 @@ export const loginCommand =
       /** Set once Ctrl+C cancels: the questions the host withdraws for it were not answered elsewhere. */
       let cancelling = false;
       /** The login's link, once shown. */
-      let linkShown = yield* Deferred.make<void>();
+      const linkShown = yield* Deferred.make<void>();
       const questions = yield* questionHandler(rpc, io, options, origin, {
         // Questions and notices reach a client on separate streams: the paste prompt can overtake the link it follows.
         before: (request) =>
@@ -470,19 +471,7 @@ export const loginCommand =
           yield* questions(event);
         }),
       );
-      let first = true;
-      yield* again(
-        rpc,
-        LlmChannels.login.id,
-        Effect.gen(function* () {
-          if (!first) {
-            linkShown = yield* Deferred.make<void>();
-            yield* questions.restart;
-          }
-          first = false;
-          yield* call(rpc, LlmChannels.login, { provider, type: method });
-        }),
-      ).pipe(
+      yield* call(rpc, LlmChannels.login, { provider, type: method }).pipe(
         Effect.onInterrupt(() =>
           Effect.andThen(
             Effect.sync(() => {
@@ -562,8 +551,8 @@ export const listCommandsCommand: Command = ({ rpc }) =>
 
 /**
  * `lemma do <id>`: runs one, answering its questions per the policy. One its
- * plugin's reload stopped runs again on the replacement, its questions asked
- * anew.
+ * plugin's reload stopped fails (`refined`), since a command run twice need
+ * not do what it does once: whether to run it again is the person's call.
  */
 export const doCommand =
   (id: string): Command =>
@@ -579,15 +568,6 @@ export const doCommand =
         }),
       );
       const cwd = resolve(io.cwd, options.cwd ?? ".");
-      let first = true;
-      const result = yield* again(
-        rpc,
-        CommandChannels.run.id,
-        Effect.gen(function* () {
-          if (!first) yield* questions.restart;
-          first = false;
-          return yield* call(rpc, CommandChannels.run, { id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
-        }),
-      );
+      const result = yield* call(rpc, CommandChannels.run, { id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
       return { json: { command: id, ...result }, text: result.message ?? `${id}: done` };
     });

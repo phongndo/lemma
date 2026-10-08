@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { HostError } from "@lemma/contracts";
-import type { AgentActivity, ChannelInfo } from "@lemma/contracts";
+import type { AgentActivity, ChannelInfo, RuntimeEvent } from "@lemma/contracts";
+import { follow } from "../src/follow.ts";
+import type { Followable } from "../src/follow.ts";
 import { startPrompt } from "../src/prompt.ts";
 import type { PromptConnection } from "../src/prompt.ts";
 
@@ -11,41 +13,56 @@ interface Call {
   readonly reject: (error: Error) => void;
 }
 
-/** A connection the test drives: the streams opened, the calls made and their replies, and the host's events. */
+/**
+ * A connection the test drives, connected throughout: the streams opened, the calls made and their replies, and the
+ * host's events. Streams are followed with `follow`, as the web app's `Client` follows them.
+ */
 const fakeConnection = () => {
   const streams = new Set<{ readonly onElement: (element: AgentActivity) => void; readonly onEnd?: (error?: Error) => void }>();
   const calls: Call[] = [];
-  const listeners = new Set<(event: { readonly type: string; readonly channels?: readonly ChannelInfo[] }) => void>();
-  const connection = {
+  const listeners = new Set<(event: RuntimeEvent) => void>();
+  let opened = 0;
+  const followable = {
+    status: () => ({ state: "connected", generation: 1, attempts: 0 }),
+    onStatus: (listener: (status: unknown) => void) => {
+      listener({ state: "connected", generation: 1, attempts: 0 });
+      return () => {};
+    },
+    onEvent: (listener: (event: RuntimeEvent) => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
     channel: {
       open: (_channel: unknown, _payload: unknown, onElement: (element: AgentActivity) => void, onEnd?: (error?: Error) => void) => {
+        opened++;
         const stream = { onElement, ...(onEnd === undefined ? {} : { onEnd }) };
         streams.add(stream);
         return () => void streams.delete(stream);
       },
+    },
+  } as unknown as Followable;
+  const connection = {
+    follow: (channel: never, payload: never, onElement: never, onEnd?: never) => follow(followable, channel, payload, onElement, onEnd),
+    channel: {
       call: (channel: { readonly id: string }, payload: Call["payload"]) =>
         new Promise((resolve, reject) => calls.push({ id: channel.id, payload, resolve, reject })),
-    },
-    onEvent: (listener: (event: { readonly type: string; readonly channels?: readonly ChannelInfo[] }) => void) => {
-      listeners.add(listener);
-      return () => void listeners.delete(listener);
     },
   };
   return {
     connection: connection as unknown as PromptConnection,
     calls,
     streams,
+    opened: () => opened,
     send: (activity: AgentActivity) => {
       for (const stream of streams) stream.onElement(activity);
     },
-    /** Ends every open stream as the host would, with `error`. */
+    /** Ends every open stream as the host would, with `error`; not one opened again as they end. */
     end: (error: Error) => {
-      for (const stream of streams) {
-        streams.delete(stream);
-        stream.onEnd?.(error);
-      }
+      const ending = Array.from(streams);
+      streams.clear();
+      for (const stream of ending) stream.onEnd?.(error);
     },
-    emit: (event: { readonly type: string; readonly channels?: readonly ChannelInfo[] }) => {
+    emit: (event: RuntimeEvent) => {
       for (const listener of listeners) listener(event);
     },
     listeners,
@@ -65,7 +82,8 @@ const state = (promise: Promise<unknown>) =>
     new Promise((resolve) => setTimeout(() => resolve("pending"), 5)),
   ]);
 const withdrawn = (id: string) => new HostError({ code: "Withdrawn", subject: id, message: `"${id}" was withdrawn` });
-const listed = (...ids: string[]): readonly ChannelInfo[] => ids.map((id) => ({ id, kind: "call", source: "agent" }));
+const unserved = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
+const listed = (...ids: string[]): readonly ChannelInfo[] => ids.map((id) => ({ id, kind: "stream", source: "agent" }));
 
 describe("startPrompt", () => {
   test("sends once agent.activity is subscribed, and is accepted when its session's turn starts, long before the turn ends", async () => {
@@ -84,13 +102,9 @@ describe("startPrompt", () => {
     // Taken: its activity is no longer needed.
     expect(fake.streams.size).toBe(0);
     expect(await state(started.done)).toBe("pending");
-    // The agent reloads while the turn runs: sent again at once, without listening again.
-    fake.calls[0]!.reject(withdrawn("agent.prompt"));
-    await tick();
-    expect([fake.streams.size, fake.calls.length]).toEqual([0, 2]);
-    fake.calls[1]!.resolve();
+    fake.calls[0]!.resolve();
     expect(await state(started.done)).toBe("resolved");
-    expect(fake.listeners.size).toBe(0);
+    expect([fake.calls.length, fake.listeners.size]).toEqual([1, 0]);
   });
 
   test("is accepted when it is queued behind the running turn", async () => {
@@ -114,7 +128,7 @@ describe("startPrompt", () => {
     fake.calls[0]!.reject(new HostError({ code: "Busy", subject: "s1", message: "Session s1 already has a turn in progress" }));
     await expect(started.accepted).rejects.toThrow("already has a turn");
     await expect(started.done).rejects.toThrow();
-    expect(fake.streams.size).toBe(0);
+    expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
   });
 
   test("a turn that ends with no activity seen still counts as accepted, and a withdrawn prompt ends quietly", async () => {
@@ -131,62 +145,50 @@ describe("startPrompt", () => {
     expect([await state(retracted.accepted), await state(retracted.done)]).toEqual(["resolved", "resolved"]);
   });
 
-  test("withdrawn while it waits, it is sent again with the same id once the agent answers, listening afresh first", async () => {
+  test("the agent reloading while it waits: the prompt is sent once, and its activity followed onto the replacement, where its acceptance is seen", async () => {
     const fake = fakeConnection();
     const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
+    // Withdrawn before it was subscribed: opened again at once.
+    fake.end(withdrawn("agent.activity"));
+    await tick();
+    expect(fake.opened()).toBe(2);
     fake.send({ type: "subscribed", running: [] });
     await tick();
-    // The agent reloads: its stream and the call both end, and the replacement answers at once.
-    fake.end(withdrawn("agent.activity"));
-    fake.calls[0]!.reject(withdrawn("agent.prompt"));
-    await tick();
-    expect(fake.streams.size).toBe(1);
     expect(fake.calls).toHaveLength(1);
-    fake.send({ type: "subscribed", running: ["s1"] });
-    await tick();
-    expect(fake.calls.map((call) => call.payload.requestId)).toEqual([started.requestId, started.requestId]);
-    // This time the replacement is not listed yet: the call waits for `channels-changed` to list the agent's channels.
+    // The agent reloads, its replacement not listed yet: the activity waits for `channels-changed` to list it.
     fake.end(withdrawn("agent.activity"));
-    fake.calls[1]!.reject(withdrawn("agent.prompt"));
     await tick();
-    fake.end(new HostError({ code: "NotFound", subject: "agent.activity", message: 'No channel "agent.activity"' }));
+    fake.end(unserved("agent.activity"));
     await tick();
-    expect(fake.calls).toHaveLength(2);
-    fake.emit({ type: "channels-changed", channels: listed("agent.prompt") });
+    fake.emit({ type: "channels-changed", channels: listed("agent.activity") });
     await tick();
-    expect(fake.streams.size).toBe(0);
-    fake.emit({ type: "channels-changed", channels: listed("agent.prompt", "agent.activity") });
-    await tick();
-    fake.send({ type: "subscribed", running: ["s1"] });
-    await tick();
-    expect(fake.calls).toHaveLength(3);
-    expect(fake.calls[2]!.payload.requestId).toBe(started.requestId);
-    fake.calls[2]!.resolve();
+    expect(fake.opened()).toBe(4);
+    fake.send({ type: "subscribed", running: [] });
+    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1" });
+    expect(await state(started.accepted)).toBe("resolved");
+    // The host made the call again on the replacement: this client sent it once.
+    fake.calls[0]!.resolve();
     expect(await state(started.done)).toBe("resolved");
-    expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
+    expect([fake.calls.length, fake.streams.size, fake.listeners.size]).toEqual([1, 0, 0]);
   });
 
-  test("withdrawn, it waits for the agent's channels only while they are not served: a NotFound naming its session fails at once", async () => {
+  test("a prompt still withdrawn is the host's answer: nothing answered it, and the client does not send it again", async () => {
     const fake = fakeConnection();
     const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
     fake.send({ type: "subscribed", running: [] });
     await tick();
     fake.calls[0]!.reject(withdrawn("agent.prompt"));
-    await tick();
-    fake.send({ type: "subscribed", running: [] });
-    await tick();
-    // The replacement answers, and the session is gone meanwhile: no listing of the agent's channels changes that.
-    fake.calls[1]!.reject(new HostError({ code: "NotFound", subject: "s1", message: 'No session "s1"' }));
-    await expect(started.done).rejects.toThrow('No session "s1"');
-    await expect(started.accepted).rejects.toThrow('No session "s1"');
-    expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
+    await expect(started.done).rejects.toThrow("was withdrawn");
+    await expect(started.accepted).rejects.toThrow("was withdrawn");
+    expect([fake.calls.length, fake.streams.size, fake.listeners.size]).toEqual([1, 0, 0]);
   });
 
   test("with no agent to listen to, it is refused unsent", async () => {
     const fake = fakeConnection();
     const missing = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
-    fake.end(new HostError({ code: "NotFound", subject: "agent.activity", message: 'No channel "agent.activity"' }));
+    fake.end(unserved("agent.activity"));
     await expect(missing.accepted).rejects.toThrow("No channel");
     expect(fake.calls).toEqual([]);
+    expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
   });
 });

@@ -106,6 +106,7 @@ export const FileChannels = {
     description: "Files and directories in `cwd` matching `query`, best first; fails Unavailable when no plugin searches files",
     payload: Schema.Struct({ cwd: Schema.String, query: Schema.String, ...FileSearchOptions.fields }),
     success: FileSearchResult,
+    repeatable: true,
   }),
 };
 

@@ -6,7 +6,7 @@ import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { RuntimeRpcs } from "@lemma/contracts/runtime";
 
-/** The typed Effect surface of what the host serves (`RuntimeRpcs`): `rpc["Host.Info"]()`, `rpc["Host.Events"]()`, `rpc["Channel.Call"]({ id })`, ... */
+/** The typed Effect surface of what the host serves (`RuntimeRpcs`): `rpc["Host.Info"]()`, `rpc["Channel.Call"]({ id })`, ...; its streams are read through `eventsOver` and `channelsOver` (see `makeHostRpc`). */
 export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;
 
 /**
@@ -28,6 +28,18 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * Transient errors are not retried silently: a ping timeout (a connection
  * that died across sleep or a network change) must fail the `Host.Events`
  * subscription, or it would wait forever on a stream the server has dropped.
+ *
+ * Its streams (`Host.Events`, `Channel.Open`) are read only through this
+ * package, which hands each element to a callback at once: `eventsOver`, and
+ * `channelsOver`'s `open`, which `connect` and `follow` use. Effect's RPC
+ * client reads the socket on one fiber, which puts a stream's chunk into that
+ * request's bounded queue (16 elements) and only then acknowledges it, so a
+ * consumer that stops taking a stream's elements suspends that fiber, and
+ * every call and stream on the socket waits behind it: a reply its consumer
+ * waits for never arrives. A client that orders or paces what it reads (the
+ * CLI) does so in a queue of its own, after the callback. The rule holds by
+ * construction (`scripts/check-boundaries.ts`); the owner is reporting the
+ * reader's behavior to Effect.
  */
 export const makeHostRpc = (
   url: string,

@@ -51,6 +51,7 @@ export const quote = defineChannel({
   description: "One symbol's quote now",
   payload: Schema.Struct({ symbol: Schema.String }),
   success: Quote,
+  repeatable: true,
 });
 
 /** `NotFound`: the ticker does not quote the symbol; clients see it as the error's code. */

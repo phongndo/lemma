@@ -143,7 +143,7 @@ describe("the agent channels, through the transport", () => {
 });
 
 describe("the agent leaving", () => {
-  test("ends a prompt call waiting on its turn Withdrawn at once over the wire, despite a long dispose deadline; called again, it waits for the resumed turn", () => {
+  test("a prompt call waiting on its turn stops waiting at once over the wire, despite a long dispose deadline, and the host makes it again on the replacement, which resumes the turn", () => {
     // The first model call never answers; the resumed turn's does.
     const llm = fakeLlm([hang("thinking"), reply("done")]);
     return served(
@@ -152,22 +152,22 @@ describe("the agent leaving", () => {
         Effect.gen(function* () {
           const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
           const prompt = { sessionId: id, content: text("go"), requestId: "r1" };
-          const waiting = yield* Effect.forkChild(Effect.exit(call(client, "agent.prompt", prompt)));
+          const waiting = yield* Effect.forkChild(call(client, "agent.prompt", prompt));
           // The turn waits on the model, which only the agent stopping ends.
           yield* waitFor(
             Effect.sync(() => llm.requests.length),
             (asked) => asked === 1,
           );
 
-          // The transport needs nothing the agent provides, so the connection stays: the agent alone restarts.
+          // The transport needs nothing the agent provides, so the connection stays: the agent alone restarts, its
+          // stop never held by the call.
           const started = Date.now();
-          const restarting = yield* Effect.forkChild(core.restart("agent", { force: true }));
-          expect(hostError(yield* Fiber.join(waiting))).toMatchObject({ code: "Withdrawn", subject: "agent.prompt" });
+          yield* core.restart("agent", { force: true });
           expect(Date.now() - started).toBeLessThan(3_000);
-          yield* Fiber.join(restarting);
 
-          // The prompt stayed taken: the replacement resumes its turn, and the call waits for it, placing nothing twice.
-          expect(yield* call(client, "agent.prompt", prompt)).toBeNull();
+          // The prompt stayed taken: the replacement resumes its turn, and the call, made again, waits for it, placing
+          // nothing twice.
+          expect(yield* Fiber.join(waiting)).toBeNull();
           expect(llm.requests).toHaveLength(2);
           const log = (yield* call(client, "sessions.events", { sessionId: id })) as SessionEvent[];
           expect(log.filter((event) => event.data.type === "message" && event.data.message.role === "user")).toHaveLength(1);

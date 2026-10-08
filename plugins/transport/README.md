@@ -74,6 +74,11 @@ The file is written as soon as the transport listens, before the plugins after i
   deadline, unless its handler stops at once for the plugin leaving, as one
   that waits on its plugin does: the transport hands it `left` and a `signal`
   (`CallLifetime`), and a call that stops for them ends `Withdrawn` too. A
+  call declared `repeatable` is made again instead, with the channel that
+  answers for its id next, once that plugin's work has ended (so the wait
+  never holds its finalizers) and for at most 30 seconds, before it ends
+  `Withdrawn` (`withChannel`): `Withdrawn` exists only because the host
+  reloads plugins, so the host hides it where repeating is safe. A
   stream is stopped at once and ends `Withdrawn`, so it never holds its
   plugin's disposal, and it runs outside its plugin's `Admitted` work: a
   change it asks for that restarts its own plugin applies at once rather than
@@ -96,6 +101,6 @@ The file is written as soon as the transport listens, before the plugins after i
 
 ## Rationale
 
-It requires the runtime only, so no subsystem is part of it: a change to any other plugin leaves it running, and with it every client's connection. A call or stream that change cut off ends `Withdrawn`, and the client makes it again on the same connection (`follow` in `@lemma/client` reopens a stream so). Only a change to the transport itself drops the connections: the host answers it first and applies it once the reply has left (`ChangeReport.deferred`).
+It requires the runtime only, so no subsystem is part of it: a change to any other plugin leaves it running, and with it every client's connection. A repeatable call that change cut off is made again here; any other call, and a stream, ends `Withdrawn`, and the client decides whether to make it again on the same connection (`follow` in `@lemma/client` reopens a stream so). Only a change to the transport itself drops the connections: the host answers it first and applies it once the reply has left (`ChangeReport.deferred`).
 
 Two protocols share one handler set because their consumers differ: a UI keeps a socket and multiplexes everything; a script wants one HTTP call that returns when done. Authentication is checked per request before routing, so the WebSocket upgrade is covered by the same check, while static assets stay public because they contain no data. Interaction goes through the hook, not an event, because a question nobody can see must fail the operation rather than hang it; the event stream is only the delivery vehicle. The grace period and replay exist so a page reload does not abort a login in progress.

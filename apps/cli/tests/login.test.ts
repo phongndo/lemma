@@ -2,6 +2,7 @@ import { Deferred, Effect, Fiber } from "effect";
 import { describe, expect, test } from "vitest";
 import { HostError } from "@lemma/contracts";
 import type { InteractionRequest, NoticePayload, RuntimeEvent } from "@lemma/contracts";
+import { ExitCode } from "../src/command.ts";
 import type { Io, Options } from "../src/command.ts";
 import { loginCommand } from "../src/live.ts";
 import { fakeHost, fed } from "./fake.ts";
@@ -112,10 +113,9 @@ describe("lemma login", () => {
     expect(tty.asked).toEqual(["If the browser ends on a page that won't load, paste its address here: "]);
   });
 
-  test("a login its provider's reload withdrew starts again, its questions asked anew and the old one's prompt closed", async () => {
+  test("a login its provider's reload withdrew fails, saying to run the command again, and closes its question's prompt", async () => {
     const events = fed<RuntimeEvent>();
-    const done = Effect.runSync(Deferred.make<void>());
-    const firstAsked = Effect.runSync(Deferred.make<void>());
+    const asked = Effect.runSync(Deferred.make<void>());
     let logins = 0;
     const connection = fakeHost({
       calls: {
@@ -123,36 +123,30 @@ describe("lemma login", () => {
         "llm.login": () =>
           Effect.suspend(() => {
             logins++;
-            events.push(question({ type: "ask", title: `Attempt ${logins}` }, `q${logins}`));
-            // Withdrawn with its question open: the old instance closes that only as it goes, after its replacement is listed.
-            return logins === 1
-              ? Effect.andThen(Deferred.await(firstAsked), Effect.fail(new HostError({ code: "Withdrawn", subject: "llm.login", message: "withdrawn" })))
-              : Deferred.await(done);
+            events.push(question({ type: "ask", title: "GitHub Enterprise URL" }));
+            // Withdrawn with its question open: the old instance closes that only as it goes.
+            return Effect.andThen(Deferred.await(asked), Effect.fail(new HostError({ code: "Withdrawn", subject: "llm.login", message: "withdrawn" })));
           }),
       },
       events: events.stream,
     });
-    const prompts: { readonly text: string; readonly signal: AbortSignal | undefined }[] = [];
-    let staleWhenAskedAgain: boolean | undefined;
+    const prompts: AbortSignal[] = [];
     const io: Io = {
       env: {},
       cwd: "/",
       out: () => {},
       err: () => {},
-      ask: (text, _secret, signal) => {
-        prompts.push({ text, signal });
-        if (text.startsWith("Attempt 1")) Effect.runSync(Deferred.succeed(firstAsked, undefined));
-        else {
-          staleWhenAskedAgain = prompts[0]?.signal?.aborted === false;
-          Effect.runSync(Deferred.succeed(done, undefined));
-        }
+      ask: (_text, _secret, signal) => {
+        if (signal !== undefined) prompts.push(signal);
+        Effect.runSync(Deferred.succeed(asked, undefined));
         return new Promise<string>(() => {});
       },
     };
-    await Effect.runPromise(Effect.scoped(loginCommand("github-copilot")(connection, io, options({ questions: "ask" }))));
-    expect(logins).toBe(2);
-    expect(prompts.map((prompt) => prompt.text)).toEqual(["Attempt 1: ", "Attempt 2: "]);
-    expect(staleWhenAskedAgain).toBe(false);
+    const failed = await Effect.runPromise(Effect.flip(Effect.scoped(loginCommand("github-copilot")(connection, io, options({ questions: "ask" })))));
+    expect(failed).toMatchObject({ code: "Withdrawn", subject: "llm.login", exit: ExitCode.failed });
+    expect(failed.message).toContain("run the command again");
+    expect(logins).toBe(1);
+    expect(prompts.map((signal) => signal.aborted)).toEqual([true]);
   });
 
   test("interrupting cancels the login on the host, without saying its questions were answered elsewhere", async () => {

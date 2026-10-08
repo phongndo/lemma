@@ -662,9 +662,9 @@ describe("channels", () => {
     );
   });
 
-  test("a call that waits on its plugin hears it leave: Effect and promise handlers alike end Withdrawn at once, despite a long dispose deadline, and calling again reaches the replacement", () => {
+  test("a call that waits on its plugin hears it leave: Effect and promise handlers alike end Withdrawn at once, despite a long dispose deadline, and calling again reaches the replacement; a repeatable one is made again there", () => {
     let instances = 0;
-    const waiting = { effect: Deferred.makeUnsafe<void>(), promise: Deferred.makeUnsafe<void>() };
+    const waiting = { effect: Deferred.makeUnsafe<void>(), promise: Deferred.makeUnsafe<void>(), repeatable: Deferred.makeUnsafe<void>() };
     const declaration = (id: string) => ({ kind: "call", id, payload: Schema.Void, success: Schema.Number }) as const;
     // The first instance's calls wait on what only its stopping would end; the replacement's answer at once.
     const patient = definePlugin({
@@ -678,6 +678,12 @@ describe("channels", () => {
             Channels,
             serveChannel(declaration("patient.effect"), (_, { left }) =>
               instance === 1 ? Effect.raceFirst(Effect.andThen(Deferred.succeed(waiting.effect, undefined), Deferred.await(never)), left) : instance,
+            ),
+          );
+          yield* owner.add(
+            Channels,
+            serveChannel({ ...declaration("patient.repeatable"), repeatable: true }, (_, { left }) =>
+              instance === 1 ? Effect.raceFirst(Effect.andThen(Deferred.succeed(waiting.repeatable, undefined), Deferred.await(never)), left) : instance,
             ),
           );
           yield* owner.add(
@@ -696,8 +702,10 @@ describe("channels", () => {
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
           const calls = yield* Effect.forEach(["patient.effect", "patient.promise"], (id) => Effect.forkChild(Effect.exit(client["Channel.Call"]({ id }))));
+          const repeated = yield* Effect.forkChild(client["Channel.Call"]({ id: "patient.repeatable" }));
           yield* Deferred.await(waiting.effect);
           yield* Deferred.await(waiting.promise);
+          yield* Deferred.await(waiting.repeatable);
           yield* host.core.restart("patient", { force: true });
           const ended = yield* Effect.forEach(calls, (call) => Effect.map(Fiber.join(call), hostError));
           expect(ended).toMatchObject([
@@ -705,6 +713,8 @@ describe("channels", () => {
             { code: "Withdrawn", subject: "patient.promise" },
           ]);
           expect(ended[0]?.message).toContain("call it again to reach its replacement");
+          // Its client sees only the replacement's answer.
+          expect(yield* Fiber.join(repeated)).toBe(2);
           expect(yield* client["Channel.Call"]({ id: "patient.effect" })).toBe(2);
           expect(yield* client["Channel.Call"]({ id: "patient.promise" })).toBe(2);
         }).pipe(Effect.timeout(Duration.seconds(5))),

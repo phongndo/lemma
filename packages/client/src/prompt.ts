@@ -5,19 +5,28 @@
  */
 
 import { AgentChannels, HostError } from "@lemma/contracts";
-import type { PromptContent, TurnOptions, WhenBusy } from "@lemma/contracts";
+import type { ChannelDeclaration, PromptContent, TurnOptions, WhenBusy } from "@lemma/contracts";
 import type { Host } from "./host.ts";
 
 /** A random request id. `crypto.getRandomValues`, unlike `crypto.randomUUID`, exists outside secure contexts too (a page over plain HTTP). */
 export const newRequestId = (): string =>
   Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("");
 
-/** What `startPrompt` uses of a connection: a `Host` has it, as does anything offering its channels and events (the web app's `Client`). */
+/**
+ * What `startPrompt` uses of a connection: the web app's `Client` has it, and
+ * over a `Host`, `follow` is `@lemma/client`'s bound to it
+ * (`(...args) => follow(host, ...args)`).
+ */
 export interface PromptConnection {
-  /** The host's events: a `channels-changed` listing the agent's channels says a withdrawn prompt can be sent again. */
-  readonly onEvent: Host["onEvent"];
-  /** The agent's channels: `agent.activity` opened to see the prompt taken, `agent.prompt` called to send it. */
-  readonly channel: Pick<Host["channel"], "call" | "open">;
+  /** Keeps `agent.activity` open, as `follow` does, to see the prompt taken. */
+  readonly follow: <Payload, Success>(
+    channel: ChannelDeclaration<"stream", Payload, Success>,
+    payload: Payload,
+    onElement: (element: Success) => void,
+    onEnd?: (error?: HostError | Error) => void,
+  ) => () => void;
+  /** Calls `agent.prompt` to send it. */
+  readonly channel: Pick<Host["channel"], "call">;
 }
 
 export interface StartedPrompt {
@@ -38,64 +47,23 @@ export interface StartedPrompt {
   readonly done: Promise<void>;
 }
 
-/** The agent's channels a prompt uses: sent again once both answer. */
-const AGENT = [AgentChannels.prompt.id, AgentChannels.activity.id];
-/** How long a withdrawn prompt waits for the agent's replacement to answer before it fails (ms). */
-const ANSWER_MS = 30_000;
-
-const codeOf = (error: unknown): string | undefined => (error instanceof HostError ? error.code : undefined);
-
-/** Whether `error` is an agent channel's own `NotFound`: nothing serves it (yet), where the agent's names what it refused (a session). */
-const unserved = (error: unknown): boolean => error instanceof HostError && error.code === "NotFound" && AGENT.includes(error.subject ?? "");
-
-/** Hears, from now on, each `channels-changed` that lists every one of `ids`. */
-const watchChannels = (connection: PromptConnection, ids: readonly string[]) => {
-  let heard = false;
-  let wake: (() => void) | undefined;
-  const stop = connection.onEvent((event) => {
-    if (event.type !== "channels-changed" || !ids.every((id) => event.channels.some((channel) => channel.id === id))) return;
-    heard = true;
-    wake?.();
-  });
-  return {
-    /** True once they are listed since the last call (at once if they were meanwhile); false when `ms` passes first. */
-    listed: (ms: number) =>
-      new Promise<boolean>((resolve) => {
-        if (heard) {
-          heard = false;
-          return resolve(true);
-        }
-        const timer = setTimeout(() => {
-          wake = undefined;
-          resolve(false);
-        }, ms);
-        wake = () => {
-          clearTimeout(timer);
-          wake = undefined;
-          heard = false;
-          resolve(true);
-        };
-      }),
-    stop,
-  };
-};
+const isWithdrawn = (error: unknown): boolean => error instanceof HostError && error.code === "Withdrawn";
 
 /**
  * Sends a prompt and reports acceptance separately from completion.
  * `agent.prompt` answers only when the turn that places the prompt ends, and
- * a refusal fails it before the agent takes it. So `agent.activity` is opened
- * first, and the prompt sent once it is subscribed: the prompt counts as
- * accepted at the first sign there that the agent took it, `turn-started` for
- * the session or its id in a `queue-changed`, or when `done` resolves if
- * those (losable) elements never arrive. The stream is closed once it is.
+ * a refusal fails it before the agent takes it. So `agent.activity` is
+ * followed first, and the prompt sent once it is subscribed: the prompt
+ * counts as accepted at the first sign there that the agent took it,
+ * `turn-started` for the session or its id in a `queue-changed`, or when
+ * `done` resolves if those (losable) elements never arrive. The stream is
+ * closed once it is. One that ends before it was first subscribed, other
+ * than withdrawn, refuses the prompt unsent (no agent serves it, say).
  *
- * When the agent stops or is replaced while the call waits, the call ends
- * `Withdrawn` and is made again with the same `requestId`, which waits for
- * the prompt's turn, or places the prompt if it never was, and never places it
- * twice: at once, since a replacement may answer already, and else, when
- * nothing serves the agent's channels yet (their own `NotFound`), once a
- * `channels-changed` lists them again (within 30s). A `NotFound` naming what
- * the agent refused (the session is gone) fails at once.
+ * The prompt is sent once. When the agent reloads while it waits, the host
+ * makes `agent.prompt` again on the replacement (it is `repeatable`), and
+ * `agent.activity`, withdrawn, is followed onto the replacement, where the
+ * prompt's acceptance is seen.
  */
 export function startPrompt(
   connection: PromptConnection,
@@ -112,56 +80,47 @@ export function startPrompt(
     ...(options === undefined ? {} : { options }),
     ...(submit.whenBusy === undefined ? {} : { whenBusy: submit.whenBusy }),
   };
-  /** The open `agent.activity`'s close: it is open only until the prompt is taken. */
+  /** `agent.activity`'s close: it is followed only until the prompt is taken, or settles. */
   let close: (() => void) | undefined;
+  let closed = false;
   const stopListening = () => {
+    closed = true;
     close?.();
-    close = undefined;
   };
-  let taken = false;
   let resolveTaken!: () => void;
   const accepted = new Promise<void>((resolve) => (resolveTaken = resolve));
   const accept = () => {
-    taken = true;
     stopListening();
     resolveTaken();
   };
-  /** Opens `agent.activity` afresh, unless the prompt was taken already; resolves once it is subscribed, rejects if it ends before. */
-  const listen = () =>
-    new Promise<void>((resolve, reject) => {
-      stopListening();
-      if (taken) return resolve();
-      close = connection.channel.open(
-        AgentChannels.activity,
-        undefined,
-        (activity) => {
-          if (activity.type === "subscribed") resolve();
-          else if (activity.type === "turn-started" && activity.sessionId === sessionId) accept();
-          else if (activity.type === "queue-changed" && activity.sessionId === sessionId && activity.queue.some((queued) => queued.requestId === requestId))
-            accept();
-        },
-        (error) => reject(error ?? new Error(`"${AgentChannels.activity.id}" ended before it was subscribed`)),
-      );
-    });
+  let listening = false;
+  /** Resolves once `agent.activity` is first subscribed; rejects if it ends otherwise than withdrawn before then. */
+  const subscribed = new Promise<void>((resolve, reject) => {
+    close = connection.follow(
+      AgentChannels.activity,
+      undefined,
+      (activity) => {
+        if (activity.type === "subscribed") {
+          listening = true;
+          resolve();
+        } else if (activity.type === "turn-started" && activity.sessionId === sessionId) accept();
+        else if (activity.type === "queue-changed" && activity.sessionId === sessionId && activity.queue.some((queued) => queued.requestId === requestId))
+          accept();
+      },
+      (error) => {
+        if (!listening && !isWithdrawn(error)) reject(error ?? new Error(`"${AgentChannels.activity.id}" ended before it was subscribed`));
+      },
+    );
+  });
+  // Taken, or refused, while it was first opened, before its close was known.
+  if (closed) close?.();
   const done = (async () => {
-    let watching: ReturnType<typeof watchChannels> | undefined;
     try {
-      for (;;) {
-        try {
-          await listen();
-          await connection.channel.call(AgentChannels.prompt, payload);
-          return;
-        } catch (error) {
-          const code = codeOf(error);
-          if (code === "Retracted") return;
-          // Withdrawn: what answers for the agent now may take it at once. Its channels not served yet: the replacement is
-          // listed only once the agent it replaces has gone.
-          if (code === "Withdrawn") watching ??= watchChannels(connection, AGENT);
-          else if (!unserved(error) || watching === undefined || !(await watching.listed(ANSWER_MS))) throw error;
-        }
-      }
+      await subscribed;
+      await connection.channel.call(AgentChannels.prompt, payload);
+    } catch (error) {
+      if (!(error instanceof HostError && error.code === "Retracted")) throw error;
     } finally {
-      watching?.stop();
       stopListening();
     }
   })();

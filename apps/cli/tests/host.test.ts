@@ -423,20 +423,7 @@ export default definePlugin({
   const until = async (done: (now: { emitted: number; active: number }) => boolean) => {
     if ((await settled(stats, done)) === undefined) throw new Error("timed out");
   };
-  /** How much it has produced once that stops changing between two looks. */
-  const stalled = async () => {
-    let last = -1;
-    const held = await settled(async () => {
-      const { emitted } = await stats();
-      const same = emitted === last;
-      last = emitted;
-      return same ? emitted : undefined;
-    });
-    if (held === undefined) throw new Error("it kept producing");
-    return held;
-  };
-
-  test("channels open waits while stdout is behind, so the host stops producing, and goes on once it drains", async () => {
+  test("channels open prints at stdout's pace and in order, while the host's stream goes on: what stdout has not taken waits in the command", async () => {
     const lines: string[] = [];
     let release: () => void = () => {};
     let waited = 0;
@@ -450,35 +437,26 @@ export default definePlugin({
       drained: () => (waited++ === 0 ? new Promise<void>((resolve) => (release = resolve)) : undefined),
     });
     await until(() => lines.length === 1);
-    // What the client and the host's socket hold, not all 200.
-    expect((await stalled()) - before).toBeLessThan(60);
+    // The connection is never held back for stdout (see `makeHostRpc` in @lemma/client): the host sends all 200.
+    await until(({ emitted, active }) => emitted - before === 200 && active === 0);
     expect(lines).toHaveLength(1);
     release();
     expect(await done).toBe(ExitCode.ok);
     expect(lines).toHaveLength(200);
   }, 30_000);
 
-  test("an unread pipe holds a stream back; Ctrl+C, SIGKILL, and `| head -n 1` stop it on the host", async () => {
-    const before = (await stats()).emitted;
-    const unread = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "channels", "open", "bulk.chunks", "5000"], {
-      env: { ...process.env, LEMMA_HOME: home },
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    await until(({ active }) => active === 1);
-    // A pipe's 64 KB, the CLI's buffers, and the client's 16 elements: well under 5000 elements of 4 KB.
-    expect((await stalled()) - before).toBeLessThan(300);
-    unread.kill("SIGKILL");
-    await until(({ active }) => active === 0);
-
-    const interrupted = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "channels", "open", "bulk.chunks", "100000"], {
-      env: { ...process.env, LEMMA_HOME: home },
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    interrupted.stdout!.resume();
-    await until(({ active }) => active === 1);
-    interrupted.kill("SIGINT");
-    await new Promise((resolve) => interrupted.once("exit", resolve));
-    await until(({ active }) => active === 0);
+  test("Ctrl+C, SIGKILL, and `| head -n 1` stop a stream on the host", async () => {
+    for (const signal of ["SIGKILL", "SIGINT"] as const) {
+      const opened = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "channels", "open", "bulk.chunks", "100000"], {
+        env: { ...process.env, LEMMA_HOME: home },
+        stdio: ["ignore", "pipe", "ignore"],
+      });
+      opened.stdout!.resume();
+      await until(({ active }) => active === 1);
+      opened.kill(signal);
+      await new Promise((resolve) => opened.once("exit", resolve));
+      await until(({ active }) => active === 0);
+    }
 
     const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
     const piped = spawn(

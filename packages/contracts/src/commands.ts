@@ -103,13 +103,16 @@ export const CommandChannels = {
     description: "Every command clients can run, by category then title",
     payload: Schema.Void,
     success: Schema.Array(CommandInfo),
+    repeatable: true,
   }),
   /**
    * Answers when the command ends, and interrupting the call (a client that
    * leaves) interrupts the command, as does its provider leaving (stopping or
    * reloading) or the command being removed (`Commands.run`): the call then
    * fails `Withdrawn` either way, and running it again reaches a replacement,
-   * if there is one. It runs in `cwd`, the host's when absent; its questions
+   * if there is one. It is not `repeatable`: a command run twice need not do
+   * what it does once (`host.toggle-plugin` flips the plugin back), and it may
+   * ask the person again. It runs in `cwd`, the host's when absent; its questions
    * carry `origin` as their `InteractionOrigin`, so the client that ran it can
    * tell them from others'.
    */

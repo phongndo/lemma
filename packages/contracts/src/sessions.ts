@@ -239,6 +239,7 @@ export const SessionChannels = {
     description: "Every session, or those in a directory (cwd), most recently updated first",
     payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
     success: Schema.Array(SessionInfo),
+    repeatable: true,
   }),
   get: defineChannel({
     kind: "call",
@@ -247,6 +248,7 @@ export const SessionChannels = {
     description: "One session's info",
     payload: Schema.Struct(sessionField),
     success: SessionInfo,
+    repeatable: true,
   }),
   create: defineChannel({
     kind: "call",
@@ -268,6 +270,7 @@ export const SessionChannels = {
     description: "A session's log in file order: every event, or those past a seq (after)",
     payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
     success: Schema.Array(SessionEvent),
+    repeatable: true,
   }),
   /**
    * Follows one session's log: `subscribed` with the log after `after` (all of

@@ -3,10 +3,10 @@ import { Deferred, Effect, Fiber, Stream } from "effect";
 import { AgentChannels, emptyUsage, FileChannels, HostError, SessionChannels } from "@lemma/contracts";
 import type { AgentActivity, SessionsChange } from "@lemma/contracts";
 import { settled } from "../../../scripts/e2e.ts";
-import { again, call, follow, followable, refined } from "../src/channels.ts";
+import { call, follow, followable, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
 import type { Io, Options } from "../src/command.ts";
-import { eventsCommand, hostEvents } from "../src/live.ts";
+import { doCommand, eventsCommand, hostEvents } from "../src/live.ts";
 import { fakeHost, fed } from "./fake.ts";
 import type { Fed } from "./fake.ts";
 
@@ -41,23 +41,28 @@ describe("a channel's failure", () => {
     expect(called).toMatchObject({ code: "NotFound", subject: "agent.activity", message: '"agent.activity" is a stream, not a call: open it' });
   });
 
-  test("a withdrawn call is made again once its channel is served, through a moment when nothing serves it", async () => {
-    let calls = 0;
+  test("Withdrawn naming the channel is its plugin reloading: the command says to run it again, and exits 1", async () => {
+    const host = fakeHost({ calls: { "agent.cancel": refused("Withdrawn", "agent.cancel") } });
+    const withdrawn = await failure(call(host.rpc, AgentChannels.cancel, { sessionId: "s1" }));
+    expect(withdrawn).toBeInstanceOf(CliError);
+    expect(withdrawn).toMatchObject({ code: "Withdrawn", subject: "agent.cancel", exit: ExitCode.failed });
+    expect(withdrawn.message).toContain("run the command again");
+  });
+
+  test("`lemma do` runs a command once: one its plugin's reload withdrew fails rather than running twice", async () => {
+    let runs = 0;
     const host = fakeHost({
       calls: {
-        "agent.cancel": () => {
-          calls++;
-          if (calls === 1) return refused("Withdrawn", "agent.cancel")();
-          // The replacement is listed before it answers, as the old one leaves.
-          if (calls === 2) return refused("NotFound", "agent.cancel")();
-          return Effect.void;
+        "commands.run": () => {
+          runs++;
+          return refused("Withdrawn", "commands.run")();
         },
       },
     });
-    await Effect.runPromise(again(host.rpc, AgentChannels.cancel.id, call(host.rpc, AgentChannels.cancel, { sessionId: "s1" })));
-    expect(calls).toBe(3);
-    // Not found without having been withdrawn is an answer, not a wait.
-    expect(await failure(again(host.rpc, SessionChannels.list.id, call(host.rpc, SessionChannels.list, {})))).toMatchObject({ code: "NotFound" });
+    const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
+    const failed = await failure(Effect.scoped(doCommand("host.toggle-plugin")(host, io, { json: false, answers: [] } as unknown as Options)));
+    expect(failed).toMatchObject({ code: "Withdrawn", subject: "commands.run", exit: ExitCode.failed });
+    expect(runs).toBe(1);
   });
 });
 

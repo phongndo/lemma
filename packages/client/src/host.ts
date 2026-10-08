@@ -210,6 +210,35 @@ const openOver = (rpc: Pick<HostRpcClient, "Channel.Open">, target: string | Cha
   return Stream.unwrap(Effect.map(access.request(payload), rpc["Channel.Open"])).pipe(Stream.mapEffect(access.read));
 };
 
+/** How a stream from the host ended: with nothing when it finished, else the host's `HostError` or the connection's failure. */
+type StreamEnd = (error?: HostError | Error) => void;
+
+/**
+ * Reads a stream from the host into callbacks until the returned close: each
+ * element as it arrives, then how it ended, if it ended by itself. It never
+ * waits on them, and this is the only way the host's streams are read (see
+ * `makeHostRpc`).
+ */
+const drain = <A>(stream: Stream.Stream<A, unknown>, onElement: (element: A) => void, onEnd: StreamEnd | undefined, what: string): (() => void) => {
+  let live = true;
+  const fiber = Effect.runFork(
+    stream.pipe(
+      Stream.runForEach((element) => Effect.sync(() => live && safely(onElement, element, what))),
+      Effect.exit,
+      Effect.map((exit) => {
+        if (!live) return;
+        live = false;
+        if (onEnd !== undefined) safely(onEnd, Exit.isSuccess(exit) ? undefined : toError(Cause.squash(exit.cause)), what);
+      }),
+    ),
+  );
+  return () => {
+    if (!live) return;
+    live = false;
+    fiber.interruptUnsafe();
+  };
+};
+
 /**
  * `Host.channel` over an Effect client (`makeHostRpc`, `makeHostRpcHttp`):
  * what `connect` gives, and what a client with a connection of its own (the
@@ -218,27 +247,23 @@ const openOver = (rpc: Pick<HostRpcClient, "Channel.Open">, target: string | Cha
 export const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
   list: () => runPromise(rpc["Channel.List"]()),
   call: (target: string | ChannelDeclaration, payload?: unknown) => runPromise(callOver(rpc, target, payload)),
-  open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: (error?: HostError | Error) => void) => {
-    const id = typeof target === "string" ? target : target.id;
-    let live = true;
-    const fiber = Effect.runFork(
-      openOver(rpc, target, payload).pipe(
-        Stream.runForEach((element) => Effect.sync(() => live && safely(onElement, element, `Channel "${id}" listener failed`))),
-        Effect.exit,
-        Effect.map((exit) => {
-          if (!live) return;
-          live = false;
-          if (onEnd !== undefined) safely(onEnd, Exit.isSuccess(exit) ? undefined : toError(Cause.squash(exit.cause)), `Channel "${id}" listener failed`);
-        }),
-      ),
-    );
-    return () => {
-      if (!live) return;
-      live = false;
-      fiber.interruptUnsafe();
-    };
-  },
+  open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: StreamEnd) =>
+    drain(openOver(rpc, target, payload), onElement, onEnd, `Channel "${typeof target === "string" ? target : target.id}" listener failed`),
 });
+
+/** What `Host.Events` sends: `subscribed` once the subscription has joined, so the client hears all that is published from then on, then the runtime's events. */
+export type HostEventsElement = { readonly type: "subscribed" } | RuntimeEvent;
+
+/**
+ * The host's own events (`Host.Events`) over an Effect client, read into
+ * callbacks as `Host.channel.open` reads a stream: `onEvent` hears
+ * `subscribed`, then each event; `onEnd` hears how it ended, if by itself
+ * (the connection dropped, say). Returns `close`, after which neither is
+ * called. What `connect` subscribes with, and what a client with a connection
+ * of its own (the CLI's) reads the host's events through.
+ */
+export const eventsOver = (rpc: Pick<HostRpcClient, "Host.Events">, onEvent: (event: HostEventsElement) => void, onEnd?: StreamEnd): (() => void) =>
+  drain(rpc["Host.Events"](), onEvent, onEnd, "Host event listener failed");
 
 /**
  * One call to a declared channel over an Effect client (`makeHostRpc`,
@@ -282,38 +307,35 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
     for (const listener of eventListeners) safely(listener, event, "Host event listener failed");
   };
 
+  /** One subscription and probe, for as long as the subscription lasts: why it ended, or why it could not start. */
   const attempt = Effect.gen(function* () {
     // Subscribe first so nothing published after the probe is missed.
     const subscribed = yield* Deferred.make<void>();
-    const events = yield* rpc["Host.Events"]().pipe(
-      Stream.runForEach((event) => (event.type === "subscribed" ? Deferred.succeed(subscribed, undefined) : Effect.sync(() => emit(event)))),
-      Effect.forkChild({ startImmediately: true }),
+    const ended = yield* Deferred.make<string>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        eventsOver(
+          rpc,
+          (event) => (event.type === "subscribed" ? Deferred.doneUnsafe(subscribed, Effect.void) : emit(event)),
+          (error) => Deferred.doneUnsafe(ended, Effect.succeed(error === undefined ? "Event stream ended" : describeError(error))),
+        ),
+      ),
+      (close) => Effect.sync(close),
     );
     const probe = yield* rpc["Host.Info"]().pipe(
       Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.fail(new Error("Timed out")) }),
       Effect.result,
     );
-    if (probe._tag === "Failure") {
-      yield* Fiber.interrupt(events);
-      return describeError(toError(probe.failure));
-    }
+    if (probe._tag === "Failure") return describeError(toError(probe.failure));
     // Connected once `subscribed` arrives, not on a subscription that ended, or stayed silent, before it did.
-    const ready = yield* Effect.raceFirst(Effect.as(Deferred.await(subscribed), true), Effect.as(Fiber.await(events), false)).pipe(
+    const ready = yield* Effect.raceFirst(Effect.as(Deferred.await(subscribed), true), Effect.as(Deferred.await(ended), false)).pipe(
       Effect.timeoutOrElse({ duration: probeTimeout, orElse: () => Effect.succeed(undefined) }),
     );
-    if (ready === undefined) {
-      yield* Fiber.interrupt(events);
-      return "Timed out waiting for the host's events";
-    }
+    if (ready === undefined) return "Timed out waiting for the host's events";
     // The acknowledgement may have come before the subscription ended: connected only while it still runs.
-    if (!ready || events.pollUnsafe() !== undefined) {
-      const exit = yield* Fiber.await(events);
-      return Exit.isFailure(exit) ? describeError(toError(Cause.squash(exit.cause))) : "Event stream ended";
-    }
-    setStatus({ state: "connected", generation: status.generation + 1, attempts: 0 });
-    const exit = yield* Fiber.await(events);
-    return Exit.isFailure(exit) ? describeError(toError(Cause.squash(exit.cause))) : "Event stream ended";
-  });
+    if (ready && !Deferred.isDoneUnsafe(ended)) setStatus({ state: "connected", generation: status.generation + 1, attempts: 0 });
+    return yield* Deferred.await(ended);
+  }).pipe(Effect.scoped);
 
   const loop = Effect.gen(function* () {
     for (;;) {

@@ -28,10 +28,10 @@ import {
   WhenBusy,
 } from "@lemma/contracts";
 import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
-import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
+import { channelsOver, makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
 import type { HostRpcClient } from "@lemma/client";
 import { resolvePaths } from "@lemma/host/paths";
-import { call, ofChannel, refined, starting } from "./channels.ts";
+import { call, ofChannel, received, refined, starting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
@@ -461,24 +461,11 @@ const channelsCommand = (sub: string | undefined, id: string | undefined, rest: 
   return ({ live }, io) =>
     Effect.gen(function* () {
       const rpc = yield* live;
-      yield* Stream.runForEach(Stream.mapError(rpc["Channel.Open"](request), refined(id)), (element) =>
+      const elements = yield* received<unknown>((onElement, onEnd) => channelsOver(rpc).open(id, request.payload, onElement, onEnd));
+      yield* Stream.runForEach(Stream.mapError(elements, refined(id)), (element) =>
         Effect.andThen(
           Effect.sync(() => io.out(JSON.stringify(element))),
           caughtUp(io),
-        ),
-      ).pipe(
-        // The RPC client reads its socket in order, so stdout held full for longer than its ping allows (seconds) drops the
-        // connection, which ends the stream interrupted: say so, rather than as if the person had stopped it.
-        Effect.catchCause((cause): Effect.Effect<never, Failure> =>
-          Cause.hasInterruptsOnly(cause) && io.interrupt?.aborted !== true
-            ? Effect.fail(
-                new CliError({
-                  code: "Unreachable",
-                  message: `The connection to the host dropped while "${id}" was open (stdout unread for seconds drops it); open it again`,
-                  exit: ExitCode.unavailable,
-                }),
-              )
-            : Effect.failCause(cause),
         ),
       );
       return undefined;
@@ -486,9 +473,9 @@ const channelsCommand = (sub: string | undefined, id: string | undefined, rest: 
 };
 
 /**
- * Waits while stdout is behind (`Io.drained`), so the stream being printed
- * waits with it: the RPC client stops acknowledging, and the host stops
- * pulling the channel.
+ * Waits while stdout is behind (`Io.drained`), so what is printed goes out at
+ * its reader's pace. What the host sends meanwhile waits in the command's
+ * queue (`received`), never on the connection.
  */
 const caughtUp = (io: Io): Effect.Effect<void> => {
   const drained = io.drained;

@@ -18,7 +18,7 @@ import type {
   TurnOptions,
 } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
-import { again, call, follow, followable } from "./channels.ts";
+import { call, follow, followable } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Command, Connection, Failure, Io, Options, Output } from "./command.ts";
 import { formatTurnResult } from "./format.ts";
@@ -48,12 +48,12 @@ const turnOptions = (options: Options): TurnOptions => ({
 type Prompt = typeof AgentChannels.prompt extends ChannelDeclaration<"call", infer Payload> ? Payload : never;
 
 /**
- * `agent.prompt`, which answers when the turn that places the prompt ends. It
- * is withdrawn when the agent reloads, and called again then with the same
- * `requestId`, which waits for that turn, or places the prompt if it never
- * was, and never places it twice.
+ * `agent.prompt`, which answers when the turn that places the prompt ends.
+ * When the agent reloads meanwhile, the host makes it again on the
+ * replacement (it is `repeatable`), where the same `requestId` waits for that
+ * turn, or places the prompt if it never was, and never places it twice.
  */
-const prompt = (rpc: HostRpcClient, payload: Prompt) => again(rpc, AgentChannels.prompt.id, call(rpc, AgentChannels.prompt, payload));
+const prompt = (rpc: HostRpcClient, payload: Prompt) => call(rpc, AgentChannels.prompt, payload);
 
 // ------------------------------------------------------------------ the result
 
@@ -160,10 +160,7 @@ const followed = (connection: Connection, io: Io, options: Options, payload: Pro
   Effect.gen(function* () {
     const { sessionId, requestId } = payload;
     const rpc = yield* connection.live;
-    // Over HTTP: `turnView` asks for it holding `serial`, which the host's notices wait for, so the host's events are not
-    // read meanwhile. On the socket, whose reader reads in order, a burst of them would fill their buffer and stall it,
-    // and the reply would wait behind them. (The channels' streams never hold it back: `follow` queues them without bound.)
-    const view = turnView(io, options, sessionId, requestId, call(connection.rpc, AgentChannels.view, { sessionId }));
+    const view = turnView(io, options, sessionId, requestId, call(rpc, AgentChannels.view, { sessionId }));
     const questions = yield* questionHandler(rpc, io, options, `session:${sessionId}`);
     // One element at a time, whichever stream it comes from, so what is shown stays in order.
     const lock = yield* Semaphore.make(1);

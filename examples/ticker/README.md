@@ -46,7 +46,9 @@ An open stream then fails `Withdrawn`, and the page, which follows it with
 page reconnects to the host, because a stream ends with its connection, and
 when a `channels-changed` event lists `ticker.prices` again after the plugin
 was off. A client that falls behind
-gets the latest prices rather than a backlog.
+gets the latest prices rather than a backlog. `ticker.quote` only reads, so
+it is declared `repeatable`: one asked across a reload the host asks of the
+new instance itself.
 
 `nix develop -c pnpm --filter @lemma/example-ticker test` checks the walk and
 the channels, and runs the plugin as a file in a real host, using it from the

@@ -1,4 +1,4 @@
-import { Cause, Deferred, Duration, Effect, Fiber, Queue, Stream } from "effect";
+import { Cause, Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import type { Scope } from "effect";
 import { callChannel, channelsOver, follow as followChannel } from "@lemma/client";
 import type { ConnectionStatus, Followable, HostRpcClient } from "@lemma/client";
@@ -12,7 +12,9 @@ import type { Failure } from "./command.ts";
  * plugins serve, typed by the declarations in @lemma/contracts
  * (`SessionChannels`, `AgentChannels`, `LlmChannels`, ...). The host's own
  * calls (`Host.*`, `Ui.*`, `Interaction.*`) and its event stream are the
- * runtime's, reached as RPCs.
+ * runtime's, reached as RPCs. Its streams, the events and the channels', are
+ * read only through `@lemma/client` (`eventsOver`, `channelsOver`, `follow`),
+ * into the command's own queues (`received`): see `makeHostRpc` for why.
  */
 
 /** Whether `error` is channel `id`'s own `code`: the transport's, naming the channel, rather than what the channel's subsystem refused. */
@@ -37,6 +39,9 @@ export const starting =
  * host still starting (`starting`). `NotFound` naming it is nothing serving
  * it when the transport says `No channel "<id>"`; otherwise a channel of the
  * other kind answers for the id (a stream called), as its message says.
+ * `Withdrawn` naming it is its plugin reloading while it ran: a call the host
+ * could not make again for the command (a login, a command, or one nothing
+ * answered again in time) or a stream, which the command runs again.
  */
 export const refined =
   (id: string) =>
@@ -46,6 +51,13 @@ export const refined =
       return new CliError({
         code: "NotFound",
         message: `${error.message}: the plugin that serves it is off or not running (see \`lemma plugins\`)`,
+        subject: id,
+        exit: ExitCode.failed,
+      });
+    if (ofChannel(error, id, "Withdrawn"))
+      return new CliError({
+        code: "Withdrawn",
+        message: `"${id}" was withdrawn: the plugin serving it was reloaded or stopped while it ran; run the command again`,
         subject: id,
         exit: ExitCode.failed,
       });
@@ -59,50 +71,36 @@ export const call = <Payload, Success>(
   payload: Payload,
 ): Effect.Effect<Success, Failure> => Effect.mapError(callChannel(rpc, channel, payload), refined(channel.id));
 
-/** How long what its plugin's leaving withdrew waits for the channel to be served again: that plugin's dispose deadline (10 seconds by default), then its replacement's start. */
-const REPLACEMENT = Duration.seconds(30);
-const POLL = Duration.millis(200);
-
-/** Waits until `Channel.List` lists `id`, until `deadline` (epoch ms): whether it did. */
-export const served = (rpc: HostRpcClient, id: string, deadline: number): Effect.Effect<boolean, Failure> =>
-  Effect.gen(function* () {
-    for (;;) {
-      if ((yield* rpc["Channel.List"]()).some((channel) => channel.id === id)) return true;
-      if (Date.now() >= deadline) return false;
-      yield* Effect.sleep(POLL);
-    }
-  });
-
 /**
- * Runs `attempt`, which calls channel `id`, again each time it fails
- * `Withdrawn`: its plugin stopped or was replaced (a reload) while it waited,
- * so it is made again once the channel is served. An exclusive plugin's
- * replacement is listed only once the old one has gone, and until then a call
- * finds nothing (`NotFound`): it waits for the channel to be listed, for at
- * most `REPLACEMENT`, then fails with the withdrawal. A stream is followed
- * instead (`follow`).
- *
- * For what is safe to make twice: a call that waits on its plugin (a
- * prompt, a login, a command).
+ * What a reader of `@lemma/client` hands its callbacks (`open` gives it them
+ * and returns its close), as a stream the command reads at its own pace: each
+ * element goes into an unbounded queue of the command's at once, since a
+ * callback that waited would stall every request on the connection
+ * (`makeHostRpc`). It ends as the reader's stream does, failing with what
+ * ended it, and is closed with the scope.
  */
-export const again = <A, R>(rpc: HostRpcClient, id: string, attempt: Effect.Effect<A, Failure, R>): Effect.Effect<A, Failure, R> =>
+export const received = <A>(
+  open: (onElement: (element: A) => void, onEnd: (error?: HostError | Error) => void) => () => void,
+): Effect.Effect<Stream.Stream<A, Failure>, never, Scope.Scope> =>
   Effect.gen(function* () {
-    let withdrawn: Failure | undefined;
-    for (;;) {
-      const result = yield* Effect.result(attempt);
-      if (result._tag === "Success") return result.success;
-      const error = result.failure;
-      if (ofChannel(error, id, "Withdrawn")) withdrawn = error;
-      else if (withdrawn === undefined || !ofChannel(error, id, "NotFound")) return yield* Effect.fail(error);
-      if (!(yield* served(rpc, id, Date.now() + Duration.toMillis(REPLACEMENT)))) return yield* Effect.fail(withdrawn);
-    }
+    const elements = yield* Queue.unbounded<A, Failure | Cause.Done>();
+    yield* Effect.acquireRelease(
+      Effect.sync(() =>
+        open(
+          (element) => void Queue.offerUnsafe(elements, element),
+          (error) => void (error === undefined ? Queue.endUnsafe(elements) : Queue.failCauseUnsafe(elements, Cause.fail(error as Failure))),
+        ),
+      ),
+      (close) => Effect.sync(close),
+    );
+    return Stream.fromQueue(elements);
   });
 
 /** A command's subscription to the host's own events (`hostEvents`). */
 export interface HostEvents {
   /** Reads it; fails with what ended it. */
   readonly fiber: Fiber.Fiber<void, Failure>;
-  /** Hears each event from here on, besides the command's own handler: what `follow` opens a stream again on. */
+  /** Hears each event from here on, as it arrives, before the command's own handler takes it in turn: what `follow` opens a stream again on. */
   readonly onEvent: (listener: (event: RuntimeEvent) => void) => () => void;
 }
 

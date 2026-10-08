@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Deferred, Effect } from "effect";
 import { RpcClientError } from "effect/rpc";
 import { emptyUsage, HostError } from "@lemma/contracts";
-import type { AgentActivity, AgentView, AssistantMessage, EventData, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
+import type { AgentActivity, AgentView, AssistantMessage, EventData, RuntimeEvent, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
 import type { Options } from "../src/command.ts";
 import { runCommand } from "../src/run.ts";
 import { fakeHost, fed } from "./fake.ts";
@@ -56,6 +56,8 @@ interface Host {
   readonly reopened: Effect.Effect<void>;
   /** Resolves once the command has shown `text`: what it shows before the log has the answer that says it. */
   readonly showing: (text: string) => Effect.Effect<void>;
+  /** Publishes the host's own events, and resolves once they have gone out to the command. */
+  readonly publish: (...events: readonly RuntimeEvent[]) => Effect.Effect<void>;
 }
 
 /**
@@ -72,6 +74,7 @@ const scripted = (script: {
   const logged: SessionEvent[] = [];
   const activities: Fed<AgentActivity>[] = [];
   const logs: Fed<SessionLogUpdate>[] = [];
+  const events = fed<RuntimeEvent>();
   const prompts: unknown[] = [];
   const reopened = Deferred.makeUnsafe<void>();
   const append = (...data: readonly EventData[]) => {
@@ -101,6 +104,11 @@ const scripted = (script: {
         screen.waiting.push({ text, shown });
         return Deferred.await(shown);
       }),
+    publish: (...published) =>
+      Effect.andThen(
+        Effect.sync(() => events.push(...published)),
+        events.sent,
+      ),
   };
   const view = script.view ?? { output: [], queue: [], queueRevision: 0 };
   const connection = fakeHost({
@@ -134,6 +142,7 @@ const scripted = (script: {
         return opened.stream;
       },
     },
+    events: events.stream,
   });
   return { connection, prompts, screen, show };
 };
@@ -261,7 +270,7 @@ describe("run --follow", () => {
     expect((await follow(host)).shown).toBe(`${said}\n`);
   });
 
-  test("an agent reload withdraws the prompt and its activity: the prompt is sent again with its id, and the turn caught up from the agent", async () => {
+  test("an agent reload withdraws the turn's activity: the prompt, sent once, is the host's to make again, and the turn is caught up from the agent", async () => {
     const host = scripted({
       view: {
         turnId,
@@ -270,14 +279,12 @@ describe("run --follow", () => {
         queue: [],
         queueRevision: 0,
       },
-      prompt: ({ act, append, reload, reopened, showing }, n) => {
-        if (n === 1) {
-          // Placed, then the agent reloads mid-answer: what it said meanwhile is lost with the activity.
-          act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1));
-          append(...started, { type: "step-start", turnId, stepId: "t1.1" });
-          reload();
-          return Effect.fail(new HostError({ code: "Withdrawn", subject: "agent.prompt", message: "withdrawn" }));
-        }
+      prompt: ({ act, append, reload, reopened, showing }) => {
+        // Placed, then the agent reloads mid-answer: what it said meanwhile is lost with the activity. The call goes on,
+        // made again on the replacement by the host, and answers when the turn ends there.
+        act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1));
+        append(...started, { type: "step-start", turnId, stepId: "t1.1" });
+        reload();
         return reopened.pipe(
           Effect.andThen(Effect.sync(() => act(word("t1.1", 3)))),
           // What was lost shows from the agent's view, and what follows it from the reopened activity, before the log has the answer.
@@ -292,9 +299,34 @@ describe("run --follow", () => {
       },
     });
     const { shown, output } = await follow(host);
-    expect(host.prompts).toHaveLength(2);
-    expect(host.prompts.map((payload) => (payload as { requestId: string }).requestId)).toEqual([requestId, requestId]);
+    expect(host.prompts).toHaveLength(1);
     expect(shown).toBe("word1 word2 word3 \n");
+    expect(output?.exit).toBeUndefined();
+  });
+
+  test("a burst of the host's events while the agent's view is on its way, on the same socket, does not hold the view back", async () => {
+    const notices = Array.from({ length: 40 }, (_, i): RuntimeEvent => ({ type: "notice", notice: { level: "info", message: `notice ${i}` } }));
+    const host = scripted({
+      log: [...started, { type: "step-start", turnId, stepId: "t1.1" }],
+      // More of the host's events than the client holds of a stream unread go out before the view's answer, while the
+      // command shows none of them until it has the view: they wait for the lock that joining the turn holds.
+      view: ({ publish }) =>
+        Effect.as(publish(...notices), {
+          turnId,
+          draft: { stepId: "t1.1", seq: 1, blocks: [{ index: 0, block: { type: "text", text: "word1 " } }] },
+          output: [],
+          queue: [],
+          queueRevision: 0,
+        }),
+      prompt: ({ act, append }) =>
+        Effect.sync(() => {
+          append({ type: "message", turnId, stepId: "t1.1", message: answer("word1 ") }, { type: "step-end", turnId, stepId: "t1.1" }, ended);
+          act(turnEnded);
+        }),
+    });
+    const { shown, output } = await follow(host);
+    expect(shown.startsWith("word1 ")).toBe(true);
+    expect(shown.split("\n").filter((line) => line.startsWith("[info] notice "))).toHaveLength(notices.length);
     expect(output?.exit).toBeUndefined();
   });
 });

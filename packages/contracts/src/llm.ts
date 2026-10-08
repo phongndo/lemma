@@ -333,6 +333,7 @@ export const LlmChannels = {
     description: "Every model provider, with the logins it offers and whether requests can authenticate now",
     payload: Schema.Void,
     success: Schema.Array(ProviderInfo),
+    repeatable: true,
   }),
   models: defineChannel({
     kind: "call",
@@ -341,6 +342,7 @@ export const LlmChannels = {
     description: "Every known model; with available, only those whose provider is configured",
     payload: Schema.Struct({ available: Schema.optional(Schema.Boolean) }),
     success: Schema.Array(ModelInfo),
+    repeatable: true,
   }),
   /**
    * Runs a provider's login flow, as `Llm.login`; its questions reach clients
@@ -353,7 +355,9 @@ export const LlmChannels = {
    * `llm.cancel-login` stops it, and as `Llm.login` does (`UnknownProvider`,
    * `LoginFailed`, `Cancelled` when its question is dismissed). When the
    * provider stops or reloads, the call fails `Withdrawn` at once, and the login
-   * ends with the provider: calling again starts one on the replacement.
+   * ends with the provider: calling again starts one on the replacement. It is
+   * not `repeatable`, since a new login asks the person again: whether to is
+   * the client's to decide.
    */
   login: defineChannel({
     kind: "call",

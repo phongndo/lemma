@@ -28,9 +28,10 @@ export interface Io {
   /**
    * Resolves once what was written has room to go (stdout's `drain`), or is
    * undefined when it has room now. A command printing a channel's stream
-   * waits on it after each write, so a reader that falls behind (an unread
-   * pipe, a paused `less`) holds the stream back rather than output piling up
-   * in memory. It resolves too when stdout closes or fails, or `signal` aborts.
+   * waits on it after each write, so what it prints goes out at its reader's
+   * pace (an unread pipe, a paused `less`), and what the host sends meanwhile
+   * waits in the command's own queue, never holding back the connection. It
+   * resolves too when stdout closes or fails, or `signal` aborts.
    */
   readonly drained?: (signal: AbortSignal) => Promise<void> | undefined;
   readonly err: (text: string) => void;

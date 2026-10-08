@@ -170,9 +170,9 @@ export interface PromptOptions extends TurnOptions {
    * seen (queued, placed in the running turn, or in its log) is not placed
    * again; the call waits for the turn that placed it, or returns at once
    * when that turn has ended. A caller that may have to call again (a client
-   * whose connection drops, or whose `agent.prompt` ends `Withdrawn`) reuses
-   * the id, and `agent.prompt` requires one; without one, the agent gives the
-   * prompt an id of its own.
+   * whose connection drops, or the host making `agent.prompt` again when the
+   * agent reloads) reuses the id, and `agent.prompt` requires one; without
+   * one, the agent gives the prompt an id of its own.
    */
   readonly requestId?: string;
   /** Default `follow-up`. */
@@ -236,24 +236,23 @@ const sessionField = { sessionId: Schema.String };
 export const AgentChannels = {
   /**
    * `Agent.prompt` for a client: answers when the turn that places the prompt
-   * ends. The call can end sooner, when its connection drops or the agent
-   * reloads (`Withdrawn`, below), as it does whenever its configuration or a
-   * plugin it requires changes; the client then calls again with the same
-   * `requestId`, which waits for the turn that placed the prompt, or places it
-   * if it never was, and never places it twice. So every call names one, new
-   * for each prompt (`PromptOptions.requestId`): a retry without it would
-   * place the prompt again.
+   * ends. Calling again with the same `requestId` waits for the turn that
+   * placed the prompt, or places it if it never was, and never places it
+   * twice. So the call is `repeatable`: when the agent reloads while it waits,
+   * as it does whenever its configuration or a plugin it requires changes, the
+   * host makes it again on the replacement, where a prompt it took stays
+   * taken, its turn resuming. A client whose connection drops calls again with
+   * the same id. So every call names one, new for each prompt
+   * (`PromptOptions.requestId`): a retry without it would place the prompt
+   * again.
    *
    * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`, or
    * `Retracted` when `agent.withdraw` took the prompt out of the queue, each
-   * with the session as its subject. `Withdrawn` (its subject `agent.prompt`)
-   * says instead that the agent stopped or was replaced while the call
-   * waited, and the call ends at once; a prompt it took stays taken, its
-   * turn resuming in the replacement once the channel answers again. A client
-   * that clears its input once the prompt is taken reads that from
-   * `agent.activity`, opened first: `turn-started` for the session, or the
-   * `requestId` in a `queue-changed`; or its message on the session's
-   * `sessions.log`.
+   * with the session as its subject; `Withdrawn` (its subject `agent.prompt`)
+   * only when no agent answered within the host's wait. A client that clears
+   * its input once the prompt is taken reads that from `agent.activity`,
+   * opened first: `turn-started` for the session, or the `requestId` in a
+   * `queue-changed`; or its message on the session's `sessions.log`.
    */
   prompt: defineChannel({
     kind: "call",
@@ -269,6 +268,7 @@ export const AgentChannels = {
       whenBusy: Schema.optional(WhenBusy),
     }),
     success: Schema.Void,
+    repeatable: true,
   }),
   cancel: defineChannel({
     kind: "call",
@@ -285,6 +285,7 @@ export const AgentChannels = {
     description: "The sessions with a turn running",
     payload: Schema.Void,
     success: Schema.Array(Schema.String),
+    repeatable: true,
   }),
   queue: defineChannel({
     kind: "call",
@@ -293,6 +294,7 @@ export const AgentChannels = {
     description: "The session's prompts waiting for a turn, oldest first",
     payload: Schema.Struct(sessionField),
     success: Schema.Array(QueuedPrompt),
+    repeatable: true,
   }),
   withdraw: defineChannel({
     kind: "call",
@@ -309,6 +311,7 @@ export const AgentChannels = {
     description: "What a client joining now shows of the session beyond its log: the running turn's model and tool output so far, and the queue",
     payload: Schema.Struct(sessionField),
     success: AgentView,
+    repeatable: true,
   }),
   /**
    * The agent's live output and each turn's and queue's change, as
@@ -335,7 +338,7 @@ const FEED = { buffer: 1024 };
 /** `AgentChannels` served from `agent`: what a provider of `Agent` adds to `Channels`, each with `PluginContext.add`. */
 export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
   // The turn is the agent's, not the call's: when the agent leaves, the call stops waiting, and the turn resumes in
-  // the replacement, where calling again with the same `requestId` waits for it.
+  // the replacement, where the host makes the call again (it is `repeatable`) and the same `requestId` waits for it.
   serveChannel(AgentChannels.prompt, ({ sessionId, content, options, requestId, whenBusy }, { left }) =>
     Effect.raceFirst(agent.prompt(sessionId, content, { ...options, requestId, ...(whenBusy === undefined ? {} : { whenBusy }) }), left),
   ),

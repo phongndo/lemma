@@ -76,8 +76,9 @@ const failed = (id: string, cause: Cause.Cause<unknown>): HostError => {
  * drained, finishing on the instance it started on before that instance's
  * finalizers run, unless its handler stops for the plugin leaving
  * (`CallLifetime`), and is interrupted, `Withdrawn`, only if it outlives the
- * dispose deadline. Its failure or defect is the caller's error, never the
- * transport's.
+ * dispose deadline. A `repeatable` call withdrawn so is made again on what
+ * answers for its id next, its client none the wiser. Its failure or defect is
+ * the caller's error, never the transport's.
  */
 export const callChannel = (registries: Reader, id: string, payload: unknown): Effect.Effect<unknown, HostError> =>
   withChannel(registries, id, "call", ({ item: channel }, left) =>
