@@ -3,7 +3,7 @@ import { Effect, Fiber } from "effect";
 import { AgentChannels, emptyUsage, FileChannels, HostError, SessionChannels } from "@lemma/contracts";
 import type { AgentActivity, SessionsChange } from "@lemma/contracts";
 import { settled } from "../../../scripts/e2e.ts";
-import { again, call } from "../src/channels.ts";
+import { again, call, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
 import type { Io, Options } from "../src/command.ts";
 import { eventsCommand } from "../src/live.ts";
@@ -33,6 +33,12 @@ describe("a channel's failure", () => {
     expect(unserved).toMatchObject({ code: "NotFound", subject: "sessions.list" });
     expect(unserved.message).toContain("lemma plugins");
     expect(await failure(call(host.rpc, SessionChannels.get, { sessionId: "s1" }))).toMatchObject({ code: "NotFound", subject: "s1" });
+  });
+
+  test("a stream called, as `lemma channels call` can, is not said to be unserved", async () => {
+    const host = fakeHost({ streams: { "agent.activity": () => fed({ type: "subscribed", running: [] }).stream } });
+    const called = await failure(Effect.mapError(host.rpc["Channel.Call"]({ id: "agent.activity" }), refined("agent.activity")));
+    expect(called).toMatchObject({ code: "NotFound", subject: "agent.activity", message: '"agent.activity" is a stream, not a call: open it' });
   });
 
   test("a withdrawn call is made again once its channel is served, through a moment when nothing serves it", async () => {

@@ -34,14 +34,15 @@ export const starting =
  * What a failure of channel `id` means here. The transport names the channel
  * as the subject of what it says about it, where a subsystem names what it
  * refused (a session, a path): so `Unavailable` naming the channel is the
- * host still starting (`starting`), and `NotFound` naming it is nothing
- * serving it.
+ * host still starting (`starting`). `NotFound` naming it is nothing serving
+ * it when the transport says `No channel "<id>"`; otherwise a channel of the
+ * other kind answers for the id (a stream called), as its message says.
  */
 export const refined =
   (id: string) =>
   (error: Failure): Failure => {
     if (ofChannel(error, id, "Unavailable")) return starting(id)(error);
-    if (ofChannel(error, id, "NotFound"))
+    if (ofChannel(error, id, "NotFound") && error.message === `No channel "${id}"`)
       return new CliError({
         code: "NotFound",
         message: `${error.message}: the plugin that serves it is off or not running (see \`lemma plugins\`)`,

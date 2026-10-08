@@ -55,7 +55,9 @@ so the two show the same records and accept the same queries.
   the running turn, and `--when-busy reject` fails `Busy`, as the
   [agent](../../plugins/agent/README.md#busy-sessions) defines. Each `run`
   sends a request id (`--request-id` to choose it), so retrying with the same
-  id reports the turn that placed the prompt rather than placing it twice.
+  id reports the turn that placed the prompt rather than placing it twice. A
+  `run` whose connection fails once the prompt may be sent prints the id it
+  chose (without `--json`), and exits 3: a dropped connection is not reopened.
 - **Following a turn.** `run --follow` opens `agent.activity` and the
   session's `sessions.log` before it sends the prompt, and shows the turn
   that places it from the prompt on: the log says what the turn did, in
@@ -65,7 +67,9 @@ so the two show the same records and accept the same queries.
   same `--request-id` while its turn runs, it shows what the turn has said so
   far (from the log and `agent.view`), then the rest. With `--json` it prints
   the turn's `agent.activity` elements and its `sessions.log` events (as
-  `appended` elements) as the channels send them, and the host's notices.
+  `appended` elements) as the channels send them, and the host's notices;
+  a step's deltas that its answer in the log overtook are left out, since the
+  answer has them.
 - **Events.** `lemma events` follows the host's own events (notices,
   questions, plugin, channel, and UI changes) and the bundled subsystems'
   streams: `agent.activity`, `sessions.changes`, `llm.changes`, and

@@ -33,7 +33,13 @@ describe("turns against a running host", () => {
     const followed = await invoke(["run", session, "again", "--model", "mock/scripted", "--follow", "--json"], home);
     const lines = followed.out.split("\n").map((line) => JSON.parse(line));
     expect(lines.some((event) => event.type === "turn-started")).toBe(true);
-    expect(lines.some((event) => event.type === "delta" && event.event.type === "toolcall-end")).toBe(true);
+    // The turn as the log has it: the answer that calls the tool. Its deltas print too unless that answer overtook them
+    // (the activity and the log each come in their own order), so they are not counted on here.
+    const calls = (event: { type: string; event?: { data: { type: string; message?: { role: string; content: { type: string }[] } } } }) =>
+      event.type === "appended" &&
+      event.event?.data.message?.role === "assistant" &&
+      event.event.data.message.content.some((block) => block.type === "toolCall");
+    expect(lines.some(calls)).toBe(true);
     // The command's output also streams live (order across event kinds is not guaranteed, so only its arrival is checked).
     expect(lines.some((event) => event.type === "tool-output" && event.chunk.includes("hello from lemma"))).toBe(true);
     expect(lines.at(-1)).toMatchObject({ type: "result", session, reason: "done", steps: 2, toolCalls: 1 });

@@ -210,7 +210,8 @@ Options
   -h, --help  Show this help
 
 Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
-2 usage error, 3 no running host or it could not be reached, 130 interrupted (Ctrl+C).`;
+2 usage error, 3 no running host, it could not be reached, or it is still starting,
+130 interrupted (Ctrl+C).`;
 
 /** `90s`, `1m30s`, `500ms`, `2m`, or bare seconds, in milliseconds. */
 export const parseOffset = (text: string): number | undefined => {

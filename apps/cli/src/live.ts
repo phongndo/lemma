@@ -84,10 +84,14 @@ interface QuestionView {
  * The handler takes every subscribed event. Each question is answered in its
  * own fiber, so events keep flowing while the terminal waits, and its prompt
  * closes when the question is answered elsewhere or the command ends.
+ * `restart` begins again for work made again (a login its provider's reload
+ * withdrew): it closes the prompts of the questions asked so far, which that
+ * work's end closes on the host in its own time, and the `--answer` values
+ * go to the new questions from the first.
  */
 export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
   Effect.gen(function* () {
-    const answers = [...options.answers];
+    let answers = [...options.answers];
     const seen = new Set<string>();
     const prompts = yield* FiberMap.make<string>();
     /** Questions waiting at the terminal now. */
@@ -126,7 +130,7 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
           raw = undefined;
         }
       });
-    return (event: HostEvent): Effect.Effect<void> => {
+    const handler = (event: HostEvent): Effect.Effect<void> => {
       if (event.type === "interaction-closed") {
         const asking = prompting.get(event.id);
         return FiberMap.remove(prompts, event.id).pipe(
@@ -145,6 +149,13 @@ export const questionHandler = (rpc: HostRpcClient, io: Io, options: Options, or
       // `--answer` values go to questions in the order they arrive.
       return Effect.asVoid(FiberMap.run(prompts, request.id, handle(request, answers.shift())));
     };
+    const restart = Effect.andThen(
+      FiberMap.clear(prompts),
+      Effect.sync(() => {
+        answers = [...options.answers];
+      }),
+    );
+    return Object.assign(handler, { restart });
   });
 
 /**
@@ -428,22 +439,16 @@ export const loginCommand =
       const isPaste = (request: InteractionRequest) => request.type === "ask" && request.kind === "sign-in-code";
       /** Set once Ctrl+C cancels: the questions the host withdraws for it were not answered elsewhere. */
       let cancelling = false;
-      /** One login's link, once shown, and the handler of its questions. */
-      const attempt = Effect.gen(function* () {
-        const linkShown = yield* Deferred.make<void>();
-        const questions = yield* questionHandler(rpc, io, options, origin, {
-          // Questions and notices reach a client on separate streams: the paste prompt can overtake the link it follows.
-          before: (request) =>
-            isPaste(request)
-              ? Deferred.await(linkShown).pipe(Effect.timeoutOrElse({ duration: Duration.millis(500), orElse: () => Effect.void }))
-              : Effect.void,
-          prompt: (request) => (isPaste(request) ? "If the browser ends on a page that won't load, paste its address here: " : undefined),
-          // The browser reached the host first, so signing in goes on without it; or this command is cancelling it.
-          closed: (request) => (cancelling || isPaste(request) ? "" : "(answered elsewhere)"),
-        });
-        return { linkShown, questions };
+      /** The login's link, once shown. */
+      let linkShown = yield* Deferred.make<void>();
+      const questions = yield* questionHandler(rpc, io, options, origin, {
+        // Questions and notices reach a client on separate streams: the paste prompt can overtake the link it follows.
+        before: (request) =>
+          isPaste(request) ? Deferred.await(linkShown).pipe(Effect.timeoutOrElse({ duration: Duration.millis(500), orElse: () => Effect.void })) : Effect.void,
+        prompt: (request) => (isPaste(request) ? "If the browser ends on a page that won't load, paste its address here: " : undefined),
+        // The browser reached the host first, so signing in goes on without it; or this command is cancelling it.
+        closed: (request) => (cancelling || isPaste(request) ? "" : "(answered elsewhere)"),
       });
-      let current = yield* attempt;
       /** Whether this terminal answers questions: Enter to open a code's page is one. */
       const asks = policyOf(io, options) === "ask" && io.ask !== undefined;
       /** Enter opens a device code's page; the prompt closes when the login ends. */
@@ -456,7 +461,7 @@ export const loginCommand =
               const shown = loginLines(event.notice, info.name, io.open !== undefined);
               if (shown.lines.length > 0) io.err(shown.lines.join("\n"));
               if (shown.link !== undefined && event.notice.kind === "sign-in") {
-                yield* Deferred.succeed(current.linkShown, undefined);
+                yield* Deferred.succeed(linkShown, undefined);
                 io.open?.(shown.link);
               }
               if (shown.link !== undefined && event.notice.kind === "device-code" && io.open !== undefined && asks) {
@@ -476,7 +481,7 @@ export const loginCommand =
               }
             }
           }
-          yield* current.questions(event);
+          yield* questions(event);
         }),
       );
       let first = true;
@@ -484,7 +489,10 @@ export const loginCommand =
         rpc,
         LlmChannels.login.id,
         Effect.gen(function* () {
-          if (!first) current = yield* attempt;
+          if (!first) {
+            linkShown = yield* Deferred.make<void>();
+            yield* questions.restart;
+          }
           first = false;
           yield* call(rpc, LlmChannels.login, { provider, type: method });
         }),
@@ -577,7 +585,7 @@ export const doCommand =
     Effect.gen(function* () {
       const rpc = yield* connection.live;
       const origin = `command:${randomUUID()}`;
-      let questions = yield* questionHandler(rpc, io, options, origin);
+      const questions = yield* questionHandler(rpc, io, options, origin);
       yield* hostEvents(rpc, (event) =>
         Effect.gen(function* () {
           if (event.type === "notice") io.err(noticeLine(event));
@@ -590,7 +598,7 @@ export const doCommand =
         rpc,
         CommandChannels.run.id,
         Effect.gen(function* () {
-          if (!first) questions = yield* questionHandler(rpc, io, options, origin);
+          if (!first) yield* questions.restart;
           first = false;
           return yield* call(rpc, CommandChannels.run, { id, cwd, origin, ...(options.session === undefined ? {} : { sessionId: options.session }) });
         }),

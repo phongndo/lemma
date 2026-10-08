@@ -118,19 +118,36 @@ export const runCommand =
         ...(Object.keys(turn).length ? { options: turn } : {}),
         ...(options.whenBusy === undefined ? {} : { whenBusy: options.whenBusy }),
       };
-      if (options.follow) return yield* followed(connection, io, options, payload);
-
-      // The turn's questions (a tool asking for approval, say) are answered here when there is something to answer
-      // with: --answer, --questions, or a terminal. Otherwise the CLI stays unattached, so they go to another client
-      // (an open web app) or, with none, fail as unanswerable, which a tool asking for approval takes as a no.
-      if (options.answers.length > 0 || options.questions !== undefined || io.ask !== undefined) {
-        const rpc = yield* connection.live;
-        yield* hostEvents(rpc, yield* questionHandler(rpc, io, options, `session:${sessionId}`));
-      }
-      yield* prompt(connection.rpc, payload);
-      const [info, events] = yield* readSession(connection.rpc, sessionId);
-      return result(summarize(info, events, payload.requestId), options, false);
+      return yield* send(connection, io, options, payload).pipe(
+        // The connection failed with the prompt perhaps placed: the id this command chose is the way back to its turn.
+        Effect.tapError((error) =>
+          Effect.sync(() => {
+            if (error._tag !== "RpcClientError" || options.requestId !== undefined || options.json) return;
+            io.err(
+              `lemma: prompt ${payload.requestId} may be running: \`lemma run ${sessionId} --request-id ${payload.requestId}\` with the same prompt rejoins its turn without placing it twice`,
+            );
+          }),
+        ),
+      );
     });
+
+/** Sends the prompt and waits for its turn: shown as it runs with `--follow`, else its result once it ends. */
+const send = (connection: Connection, io: Io, options: Options, payload: Prompt) =>
+  Effect.gen(function* () {
+    const { sessionId } = payload;
+    if (options.follow) return yield* followed(connection, io, options, payload);
+
+    // The turn's questions (a tool asking for approval, say) are answered here when there is something to answer
+    // with: --answer, --questions, or a terminal. Otherwise the CLI stays unattached, so they go to another client
+    // (an open web app) or, with none, fail as unanswerable, which a tool asking for approval takes as a no.
+    if (options.answers.length > 0 || options.questions !== undefined || io.ask !== undefined) {
+      const rpc = yield* connection.live;
+      yield* hostEvents(rpc, yield* questionHandler(rpc, io, options, `session:${sessionId}`));
+    }
+    yield* prompt(connection.rpc, payload);
+    const [info, events] = yield* readSession(connection.rpc, sessionId);
+    return result(summarize(info, events, payload.requestId), options, false);
+  });
 
 /**
  * `run --follow`: the agent's activity and the session's log are followed
@@ -143,7 +160,9 @@ const followed = (connection: Connection, io: Io, options: Options, payload: Pro
   Effect.gen(function* () {
     const { sessionId, requestId } = payload;
     const rpc = yield* connection.live;
-    const view = turnView(io, options, sessionId, requestId, call(rpc, AgentChannels.view, { sessionId }));
+    // Over HTTP: `turnView` asks for it holding `serial`, so neither stream is read meanwhile, and the socket's reader,
+    // which reads in order, stalls once one of them fills its buffer: a reply on the socket behind it would never come.
+    const view = turnView(io, options, sessionId, requestId, call(connection.rpc, AgentChannels.view, { sessionId }));
     const questions = yield* questionHandler(rpc, io, options, `session:${sessionId}`);
     // One element at a time, whichever stream it comes from, so what is shown stays in order.
     const lock = yield* Semaphore.make(1);
