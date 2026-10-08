@@ -261,4 +261,38 @@ describe("channels", () => {
       ),
     );
   });
+
+  test("a client that falls behind the changes stream receives the latest list, skipping the ones in between", async () => {
+    const contributors = ["a", "b", "c", "d", "e", "f"].map((id) => contributor(id, [command(`${id}.run`)]));
+    const plugins = new Map([paths, commands, ...contributors].map((plugin) => [plugin.id, plugin]));
+    const ids = (list: readonly CommandInfo[]) => list.map((info) => info.id);
+    const only = (id: string) => ({ plugins: { paths: {}, commands: {}, [id]: {} } });
+    const lists = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const loader = yield* makeLoader({ source: { resolve: (id) => Effect.succeed(plugins.get(id)!) }, composition: only("a") });
+          const changes = (yield* loader.core.run(served)).get("commands.changes") as ChannelStream;
+          const pull = yield* Stream.toPull(elementsOf(changes, undefined));
+          expect((yield* pull).map((list) => ids(list as readonly CommandInfo[]))).toEqual([["a.run"]]);
+          // What the plugin publishes, heard at once, so the test knows when the last change has been published.
+          const published = yield* Queue.unbounded<readonly string[]>();
+          const events = yield* loader.core.run(Events);
+          yield* Effect.forkScoped(
+            Stream.runForEach(events.stream(CommandsChanged, { buffer: 64 }), ({ commands }) => Queue.offer(published, ids(commands))),
+            { startImmediately: true },
+          );
+          // Five changes, each a different list, while the client reads none of them.
+          for (const id of ["b", "c", "d", "e", "f"]) yield* loader.apply(only(id));
+          let heard: readonly string[] = [];
+          while (heard[0] !== "f.run") heard = yield* Queue.take(published);
+          const read: string[][] = [];
+          while (read.at(-1)?.[0] !== "f.run") read.push(...(yield* pull).map((list) => ids(list as readonly CommandInfo[])));
+          return read;
+        }),
+      ),
+    );
+    // At most what the client and the stream's source each hold, and one on its way between them.
+    expect(lists.length).toBeLessThanOrEqual(3);
+    expect(lists.at(-1)).toEqual(["f.run"]);
+  });
 });

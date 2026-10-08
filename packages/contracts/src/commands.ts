@@ -1,8 +1,8 @@
-import { Context, Data, Effect, Schema } from "effect";
-import type { Scope, Stream } from "effect";
+import { Context, Data, Effect, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import { Event } from "@lemma/core";
-import type { Awaitable, PluginContext } from "@lemma/core";
-import { defineChannel, serveChannel } from "./channels.ts";
+import type { Awaitable, Events, PluginContext } from "@lemma/core";
+import { defineChannel, eventFeed, serveChannel } from "./channels.ts";
 import type { Channel } from "./channels.ts";
 import { InteractionOrigin } from "./interaction.ts";
 
@@ -56,12 +56,13 @@ export interface Command extends Omit<CommandInfo, "source"> {
   readonly run: (context: CommandContext) => Awaitable<CommandResult | void, unknown>;
 }
 
-/** Published whenever a command is registered or removed. */
+/** Every command (`Commands.list`), published by its provider whenever one is registered or removed, once that is live. */
 export const CommandsChanged = Event.make<{ readonly commands: readonly CommandInfo[] }>("lemma/commands.changed");
 
 /**
- * The commands plugins register and clients list and run. Its provider serves
- * it to clients as `CommandChannels` (`serveCommands`).
+ * The commands plugins register and clients list and run. Its provider
+ * publishes `CommandsChanged`, and serves it to clients as `CommandChannels`
+ * (`serveCommands`).
  */
 export class Commands extends Context.Service<
   Commands,
@@ -74,12 +75,6 @@ export class Commands extends Context.Service<
     readonly register: (command: Command) => Effect.Effect<void, CommandError, Scope.Scope | PluginContext>;
     /** Sorted by category, then title. */
     readonly list: Effect.Effect<readonly CommandInfo[]>;
-    /**
-     * `list` now, then again after each registration or removal, once it is
-     * live. A slow reader skips to the latest list and never holds back a
-     * registration.
-     */
-    readonly changes: Stream.Stream<readonly CommandInfo[]>;
     /** Interruption stays interruption; every failure becomes a `CommandError`. */
     readonly run: (id: string, context: CommandContext) => Effect.Effect<CommandResult, CommandError>;
   }
@@ -122,9 +117,10 @@ export const CommandChannels = {
   }),
   /**
    * Every command now, then the whole list again after each registration or
-   * removal (`Commands.changes`). The first list says the stream is live and
-   * resyncs a client that reconnects. A client that falls behind receives the
-   * latest list, skipping the ones in between; it never holds back the
+   * removal (`CommandsChanged`; see `eventFeed`). The first list says the
+   * stream is live and resyncs a client that reconnects. Each list is whole,
+   * so a client keeps the last it received: one that falls behind receives
+   * the latest, skipping the ones in between, and never holds back the
    * commands.
    */
   changes: defineChannel({
@@ -137,17 +133,26 @@ export const CommandChannels = {
   }),
 };
 
+/** What a client's `commands.changes`, and its source, hold: the latest list (see `eventFeed`). */
+const FEED = { buffer: 1 };
+
 /**
- * `CommandChannels` served by `commands`: what a provider of `Commands` adds
- * to `Channels`. A run naming no `cwd` runs in `defaults.cwd`, the host's
- * (`Paths`).
+ * `CommandChannels` served from `commands`: what a provider of `Commands` adds
+ * to `Channels`, each with `PluginContext.add`. A run naming no `cwd` runs in
+ * `defaults.cwd`, the host's (`Paths`).
  */
-export const serveCommands = (commands: Context.Service.Shape<typeof Commands>, defaults: { readonly cwd: string }): readonly Channel[] => [
+export const serveCommands = (
+  commands: Context.Service.Shape<typeof Commands>,
+  events: Context.Service.Shape<typeof Events>,
+  defaults: { readonly cwd: string },
+): readonly Channel[] => [
   serveChannel(CommandChannels.list, () => commands.list),
   // A command can wait on a question for good: it stops when the provider leaves rather than hold that up.
   serveChannel(CommandChannels.run, ({ id, cwd, sessionId, origin }, { left }) => {
     const run = commands.run(id, { cwd: cwd ?? defaults.cwd, ...(sessionId === undefined ? {} : { sessionId }) });
     return Effect.raceFirst(origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin), left);
   }),
-  serveChannel(CommandChannels.changes, () => commands.changes),
+  serveChannel(CommandChannels.changes, () =>
+    eventFeed(commands.list, [Stream.map(events.stream(CommandsChanged, FEED), (changed) => changed.commands)], FEED.buffer),
+  ),
 ];

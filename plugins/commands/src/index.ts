@@ -27,7 +27,7 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
   const registries = yield* Registries;
   const snapshot = Effect.map(registries.items(Entries), infoOf);
 
-  // Clients hear of every change once it is live: after a contributor is published, and after it leaves.
+  // Clients hear of every change once it is live, after a contributor is published and after it leaves: `commands.changes` follows this.
   yield* owner
     .background(
       "commands.changed",
@@ -96,7 +96,7 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
     })
     .pipe(Effect.ignore);
 
-  return { register, list: snapshot, changes: Stream.map(registries.changes(Entries), infoOf), run } satisfies Service;
+  return { register, list: snapshot, run } satisfies Service;
 });
 
 /**
@@ -111,7 +111,7 @@ export default definePlugin({
   requires: { paths: Paths },
   setup: function* ({ paths }, owner) {
     const commands = yield* makeRegistry;
-    yield* Effect.forEach(serveCommands(commands, paths), (channel) => owner.add(Channels, channel));
+    yield* Effect.forEach(serveCommands(commands, yield* Events, paths), (channel) => owner.add(Channels, channel));
     return { commands };
   },
 });
