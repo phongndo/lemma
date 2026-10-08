@@ -1,22 +1,19 @@
 {
-  "name": "@lemma/client",
+  "name": "@lemma/example-ticker",
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts"
-  },
   "scripts": {
     "check": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {
-    "@lemma/core": "workspace:*",
-    "@lemma/plugin-transport": "workspace:*",
+    "@lemma/cli": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"

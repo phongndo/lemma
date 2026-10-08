@@ -162,6 +162,17 @@ describe("against a running host", () => {
     expect(JSON.parse((await invoke(["inspectors", "nope", "--json"], home)).err).error.code).toBe("NotFound");
   });
 
+  test("channels lists what host plugins serve; an unknown one is NotFound, for a call and a stream alike", async () => {
+    // No bundled plugin serves a channel; a plugin file's are below, and examples/ticker uses one in a real host.
+    expect((await invoke(["channels"], home)).out).toBe("No channels: no running plugin serves one.");
+    expect(JSON.parse((await invoke(["channels", "--json"], home)).out)).toEqual([]);
+    for (const sub of ["call", "open"]) {
+      const result = await invoke(["channels", sub, "nope.nothing", "{}", "--json"], home);
+      expect(result.code).toBe(ExitCode.failed);
+      expect(JSON.parse(result.err).error).toMatchObject({ code: "NotFound", subject: "nope.nothing" });
+    }
+  });
+
   test("plugins config shows a plugin's fields and sets or unsets one in the file that sets its config", async () => {
     const userConfig = join(home, "config.jsonc");
     const original = await readFile(userConfig, "utf8");
@@ -291,5 +302,62 @@ describe("against a running host", () => {
     } finally {
       await rm(other, { recursive: true, force: true });
     }
+  });
+});
+
+describe("channels served by a plugin file", () => {
+  let lemma: Lemma;
+  let home: string;
+  beforeAll(async () => {
+    lemma = await startLemma("lemma-cli-channels-", {
+      prepare: async (home) => {
+        await mkdir(join(home, "plugins"));
+        // Its stream sends 4 KB at a time, as fast as it is pulled, and its stats say how much it has sent.
+        await writeFile(
+          join(home, "plugins", "bulk.ts"),
+          `import { Effect, Layer, Schema, Stream } from "effect";
+import { definePlugin, PluginContext } from "@lemma/core";
+import { Channels, serveChannel } from "@lemma/contracts";
+let emitted = 0;
+let active = 0;
+export default definePlugin({
+  id: "bulk",
+  layer: Layer.effectDiscard(Effect.gen(function* () {
+    const owner = yield* PluginContext;
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "bulk.stats", payload: Schema.Void, success: Schema.Struct({ emitted: Schema.Number, active: Schema.Number }) }, () => ({ emitted, active })));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "bulk.nothing", payload: Schema.Void, success: Schema.Void }, () => undefined));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "bulk.empty", payload: Schema.Void, success: Schema.Struct({}) }, () => ({})));
+    yield* owner.add(Channels, serveChannel({ kind: "stream", id: "bulk.chunks", payload: Schema.Number, success: Schema.String }, (count) =>
+      Stream.fromEffectRepeat(Effect.sync(() => { emitted++; return "x".repeat(4096); })).pipe(
+        Stream.take(count),
+        Stream.onStart(Effect.sync(() => { active++; })),
+        Stream.ensuring(Effect.sync(() => { active--; })),
+      ),
+    ));
+  })),
+});
+`,
+        );
+      },
+    });
+    home = lemma.home;
+  }, 30_000);
+  afterAll(() => lemma?.stop());
+  printOnFailure(() => lemma?.output());
+
+  test("channels lists, calls, and opens them, and prints a call with no result, or an empty one, as something", async () => {
+    expect(JSON.parse((await invoke(["channels", "--json"], home)).out).map((channel: { id: string }) => channel.id)).toEqual([
+      "bulk.stats",
+      "bulk.nothing",
+      "bulk.empty",
+      "bulk.chunks",
+    ]);
+    expect(await invoke(["channels", "call", "bulk.nothing"], home)).toMatchObject({ code: ExitCode.ok, out: "called bulk.nothing: no result" });
+    expect(await invoke(["channels", "call", "bulk.nothing", "--json"], home)).toMatchObject({ code: ExitCode.ok, out: "null" });
+    expect(await invoke(["channels", "call", "bulk.empty"], home)).toMatchObject({ code: ExitCode.ok, out: "{}" });
+    expect(await invoke(["channels", "call", "bulk.empty", "--json"], home)).toMatchObject({ code: ExitCode.ok, out: "{}" });
+    const opened = await invoke(["channels", "open", "bulk.chunks", "3"], home);
+    expect(opened.code).toBe(ExitCode.ok);
+    expect(opened.out.split("\n").map((line) => (JSON.parse(line) as string).length)).toEqual([4096, 4096, 4096]);
   });
 });

@@ -1,6 +1,7 @@
-import { Effect, Schema } from "effect";
-import { Agent, appUrl, Commands, HostControl, HostRpcs, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
+import { Effect, Layer, Schema } from "effect";
+import { Agent, appUrl, Commands, HostControl, InteractionHook, Llm, Notice, Paths, secret, Sessions, Workspace } from "@lemma/contracts";
 import { definePlugin, Events, Registries } from "@lemma/core";
+import { ChannelLifetime, channelLifetime, ServedRpcs } from "./channels.ts";
 import { makeHandlers } from "./handlers.ts";
 import { makeHub } from "./hub.ts";
 import type { Hub } from "./hub.ts";
@@ -64,8 +65,9 @@ export default definePlugin({
 
     const token = config.token ?? (yield* loadToken(paths.home));
     const logins = makeLogins(llm, yield* Effect.scope);
-    const handlers = HostRpcs.toLayer(
-      makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }),
+    const handlers = Layer.merge(
+      ServedRpcs.toLayer(makeHandlers({ version: VERSION, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins })),
+      Layer.succeed(ChannelLifetime, channelLifetime(registries)),
     );
     const address = yield* startServer(
       { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },

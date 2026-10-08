@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Layer } from "effect";
-import { definePlugin, makeCore, PluginContext, Registries } from "@lemma/core";
-import { FileSearchers, Inspectors, searchFiles, snapshotOf } from "../src/index.ts";
+import { Cause, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { definePlugin, fail, makeCore, PluginContext, Registries } from "@lemma/core";
+import { elementsOf, FileSearchers, Inspectors, resultOf, searchFiles, serveChannel, snapshotOf } from "../src/index.ts";
 import type { FileSearcher, Inspector } from "../src/index.ts";
 
 /** Runs `body` in a core where one plugin contributed `searcher` and `inspectors`. */
@@ -51,6 +51,31 @@ describe("callbacks a plugin hands the contracts", () => {
       ),
     );
     expect(snapshots).toEqual(["effect", "value", "promise", "lazy"]);
+  });
+
+  test("a channel's call may answer at once, with a promise, or with an Effect; its stream may be an async iterable", async () => {
+    const declaration = { id: "plain.double", payload: Schema.Number, success: Schema.Number } as const;
+    const calls = [
+      serveChannel({ ...declaration, kind: "call" }, (n) => n * 2),
+      serveChannel({ ...declaration, kind: "call" }, async (n) => n * 2),
+      serveChannel({ ...declaration, kind: "call" }, (n) => Effect.succeed(n * 2)),
+    ];
+    expect(await Effect.runPromise(Effect.forEach(calls, (channel) => resultOf(channel, 21)))).toEqual([42, 42, 42]);
+
+    const counting = serveChannel({ ...declaration, kind: "stream" }, async function* (to) {
+      for (let n = 1; n <= to; n++) yield n;
+    });
+    expect(await Effect.runPromise(Stream.runCollect(elementsOf(counting, 3)))).toEqual([1, 2, 3]);
+    // A throw promise code did not mark with `fail` is a defect, as from a promise; a marked one is the stream's failure.
+    const broken = (error: unknown) =>
+      serveChannel({ ...declaration, kind: "stream" }, async function* () {
+        yield 1;
+        throw error;
+      });
+    const unmarked = await Effect.runPromiseExit(Stream.runDrain(elementsOf(broken(new Error("bug")), 0)));
+    expect(Exit.isFailure(unmarked) && Cause.hasDies(unmarked.cause)).toBe(true);
+    const marked = await Effect.runPromiseExit(Stream.runDrain(elementsOf(broken(fail(new Error("expected"))), 0)));
+    expect(Exit.isFailure(marked) && Cause.hasFails(marked.cause)).toBe(true);
   });
 
   test("an inspector's snapshot method is called on its inspector", async () => {

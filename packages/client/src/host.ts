@@ -5,6 +5,7 @@ import { HostError, SUBSCRIBED_HEADER } from "@lemma/contracts";
 import type {
   AgentView,
   AuthType,
+  ChannelInfo,
   CustomProviderSpec,
   CommandInfo,
   CommandResult,
@@ -50,9 +51,12 @@ export interface ConnectionStatus {
 }
 
 /**
- * Promise-returning facade over `HostRpcs`. Methods reject with `HostError`
- * for domain failures and a plain `Error` for transport failures. The web app
- * depends on this interface only, so a fake can stand in for it.
+ * Promise-returning facade over `HostRpcs` and `ChannelRpcs`. Methods reject
+ * with `HostError` for domain failures and an `Error` for transport failures:
+ * an `RpcClientError` (`_tag` "RpcClientError", such as "Error in socket")
+ * when the connection failed, or the defect's message when a host handler
+ * died. The web app depends on this interface only, so a fake can stand in
+ * for it.
  */
 export interface Host {
   readonly session: {
@@ -122,6 +126,29 @@ export interface Host {
     /** Resolves when the command ends; its questions arrive as `interaction` events. */
     readonly run: (id: string, context?: { cwd?: string; sessionId?: string }) => Promise<CommandResult>;
   };
+  readonly channel: {
+    /** What host plugins serve (see `Channels`): the channel that answers for each id. */
+    readonly list: () => Promise<readonly ChannelInfo[]>;
+    /**
+     * One call, by id with its payload as JSON; resolves with its result as
+     * JSON (`null` for none). Rejects with a `HostError` (`NotFound`,
+     * `InvalidPayload`, the channel's own code, `Failed` for its defects, or
+     * `Withdrawn`; see `Channel.Call`) or, when the connection failed, an
+     * `RpcClientError`.
+     */
+    readonly call: (id: string, payload?: unknown) => Promise<unknown>;
+    /**
+     * Opens a stream: `onElement` receives each element as JSON. `onEnd` is
+     * called once if it ends by itself: with nothing when it finished; with a
+     * `HostError` when the host ended it (`Withdrawn`: its plugin stopped or
+     * was replaced, so open it again; `Failed`, including the handler's
+     * defects; `NotFound`; `InvalidPayload`; the channel's own code); or with
+     * an `RpcClientError` (an `Error`, `_tag` "RpcClientError") when the
+     * connection dropped. Nothing resumes it: open it again on reconnect.
+     * Returns `close`, after which neither is called.
+     */
+    readonly open: (id: string, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void) => () => void;
+  };
   readonly host: {
     readonly info: () => Promise<HostInfo>;
     /** Every known plugin, enabled or not. */
@@ -167,10 +194,19 @@ export const defaultBackoff = (attempt: number): number => Math.min(5_000, 250 *
 export const runPromise = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
   Effect.runPromiseExit(effect).then((exit) => (Exit.isSuccess(exit) ? exit.value : Promise.reject(toError(Cause.squash(exit.cause)))));
 
-const toError = (error: unknown): unknown => {
+const toError = (error: unknown): HostError | Error => {
   if (error instanceof HostError || error instanceof Error) return error;
   if (typeof error === "object" && error !== null && "message" in error) return new Error(String(error.message));
   return new Error(String(error));
+};
+
+/** Calls a listener; one that throws is reported, and never ends what feeds it. */
+const safely = <A>(listener: (value: A) => void, value: A, what: string) => {
+  try {
+    listener(value);
+  } catch (error) {
+    console.error(what, error);
+  }
 };
 
 export const describeError = (error: unknown): string => {
@@ -201,13 +237,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
     for (const listener of statusListeners) listener(next);
   };
   const emit = (event: HostEvent) => {
-    for (const listener of eventListeners) {
-      try {
-        listener(event);
-      } catch (error) {
-        console.error("Host event listener failed", error);
-      }
-    }
+    for (const listener of eventListeners) safely(listener, event, "Host event listener failed");
   };
 
   const attempt = Effect.gen(function* () {
@@ -327,6 +357,29 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
             ...(context?.sessionId === undefined ? {} : { sessionId: context.sessionId }),
           }),
         ),
+    },
+    channel: {
+      list: () => runPromise(rpc["Channel.List"]()),
+      call: (id, payload) => runPromise(rpc["Channel.Call"](payload === undefined ? { id } : { id, payload })),
+      open: (id, payload, onElement, onEnd) => {
+        let live = true;
+        const fiber = Effect.runFork(
+          rpc["Channel.Open"](payload === undefined ? { id } : { id, payload }).pipe(
+            Stream.runForEach((element) => Effect.sync(() => live && safely(onElement, element, `Channel "${id}" listener failed`))),
+            Effect.exit,
+            Effect.map((exit) => {
+              if (!live) return;
+              live = false;
+              if (onEnd !== undefined) safely(onEnd, Exit.isSuccess(exit) ? undefined : toError(Cause.squash(exit.cause)), `Channel "${id}" listener failed`);
+            }),
+          ),
+        );
+        return () => {
+          if (!live) return;
+          live = false;
+          fiber.interruptUnsafe();
+        };
+      },
     },
     host: {
       info: () => runPromise(rpc["Host.Info"]()),

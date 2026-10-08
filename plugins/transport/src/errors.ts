@@ -14,7 +14,7 @@ interface Tagged {
   readonly diagnostics?: readonly Diagnostic[];
 }
 
-const isTagged = (error: unknown): error is Tagged => typeof error === "object" && error !== null && typeof (error as Tagged)._tag === "string";
+export const isTagged = (error: unknown): error is Tagged => typeof error === "object" && error !== null && typeof (error as Tagged)._tag === "string";
 
 const text = (value: unknown): string | undefined => (typeof value === "string" && value !== "" ? value : undefined);
 

@@ -1,6 +1,6 @@
 # @lemma/plugin-transport
 
-Serves `HostRpcs` from `@lemma/contracts` with `effect/rpc` on Node's HTTP server, so the web app, the desktop shell, and CLI clients can drive a running host. Requires `Paths`, `Sessions`, `Agent`, `Llm`, `HostControl`, `Workspace`, and `Commands`; provides nothing; reads `Inspectors` and `FileSearchers` from the core's registries; answers `InteractionHook` for connected clients. Marked `exclusive`: it owns the port, so a reload stops the old instance before starting the new one.
+Serves `HostRpcs` and `ChannelRpcs` from `@lemma/contracts` with `effect/rpc` on Node's HTTP server, so the web app, the desktop shell, and CLI clients can drive a running host. Requires `Paths`, `Sessions`, `Agent`, `Llm`, `HostControl`, `Workspace`, and `Commands`; provides nothing; reads `Inspectors`, `FileSearchers`, and `Channels` from the core's registries; answers `InteractionHook` for connected clients. Marked `exclusive`: it owns the port, so a reload stops the old instance before starting the new one.
 
 ## Use
 
@@ -20,7 +20,7 @@ Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser 
 
 - `GET /rpc` — WebSocket, JSON serialization. One multiplexed connection for UIs.
 - `POST /rpc/http` — streaming HTTP, NDJSON serialization. With `effect/rpc`'s HTTP client, add `HttpClient.filterStatusOk`: otherwise it parses a `401` body as NDJSON and waits forever. Also set the request URL whole (`HttpClientRequest.setUrl`), as `makeHostRpcHttp` in `@lemma/client` does: `RpcClient.layerProtocolHttp` posts to `<url>/`, which is not routed.
-- `GET /api/health` — `{ ok: true, version, protocol }`: `protocol` is `HOST_PROTOCOL`, the version of the RPC encoding (2 since Effect 4; a host without one speaks 1). A client and a host on different protocols cannot talk: the CLI says so and asks for the host to be restarted.
+- `GET /api/health` — `{ ok: true, version, protocol }`: `protocol` is `HOST_PROTOCOL`, the version of what it serves on the wire (a host without one speaks 1). A client and a host on different protocols cannot talk: the CLI says so and asks for the host to be restarted.
 - `GET /api/ui/<source>/<name>` — a UI file the host lists for the web app (`Ui.Composition`); any other name is `404`.
 
 Without a configured `token`, the host's token is the one in `<Paths.home>/token`. The first start creates that file with a random token (mode 0600, in a 0700 home; never starting with `-`, which `--token <token>` would read as an option), complete before it appears and never replacing one another host created at the same moment; later starts read it, so clients on other machines stay valid across host restarts. Surrounding whitespace is ignored; an empty or unreadable file fails the plugin's activation. Delete the file and restart the host to rotate the token. Remote access is described in [docs/remote.md](../../docs/remote.md).
@@ -40,6 +40,26 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
   and every waiting call fails `Cancelled`.
   `Files.Search` asks `FileSearchers` at each call, so file search can be off
   without the transport noticing.
+- **Channels.** `Channel.List`, `Channel.Call`, and `Channel.Open`
+  ([`ChannelRpcs`](../../packages/contracts/src/channels.ts)) serve whatever
+  host plugins add to `Channels`, read at each call, so a plugin gives its own
+  UI a call or a stream without a change here. Payloads and results cross as
+  JSON through the channel's own schemas' JSON codecs. Each call and stream
+  runs as work with its channel's contribution (`Registries.run` in the core),
+  so the plugin's finalizers wait for it. When the plugin stops or is
+  replaced, a call in flight finishes on its own instance and is interrupted,
+  `Withdrawn`, only if it outlives the dispose deadline; a stream is stopped at
+  once and ends `Withdrawn`. A request arriving after its channel left is
+  `NotFound`. A middleware around each `Channel.Open` request
+  (`ChannelLifetime`) does the stopping, because the RPC server sends the next
+  chunk only once the client acknowledged the last (WebSocket) or the response
+  drained (streaming HTTP), and only a wrapper around the whole request can end
+  one blocked there: a client that stopped reading cannot keep a withdrawn
+  stream running. So a stream is pulled at its client's pace over either
+  protocol: one chunk ahead of the client over the WebSocket, as far as the
+  connection's buffers allow over HTTP. Effect's RPC client reads a WebSocket in
+  order, so a client that stops taking a stream's elements stalls its own
+  connection, never the host.
 - **`Host.Events`.** The kernel events behind each [`HostEvent`](../../packages/contracts/src/rpc.ts) are observed once, at activation, and copied into every subscriber's drop-oldest buffer (1024 events): a slow client loses old events, never the publisher's time, and repairs from `Session.Events`. Each kind has its own observer queue, so order holds within a kind but not across kinds (`turn-ended` can overtake the last `delta`). A subscription that asks for it with the `lemma-subscribed` header (`SUBSCRIBED_HEADER`) opens with `{ type: "subscribed" }`, sent once the subscriber has joined: a client that must see the effects of its own next call (a question a command asks) waits for it. Opt-in, so a client from before it never receives an event it cannot decode. A call's reply is no such sign, since the host handles the calls on one socket concurrently and the RPC client sends a stream request asynchronously.
 - **Interaction.** With at least one subscriber, an `InteractionHook` request is broadcast as an `interaction` event through a per-subscriber queue that never drops, and replayed to clients that subscribe while it is open. The first `Interaction.Answer` wins; `Interaction.Dismiss` fails it `Dismissed`. Once it settles, or the asking fiber is interrupted, every client receives `interaction-closed`. With no subscriber the request passes to the next handler (and the interaction plugin's terminal reports `Unavailable`). If all clients leave and none returns within `interactionGraceMs`, it fails `Unavailable`.
 - **Shutdown** closes the listener and destroys open sockets, including upgraded WebSockets, before any other cleanup: `server.close` and the platform's WebSocket server would each wait for connected clients, so a reload with a UI attached would miss its deadline and leave the port bound.

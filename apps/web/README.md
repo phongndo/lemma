@@ -206,6 +206,14 @@ anything it imports, and take from the api what it offers, so it shares the
 page's module instances. UI files run with the page's permissions and token,
 as host plugins run with the host's.
 
+A host plugin serves its own UI through
+[`Channels`](../../packages/contracts/src/channels.ts): a UI plugin requires
+`Client` and calls `client.host.channel.call(id, payload)`, or follows a
+stream with `client.host.channel.open(id, payload, onElement, onEnd)`, opening
+it again on `client.onConnect` and when it ends `Withdrawn`.
+[`examples/ticker`](../../examples/ticker/README.md) is a host plugin file and a
+UI file that shows its prices at `/ticker`.
+
 A replacement with a bundled plugin's id can wrap it rather than copy it, and
 so keep what it gains in later versions: `api.bundled` holds the bundled
 plugins, and `api.extendUiPlugin` makes a plugin from another's definition.

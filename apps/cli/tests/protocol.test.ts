@@ -32,7 +32,7 @@ describe("a host on another RPC protocol", () => {
   test("is named, with what to do, instead of a failure that says nothing", async () => {
     const result = await invoke(["status"], home, "/", { LEMMA_URL: url, LEMMA_TOKEN: "token" });
     expect(result.code).toBe(ExitCode.unavailable);
-    expect(result.err).toContain(`The host at ${url} runs another version of Lemma: it speaks RPC protocol 1, this command 2`);
+    expect(result.err).toContain(`The host at ${url} runs another version of Lemma: it speaks RPC protocol 1, this command 3`);
     expect(result.err).toContain("Restart it from this version");
   });
 });

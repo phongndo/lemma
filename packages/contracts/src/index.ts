@@ -1,5 +1,6 @@
 export * from "./addresses.ts";
 export * from "./agent.ts";
+export * from "./channels.ts";
 export * from "./commands.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";

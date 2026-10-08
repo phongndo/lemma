@@ -118,8 +118,9 @@ export const HostInfo = Schema.Struct({
 export type HostInfo = typeof HostInfo.Type;
 
 /**
- * The version of `HostRpcs`'s encoding on the wire, which Effect's RPC owns: 2 since Lemma moved to Effect 4, 1
- * before (a host whose `/api/health` names none). A client and a host speaking different versions cannot talk, so a
- * client whose calls fail asks `/api/health` to say why.
+ * The version of what the host serves on the wire (`HostRpcs`, `ChannelRpcs`, and their encoding, which Effect's RPC
+ * owns): 3 since it serves channels, 2 since Lemma moved to Effect 4, 1 before (a host whose `/api/health` names
+ * none). A client and a host speaking different versions cannot talk, so a client whose calls fail asks `/api/health`
+ * to say why.
  */
-export const HOST_PROTOCOL = 2;
+export const HOST_PROTOCOL = 3;

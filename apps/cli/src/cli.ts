@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { Cause, Effect, Exit, Schema } from "effect";
+import { Cause, Effect, Exit, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import {
   appUrl,
@@ -49,6 +49,7 @@ import {
   formatRegistries,
   formatEvents,
   formatCapabilities,
+  formatChannels,
   formatInspectors,
   formatSnapshot,
 } from "./format.ts";
@@ -141,6 +142,12 @@ Commands (what the web app's command palette runs; plugins add them)
   do                             List commands: id, title, category, and the plugin that added it
   do <command>                   Run one in the current directory (or --cwd); --session <id> for its session
                                  Its questions are answered like a login's (see --questions, --answer)
+
+Channels (calls and streams host plugins serve their clients)
+  channels                       What host plugins serve: id, call or stream, title, plugin, and what it does
+  channels call <id> [<json>]    Call one with a JSON payload and print the result
+  channels open <id> [<json>]    Open a stream and print each element as a line of JSON until it ends or
+                                 is stopped; it fails Withdrawn when its plugin stops or reloads
 
 Questions the host asks (logins, tools that confirm)
   questions                      Open questions, with their ids
@@ -348,6 +355,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "do":
       if (sub === undefined) return listCommandsCommand;
       return extra(2) ?? doCommand(sub);
+    case "channels":
+      return channelsCommand(sub, arg, rest);
     case "questions":
       return extra(1) ?? questionsCommand;
     case "answer":
@@ -394,6 +403,39 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     default:
       return usage(`Unknown command "${command}"`);
   }
+};
+
+/** `channels`: the list, a call, or a stream, followed over the WebSocket as `events` is, so a connection that dies fails it rather than hanging. */
+const channelsCommand = (sub: string | undefined, id: string | undefined, rest: readonly string[]): Command | CliError => {
+  if (sub === undefined || sub === "list") {
+    if (id !== undefined) return usage(`Unexpected argument "${id}"`);
+    return ({ rpc }) => Effect.map(rpc["Channel.List"](), (channels) => ({ json: channels, text: formatChannels(channels) }));
+  }
+  if (sub !== "call" && sub !== "open") return usage(`Unknown channels command "${sub}"`);
+  if (id === undefined) return usage(`channels ${sub} needs a channel id`);
+  const [text, ...more] = rest;
+  if (more.length) return usage(`Unexpected argument "${more[0]}"`);
+  let request: { readonly id: string; readonly payload?: unknown } = { id };
+  if (text !== undefined) {
+    try {
+      request = { id, payload: JSON.parse(text) };
+    } catch (error) {
+      return usage(`The payload must be JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (sub === "call") {
+    // A call with no result (`Schema.Void`) answers `null`.
+    return ({ rpc }) =>
+      Effect.map(rpc["Channel.Call"](request), (result) =>
+        result === null ? { json: null, text: `called ${id}: no result` } : { json: result, text: formatSnapshot(result) },
+      );
+  }
+  return ({ live }, io) =>
+    Effect.gen(function* () {
+      const rpc = yield* live;
+      yield* Stream.runForEach(rpc["Channel.Open"](request), (element) => Effect.sync(() => io.out(JSON.stringify(element))));
+      return undefined;
+    });
 };
 
 /** The web app plans its own composition from these rows; the host only stores them and tells open web apps. */

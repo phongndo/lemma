@@ -16,6 +16,7 @@ import {
   usersOf,
 } from "@lemma/contracts";
 import type {
+  ChannelInfo,
   CommandInfo,
   InspectorInfo,
   KernelView,
@@ -628,10 +629,19 @@ export const formatInspectors = (inspectors: readonly InspectorInfo[]): string =
         ...inspectors.map((inspector) => [inspector.id, inspector.title, inspector.source, inspector.description ?? ""]),
       ]);
 
-/** An inspector's snapshot: as tables when it has their shape, else as JSON. */
+export const formatChannels = (channels: readonly ChannelInfo[]): string =>
+  channels.length === 0
+    ? "No channels: no running plugin serves one."
+    : pad([
+        ["channel", "kind", "title", "from", "what it does"],
+        ...channels.map((channel) => [channel.id, channel.kind, channel.title ?? "", channel.source, channel.description ?? ""]),
+      ]);
+
+/** An inspector's snapshot or a channel call's result: as tables when it has their shape, else as JSON. */
 export const formatSnapshot = (value: unknown): string => {
   const tables = tablesOf(value);
-  if (tables === undefined) return JSON.stringify(value, undefined, 2);
+  // An object of no tables (`{}`) prints as itself, not as nothing.
+  if (tables === undefined || tables.length === 0) return JSON.stringify(value, undefined, 2);
   return tables
     .map((table) => {
       const body = table.rows.length === 0 ? "  (none)" : pad([[...table.columns], ...table.rows.map((row) => [...row])]);

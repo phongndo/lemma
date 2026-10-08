@@ -1,8 +1,9 @@
 import { Cause, Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, snapshotOf, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
+import { HostError, Inspectors, InteractionOrigin, searchFiles, snapshotOf, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
 import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
+import { callChannel, listChannels, openedStream, ServedRpcs } from "./channels.ts";
 import { toHostError } from "./errors.ts";
 import type { Hub } from "./hub.ts";
 import type { Interactions } from "./interactions.ts";
@@ -19,7 +20,7 @@ interface HandlerServices {
   readonly control: Context.Service.Shape<typeof HostControl>;
   readonly workspace: Context.Service.Shape<typeof Workspace>;
   readonly commands: Context.Service.Shape<typeof Commands>;
-  /** The core's registries: host plugins' `Inspectors` and `FileSearchers` are read from them. */
+  /** The core's registries: host plugins' `Inspectors`, `FileSearchers`, and `Channels` are read from them. */
   readonly registries: Context.Service.Shape<typeof Registries>;
   /** Runs `Llm.login` in the plugin's scope, and cancels it; see `makeLogins`. */
   readonly logins: ReturnType<typeof makeLogins>;
@@ -29,7 +30,7 @@ const cwdOption = (cwd: string | undefined) => (cwd === undefined ? undefined : 
 
 /** Every RPC maps to one capability call; only the error boundary is transport-specific. */
 export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }: HandlerServices) =>
-  HostRpcs.of({
+  ServedRpcs.of({
     "Session.List": ({ cwd }) => sessions.list(cwdOption(cwd)).pipe(Effect.mapError(toHostError)),
     "Session.Get": ({ sessionId }) => sessions.get(sessionId).pipe(Effect.mapError(toHostError)),
     "Session.Create": ({ cwd }) => sessions.create({ cwd: cwd ?? paths.cwd }).pipe(Effect.mapError(toHostError)),
@@ -100,6 +101,12 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
       commands
         .run(id, { cwd: cwd ?? paths.cwd, ...(sessionId === undefined ? {} : { sessionId }) })
         .pipe((run) => (origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin)), Effect.mapError(toHostError)),
+
+    // Read at each call, not required: a channel's plugin stops, reloads, or is off without the transport noticing.
+    "Channel.List": () => listChannels(registries),
+    "Channel.Call": ({ id, payload }) => callChannel(registries, id, payload),
+    // `ChannelLifetime` finds the channel and runs the request within its lifetime; this serves what it found.
+    "Channel.Open": () => openedStream,
 
     "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition })),
     "Host.Events": (_, { headers }) => hub.events(headers[SUBSCRIBED_HEADER] !== undefined),

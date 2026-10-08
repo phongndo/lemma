@@ -1167,6 +1167,20 @@ export const createMockHost = (): Host => {
         }
       },
     },
+    // The bundled plugins serve no channels, so neither does the mock.
+    channel: {
+      list: async () => [],
+      call: async (channelId) => {
+        throw new HostError({ code: "NotFound", subject: channelId, message: `No channel "${channelId}"` });
+      },
+      open: (channelId, _payload, _onElement, onEnd) => {
+        let live = true;
+        setTimeout(() => live && onEnd?.(new HostError({ code: "NotFound", subject: channelId, message: `No channel "${channelId}"` })), 0);
+        return () => {
+          live = false;
+        };
+      },
+    },
     host: {
       info: async () => ({
         version: "0.1.0-mock",

@@ -11,6 +11,7 @@ nix develop -c pnpm lemma run new "fix the failing test" --follow
 nix develop -c pnpm lemma inspect <session> --filter "is:error" --json
 nix develop -c pnpm lemma kernel hooks                  # each hook's chain, in run order
 nix develop -c pnpm lemma inspectors tools.registered   # what a host plugin lets you look into
+nix develop -c pnpm lemma channels open ticker.prices   # a host plugin's stream, one JSON line per element
 ```
 
 The CLI and the web app share their logic through `@lemma/contracts` (the
@@ -45,8 +46,8 @@ so the two show the same records and accept the same queries.
 - **Machine-readable output.** With `--json`, results are the contract shapes
   (`HostInfo`, `SessionInfo`, `SessionEvent`, …) on stdout, and failures are
   `{"error": {"code", "message", "subject"?}}` on stderr. Streams
-  (`run --follow --json`, `events --json`) are NDJSON, and `run --follow` ends
-  with a `{"type": "result", …}` line.
+  (`run --follow --json`, `events --json`, `channels open`) are NDJSON, and
+  `run --follow` ends with a `{"type": "result", …}` line.
 - **Directory scope.** `session list`, `session new`, `run new`, and
   `workspace` default to the directory the command runs in (`--all` lists
   every session). With a remote host that directory is this machine's: give
