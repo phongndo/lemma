@@ -25,6 +25,14 @@ export interface Io {
   readonly out: (text: string) => void;
   /** Output without a line break, for streamed text. */
   readonly write?: (text: string) => void;
+  /**
+   * Resolves once what was written has room to go (stdout's `drain`), or is
+   * undefined when it has room now. A command printing a channel's stream
+   * waits on it after each write, so a reader that falls behind (an unread
+   * pipe, a paused `less`) holds the stream back rather than output piling up
+   * in memory. It resolves too when stdout closes or fails, or `signal` aborts.
+   */
+  readonly drained?: (signal: AbortSignal) => Promise<void> | undefined;
   readonly err: (text: string) => void;
   /** Asks the person at the terminal; absent when stdin is not one. Aborting `signal` withdraws the prompt. */
   readonly ask?: (question: string, secret: boolean, signal?: AbortSignal) => Promise<string>;

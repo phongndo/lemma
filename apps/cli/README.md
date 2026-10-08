@@ -47,7 +47,11 @@ so the two show the same records and accept the same queries.
   (`HostInfo`, `SessionInfo`, `SessionEvent`, …) on stdout, and failures are
   `{"error": {"code", "message", "subject"?}}` on stderr. Streams
   (`run --follow --json`, `events --json`, `channels open`) are NDJSON, and
-  `run --follow` ends with a `{"type": "result", …}` line.
+  `run --follow` ends with a `{"type": "result", …}` line. `channels open`
+  waits while its reader is behind (an unread pipe, a paused `less`), so the
+  host stops producing for it rather than output piling up in memory; a reader
+  that stays behind for more than a few seconds drops the connection, which
+  the RPC client reads in order, and the command ends unavailable (exit 3).
 - **Directory scope.** `session list`, `session new`, `run new`, and
   `workspace` default to the directory the command runs in (`--all` lists
   every session). With a remote host that directory is this machine's: give

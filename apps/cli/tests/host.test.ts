@@ -1,12 +1,13 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { settled, startLemma } from "../../../scripts/e2e.ts";
 import type { Lemma } from "../../../scripts/e2e.ts";
-import { ExitCode } from "../src/cli.ts";
+import { ExitCode, run } from "../src/cli.ts";
 import { invoke, printOnFailure } from "./invoke.ts";
 
 describe("against a running host", () => {
@@ -308,6 +309,7 @@ describe("against a running host", () => {
 describe("channels served by a plugin file", () => {
   let lemma: Lemma;
   let home: string;
+  const cliMain = fileURLToPath(new URL("../src/main.ts", import.meta.url));
   beforeAll(async () => {
     lemma = await startLemma("lemma-cli-channels-", {
       prepare: async (home) => {
@@ -360,4 +362,79 @@ export default definePlugin({
     expect(opened.code).toBe(ExitCode.ok);
     expect(opened.out.split("\n").map((line) => (JSON.parse(line) as string).length)).toEqual([4096, 4096, 4096]);
   });
+  /** What the bulk plugin has produced, and how many of its streams run now. */
+  const stats = async () => JSON.parse((await invoke(["channels", "call", "bulk.stats", "--json"], home)).out) as { emitted: number; active: number };
+  const until = async (done: (now: { emitted: number; active: number }) => boolean) => {
+    if ((await settled(stats, done)) === undefined) throw new Error("timed out");
+  };
+  /** How much it has produced once that stops changing between two looks. */
+  const stalled = async () => {
+    let last = -1;
+    const held = await settled(async () => {
+      const { emitted } = await stats();
+      const same = emitted === last;
+      last = emitted;
+      return same ? emitted : undefined;
+    });
+    if (held === undefined) throw new Error("it kept producing");
+    return held;
+  };
+
+  test("channels open waits while stdout is behind, so the host stops producing, and goes on once it drains", async () => {
+    const lines: string[] = [];
+    let release: () => void = () => {};
+    let waited = 0;
+    const before = (await stats()).emitted;
+    const done = run(["channels", "open", "bulk.chunks", "200"], {
+      env: { LEMMA_HOME: home },
+      cwd: home,
+      out: (text) => void lines.push(text),
+      err: () => {},
+      // Behind after the first line, until released.
+      drained: () => (waited++ === 0 ? new Promise<void>((resolve) => (release = resolve)) : undefined),
+    });
+    await until(() => lines.length === 1);
+    // What the client and the host's socket hold, not all 200.
+    expect((await stalled()) - before).toBeLessThan(60);
+    expect(lines).toHaveLength(1);
+    release();
+    expect(await done).toBe(ExitCode.ok);
+    expect(lines).toHaveLength(200);
+  }, 30_000);
+
+  test("an unread pipe holds a stream back; Ctrl+C, SIGKILL, and `| head -n 1` stop it on the host", async () => {
+    const before = (await stats()).emitted;
+    const unread = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "channels", "open", "bulk.chunks", "5000"], {
+      env: { ...process.env, LEMMA_HOME: home },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    await until(({ active }) => active === 1);
+    // A pipe's 64 KB, the CLI's buffers, and the client's 16 elements: well under 5000 elements of 4 KB.
+    expect((await stalled()) - before).toBeLessThan(300);
+    unread.kill("SIGKILL");
+    await until(({ active }) => active === 0);
+
+    const interrupted = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "channels", "open", "bulk.chunks", "100000"], {
+      env: { ...process.env, LEMMA_HOME: home },
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    interrupted.stdout!.resume();
+    await until(({ active }) => active === 1);
+    interrupted.kill("SIGINT");
+    await new Promise((resolve) => interrupted.once("exit", resolve));
+    await until(({ active }) => active === 0);
+
+    const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+    const piped = spawn(
+      "bash",
+      ["-o", "pipefail", "-c", `${quote(process.execPath)} --conditions=lemma-source ${quote(cliMain)} channels open bulk.chunks 100000 | head -n 1 | wc -c`],
+      { env: { ...process.env, LEMMA_HOME: home }, stdio: ["ignore", "pipe", "ignore"] },
+    );
+    let out = "";
+    piped.stdout!.on("data", (chunk: Buffer) => (out += chunk.toString()));
+    expect(await new Promise((resolve) => piped.once("exit", resolve))).toBe(0);
+    // One line of a 4 KB JSON string and its newline.
+    expect(out.trim()).toBe(String(4096 + 2 + 1));
+    await until(({ active }) => active === 0);
+  }, 60_000);
 });

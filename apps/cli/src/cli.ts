@@ -433,9 +433,43 @@ const channelsCommand = (sub: string | undefined, id: string | undefined, rest: 
   return ({ live }, io) =>
     Effect.gen(function* () {
       const rpc = yield* live;
-      yield* Stream.runForEach(rpc["Channel.Open"](request), (element) => Effect.sync(() => io.out(JSON.stringify(element))));
+      yield* Stream.runForEach(rpc["Channel.Open"](request), (element) =>
+        Effect.andThen(
+          Effect.sync(() => io.out(JSON.stringify(element))),
+          caughtUp(io),
+        ),
+      ).pipe(
+        // The RPC client reads its socket in order, so stdout held full for longer than its ping allows (seconds) drops the
+        // connection, which ends the stream interrupted: say so, rather than as if the person had stopped it.
+        Effect.catchCause((cause): Effect.Effect<never, Failure> =>
+          Cause.hasInterruptsOnly(cause) && io.interrupt?.aborted !== true
+            ? Effect.fail(
+                new CliError({
+                  code: "Unreachable",
+                  message: `The connection to the host dropped while "${id}" was open (stdout unread for seconds drops it); open it again`,
+                  exit: ExitCode.unavailable,
+                }),
+              )
+            : Effect.failCause(cause),
+        ),
+      );
       return undefined;
     });
+};
+
+/**
+ * Waits while stdout is behind (`Io.drained`), so the stream being printed
+ * waits with it: the RPC client stops acknowledging, and the host stops
+ * pulling the channel.
+ */
+const caughtUp = (io: Io): Effect.Effect<void> => {
+  const drained = io.drained;
+  if (drained === undefined) return Effect.void;
+  return Effect.callback<void>((resume, signal) => {
+    const pending = drained(signal);
+    if (pending === undefined) resume(Effect.void);
+    else void pending.then(() => resume(Effect.void));
+  });
 };
 
 /** The web app plans its own composition from these rows; the host only stores them and tells open web apps. */
