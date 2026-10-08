@@ -37,8 +37,9 @@ wait until the composition is up (see `tests/runtime.test.ts`).
 `reportFaults` logs each plugin fault and publishes it as an error `Notice`
 from that plugin and `PluginsChanged`, recording it in the fault history first
 so the list it publishes has it. The runtime is not a plugin, so its own
-failures are no `PluginFault`: what it starts logs them. Two kernel facts shape
+failures are no `PluginFault`: what it starts logs them. Three kernel facts shape
 the rest:
 
 - `Loader.apply` retires the current revision and drains in-flight `core.run` work before swapping. A `HostControl.reload` executed _inside_ `core.run` therefore waits on itself until the dispose deadline. Call it from plugin code (a transport's handler runs in its plugin scope) or, in the app, from the service value read once with `loader.core.run(HostControl)`.
+- A plugin's disposal waits for the work run with its registry items, such as a channel call it serves, and that work knows it is the plugin's (`Admitted`). `HostControl.configure` asks `deferral` (`src/deferral.ts`) whether the change restarts a plugin whose work is making it, the transport serving the request included: if so, it checks and writes the change, answers `deferred`, and applies it once that work has ended, rather than wait on the work that waits on it.
 - A fault raised while a plugin is still staging (activation inside a reload) is published with the pre-swap snapshot; the reload's own `PluginsChanged` follows with the final state. Events are losable by design: the app's log and `core.inspect` remain the source of truth.

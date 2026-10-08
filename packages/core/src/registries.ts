@@ -50,6 +50,25 @@ export interface Contribution<Item> {
   readonly order: number;
 }
 
+/** Work `Registries.run` admitted, as work running within it finds it (`Admitted`). */
+export interface AdmittedWork {
+  /** The plugin whose item the work runs with: that plugin's disposal waits for the work. */
+  readonly pluginId: string;
+  /** Completes once the work has ended, however it ended. */
+  readonly ended: Effect.Effect<void>;
+}
+
+/**
+ * The work `Registries.run` admitted that the current work runs within,
+ * outermost first; empty outside any. A plugin's disposal waits for its
+ * admitted work, so that work must not wait for the disposal: it would wait
+ * on itself until the dispose deadline. Code that replaces plugins on request
+ * (an application's reload) reads this to tell whose work is asking, and
+ * leaves a change that would replace one of those plugins until its work has
+ * `ended`.
+ */
+export const Admitted = Context.Reference<readonly AdmittedWork[]>("@lemma/core/Admitted", { defaultValue: () => [] });
+
 /** Reading registries, and running work with what they hold; contributing goes through `PluginContext.add`. */
 export class Registries extends Context.Service<
   Registries,
@@ -68,7 +87,8 @@ export class Registries extends Context.Service<
      * may finish. The contributor's disposal waits for admitted work before its
      * finalizers run, for at most the core's dispose deadline, then interrupts
      * it, and `run` fails `RegistryError` ("Expired"). The work runs on its own
-     * fiber, with the caller's context; interrupting `run` interrupts it.
+     * fiber, with the caller's context, and finds itself in `Admitted`;
+     * interrupting `run` interrupts it.
      */
     readonly run: <I, A, E, R>(
       contribution: Contribution<I>,

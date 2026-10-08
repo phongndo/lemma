@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
-import { definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
-import type { Composition, Contribution, Plugin, PluginSource } from "../src/index.ts";
+import { Admitted, definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
+import type { AdmittedWork, Composition, Contribution, Plugin, PluginSource } from "../src/index.ts";
 import { failure, run, waitFor } from "./support.ts";
 
 interface Entry {
@@ -382,6 +382,42 @@ describe("registries", () => {
     // The core closed with the scope: `lasting`'s work stopped before its finalizer (`third` had none to wait for).
     expect(log.slice(3).sort()).toEqual(["finalizer lasting", "finalizer third", "stopped lasting"]);
     expect(log.indexOf("stopped lasting")).toBeLessThan(log.indexOf("finalizer lasting"));
+  });
+
+  test("admitted work finds whose items it runs with in `Admitted`, outermost first, and `ended` says when each has ended", async () => {
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([contributor("outer", [{ label: "outer" }]), contributor("inner", [{ label: "inner" }])]);
+        const registries = yield* core.run(Registries);
+        const [inner, outer] = yield* registries.items(Menu);
+        expect(yield* Admitted).toEqual([]);
+        const release = yield* Deferred.make<void>();
+        const seen = yield* Deferred.make<readonly AdmittedWork[]>();
+        // Work with one plugin's item that runs work with another's, and waits to be let go.
+        const working = yield* Effect.forkChild(
+          registries.run(outer!, () =>
+            registries.run(inner!, () =>
+              Effect.andThen(
+                Effect.flatMap(Admitted, (admitted) => Deferred.succeed(seen, admitted)),
+                Deferred.await(release),
+              ),
+            ),
+          ),
+          { startImmediately: true },
+        );
+        const admitted = yield* Deferred.await(seen);
+        expect(admitted.map((work) => work.pluginId)).toEqual(["outer", "inner"]);
+        // Whoever holds them may wait for their end, which is not yet.
+        const ended = yield* Effect.forkChild(Effect.forEach(admitted, (work) => work.ended, { discard: true }));
+        yield* turns(20);
+        expect(ended.pollUnsafe()).toBeUndefined();
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(working);
+        yield* Fiber.join(ended);
+        // Asked after the end, it is over at once.
+        yield* Effect.forEach(admitted, (work) => work.ended, { discard: true });
+      }),
+    );
   });
 
   test("a registry's check refuses a malformed item from the plugin adding it, before its key, and readers never see it", async () => {

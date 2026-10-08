@@ -155,10 +155,14 @@ export type NoticePayload = typeof NoticePayload.Type;
 export const Notice = Event.make<NoticePayload>("lemma/notice");
 
 /**
- * What a configure did. `deferred`: the change restarts the transport serving
- * this call, so it was checked and written, and applies once the reply is sent;
- * the report is then empty, and clients reconnect. A deferred change that still
- * fails is undone in the file and reported as an error `Notice`.
+ * What a configure did. `deferred`: the change restarts a plugin whose work is
+ * making it, which it would otherwise wait on or cut off: the transport
+ * serving the call, or the plugin whose own work asks (a channel call it
+ * serves, as `llm.add-custom` saves the llm plugin's config). So it was checked
+ * and written, and applies once that work has ended, the reply sent; the
+ * report is then empty, and if the transport restarts, clients reconnect. A
+ * deferred change that still fails is undone in the file and reported as an
+ * error `Notice`.
  */
 export interface ConfigureReport extends ReloadReport {
   readonly deferred?: boolean;
@@ -189,7 +193,11 @@ export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, num
  * A change (`restart`, `reload`, `configure`) drains all work in flight under
  * `core.run` before swapping, whichever plugins it touches, so call it from a
  * plugin's own code (a transport's handler, a command): from inside `core.run`
- * it would wait on itself until the dispose deadline.
+ * it would wait on itself until the dispose deadline. A plugin's disposal
+ * also waits for the work run with its items, such as the channel calls it
+ * serves: `configure` defers a change that would restart the plugin whose
+ * work asks for it (see `ConfigureReport`), while a `restart` or `reload`
+ * that restarts it from there waits on itself the same way.
  */
 export class HostControl extends Context.Service<
   HostControl,

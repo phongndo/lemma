@@ -135,8 +135,9 @@ export function makeLlmPlugin(options: Options = {}) {
       for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
       const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
       /**
-       * Saves a change to this plugin's own `providers` list, in the config file its config comes from; the host
-       * reloads it, after replying when that restarts the caller's transport.
+       * Saves a change to this plugin's own `providers` list, in the config file its config comes from. The change
+       * restarts this plugin, so the host applies it once the work asking for it has ended (`ConfigureReport`): a
+       * client's call returns first.
        */
       const saveProviders = (provider: string, change: { readonly add?: readonly CustomProvider[]; readonly remove?: readonly string[] }) =>
         host.plugins

@@ -471,3 +471,60 @@ export default definePlugin({
     await until(({ active }) => active === 0);
   }, 60_000);
 });
+
+describe("a change a plugin's own call asks for", () => {
+  let lemma: Lemma;
+  let home: string;
+  beforeAll(async () => {
+    lemma = await startLemma("lemma-cli-self-", {
+      prepare: async (home) => {
+        await mkdir(join(home, "plugins"));
+        // Its own call changes its config, and answers with whether the change was deferred and the value it still serves.
+        await writeFile(
+          join(home, "plugins", "selfconf.ts"),
+          `import { Effect, Schema } from "effect";
+import { definePlugin } from "@lemma/core";
+import { Channels, HostControl, serveChannel } from "@lemma/contracts";
+export default definePlugin({
+  id: "selfconf",
+  config: { value: 0 },
+  requires: { host: HostControl },
+  setup: function* ({ host }, owner) {
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "selfconf.value", payload: Schema.Void, success: Schema.Number }, () => owner.config.value));
+    yield* owner.add(Channels, serveChannel(
+      { kind: "call", id: "selfconf.set", payload: Schema.Number, success: Schema.Struct({ deferred: Schema.Boolean, value: Schema.Number }) },
+      (value) => Effect.map(host.configure({ selfconf: { config: { value } } }), (report) => ({ deferred: report.deferred === true, value: owner.config.value })).pipe(Effect.orDie),
+    ));
+  },
+});
+`,
+        );
+      },
+    });
+    home = lemma.home;
+  }, 30_000);
+  afterAll(() => lemma?.stop());
+  printOnFailure(() => lemma?.output());
+
+  // Waiting on its own plugin's reload, a call would last the dispose deadline (10 seconds), then fail Withdrawn.
+  test("is answered deferred at once, and applies once the call has ended", async () => {
+    const started = Date.now();
+    const set = await invoke(["channels", "call", "selfconf.set", "7", "--json"], home);
+    expect(set.code).toBe(ExitCode.ok);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(JSON.parse(set.out)).toEqual({ deferred: true, value: 0 });
+    const value = async () => JSON.parse((await invoke(["channels", "call", "selfconf.value", "--json"], home)).out) as number;
+    expect(await settled(value, (now) => now === 7)).toBe(7);
+  });
+
+  test("llm.add-custom answers at once with the new provider's id, listed once llm has reloaded", async () => {
+    const started = Date.now();
+    const spec = { name: "Local", api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: ["m"] };
+    const added = await invoke(["channels", "call", "llm.add-custom", JSON.stringify({ spec }), "--json"], home);
+    expect(added.code).toBe(ExitCode.ok);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(JSON.parse(added.out)).toBe("local");
+    const listed = async () => (JSON.parse((await invoke(["providers", "--json"], home)).out) as { id: string }[]).some((provider) => provider.id === "local");
+    expect(await settled(listed, (found) => found)).toBe(true);
+  });
+});

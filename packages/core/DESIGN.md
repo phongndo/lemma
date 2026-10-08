@@ -104,7 +104,9 @@ Work a reader runs with an item belongs to the item's contributor instead
 the item leaves, and the old instance's finalizers wait for it, up to the
 dispose deadline, then interrupt it. Such work may finish on the retired
 instance, as in-flight `core.run` work does, but never runs once its
-finalizers have begun.
+finalizers have begun. It knows whose it is (`Admitted`), so a change it asks
+for that would replace its own plugin can wait for it to end, rather than the
+disposal waiting on the work that waits on the disposal.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 

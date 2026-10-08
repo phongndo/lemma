@@ -11,6 +11,7 @@ import type { ConfigScope, ConfigureReport, PluginChange, UiComposition } from "
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
+import { deferral } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import type { ConfigSection } from "./config.ts";
 import { loadLocalPlugins } from "./local.ts";
@@ -187,8 +188,6 @@ const readConfigFiles = Effect.forEach([paths.userConfig, paths.projectConfig], 
   Effect.map(readConfigText(path).pipe(Effect.orElseSucceed(() => undefined)), (text) => [path, text] as const),
 );
 
-/** How long a deferred change waits for its reply to leave before the transport that sends it restarts. */
-const DEFER = Duration.millis(250);
 /**
  * How long stopping may take in all. The core's default (its 10 second dispose deadline) would cut it short of a
  * plugin that asks for longer to close: the agent takes up to 30 seconds, letting running turns reach a point to
@@ -196,7 +195,7 @@ const DEFER = Duration.millis(250);
  */
 const SHUTDOWN_TIMEOUT = Duration.seconds(40);
 
-/** Decodes the configs of `ids` as the loader will, so a change that restarts the transport is refused before it is applied. */
+/** Decodes the configs of `ids` as the loader will, so a deferred change is refused before it is applied. */
 const checkConfigs = (next: Loaded, ids: readonly string[]): Effect.Effect<void, ReloadError> => {
   const diagnostics: Diagnostic[] = [];
   for (const id of ids) {
@@ -269,12 +268,12 @@ const program = Effect.gen(function* () {
       );
     });
   /**
-   * A change that restarts the transport would drop the connection asking for
-   * it, so it is checked and written now and applied once the reply is out
-   * (see `ConfigureReport`). If applying still fails, the file is put back and
-   * clients hear why.
+   * A change that restarts a plugin whose work is making it would wait on that
+   * work or cut it off (`deferral`), so it is checked and written now and
+   * applied once `after` (see `ConfigureReport`). If applying still fails, the
+   * file is put back and clients hear why.
    */
-  const writeDeferred = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) =>
+  const writeDeferred = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, after: Effect.Effect<void>) =>
     Effect.gen(function* () {
       const path = scope === "user" ? paths.userConfig : paths.projectConfig;
       const update = yield* updateConfig(path, rows, scope, "plugins").pipe(Effect.mapError(rejected));
@@ -304,7 +303,7 @@ const program = Effect.gen(function* () {
           }),
           Effect.ignore,
         );
-      yield* Effect.forkIn(Effect.delay(later, DEFER), programScope);
+      yield* Effect.forkIn(Effect.andThen(after, later), programScope);
       const report: ConfigureReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
       return report;
     });
@@ -400,9 +399,10 @@ const program = Effect.gen(function* () {
                 );
               }
             }
-            // The transport serves this call; a change that restarts it is applied after the reply.
-            const restarts = restartedBy(applied.known, Object.keys(rows), { provided });
-            if (Object.keys(pinned).some((id) => restarts.has(id))) return yield* writeDeferred(loader, rows, scope);
+            // A change that restarts the plugin asking for it (the transport serving the call, or one whose channel
+            // call asks) applies once that work is over.
+            const after = yield* deferral(restartedBy(applied.known, Object.keys(rows), { provided }), Object.keys(pinned));
+            if (after !== undefined) return yield* writeDeferred(loader, rows, scope, after);
             return yield* write(loader, rows, scope, "plugins");
           }),
         ),

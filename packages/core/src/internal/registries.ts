@@ -2,6 +2,7 @@ import { Cause, Deferred, Effect, Exit, Fiber, Order, Queue, Scope, Stream } fro
 import type { Context } from "effect";
 import { CoreClosed, RegistryError } from "../errors.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
+import { Admitted } from "../registries.ts";
 import type { ContributeOptions, Contribution, Registries, Registry } from "../registries.ts";
 
 interface Entry {
@@ -45,6 +46,9 @@ interface Admission {
   fiber: Fiber.Fiber<unknown, unknown> | undefined;
   /** Interrupted at its contributor's dispose deadline: `run` reports "Expired". */
   expired: boolean;
+  /** The work has ended, and `waiting` (made only once something waits for that) is complete. */
+  ended: boolean;
+  waiting: Deferred.Deferred<void> | undefined;
 }
 
 /** The item will not be visible again; work running with it hears so through `left`. */
@@ -257,14 +261,17 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
           );
         }
         const owner = item.owner;
-        const admission: Admission = { fiber: undefined, expired: false };
+        const admission: Admission = { fiber: undefined, expired: false, ended: false, waiting: undefined };
         owner.admitted.add(admission);
         // Completing `left` resumes its waiters at once, inside the change that removed the item: they yield, so they
         // act once that change is complete (a non-exclusive replacement published) rather than in the middle of it.
         const left = Effect.andThen(Deferred.await((item.left ??= Deferred.makeUnsafe<void>())), Effect.yieldNow);
+        const ended = Effect.suspend(() => (admission.ended ? Effect.void : Deferred.await((admission.waiting ??= Deferred.makeUnsafe<void>()))));
         return Effect.gen(function* () {
+          const within = yield* Admitted;
+          const admitted = Effect.provideService(work(left), Admitted, [...within, { pluginId: owner.identity.id, ended }]);
           // A child is interruptible: its contributor's deadline can stop it, whatever the caller's interruptibility.
-          const fiber = yield* Effect.forkChild(work(left), { startImmediately: true });
+          const fiber = yield* Effect.forkChild(admitted, { startImmediately: true });
           admission.fiber = fiber;
           if (admission.expired) fiber.interruptUnsafe();
           const exit = yield* restore(Fiber.await(fiber)).pipe(Effect.onInterrupt(() => Fiber.interrupt(fiber)));
@@ -282,6 +289,8 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
           Effect.ensuring(
             Effect.sync(() => {
               owner.admitted.delete(admission);
+              admission.ended = true;
+              if (admission.waiting !== undefined) Deferred.doneUnsafe(admission.waiting, Effect.void);
               if (owner.admitted.size === 0 && owner.idle !== undefined) Deferred.doneUnsafe(owner.idle, Effect.void);
             }),
           ),
