@@ -712,7 +712,7 @@ describe("channels", () => {
             { code: "Withdrawn", subject: "patient.effect" },
             { code: "Withdrawn", subject: "patient.promise" },
           ]);
-          expect(ended[0]?.message).toContain("call it again to reach its replacement");
+          expect(ended[0]?.message).toBe(`"patient.effect" was withdrawn: its plugin stopped or was replaced while it ran`);
           // Its client sees only the replacement's answer.
           expect(yield* Fiber.join(repeated)).toBe(2);
           expect(yield* client["Channel.Call"]({ id: "patient.effect" })).toBe(2);
@@ -779,6 +779,7 @@ describe("channels", () => {
             items: (registry) => (looks++ === 0 ? Effect.succeed(stale as never) : registries.items(registry)),
             changes: registries.changes,
             run: registries.run,
+            settled: registries.settled,
           };
           expect(yield* callChannel(reader, "echo.say", "late")).toBe("3:late");
         }),

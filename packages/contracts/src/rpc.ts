@@ -109,9 +109,9 @@ export class RuntimeRpcs extends RpcGroup.make(
    * defect, or a result its success schema cannot send), `Withdrawn` (its
    * plugin left while it waited on that plugin, see `CallLifetime`, or it was
    * still running at the plugin's dispose deadline and was interrupted: call
-   * again to reach the replacement; a `repeatable` call the host made again
-   * itself, and is `Withdrawn` only when nothing answered within its wait),
-   * or `Unavailable` (the host still
+   * again to reach the replacement; a `repeatable` call the host makes again
+   * itself, `Withdrawn` only when nothing answers once that change has
+   * finished, see `withChannel`), or `Unavailable` (the host still
    * starting at the transport's startup timeout, as above; a handler's domain
    * error may be `Unavailable` too).
    */

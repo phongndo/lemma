@@ -89,6 +89,13 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
   private sequence = 0;
   private closed = false;
 
+  /** Completes once no change to the composition is under way: the runtime's, which serializes them. */
+  readonly settled: Effect.Effect<void>;
+
+  constructor(settled: Effect.Effect<void>) {
+    this.settled = settled;
+  }
+
   close(): void {
     this.closed = true;
     for (const entry of this.entries.values()) {

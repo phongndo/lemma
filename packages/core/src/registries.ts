@@ -94,5 +94,20 @@ export class Registries extends Context.Service<
       contribution: Contribution<I>,
       work: (left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
     ) => Effect.Effect<A, E | RegistryError, R>;
+    /**
+     * Completes once no change to the composition is under way: at once when
+     * none is, else once the one in progress has finished, its replacements
+     * published or failed and what it replaced disposed. Changes run one at a
+     * time, each bounded by the core's deadlines. A contribution leaves while
+     * the change that removes it runs, and what replaces it may come only
+     * later in that change (an `exclusive` plugin's replacement starts once
+     * its predecessor is disposed): work its leaving ended waits for this, then
+     * looks again for what is offered now, which is then what that change left.
+     * Never wait for it within a change (a plugin starting or stopping) or
+     * within work `run` admitted, which a change disposing its contributor
+     * waits for: each would wait on the other until a deadline. Interrupting
+     * the wait ends it.
+     */
+    readonly settled: Effect.Effect<void>;
   }
 >()("@lemma/core/Registries") {}

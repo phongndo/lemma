@@ -166,9 +166,11 @@ function assemble<E>(
         instance.fault = reported;
         return PubSub.isShutdown(faults).pipe(Effect.flatMap((closed) => (closed ? Effect.void : PubSub.publish(faults, reported).pipe(Effect.asVoid))));
       });
+    /** Held by each change to the composition, so they run one at a time. */
+    const lock = yield* Semaphore.make(1);
     const registry = new HookRegistry();
     const bus = new EventBus();
-    const store = new RegistryStore();
+    const store = new RegistryStore(lock.withPermits(1)(Effect.void));
     const builtins = Context.empty().pipe(Context.add(Hooks, registry), Context.add(Events, bus), Context.add(Registries, store)) as Context.Context<never>;
     /** Owns the application's services: closed after the last plugin is disposed. */
     const application = yield* Scope.make();
@@ -179,7 +181,6 @@ function assemble<E>(
     /** Owns core.run fibers. */
     const work = yield* Scope.make();
     const tasks = new Map<Fiber.Fiber<unknown, unknown>, TrackedServices>();
-    const lock = yield* Semaphore.make(1);
     const closed = yield* Deferred.make<void, unknown>();
     let state: CoreSnapshot["state"] = "active";
     const instances = new Map<string, Instance>();

@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
+import { Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import type { Context } from "effect";
 import { TestClock } from "effect/testing";
-import { definePlugin, Event, Events, makeCore, PluginContext, Registries } from "@lemma/core";
+import { definePlugin, Event, Events, makeCore, makeLoader, PluginContext, Registries } from "@lemma/core";
+import type { PluginSource } from "@lemma/core";
 import { channelProblem, Channels, defineChannel, eventFeed, optionalPayload, serveChannel, wireCodec, withdrawnFrom } from "../src/channels.ts";
 import type { CallLifetime } from "../src/channels.ts";
 import { callServed } from "../src/testing.ts";
@@ -140,6 +141,7 @@ describe("callServed", () => {
             items: (registry) => (looks++ === 0 ? Effect.succeed(stale as never) : registries.items(registry)),
             changes: registries.changes,
             run: registries.run,
+            settled: registries.settled,
           };
           expect(yield* callServed(reader, "echo.say", "late")).toBe("3:late");
         }),
@@ -150,26 +152,34 @@ describe("callServed", () => {
 describe("a repeatable call", () => {
   const read = { kind: "call", id: "patient.read", payload: Schema.String, success: Schema.String, repeatable: true } as const;
   const write = { kind: "call", id: "patient.write", payload: Schema.String, success: Schema.String } as const;
+  const hold = { kind: "call", id: "patient.hold", payload: Schema.String, success: Schema.String } as const;
 
   /**
-   * An exclusive plugin serving `patient.read` (repeatable) and `patient.write` (not). The first instance's calls wait
-   * until it leaves; a replacement starts once `opened` (or fails to, `failing`), then answers with its number.
+   * An exclusive plugin serving `patient.read` (repeatable) and `patient.write` (not), whose first instance's calls
+   * wait until it leaves, and `patient.hold`, whose first instance's calls take no notice of its leaving and wait to be
+   * released, so its disposal waits for them. A replacement starts once opened (at once with `gated: false`), then
+   * answers with its number.
    */
-  const patient = (options: { readonly failing?: boolean } = {}) => {
-    const started = { read: Deferred.makeUnsafe<void>(), write: Deferred.makeUnsafe<void>() };
+  const patient = (options: { readonly gated?: boolean } = {}) => {
+    const started = { read: Deferred.makeUnsafe<void>(), write: Deferred.makeUnsafe<void>(), hold: Deferred.makeUnsafe<void>() };
     const finalized = Deferred.makeUnsafe<void>();
     const opened = Deferred.makeUnsafe<void>();
+    const released = Deferred.makeUnsafe<void>();
     let instances = 0;
     let answered = 0;
     const handle =
       (instance: number, call: keyof typeof started) =>
-      (text: string, { left }: CallLifetime) =>
-        instance === 1
-          ? Effect.raceFirst(Effect.andThen(Deferred.succeed(started[call], undefined), Effect.never), left)
-          : Effect.sync(() => {
-              answered++;
-              return `${instance}:${text}`;
-            });
+      (text: string, { left }: CallLifetime) => {
+        if (instance !== 1)
+          return Effect.sync(() => {
+            answered++;
+            return `${instance}:${text}`;
+          });
+        const begun = Deferred.succeed(started[call], undefined);
+        return call === "hold"
+          ? Effect.andThen(begun, Effect.as(Deferred.await(released), `1:${text}`))
+          : Effect.raceFirst(Effect.andThen(begun, Effect.never), left);
+      };
     const plugin = definePlugin({
       id: "patient",
       exclusive: true,
@@ -178,21 +188,27 @@ describe("a repeatable call", () => {
           const owner = yield* PluginContext;
           const instance = ++instances;
           if (instance === 1) yield* Effect.addFinalizer(() => Deferred.succeed(finalized, undefined));
-          else {
-            yield* Deferred.await(opened);
-            if (options.failing) return yield* Effect.die("the replacement does not start");
-          }
+          else if (options.gated !== false) yield* Deferred.await(opened);
           yield* owner.add(Channels, serveChannel(read, handle(instance, "read")));
           yield* owner.add(Channels, serveChannel(write, handle(instance, "write")));
+          yield* owner.add(Channels, serveChannel(hold, handle(instance, "hold")));
         }).pipe(Effect.orDie),
       ),
     });
-    return { plugin, started, finalized, open: Deferred.succeed(opened, undefined), answered: () => answered };
+    return {
+      plugin,
+      started,
+      finalized,
+      open: Deferred.succeed(opened, undefined),
+      release: Deferred.succeed(released, undefined),
+      answered: () => answered,
+    };
   };
-  /** Lets the fibers a step woke run on: a call withdrawn begins its wait within these. */
+  /** Lets the fibers a step woke run on. */
   const settle = Effect.repeat(Effect.yieldNow, { times: 50 });
+  const unanswered = { code: "Withdrawn", subject: "patient.read", message: expect.stringContaining("nothing answers for it now") };
 
-  test("withdrawn while it waits, it is made again on what answers next and answers from there; the old instance finalizes meanwhile, and one not repeatable ends Withdrawn", () =>
+  test("withdrawn while it waits, it is made again once the change has finished, on what answers then; the old instance finalizes meanwhile, and one not repeatable ends Withdrawn", () =>
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -205,7 +221,7 @@ describe("a repeatable call", () => {
           yield* Deferred.await(served.started.read);
           yield* Deferred.await(served.started.write);
           const restarting = yield* Effect.forkChild(core.restart("patient", { force: true }));
-          // The old instance is gone, and nothing answers until the replacement starts: the read waits for it.
+          // The old instance is gone, and the change goes on until the replacement starts: the read waits for it.
           yield* Deferred.await(served.finalized);
           expect(yield* Fiber.join(writing)).toEqual(withdrawnFrom("patient.write", "call"));
           yield* settle;
@@ -217,25 +233,92 @@ describe("a repeatable call", () => {
       ),
     ));
 
-  test("fails Withdrawn when nothing answers for its id within 30 seconds", () =>
+  test("reaches an exclusive replacement however long its predecessor takes to stop", () =>
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const served = patient({ failing: true });
-          const core = yield* makeCore([served.plugin]);
+          const served = patient({ gated: false });
+          const core = yield* makeCore([served.plugin], { deadlines: { dispose: Duration.minutes(2) } });
+          const registries = yield* core.run(Registries);
+          const reading = yield* Effect.forkChild(callServed(registries, "patient.read", "hi"));
+          const holding = yield* Effect.forkChild(callServed(registries, "patient.hold", "on"));
+          yield* Deferred.await(served.started.read);
+          yield* Deferred.await(served.started.hold);
+          // The old instance's disposal waits for the held call, and its replacement starts only after it.
+          const restarting = yield* Effect.forkChild(core.restart("patient", { force: true }));
+          yield* settle;
+          yield* TestClock.adjust("1 minute");
+          yield* settle;
+          expect(reading.pollUnsafe()).toBeUndefined();
+          yield* served.release;
+          expect(yield* Fiber.join(holding)).toBe("1:on");
+          expect(yield* Fiber.join(reading)).toBe("2:hi");
+          yield* Fiber.join(restarting);
+        }),
+      ).pipe(Effect.provide(TestClock.layer())),
+    ));
+
+  test("fails Withdrawn as soon as the change has finished when nothing answers then, as when its plugin is turned off", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const served = patient();
+          const source: PluginSource = { resolve: () => Effect.succeed(served.plugin) };
+          const loader = yield* makeLoader({ source, composition: { plugins: { patient: {} } } });
+          const registries = yield* loader.core.run(Registries);
+          const reading = yield* Effect.forkChild(Effect.flip(callServed(registries, "patient.read", "hi")));
+          yield* Deferred.await(served.started.read);
+          yield* loader.apply({ plugins: { patient: { enabled: false } } });
+          expect(yield* Fiber.join(reading)).toMatchObject(unanswered);
+        }),
+      ),
+    ));
+
+  test("fails Withdrawn at once when the core closes while it waits", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const served = patient();
+          const scope = yield* Scope.make();
+          const core = yield* Scope.provide(makeCore([served.plugin]), scope);
           const registries = yield* core.run(Registries);
           const reading = yield* Effect.forkChild(Effect.flip(callServed(registries, "patient.read", "hi")));
           yield* Deferred.await(served.started.read);
-          yield* served.open;
-          yield* Effect.exit(core.restart("patient", { force: true }));
-          yield* settle;
-          yield* TestClock.adjust("29 seconds");
-          yield* settle;
-          expect(reading.pollUnsafe()).toBeUndefined();
-          yield* TestClock.adjust("1 second");
-          expect(yield* Fiber.join(reading)).toEqual(withdrawnFrom("patient.read", "call"));
+          yield* Scope.close(scope, Exit.void);
+          expect(yield* Fiber.join(reading)).toMatchObject(unanswered);
         }),
-      ).pipe(Effect.provide(TestClock.layer())),
+      ),
+    ));
+
+  test("when what it found leaves before it runs, it waits for that change too and looks again", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const served = patient();
+          const core = yield* makeCore([served.plugin]);
+          const registries = yield* core.run(Registries);
+          const stale = yield* registries.items(Channels);
+          // A reader that sees the change settle at once the first time it asks, and on its first look then finds what
+          // the change took away: as if another change began between the two.
+          let looks = 0;
+          let settles = 0;
+          const reader: typeof registries = {
+            items: (registry) => (++looks === 2 ? Effect.succeed(stale as never) : registries.items(registry)),
+            changes: registries.changes,
+            run: registries.run,
+            settled: Effect.suspend(() => (++settles === 1 ? Effect.void : registries.settled)),
+          };
+          const reading = yield* Effect.forkChild(callServed(reader, "patient.read", "hi"));
+          yield* Deferred.await(served.started.read);
+          const restarting = yield* Effect.forkChild(core.restart("patient", { force: true }));
+          yield* Deferred.await(served.finalized);
+          yield* settle;
+          expect([looks, settles, reading.pollUnsafe()]).toEqual([3, 2, undefined]);
+          yield* served.open;
+          expect(yield* Fiber.join(reading)).toBe("2:hi");
+          yield* Fiber.join(restarting);
+        }),
+      ),
     ));
 
   test("interrupting it ends its wait, and the replacement never hears it", () =>

@@ -6,8 +6,20 @@ import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { RuntimeRpcs } from "@lemma/contracts/runtime";
 
-/** The typed Effect surface of what the host serves (`RuntimeRpcs`): `rpc["Host.Info"]()`, `rpc["Channel.Call"]({ id })`, ...; its streams are read through `eventsOver` and `channelsOver` (see `makeHostRpc`). */
-export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;
+/** Every RPC the host serves (`RuntimeRpcs`), as Effect's RPC client makes them: held only in this package (see `makeHostRpc`). */
+export type RawHostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;
+
+/**
+ * The typed Effect surface of what the host serves (`RuntimeRpcs`), as
+ * clients get it: `rpc["Host.Info"]()`, `rpc["Channel.Call"]({ id })`, ...
+ * Its streams' RPCs, `Host.Events` and `Channel.Open`, are left out, so a
+ * client reads them only through `eventsOver` and `channelsOver` (see
+ * `makeHostRpc`); reading one raw fails to compile.
+ */
+export type HostRpcClient = Omit<RawHostRpcClient, "Host.Events" | "Channel.Open">;
+
+/** The whole client behind one this package made, for its own readers of the streams' RPCs. */
+export const raw = (rpc: HostRpcClient): RawHostRpcClient => rpc as RawHostRpcClient;
 
 /**
  * `ws(s)://<origin>/rpc?token=…` for a page or host base URL. `http:` maps to
@@ -38,8 +50,9 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * every call and stream on the socket waits behind it: a reply its consumer
  * waits for never arrives. A client that orders or paces what it reads (the
  * CLI) does so in a queue of its own, after the callback. The rule holds by
- * construction (`scripts/check-boundaries.ts`); the owner is reporting the
- * reader's behavior to Effect.
+ * construction: the client this hands out has no stream RPCs
+ * (`HostRpcClient`), and `scripts/check-boundaries.ts` finds a client made
+ * elsewhere. The owner is reporting the reader's behavior to Effect.
  */
 export const makeHostRpc = (
   url: string,

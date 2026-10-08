@@ -49,6 +49,9 @@ export interface StartedPrompt {
 
 const isWithdrawn = (error: unknown): boolean => error instanceof HostError && error.code === "Withdrawn";
 
+/** Whether `error` is `agent.activity`'s own `NotFound`: nothing serves it (yet), where the agent's would name what it refused. */
+const unserved = (error: unknown): boolean => error instanceof HostError && error.code === "NotFound" && error.subject === AgentChannels.activity.id;
+
 /**
  * Sends a prompt and reports acceptance separately from completion.
  * `agent.prompt` answers only when the turn that places the prompt ends, and
@@ -57,8 +60,9 @@ const isWithdrawn = (error: unknown): boolean => error instanceof HostError && e
  * counts as accepted at the first sign there that the agent took it,
  * `turn-started` for the session or its id in a `queue-changed`, or when
  * `done` resolves if those (losable) elements never arrive. The stream is
- * closed once it is. One that ends before it was first subscribed, other
- * than withdrawn, refuses the prompt unsent (no agent serves it, say).
+ * closed once it is. One that ends before it was first subscribed refuses
+ * the prompt unsent (no agent serves it, say), unless the agent is reloading:
+ * withdrawn, and then not served until its replacement is listed.
  *
  * The prompt is sent once. When the agent reloads while it waits, the host
  * makes `agent.prompt` again on the replacement (it is `repeatable`), and
@@ -94,7 +98,9 @@ export function startPrompt(
     resolveTaken();
   };
   let listening = false;
-  /** Resolves once `agent.activity` is first subscribed; rejects if it ends otherwise than withdrawn before then. */
+  /** It was withdrawn: the agent is reloading, so nothing serving it for now is its replacement on the way. */
+  let reloading = false;
+  /** Resolves once `agent.activity` is first subscribed; rejects if it ends before then other than for a reload. */
   const subscribed = new Promise<void>((resolve, reject) => {
     close = connection.follow(
       AgentChannels.activity,
@@ -108,7 +114,10 @@ export function startPrompt(
           accept();
       },
       (error) => {
-        if (!listening && !isWithdrawn(error)) reject(error ?? new Error(`"${AgentChannels.activity.id}" ended before it was subscribed`));
+        if (listening) return;
+        // `follow` opens it again at once when withdrawn, and once a `channels-changed` lists it when nothing served it.
+        if (isWithdrawn(error)) reloading = true;
+        else if (!(reloading && unserved(error))) reject(error ?? new Error(`"${AgentChannels.activity.id}" ended before it was subscribed`));
       },
     );
   });

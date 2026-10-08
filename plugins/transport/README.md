@@ -74,10 +74,9 @@ The file is written as soon as the transport listens, before the plugins after i
   deadline, unless its handler stops at once for the plugin leaving, as one
   that waits on its plugin does: the transport hands it `left` and a `signal`
   (`CallLifetime`), and a call that stops for them ends `Withdrawn` too. A
-  call declared `repeatable` is made again instead, with the channel that
-  answers for its id next, once that plugin's work has ended (so the wait
-  never holds its finalizers) and for at most 30 seconds, before it ends
-  `Withdrawn` (`withChannel`): `Withdrawn` exists only because the host
+  call declared `repeatable` is made again instead, once the change that
+  withdrew it has finished, with what answers for its id then
+  (`withChannel` says how): `Withdrawn` exists only because the host
   reloads plugins, so the host hides it where repeating is safe. A
   stream is stopped at once and ends `Withdrawn`, so it never holds its
   plugin's disposal, and it runs outside its plugin's `Admitted` work: a

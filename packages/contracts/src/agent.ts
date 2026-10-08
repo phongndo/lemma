@@ -249,7 +249,8 @@ export const AgentChannels = {
    * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`, or
    * `Retracted` when `agent.withdraw` took the prompt out of the queue, each
    * with the session as its subject; `Withdrawn` (its subject `agent.prompt`)
-   * only when no agent answered within the host's wait. A client that clears
+   * only when no agent answers once the change that stopped it has finished,
+   * as when the agent is turned off. A client that clears
    * its input once the prompt is taken reads that from `agent.activity`,
    * opened first: `turn-started` for the session, or the `requestId` in a
    * `queue-changed`; or its message on the session's `sessions.log`.

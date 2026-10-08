@@ -420,6 +420,48 @@ describe("registries", () => {
     );
   });
 
+  test("settled completes at once between changes, and else once the change in progress has finished: an exclusive replacement is offered by then", async () => {
+    await run(
+      Effect.gen(function* () {
+        const open = yield* Deferred.make<void>();
+        let instances = 0;
+        // Its replacement starts once the test lets it, which holds the change open.
+        const exclusive = definePlugin({
+          id: "exclusive",
+          exclusive: true,
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              const instance = ++instances;
+              if (instance > 1) yield* Deferred.await(open);
+              yield* owner.add(Menu, { label: `exclusive ${instance}` });
+            }),
+          ),
+        });
+        const core = yield* makeCore([exclusive]);
+        const registries = yield* core.run(Registries);
+        yield* registries.settled;
+        const [first] = yield* registries.items(Menu);
+        // Work that ends when its item leaves, then waits for the change that removed it and looks again.
+        const after = yield* Effect.forkChild(
+          registries.run(first!, (left) => left).pipe(Effect.andThen(registries.settled), Effect.andThen(core.run(labels()))),
+          { startImmediately: true },
+        );
+        const restarting = yield* Effect.forkChild(core.restart("exclusive", { force: true }));
+        // The old instance is gone and its replacement not yet offered: the change is still under way.
+        yield* waitFor(core.run(labels()), (now) => now.length === 0);
+        yield* turns(50);
+        expect(after.pollUnsafe()).toBeUndefined();
+        // A wait given up leaves the change to go on.
+        const abandoned = yield* Effect.forkChild(registries.settled);
+        yield* Fiber.interrupt(abandoned);
+        yield* Deferred.succeed(open, undefined);
+        expect(yield* Fiber.join(after)).toEqual(["exclusive 2"]);
+        yield* Fiber.join(restarting);
+      }),
+    );
+  });
+
   test("a registry's check refuses a malformed item from the plugin adding it, before its key, and readers never see it", async () => {
     await run(
       Effect.gen(function* () {

@@ -226,25 +226,36 @@ report("Runtime boundary violations (scripts/check-boundaries.ts)", runtimeProbl
 // The host's streams, `Host.Events` and `Channel.Open`, are read only in packages/client/src, which hands each element to
 // a callback at once. Effect's RPC client reads a WebSocket on one fiber, which puts a stream's chunk into that request's
 // bounded queue before it reads on, so a reader that stops taking a stream's elements stalls every call and stream on its
-// socket (`makeHostRpc` in packages/client/src/rpc.ts). A client calls an RPC by indexing it with the RPC's tag
-// (`rpc["Host.Events"]()`), which is what this finds; the transport serves them from an object keyed by the tag, which
-// it does not match. Tests are left out: they read them raw to test the host, a reader that stops included.
+// socket (`makeHostRpc` in packages/client/src/rpc.ts). The client @lemma/client hands out (`HostRpcClient`) has no such
+// RPCs, so reading one raw fails to compile. What types cannot see is a client made elsewhere with Effect's `RpcClient`,
+// which this finds: a value import of `RpcClient` (the module, from `effect/rpc` or `effect/rpc/RpcClient`) outside
+// packages/client/src; `RpcClientError` and type-only imports are fine. Tests are left out: they make their own to test
+// the host, a reader that stops included.
 const clientSource = join(root, "packages/client/src");
-const rawStream = /\[\s*(["'`])(Host\.Events|Channel\.Open)\1\s*\]/g;
-const readerProblems: string[] = [];
+const rpcImport = /import\s+(?!type\s)(\{[^}]*\}|\*\s+as\s+\w+)\s*from\s*["']effect\/rpc(\/RpcClient)?["']/g;
+const importsRpcClient = (names: string, module: string | undefined) =>
+  names.startsWith("*")
+    ? true
+    : module !== undefined ||
+      names
+        .slice(1, -1)
+        .split(",")
+        .some((name) => /^RpcClient(\s+as\s+\w+)?$/.test(name.trim()));
+const clientProblems: string[] = [];
 for (const dir of ["apps", "examples", "packages", "plugins", "scripts"]) {
   for (const path of walk(join(root, dir)).filter(isCode)) {
     const file = relative(root, path);
-    if (path.startsWith(`${clientSource}/`) || file === "scripts/check-boundaries.ts" || /(^|\/)tests\//.test(file) || /\.test\.tsx?$/.test(file)) continue;
+    if (path.startsWith(`${clientSource}/`) || /(^|\/)tests\//.test(file) || /\.test\.tsx?$/.test(file)) continue;
     const text = readFileSync(path, "utf8");
-    for (const match of text.matchAll(rawStream)) {
-      readerProblems.push(
-        `${file}:${text.slice(0, match.index).split("\n").length}: reads ${match[2]} from an RPC client: read it through @lemma/client (eventsOver, channelsOver, follow), which hands each element to a callback at once, since a reader that waits stalls every request on its connection`,
+    for (const match of text.matchAll(rpcImport)) {
+      if (!importsRpcClient(match[1]!, match[2])) continue;
+      clientProblems.push(
+        `${file}:${text.slice(0, match.index).split("\n").length}: makes an RPC client of its own: connect through @lemma/client (makeHostRpc, makeHostRpcHttp, connect), whose client reads the host's streams only into callbacks, since a reader that waits stalls every request on its connection`,
       );
     }
   }
 }
-report("Host stream readers outside @lemma/client (scripts/check-boundaries.ts)", readerProblems, "host stream readers: ok");
+report("RPC clients outside @lemma/client (scripts/check-boundaries.ts)", clientProblems, "rpc clients: ok");
 
 // The web app is replaceable piece by piece: everything it shows comes from a
 // plugin (turn it off or replace it by id), and plugins reach each other only

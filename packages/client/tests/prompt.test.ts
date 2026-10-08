@@ -172,6 +172,24 @@ describe("startPrompt", () => {
     expect([fake.calls.length, fake.streams.size, fake.listeners.size]).toEqual([1, 0, 0]);
   });
 
+  test("submitted as the exclusive agent reloads, before its activity was subscribed, it waits for the replacement rather than being refused", async () => {
+    const fake = fakeConnection();
+    const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
+    // Withdrawn, then not served until the replacement is listed.
+    fake.end(withdrawn("agent.activity"));
+    await tick();
+    fake.end(unserved("agent.activity"));
+    expect(await state(started.accepted)).toBe("pending");
+    fake.emit({ type: "channels-changed", channels: listed("agent.activity") });
+    await tick();
+    expect(fake.opened()).toBe(3);
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    expect(fake.calls.map((call) => call.payload.requestId)).toEqual([started.requestId]);
+    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1" });
+    expect(await state(started.accepted)).toBe("resolved");
+  });
+
   test("a prompt still withdrawn is the host's answer: nothing answered it, and the client does not send it again", async () => {
     const fake = fakeConnection();
     const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);

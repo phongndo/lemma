@@ -17,8 +17,8 @@ import type {
   RuntimeEvent,
   UiComposition,
 } from "@lemma/contracts/runtime";
-import { makeHostRpc, rpcUrl } from "./rpc.ts";
-import type { HostRpcClient } from "./rpc.ts";
+import { makeHostRpc, raw, rpcUrl } from "./rpc.ts";
+import type { HostRpcClient, RawHostRpcClient } from "./rpc.ts";
 
 export type ConnectionState = "connecting" | "connected" | "reconnecting" | "closed";
 
@@ -205,7 +205,7 @@ const callOver = (rpc: Pick<HostRpcClient, "Channel.Call">, target: string | Cha
 };
 
 /** A channel's stream, by declaration or by id, over an Effect client: what `Host.channel.open` reads. */
-const openOver = (rpc: Pick<HostRpcClient, "Channel.Open">, target: string | ChannelDeclaration, payload: unknown) => {
+const openOver = (rpc: Pick<RawHostRpcClient, "Channel.Open">, target: string | ChannelDeclaration, payload: unknown) => {
   const access = channelOf(target);
   return Stream.unwrap(Effect.map(access.request(payload), rpc["Channel.Open"])).pipe(Stream.mapEffect(access.read));
 };
@@ -248,7 +248,7 @@ export const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
   list: () => runPromise(rpc["Channel.List"]()),
   call: (target: string | ChannelDeclaration, payload?: unknown) => runPromise(callOver(rpc, target, payload)),
   open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: StreamEnd) =>
-    drain(openOver(rpc, target, payload), onElement, onEnd, `Channel "${typeof target === "string" ? target : target.id}" listener failed`),
+    drain(openOver(raw(rpc), target, payload), onElement, onEnd, `Channel "${typeof target === "string" ? target : target.id}" listener failed`),
 });
 
 /** What `Host.Events` sends: `subscribed` once the subscription has joined, so the client hears all that is published from then on, then the runtime's events. */
@@ -262,8 +262,8 @@ export type HostEventsElement = { readonly type: "subscribed" } | RuntimeEvent;
  * called. What `connect` subscribes with, and what a client with a connection
  * of its own (the CLI's) reads the host's events through.
  */
-export const eventsOver = (rpc: Pick<HostRpcClient, "Host.Events">, onEvent: (event: HostEventsElement) => void, onEnd?: StreamEnd): (() => void) =>
-  drain(rpc["Host.Events"](), onEvent, onEnd, "Host event listener failed");
+export const eventsOver = (rpc: HostRpcClient, onEvent: (event: HostEventsElement) => void, onEnd?: StreamEnd): (() => void) =>
+  drain(raw(rpc)["Host.Events"](), onEvent, onEnd, "Host event listener failed");
 
 /**
  * One call to a declared channel over an Effect client (`makeHostRpc`,

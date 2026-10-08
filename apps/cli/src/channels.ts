@@ -41,7 +41,7 @@ export const starting =
  * other kind answers for the id (a stream called), as its message says.
  * `Withdrawn` naming it is its plugin reloading while it ran: a call the host
  * could not make again for the command (a login, a command, or one nothing
- * answered again in time) or a stream, which the command runs again.
+ * answers once the reload finished) or a stream, which the command runs again.
  */
 export const refined =
   (id: string) =>

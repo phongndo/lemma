@@ -168,6 +168,7 @@ describe("commands", () => {
       },
       changes: registries.changes,
       run: registries.run,
+      settled: registries.settled,
     });
     const looking: Plugin = {
       ...commands,

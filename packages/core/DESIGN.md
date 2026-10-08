@@ -106,7 +106,10 @@ dispose deadline, then interrupt it. Such work may finish on the retired
 instance, as in-flight `core.run` work does, but never runs once its
 finalizers have begun. It knows whose it is (`Admitted`), so a change it asks
 for that would replace its own plugin can wait for it to end, rather than the
-disposal waiting on the work that waits on the disposal.
+disposal waiting on the work that waits on the disposal. Changes run one at a
+time, so a reader whose work an item's leaving ended can wait for the change
+under way to finish (`Registries.settled`) and see what it left, rather than
+guess how long a replacement takes to start.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 

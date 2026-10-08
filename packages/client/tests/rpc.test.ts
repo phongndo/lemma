@@ -2,7 +2,8 @@ import { describe, expect, test } from "vitest";
 import { Effect, Exit, Layer, Stream } from "effect";
 import { Socket } from "effect/socket";
 import { TestClock } from "effect/testing";
-import { makeHostRpc, rpcUrl } from "../src/rpc.ts";
+import { makeHostRpc, raw, rpcUrl } from "../src/rpc.ts";
+import type { HostRpcClient } from "../src/rpc.ts";
 
 /** A socket that opens and then goes silent, as a connection does across laptop sleep or a network change. */
 class SilentWebSocket extends EventTarget {
@@ -43,7 +44,7 @@ describe("makeHostRpc", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const rpc = yield* makeHostRpc("ws://host.invalid/rpc", constructor);
-          const events = yield* Effect.forkChild(Stream.runDrain(rpc["Host.Events"]()));
+          const events = yield* Effect.forkChild(Stream.runDrain(raw(rpc)["Host.Events"]()));
           const subscribed = () => sockets[0]?.sent.some((line) => line.includes("Host.Events")) ?? false;
           yield* until(() => Effect.sync(subscribed));
           expect(subscribed()).toBe(true);
@@ -58,6 +59,21 @@ describe("makeHostRpc", () => {
       ),
     );
     expect(exit !== undefined && Exit.isFailure(exit)).toBe(true);
+  });
+});
+
+describe("HostRpcClient", () => {
+  test("leaves out the streams' RPCs, which only this package reads, so reading one raw fails to compile", () => {
+    const misuse = (rpc: HostRpcClient, tag: string) => {
+      // @ts-expect-error The host's events are read through `eventsOver`.
+      void rpc["Host.Events"];
+      // @ts-expect-error A channel's stream is read through `channelsOver`.
+      const { "Channel.Open": open } = rpc;
+      // @ts-expect-error Nor by a key worked out at run time.
+      void rpc[tag];
+      return open;
+    };
+    expect(misuse).toBeTypeOf("function");
   });
 });
 
