@@ -26,7 +26,7 @@ export function createInteractions(
       if (event.type === "interaction") setOpen((all) => [...all.filter((request) => request.id !== event.request.id), event.request]);
       else if (event.type === "interaction-closed") close(event.id);
     }),
-    // Events only carry questions asked since the subscription began; each connection reads the ones already waiting.
+    // The host sends the questions still open as a subscription begins; each connection also reads them, merged by id.
     client.onConnect(() => {
       const closed = new Set<string>();
       closedSince = closed;
