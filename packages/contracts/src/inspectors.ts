@@ -14,8 +14,9 @@ export interface Inspector {
   readonly title: string;
   readonly description?: string;
   /**
-   * What it shows now, as plain JSON. An array of flat objects reads as a
-   * table; an object of those, as tables by key. An Effect run each time it
+   * What it shows now, as plain JSON: one JSON cannot carry as it is (a
+   * `BigInt`, a `Date`, an `undefined` field) fails its request. An array of
+   * flat objects reads as a table; an object of those, as tables by key. An Effect run each time it
    * is read, or a function returning the snapshot, a promise of it, or an
    * Effect, so a plugin written with promises adds one too. Read it with
    * `snapshotOf`.

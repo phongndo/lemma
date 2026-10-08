@@ -41,7 +41,9 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
   `Llm.CancelLogin` interrupts it, from any client: its question is withdrawn
   and every waiting call fails `Cancelled`.
   `Files.Search` asks `FileSearchers` at each call, so file search can be off
-  without the transport noticing.
+  without the transport noticing. `Host.Inspect` checks a snapshot is JSON
+  before sending it, so one that is not fails that request `Failed`, naming
+  the inspector, rather than as a defect from the protocol.
 - **Channels.** `Channel.List`, `Channel.Call`, and `Channel.Open`
   ([`ChannelRpcs`](../../packages/contracts/src/channels.ts)) serve whatever
   host plugins add to `Channels`, read at each call, so a plugin gives its own

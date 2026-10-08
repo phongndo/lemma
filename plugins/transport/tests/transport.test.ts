@@ -209,6 +209,9 @@ describe("transport", () => {
           Effect.all([
             owner.add(Inspectors, { id: "inspected.state", title: "State", snapshot: Effect.succeed([{ key: "a", value: 1 }]) }),
             owner.add(Inspectors, { id: "inspected.broken", title: "Broken", snapshot: Effect.die(new Error("no state here")) }),
+            // A count kept as a BigInt, which JSON cannot carry.
+            owner.add(Inspectors, { id: "inspected.big", title: "Big", snapshot: () => [{ count: 1n }] }),
+            owner.add(Inspectors, { id: "inspected.nothing", title: "Nothing", snapshot: () => undefined }),
           ]),
         ).pipe(Effect.orDie),
       ),
@@ -230,8 +233,18 @@ describe("transport", () => {
           );
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "inspected.broken" })))).toMatchObject({ code: "Failed", message: "no state here" });
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "nothing" })))).toMatchObject({ code: "NotFound" });
+          // A snapshot JSON cannot carry fails its own request, never the connection: the subscription goes on.
+          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]()));
+          expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "inspected.big" })))).toMatchObject({
+            code: "Failed",
+            subject: "inspected.big",
+            message: expect.stringContaining("Expected JSON value"),
+          });
+          // One with nothing to show is no value.
+          expect(yield* client["Host.Inspect"]({ id: "inspected.nothing" })).toBeNull();
           // The transport is still serving.
           expect((yield* client["Host.Info"]()).version).toBeDefined();
+          expect(events.pollUnsafe()).toBeUndefined();
         }),
       {},
       undefined,

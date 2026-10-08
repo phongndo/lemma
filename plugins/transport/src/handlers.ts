@@ -1,4 +1,4 @@
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { HostError, Inspectors, InteractionOrigin, searchFiles, snapshotOf, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
@@ -27,6 +27,9 @@ interface HandlerServices {
 }
 
 const cwdOption = (cwd: string | undefined) => (cwd === undefined ? undefined : { cwd });
+
+/** What an inspector's snapshot must be to cross the wire: JSON as it is. */
+const asJson = Schema.encodeUnknownEffect(Schema.toCodecJson(Schema.Unknown));
 
 /** Every RPC maps to one capability call; only the error boundary is transport-specific. */
 export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }: HandlerServices) =>
@@ -130,6 +133,16 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
             const error = Cause.squash(cause);
             return Effect.fail(new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) }));
           }),
+          // Nor does a snapshot JSON cannot carry, which the protocol would refuse as a defect. One of nothing is no value.
+          Effect.flatMap((snapshot) =>
+            snapshot === undefined
+              ? Effect.succeed(null)
+              : asJson(snapshot).pipe(
+                  Effect.mapError(
+                    (error) => new HostError({ code: "Failed", subject: id, message: `Inspector "${id}"'s snapshot cannot be sent: ${error.message}` }),
+                  ),
+                ),
+          ),
         );
       }),
     "Host.RestartPlugin": ({ pluginId, force }) => control.restart(pluginId, force === undefined ? undefined : { force }).pipe(Effect.mapError(toHostError)),

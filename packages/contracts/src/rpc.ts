@@ -160,7 +160,7 @@ export class HostRpcs extends RpcGroup.make(
   Rpc.make("Host.Plugins", { success: Schema.Array(PluginStatus) }),
   /** What host plugins let you look into (see `Inspectors`). */
   Rpc.make("Host.Inspectors", { success: Schema.Array(InspectorInfo) }),
-  /** One inspector's snapshot: plain JSON. */
+  /** One inspector's snapshot: plain JSON, `null` for none. Fails `NotFound`, or `Failed` when the inspector fails or dies, or its snapshot is not JSON. */
   Rpc.make("Host.Inspect", { payload: { id: Schema.String }, success: Schema.Unknown, error: HostError }),
   /** A failed or halted plugin and its dependents; `force` also replaces a running one. */
   Rpc.make("Host.RestartPlugin", { payload: { pluginId: Schema.String, force: Schema.optional(Schema.Boolean) }, error: HostError }),
