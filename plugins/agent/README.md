@@ -153,19 +153,23 @@ so a client seeded from `view` skips what it already shows.
 A host that crashes, restarts, or reloads the agent loses no turn and no queued
 prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
-- `<session>.json`, the journal: the running turn (the prompts it was started
-  with, and whether it logs `agent.started` events) and the queue. Written, and
-  synced, before the log is: when a turn starts, a prompt is queued, placed, or
-  withdrawn, and when a turn ends.
+- `<session>.json`, the journal: the turn, running or suspended (the prompts it
+  was started with, whether it logs `agent.started` events, and whether it is
+  being cancelled), and the queue. Written, and synced, before the log is: when
+  a turn starts, a prompt is queued, placed, or withdrawn, and when a turn ends.
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 
-When the agent starts, it reads the journals. The log is the truth: a queued
-prompt the log already has was placed, and a turn the log ended is over. Each
-open turn resumes once the composition is up, from where its log stops, after a
-`custom` event (`agent.resumed`). Where it stops is the last event that names
-the turn, reached back to its `turn-start` by parents, so titles a rename hung
-off the turn meanwhile do not mislead it.
+When the agent starts, each journal becomes its session's state as it was: the
+queue, and the turn, _suspended_. Then the agent takes each session up: it
+holds the session and reads it and its log, once, and the model a suspended
+turn continues on. The log is the truth: a queued prompt the log already has
+was placed, and a turn the log ended is over. A suspended turn then resumes once
+the composition is up, from where its log stops, after a `custom` event
+(`agent.resumed`); a session without one runs its queue on, unless the queue
+waits for the next prompt (see [Busy sessions](#busy-sessions)). Where a turn
+stops is the last event that names it, reached back to its `turn-start` by
+parents, so titles a rename hung off the turn meanwhile do not mislead it.
 
 - A model call cut off (its `request` logged, no answer) is logged as an
   `attempt` with what it had produced (from the live file), the error
@@ -187,11 +191,17 @@ The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
 restart can be awaited again with their `requestId`.
 
-A journal goes with its session only once the store says the session does not
-exist (`NotFound`). One whose session cannot be read or held as the agent starts
-(another error) is kept and logged as a warning, and acted on when the session
-is next prompted (a prompt that still cannot read it fails `Session`), or at the
-next start.
+Taking a session up changes nothing until the session, its log and the model
+have been read. A session the store says does not exist (`NotFound`) goes,
+journal and all. One that cannot be taken up otherwise (the store fails, or no
+model resolves) stays as it was, its journal untouched, with a warning in the
+log; it is taken up when it is next prompted, the prompt failing as the reading
+did if it still cannot be, or at the next start. Until then its turn stays
+suspended, and is not running: `busy`, `running` and `view` leave it out, and
+nothing holds the session for it, so the session can be deleted, which drops
+the turn. `queue` and `withdraw` see the session's queue. `cancel` marks the
+turn cancelling in the journal, so it closes as cancelled, without asking the
+model again, when it is taken up: at once, if it can be.
 
 ## Stopping
 
@@ -247,5 +257,6 @@ asked again, or run (or reported interrupted) when the turn resumes.
 ## Inspector
 
 `agent.turns` (in `Inspectors`) lists the sessions with a turn running or
-prompts queued: the turn, since when, whether it is being cancelled, and how
-many prompts wait.
+suspended (see [Durability](#durability)), or prompts queued: the turn, since
+when it runs, whether it is suspended or being cancelled, and how many prompts
+wait.

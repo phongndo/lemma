@@ -35,6 +35,23 @@ afterEach(async () => {
 
 const withAgent = <A, E>(setup: AgentSetup, body: Parameters<typeof runAgent<A, E>>[2]) => runAgent(dir, setup, body);
 
+/** A session whose turn the agent left open as it stopped, cut off in its model call, with prompts `queued` behind it. */
+const suspendTurn = (queued: readonly string[] = []) =>
+  withAgent({ scripts: [hang("thinking")], config: { stopGrace: 0 } }, ({ requests }) =>
+    Effect.gen(function* () {
+      const { id } = yield* newSession;
+      const a = yield* Agent;
+      yield* Effect.forkChild(a.prompt(id, text("go")));
+      yield* waitFor(
+        Effect.sync(() => requests.length),
+        (asked) => asked === 1,
+      );
+      for (const requestId of queued) yield* Effect.forkChild(a.prompt(id, text(requestId), { requestId }));
+      yield* waitFor(a.queue(id), (queue) => queue.length === queued.length);
+      return id;
+    }),
+  );
+
 /**
  * Holds up the next `rm` or `rename` through `node:fs`'s promises (as the sessions store and journal writes make
  * them) of a path ending in `suffix`: `reached` once it waits, until `go`.
@@ -82,8 +99,15 @@ const racingSessions = (race: { checkout?: { readonly sessionId: string; readonl
       })),
     ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
   });
-/** The sessions store, but its next `failing.reads` log reads, `failing.gets` and `failing.holds` fail, as an unreadable file's would. */
-const unreadableSessions = (failing: { reads?: number; gets?: number; holds?: number }) =>
+/**
+ * The sessions store, but the calls `fails` names fail, as an unreadable file's would: `fails.reads(n)` says whether
+ * the `n`th log read does (from 1), and so for `get` and `hold`.
+ */
+const unreadableSessions = (fails: {
+  readonly reads?: (n: number) => boolean;
+  readonly gets?: (n: number) => boolean;
+  readonly holds?: (n: number) => boolean;
+}) =>
   definePlugin({
     id: "sessions",
     provides: [Sessions],
@@ -92,11 +116,11 @@ const unreadableSessions = (failing: { reads?: number; gets?: number; holds?: nu
     layer: Layer.effect(
       Sessions,
       Effect.map(Sessions, (store) => {
+        const made = { reads: 0, gets: 0, holds: 0 };
         const unless = <A, R>(kind: "reads" | "gets" | "holds", sessionId: string, call: Effect.Effect<A, SessionError, R>) =>
           Effect.suspend(() => {
-            if ((failing[kind] ?? 0) === 0) return call;
-            failing[kind] = (failing[kind] ?? 0) - 1;
-            return Effect.fail(new SessionError({ sessionId, reason: "Io", message: "unreadable" }));
+            made[kind] += 1;
+            return fails[kind]?.(made[kind]) === true ? Effect.fail(new SessionError({ sessionId, reason: "Io", message: "unreadable" })) : call;
           });
         return {
           ...store,
@@ -451,15 +475,20 @@ describe("agent", () => {
   });
 
   it("fails a prompt whose request id it cannot check, rather than placing it again", async () => {
-    const failing = { reads: 0 };
+    const failing = { next: false };
+    const next = () => {
+      const fails = failing.next;
+      failing.next = false;
+      return fails;
+    };
     // One script: a second turn would fail with "no script left".
-    await withAgent({ sessions: unreadableSessions(failing), scripts: [reply("hi")] }, () =>
+    await withAgent({ sessions: unreadableSessions({ reads: next }), scripts: [reply("hi")] }, () =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
         yield* a.prompt(id, text("hello"), { requestId: "r1" });
         // Idle, the session's request ids are dropped; a retry reads them again, and that read fails.
-        failing.reads = 1;
+        failing.next = true;
         const unchecked = yield* Effect.flip(a.prompt(id, text("hello"), { requestId: "r1" }));
         expect(unchecked).toMatchObject({ reason: "Session", message: "unreadable" });
         yield* a.prompt(id, text("hello"), { requestId: "r1" });
@@ -601,22 +630,11 @@ describe("agent", () => {
     );
   });
 
-  it("keeps a turn's journal when its session cannot be read as the agent starts, and resumes the turn once it can: at the next start", async () => {
-    const id = await withAgent({ scripts: [hang("thinking")], config: { stopGrace: 0 } }, ({ requests }) =>
-      Effect.gen(function* () {
-        const { id } = yield* newSession;
-        yield* Effect.forkChild(Effect.flatMap(Agent, (a) => a.prompt(id, text("go"))));
-        yield* waitFor(
-          Effect.sync(() => requests.length),
-          (asked) => asked === 1,
-        );
-        return id;
-      }),
-    );
-    // Starting with a session the store cannot hold, or cannot find for an error other than its absence, resumes
-    // nothing and keeps the journal; a prompt meanwhile fails as the store does.
-    for (const failing of [{ holds: Infinity }, { gets: Infinity }]) {
-      await withAgent({ sessions: unreadableSessions(failing), scripts: [] }, () =>
+  it("keeps a suspended turn and its journal while its session cannot be held or read as it starts, and resumes the turn at a start where it can", async () => {
+    const id = await suspendTurn();
+    // A prompt meanwhile fails as the store does.
+    for (const fails of [{ holds: () => true }, { gets: () => true }, { reads: () => true }]) {
+      await withAgent({ sessions: unreadableSessions(fails), scripts: [] }, () =>
         Effect.gen(function* () {
           const a = yield* Agent;
           expect(yield* a.busy(id)).toBe(false);
@@ -637,20 +655,25 @@ describe("agent", () => {
     );
   });
 
-  it("resumes a turn it could not when it started once the session is next prompted, then runs that prompt", async () => {
-    const id = await withAgent({ scripts: [hang("thinking")], config: { stopGrace: 0 } }, ({ requests }) =>
+  it("reads a suspended turn's log once, before it resumes: a read that would fail after that costs the turn nothing", async () => {
+    const id = await suspendTurn();
+    // Every read of the log after the first fails, until this test reads it.
+    const failing = { after: true };
+    await withAgent({ sessions: unreadableSessions({ reads: (n) => failing.after && n > 1 }), scripts: [reply("done")] }, () =>
       Effect.gen(function* () {
-        const { id } = yield* newSession;
-        yield* Effect.forkChild(Effect.flatMap(Agent, (a) => a.prompt(id, text("go"))));
-        yield* waitFor(
-          Effect.sync(() => requests.length),
-          (asked) => asked === 1,
-        );
-        return id;
+        const a = yield* Agent;
+        yield* waitFor(a.busy(id), (busy) => !busy);
+        failing.after = false;
+        expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "done" }]);
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
       }),
     );
+  });
+
+  it("resumes a suspended turn when its session is next prompted, then runs that prompt", async () => {
+    const id = await suspendTurn();
     // The store cannot hold the session as the agent starts; by the next prompt it can.
-    await withAgent({ sessions: unreadableSessions({ holds: 1 }), scripts: [reply("done"), reply("again")] }, () =>
+    await withAgent({ sessions: unreadableSessions({ holds: (n) => n === 1 }), scripts: [reply("done"), reply("again")] }, () =>
       Effect.gen(function* () {
         const a = yield* Agent;
         expect(yield* a.busy(id)).toBe(false);
@@ -662,6 +685,58 @@ describe("agent", () => {
           { turnId: next!.turnId, reason: "done" },
         ]);
         expect(ofType(events, "message").map((data) => data.message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+      }),
+    );
+  });
+
+  it("cancels a suspended turn without asking the model again: recorded in its journal, it closes as cancelled when it can resume", async () => {
+    const id = await suspendTurn();
+    await withAgent({ sessions: unreadableSessions({ holds: () => true }), scripts: [] }, ({ requests }) =>
+      Effect.gen(function* () {
+        yield* Effect.flatMap(Agent, (a) => a.cancel(id));
+        expect((yield* readJournals(dir)).get(id)?.turn).toMatchObject({ cancelling: true });
+        expect(requests).toHaveLength(0);
+      }),
+    );
+    // No script: a model call would fail the turn.
+    await withAgent({ scripts: [] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        yield* waitFor(a.busy(id), (busy) => !busy);
+        expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "cancelled" }]);
+        expect(requests).toHaveLength(0);
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
+  it("cancels a suspended turn at once when its session can be read by then", async () => {
+    const id = await suspendTurn();
+    await withAgent({ sessions: unreadableSessions({ holds: (n) => n === 1 }), scripts: [] }, ({ requests }) =>
+      Effect.gen(function* () {
+        yield* Effect.flatMap(Agent, (a) => a.cancel(id));
+        expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "cancelled" }]);
+        expect(requests).toHaveLength(0);
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
+  it("shows a suspended session's queue, not running, and withdraws from it; deleting the session drops the turn", async () => {
+    const id = await suspendTurn(["q1"]);
+    await withAgent({ sessions: unreadableSessions({ holds: () => true }), scripts: [] }, () =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        expect(yield* a.busy(id)).toBe(false);
+        expect(yield* a.running).toEqual([]);
+        expect((yield* a.view(id)).turnId).toBeUndefined();
+        expect((yield* a.queue(id)).map((prompt) => prompt.requestId)).toEqual(["q1"]);
+        expect(yield* a.withdraw(id, "q1")).toBe(true);
+        expect(yield* a.queue(id)).toEqual([]);
+        expect((yield* readJournals(dir)).get(id)).toMatchObject({ turn: { prompts: [expect.anything()] }, queue: [] });
+        // Nothing holds the session for a suspended turn.
+        yield* Effect.flatMap(Sessions, (store) => store.remove(id));
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
       }),
     );
   });
