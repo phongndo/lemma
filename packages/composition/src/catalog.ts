@@ -1,5 +1,5 @@
-import { configValues, describeConfig, faultMessage } from "@lemma/contracts";
-import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, PluginSource } from "@lemma/contracts";
+import { configValues, describeConfig, faultMessage } from "@lemma/contracts/runtime";
+import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, PluginSource } from "@lemma/contracts/runtime";
 import { Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import type { Capability, Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
 

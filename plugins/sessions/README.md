@@ -26,7 +26,8 @@ Effect.gen(function* () {
 
 ## Storage
 
-`<Paths.sessions>/<encoded cwd>/<createdAt ISO>_<id>.jsonl`. The cwd is encoded
+`<Paths.home>/sessions/<encoded cwd>/<createdAt ISO>_<id>.jsonl`, the directory
+`~/.lemma/sessions` unless `$LEMMA_HOME` moves the home. The cwd is encoded
 pi-style (`/home/me/app` → `--home-me-app--`); the header's `cwd` is authoritative.
 
 | Line     | Shape                                                                       |
@@ -41,7 +42,7 @@ event appended or the last checkout, whichever is later. The title is the latest
 `title` event; `pinned` and `archived` are the latest value each marks line gave
 (a marks line moves neither the leaf nor `updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
 
-`<Paths.sessions>/.index.json` is the listing index: for each file, its size,
+`<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
 to those bytes, and a hash of its last line. It is a cache, so deleting it only
 costs re-reading the files.
@@ -88,7 +89,7 @@ costs re-reading the files.
   file, and the next use reloads it. A loaded session takes about 1.1× its file
   size in heap, and reloading a 40 MB one about 70 ms: without unloading, a
   long-running host's heap and open files grow with every session it touches.
-- **One process per directory.** The store holds `<Paths.sessions>/.lock`
+- **One process per directory.** The store holds `<Paths.home>/sessions/.lock`
   (`{ pid, hostname, token, startedAt }`) while it runs, and touches it every 10
   seconds, so a second host on the same directory fails to activate this plugin
   instead of interleaving appends with the first (and resuming its turns

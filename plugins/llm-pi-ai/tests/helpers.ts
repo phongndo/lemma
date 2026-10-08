@@ -101,8 +101,6 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
     home,
     userConfig: join(home, "config.jsonc"),
     projectConfig: join(home, "project.jsonc"),
-    auth: join(home, "auth.json"),
-    sessions: join(home, "sessions"),
     cwd: home,
   };
   const plugin = definePlugin({

@@ -1,6 +1,6 @@
 import { Cause, Effect, Fiber, Layer, Stream } from "effect";
 import type { Context } from "effect";
-import { HOST_API, HostApi, HostControl, Interaction, Notice, Paths, PluginsChanged } from "@lemma/contracts";
+import { HOST_API, HostApi, HostControl, Interaction, Notice, Paths, PluginsChanged } from "@lemma/contracts/runtime";
 import { Events } from "@lemma/core";
 import type { ApplicationServices, Loader, ReportedFault } from "@lemma/core";
 import { interactionLayer } from "./interaction.ts";

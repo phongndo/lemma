@@ -2,12 +2,12 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
-import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, UiChanged } from "@lemma/contracts/runtime";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ChangeReport, ConfigScope, PluginChange, UiComposition } from "@lemma/contracts";
+import type { ChangeReport, ConfigScope, PluginChange, UiComposition } from "@lemma/contracts/runtime";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";

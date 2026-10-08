@@ -1,7 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { Effect } from "effect";
-import type { UiFile } from "@lemma/contracts";
+import type { UiFile } from "@lemma/contracts/runtime";
 import type { PathsService } from "./paths.ts";
 
 /** `<home>/ui`: the user's web app plugins and stylesheets. */

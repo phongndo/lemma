@@ -25,7 +25,7 @@ beforeEach(async () => {
 afterEach(() => rm(root, { recursive: true, force: true }));
 
 const run = <A, E>(body: Effect.Effect<A, E, Credentials>) =>
-  Effect.runPromise(Effect.scoped(Effect.flatMap(makeCore([pathsPlugin(home, { auth, cwd: root }), credentials]), (core) => core.run(body))));
+  Effect.runPromise(Effect.scoped(Effect.flatMap(makeCore([pathsPlugin(home, { cwd: root }), credentials]), (core) => core.run(body))));
 
 const stored = async (): Promise<Record<string, unknown>> => JSON.parse(await readFile(auth, "utf8"));
 const set = (credential: Credential) => () => Effect.succeed(credential);
@@ -147,7 +147,7 @@ describe("credentials", () => {
 
   test("concurrent modifies from several processes do not lose updates", async () => {
     const fixture = fileURLToPath(new URL("./fixtures/increment.ts", import.meta.url));
-    const child = () => promisify(execFile)(process.execPath, ["--conditions=lemma-source", fixture, auth, "counter", "10"]);
+    const child = () => promisify(execFile)(process.execPath, ["--conditions=lemma-source", fixture, home, "counter", "10"]);
     await run(
       Effect.gen(function* () {
         const service = yield* Credentials;

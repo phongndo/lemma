@@ -27,8 +27,6 @@ describe("resolvePaths", () => {
       home: "/home/me/.lemma",
       userConfig: "/home/me/.lemma/config.jsonc",
       projectConfig: "/work/app/.lemma/config.jsonc",
-      auth: "/home/me/.lemma/auth.json",
-      sessions: "/home/me/.lemma/sessions",
       cwd: "/work/app",
     });
   });
@@ -36,7 +34,7 @@ describe("resolvePaths", () => {
   test("LEMMA_HOME overrides the home directory", () => {
     const paths = resolvePaths({ env: { HOME: "/home/me", LEMMA_HOME: "/var/lemma" }, cwd: "/work/app" });
     expect(paths.home).toBe("/var/lemma");
-    expect(paths.auth).toBe("/var/lemma/auth.json");
+    expect(paths.userConfig).toBe("/var/lemma/config.jsonc");
     expect(paths.projectConfig).toBe("/work/app/.lemma/config.jsonc");
   });
 });

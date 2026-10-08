@@ -95,7 +95,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
     const events = yield* Events;
     const hooks = yield* Hooks;
     const owner = yield* PluginContext;
-    const root = paths.sessions;
+    const root = path.join(paths.home, "sessions");
     // Taken first, so it is released last, after every file is closed.
     const holder = yield* Effect.acquireRelease(acquireLock(root, undefined, fs), (holder) => releaseLock(root, holder, fs));
     // Kept fresh while the store runs, so another process sees it live; one that took it over stops this store.

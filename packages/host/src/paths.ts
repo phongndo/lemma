@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Context } from "effect";
-import type { Paths } from "@lemma/contracts";
+import type { Paths } from "@lemma/contracts/runtime";
 
 export type PathsService = Context.Service.Shape<typeof Paths>;
 
@@ -14,8 +14,6 @@ export function resolvePaths(options: { readonly env: Readonly<Record<string, st
     home,
     userConfig: join(home, "config.jsonc"),
     projectConfig: join(cwd, ".lemma", "config.jsonc"),
-    auth: join(home, "auth.json"),
-    sessions: join(home, "sessions"),
     cwd,
   };
 }

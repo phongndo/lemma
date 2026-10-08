@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { isBuiltin } from "node:module";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The kernel stays domain-neutral: `packages/core` may depend on Effect only,
@@ -118,6 +119,121 @@ for (const dir of readdirSync(join(root, "plugins"))) {
 }
 report("Host plugin boundary violations", pluginProblems, "host plugin boundary: ok");
 
+// The runtime is the API every plugin is written against (AGENTS.md): the host's (packages/host, but not `bundled.ts`,
+// the list of bundled plugins, which the walk does not enter), the planner both apps share (packages/composition), the
+// web app's (`runtime/` and the boot's modules in `ui/`), and its contracts (`@lemma/contracts/runtime`). It knows no
+// domain: nothing it imports, however indirectly and if only for a type, is a domain contract, which is any module of
+// packages/contracts but the runtime's own (`runtimeContracts`; a new module counts as domain until it is listed
+// there). The barrel `@lemma/contracts` is every contract, so the runtime imports `@lemma/contracts/runtime`. The walk
+// follows relative imports, and workspace packages through their `exports`. The transport is a plugin, held to the
+// runtime by its `requires` instead.
+const contracts = join(root, "packages/contracts/src");
+const runtimeContracts = ["addresses", "channels", "config", "discovery", "fs", "host", "inspectors", "interaction", "kernel", "rpc", "runtime", "status"];
+const isCode = (path: string) => /\.(ts|tsx|mts)$/.test(path);
+const bundledList = join(root, "packages/host/src/bundled.ts");
+const runtimeCode = [
+  ...walk(join(root, "packages/host/src")).filter((path) => path !== bundledList),
+  ...walk(join(root, "packages/composition/src")),
+  ...walk(join(root, "apps/web/src/runtime")),
+  ...["boot.tsx", "define.ts", "draw.tsx", "files.ts", "runtime.ts", "slots.ts"].map((name) => join(root, "apps/web/src/ui", name)),
+  join(contracts, "runtime.ts"),
+].filter(isCode);
+// What the runtime still reaches of the domain, by the import that crosses into it, and why it is left. Rows only
+// ever leave: a crossing not listed fails, and a row whose crossing is gone asks to be removed.
+const webEvents = "the web runtime imports the contracts barrel for `HostEvent` (rpc.ts), whose domain kinds are leaving the wire";
+const clientRpcs = "the client's `Host` and RPC client still carry the domain RPCs (`HostRpcs`), which are leaving the wire";
+const runtimeExceptions: Readonly<Record<string, string>> = {
+  "apps/web/src/runtime/client.ts → packages/contracts/src/index.ts": webEvents,
+  "apps/web/src/runtime/host-plugins.ts → packages/contracts/src/index.ts": webEvents,
+  "apps/web/src/runtime/interactions.ts → packages/contracts/src/index.ts": webEvents,
+  "apps/web/src/ui/boot.tsx → packages/contracts/src/index.ts": webEvents,
+  "apps/web/src/ui/files.ts → packages/contracts/src/index.ts": webEvents,
+  "apps/web/src/ui/runtime.ts → packages/contracts/src/index.ts": webEvents,
+  "packages/client/src/host.ts → packages/contracts/src/index.ts": clientRpcs,
+  "packages/client/src/rpc.ts → packages/contracts/src/index.ts": clientRpcs,
+  "packages/client/src/prompt.ts → packages/contracts/src/index.ts":
+    "@lemma/client's entry, which the web runtime imports for the connection, also exports `startPrompt`, which prompts over the agent's channels",
+};
+const workspacePackages = new Map<string, { readonly dir: string; readonly exports: Readonly<Record<string, unknown>> }>();
+for (const group of ["apps", "examples", "packages", "plugins"]) {
+  for (const name of readdirSync(join(root, group))) {
+    const manifest = join(root, group, name, "package.json");
+    if (!existsSync(manifest)) continue;
+    const { name: id, exports = {} } = JSON.parse(readFileSync(manifest, "utf8"));
+    workspacePackages.set(id, { dir: join(root, group, name), exports: typeof exports === "string" ? { ".": exports } : exports });
+  }
+}
+const unresolved: string[] = [];
+/** The module `specifier` names from `from`: a file, `node:<name>` for Node's own, or none for an asset or a package from outside. */
+const resolveImport = (from: string, specifier: string): string | undefined => {
+  if (isBuiltin(specifier)) return specifier.startsWith("node:") ? specifier : `node:${specifier}`;
+  if (specifier.startsWith(".")) {
+    const path = resolve(dirname(from), specifier.replace(/\?.*$/, ""));
+    if (isCode(path) && existsSync(path)) return path;
+    if (isCode(path) || extname(path) === "") unresolved.push(`${relative(root, from)}: imports "${specifier}", which names no file`);
+    return undefined;
+  }
+  const [first = "", ...rest] = specifier.split("/");
+  const name = first.startsWith("@") ? `${first}/${rest.shift()}` : first;
+  const workspace = workspacePackages.get(name);
+  if (workspace === undefined) return undefined;
+  // A subpath's entry: a file, or conditions, of which processes here run `lemma-source` (docs/development.md).
+  const entry = workspace.exports[[".", ...rest].join("/")] as string | Readonly<Record<string, string>> | undefined;
+  const file = typeof entry === "string" ? entry : (entry?.["lemma-source"] ?? entry?.import);
+  if (file !== undefined) return join(workspace.dir, file);
+  unresolved.push(`${relative(root, from)}: imports "${specifier}", which ${name}'s exports do not name`);
+  return undefined;
+};
+/**
+ * Follows the imports of `roots` breadth-first, so each module is reached by its shortest chain. `onward` sees each
+ * import of a module reached and says whether to follow it. Returns the chain from a root to a module reached.
+ */
+const followImports = (roots: readonly string[], onward: (from: string, to: string) => boolean) => {
+  const via = new Map<string, string | undefined>(roots.map((file) => [file, undefined]));
+  const queue = [...via.keys()];
+  for (let next = 0; next < queue.length; next++) {
+    const file = queue[next]!;
+    for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
+      const to = resolveImport(file, match[1]!);
+      if (to === undefined || via.has(to) || !onward(file, to) || to.startsWith("node:")) continue;
+      via.set(to, file);
+      queue.push(to);
+    }
+  }
+  return (file: string) => {
+    const chain: string[] = [];
+    for (let at: string | undefined = file; at !== undefined; at = via.get(at)) chain.unshift(relative(root, at));
+    return chain;
+  };
+};
+const isDomain = (path: string) =>
+  !path.startsWith("node:") && !relative(contracts, path).startsWith("..") && !runtimeContracts.includes(relative(contracts, path).replace(/\.ts$/, ""));
+const crossings = new Map<string, { readonly from: string; readonly to: string }>();
+const runtimeChain = followImports(runtimeCode, (from, to) => {
+  if (to === bundledList) return false;
+  if (!isDomain(to)) return true;
+  crossings.set(`${relative(root, from)} → ${relative(root, to)}`, { from, to });
+  return false;
+});
+// The web app bundles the planner, so nothing it reaches is Node's.
+const nodeImports: { readonly from: string; readonly to: string }[] = [];
+const compositionChain = followImports(walk(join(root, "packages/composition/src")).filter(isCode), (from, to) => {
+  if (to.startsWith("node:")) nodeImports.push({ from, to });
+  return true;
+});
+const runtimeProblems = [...new Set(unresolved)];
+for (const [crossing, { from, to }] of crossings) {
+  if (crossing in runtimeExceptions) continue;
+  const what = relative(contracts, to) === "index.ts" ? "every contract, the domain's too (import @lemma/contracts/runtime)" : "a domain contract";
+  runtimeProblems.push(`${[...runtimeChain(from), relative(root, to)].join(" → ")}: ${what}`);
+}
+for (const { from, to } of nodeImports) {
+  runtimeProblems.push(`${[...compositionChain(from), to].join(" → ")}: Node's, in @lemma/composition, which the web app bundles`);
+}
+const gone = Object.keys(runtimeExceptions).filter((crossing) => !crossings.has(crossing));
+if (gone.length) console.log(`Crossings gone from the runtime, to remove from runtimeExceptions:\n${gone.map((crossing) => `  ${crossing}`).join("\n")}`);
+report("Runtime boundary violations (scripts/check-boundaries.ts)", runtimeProblems, "runtime boundary: ok");
+
 // The web app is replaceable piece by piece: everything it shows comes from a
 // plugin (turn it off or replace it by id), and plugins reach each other only
 // through `ui/contracts.ts` (capabilities, slots, parts). So a plugin imports
@@ -126,7 +242,8 @@ report("Host plugin boundary violations", pluginProblems, "host plugin boundary:
 // shared parts' defaults, so only it imports `components/`. The runtime
 // (`runtime/`) is what plugins are written against: they reach it through its
 // capabilities, and it knows only its own contracts (`ui/runtime.ts`), never a
-// plugin, a component, or what plugins provide. See apps/web/AGENTS.md.
+// plugin, a component, or what plugins provide; the runtime boundary above
+// keeps it, and the boot, from every domain contract. See apps/web/AGENTS.md.
 const web = join(root, "apps/web/src");
 const uiProblems: string[] = [];
 const within = (file: string, dir: string) => relative(join(web, dir), file).split("/")[0] !== "..";

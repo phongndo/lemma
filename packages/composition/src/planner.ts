@@ -1,5 +1,5 @@
 import { Predicate, Result, Schema, SchemaIssue } from "effect";
-import type { PluginRow } from "@lemma/contracts";
+import type { PluginRow } from "@lemma/contracts/runtime";
 import { checkComposition, Diagnostic } from "@lemma/core";
 import type { Capability, Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
 import { reservedKeys, resolveComposition } from "./catalog.ts";

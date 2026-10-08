@@ -3,9 +3,9 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { Effect, Predicate, Result, Schema, SchemaIssue } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
-import { ConfigFile } from "@lemma/contracts";
+import { ConfigFile } from "@lemma/contracts/runtime";
 import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
-import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
+import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts/runtime";
 import { Diagnostic } from "@lemma/core";
 import type { PathsService } from "./paths.ts";
 

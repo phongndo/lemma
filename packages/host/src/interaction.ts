@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Effect, Layer } from "effect";
 import type { Context } from "effect";
-import { Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts";
-import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
+import { Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts/runtime";
+import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts/runtime";
 import { Hooks } from "@lemma/core";
 
 type Answer<T extends InteractionRequest["type"]> = Extract<InteractionAnswer, { type: T }>["value"];
