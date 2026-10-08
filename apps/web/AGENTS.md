@@ -1,12 +1,13 @@
 # Developing the web app
 
-Every piece of the web app is **replaceable**: a user can turn it off, turn it
-on, configure it, or swap it for their own, without editing this repository.
-Every piece is a plugin, written against the runtime (`src/runtime/`), which
-the boot provides and nothing replaces: the connection, slots, the router,
-messages, the plugins, and questions. The bundled plugins are defaults that
-sit on the same footing as a user's UI file. Build every default so a user
-could have written it and could replace it.
+Everything the web app shows is a plugin, and every plugin is
+**replaceable**: a user can turn it off, turn it on, configure it, or swap it
+for their own, without editing this repository. The plugins are written
+against the runtime (`src/runtime/`), which the boot provides and nothing
+replaces: the connection, slots, the router, messages, the plugins, and
+questions. The bundled plugins are defaults that sit on the same footing as a
+user's UI file. Build every default so a user could have written it and could
+replace it.
 
 ## Where each kind of code goes
 

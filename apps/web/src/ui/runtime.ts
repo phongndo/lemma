@@ -173,8 +173,6 @@ export class Interactions extends Context.Service<Interactions, InteractionsServ
  * provides each version it supports, so a plugin written for another is left
  * out, saying so, rather than failing at some later call. As with `HostApi`,
  * a breaking change gives the changed capability, slot, or part a new key.
- * 2 since the runtime is the app's own (`api.bundled` no longer holds it, and
- * the page's slots refuse to add); 1 before.
  */
 export const UI_API = 2;
 /** Required by a plugin written for version `version` of these contracts (see `UI_API`). */

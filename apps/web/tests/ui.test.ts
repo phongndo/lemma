@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { Context, Effect, Exit, Layer, Schema, Scope } from "effect";
 import { createEffect, createRoot, createSignal } from "solid-js";
 import { checkComposition, definePlugin, makeLoader } from "@lemma/core";
@@ -96,6 +96,29 @@ describe("slots", () => {
       expect(slots.failures(Items)).toEqual([]);
       dispose();
     });
+  });
+
+  it("logs a reader that throws on a change, and goes on following the slot", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await run([adding("a", [{ id: "a", label: "A" }]), adding("b", [{ id: "b", label: "B" }])], async (loader) => {
+        const slots = await Effect.runPromise(loader.core.run(Slots));
+        const dispose = createRoot((dispose) => {
+          createEffect(() => {
+            if (slots.list(Items).length === 1) throw new Error("reader failed");
+          });
+          return dispose;
+        });
+        // A plugin stopping removes its items in the core: only the slot's watcher hears it.
+        await Effect.runPromise(loader.apply({ plugins: { a: {}, b: { enabled: false } } }));
+        await waitFor(() => logged.mock.calls.some(([message]) => message === "lemma ui: a reader of test.items failed"));
+        await Effect.runPromise(loader.apply({ plugins: { a: { enabled: false }, b: { enabled: false } } }));
+        await waitFor(() => slots.list(Items).length === 0);
+        dispose();
+      });
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("gives every definition of a name the same slot, as a UI file loaded again defines it again", async () => {

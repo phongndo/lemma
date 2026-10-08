@@ -36,8 +36,9 @@ import { createServer } from "vite";
  *    suggestions on their way, and a picked folder narrows to what is in it.
  * 7. The address names the page: settings sections and their state, threads
  *    and their views survive a reload and back and forward; a page whose
- *    plugin is off says so and returns with it; a plugin adds a page; a page
- *    that throws fails alone; routes in conflict are reported; a hovered
+ *    plugin is off says so, naming it, and returns with it; a plugin adds a
+ *    page; a page that throws fails alone, and one with no route is its
+ *    plugin's fault; routes in conflict are reported; a hovered
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
  * 8. The devtools dock under the app, and each panel shows it as it runs: a
@@ -705,9 +706,16 @@ const parts = async () => {
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   await archive(false);
   await page.waitForSelector(".turn");
-  // The thread page's plugin off: the address stays and says so; back on, the thread returns.
+  // The thread page's plugin off: the address stays and says so, naming the plugin that declares the route; back on,
+  // the thread returns.
   await switchTo(page, "thread-view", false);
   await page.waitForSelector(".page-missing >> text=This page is off");
+  await page.waitForSelector(".page-missing >> text=The “thread-view” plugin shows these pages");
+  assert.match(
+    (await page.getAttribute(".page-missing a:text-is('Plugins')", "href")) ?? "",
+    /[?&]plugin=thread-view(&|$)/,
+    "the off page's Plugins link does not open thread-view",
+  );
   assert.equal(await where(), thread, "turning the page's plugin off moved the address");
   await switchTo(page, "thread-view", true);
   await page.waitForSelector(".turn");
@@ -890,6 +898,51 @@ const parts = async () => {
     const check = window as any;
     check.disposeCount();
     for (const remove of check.removals) remove();
+  });
+  // A `Pages` item whose route is not made with defineRoute is its plugin's fault, named for it and reported, and is
+  // left out: the runtime's router goes on taking in pages and navigating.
+  await page.evaluate(async () => {
+    const { Pages } = await import("/src/ui/contracts.ts" as string);
+    (window as any).removeMalformed = (window as any).checkSlots.add(Pages, {
+      id: "check.no-route",
+      route: { id: "check.no-route", path: "/no-route" },
+      component: () => document.createElement("div"),
+    });
+  });
+  await page.waitForFunction(async () => {
+    const { Pages } = await import("/src/ui/contracts.ts" as string);
+    return (window as any).lemma.slots().failures(Pages).length === 1;
+  });
+  assert.deepEqual(
+    await page.evaluate(async () => {
+      const { Pages } = await import("/src/ui/contracts.ts" as string);
+      return (window as any).lemma
+        .slots()
+        .failures(Pages)
+        .map((failure: any) => [failure.item.id, failure.pluginId]);
+    }),
+    [["check.no-route", "check"]],
+    "a page without a route is not named for its plugin",
+  );
+  await page.waitForSelector('.toast >> text=The "check.no-route" page has no route made with defineRoute');
+  await page.evaluate(async () => {
+    const { api } = await import("/src/ui/api.ts" as string);
+    const { Pages, Router } = api.contracts;
+    const After = api.defineRoute("check.after", { path: "/after/:id" });
+    const page = () => {
+      const element = document.createElement("div");
+      element.className = "check-after";
+      element.textContent = "after a page without a route";
+      return element;
+    };
+    (window as any).removeAfter = (window as any).checkSlots.add(Pages, { id: "check.after", route: After, component: page });
+    (await (window as any).lemma.service(Router)).navigate(After, { id: "1" });
+  });
+  await page.waitForSelector(".check-after");
+  assert.equal(await where(), "/after/1?mock=", "the router did not navigate after a page without a route");
+  await page.evaluate(() => {
+    (window as any).removeAfter();
+    (window as any).removeMalformed();
   });
   errors.splice(0);
   return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page";
