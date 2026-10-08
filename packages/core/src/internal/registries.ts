@@ -260,7 +260,7 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
         const admission: Admission = { fiber: undefined, expired: false };
         owner.admitted.add(admission);
         // Completing `left` resumes its waiters at once, inside the change that removed the item: they yield, so they
-        // act once that change is complete (a replacement published) rather than in the middle of it.
+        // act once that change is complete (a non-exclusive replacement published) rather than in the middle of it.
         const left = Effect.andThen(Deferred.await((item.left ??= Deferred.makeUnsafe<void>())), Effect.yieldNow);
         return Effect.gen(function* () {
           // A child is interruptible: its contributor's deadline can stop it, whatever the caller's interruptibility.
