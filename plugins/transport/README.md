@@ -31,7 +31,9 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
 
 - **Errors.** Domain errors become `HostError`, whose `code` is the error's
   `reason` (`NotFound`, `Busy`, …) or its tag, and whose `subject` names the
-  session, provider, plugin, tool, or path.
+  session, provider, plugin, tool, or path. A handler's defect fails only its
+  own request, as a defect carrying its message; the connection and its other
+  requests go on.
 - **RPCs** each call one capability, as [`HostRpcs`](../../packages/contracts/src/rpc.ts)
   documents. Two outlive their caller: `Agent.Prompt` (the agent keeps the turn)
   and `Llm.Login`, which runs in this plugin's scope, so a login survives a

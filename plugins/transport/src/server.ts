@@ -99,8 +99,15 @@ export const startServer = (options: ServerOptions, handlers: HostHandlers): Eff
 const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<typeof createServer>) =>
   Effect.gen(function* () {
     const handlerContext = yield* Layer.build(handlers);
-    const websocket = yield* RpcServer.toHttpEffectWebsocket(ServedRpcs).pipe(Effect.provide(RpcSerialization.layerJson), Effect.provide(handlerContext));
-    const http = yield* RpcServer.toHttpEffect(ServedRpcs).pipe(Effect.provide(RpcSerialization.layerNdjson), Effect.provide(handlerContext));
+    // A handler's defect fails its own request: by default it would end every request on the connection.
+    const websocket = yield* RpcServer.toHttpEffectWebsocket(ServedRpcs, { disableFatalDefects: true }).pipe(
+      Effect.provide(RpcSerialization.layerJson),
+      Effect.provide(handlerContext),
+    );
+    const http = yield* RpcServer.toHttpEffect(ServedRpcs, { disableFatalDefects: true }).pipe(
+      Effect.provide(RpcSerialization.layerNdjson),
+      Effect.provide(handlerContext),
+    );
     const platform = yield* Layer.build(NodeHttpServer.layerHttpServices);
     const root = options.staticDir === undefined ? undefined : resolve(options.staticDir);
 
