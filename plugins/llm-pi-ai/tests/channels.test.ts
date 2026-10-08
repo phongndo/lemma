@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { Effect, Layer, Schema, Stream } from "effect";
-import { createProvider, fauxProvider } from "@earendil-works/pi-ai";
-import type { Provider } from "@earendil-works/pi-ai";
-import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import { connect } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import {
@@ -19,6 +16,7 @@ import {
   llmModels,
   llmProviders,
   llmRemoveCustom,
+  llmSetLogo,
   serveChannel,
   Sessions,
   Workspace,
@@ -228,49 +226,59 @@ describe("llm's channels, through the transport", () => {
     );
   }, 30_000);
 
-  it("adds a provider of the user's to the llm plugin's config", () => {
+  it("adds and removes providers of the user's, and sets their logos, in the llm plugin's config", () => {
     const { plugins } = gatewayLlm(() => Effect.succeed("unused"));
-    return served(plugins, async (client, host) => {
-      const id = await (
-        await client()
-      ).channel.call(llmAddCustom, {
-        spec: { name: "Local", api: "openai-completions", baseUrl: "http://localhost:11434/v1", models: ["qwen3"] },
-      });
-      expect(id).toBe("local");
-      expect(host.saved).toEqual([{ llm: { add: { providers: [expect.objectContaining({ id: "local", api: "openai-completions" })] } } }]);
-    });
+    return served(
+      plugins,
+      async (client, host) => {
+        const user = await client();
+        expect(
+          await user.channel.call(llmAddCustom, {
+            spec: { name: "Local", api: "openai-completions", baseUrl: "http://localhost:11434/v1", models: ["qwen3"] },
+          }),
+        ).toBe("local");
+        await user.channel.call(llmSetLogo, { provider: "gateway", svg: "<svg>new</svg>" });
+        await user.channel.call(llmSetLogo, { provider: "gateway" });
+        await user.channel.call(llmRemoveCustom, { provider: "gateway" });
+        // Each one saved: the host's reload would list the change.
+        const [added, logo, cleared, removed, ...rest] = host.saved;
+        expect(added).toEqual({ llm: { add: { providers: [expect.objectContaining({ id: "local", api: "openai-completions" })] } } });
+        expect(logo).toEqual({
+          llm: { add: { providers: [expect.objectContaining({ id: "gateway", baseUrl: "http://127.0.0.1:9/v1", logo: "<svg>new</svg>" })] } },
+        });
+        expect(cleared?.llm?.add?.providers).toEqual([expect.objectContaining({ id: "gateway", baseUrl: "http://127.0.0.1:9/v1" })]);
+        expect(cleared?.llm?.add?.providers?.[0]).not.toHaveProperty("logo");
+        expect(removed).toEqual({ llm: { remove: { providers: ["gateway"] } } });
+        expect(rest).toEqual([]);
+      },
+      { llm: { providers: [{ ...gateway.providers[0], logo: "<svg>old</svg>" }] } },
+    );
   }, 30_000);
 
-  it("says a stream of changes is live with its first element, then sends models-changed when the models listed change", () => {
-    // A provider whose list grows on every refresh after the first (at startup).
-    let refreshes = 0;
-    const models = [{ id: "a" }];
-    const provider: Provider = {
-      ...createProvider({ id: "grow", name: "Grow", auth: {}, models: [], api: openAICompletionsApi() }),
-      getModels: () => models.map((entry) => ({ ...fauxProvider({ provider: "grow" }).provider.getModels()[0]!, ...entry, provider: "grow" })),
-      refreshModels: async (context) => {
-        if (refreshes++ === 0) return;
-        await context.publish({ update: () => models.push({ id: `m${refreshes}` }) });
+  it("says a stream of changes is live with its first element, then sends models-changed after any client's login or logout", () => {
+    const { plugins } = gatewayLlm(() => Effect.succeed("sk-test"));
+    return served(
+      plugins,
+      async (client) => {
+        const [watching, other] = [await client(), await client()];
+        const changes: LlmChange[] = [];
+        const close = watching.channel.open(llmChanges, undefined, (change) => changes.push(change));
+        await until(() => changes.length === 1);
+        expect(changes).toEqual([{ type: "subscribed" }]);
+        const available = async () => (await watching.channel.call(llmModels, { available: true })).map((model) => model.ref);
+        expect(await available()).toEqual([]);
+        // Neither changes the models gateway lists, only whether they are available.
+        await other.channel.call(llmLogin, { provider: "gateway", type: "api_key" });
+        await until(() => changes.length === 2);
+        expect(changes[1]).toEqual({ type: "models-changed" });
+        expect(await available()).toEqual(["gateway/m"]);
+        await other.channel.call(llmLogout, { provider: "gateway" });
+        await until(() => changes.length === 3);
+        expect(changes[2]).toEqual({ type: "models-changed" });
+        expect(await available()).toEqual([]);
+        close();
       },
-    };
-    const plugins = [
-      fakeCredentials().plugin,
-      fakeInteraction(() => Effect.succeed("unused")).plugin,
-      makeLlmPlugin({ fetch: offline, providers: () => [provider], authContext: envContext() }),
-    ];
-    return served(plugins, async (client) => {
-      const host = await client();
-      await until(() => refreshes === 1);
-      const changes: LlmChange[] = [];
-      const close = host.channel.open(llmChanges, undefined, (change) => changes.push(change));
-      await until(() => changes.length === 1);
-      expect(changes).toEqual([{ type: "subscribed" }]);
-      // Logging out refreshes the provider's catalog, which grows this time.
-      await host.channel.call(llmLogout, { provider: "grow" });
-      await until(() => changes.length === 2);
-      expect(changes[1]).toEqual({ type: "models-changed" });
-      expect((await host.channel.call(llmModels, {})).map((model) => model.ref)).toEqual(["grow/a", "grow/m2"]);
-      close();
-    });
+      { llm: gateway },
+    );
   }, 30_000);
 });

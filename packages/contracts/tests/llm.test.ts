@@ -125,18 +125,19 @@ describe("llmChannels", () => {
       }),
     ));
 
-  test("a login ends with its provider", () =>
+  test("a login ends with its provider, while the core runs on", () =>
     run(
       Effect.gen(function* () {
         const held = yield* heldLogin;
-        const scope = yield* Scope.make();
-        const core = yield* makeCore([provider(held.login)]).pipe(Scope.provide(scope));
+        const core = yield* makeCore([provider(held.login)]);
         const channels = yield* channelsOf(core);
         const waiting = yield* Effect.forkChild(Effect.exit(call(channels, "llm.login", { provider: "p", type: "oauth" })));
         yield* Deferred.await(held.started);
-        yield* Scope.close(scope, Exit.void);
+        // Replaced, as a change to its config replaces it.
+        yield* core.restart("llm", { force: true });
         expect(held.seen.interrupted).toBe(true);
         expect(failure(yield* Fiber.join(waiting))).toMatchObject({ reason: "Cancelled", provider: "p" });
+        expect((yield* core.inspect).state).toBe("active");
       }),
     ));
 

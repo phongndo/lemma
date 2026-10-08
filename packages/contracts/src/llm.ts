@@ -275,7 +275,12 @@ export class LlmError extends Data.TaggedError("LlmError")<{
 /** Wraps every model request: logging, retries, routing, and gates can be plugins. The terminal is the provider. */
 export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, LlmError>, LlmError>("lemma/llm.request");
 
-/** The models `Llm.models` lists changed (a provider's catalog refreshed, a login or logout); clients list them again. */
+/**
+ * What `Llm.providers` and `Llm.models` list changed; clients list them
+ * again. The provider of `Llm` publishes it when a catalog refresh changed
+ * the models, and after every login and logout, which change what is
+ * configured and available even when the models stay the same.
+ */
 export const ModelsChanged = Event.make<Record<string, never>>("lemma/llm.models.changed");
 
 /**
@@ -399,7 +404,7 @@ export const llmSetLogo = defineChannel({
 export const LlmChange = Schema.Union([
   /** First, once the stream hears every change: list providers and models now. */
   Schema.Struct({ type: Schema.Literal("subscribed") }),
-  /** The models `Llm.models` lists changed (`ModelsChanged`): list them again. */
+  /** What `Llm.providers` and `Llm.models` list changed (`ModelsChanged`): list them again. */
   Schema.Struct({ type: Schema.Literal("models-changed") }),
 ]);
 export type LlmChange = typeof LlmChange.Type;
@@ -408,15 +413,16 @@ export type LlmChange = typeof LlmChange.Type;
  * Says when to list providers and models again. Its first element is
  * `subscribed`, sent once the stream hears every change, so a client that
  * lists on every element, that one included, misses none, and one that
- * reopens it after reconnecting is in sync again. A client that falls behind
- * receives one `models-changed` for all it missed: the provider never waits
- * for it.
+ * reopens it after reconnecting, or after it ends `Withdrawn` because its
+ * provider stopped or reloaded (as a change to the custom providers reloads
+ * it), is in sync again. A client that falls behind receives one
+ * `models-changed` for all it missed: the provider never waits for it.
  */
 export const llmChanges = defineChannel({
   kind: "stream",
   id: "llm.changes",
   title: "Changes",
-  description: "Says it is subscribed, then each time the models listed change: list providers and models on each",
+  description: "Says it is subscribed, then each time the providers or models listed change: list both on each",
   payload: Schema.Void,
   success: LlmChange,
 });

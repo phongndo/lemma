@@ -185,20 +185,35 @@ export function makeLlmPlugin(options: Options = {}) {
           .getProviders()
           .flatMap((provider) => provider.getModels().map((model) => `${provider.id}/${model.id}`))
           .join("\n");
+      /** Clients hear that what `providers` and `models` list changed, and list them again. */
+      const announce = events.publish(ModelsChanged, {});
       /**
        * Updates provider catalogs (live catalogs, a ChatGPT plan's, Radius's own); failures keep the previous list.
-       * Clients hear when the models changed, and list them again.
+       * Whether the models listed changed.
        */
       const refresh = (providers?: readonly string[]) =>
         Effect.gen(function* () {
           const before = listed();
           const result = yield* Effect.tryPromise((signal) => models.refresh({ signal, ...(providers === undefined ? {} : { providers }) }));
           yield* Effect.forEach(result.errors, ([id, error]) => Effect.logDebug(`llm: model refresh failed for ${id}: ${error.message}`));
-          if (listed() !== before) yield* events.publish(ModelsChanged, {});
-          return result;
+          return listed() !== before;
         });
+      /**
+       * After a login or logout: the provider's catalog first, so clients listing on hearing of it see all of it, then
+       * `announce` even when the models stayed the same, since what is configured and available changed.
+       */
+      const authChanged = (providerId: string) => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore, Effect.andThen(announce));
       // Now and every hour, so models a provider adds or retires show without a restart.
-      yield* plugin.background("refresh models", Effect.repeat(refresh().pipe(Effect.ignore), Schedule.spaced("1 hour")));
+      yield* plugin.background(
+        "refresh models",
+        Effect.repeat(
+          refresh().pipe(
+            Effect.flatMap((changed) => (changed ? announce : Effect.void)),
+            Effect.ignore,
+          ),
+          Schedule.spaced("1 hour"),
+        ),
+      );
 
       const unknownModel = (ref: string) => new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}. Model refs are <provider>/<model>.` });
 
@@ -371,13 +386,13 @@ export function makeLlmPlugin(options: Options = {}) {
               ),
             );
             // The credential is stored: the rest runs in the plugin's scope, so cancelling the login can no
-            // longer report it cancelled. Its live catalog first, so clients that list models on hearing of
-            // the login see all of them; every client learns of it, including one that reloaded meanwhile.
+            // longer report it cancelled. Its live catalog and `ModelsChanged` first, so clients that list
+            // models on hearing of the login see all of them; every client learns of it, including one that
+            // reloaded meanwhile.
             yield* Effect.forkIn(
-              refresh([providerId]).pipe(
-                Effect.timeout("20 seconds"),
-                Effect.ignore,
-                Effect.andThen(events.publish(Notice, stamp({ level: "info", source: "llm", kind: "signed-in", message: `Logged in to ${provider.name}` }))),
+              Effect.andThen(
+                authChanged(providerId),
+                events.publish(Notice, stamp({ level: "info", source: "llm", kind: "signed-in", message: `Logged in to ${provider.name}` })),
               ),
               scope,
             );
@@ -394,7 +409,7 @@ export function makeLlmPlugin(options: Options = {}) {
                 cause: error,
               }),
             // Signed out of a plan, the provider's own list returns.
-          }).pipe(Effect.tap(() => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore))),
+          }).pipe(Effect.tap(() => authChanged(providerId))),
 
         addCustom: (spec) =>
           Effect.gen(function* () {

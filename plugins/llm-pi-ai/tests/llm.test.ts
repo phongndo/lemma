@@ -4,7 +4,7 @@ import type { AddressInfo } from "node:net";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Context, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
@@ -363,41 +363,63 @@ describe("catalog", () => {
 });
 
 describe("model catalogs", () => {
-  it("tells clients when a refresh changed the models, and not when it did not", async () => {
-    // A provider whose list grows on every refresh after the first (at startup).
+  /** A provider whose list grows on every refresh after the first `unchanged` (the first is at startup). */
+  const growing = (unchanged: number): Provider => {
     let refreshes = 0;
     const models = [{ id: "a" }];
-    const growing = createProvider({
-      id: "grow",
-      name: "Grow",
-      auth: {},
-      models: [],
-      api: openAICompletionsApi(),
-    });
-    const provider: Provider = {
-      ...growing,
+    return {
+      ...createProvider({ id: "grow", name: "Grow", auth: {}, models: [], api: openAICompletionsApi() }),
       getModels: () => models.map((entry) => ({ ...fauxProvider({ provider: "grow" }).provider.getModels()[0]!, ...entry, provider: "grow" })),
       refreshModels: async (context) => {
-        if (refreshes++ === 0) return;
+        if (refreshes++ < unchanged) return;
         await context.publish({ update: () => models.push({ id: `m${refreshes}` }) });
       },
     };
-    const { plugins } = setup({ providers: () => [provider] });
-    const changes = await runWith(
+  };
+
+  it("tells clients when a refresh changed the models", async () => {
+    // Observing from before the llm plugin starts, so the refresh at startup cannot be missed.
+    const heard = Deferred.makeUnsafe<void>();
+    const listener = definePlugin({
+      id: "listener",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (context) => context.observe(ModelsChanged, () => Deferred.succeed(heard, undefined)))),
+    });
+    const { plugins } = setup({ providers: () => [growing(0)] });
+    const refs = await runWith(
+      [listener, ...plugins],
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        yield* Deferred.await(heard);
+        return (yield* llm.models()).map((model) => model.ref);
+      }),
+    );
+    expect(refs).toEqual(["grow/a", "grow/m1"]);
+  });
+
+  it("tells clients after a logout, once the provider's catalog has refreshed", async () => {
+    const { plugins } = setup({ providers: () => [growing(1)] });
+    const listed = await runWith(
       plugins,
       Effect.gen(function* () {
         const events = yield* Events;
         const llm = yield* Llm;
         yield* Effect.sleep("50 millis");
-        const heard = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(ModelsChanged), 1)));
+        // What a client lists on hearing of the change.
+        const heard = yield* Effect.forkChild(
+          Stream.runCollect(
+            events.stream(ModelsChanged).pipe(
+              Stream.take(1),
+              Stream.mapEffect(() => llm.models()),
+            ),
+          ),
+        );
         yield* Effect.yieldNow;
         // Logging out refreshes the provider's catalog, which grows this time.
         yield* llm.logout("grow");
-        yield* Fiber.join(heard);
-        return (yield* llm.models()).map((model) => model.ref);
+        return yield* Fiber.join(heard);
       }),
     );
-    expect(changes).toEqual(["grow/a", "grow/m2"]);
+    expect(listed.map((models) => models.map((model) => model.ref))).toEqual([["grow/a", "grow/m2"]]);
   });
 });
 
