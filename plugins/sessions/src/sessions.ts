@@ -253,12 +253,13 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       });
 
     /**
-     * Writes `line` and then applies `update` to the in-memory session, uninterruptibly: an
-     * interrupted write can still reach disk, and memory that missed it would reuse its `seq`.
-     * A file another program changed no longer matches memory, which is dropped. Callers hold
-     * `entry.lock`.
+     * Writes `line`, applies `update` to the in-memory session, and announces the change,
+     * uninterruptibly: an interrupted write can still reach disk, memory that missed it would
+     * reuse its `seq`, and a change made but never announced would leave a client following
+     * the session waiting. A file another program changed no longer matches memory, which is
+     * dropped. Callers hold `entry.lock`.
      */
-    const commit = (entry: Entry, open: Open, line: Line, update: () => void) =>
+    const commit = (entry: Entry, open: Open, line: Line, update: () => void, announce: Effect.Effect<void> = Effect.void) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const writer = yield* writerOf(entry, open);
@@ -268,6 +269,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
           open.tail = { validBytes: start + Buffer.byteLength(text), lines: open.tail.lines + 1, lastStart: start, lastHash: lineHash(text.slice(0, -1)) };
           update();
           entry.info = infoOfOpen(open);
+          yield* announce;
+          yield* changed(entry);
         }).pipe(Effect.tapError((error) => (error.cause === CHANGED_ON_DISK ? forget(entry) : Effect.void))),
       );
 
@@ -328,15 +331,19 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
               return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.failure}` });
             }
             const event = read.success;
-            yield* commit(entry, open, event, () => {
-              open.events.push(event);
-              open.byId.set(id, event);
-              open.leaf = id;
-              open.updatedAt = Math.max(open.updatedAt, event.at);
-              if (event.data.type === "title") open.title = event.data.title;
-            });
-            yield* events.publish(SessionAppended, { sessionId, event });
-            yield* changed(entry);
+            yield* commit(
+              entry,
+              open,
+              event,
+              () => {
+                open.events.push(event);
+                open.byId.set(id, event);
+                open.leaf = id;
+                open.updatedAt = Math.max(open.updatedAt, event.at);
+                if (event.data.type === "title") open.title = event.data.title;
+              },
+              events.publish(SessionAppended, { sessionId, event }),
+            );
             return event;
           }),
         );
@@ -354,7 +361,6 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
               open.leaf = target;
               open.updatedAt = Math.max(open.updatedAt, at);
             });
-            yield* changed(entry);
             return entry.info;
           }),
         );
@@ -370,7 +376,6 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
             yield* commit(entry, open, line, () => {
               open.marks = applyMarks(open.marks, marks);
             });
-            yield* changed(entry);
             return entry.info;
           }),
         );
@@ -381,7 +386,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         yield* entry.lock.withPermits(1)(
-          // Uninterruptible, so memory matches whether the file went.
+          // Uninterruptible, so memory matches whether the file went, and its removal is announced.
           Effect.uninterruptible(
             Effect.gen(function* () {
               if (entries.get(sessionId) !== entry) return yield* notFound(sessionId, `Session ${sessionId} does not exist`);
@@ -393,10 +398,10 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
               entries.delete(sessionId);
               indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
               yield* entry.open?.writer?.close ?? Effect.void;
+              yield* events.publish(SessionRemoved, { sessionId });
             }),
           ),
         );
-        yield* events.publish(SessionRemoved, { sessionId });
       });
 
     const remove: Service["remove"] = (sessionId) =>
