@@ -72,7 +72,10 @@ export const envContext = (env: Record<string, string> = {}): AuthContext => ({
   fileExists: async () => false,
 });
 
-/** A host that records the config changes plugins ask it to save; `configure` succeeds as a deferred change would. */
+/**
+ * A host that records the config changes plugins ask it to save; `configure` succeeds as a deferred change would.
+ * Its composition is what a client's connect probe (`Host.Info`) reads.
+ */
 export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
   const saved: Record<string, PluginChange>[] = [];
   const scopes: (ConfigScope | undefined)[] = [];
@@ -80,7 +83,7 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
   const service = {
     runtime: [HostControl.key, Paths.key],
     plugins: Effect.succeed([{ id: "llm", ...(options.configScope === undefined ? {} : { configScope: options.configScope }) }]),
-    composition: unused(),
+    composition: Effect.succeed({ id: "test", plugins: [] }),
     restart: unused,
     reload: unused(),
     configure: (plugins: Record<string, PluginChange>, configure?: { readonly scope?: ConfigScope }) =>

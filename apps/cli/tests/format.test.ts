@@ -184,6 +184,10 @@ describe("formatPlugins", () => {
   });
 });
 
+test("channels say when no running plugin serves one", () => {
+  expect(formatChannels([])).toBe("No channels: no running plugin serves one.");
+});
+
 describe("what the host provides itself", () => {
   const base = { version: "1", source: "bundled" as const, enabled: true, state: "active" as const, provides: [], requires: [] };
   const plugins: PluginStatus[] = [

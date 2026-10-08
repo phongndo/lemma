@@ -171,8 +171,22 @@ describe("against a running host", () => {
 
   test("channels lists what host plugins serve; an unknown one is NotFound, for a call and a stream alike", async () => {
     // The bundled subsystems serve theirs; a plugin file's are below, and examples/ticker uses one in a real host.
-    expect((await invoke(["channels"], home)).out).toMatch(/^sessions\.list +call +List sessions +sessions /m);
-    expect(JSON.parse((await invoke(["channels", "--json"], home)).out)).toContainEqual(expect.objectContaining({ id: "sessions.list", source: "sessions" }));
+    const text = (await invoke(["channels"], home)).out;
+    expect(text).toMatch(/^sessions\.list +call +List sessions +sessions /m);
+    expect(text).toMatch(/\nllm\.login\s+call\s+Log in\s+llm\s+Runs a provider's login flow/);
+    const listed = JSON.parse((await invoke(["channels", "--json"], home)).out) as { id: string; source: string }[];
+    expect(listed).toContainEqual(expect.objectContaining({ id: "sessions.list", source: "sessions" }));
+    expect(listed.filter((channel) => channel.source === "llm").map((channel) => channel.id)).toEqual([
+      "llm.providers",
+      "llm.models",
+      "llm.login",
+      "llm.cancel-login",
+      "llm.logout",
+      "llm.add-custom",
+      "llm.remove-custom",
+      "llm.set-logo",
+      "llm.changes",
+    ]);
     for (const sub of ["call", "open"]) {
       const result = await invoke(["channels", sub, "nope.nothing", "{}", "--json"], home);
       expect(result.code).toBe(ExitCode.failed);

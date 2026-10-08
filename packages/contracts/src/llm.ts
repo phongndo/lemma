@@ -1,6 +1,10 @@
-import { Context, Data, Schema } from "effect";
-import type { Effect, Stream } from "effect";
-import { Event, Hook } from "@lemma/core";
+import { Cause, Context, Data, Deferred, Effect, Exit, Fiber, PubSub, Schema, Stream } from "effect";
+import type { Scope } from "effect";
+import { Event, Hook, PluginContext } from "@lemma/core";
+import type { CoreClosed, EventError } from "@lemma/core";
+import { defineChannel, serveChannel } from "./channels.ts";
+import type { Channel } from "./channels.ts";
+import { InteractionOrigin } from "./interaction.ts";
 
 // Message shapes follow pi-ai's provider-neutral format so opaque provider
 // state (reasoning signatures, response ids) survives a round trip through the
@@ -254,10 +258,17 @@ export const StreamEvent = Schema.Union([
 ]);
 export type StreamEvent = typeof StreamEvent.Type;
 
-/** A request that cannot start: unknown model or provider. Provider failures arrive as an `error` event instead. */
+/**
+ * Why an `Llm` operation failed: a request that cannot start (an unknown model
+ * or provider), or a login, logout, or custom provider change that did not
+ * happen. A provider's failure to answer a request arrives as an `error` event
+ * instead. Clients see `reason` as the error's code and `provider`, when it
+ * names one, as its subject.
+ */
 export class LlmError extends Data.TaggedError("LlmError")<{
-  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "InvalidProvider" | "SaveFailed";
+  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "Busy" | "InvalidProvider" | "SaveFailed";
   readonly message: string;
+  readonly provider?: string;
   readonly cause?: unknown;
 }> {}
 
@@ -267,6 +278,10 @@ export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, L
 /** The models `Llm.models` lists changed (a provider's catalog refreshed, a login or logout); clients list them again. */
 export const ModelsChanged = Event.make<Record<string, never>>("lemma/llm.models.changed");
 
+/**
+ * Models and their providers. The plugin providing it serves the `llm.*`
+ * channels to clients from it (`llmChannels`).
+ */
 export class Llm extends Context.Service<
   Llm,
   {
@@ -291,3 +306,204 @@ export class Llm extends Context.Service<
     readonly setLogo: (provider: string, svg: string | undefined) => Effect.Effect<void, LlmError>;
   }
 >()("lemma/Llm") {}
+
+// What clients reach of `Llm`, as channels its provider serves (`llmChannels`). Each call's domain error reaches the
+// client with its `reason` as the code and its provider as the subject (the channel when it names none).
+
+export const llmProviders = defineChannel({
+  kind: "call",
+  id: "llm.providers",
+  title: "Providers",
+  description: "Every model provider, with the logins it offers and whether requests can authenticate now",
+  payload: Schema.Void,
+  success: Schema.Array(ProviderInfo),
+});
+
+export const llmModels = defineChannel({
+  kind: "call",
+  id: "llm.models",
+  title: "Models",
+  description: "Every known model; with available, only those whose provider is configured",
+  payload: Schema.Struct({ available: Schema.optional(Schema.Boolean) }),
+  success: Schema.Array(ModelInfo),
+});
+
+/**
+ * Runs a provider's login flow, as `Llm.login`; its questions reach clients
+ * as interactions and its progress as notices, under the origin
+ * `login:<provider>`. The login belongs to the provider, not to the call: it
+ * runs in the provider's scope, so a client that drops its connection leaves
+ * it running, its question waiting for a client to answer, and a second call
+ * for the same provider and type waits for the same login. Fails `Busy` while
+ * a login of the other type to that provider runs, `Cancelled` when
+ * `llm.cancel-login` stops it, and as `Llm.login` does (`UnknownProvider`,
+ * `LoginFailed`, `Cancelled` when its question is dismissed).
+ */
+export const llmLogin = defineChannel({
+  kind: "call",
+  id: "llm.login",
+  title: "Log in",
+  description: "Runs a provider's login flow and stores the credential; its questions and progress reach clients as interactions and notices",
+  payload: Schema.Struct({ provider: Schema.String, type: AuthType }),
+  success: Schema.Void,
+});
+
+/** Stops a provider's running login, whoever started it, as dismissing its question would: every call waiting for it fails `Cancelled`. */
+export const llmCancelLogin = defineChannel({
+  kind: "call",
+  id: "llm.cancel-login",
+  title: "Cancel a login",
+  description: "Stops a provider's running login, whoever started it; false when none was running",
+  payload: Schema.Struct({ provider: Schema.String }),
+  success: Schema.Boolean,
+});
+
+export const llmLogout = defineChannel({
+  kind: "call",
+  id: "llm.logout",
+  title: "Log out",
+  description: "Removes a provider's stored credential",
+  payload: Schema.Struct({ provider: Schema.String }),
+  success: Schema.Void,
+});
+
+/** As `Llm.addCustom`: resolves with the new provider's id, which `llm.providers` lists once the provider's config has reloaded. */
+export const llmAddCustom = defineChannel({
+  kind: "call",
+  id: "llm.add-custom",
+  title: "Add a provider",
+  description: "Adds a provider of the user's on a known wire API; resolves with its id",
+  payload: Schema.Struct({ spec: CustomProviderSpec }),
+  success: Schema.String,
+});
+
+export const llmRemoveCustom = defineChannel({
+  kind: "call",
+  id: "llm.remove-custom",
+  title: "Remove a provider",
+  description: "Removes a provider the user added, with its logo",
+  payload: Schema.Struct({ provider: Schema.String }),
+  success: Schema.Void,
+});
+
+export const llmSetLogo = defineChannel({
+  kind: "call",
+  id: "llm.set-logo",
+  title: "Set a provider's logo",
+  description: "Sets or clears the logo, as SVG markup, of a provider the user added",
+  payload: Schema.Struct({ provider: Schema.String, svg: Schema.optional(Schema.String) }),
+  success: Schema.Void,
+});
+
+/** What `llm.changes` sends. */
+export const LlmChange = Schema.Union([
+  /** First, once the stream hears every change: list providers and models now. */
+  Schema.Struct({ type: Schema.Literal("subscribed") }),
+  /** The models `Llm.models` lists changed (`ModelsChanged`): list them again. */
+  Schema.Struct({ type: Schema.Literal("models-changed") }),
+]);
+export type LlmChange = typeof LlmChange.Type;
+
+/**
+ * Says when to list providers and models again. Its first element is
+ * `subscribed`, sent once the stream hears every change, so a client that
+ * lists on every element, that one included, misses none, and one that
+ * reopens it after reconnecting is in sync again. A client that falls behind
+ * receives one `models-changed` for all it missed: the provider never waits
+ * for it.
+ */
+export const llmChanges = defineChannel({
+  kind: "stream",
+  id: "llm.changes",
+  title: "Changes",
+  description: "Says it is subscribed, then each time the models listed change: list providers and models on each",
+  payload: Schema.Void,
+  success: LlmChange,
+});
+
+/**
+ * Logins as `llm.login` runs them: in `scope`, one per provider. Admission
+ * and the fork are uninterruptible, or a caller interrupted between them would
+ * leave the provider busy forever. A caller awaits the login rather than
+ * joining it, so one that goes away leaves it running. `cancel` interrupts it,
+ * which withdraws its open question.
+ */
+const makeLogins = (llm: Context.Service.Shape<typeof Llm>, scope: Scope.Scope) => {
+  const running = new Map<string, { readonly type: AuthType; readonly fiber: Deferred.Deferred<Fiber.Fiber<void, LlmError>> }>();
+  const login = (provider: string, type: AuthType): Effect.Effect<void, LlmError> =>
+    Effect.gen(function* () {
+      const fiber = yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          const current = running.get(provider);
+          if (current !== undefined) {
+            if (current.type !== type)
+              return yield* new LlmError({ reason: "Busy", provider, message: `A ${current.type} login to "${provider}" is in progress` });
+            return current.fiber;
+          }
+          // Set before the fork, so the entry exists before the login can end.
+          const entry = { type, fiber: yield* Deferred.make<Fiber.Fiber<void, LlmError>>() };
+          running.set(provider, entry);
+          const forked = yield* Effect.forkIn(
+            Effect.interruptible(Effect.provideService(llm.login(provider, type), InteractionOrigin, `login:${provider}`)).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  if (running.get(provider) === entry) running.delete(provider);
+                }),
+              ),
+            ),
+            scope,
+          );
+          yield* Deferred.succeed(entry.fiber, forked);
+          return entry.fiber;
+        }),
+      );
+      const exit = yield* Fiber.await(yield* Deferred.await(fiber));
+      if (Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)) {
+        return yield* new LlmError({ reason: "Cancelled", provider, message: `The ${provider} login was cancelled` });
+      }
+      return yield* exit;
+    });
+  const cancel = (provider: string): Effect.Effect<boolean> =>
+    Effect.gen(function* () {
+      const current = running.get(provider);
+      if (current === undefined) return false;
+      yield* Fiber.interrupt(yield* Deferred.await(current.fiber));
+      return true;
+    });
+  return { login, cancel };
+};
+
+/**
+ * The `llm.*` channels, served from `llm`: what the plugin providing `Llm`
+ * adds to `Channels` in its setup, whichever plugin that is, with
+ * `for (const channel of yield* llmChannels(llm)) yield* owner.add(Channels, channel)`.
+ * Logins run in the setup's scope, the provider's, and end with it;
+ * `llm.changes` hears `ModelsChanged` from when this returns.
+ */
+export const llmChannels = (llm: Context.Service.Shape<typeof Llm>): Effect.Effect<readonly Channel[], EventError | CoreClosed, PluginContext | Scope.Scope> =>
+  Effect.gen(function* () {
+    const owner = yield* PluginContext;
+    const logins = makeLogins(llm, yield* Effect.scope);
+    // Holding only the latest: a subscriber behind by any number of changes has one to read.
+    const changes = yield* PubSub.sliding<LlmChange>(1);
+    const changed: LlmChange = { type: "models-changed" };
+    yield* owner.observe(ModelsChanged, () => PubSub.publish(changes, changed), { buffer: 1 });
+    return [
+      serveChannel(llmProviders, () => llm.providers),
+      serveChannel(llmModels, ({ available }) => llm.models(available === undefined ? undefined : { available })),
+      serveChannel(llmLogin, ({ provider, type }) => logins.login(provider, type)),
+      serveChannel(llmCancelLogin, ({ provider }) => logins.cancel(provider)),
+      serveChannel(llmLogout, ({ provider }) => llm.logout(provider)),
+      serveChannel(llmAddCustom, ({ spec }) => llm.addCustom(spec)),
+      serveChannel(llmRemoveCustom, ({ provider }) => llm.removeCustom(provider)),
+      serveChannel(llmSetLogo, ({ provider, svg }) => llm.setLogo(provider, svg)),
+      // Subscribed before `subscribed` is sent, so nothing published after it is missed.
+      serveChannel(llmChanges, () =>
+        Stream.unwrap(
+          Effect.map(PubSub.subscribe(changes), (subscription) =>
+            Stream.concat(Stream.succeed<LlmChange>({ type: "subscribed" }), Stream.fromSubscription(subscription)),
+          ),
+        ),
+      ),
+    ];
+  });
