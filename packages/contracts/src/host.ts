@@ -2,7 +2,7 @@ import { Cause, Context, Schema } from "effect";
 import type { Effect } from "effect";
 import { Event } from "@lemma/core";
 import type { CoreClosed, PluginFault, PluginState, ReloadError, ReloadReport, RestartOptions } from "@lemma/core";
-import type { PluginStatus } from "./rpc.ts";
+import type { PluginStatus } from "./status.ts";
 
 /**
  * Locations the host resolves once. Plugins never compute paths themselves.

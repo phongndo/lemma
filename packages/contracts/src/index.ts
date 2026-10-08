@@ -14,6 +14,7 @@ export * from "./ledger.ts";
 export * from "./llm.ts";
 export * from "./rpc.ts";
 export * from "./sessions.ts";
+export * from "./status.ts";
 export * from "./tools.ts";
 export * from "./trajectory.ts";
 export * from "./workspace.ts";

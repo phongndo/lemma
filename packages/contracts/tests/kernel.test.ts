@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { capabilityName, hookChain, kernelOf, providerOf, recoverable, tablesOf, usersOf } from "../src/kernel.ts";
-import type { PluginStatus } from "../src/rpc.ts";
+import type { PluginStatus } from "../src/status.ts";
 
 const plugin = (id: string, fields: Partial<PluginStatus> = {}): PluginStatus => ({
   id,

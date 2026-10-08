@@ -1,5 +1,5 @@
 import { Order, Predicate } from "effect";
-import type { PluginStatus } from "./rpc.ts";
+import type { PluginStatus } from "./status.ts";
 
 /*
  * A composition as its kernel runs it, turned from per-plugin statuses (what

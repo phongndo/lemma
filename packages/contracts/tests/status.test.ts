@@ -1,7 +1,7 @@
 import { Cause } from "effect";
 import { describe, expect, test } from "vitest";
 import { PluginFault } from "@lemma/core";
-import { describeReload, toPluginStatus } from "../src/rpc.ts";
+import { describeReload, toPluginStatus } from "../src/status.ts";
 
 describe("describeReload", () => {
   test("names what changed, failures included, leaving out the plugin the message already names", () => {
