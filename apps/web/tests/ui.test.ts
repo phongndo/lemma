@@ -6,9 +6,9 @@ import type { ApplicationServices, Loader, Plugin } from "@lemma/core";
 import { planComposition } from "@lemma/composition";
 import { defineRoute } from "@lemma/router";
 import { makeSlots } from "../src/runtime/slots.ts";
-import { Notify, Slots, UI_API, UiApi } from "../src/ui/contracts.ts";
+import { ConfigFormPart, IconPart, Notify, SearchFieldPart, Slots, TogglePart, UI_API, UiApi } from "../src/ui/contracts.ts";
 import { defineUiPlugin, extendUiPlugin, routesOf } from "../src/ui/define.ts";
-import { defineSlot } from "../src/ui/slots.ts";
+import { definePart, defineSlot, fallbackOf } from "../src/ui/slots.ts";
 import type { SlotsService } from "../src/ui/slots.ts";
 
 /** Resolves once `ready` holds; slot changes from a plugin starting or stopping arrive asynchronously. */
@@ -134,6 +134,21 @@ describe("slots", () => {
       const slots = await Effect.runPromise(loader.core.run(Slots));
       expect(slots.list(defineSlot("test.shared")).map((item) => item.id)).toEqual(["x", "y"]);
     });
+  });
+
+  it("keeps a part's fallback with its declaration: defining it again without one keeps it, with one replaces it", () => {
+    const plain = () => null;
+    const part = definePart<{ readonly label: string }>("test.fallback", plain);
+    expect(fallbackOf(part)).toBe(plain);
+    expect(fallbackOf(definePart("test.fallback"))).toBe(plain);
+    const other = () => null;
+    definePart("test.fallback", other);
+    expect(fallbackOf(part)).toBe(other);
+    expect(fallbackOf(definePart("test.bare"))).toBeUndefined();
+  });
+
+  it("declares a fallback for each part the always-on plugins draw", () => {
+    for (const part of [TogglePart, SearchFieldPart, ConfigFormPart, IconPart]) expect(fallbackOf(part), part.name).toBeDefined();
   });
 
   it("ignores an add from a plugin that has stopped", async () => {

@@ -18,13 +18,12 @@ import {
   SettingsGroups,
   SettingsSections,
   Slots,
-  TogglePart,
   UiPlugins,
 } from "../ui/contracts.ts";
-import type { ClientService, PluginTab, PluginsFact, PluginsService, ToggleProps, UiPluginsService } from "../ui/contracts.ts";
+import type { ClientService, PluginTab, PluginsFact, PluginsService, UiPluginsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
-import { ConfigForm, Contained, First, PuzzleIcon, RefreshIcon, SearchField, Spinner, XIcon } from "../ui/parts.tsx";
+import { ConfigForm, Contained, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "../ui/parts.tsx";
 import styles from "./plugins-page.css?inline";
 
 const SECTION = SectionIds.plugins;
@@ -154,33 +153,6 @@ function Confirm(props: { inspector: Inspector; plugin: PluginStatus; pending: C
   );
 }
 
-/**
- * A plugin's switch: the `toggle` part, or a plain checkbox while nothing
- * provides it (`kit` off), so the switch that turns it back on is still here.
- */
-function PluginToggle(props: ToggleProps) {
-  return (
-    <First
-      slot={TogglePart}
-      props={props}
-      fallback={
-        <input
-          type="checkbox"
-          aria-label={props.label}
-          checked={props.checked}
-          disabled={props.disabled}
-          onChange={(event) => {
-            const checked = event.currentTarget.checked;
-            // It shows the plugin's state, which the change may not alter (a confirmation, a failure), not the click.
-            event.currentTarget.checked = props.checked;
-            props.onChange(checked);
-          }}
-        />
-      }
-    />
-  );
-}
-
 function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
   const { inspector } = props;
   const plugin = () => props.entry.plugin;
@@ -222,7 +194,7 @@ function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
             </button>
           </Show>
           <span data-tip={plugin().locked ?? (plugin().enabled ? `Turn ${plugin().id} off` : `Turn ${plugin().id} on`)}>
-            <PluginToggle
+            <Toggle
               label={`${plugin().id} on`}
               checked={plugin().enabled}
               disabled={plugin().locked !== undefined || inspector.busy() !== undefined}

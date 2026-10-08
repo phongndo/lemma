@@ -28,6 +28,7 @@ import type { ToolSummary } from "../model/format.ts";
 import type { ProjectSettings } from "../model/prefs.ts";
 import type { LiveState } from "../model/live.ts";
 import type { ToolResultView, TurnView } from "../model/transcript.ts";
+import { ConfigFormFallback, IconFallback, SearchFieldFallback, ToggleFallback } from "./fallbacks.tsx";
 import { definePart, defineSlot } from "./slots.ts";
 import type { Region } from "./slots.ts";
 
@@ -706,6 +707,10 @@ export const SectionIds = { general: "general", appearance: "appearance", keyboa
  * by adding an item with a lower order than the default (`DEFAULT_PART_ORDER`).
  * The `kit` plugin supplies the shared parts; a view supplies its own.
  * Plugins draw these through `ui/parts.tsx`, never by importing a component.
+ * The parts the always-on plugins draw (`shell`, `pages`, `settings`, and
+ * `plugins-page`) declare a plain fallback (`ui/fallbacks.tsx`), which renders
+ * while nothing provides them, so with `kit` off the Plugins page still
+ * searches, switches plugins, and edits their settings.
  */
 
 export interface MarkdownProps {
@@ -761,8 +766,11 @@ export interface SearchFieldProps {
   /** The page's controls after the field: a filter menu, a count. */
   readonly children?: JSX.Element;
 }
-/** A page's search (the settings sections'): an underlined field with an icon, and room for the page's controls. */
-export const SearchFieldPart = definePart<SearchFieldProps>("search-field");
+/**
+ * A page's search (the settings sections'): an underlined field with an icon, and room for the page's controls.
+ * Its fallback is a plain search input.
+ */
+export const SearchFieldPart = definePart<SearchFieldProps>("search-field", SearchFieldFallback);
 
 export interface CopyButtonProps {
   /** What it puts on the clipboard. */
@@ -780,7 +788,8 @@ export interface ToggleProps {
   readonly disabled?: boolean;
   readonly onChange: (checked: boolean) => void;
 }
-export const TogglePart = definePart<ToggleProps>("toggle");
+/** An on/off switch. Its fallback is a plain checkbox, so the Plugins page can turn `kit` back on. */
+export const TogglePart = definePart<ToggleProps>("toggle", ToggleFallback);
 
 export interface SettingRowProps {
   readonly title: string;
@@ -806,8 +815,11 @@ export interface ConfigFormProps {
   readonly disabled?: boolean;
   readonly onSave: (values: Readonly<Record<string, unknown>>) => Promise<void>;
 }
-/** A plugin's settings, projected from its config Schema. */
-export const ConfigFormPart = definePart<ConfigFormProps>("config-form");
+/**
+ * A plugin's settings, projected from its config Schema. Its fallback is a text input per field, read as
+ * `lemma plugins config` reads a value.
+ */
+export const ConfigFormPart = definePart<ConfigFormProps>("config-form", ConfigFormFallback);
 
 export interface ProviderLogoProps {
   readonly id: string;
@@ -868,8 +880,11 @@ export interface IconProps {
   /** For icons with a filled state (star). */
   readonly filled?: boolean;
 }
-/** Every icon, by name: one part, so a set replaces them all and can fall back to the defaults (`api.defaults.Icon`). */
-export const IconPart = definePart<IconProps>("icon");
+/**
+ * Every icon, by name: one part, so a set replaces them all and can fall back to the defaults (`api.defaults.Icon`).
+ * Its fallback is a text glyph.
+ */
+export const IconPart = definePart<IconProps>("icon", IconFallback);
 
 export interface FileIconProps {
   /** The file's path or name; only its name is read. */

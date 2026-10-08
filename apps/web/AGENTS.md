@@ -37,7 +37,12 @@ replace it.
   pieces through `ui/parts.tsx`; `kit` supplies the shared parts' defaults and
   is the only plugin that imports `components/`. A view that has pieces users
   would change on their own (a tool call, a row) defines parts for them and
-  adds its own defaults at `DEFAULT_PART_ORDER`, as `chat` does.
+  adds its own defaults at `DEFAULT_PART_ORDER`, as `chat` does. A part may
+  declare a plain fallback (`definePart(name, fallback)`): native markup with
+  no styling of its own, used while nothing provides the part. The parts the
+  always-on plugins draw (`shell`, `pages`, `settings`, `plugins-page`) have
+  one, in `ui/fallbacks.tsx`, so with `kit` off the Plugins page still works;
+  give one to any part they start to draw.
 - **A component** (`src/components/`) is a default implementation of a part.
   It draws other parts through `ui/parts.tsx`.
 - **A model** (`src/model/`) is pure data and functions, tested in `tests/`.

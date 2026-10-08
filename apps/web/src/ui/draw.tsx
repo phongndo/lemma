@@ -1,6 +1,7 @@
 import { ErrorBoundary, For, Show, createContext, useContext } from "solid-js";
 import type { Accessor, Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { fallbackOf } from "./slots.ts";
 import type { Region, Slot, SlotItem, SlotsService } from "./slots.ts";
 
 /*
@@ -76,11 +77,18 @@ export function Each<T extends Region<any>>(props: {
   );
 }
 
-/** The first working item of a region (or part), contained: when it throws, the next one shows; `fallback` when none does. */
+/**
+ * The first working item of a region (or part), contained: when it throws, the next one shows. When none does,
+ * `fallback`, else a part's own (`definePart`), isolated: it belongs to the part's declaration, not to whoever draws it.
+ */
 export function First<T extends Region<any>>(props: { readonly slot: Slot<T>; readonly props?: PropsOf<T>; readonly fallback?: JSX.Element }): JSX.Element {
   const slots = useContext(SlotsContext);
+  const plain = () => {
+    const declared = fallbackOf(props.slot);
+    return declared === undefined ? undefined : <Isolated component={declared} {...(props.props === undefined ? {} : { props: props.props })} />;
+  };
   return (
-    <Show when={slots()?.first(props.slot)} keyed fallback={props.fallback}>
+    <Show when={slots()?.first(props.slot)} keyed fallback={props.fallback ?? plain()}>
       {(item) => <Contained slot={props.slot} item={item} component={item.component} {...(props.props === undefined ? {} : { props: props.props })} />}
     </Show>
   );

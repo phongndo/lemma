@@ -20,8 +20,9 @@ import { createServer } from "vite";
  *    page does it, and the page stays up and error-free either way; only the
  *    pinned ones and what they need stay on, and the runtime is no row at all.
  *    The Plugins page needs none of them: a line its summary shows leaves with
- *    the plugin that adds it, and with `kit` off its switches are plain ones
- *    that turn `kit` back on. With every plugin off that can be, the runtime
+ *    the plugin that adds it, and with `kit` off its parts are their plain
+ *    fallbacks, which still filter, edit a plugin's settings, and switch `kit`
+ *    back on. With every plugin off that can be, the runtime
  *    still answers, and a UI file providing part of it is left out, saying so,
  *    while the app's own goes on.
  * 4. A part replaced by a lower-order item changes what renders, and the
@@ -239,7 +240,7 @@ const toggling = async () => {
   );
 
   // The Plugins page needs no plugin that can be turned off: a line of its summary leaves with the plugin that adds it
-  // (the turns running, with threads), and its switches work without the toggle part (kit off), from the page itself.
+  // (the turns running, with threads), and its pieces work without kit, from the page itself.
   await page.evaluate(async () => {
     const { Settings } = await import("/src/ui/contracts.ts" as string);
     (await (window as any).lemma.service(Settings)).open("plugins");
@@ -258,6 +259,34 @@ const toggling = async () => {
     .waitFor({ timeout: 5_000 })
     .catch(() => assert.fail("with kit off, the Plugins page has no switch to turn it back on"));
   assert.notEqual(await kitState(), "active", "kit did not turn off from its switch");
+  // With kit off, the parts the page draws are their plain fallbacks: its search filters, a plugin's settings form
+  // refuses what is not of a field's type and saves what is, and its icons still mark their buttons.
+  const filter = page.locator("input[type=search][aria-label='Filter plugins']");
+  await filter.waitFor({ timeout: 5_000 }).catch(() => assert.fail("with kit off, the Plugins page has no search field"));
+  await filter.fill("agent");
+  const agent = page.locator(".inspector-row[data-key='host:agent']");
+  await kit.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("with kit off, the Plugins page's search does not filter"));
+  await agent.click();
+  await page.click(".inspector-tabs [role=tab] >> text=Settings");
+  const maxSteps = page.getByLabel("Max steps");
+  await maxSteps.waitFor({ timeout: 5_000 }).catch(() => assert.fail("with kit off, a plugin's settings form does not show"));
+  assert.notEqual((await page.locator("[aria-label='Close details']").textContent())?.trim(), "", "with kit off, an icon button is blank");
+  await maxSteps.fill("2.5");
+  await maxSteps.press("Tab");
+  assert.equal(
+    await maxSteps.evaluate((input: HTMLInputElement) => input.validationMessage),
+    "maxSteps must be a whole number",
+    "with kit off, a bad value is not refused",
+  );
+  await maxSteps.fill("150");
+  await maxSteps.press("Tab");
+  await expose(page, "HostPlugins");
+  await page
+    .waitForFunction(() => (window as any).services.HostPlugins.list().find((plugin: any) => plugin.id === "agent").config.values.maxSteps === 150, undefined, {
+      timeout: 5_000,
+    })
+    .catch(() => assert.fail("with kit off, a plugin's settings form does not save"));
+  await filter.fill("");
   await kit.locator("input[type=checkbox]").click();
   await kit
     .locator("[role=switch]")
@@ -327,7 +356,7 @@ const toggling = async () => {
   await page.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
   await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
   expectNoErrors("a UI file providing part of the runtime");
-  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page keeps its switches without kit; the runtime answers with every plugin off, and a UI file providing Notify is left out`;
+  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a UI file providing Notify is left out`;
 };
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.

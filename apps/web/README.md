@@ -144,7 +144,9 @@ plugins use nothing else:
   stops.
 - **Parts** are the pieces plugins draw with, such as `icon`, `dialog`, or
   `chat.tool`. Replace one everywhere by adding an item with an `order` below
-  `DEFAULT_PART_ORDER`; `api.defaults` holds the bundled implementations.
+  `DEFAULT_PART_ORDER`; `api.defaults` holds the bundled implementations. A
+  part may declare a plain fallback, drawn while nothing provides it: those
+  the Plugins page draws do, so it still works with `kit` off.
 
 The devtools' Registries panel (`mod+shift+d`) lists every slot and who fills
 it.

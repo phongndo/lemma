@@ -32,8 +32,9 @@ import type { Part } from "./slots.ts";
 /**
  * How plugins draw parts (see `definePart`). Each export renders whatever
  * currently fills its part, so replacing a part changes it everywhere at
- * once, and a part that nothing fills renders nothing. The boot provides the
- * registry to the whole page through `SlotsContext`.
+ * once, and a part that nothing fills renders its plain fallback, or nothing
+ * when it declares none. The boot provides the registry to the whole page
+ * through `SlotsContext`.
  */
 
 export { Contained, Each, First, Isolated, SlotsContext } from "./draw.tsx";
@@ -44,7 +45,7 @@ export function Highlighted(props: { readonly text: string; readonly matches: re
   return <For each={parts()}>{(part) => (part.hit ? <mark>{part.text}</mark> : part.text)}</For>;
 }
 
-/** A component that renders `part`'s current provider with its props: its default when a replacement throws. */
+/** A component that renders `part`'s current provider with its props: its default when a replacement throws, its fallback when nothing provides it. */
 export const partView =
   <P extends Record<string, any>>(part: Part<P>): Component<P> =>
   (props) => <First slot={part} props={props as never} />;

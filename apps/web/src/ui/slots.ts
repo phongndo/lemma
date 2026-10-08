@@ -19,7 +19,7 @@ export interface SlotOptions {
   readonly shows?: "first" | "all";
 }
 
-const named = new Map<string, { readonly slot: Slot<any>; shows: "first" | "all" }>();
+const named = new Map<string, { readonly slot: Slot<any>; shows: "first" | "all"; fallback?: Component<any> }>();
 
 /**
  * The slot with this name: the same token each time, so a UI file loaded
@@ -47,9 +47,22 @@ export interface Region<P extends Record<string, any> = {}> {
  * `part.<name>`, whose first item by order renders wherever the part is used
  * (see `ui/parts.tsx`). A plugin replaces a part by adding an item with a
  * lower order than the default's; `P` is the props every provider takes.
+ *
+ * `fallback` renders wherever the part is drawn while no plugin provides it:
+ * plain native markup, belonging to no plugin, so a page whose pieces must
+ * work with every plugin off but its own (the Plugins page, with `kit` off)
+ * still works. Without one, a part nothing provides renders nothing. Defining
+ * the part again without a fallback keeps the one it has.
  */
 export type Part<P extends Record<string, any>> = Slot<Region<P>>;
-export const definePart = <P extends Record<string, any>>(name: string): Part<P> => defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
+export const definePart = <P extends Record<string, any>>(name: string, fallback?: Component<P>): Part<P> => {
+  const part = defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
+  if (fallback !== undefined) named.get(part.name)!.fallback = fallback;
+  return part;
+};
+
+/** What renders for `slot` while nothing provides it: a part's fallback (`definePart`), or undefined. */
+export const fallbackOf = (slot: Slot<any>): Component<any> | undefined => named.get(slot.name)?.fallback;
 
 /** Where the defaults of parts are added: a replacement uses a lower order. */
 export const DEFAULT_PART_ORDER = 100;

@@ -1,10 +1,8 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
-import { parseConfigValue } from "@lemma/contracts";
 import type { ConfigField } from "@lemma/contracts";
+import { configEdit, configText } from "../model/config.ts";
 import type { ConfigFormProps } from "../ui/contracts.ts";
 import { Toggle } from "../ui/parts.tsx";
-
-const show = (value: unknown): string => (value === undefined ? "" : Array.isArray(value) ? value.join(", ") : String(value));
 
 /**
  * A plugin's settings, projected from its config Schema: a control per
@@ -27,17 +25,10 @@ export function ConfigForm(props: ConfigFormProps) {
   };
   /** Text typed into a field: parsed as its type, saved when it changed, unset when cleared. */
   const commit = (field: ConfigField, text: string) => {
-    if (text.trim() === "" && !field.secret) {
-      if (value(field) !== undefined && value(field) !== field.default) void save(field, null);
-      return;
-    }
-    if (field.secret && text === "") return;
-    const parsed = parseConfigValue(field, text);
-    if ("error" in parsed) {
-      setErrors((all) => ({ ...all, [field.key]: parsed.error }));
-      return;
-    }
-    if (JSON.stringify(parsed.value) !== JSON.stringify(value(field))) void save(field, parsed.value);
+    const edit = configEdit(field, value(field), text);
+    if (edit === undefined) return;
+    if ("error" in edit) setErrors((all) => ({ ...all, [field.key]: edit.error }));
+    else void save(field, edit.value);
   };
   const resettable = (field: ConfigField) =>
     !field.secret && field.type !== "other" && value(field) !== undefined && JSON.stringify(value(field)) !== JSON.stringify(field.default);
@@ -69,7 +60,7 @@ export function ConfigForm(props: ConfigFormProps) {
                     autocomplete="off"
                     spellcheck={false}
                     disabled={busy()}
-                    value={field.secret ? "" : show(value(field))}
+                    value={field.secret ? "" : configText(value(field))}
                     placeholder={
                       field.secret
                         ? props.config?.secretsSet.includes(field.key)
@@ -79,7 +70,7 @@ export function ConfigForm(props: ConfigFormProps) {
                           ? field.type === "strings"
                             ? "Comma-separated"
                             : "Not set"
-                          : show(field.default)
+                          : configText(field.default)
                     }
                     onKeyDown={(event) => {
                       if (event.key === "Enter") event.currentTarget.blur();
@@ -96,7 +87,7 @@ export function ConfigForm(props: ConfigFormProps) {
                     id={`config-${field.key}`}
                     class="field"
                     disabled={busy()}
-                    value={show(value(field))}
+                    value={configText(value(field))}
                     onChange={(event) => void save(field, event.currentTarget.value)}
                   >
                     <Show when={value(field) === undefined}>
@@ -114,7 +105,7 @@ export function ConfigForm(props: ConfigFormProps) {
                   class="link-button small"
                   disabled={busy()}
                   onClick={() => void save(field, null)}
-                  data-tip={field.default === undefined ? "Unset" : `Back to ${show(field.default)}`}
+                  data-tip={field.default === undefined ? "Unset" : `Back to ${configText(field.default)}`}
                 >
                   Reset
                 </button>
