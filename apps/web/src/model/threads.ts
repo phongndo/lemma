@@ -1,4 +1,4 @@
-import { branchOf } from "@lemma/contracts";
+import { branchOf, HostError, SessionChannels } from "@lemma/contracts";
 import type { QueuedPrompt, SessionEvent, SessionInfo, SessionsChange } from "@lemma/contracts";
 
 interface SessionGroup {
@@ -59,6 +59,20 @@ export const appendLog = (events: readonly SessionEvent[], incoming: readonly Se
   const last = events.at(-1)?.seq ?? 0;
   const fresh = incoming.filter((event) => event.seq > last);
   return fresh.length === 0 ? events : [...events, ...fresh];
+};
+
+/**
+ * What the open thread says when its `sessions.log` ends, or undefined when
+ * following it carries on by itself: its plugin left (`Withdrawn`), the
+ * channel is not served for now (`NotFound` or `Unavailable` naming the
+ * channel: `sessions` being replaced, the host starting), or the connection
+ * dropped (not a `HostError`). What names the session (it is gone, its log
+ * unreadable) is said.
+ */
+export const logFailure = (error: unknown): string | undefined => {
+  if (!(error instanceof HostError) || error.code === "Withdrawn") return undefined;
+  if (error.subject === SessionChannels.log.id && (error.code === "NotFound" || error.code === "Unavailable")) return undefined;
+  return error.message;
 };
 
 /**

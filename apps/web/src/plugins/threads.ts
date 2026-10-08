@@ -1,11 +1,11 @@
 import { batch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
-import { describeError, startPrompt } from "@lemma/client";
+import { startPrompt } from "@lemma/client";
 import { AgentChannels, branchOf, HostError, SessionChannels } from "@lemma/contracts";
 import { isRoute } from "@lemma/router";
 import type { AgentActivity, AgentView, PromptContent, SessionEvent, SessionInfo, SessionMarks, SessionsChange, TurnOptions } from "@lemma/contracts";
 import { appendOutput, applyDelta, beginJoin, emptyLive, endTurn, joinLive, reconcileLive } from "../model/live.ts";
 import type { LiveState } from "../model/live.ts";
-import { appendLog, applySessionsChange, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../model/threads.ts";
+import { appendLog, applySessionsChange, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../model/threads.ts";
 import type { KnownQueue } from "../model/threads.ts";
 import { Client, NewThreadRoute, Notify, PluginsFacts, Router, Slots, ThreadRoute, Threads } from "../ui/contracts.ts";
 import type { LogState } from "../ui/contracts.ts";
@@ -285,10 +285,12 @@ export default defineUiPlugin({
             first();
           },
           (error) => {
-            // A reload opens it again at once, and a dropped connection once it is back, from the last event this page
-            // has; what else ends it (the session gone, its log unreadable) is said.
+            // A reload opens it again at once, a dropped connection once it is back, and the channel not served
+            // (`sessions` being replaced) once it is listed, each from the last event this page has; what else ends it
+            // is said (`logFailure`).
             if (error instanceof HostError && error.code === "Withdrawn") return;
-            if (error instanceof HostError) setLog({ loaded: true, error: describeError(error) });
+            const failure = logFailure(error);
+            if (failure !== undefined) setLog({ loaded: true, error: failure });
             first();
           },
         );

@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { HostError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/contracts";
-import { appendLog, applySessionsChange, fileSessions, groupSessions, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/model/threads.ts";
+import {
+  appendLog,
+  applySessionsChange,
+  fileSessions,
+  groupSessions,
+  logFailure,
+  newerQueue,
+  resolveLeaf,
+  trackTurn,
+  upsertSession,
+} from "../src/model/threads.ts";
 
 const info = (id: string, cwd: string, updatedAt: number, lastSeq = 0): SessionInfo => ({ id, cwd, createdAt: 0, updatedAt, lastSeq });
 const ev = (id: string, parent: string | null, seq: number): SessionEvent => ({ seq, id, parent, at: seq, data: { type: "title", title: id } });
@@ -59,6 +70,19 @@ describe("appendLog", () => {
     expect(appendLog(log, [ev("2", "1", 2), ev("3", "2", 3)]).map((event) => event.seq)).toEqual([1, 2, 3]);
     expect(appendLog(log, [ev("1", null, 1)])).toBe(log);
     expect(appendLog([], log)).toEqual(log);
+  });
+});
+
+describe("logFailure", () => {
+  it("says what names the session, and nothing when following the log carries on by itself", () => {
+    const ended = (code: string, subject: string) => new HostError({ code, subject, message: `${code} ${subject}` });
+    expect(logFailure(ended("NotFound", "s1"))).toBe("NotFound s1");
+    expect(logFailure(ended("Failed", "sessions.log"))).toBe("Failed sessions.log");
+    // `sessions` reloading or being replaced, or the host starting: opened again once the channel is listed.
+    expect(logFailure(ended("Withdrawn", "sessions.log"))).toBeUndefined();
+    expect(logFailure(ended("NotFound", "sessions.log"))).toBeUndefined();
+    expect(logFailure(ended("Unavailable", "sessions.log"))).toBeUndefined();
+    expect(logFailure(new Error("Error in socket"))).toBeUndefined();
   });
 });
 

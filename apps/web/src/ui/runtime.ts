@@ -101,7 +101,8 @@ export interface ClientService {
    * connected, and anew after every reconnect, since a stream ends with its
    * connection; again at once when it ends `Withdrawn`, its plugin stopped or
    * replaced; and, after it ended otherwise (nothing served it, say), when a
-   * `channels-changed` lists it. Each opening starts afresh, so a subsystem's
+   * `channels-changed` lists it, or at once if one listed it while that
+   * opening was on its way. Each opening starts afresh, so a subsystem's
    * stream begins with `subscribed`, from which its reader resyncs. `payload`
    * may be a function, read at each opening (`sessions.log` resumes `after`
    * the last event its reader has). `onEnd` hears each ending.

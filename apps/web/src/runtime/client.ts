@@ -64,25 +64,35 @@ export function createClient(host: HostConnection): { readonly client: ClientSer
     const id = typeof target === "string" ? target : target.id;
     /** The open stream's close, while one is open. */
     let current: (() => void) | undefined;
+    /** The open stream has sent nothing yet, so it may still fail for want of a channel. */
+    let pending = false;
+    /** A `channels-changed` listed it while the open was pending: one that then fails crossed that listing, and opens again. */
+    let listed = false;
     let stopped = false;
     const open = () => {
       current?.();
       current = undefined;
+      listed = false;
       if (stopped || !connected()) return;
       let live = true;
+      pending = true;
       const close = host.channel.open(
         target as string,
         typeof payload === "function" ? (payload as () => unknown)() : payload,
         (element) => {
-          if (live) safely(onElement, element);
+          if (!live) return;
+          pending = false;
+          listed = false;
+          safely(onElement, element);
         },
         (error) => {
           if (!live) return;
           live = false;
           current = undefined;
           if (onEnd !== undefined) safely(onEnd, error);
-          // Its plugin left: whatever answers for it now, at once; else `channels-changed` says when one does.
-          if (error instanceof HostError && error.code === "Withdrawn") open();
+          // Its plugin left: whatever answers for it now, at once. Listed while this open was on its way (an exclusive
+          // replacement listed as nothing served the open): at once too. Else `channels-changed` says when one does.
+          if ((error instanceof HostError && error.code === "Withdrawn") || listed) open();
         },
       );
       if (live)
@@ -94,7 +104,9 @@ export function createClient(host: HostConnection): { readonly client: ClientSer
     const stops = [
       onConnect(open),
       host.onEvent((event) => {
-        if (event.type === "channels-changed" && current === undefined && event.channels.some((channel) => channel.id === id)) open();
+        if (event.type !== "channels-changed" || !event.channels.some((channel) => channel.id === id)) return;
+        if (current === undefined) open();
+        else if (pending) listed = true;
       }),
     ];
     return () => {

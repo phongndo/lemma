@@ -182,6 +182,30 @@ describe("createClient", () => {
     expect(fake.opened).toHaveLength(4);
     expect(fake.listeners()).toBe(1);
   });
+
+  it("opens a stream again at once when the listing that names it crossed the failed opening", () => {
+    const fake = fakeHost();
+    const { client } = createClient(fake.host);
+    const withdrawn = new HostError({ code: "Withdrawn", subject: "test.feed", message: "withdrawn" });
+    const notFound = new HostError({ code: "NotFound", subject: "test.feed", message: "none" });
+    const listing: HostEvent = { type: "channels-changed", channels: [{ id: "test.feed", kind: "stream", source: "x" }] };
+    const close = client.follow("test.feed", undefined, () => {});
+    // Its plugin is replaced: the opening made at once finds nothing, but the replacement is listed before that is heard.
+    fake.opened[0]!.end(withdrawn);
+    fake.emit(listing);
+    expect(fake.opened).toHaveLength(2);
+    fake.opened[1]!.end(notFound);
+    expect(fake.opened).toHaveLength(3);
+    // Once the stream has sent something, a listing heard before or since says nothing about how it ends: it waits for the next.
+    fake.emit(listing);
+    fake.opened[2]!.send("subscribed");
+    fake.emit(listing);
+    fake.opened[2]!.end(notFound);
+    expect(fake.opened).toHaveLength(3);
+    fake.emit(listing);
+    expect(fake.opened).toHaveLength(4);
+    close();
+  });
 });
 
 describe("createNotify", () => {
