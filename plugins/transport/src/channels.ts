@@ -30,7 +30,7 @@ const notFound = (id: string) => new HostError({ code: "NotFound", subject: id, 
 
 const find = <Kind extends Channel["kind"]>(registries: Reader, id: string, kind: Kind) =>
   Effect.flatMap(registries.items(Channels), (items): Effect.Effect<Contribution<Extract<Channel, { readonly kind: Kind }>>, HostError> => {
-    const found = items.find((contribution) => contribution.item.id === id);
+    const found = answering(items, id);
     if (found === undefined) return Effect.fail(notFound(id));
     if (found.item.kind !== kind) {
       const verb = found.item.kind === "call" ? "call" : "open";
@@ -147,18 +147,26 @@ const openChannel = <A, E, R>(registries: Reader, request: { readonly id: string
     const contribution = yield* find(registries, id, "stream");
     const channel = contribution.item;
     const input = yield* decode(channel, request.payload);
+    // Another contribution now answers for the id (a lower order): a client reopening on `Withdrawn` reaches it.
+    const overridden = registries.changes(Channels).pipe(
+      Stream.filter((items) => answering(items, id) !== contribution),
+      Stream.runHead,
+    );
     const ended = yield* registries
       .run(contribution, (left) =>
         Effect.raceFirst(
           Effect.map(Effect.exit(Effect.provideService(next, Opened, { channel, input })), Option.some),
-          Effect.as(left, Option.none<Exit.Exit<A, E>>()),
+          Effect.as(Effect.raceFirst(left, overridden), Option.none<Exit.Exit<A, E>>()),
         ),
       )
       .pipe(Effect.mapError(lost(id)));
-    // Stopped when its channel left, or ended once it had (its plugin stopping its source): withdrawn, not finished.
-    if (Option.isNone(ended) || !(yield* registries.items(Channels)).includes(contribution)) return yield* Effect.fail(withdrawn(id));
+    // Stopped, or ended once its channel no longer answered (its plugin stopping its source): withdrawn, not finished.
+    if (Option.isNone(ended) || answering(yield* registries.items(Channels), id) !== contribution) return yield* Effect.fail(withdrawn(id));
     return yield* ended.value;
   });
+
+/** The contribution that answers for `id`: the first by order. */
+const answering = (items: readonly Contribution<Channel>[], id: string) => items.find((contribution) => contribution.item.id === id);
 
 /** The stream `ChannelLifetime` opened for this request, encoded for the wire. */
 export const openedStream: Stream.Stream<unknown, HostError> = Stream.unwrap(

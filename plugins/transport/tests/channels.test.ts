@@ -175,6 +175,54 @@ describe("channels", () => {
     );
   }, 30_000);
 
+  test("an open stream ends Withdrawn when another plugin's channel overrides its id, so reopening reaches that one; a call in flight finishes", () => {
+    const feed = (source: string) =>
+      serveChannel({ kind: "stream", id: "shared.feed", payload: Schema.Void, success: Schema.String }, () => Stream.concat(Stream.make(source), Stream.never));
+    // The usual plugin's call answers once the test lets it, so it is in flight across the override.
+    const calling = Deferred.makeUnsafe<void>();
+    const release = Deferred.makeUnsafe<void>();
+    const slow = (source: string) =>
+      serveChannel({ kind: "call", id: "shared.slow", payload: Schema.Void, success: Schema.String }, () =>
+        source === "usual" ? Effect.as(Effect.andThen(Deferred.succeed(calling, undefined), Deferred.await(release)), source) : Effect.succeed(source),
+      );
+    const usual = serving("usual", feed("usual"), slow("usual"));
+    let override: Effect.Effect<void> = Effect.void;
+    // Adds its own channels under the same ids, with a lower order, when the test says so.
+    const overriding = definePlugin({
+      id: "overriding",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          Effect.sync(() => {
+            override = Effect.all([owner.add(Channels, feed("overriding"), { order: -10 }), owner.add(Channels, slow("overriding"), { order: -10 })]).pipe(
+              Effect.orDie,
+              Effect.asVoid,
+            );
+          }),
+        ),
+      ),
+    });
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          const before = yield* open(client, "shared.feed");
+          expect(before.first).toBe("usual");
+          const call = yield* Effect.forkChild(client["Channel.Call"]({ id: "shared.slow" }));
+          yield* Deferred.await(calling);
+          yield* override;
+          expect(hostError(yield* Fiber.await(before.fiber))).toMatchObject({ code: "Withdrawn", subject: "shared.feed" });
+          expect((yield* open(client, "shared.feed")).first).toBe("overriding");
+          // The call was made to the instance that was answering, and still answers from there.
+          yield* Deferred.succeed(release, undefined);
+          expect(yield* Fiber.join(call)).toBe("usual");
+          expect(yield* client["Channel.Call"]({ id: "shared.slow" })).toBe("overriding");
+        }),
+      {},
+      undefined,
+      [usual, overriding],
+    );
+  }, 30_000);
+
   test("serves host plugins' channels with their own schemas; a failing one is an error naming it, not a crash", () => {
     class ProbeError extends Data.TaggedError("ProbeError")<{ readonly reason: "Busy"; readonly message: string }> {}
     // Adds channels without requiring anything, and with no change to the contracts or the transport.

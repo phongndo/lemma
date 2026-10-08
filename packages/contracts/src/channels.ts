@@ -123,7 +123,9 @@ export const channelProblem = (value: unknown): string | undefined => {
 /**
  * The channels host plugins serve, read at each call: the transport does not
  * require them. The first by order answers for an id, so a plugin replaces
- * another's channel by adding one with its id and a lower order.
+ * another's channel by adding one with its id and a lower order: streams open
+ * on the one replaced end `Withdrawn`, so their clients reopen on the new one,
+ * while calls in flight there finish, since they were made to it.
  */
 export const Channels = Registry.make<Channel>("lemma/channels", { key: (channel) => channel.id, check: channelProblem });
 
@@ -161,9 +163,10 @@ export class ChannelRpcs extends RpcGroup.make(
   /**
    * Opens a channel stream: its elements, encoded as for `Channel.Call`, until
    * it ends. Fails as `Channel.Call` does, except that it ends `Withdrawn` as
-   * soon as its plugin stops or is replaced, whether or not the client is
-   * reading, and is stopped before that plugin's finalizers run: open it again
-   * to reach the replacement. It ends with the connection and nothing resumes
+   * soon as its plugin stops or is replaced, or another plugin's channel takes
+   * over its id, whether or not the client is reading, and is stopped before
+   * that plugin's finalizers run: open it again to reach whatever answers for
+   * the id now. It ends with the connection and nothing resumes
    * it, so a client reopens it when it reconnects and receives what the
    * channel sends from then on.
    */

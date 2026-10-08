@@ -60,7 +60,10 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
   chunk only once the client acknowledged the last (WebSocket) or the response
   drained (streaming HTTP), and only a wrapper around the whole request can end
   one blocked there: a client that stopped reading cannot keep a withdrawn
-  stream running. So a stream is pulled at its client's pace over either
+  stream running. A stream also ends `Withdrawn` when another plugin's
+  channel takes over its id (a lower order), so a client that reopens reaches
+  the one answering now; a call in flight is left to finish. A stream is
+  pulled at its client's pace over either
   protocol: one chunk ahead of the client over the WebSocket, as far as the
   connection's buffers allow over HTTP. Effect's RPC client reads a WebSocket in
   order, so a client that stops taking a stream's elements stalls its own
