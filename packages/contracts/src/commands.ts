@@ -119,9 +119,12 @@ export const CommandChannels = {
    * Every command now, then the whole list again after each registration or
    * removal (`CommandsChanged`; see `eventFeed`). The first list says the
    * stream is live and resyncs a client that reconnects. Each list is whole,
-   * so a client keeps the last it received: one that falls behind receives
-   * the latest, skipping the ones in between, and never holds back the
-   * commands.
+   * so a client keeps the last it received, which is current once the
+   * commands stop changing. Lists are published after the change they
+   * report, so one from changes made just as the stream opened can follow the
+   * first though older than it, the current list then following. A client
+   * that falls behind receives the latest, skipping the ones in between, and
+   * never holds back the commands.
    */
   changes: defineChannel({
     kind: "stream",
