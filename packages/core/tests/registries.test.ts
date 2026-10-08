@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
-import type { Composition, Plugin, PluginSource } from "../src/index.ts";
+import type { Composition, Contribution, Plugin, PluginSource } from "../src/index.ts";
 import { failure, run, waitFor } from "./support.ts";
 
 interface Entry {
@@ -170,6 +170,57 @@ describe("registries", () => {
         expect(seen).toEqual([["a", "b"], ["a"]]);
         const collected = yield* core.run(Effect.flatMap(Registries, (registries) => Stream.runCollect(Stream.take(registries.changes(Menu), 1))));
         expect(Array.from(collected).map((items) => items.map((item) => item.item.label))).toEqual([["a"]]);
+      }),
+    );
+  });
+
+  test("a contribution keeps its identity while it is there, and leaves before its plugin's finalizers run", async () => {
+    await run(
+      Effect.gen(function* () {
+        // What a reader holds, and whether it was still there each time the plugin's finalizer ran.
+        let held: Contribution<Entry> | undefined;
+        const there: boolean[] = [];
+        const trigger = yield* Deferred.make<void>();
+        const owned = definePlugin({
+          id: "owned",
+          config: Schema.Struct({ generation: Schema.Number, fails: Schema.optional(Schema.Boolean) }),
+          layer: (config) =>
+            Layer.effectDiscard(
+              Effect.gen(function* () {
+                const owner = yield* PluginContext;
+                const registries = yield* Registries;
+                yield* owner.add(Menu, { label: "owned" });
+                // Released before the item's own cleanup would be, were the item still there.
+                yield* Effect.addFinalizer(() => Effect.map(registries.items(Menu), (items) => void there.push(items.includes(held!))));
+                if (config.fails) yield* owner.background("work", Effect.andThen(Deferred.await(trigger), Effect.fail("broken")), { required: true });
+              }),
+            ),
+        });
+        const source: PluginSource = { resolve: (id) => Effect.succeed(id === "owned" ? owned : contributor(id, [{ label: id }])) };
+        const loader = yield* makeLoader({ source, composition: { plugins: { owned: { config: { generation: 1 } } } } });
+        const items = loader.core.run(Effect.flatMap(Registries, (registries) => registries.items(Menu)));
+        held = (yield* items).find((contribution) => contribution.pluginId === "owned");
+        yield* loader.apply({ plugins: { owned: { config: { generation: 1 } }, other: {} } });
+        expect((yield* items).includes(held!)).toBe(true);
+
+        // Replaced: the replacement's item is another contribution, even with an equal value.
+        yield* loader.apply({ plugins: { owned: { config: { generation: 2, fails: true } }, other: {} } });
+        const replacement = (yield* items).find((contribution) => contribution.pluginId === "owned");
+        expect(replacement).not.toBe(held);
+        expect(replacement?.item).toEqual(held?.item);
+        expect(there).toEqual([false]);
+
+        // Failed, then removed after a restart: gone each time before its finalizers run.
+        held = replacement;
+        yield* Deferred.succeed(trigger, undefined);
+        yield* waitFor(
+          Effect.sync(() => there.length),
+          (count) => count === 2,
+        );
+        yield* loader.core.restart("owned");
+        held = (yield* items).find((contribution) => contribution.pluginId === "owned");
+        yield* loader.apply({ plugins: { other: {} } });
+        expect(there).toEqual([false, false, false]);
       }),
     );
   });

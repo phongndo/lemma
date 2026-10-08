@@ -331,6 +331,7 @@ Effect.gen(function* () {
 
 - Items come in `order` (lower first), then by plugin id, then in the order that plugin added them. Each carries the contributing plugin's id; `core.inspect` lists who contributes what.
 - An item belongs to the plugin instance that added it. It is hidden while its plugin stages, appears when the plugin is published, and leaves when the plugin is retired or its scope closes. The effect `add` returns removes it sooner.
+- A contribution keeps its identity while it is there, so a reader can tell whether the one it holds is still offered (`items.includes(contribution)`); a replacement's item is another contribution, even with an equal value. An item leaves before its plugin's finalizers run, so work a reader runs with an item can end when `changes` shows it gone, and work that failed because the plugin's resources closed finds it gone already.
 - With `unique`, a key held by another plugin (visible or staged) fails `add` with `RegistryError` (`Conflict`, naming the `holder`). The plugin's own replacement may take the key over, so a reload swaps without an exclusive gap.
 - `items` returns an immutable array that changes only when the registry does. `changes` never backs up: a slow reader gets the latest items, not every intermediate list.
 - A name identifies one token per core, as for hooks.

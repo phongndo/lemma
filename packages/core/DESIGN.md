@@ -99,6 +99,9 @@ unique name kept in a plugin's own data structure) makes its plugin
 `exclusive`, stopped before its replacement starts: that gap is explicit rather
 than pretending the swap was transactional. A core registry's items follow
 their contributor through the swap, so a contributor to one needs no such gap.
+Work a reader runs with an item, outside any `core.run` task, is not drained:
+the reader ends it when the item leaves, which happens before the old
+instance's finalizers run, so it never runs on against a retired instance.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 
