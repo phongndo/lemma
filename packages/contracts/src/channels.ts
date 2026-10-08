@@ -1,7 +1,8 @@
 import { Cause, Effect, Fiber, Queue, Schema, SchemaTransformation, Stream } from "effect";
+import type { Context } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 import { awaitable, isExpectedFailure, Registry } from "@lemma/core";
-import type { Awaitable } from "@lemma/core";
+import type { Awaitable, Contribution, Registries } from "@lemma/core";
 import { HostError } from "./status.ts";
 
 export type ChannelKind = "call" | "stream";
@@ -70,9 +71,13 @@ export interface CallLifetime {
   /** Fails with the call's `Withdrawn` once the plugin has left: race what waits with it, `Effect.raceFirst(wait, left)`. */
   readonly left: Effect.Effect<never, HostError>;
   /**
-   * Aborts then, with that `Withdrawn` as its reason, for promise code: a
-   * handler that rejects with it (`signal.throwIfAborted()`, `fetch`), or
-   * with an error it caused (Node's `AbortError`), ends `Withdrawn` too.
+   * For promise code, aborted once the call no longer matters. When the
+   * plugin leaves, its reason is that `Withdrawn`, and a handler that rejects
+   * with it (`signal.throwIfAborted()`, `fetch`), or with an error it caused
+   * (Node's `AbortError`), ends `Withdrawn` too. When the call is interrupted
+   * instead (its client dropped or cancelled it), it aborts with the default
+   * `AbortError`, as `awaitable`'s signal does, so what the handler started
+   * stops with the call.
    */
   readonly signal: AbortSignal;
 }
@@ -198,7 +203,8 @@ const stoppedFor = (cause: Cause.Cause<unknown>, reason: unknown): boolean => {
  * A call's result, however its handler gives it (see `ChannelCall.handle`).
  * `served` is the lifetime of the plugin serving it: `left` completes when
  * that plugin leaves (`Registries.run`'s), and a handler that stops for it
- * fails with `withdrawn`. Without it, the plugin never leaves.
+ * fails with `withdrawn`. Without it, as outside a host, the plugin never
+ * leaves. Either way the handler's `signal` aborts if the call is interrupted.
  */
 export const resultOf = (
   channel: ChannelCall,
@@ -206,34 +212,41 @@ export const resultOf = (
   served?: { readonly left: Effect.Effect<void>; readonly withdrawn: HostError },
 ): Effect.Effect<unknown, unknown> =>
   Effect.suspend(() => {
-    if (served === undefined) return awaitable(() => channel.handle(payload, staying));
-    const { left, withdrawn } = served;
-    // The signal, and the fiber that aborts it, are made only for a handler that reads it.
+    // The signal, and the fiber that aborts it when the plugin leaves, are made only for a handler that reads it.
     let controller: AbortController | undefined;
     let aborter: Fiber.Fiber<void> | undefined;
+    let interrupted = false;
     const lifetime: CallLifetime = {
-      left: Effect.andThen(left, Effect.fail(withdrawn)),
+      left: served === undefined ? Effect.never : Effect.andThen(served.left, Effect.fail(served.withdrawn)),
       get signal() {
         if (controller === undefined) {
           const made = (controller = new AbortController());
-          aborter = Effect.runFork(
-            Effect.andThen(
-              left,
-              Effect.sync(() => made.abort(withdrawn)),
-            ),
-          );
+          // Read by promise code still running after the call was interrupted: aborted already.
+          if (interrupted) made.abort();
+          else if (served !== undefined)
+            aborter = Effect.runFork(
+              Effect.andThen(
+                served.left,
+                Effect.sync(() => made.abort(served.withdrawn)),
+              ),
+            );
         }
         return controller.signal;
       },
     };
-    return awaitable(() => channel.handle(payload, lifetime)).pipe(
-      Effect.catchCause((cause) => (stoppedFor(cause, withdrawn) ? Effect.fail(withdrawn) : Effect.failCause(cause))),
+    const result = awaitable(() => channel.handle(payload, lifetime)).pipe(
+      Effect.onInterrupt(() =>
+        Effect.sync(() => {
+          interrupted = true;
+          controller?.abort();
+        }),
+      ),
       Effect.ensuring(Effect.suspend(() => (aborter === undefined ? Effect.void : Fiber.interrupt(aborter)))),
     );
+    if (served === undefined) return result;
+    const { withdrawn } = served;
+    return Effect.catchCause(result, (cause) => (stoppedFor(cause, withdrawn) ? Effect.fail(withdrawn) : Effect.failCause(cause)));
   });
-
-/** The lifetime of a call whose plugin never leaves: one run outside a host, as in a test. */
-const staying: CallLifetime = { left: Effect.never, signal: new AbortController().signal };
 
 /**
  * A stream's elements, however its handler gives them (see
@@ -277,6 +290,64 @@ export const channelProblem = (value: unknown): string | undefined => {
  * while calls in flight there finish, since they were made to it.
  */
 export const Channels = Registry.make<Channel>("lemma/channels", { key: (channel) => channel.id, check: channelProblem });
+
+/** The contribution that answers for `id`: the first by order. */
+export const answering = (items: readonly Contribution<Channel>[], id: string): Contribution<Channel> | undefined =>
+  items.find((contribution) => contribution.item.id === id);
+
+const notFound = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
+
+/** What a request to `id` ends with when the plugin serving it left first: a client calls or opens it again. */
+export const withdrawnFrom = (id: string, kind: ChannelKind): HostError =>
+  new HostError({
+    code: "Withdrawn",
+    subject: id,
+    message: `"${id}" was withdrawn: its plugin stopped or was replaced; ${kind === "call" ? "call" : "open"} it again to reach its replacement`,
+  });
+
+const find = <Kind extends ChannelKind>(registries: Context.Service.Shape<typeof Registries>, id: string, kind: Kind) =>
+  Effect.flatMap(registries.items(Channels), (items): Effect.Effect<Contribution<Extract<Channel, { readonly kind: Kind }>>, HostError> => {
+    const found = answering(items, id);
+    if (found === undefined) return Effect.fail(notFound(id));
+    if (found.item.kind !== kind) {
+      const verb = found.item.kind === "call" ? "call" : "open";
+      return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `"${id}" is a ${found.item.kind}, not a ${kind}: ${verb} it` }));
+    }
+    return Effect.succeed(found as Contribution<Extract<Channel, { readonly kind: Kind }>>);
+  });
+
+/**
+ * Runs `work` with the channel that answers for `id`, as a transport serves a
+ * client's request: as part of its plugin's lifetime (`Registries.run`) from
+ * the moment it is found, so all of `work` ends before that plugin's
+ * finalizers run, and `left` completes when the plugin leaves. If that channel
+ * left before the work was admitted, as when a reload replaced it, the work
+ * runs with the one answering now: it fails `NotFound` only when nothing
+ * answers, or a channel of the other kind does, and `Withdrawn`
+ * (`withdrawnFrom`) when it outlives its plugin's dispose deadline.
+ */
+export const withChannel = <Kind extends ChannelKind, A, E, R>(
+  registries: Context.Service.Shape<typeof Registries>,
+  id: string,
+  kind: Kind,
+  work: (contribution: Contribution<Extract<Channel, { readonly kind: Kind }>>, left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
+): Effect.Effect<A, E | HostError, R> => {
+  // `refused`: the contribution that had left when it was found, which a second look must not find again.
+  const serve = (refused?: Contribution<Channel>): Effect.Effect<A, E | HostError, R> =>
+    Effect.flatMap(find(registries, id, kind), (contribution) =>
+      contribution === refused
+        ? Effect.fail(notFound(id))
+        : registries
+            .run(contribution, (left) => Effect.exit(work(contribution, left)))
+            .pipe(
+              Effect.matchEffect({
+                onFailure: (error) => (error.reason === "Absent" ? serve(contribution) : Effect.fail(withdrawnFrom(id, kind))),
+                onSuccess: (exit) => exit,
+              }),
+            ),
+    );
+  return serve();
+};
 
 /** A channel as clients list it: `source` is the plugin that added it. */
 export const ChannelInfo = Schema.Struct({

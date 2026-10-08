@@ -1,8 +1,9 @@
 import { Cause, Context, Effect, Exit, Option, Schema, Stream } from "effect";
 import { RpcGroup, RpcMiddleware } from "effect/rpc";
 import type { Rpc } from "effect/rpc";
+import { Admitted } from "@lemma/core";
 import type { Contribution, Registries } from "@lemma/core";
-import { ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf, wireCodec } from "@lemma/contracts";
+import { answering, ChannelRpcs, Channels, elementsOf, HostError, HostRpcs, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
 import { Startup } from "./startup.ts";
@@ -25,19 +26,6 @@ export const channelInfo = ({ item, pluginId }: Contribution<Channel>): ChannelI
 
 export const listChannels = (registries: Reader): Effect.Effect<ChannelInfo[]> =>
   Effect.map(registries.items(Channels), (items) => answers(items).map(channelInfo));
-
-const notFound = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
-
-const find = <Kind extends Channel["kind"]>(registries: Reader, id: string, kind: Kind) =>
-  Effect.flatMap(registries.items(Channels), (items): Effect.Effect<Contribution<Extract<Channel, { readonly kind: Kind }>>, HostError> => {
-    const found = answering(items, id);
-    if (found === undefined) return Effect.fail(notFound(id));
-    if (found.item.kind !== kind) {
-      const verb = found.item.kind === "call" ? "call" : "open";
-      return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `"${id}" is a ${found.item.kind}, not a ${kind}: ${verb} it` }));
-    }
-    return Effect.succeed(found as Contribution<Extract<Channel, { readonly kind: Kind }>>);
-  });
 
 const reason = (cause: Cause.Cause<unknown>): string => {
   const error = Cause.squash(cause);
@@ -82,56 +70,21 @@ const failed = (id: string, cause: Cause.Cause<unknown>): HostError => {
   return new HostError({ code: "Failed", subject: id, message: reason(cause) });
 };
 
-const withdrawn = (id: string, kind: Channel["kind"]) =>
-  new HostError({
-    code: "Withdrawn",
-    subject: id,
-    message: `"${id}" was withdrawn: its plugin stopped or was replaced; ${kind === "call" ? "call" : "open"} it again to reach its replacement`,
-  });
-
 /**
- * Runs `work` with the channel that answers for `id`, as part of its plugin's
- * lifetime (`Registries.run`) from the moment it is found, so decoding the
- * payload, the handler, and encoding what it sends all end before that
- * plugin's finalizers run. If that channel left before the work was admitted,
- * as when a reload replaced it, the work runs with the one answering now: the
- * request is `NotFound` only when nothing answers, and `Withdrawn` when it
- * outlives its plugin's dispose deadline.
- */
-const serve = <Kind extends Channel["kind"], A, E, R>(
-  registries: Reader,
-  id: string,
-  kind: Kind,
-  work: (contribution: Contribution<Extract<Channel, { readonly kind: Kind }>>, left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
-  refused?: Contribution<Channel>,
-): Effect.Effect<A, E | HostError, R> =>
-  Effect.flatMap(find(registries, id, kind), (contribution) =>
-    contribution === refused
-      ? Effect.fail(notFound(id))
-      : registries
-          .run(contribution, (left) => Effect.exit(work(contribution, left)))
-          .pipe(
-            Effect.matchEffect({
-              onFailure: (error) => (error.reason === "Absent" ? serve(registries, id, kind, work, contribution) : Effect.fail(withdrawn(id, kind))),
-              onSuccess: (exit) => exit,
-            }),
-          ),
-  );
-
-/**
- * One call, served with its channel (`serve`): when its plugin stops or is
- * replaced, the call is drained, finishing on the instance it started on
- * before that instance's finalizers run, unless its handler stops for the
- * plugin leaving (`CallLifetime`), and is interrupted, `Withdrawn`, only if
- * it outlives the dispose deadline. Its failure or defect is the caller's
- * error, never the transport's.
+ * One call, served with its channel (`withChannel`), from decoding its payload
+ * to encoding its result: when its plugin stops or is replaced, the call is
+ * drained, finishing on the instance it started on before that instance's
+ * finalizers run, unless its handler stops for the plugin leaving
+ * (`CallLifetime`), and is interrupted, `Withdrawn`, only if it outlives the
+ * dispose deadline. Its failure or defect is the caller's error, never the
+ * transport's.
  */
 export const callChannel = (registries: Reader, id: string, payload: unknown): Effect.Effect<unknown, HostError> =>
-  serve(registries, id, "call", ({ item: channel }, left) =>
+  withChannel(registries, id, "call", ({ item: channel }, left) =>
     decode(channel, payload).pipe(
       Effect.flatMap((input) =>
         contained(
-          () => resultOf(channel, input, { left, withdrawn: withdrawn(id, "call") }),
+          () => resultOf(channel, input, { left, withdrawn: withdrawnFrom(id, "call") }),
           (cause) => failed(id, cause),
         ),
       ),
@@ -155,7 +108,9 @@ const Opened = Context.Reference<Opened | undefined>("lemma/transport/Opened", {
  * response drained (streaming HTTP), and only this wrapper can end a request
  * blocked there. When the contribution leaves, or another answers for its id,
  * the request ends `Withdrawn` at once, stopping the stream whether or not the
- * client is reading.
+ * client is reading. So the stream never holds its plugin's disposal, and it
+ * runs outside `Admitted`: a change it asks for that restarts its own plugin
+ * applies at once, ending it, rather than wait for its client to close it.
  */
 export class ChannelLifetime extends RpcMiddleware.Service<ChannelLifetime>()("lemma/transport/ChannelLifetime", { error: HostError }) {}
 
@@ -180,28 +135,28 @@ export const channelLifetime =
     rpc._tag === "Channel.Open" ? openChannel(registries, payload as { readonly id: string; readonly payload?: unknown }, next) : next;
 
 const openChannel = <A, E, R>(registries: Reader, request: { readonly id: string; readonly payload?: unknown }, next: Effect.Effect<A, E, R>) =>
-  serve(registries, request.id, "stream", (contribution, left) =>
-    Effect.gen(function* () {
-      const { id } = request;
-      const channel = contribution.item;
-      const input = yield* decode(channel, request.payload);
-      // Another contribution now answers for the id (a lower order): a client reopening on `Withdrawn` reaches it.
-      const overridden = registries.changes(Channels).pipe(
-        Stream.filter((items) => answering(items, id) !== contribution),
-        Stream.runHead,
-      );
-      const ended = yield* Effect.raceFirst(
-        Effect.map(Effect.exit(Effect.provideService(next, Opened, { channel, input })), Option.some),
-        Effect.as(Effect.raceFirst(left, overridden), Option.none<Exit.Exit<A, E>>()),
-      );
-      // Stopped, or ended once its channel no longer answered (its plugin stopping its source): withdrawn, not finished.
-      if (Option.isNone(ended) || answering(yield* registries.items(Channels), id) !== contribution) return yield* Effect.fail(withdrawn(id, "stream"));
-      return yield* ended.value;
-    }),
+  Effect.flatMap(Admitted, (outside) =>
+    withChannel(registries, request.id, "stream", (contribution, left) =>
+      Effect.gen(function* () {
+        const { id } = request;
+        const channel = contribution.item;
+        const input = yield* decode(channel, request.payload);
+        // Another contribution now answers for the id (a lower order): a client reopening on `Withdrawn` reaches it.
+        const overridden = registries.changes(Channels).pipe(
+          Stream.filter((items) => answering(items, id) !== contribution),
+          Stream.runHead,
+        );
+        const stream = Effect.provideService(Effect.provideService(next, Opened, { channel, input }), Admitted, outside);
+        const ended = yield* Effect.raceFirst(
+          Effect.map(Effect.exit(stream), Option.some),
+          Effect.as(Effect.raceFirst(left, overridden), Option.none<Exit.Exit<A, E>>()),
+        );
+        // Stopped, or ended once its channel no longer answered (its plugin stopping its source): withdrawn, not finished.
+        if (Option.isNone(ended) || answering(yield* registries.items(Channels), id) !== contribution) return yield* Effect.fail(withdrawnFrom(id, "stream"));
+        return yield* ended.value;
+      }),
+    ),
   );
-
-/** The contribution that answers for `id`: the first by order. */
-const answering = (items: readonly Contribution<Channel>[], id: string) => items.find((contribution) => contribution.item.id === id);
 
 /** The stream `ChannelLifetime` opened for this request, encoded for the wire. */
 export const openedStream: Stream.Stream<unknown, HostError> = Stream.unwrap(

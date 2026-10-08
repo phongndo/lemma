@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import { Channels, FileSearchers, serveChannel } from "@lemma/contracts";
 import type { Channel, ChannelInfo, HostEvent } from "@lemma/contracts";
-import { definePlugin, PluginContext, Registries } from "@lemma/core";
+import { Admitted, definePlugin, PluginContext, Registries } from "@lemma/core";
 import { settled } from "../../../scripts/e2e.ts";
 import { callChannel } from "../src/channels.ts";
 import type { Client, Kind } from "./harness.ts";
@@ -648,6 +648,26 @@ describe("channels", () => {
       { dispose: Duration.millis(600) },
     );
   }, 30_000);
+
+  test("a call runs as its plugin's admitted work, which a change restarting that plugin waits for; a stream, which ends as its plugin leaves, does not", () => {
+    const whose = Effect.map(Admitted, (admitted) => admitted.map((work) => work.pluginId));
+    const probe = serving(
+      "probe",
+      serveChannel({ kind: "call", id: "probe.call", payload: Schema.Void, success: Schema.Array(Schema.String) }, () => whose),
+      serveChannel({ kind: "stream", id: "probe.stream", payload: Schema.Void, success: Schema.Array(Schema.String) }, () => Stream.fromEffect(whose)),
+    );
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          expect(yield* client["Channel.Call"]({ id: "probe.call" })).toEqual(["probe"]);
+          expect(yield* Stream.runCollect(client["Channel.Open"]({ id: "probe.stream" }))).toEqual([[]]);
+        }),
+      {},
+      undefined,
+      [probe],
+    );
+  });
 
   test("a call that waits on its plugin hears it leave: Effect and promise handlers alike end Withdrawn at once, despite a long dispose deadline, and calling again reaches the replacement", () => {
     let instances = 0;

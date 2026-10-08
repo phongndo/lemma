@@ -129,6 +129,43 @@ describe("callbacks a plugin hands the contracts", () => {
     ).toBe("false");
   });
 
+  test("a call's signal aborts when the call is interrupted, as a dropped client's is, with an AbortError rather than its Withdrawn, in a host or out of one", async () => {
+    const declaration = { kind: "call", id: "plain.wait", payload: Schema.Void, success: Schema.String } as const;
+    const withdrawn = new HostError({ code: "Withdrawn", subject: "plain.wait", message: "left" });
+    const outcomes = await Effect.runPromise(
+      Effect.forEach([{ left: Effect.never, withdrawn }, undefined], (served) =>
+        Effect.gen(function* () {
+          const reading = yield* Deferred.make<void>();
+          const aborted = yield* Deferred.make<unknown>();
+          // Reads its signal at once.
+          const early = serveChannel(declaration, async (_, { signal }) => {
+            signal.addEventListener("abort", () => Deferred.doneUnsafe(aborted, Effect.succeed(signal.reason)));
+            Deferred.doneUnsafe(reading, Effect.void);
+            return await new Promise<string>(() => {});
+          });
+          const call = yield* Effect.forkChild(resultOf(early, undefined, served), { startImmediately: true });
+          yield* Deferred.await(reading);
+          yield* Fiber.interrupt(call);
+          // Reads it only once the call was interrupted, its promise still running: aborted already.
+          const resume = yield* Deferred.make<void>();
+          const late = yield* Deferred.make<boolean>();
+          const later = serveChannel(declaration, async (_, lifetime) => {
+            await Effect.runPromise(Deferred.await(resume));
+            Deferred.doneUnsafe(late, Effect.succeed(lifetime.signal.aborted));
+            return "late";
+          });
+          yield* Fiber.interrupt(yield* Effect.forkChild(resultOf(later, undefined, served), { startImmediately: true }));
+          yield* Deferred.succeed(resume, undefined);
+          return { reason: yield* Deferred.await(aborted), late: yield* Deferred.await(late) };
+        }),
+      ),
+    );
+    for (const { reason, late } of outcomes) {
+      expect(reason).toMatchObject({ name: "AbortError" });
+      expect(late).toBe(true);
+    }
+  });
+
   test("an inspector's snapshot method is called on its inspector", async () => {
     class Rows implements Inspector {
       readonly id = "rows";
