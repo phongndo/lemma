@@ -9,7 +9,7 @@ import { call, collect, hostError, open, served } from "./served.ts";
 
 const withSessions = <A, E>(body: Parameters<typeof served<A, E>>[1]) => served((home) => [pathsPlugin(home, { cwd: "/work" }), sessions], body);
 
-/** Refuses to remove `kept`, as the agent refuses a session with a turn running. */
+/** Refuses to remove `kept`, as a `SessionRemoveHook` handler may. */
 const keeper = (kept: { id?: string }) =>
   definePlugin({
     id: "keeper",

@@ -1,4 +1,5 @@
 import { Context, Data, Effect, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import { Event, Hook } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
@@ -146,8 +147,11 @@ export type SessionInfo = typeof SessionInfo.Type;
 
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
-  /** `Busy`: a `SessionRemoveHook` handler refused to remove the session while it is in use. */
-  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy";
+  /**
+   * `Busy`: `remove` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler refused it.
+   * `Removing`: `hold` refused, as the session is being removed; it may stay, if the removal fails.
+   */
+  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "Removing";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -163,11 +167,12 @@ export const SessionChanged = Event.make<{ readonly info: SessionInfo }>("lemma/
 export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/session.removed");
 
 /**
- * Around every `Sessions.remove`, whoever calls it; the terminal deletes the
- * session. A handler that must not see a session go while it uses it refuses
- * by failing instead of calling `next`: the agent fails `Busy` while a turn
- * runs in the session. A provider of `Sessions` runs each removal through it,
- * so the rule holds for every client and every plugin.
+ * Around every `Sessions.remove` that no hold refused, whoever calls it; the
+ * terminal deletes the session. A handler refuses by failing instead of
+ * calling `next`; no hold is granted while it runs. A provider of `Sessions`
+ * runs each removal through it, so a handler's rule holds for every client
+ * and every plugin. Work that writes to the session holds it instead (see
+ * `Sessions.hold`).
  */
 export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
 
@@ -199,7 +204,20 @@ export class Sessions extends Context.Service<
     readonly checkout: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /** Pins or archives it. Neither moves the leaf nor `updatedAt`: filing a session is not activity in it. */
     readonly mark: (sessionId: string, marks: SessionMarks) => Effect.Effect<SessionInfo, SessionError>;
-    /** Deletes it from disk, for good, unless a `SessionRemoveHook` handler refuses. */
+    /**
+     * Holds the session while the scope lasts, so it is not removed: work that
+     * writes to it holds it from before it starts until it has stopped, as the
+     * agent does for each turn. Not a `SessionRemoveHook` handler, since core
+     * retires a stopping plugin's handlers before its work has stopped. Fails
+     * `NotFound` when it does not exist, and `Removing` while a removal runs.
+     * Any number of holds may exist at once.
+     */
+    readonly hold: (sessionId: string) => Effect.Effect<void, SessionError, Scope.Scope>;
+    /**
+     * Deletes it from disk, for good. Fails `Busy` while any hold exists. From
+     * the moment it passes that check until it ends, it grants no new hold, and
+     * runs through `SessionRemoveHook`, whose handlers may refuse it.
+     */
     readonly remove: (sessionId: string) => Effect.Effect<void, SessionError>;
   }
 >()("lemma/Sessions") {}
@@ -315,12 +333,12 @@ export const SessionChannels = {
     payload: Schema.Struct({ ...sessionField, pinned: Schema.optional(Schema.Boolean), archived: Schema.optional(Schema.Boolean) }),
     success: SessionInfo,
   }),
-  /** Through `SessionRemoveHook`: fails `Busy` while a turn runs in the session. */
+  /** `Sessions.remove`: fails `Busy` while the session is held, as it is while a turn runs in it. */
   delete: defineChannel({
     kind: "call",
     id: "sessions.delete",
     title: "Delete a session",
-    description: "Deletes a session for good; fails Busy while a turn runs in it",
+    description: "Deletes a session for good; fails Busy while it is in use, as while a turn runs in it",
     payload: Schema.Struct(sessionField),
     success: Schema.Void,
   }),

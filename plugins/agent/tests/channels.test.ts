@@ -1,12 +1,12 @@
 import { describe, expect, test } from "vitest";
-import { Duration, Effect, Exit, Fiber } from "effect";
-import { AgentChannels, Sessions } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Exit, Fiber } from "effect";
+import { Agent, AgentChannels, Sessions } from "@lemma/contracts";
 import type { AgentView, ChannelInfo, QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
 import sessions from "../../sessions/src/index.ts";
 import { call, collect, hostError, open, served } from "../../sessions/tests/served.ts";
 import tools from "../../tools/src/index.ts";
 import agent from "../src/index.ts";
-import { fakeLlm, hang, host, paths, reply, testTools, text, waitFor } from "./fakes.ts";
+import { fakeLlm, gated, hang, host, ofType, paths, reply, testTools, text, waitFor } from "./fakes.ts";
 import type { Script } from "./fakes.ts";
 
 /** The agent with the sessions store, behind the transport, its model playing `scripts`. */
@@ -96,7 +96,7 @@ describe("the agent channels, through the transport", () => {
         // Taken out of the queue, the prompt fails `Retracted`, naming the session: not the channel's `Withdrawn`, which would say the agent left.
         expect(hostError(yield* Fiber.await(queued))).toMatchObject({ code: "Retracted", subject: id });
 
-        // Refused by the agent through `SessionRemoveHook`, for a client and for a plugin alike.
+        // Refused by the sessions store, as the turn holds the session, for a client and for a plugin alike.
         expect(hostError(yield* Effect.exit(call(client, "sessions.delete", { sessionId: id })))).toMatchObject({ code: "Busy", subject: id });
         const removed = yield* Effect.exit(core.run(Effect.flatMap(Sessions, (store) => store.remove(id))));
         expect(Exit.isFailure(removed) && Exit.findErrorOption(removed)).toMatchObject({ _tag: "Some", value: { reason: "Busy", sessionId: id } });
@@ -173,6 +173,45 @@ describe("the agent leaving", () => {
           expect(log.filter((event) => event.data.type === "message" && event.data.message.role === "user")).toHaveLength(1);
         }),
       { configs: { agent: { stopGrace: 0 } }, deadlines: { dispose: Duration.seconds(30) } },
+    );
+  }, 30_000);
+
+  test("a session cannot be deleted while a restart of the agent is still stopping its turn, though its channels are gone; once the turn has stopped, it can", () => {
+    // The model answers once the gate opens, within the stopping agent's grace.
+    const gate = Effect.runSync(Deferred.make<void>());
+    const llm = fakeLlm([gated(gate, reply("late"))]);
+    return served(
+      (home) => [paths(home, home), host(), sessions, tools, testTools().plugin, llm.plugin, agent],
+      (client, core) =>
+        Effect.gen(function* () {
+          const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+          const old = yield* core.run(Agent);
+          yield* Effect.forkChild(call(client, "agent.prompt", { sessionId: id, content: text("go"), requestId: "r1" }));
+          yield* waitFor(
+            Effect.sync(() => llm.requests.length),
+            (asked) => asked === 1,
+          );
+
+          const restart = yield* Effect.forkChild(core.restart("agent", { force: true }));
+          // The old agent's hooks and channels are retired, but its turn still runs, in its call, for the grace.
+          yield* waitFor(client["Channel.List"](), (listed: readonly ChannelInfo[]) => !listed.some((channel) => channel.id === "agent.prompt"));
+          expect(yield* old.busy(id)).toBe(true);
+          expect(hostError(yield* Effect.exit(call(client, "sessions.delete", { sessionId: id })))).toMatchObject({ code: "Busy", subject: id });
+          const removed = yield* Effect.exit(core.run(Effect.flatMap(Sessions, (store) => store.remove(id))));
+          expect(Exit.isFailure(removed) && Exit.findErrorOption(removed)).toMatchObject({ _tag: "Some", value: { reason: "Busy", sessionId: id } });
+
+          // The call answers, the old turn stops with the session whole, and the replacement takes over; with no turn
+          // running, the session goes.
+          yield* Deferred.succeed(gate, undefined);
+          yield* Fiber.join(restart);
+          yield* waitFor(call(client, "agent.running"), (running) => (running as readonly string[]).length === 0);
+          expect(ofType((yield* call(client, "sessions.events", { sessionId: id })) as SessionEvent[], "message").map((data) => data.message.role)).toEqual([
+            "user",
+            "assistant",
+          ]);
+          expect(yield* call(client, "sessions.delete", { sessionId: id })).toBeNull();
+        }),
+      { configs: { agent: { stopGrace: 20 } }, deadlines: { dispose: Duration.seconds(30) } },
     );
   }, 30_000);
 });

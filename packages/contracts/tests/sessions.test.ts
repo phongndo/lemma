@@ -45,6 +45,7 @@ const recording = () => {
     branch: answer("branch", []),
     checkout: answer("checkout", info),
     mark: answer("mark", info),
+    hold: answer("hold", undefined),
     remove: answer("remove", undefined),
   };
   return { asked, store };

@@ -381,6 +381,34 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         );
       });
 
+    /**
+     * How many holds each held session has, and how many removals of each session being removed run. `hold` and
+     * `remove` each check the other's count and add to their own in one step, so a session is never both.
+     */
+    const holds = new Map<string, number>();
+    const removing = new Map<string, number>();
+    const count = (counts: Map<string, number>, sessionId: string, by: 1 | -1) => {
+      const next = (counts.get(sessionId) ?? 0) + by;
+      if (next === 0) counts.delete(sessionId);
+      else counts.set(sessionId, next);
+    };
+
+    const hold: Service["hold"] = (sessionId) =>
+      Effect.acquireRelease(
+        Effect.flatMap(locate(sessionId), (entry) =>
+          Effect.suspend(() => {
+            // Removed while it was found.
+            if (entries.get(sessionId) !== entry) return Effect.fail(notFound(sessionId, `Session ${sessionId} does not exist`));
+            if (removing.has(sessionId)) {
+              return Effect.fail(new SessionError({ sessionId, reason: "Removing", message: `Session ${sessionId} is being deleted` }));
+            }
+            count(holds, sessionId, 1);
+            return Effect.void;
+          }),
+        ),
+        () => Effect.sync(() => count(holds, sessionId, -1)),
+      );
+
     /** What `remove` does once every `SessionRemoveHook` handler let it. */
     const removeNow = (sessionId: string) =>
       Effect.gen(function* () {
@@ -405,12 +433,25 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       });
 
     const remove: Service["remove"] = (sessionId) =>
-      hooks
-        .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
-        .pipe(
-          // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
-          Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
-        );
+      Effect.acquireUseRelease(
+        Effect.suspend(() => {
+          if (holds.has(sessionId)) {
+            return Effect.fail(
+              new SessionError({ sessionId, reason: "Busy", message: "This session is in use, by a running turn or other work; stop it before deleting" }),
+            );
+          }
+          count(removing, sessionId, 1);
+          return Effect.void;
+        }),
+        () =>
+          hooks
+            .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
+            .pipe(
+              // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
+              Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
+            ),
+        () => Effect.sync(() => count(removing, sessionId, -1)),
+      );
 
     const branch: Service["branch"] = (sessionId, options) =>
       Effect.flatMap(opened(sessionId), (open) => {
@@ -492,6 +533,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       branch,
       checkout,
       mark,
+      hold,
       remove,
     } satisfies Service;
   });

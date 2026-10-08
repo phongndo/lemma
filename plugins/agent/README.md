@@ -115,11 +115,13 @@ A prompt sent while the session's turn runs does what its `whenBusy` says:
 - `steer`: queued; placed in the running turn after its current step (step 6).
 - `reject`: fails `Busy`.
 
-A session with a turn running cannot be deleted: the agent handles
-`SessionRemoveHook` and fails `Busy`, whoever asks. While a deletion it let
-through runs, a prompt to the session fails `Session`, so no turn starts in a
-session as it goes; its queued prompts fail `Session` too, and its journal goes
-with it.
+A session with a turn running cannot be deleted: each turn holds its session
+(`Sessions.hold`) from before it starts until it has stopped, through a
+stopping agent's grace too (see [Stopping](#stopping)). A prompt that would
+start a turn in a session being deleted fails `Session`, as in one that does
+not exist. When the agent hears a session removed (`SessionRemoved`), its
+queued prompts fail `Session` and its journal goes; one removed while no agent
+ran goes when the next starts.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Retracted`), and `QueueChanged` reports every change with a revision that only

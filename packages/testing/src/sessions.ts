@@ -1,5 +1,5 @@
-import { Effect, Layer, Result } from "effect";
-import type { Context, Scope } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Result, Scope } from "effect";
+import type { Context } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
@@ -158,6 +158,47 @@ export function sessionsConformance(name: string, compose: () => readonly Plugin
         }),
       ));
 
+    test("remove fails Busy while the session is held, and removes it once every hold's scope has closed", () =>
+      run((store) =>
+        Effect.gen(function* () {
+          const { id } = yield* store.create({ cwd: "/work/a" });
+          yield* store.append(id, note("one"));
+          const first = yield* Scope.make();
+          const second = yield* Scope.make();
+          yield* store.hold(id).pipe(Scope.provide(first));
+          yield* store.hold(id).pipe(Scope.provide(second));
+          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
+          yield* Scope.close(first, Exit.void);
+          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
+          expect((yield* store.events(id)).length).toBe(1);
+          yield* Scope.close(second, Exit.void);
+          yield* store.remove(id);
+          expect(reason(yield* Effect.result(store.get(id)))).toBe("NotFound");
+        }),
+      ));
+
+    test("hold is refused on a missing session, NotFound, and while a removal runs, Removing; a refused removal leaves it to be held", () =>
+      run((store, seen) =>
+        Effect.gen(function* () {
+          expect(reason(yield* Effect.result(Effect.scoped(store.hold("missing"))))).toBe("NotFound");
+          const { id } = yield* store.create({ cwd: "/work/a" });
+          // A removal ends when a handler refuses it.
+          seen.kept.add(id);
+          expect(reason(yield* Effect.result(store.remove(id)))).toBe("Busy");
+          yield* Effect.scoped(store.hold(id));
+          seen.kept.delete(id);
+          // Held up in `SessionRemoveHook`, past its check for holds, a removal refuses every hold until it ends.
+          const stall = { entered: yield* Deferred.make<void>(), open: yield* Deferred.make<void>() };
+          seen.stalled.set(id, stall);
+          const removal = yield* Effect.forkChild(store.remove(id));
+          yield* Deferred.await(stall.entered);
+          expect(reason(yield* Effect.result(Effect.scoped(store.hold(id))))).toBe("Removing");
+          yield* Deferred.succeed(stall.open, undefined);
+          yield* Fiber.join(removal);
+          expect(reason(yield* Effect.result(Effect.scoped(store.hold(id))))).toBe("NotFound");
+        }),
+      ));
+
     test("refusals: a missing session or event, an unknown parent", () =>
       run((store) =>
         Effect.gen(function* () {
@@ -195,23 +236,29 @@ interface Seen {
   readonly appended: { readonly sessionId: string; readonly event: SessionEvent }[];
   readonly changed: { readonly id: string; readonly lastSeq: number }[];
   readonly removed: string[];
-  /** Sessions whose removal it refuses, `Busy`, as a plugin using one does (the agent, while a turn runs). */
+  /** Sessions whose removal it refuses, `Busy`, as a `SessionRemoveHook` handler may. */
   readonly kept: Set<string>;
+  /** Sessions whose removal it holds up until `open`, saying so with `entered`, as a slow handler would. */
+  readonly stalled: Map<string, { readonly entered: Deferred.Deferred<void>; readonly open: Deferred.Deferred<void> }>;
 }
 
-/** Another plugin beside the store: it records what the store publishes, and refuses to remove what it keeps. */
+/** Another plugin beside the store: it records what the store publishes, and refuses or holds up the removals it is told to. */
 function recorder(): Seen {
-  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], kept: new Set() };
+  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], kept: new Set(), stalled: new Map() };
   const plugin = definePlugin({
     id: "conformance-recorder",
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
-        yield* owner.on(SessionRemoveHook, (input, next) =>
-          seen.kept.has(input.sessionId)
-            ? Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: `"${input.sessionId}" is in use` }))
-            : next(input),
-        );
+        yield* owner.on(SessionRemoveHook, (input, next) => {
+          if (seen.kept.has(input.sessionId)) {
+            return Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: `"${input.sessionId}" is in use` }));
+          }
+          const stall = seen.stalled.get(input.sessionId);
+          return stall === undefined
+            ? next(input)
+            : Effect.andThen(Deferred.succeed(stall.entered, undefined), Effect.andThen(Deferred.await(stall.open), next(input)));
+        });
         yield* owner.observe(SessionAppended, (payload) => Effect.sync(() => void seen.appended.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionChanged, ({ info }) => Effect.sync(() => void seen.changed.push(info)), { buffer: 256 });
         yield* owner.observe(SessionRemoved, ({ sessionId }) => Effect.sync(() => void seen.removed.push(sessionId)), { buffer: 256 });

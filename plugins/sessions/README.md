@@ -120,9 +120,11 @@ costs re-reading the files.
   and a session larger than the longest string Node allows still opens (each line
   must still fit in one). Opening validates every line; listing uses `JSON.parse`
   alone.
-- **Removal.** `remove` runs through `SessionRemoveHook`, so a plugin using the
-  session can refuse whoever asks (the agent fails `Busy` while a turn runs in
-  it) and the session stays. Otherwise it deletes the file and closes it, then
+- **Removal.** Holds (`hold`) are counted per session, in memory: the store
+  starts with none, as the plugins that held sessions through it restart with
+  it. `remove` checks that the session has none and marks it as being removed
+  in one step, then runs through `SessionRemoveHook`; a handler that refuses
+  keeps the session. Otherwise it deletes the file and closes it, then
   fsyncs its directory so a power loss does not bring the session back (best
   effort: on a failing disk it may come back, whole); the session is gone from
   memory and listings, and `SessionRemoved` is published.

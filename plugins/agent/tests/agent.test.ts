@@ -461,20 +461,17 @@ describe("agent", () => {
   it("refuses deleting a session while its turn runs; admits no prompt while a deletion runs, and drops the queue with it", async () => {
     const entered = Effect.runSync(Deferred.make<void>());
     const release = Effect.runSync(Deferred.make<void>());
-    // Inside the agent's handler (a later order): past the agent's check, a deletion waits for `release`, as on a slow disk.
+    // Past the store's check for holds, a deletion waits for `release`, as on a slow disk.
     const slowRemoval = definePlugin({
       id: "slow-removal",
       layer: Layer.effectDiscard(
         Effect.flatMap(PluginContext, (owner) =>
-          owner.on(
-            SessionRemoveHook,
-            (input, next) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(release);
-                return yield* next(input);
-              }),
-            { order: 1 },
+          owner.on(SessionRemoveHook, (input, next) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              return yield* next(input);
+            }),
           ),
         ).pipe(Effect.orDie),
       ),
@@ -496,14 +493,19 @@ describe("agent", () => {
 
         const removal = yield* Effect.forkChild(store.remove(id));
         yield* Deferred.await(entered);
-        // The session is still there, but no turn starts in it.
-        expect(yield* Effect.flip(a.prompt(id, text("too late")))).toMatchObject({ reason: "Session", sessionId: id });
+        // The session is still there, but no turn starts in it: the store holds it for none.
+        expect(yield* Effect.flip(a.prompt(id, text("too late")))).toMatchObject({
+          reason: "Session",
+          sessionId: id,
+          message: `Session ${id} is being deleted`,
+        });
         expect(yield* a.busy(id)).toBe(false);
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(removal);
+        // Heard removed, the agent drops the session's queue and journal.
         expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: id });
         expect(yield* a.queue(id)).toEqual([]);
-        expect((yield* readJournals(dir)).has(id)).toBe(false);
+        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
       }),
     );
   });

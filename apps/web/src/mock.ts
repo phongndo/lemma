@@ -1052,7 +1052,7 @@ export const createMockHost = (): Host => {
     serveCall("sessions", SessionChannels.delete, async ({ sessionId }) => {
       sessionOf(sessionId);
       if (running.has(sessionId))
-        throw new HostError({ code: "Busy", subject: sessionId, message: "A turn is running in this session; stop it before deleting" });
+        throw new HostError({ code: "Busy", subject: sessionId, message: "This session is in use, by a running turn or other work; stop it before deleting" });
       sessions.delete(sessionId);
       logs.publish({ sessionId });
       sessionChanges.publish({ type: "session-removed", sessionId });
