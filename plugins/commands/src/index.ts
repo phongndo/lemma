@@ -1,9 +1,8 @@
 import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries, Registry } from "@lemma/core";
-import { Channels, CommandError, Commands, CommandsChanged, Inspectors, InteractionError, Paths, serveCommands } from "@lemma/contracts";
-import type { Contribution } from "@lemma/core";
-import type { Command, CommandInfo, CommandResult } from "@lemma/contracts";
+import { Channels, CommandError, Commands, CommandsChanged, Inspectors, InteractionError, Paths, serveCommands, withContribution } from "@lemma/contracts";
+import type { Command, CommandInfo } from "@lemma/contracts";
 
 type Service = Context.Service.Shape<typeof Commands>;
 
@@ -22,12 +21,12 @@ const message = (cause: unknown): string => (cause instanceof Error ? cause.mess
 const infoOf = (items: readonly { readonly item: Command; readonly pluginId: string }[]): CommandInfo[] =>
   items.map(({ item: { run: _run, ...fields }, pluginId }) => ({ ...fields, source: pluginId })).sort(byCategoryThenTitle);
 
-/** A run of `id` that its contributor, `pluginId`, left: stopping or replaced. */
+/** A run of `id` stopped because its command was removed while it ran. */
 const withdrawn = (id: string, pluginId: string, cause?: unknown) =>
   new CommandError({
     command: id,
     reason: "Withdrawn",
-    message: `"${id}" was withdrawn: ${pluginId}, which registered it, stopped or was replaced; run it again to reach its replacement`,
+    message: `"${id}" was withdrawn while it ran: ${pluginId}, which registered it, removed it, stopped, or was replaced`,
     ...(cause === undefined ? {} : { cause }),
   });
 
@@ -67,59 +66,41 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
       yield* Effect.addFinalizer(() => remove);
     });
 
-  /**
-   * Runs `work` with the command registered under `id`, as part of its
-   * contributor's lifetime (`Registries.run`), from the moment it is found.
-   * One that left before the work was admitted, as when a reload replaced it,
-   * is looked for again, since its replacement may answer for the id now:
-   * `NotFound` only when nothing does. Work that outlives its contributor's
-   * dispose deadline is interrupted and `Withdrawn`.
-   */
-  const withCommand = (
-    id: string,
-    work: (contribution: Contribution<Command>, left: Effect.Effect<void>) => Effect.Effect<CommandResult, CommandError>,
-    // The contribution that had left when it was found, which a second look must not find again.
-    refused?: Contribution<Command>,
-  ): Effect.Effect<CommandResult, CommandError> =>
-    Effect.flatMap(registries.items(Entries), (items) => {
-      const found = items.find((contribution) => contribution.item.id === id);
-      if (found === undefined || found === refused) return Effect.fail(new CommandError({ command: id, reason: "NotFound", message: `No command "${id}"` }));
-      return registries
-        .run(found, (left) => Effect.exit(work(found, left)))
-        .pipe(
-          Effect.matchEffect({
-            onFailure: (error) => (error.reason === "Absent" ? withCommand(id, work, found) : Effect.fail(withdrawn(id, found.pluginId, error))),
-            onSuccess: (exit) => exit,
-          }),
-        );
-    });
-
+  // Within the lifetime of the plugin that registered the command, found again if a reload replaced it first.
   const run: Service["run"] = (id, context) =>
     owner.trace(
       `commands.run ${id}`,
-      withCommand(id, ({ item: command, pluginId }, left) => {
-        const ran = awaitable(() => command.run(context)).pipe(
-          Effect.map((result) => result ?? {}),
-          Effect.catchCause((cause) => {
-            if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
-            const error = Cause.squash(cause);
-            const dismissed = error instanceof InteractionError && error.reason === "Dismissed";
-            return Effect.fail(
-              new CommandError({
-                command: id,
-                reason: dismissed ? "Cancelled" : "Failed",
-                message: dismissed ? `${command.title} was cancelled` : message(error),
-                cause: error,
-              }),
-            );
-          }),
-        );
-        // A command can wait on a question for good: it stops when its plugin leaves rather than hold up that plugin's stop.
-        return Effect.raceFirst(
-          ran,
-          Effect.andThen(left, () => Effect.fail(withdrawn(id, pluginId))),
-        );
-      }),
+      withContribution(
+        registries,
+        () => Effect.map(registries.items(Entries), (items) => items.find((contribution) => contribution.item.id === id)),
+        ({ item: command, pluginId }, left) => {
+          const ran = awaitable(() => command.run(context)).pipe(
+            Effect.map((result) => result ?? {}),
+            Effect.catchCause((cause) => {
+              if (Cause.hasInterruptsOnly(cause)) return Effect.failCause(cause as Cause.Cause<never>);
+              const error = Cause.squash(cause);
+              const dismissed = error instanceof InteractionError && error.reason === "Dismissed";
+              return Effect.fail(
+                new CommandError({
+                  command: id,
+                  reason: dismissed ? "Cancelled" : "Failed",
+                  message: dismissed ? `${command.title} was cancelled` : message(error),
+                  cause: error,
+                }),
+              );
+            }),
+          );
+          // A command can wait on a question for good: it stops when it is removed rather than hold up its plugin's stop.
+          return Effect.raceFirst(
+            ran,
+            Effect.andThen(left, () => Effect.fail(withdrawn(id, pluginId))),
+          );
+        },
+        {
+          missing: () => new CommandError({ command: id, reason: "NotFound", message: `No command "${id}"` }),
+          expired: ({ pluginId }, error) => withdrawn(id, pluginId, error),
+        },
+      ),
     );
 
   // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the commands.

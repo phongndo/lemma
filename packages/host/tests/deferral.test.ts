@@ -5,7 +5,7 @@ import { HostControl, Interaction } from "@lemma/contracts";
 import type { ChangeReport } from "@lemma/contracts";
 import { callServed, pathsPlugin } from "@lemma/contracts/testing";
 import { definePlugin, makeCore, PluginContext, Registries, Registry } from "@lemma/core";
-import type { Core } from "@lemma/core";
+import type { Core, Plugin } from "@lemma/core";
 import commands from "@lemma/plugin-commands";
 import { host } from "@lemma/plugin-commands-builtin";
 import { changedBetween, deferral } from "../src/deferral.ts";
@@ -71,6 +71,9 @@ describe("deferral", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const scope = yield* Effect.scope;
+          let activations = 0;
+          // commands-host as bundled, counting its instances.
+          const counted: Plugin = { ...host, layer: (config) => Layer.merge(host.layer(config), Layer.effectDiscard(Effect.sync(() => void activations++))) };
           const running = yield* Deferred.make<Core>();
           const restarted = yield* Deferred.make<void>();
           const restart = Effect.flatMap(Deferred.await(running), (core) =>
@@ -86,7 +89,7 @@ describe("deferral", () => {
               return { ...report, restarted: [], deferred: true };
             }),
           } as unknown as Context.Service.Shape<typeof HostControl>;
-          const core = yield* makeCore([pathsPlugin("/lemma"), commands, host], {
+          const core = yield* makeCore([pathsPlugin("/lemma"), commands, counted], {
             provide: {
               provides: [HostControl, Interaction],
               layer: Layer.mergeAll(Layer.succeed(HostControl, control), Layer.succeed(Interaction, {} as Context.Service.Shape<typeof Interaction>)),
@@ -99,9 +102,7 @@ describe("deferral", () => {
             message: "Reloading config: the host restarts the plugins it changes once this command has ended",
           });
           yield* Deferred.await(restarted);
-          expect(yield* callServed(registries, "commands.list", undefined)).toContainEqual(
-            expect.objectContaining({ id: "host.reload", source: "commands-host" }),
-          );
+          expect(activations).toBe(2);
         }),
       ),
     ));

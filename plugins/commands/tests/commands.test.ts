@@ -364,6 +364,33 @@ describe("channels", () => {
     expect(log).toEqual(["p 1 stopped", "p 1 finalized", "p 2 stopped", "p 2 finalized"]);
   });
 
+  test("a command that outlives its plugin's dispose deadline is withdrawn: a client gets Withdrawn, and a caller in the host the CommandError, caused by the expiry", async () => {
+    const started = Effect.runSync(Queue.unbounded<void>());
+    const release = Deferred.makeUnsafe<void>();
+    // Stops for nothing, its plugin leaving included, until the test lets it.
+    const stuck = command("p.stuck", () => Effect.uninterruptible(Effect.andThen(Queue.offer(started, undefined), Deferred.await(release))));
+    const [client, caller] = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths, commands, contributor("p", [stuck])], { deadlines: { dispose: Duration.millis(20) } });
+          const registries = yield* core.run(Registries);
+          const registry = yield* core.run(Commands);
+          // Both outside `core.run`, as the transport calls: a restart drains `core.run` work too.
+          const served = yield* Effect.forkChild(Effect.flip(callServed(registries, "commands.run", { id: "p.stuck" })));
+          const direct = yield* Effect.forkChild(Effect.flip(registry.run("p.stuck", { cwd: "/" })));
+          yield* Queue.take(started);
+          yield* Queue.take(started);
+          // Done once the deadline has passed and the plugin's disposal went on without the work.
+          yield* core.restart("p", { force: true });
+          yield* Deferred.succeed(release, undefined);
+          return [yield* Fiber.join(served), yield* Fiber.join(direct)] as const;
+        }),
+      ),
+    );
+    expect(client).toEqual(withdrawnFrom("commands.run", "call"));
+    expect(caller).toMatchObject({ _tag: "CommandError", reason: "Withdrawn", command: "p.stuck", cause: { _tag: "RegistryError", reason: "Expired" } });
+  });
+
   test("the changes stream starts with every command now, then sends the list after each change", async () => {
     const plugins = new Map([paths, commands, contributor("p", [command("p.one")])].map((plugin) => [plugin.id, plugin]));
     const ids = (list: readonly CommandInfo[]) => list.map((info) => info.id);

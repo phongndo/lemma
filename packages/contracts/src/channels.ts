@@ -1,7 +1,7 @@
 import { Cause, Effect, Fiber, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, isExpectedFailure, Registry } from "@lemma/core";
-import type { Awaitable, Contribution, Registries } from "@lemma/core";
+import type { Awaitable, Contribution, Registries, RegistryError } from "@lemma/core";
 import { HostError } from "./status.ts";
 
 export type ChannelKind = "call" | "stream";
@@ -304,49 +304,65 @@ export const withdrawnFrom = (id: string, kind: ChannelKind): HostError =>
     message: `"${id}" was withdrawn: its plugin stopped or was replaced; ${kind === "call" ? "call" : "open"} it again to reach its replacement`,
   });
 
+/**
+ * Runs `work` with the contribution `find` finds, as part of its
+ * contributor's lifetime (`Registries.run`) from the moment it is found, as a
+ * plugin serves a request with what another plugin contributed (a channel, a
+ * command): all of `work` ends before that contributor's finalizers run, and
+ * `left` completes when the contribution leaves. If it left before the work
+ * was admitted, as when a reload replaced it, it calls `find` again, since a
+ * replacement may answer now. It fails `missing` when `find` finds nothing, or
+ * only what had left, and `expired` when the work outlives its contributor's
+ * dispose deadline.
+ */
+export const withContribution = <I, A, E, R, F, RF, M, X>(
+  registries: Context.Service.Shape<typeof Registries>,
+  find: () => Effect.Effect<Contribution<I> | undefined, F, RF>,
+  work: (contribution: Contribution<I>, left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
+  errors: { readonly missing: () => M; readonly expired: (contribution: Contribution<I>, error: RegistryError) => X },
+): Effect.Effect<A, E | F | M | X, R | RF> => {
+  // `refused`: the contribution that had left when it was found, which a second look must not find again.
+  const attempt = (refused?: Contribution<I>): Effect.Effect<A, E | F | M | X, R | RF> =>
+    Effect.flatMap(find(), (found) =>
+      found === undefined || found === refused
+        ? Effect.fail(errors.missing())
+        : registries
+            .run(found, (left) => Effect.exit(work(found, left)))
+            .pipe(
+              Effect.matchEffect({
+                onFailure: (error) => (error.reason === "Absent" ? attempt(found) : Effect.fail(errors.expired(found, error))),
+                onSuccess: (exit) => exit,
+              }),
+            ),
+    );
+  return attempt();
+};
+
 const find = <Kind extends ChannelKind>(registries: Context.Service.Shape<typeof Registries>, id: string, kind: Kind) =>
-  Effect.flatMap(registries.items(Channels), (items): Effect.Effect<Contribution<Extract<Channel, { readonly kind: Kind }>>, HostError> => {
+  Effect.flatMap(registries.items(Channels), (items): Effect.Effect<Contribution<Extract<Channel, { readonly kind: Kind }>> | undefined, HostError> => {
     const found = answering(items, id);
-    if (found === undefined) return Effect.fail(notFound(id));
-    if (found.item.kind !== kind) {
+    if (found !== undefined && found.item.kind !== kind) {
       const verb = found.item.kind === "call" ? "call" : "open";
       return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `"${id}" is a ${found.item.kind}, not a ${kind}: ${verb} it` }));
     }
-    return Effect.succeed(found as Contribution<Extract<Channel, { readonly kind: Kind }>>);
+    return Effect.succeed(found as Contribution<Extract<Channel, { readonly kind: Kind }>> | undefined);
   });
 
 /**
  * Runs `work` with the channel that answers for `id`, as a transport serves a
- * client's request: as part of its plugin's lifetime (`Registries.run`) from
- * the moment it is found, so all of `work` ends before that plugin's
- * finalizers run, and `left` completes when the plugin leaves. If that channel
- * left before the work was admitted, as when a reload replaced it, the work
- * runs with the one answering now: it fails `NotFound` only when nothing
- * answers, or a channel of the other kind does, and `Withdrawn`
- * (`withdrawnFrom`) when it outlives its plugin's dispose deadline.
+ * client's request: within its plugin's lifetime, with the one answering now
+ * if a reload replaced it first (`withContribution`). It fails `NotFound`
+ * only when nothing answers, or a channel of the other kind does, and
+ * `Withdrawn` (`withdrawnFrom`) when it outlives its plugin's dispose
+ * deadline.
  */
 export const withChannel = <Kind extends ChannelKind, A, E, R>(
   registries: Context.Service.Shape<typeof Registries>,
   id: string,
   kind: Kind,
   work: (contribution: Contribution<Extract<Channel, { readonly kind: Kind }>>, left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
-): Effect.Effect<A, E | HostError, R> => {
-  // `refused`: the contribution that had left when it was found, which a second look must not find again.
-  const serve = (refused?: Contribution<Channel>): Effect.Effect<A, E | HostError, R> =>
-    Effect.flatMap(find(registries, id, kind), (contribution) =>
-      contribution === refused
-        ? Effect.fail(notFound(id))
-        : registries
-            .run(contribution, (left) => Effect.exit(work(contribution, left)))
-            .pipe(
-              Effect.matchEffect({
-                onFailure: (error) => (error.reason === "Absent" ? serve(contribution) : Effect.fail(withdrawnFrom(id, kind))),
-                onSuccess: (exit) => exit,
-              }),
-            ),
-    );
-  return serve();
-};
+): Effect.Effect<A, E | HostError, R> =>
+  withContribution(registries, () => find(registries, id, kind), work, { missing: () => notFound(id), expired: () => withdrawnFrom(id, kind) });
 
 /** A channel as clients list it: `source` is the plugin that added it. */
 export const ChannelInfo = Schema.Struct({
