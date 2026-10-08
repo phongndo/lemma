@@ -353,8 +353,8 @@ const program = Effect.gen(function* () {
     reloading.withPermits(1)(
       Effect.gen(function* () {
         const next = yield* load();
-        // One that restarts the plugin asking for it (as `commands.run` runs `host.reload`), or the transport serving
-        // the request, is checked now and applied once that work is over.
+        // One that restarts the plugin asking for it (`commands-host` running `host.reload`, or `commands` serving that
+        // run), or the transport serving the request, is checked now and applied once that work is over.
         const touched = touchedBy(applied, next);
         const after = yield* deferral(touched, Object.keys(pinned));
         if (after === undefined) return yield* apply(loader, next);
@@ -407,7 +407,8 @@ const program = Effect.gen(function* () {
             }
           }
           // Only a loaded plugin that is not running, or is forced, restarts, with what needs it: one that restarts the
-          // plugin asking for it (as `commands.run` runs `host.restart-plugin`) applies once that work is over.
+          // plugin asking for it (`commands-host` running `host.restart-plugin`, or `commands` serving that run) applies
+          // once that work is over.
           const state = snapshot.plugins.find((plugin) => plugin.id === pluginId)?.state;
           const after =
             state === undefined || (state === "active" && !options?.force)
@@ -450,8 +451,8 @@ const program = Effect.gen(function* () {
                 );
               }
             }
-            // A change that restarts the plugin asking for it (the transport serving the call, or one whose channel
-            // call asks) applies once that work is over.
+            // A change that restarts the plugin asking for it (the transport serving the call, or one whose channel call
+            // or command asks) applies once that work is over.
             const after = yield* deferral(restartedBy(applied.known, Object.keys(rows), { provided }), Object.keys(pinned));
             if (after !== undefined) return yield* writeDeferred(loader, rows, scope, after);
             return yield* write(loader, rows, scope, "plugins");

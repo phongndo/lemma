@@ -156,13 +156,14 @@ export const Notice = Event.make<NoticePayload>("lemma/notice");
  * What a configure or reload did. `deferred`: the change restarts a plugin
  * whose work is asking for it, which the change would otherwise wait on or cut
  * off: a call that plugin serves (as `llm.add-custom` saves the llm plugin's
- * config, or `commands.run` runs `host.reload`), or the transport serving the
- * request. So it was checked (and a configure's rows written), and applies
- * once that work has ended, the reply sent; the report is then empty, and if
- * the transport restarts, clients reconnect. A deferred change that still
- * fails is reported as an error `Notice`, a configure's rows undone in the
- * file. A stream a plugin serves is no such work: it ends as soon as its
- * plugin leaves, so a change it asks for applies at once, ending it.
+ * config) or a command it registered (as `host.reload` restarts
+ * `commands-host`), or the transport serving the request. So it was checked
+ * (and a configure's rows written), and applies once that work has ended, the
+ * reply sent; the report is then empty, and if the transport restarts,
+ * clients reconnect. A deferred change that still fails is reported as an
+ * error `Notice`, a configure's rows undone in the file. A stream a plugin
+ * serves is no such work: it ends as soon as its plugin leaves, so a change it
+ * asks for applies at once, ending it.
  */
 export interface ChangeReport extends ReloadReport {
   readonly deferred?: boolean;
@@ -198,10 +199,11 @@ export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, num
  * plugin's own code (a transport's handler, a command): from inside `core.run`
  * it would wait on itself until the dispose deadline. A plugin's disposal
  * also waits for the work run with its items, such as the channel calls it
- * serves: a change that would restart the plugin whose work asks for it is
- * deferred until that work has ended (see `ChangeReport`). Once asked, a
- * change runs to its end and publishes `PluginsChanged` even if its caller
- * stops waiting, as a stream does when the change restarts its plugin.
+ * serves and the commands it registered: a change that would restart the
+ * plugin whose work asks for it is deferred until that work has ended (see
+ * `ChangeReport`). Once asked, a change runs to its end and publishes
+ * `PluginsChanged` even if its caller stops waiting, as a stream does when the
+ * change restarts its plugin.
  */
 export class HostControl extends Context.Service<
   HostControl,

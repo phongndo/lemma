@@ -1,9 +1,21 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Stream } from "effect";
-import { Channels, CommandChannels, Commands, CommandsChanged, elementsOf, InteractionError, InteractionOrigin, resultOf } from "@lemma/contracts";
+import type { Context } from "effect";
+import {
+  Channels,
+  CommandChannels,
+  Commands,
+  CommandsChanged,
+  elementsOf,
+  InteractionError,
+  InteractionOrigin,
+  resultOf,
+  withdrawnFrom,
+} from "@lemma/contracts";
 import type { Channel, ChannelCall, ChannelStream, Command, CommandError, CommandInfo } from "@lemma/contracts";
 import { callServed, pathsPlugin } from "@lemma/contracts/testing";
-import { definePlugin, Events, makeCore, makeLoader, Registries } from "@lemma/core";
+import { Admitted, definePlugin, Events, makeCore, makeLoader, Registries } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
 import commands from "../src/index.ts";
 
 const contributor = (id: string, contributed: readonly Command[]) =>
@@ -115,6 +127,73 @@ describe("commands", () => {
       }),
     );
     expect(interrupted).toBe(true);
+  });
+
+  test("runs a command as part of its plugin's lifetime: what it does finds that plugin in Admitted, within the call that runs it", async () => {
+    const whose = command("p.whose", () => Effect.map(Admitted, (admitted) => ({ message: admitted.map((work) => work.pluginId).join(" ") })));
+    const ran = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths, commands, contributor("p", [whose])]);
+          const registries = yield* core.run(Registries);
+          const direct = yield* core.run(Effect.flatMap(Commands, (registry) => registry.run("p.whose", { cwd: "/" })));
+          return [direct, yield* callServed(registries, "commands.run", { id: "p.whose" })];
+        }),
+      ),
+    );
+    // So a change the command asks for that restarts `p` (as `host.reload` may restart `commands-host`) waits for it to end.
+    expect(ran).toEqual([{ message: "p" }, { message: "commands p" }]);
+  });
+
+  test("a command found just as a reload replaced it runs on the replacement; one found just as its plugin stopped is NotFound", async () => {
+    let instances = 0;
+    const counted = definePlugin({
+      id: "p",
+      requires: [Commands],
+      layer: Layer.effectDiscard(
+        Effect.flatMap(Commands, (registry) => {
+          const instance = ++instances;
+          return registry.register(command("p.which", () => ({ message: `instance ${instance}` })));
+        }),
+      ),
+    });
+    // What the commands plugin found at its last look, and whether its next look finds that again: a look from before a change.
+    let last: unknown = [];
+    let stale = false;
+    const reader = (registries: Context.Service.Shape<typeof Registries>): Context.Service.Shape<typeof Registries> => ({
+      items: (registry) => {
+        if (registry.name !== "lemma/commands") return registries.items(registry);
+        if (stale) return ((stale = false), Effect.succeed(last as never));
+        return Effect.map(registries.items(registry), (items) => (last = items));
+      },
+      changes: registries.changes,
+      run: registries.run,
+    });
+    const looking: Plugin = {
+      ...commands,
+      layer: (config) => Layer.provide(commands.layer(config), Layer.effect(Registries, Effect.map(Registries, reader))),
+    };
+    const plugins = new Map([paths, looking, counted].map((plugin) => [plugin.id, plugin]));
+    const [replaced, gone] = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const loader = yield* makeLoader({
+            source: { resolve: (id) => Effect.succeed(plugins.get(id)!) },
+            composition: { plugins: { paths: {}, commands: {}, p: {} } },
+          });
+          const which = loader.core.run(Effect.flatMap(Commands, (registry) => registry.run("p.which", { cwd: "/" })));
+          expect(yield* which).toEqual({ message: "instance 1" });
+          yield* loader.core.restart("p", { force: true });
+          stale = true;
+          const replaced = yield* which;
+          yield* loader.apply({ plugins: { paths: {}, commands: {} } });
+          stale = true;
+          return [replaced, yield* Effect.flip(which)] as const;
+        }),
+      ),
+    );
+    expect(replaced).toEqual({ message: "instance 2" });
+    expect(gone).toMatchObject({ reason: "NotFound", command: "p.which" });
   });
 
   test("publishes the list when commands come and go with their plugin", async () => {
@@ -236,6 +315,53 @@ describe("channels", () => {
     expect(Exit.isFailure(ended) && Cause.squash(ended.cause)).toMatchObject({ code: "Withdrawn", subject: "commands.run" });
     expect(stopped).toBe(true);
     expect(again).toEqual({ message: "done" });
+  });
+
+  test("a client's run ends Withdrawn at once when the command's plugin reloads or stops, despite a long dispose deadline, and that plugin's finalizers run once the command has stopped; run again, it reaches the replacement", async () => {
+    let instances = 0;
+    const log: string[] = [];
+    const started = Effect.runSync(Queue.unbounded<number>());
+    const waiting = definePlugin({
+      id: "p",
+      requires: [Commands],
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const instance = ++instances;
+          yield* Effect.addFinalizer(() => Effect.sync(() => void log.push(`p ${instance} finalized`)));
+          // Waits for good, as on a question nobody answers.
+          const waits = Effect.andThen(Queue.offer(started, instance), Effect.never).pipe(
+            Effect.onInterrupt(() => Effect.sync(() => void log.push(`p ${instance} stopped`))),
+          );
+          yield* (yield* Commands).register(command("p.waits", () => waits));
+        }),
+      ),
+    });
+    const plugins = new Map([paths, commands, waiting].map((plugin) => [plugin.id, plugin]));
+    const ended = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const loader = yield* makeLoader({
+            source: { resolve: (id) => Effect.succeed(plugins.get(id)!) },
+            composition: { plugins: { paths: {}, commands: {}, p: {} } },
+            deadlines: { dispose: Duration.seconds(30) },
+          });
+          const registries = yield* loader.core.run(Registries);
+          // As the transport calls it: within the commands plugin's lifetime, which the command's plugin leaving does not end.
+          const run = Effect.forkChild(Effect.flip(callServed(registries, "commands.run", { id: "p.waits" })));
+          const reloaded = yield* run;
+          expect(yield* Queue.take(started)).toBe(1);
+          yield* loader.core.restart("p", { force: true });
+          const first = yield* Fiber.join(reloaded);
+          const stopped = yield* run;
+          expect(yield* Queue.take(started)).toBe(2);
+          yield* loader.apply({ plugins: { paths: {}, commands: {} } });
+          return [first, yield* Fiber.join(stopped)];
+        }),
+      ).pipe(Effect.timeout(Duration.seconds(5))),
+    );
+    // What a client gets when the commands plugin itself leaves.
+    expect(ended).toEqual([withdrawnFrom("commands.run", "call"), withdrawnFrom("commands.run", "call")]);
+    expect(log).toEqual(["p 1 stopped", "p 1 finalized", "p 2 stopped", "p 2 finalized"]);
   });
 
   test("the changes stream starts with every command now, then sends the list after each change", async () => {

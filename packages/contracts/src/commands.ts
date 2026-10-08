@@ -2,7 +2,7 @@ import { Context, Data, Effect, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import { Event } from "@lemma/core";
 import type { Awaitable, Events, PluginContext } from "@lemma/core";
-import { defineChannel, eventFeed, serveChannel } from "./channels.ts";
+import { defineChannel, eventFeed, serveChannel, withdrawnFrom } from "./channels.ts";
 import type { Channel } from "./channels.ts";
 import { InteractionOrigin } from "./interaction.ts";
 
@@ -37,11 +37,13 @@ export type CommandResult = typeof CommandResult.Type;
 
 /**
  * `NotFound`: no command has the id. `Cancelled`: the person dismissed one of
- * its questions. `Failed`: anything else the command failed with.
+ * its questions. `Withdrawn`: the plugin that registered it stopped or was
+ * replaced while it ran, which stopped it; running it again reaches the
+ * replacement. `Failed`: anything else the command failed with.
  */
 export class CommandError extends Data.TaggedError("CommandError")<{
   readonly command: string;
-  readonly reason: "NotFound" | "Failed" | "Cancelled";
+  readonly reason: "NotFound" | "Failed" | "Cancelled" | "Withdrawn";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -75,7 +77,14 @@ export class Commands extends Context.Service<
     readonly register: (command: Command) => Effect.Effect<void, CommandError, Scope.Scope | PluginContext>;
     /** Sorted by category, then title. */
     readonly list: Effect.Effect<readonly CommandInfo[]>;
-    /** Interruption stays interruption; every failure becomes a `CommandError`. */
+    /**
+     * Runs as part of the lifetime of the plugin that registered the command
+     * (`Registries.run`): that plugin's finalizers wait for it, and what it
+     * does finds that plugin in `Admitted`, so a change it asks for that
+     * restarts the plugin applies once it has ended. When that plugin stops or
+     * is replaced while it runs, it stops at once and fails `Withdrawn`.
+     * Interruption stays interruption; every failure becomes a `CommandError`.
+     */
     readonly run: (id: string, context: CommandContext) => Effect.Effect<CommandResult, CommandError>;
   }
 >()("lemma/Commands") {}
@@ -96,9 +105,10 @@ export const CommandChannels = {
   }),
   /**
    * Answers when the command ends, and interrupting the call (a client that
-   * leaves) interrupts the command, as does its provider leaving (stopping or
-   * reloading): the call then fails `Withdrawn`, and running it again reaches
-   * the replacement. It runs in `cwd`, the host's when absent; its questions
+   * leaves) interrupts the command, as does its provider, or the plugin that
+   * registered the command, leaving (stopping or reloading): the call then
+   * fails `Withdrawn` either way, and running it again reaches the
+   * replacement. It runs in `cwd`, the host's when absent; its questions
    * carry `origin` as their `InteractionOrigin`, so the client that ran it can
    * tell them from others'.
    */
@@ -150,9 +160,15 @@ export const serveCommands = (
   defaults: { readonly cwd: string },
 ): readonly Channel[] => [
   serveChannel(CommandChannels.list, () => commands.list),
-  // A command can wait on a question for good: it stops when the provider leaves rather than hold that up.
+  // A command can wait on a question for good: it stops when the provider leaves rather than hold that up. One stopped
+  // by its own plugin leaving ends as the call's withdrawal too: either way, running it again reaches the replacement.
   serveChannel(CommandChannels.run, ({ id, cwd, sessionId, origin }, { left }) => {
-    const run = commands.run(id, { cwd: cwd ?? defaults.cwd, ...(sessionId === undefined ? {} : { sessionId }) });
+    const run = commands.run(id, { cwd: cwd ?? defaults.cwd, ...(sessionId === undefined ? {} : { sessionId }) }).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "Withdrawn",
+        () => Effect.fail(withdrawnFrom(CommandChannels.run.id, "call")),
+      ),
+    );
     return Effect.raceFirst(origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin), left);
   }),
   serveChannel(CommandChannels.changes, () =>
