@@ -121,8 +121,14 @@ describe("turns against a running host", () => {
 
     expect((await invoke(["session", "title", other, "elsewhere"], home)).code).toBe(ExitCode.ok);
     expect((await invoke(["run", session, "check the shell", "--model", "mock/scripted"], home)).code).toBe(ExitCode.ok);
+    // Each stream has its own order: the agent's turn-ended can trail the log's turn-end, so it waits for both.
     expect(
-      await settled(async () => of("sessions.log").some((element) => element.type === "appended" && element.event.data.type === "turn-end") || undefined),
+      await settled(
+        async () =>
+          (of("sessions.log").some((element) => element.type === "appended" && element.event.data.type === "turn-end") &&
+            of("agent.activity").some((element) => element.type === "turn-ended")) ||
+          undefined,
+      ),
     ).toBe(true);
     interrupt.abort();
     expect(await following).toBe(ExitCode.interrupted);
