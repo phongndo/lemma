@@ -356,6 +356,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
           })))
       );
     case "events":
+      // Watching answers nothing unless asked to: answers given alone would go unused.
+      if (options.answers.length > 0 && options.questions === undefined) return usage("events answers questions only with --questions ask, ignore, or dismiss");
       return extra(1) ?? eventsCommand;
     case "session":
       return sessionCommand(sub, arg, rest, options, io);

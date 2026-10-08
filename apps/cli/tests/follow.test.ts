@@ -5,7 +5,8 @@ import type { AgentActivity, AgentView, AssistantMessage, EventData, Interaction
 import { settled } from "../../../scripts/e2e.ts";
 import { GIVE_UP } from "../src/channels.ts";
 import { ExitCode } from "../src/command.ts";
-import type { Io, Options } from "../src/command.ts";
+import type { Failure, Io, Options } from "../src/command.ts";
+import { toCliError } from "../src/remote.ts";
 import { runCommand } from "../src/run.ts";
 import { fakeHost, fed } from "./fake.ts";
 import type { Fed } from "./fake.ts";
@@ -63,6 +64,8 @@ interface Host {
   /** Cuts the command's connection: what is in flight on it is lost, and it cannot connect again until `restore`. */
   readonly drop: () => void;
   readonly restore: () => void;
+  /** Closes the connection as the host does over a message too big for it. */
+  readonly refuseTooLarge: () => void;
 }
 
 /**
@@ -121,6 +124,7 @@ const scripted = (script: {
       ),
     drop: () => connection.drop(),
     restore: () => connection.restore(),
+    refuseTooLarge: () => connection.refuseTooLarge(),
   };
   const view = script.view ?? { output: [], queue: [], queueRevision: 0 };
   const calls: Readonly<Record<string, (payload: any) => Effect.Effect<unknown, HostError>>> = {
@@ -685,5 +689,36 @@ describe("a run that fails once its prompt may be placed", () => {
       // With --json the error carries the id; without, it is said.
       expect(said).toEqual(json ? [] : [expect.stringContaining(`\`lemma run ${sessionId} --request-id ${sent}\``)]);
     }
+  });
+
+  test("a prompt the agent refused was never placed: it is reported as it is, with no id to rejoin", async () => {
+    for (const follow of [false, true]) {
+      for (const code of ["Busy", "NoModel", "Retracted"]) {
+        const host = scripted({ prompt: () => Effect.fail(new HostError({ code, subject: sessionId, message: `${code}: ${sessionId}` })) });
+        const { said, exit } = await run(host, { follow, requestId: undefined });
+        const error = failed(exit) as { readonly code?: string; readonly requestId?: string };
+        expect(error.code).toBe(code);
+        expect(error.requestId).toBeUndefined();
+        expect(said).toEqual([]);
+      }
+    }
+  });
+
+  test("a prompt the host refused as too large never arrived: it fails TooLarge, exit 1, naming the host's limit, with no id to rejoin", async () => {
+    const host = scripted({
+      prompt: ({ refuseTooLarge }) =>
+        Effect.suspend(() => {
+          refuseTooLarge();
+          return Effect.never;
+        }),
+    });
+    const { said, exit } = await run(host, { follow: false, requestId: undefined });
+    const error = toCliError(failed(exit) as Failure);
+    expect(error).toMatchObject({ code: "TooLarge", exit: ExitCode.failed });
+    expect(error.message).toContain("100 MiB");
+    expect(error.requestId).toBeUndefined();
+    // Not made again on the next connection: it would be refused again.
+    expect(host.prompts).toHaveLength(1);
+    expect(said.filter((line) => line.includes("--request-id"))).toEqual([]);
   });
 });

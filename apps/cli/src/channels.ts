@@ -1,7 +1,7 @@
 import { Cause, Deferred, Effect, Fiber, Queue, Stream } from "effect";
 import type { Scope } from "effect";
 import { RpcClientError } from "effect/rpc";
-import { callChannel, connect, dropped, follow as followChannel } from "@lemma/client";
+import { callChannel, connect, dropped, follow as followChannel, tooLarge } from "@lemma/client";
 import type { ConnectOptions, ConnectionStatus, Followable, Host, HostRpcClient } from "@lemma/client";
 import { HostError } from "@lemma/contracts";
 import type { ChannelDeclaration } from "@lemma/contracts";
@@ -213,7 +213,9 @@ export const reconnecting = <A, R>(host: Host, io: Io, body: Effect.Effect<A, Fa
  * while it waits, `Host.channel.call` makes one declared `repeatable` again
  * once the connection is back (within `reconnecting`, which bounds the
  * wait); any other fails `Disconnected`, since it may or may not have taken
- * effect: whether to run the command again is the person's call.
+ * effect: whether to run the command again is the person's call. A
+ * connection the host closed over a message too big for it fails as that
+ * (`tooLarge`, `toCliError`): the call never arrived.
  */
 export const callOn = <Payload, Success>(
   host: Host,
@@ -222,7 +224,7 @@ export const callOn = <Payload, Success>(
 ): Effect.Effect<Success, Failure> =>
   Effect.tryPromise({ try: () => host.channel.call(channel, payload), catch: (error) => error as HostError | Error }).pipe(
     Effect.catch((error) => {
-      if (dropped(error) && channel.repeatable !== true)
+      if (dropped(error) && !tooLarge(error) && channel.repeatable !== true)
         return Effect.fail(
           new CliError({
             code: "Disconnected",

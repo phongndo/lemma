@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { Deferred, Duration, Effect, Fiber, Semaphore } from "effect";
-import { AgentChannels, branchOf, contentText, SessionChannels, trajectory } from "@lemma/contracts";
+import { AgentChannels, branchOf, contentText, HostError, SessionChannels, trajectory } from "@lemma/contracts";
 import type {
   AgentActivity,
   AgentView,
@@ -17,6 +17,7 @@ import type {
   TextContent,
   TurnOptions,
 } from "@lemma/contracts";
+import { tooLarge } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { callOn, follow, ofChannel, on, reconnecting, RUN_AGAIN } from "./channels.ts";
 import type { Calls } from "./channels.ts";
@@ -73,6 +74,16 @@ const prompt = (host: Host, payload: Prompt) =>
         : error,
     ),
   );
+
+/**
+ * Whether `agent.prompt` failed without placing the prompt: the agent refused
+ * it (`Busy`, `NoModel`, `Session`, `Hook`) or took it out of the queue unrun
+ * (`Retracted`), nothing serves the channel or the host is still starting,
+ * or the host refused the message as too large (`tooLarge`), so it never
+ * arrived. Only its withdrawal (`prompt`), or a connection lost otherwise,
+ * leaves it perhaps placed.
+ */
+const unplaced = (error: Failure): boolean => tooLarge(error) || error instanceof HostError || (error instanceof CliError && error.code !== "Withdrawn");
 
 /**
  * A failure once the prompt may be placed, as `run` reports it: with the
@@ -138,7 +149,8 @@ const result = (turn: TurnResult, options: Options, streamed: boolean): Output =
  * `--follow` streams it. A dropped connection is reconnected
  * (`reconnecting`): the prompt is sent again with its request id, and the
  * turn's streams go on from what was shown. Once the prompt may be placed,
- * any failure says the id that rejoins its turn (`afterPrompt`).
+ * any failure says the id that rejoins its turn (`afterPrompt`); a prompt
+ * refused is reported as it is (`unplaced`).
  */
 export const runCommand =
   (target: string, words: readonly string[]): Command =>
@@ -166,11 +178,17 @@ export const runCommand =
         ...(Object.keys(turn).length ? { options: turn } : {}),
         ...(options.whenBusy === undefined ? {} : { whenBusy: options.whenBusy }),
       };
-      /** Set just before the prompt is first sent: from then on it may be placed, whatever fails. */
+      /** Set just before the prompt is first sent: from then on it may be placed, whatever fails, unless its refusal says it was not. */
       let sent = false;
       const place = Effect.suspend(() => {
         sent = true;
-        return prompt(host, payload);
+        return prompt(host, payload).pipe(
+          Effect.tapError((error) =>
+            Effect.sync(() => {
+              if (unplaced(error)) sent = false;
+            }),
+          ),
+        );
       });
       return yield* reconnecting(host, io, send(host, io, options, payload, place, answers)).pipe(
         Effect.mapError((error) => (sent ? afterPrompt(error, connection.target, payload.requestId) : error)),

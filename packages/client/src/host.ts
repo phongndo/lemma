@@ -69,7 +69,7 @@ export interface Host {
      * same effect made twice as once. It waits for as long as that takes, and
      * rejects once `close` runs; a client that gives up on the host bounds it
      * (the CLI). Not when the host closed the connection over a message too
-     * big for it (1009), which the call may have sent, and would again.
+     * big for it (`tooLarge`), which the call may have sent, and would again.
      */
     readonly call: {
       <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload): Promise<Success>;
@@ -285,10 +285,15 @@ const eventsOver = (rpc: HostRpcClient, answers: boolean, onEvent: (event: HostE
 export const dropped = (error: unknown): boolean => error instanceof RpcClientError.RpcClientError && error.reason._tag !== "RpcClientDefect";
 
 /**
- * The host closed the connection over a message too big for it (1009): one
- * of the requests then in flight sent it, and would again.
+ * Whether the host closed the connection over a message too big for it
+ * (1009: its limit is 100 MiB, an attached image, say). One of the requests
+ * then in flight sent it and would again, and which one cannot be told, so
+ * `Host.channel.call` makes none of them again: every repeatable call in
+ * flight then rejects, the innocent with the guilty. A backstop only: a
+ * proxy that drops an oversized frame without that close looks like any
+ * dropped connection, and the call is made again.
  */
-const refused = (error: unknown): boolean =>
+export const tooLarge = (error: unknown): boolean =>
   error instanceof RpcClientError.RpcClientError && error.reason._tag === "SocketCloseError" && error.reason.code === 1009;
 
 /**
@@ -405,7 +410,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
         try {
           return await channels.call(target as string, payload);
         } catch (error) {
-          if (typeof target === "string" || target.repeatable !== true || !dropped(error) || refused(error)) throw error;
+          if (typeof target === "string" || target.repeatable !== true || !dropped(error) || tooLarge(error)) throw error;
           await connectedAfter(generation);
         }
       }

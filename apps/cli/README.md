@@ -65,13 +65,20 @@ so the two show the same records and accept the same queries.
   otherwise `--questions ask` prompts at the terminal (the default when
   stdin is one), `dismiss` fails them, and `ignore` (the default otherwise,
   so an agent never answers for the person) leaves them to another client
-  and prints how to answer from the CLI. The host holds a question only for
-  clients that answer questions: a command that asks, dismisses, or was
-  given answers, and always `do` and `login`. One that ignores them, or only
-  watches (`events` without `--questions`, `channels open`), holds none: a
-  question with no answering client connected goes on to fail as
-  unanswerable, which a tool asking for approval takes as a no, and one an
-  answering client holds is shown. Once no answering client is connected,
+  and prints how to answer from the CLI. `events` answers only with
+  `--questions` (`--answer` alone is a usage error). The host holds a
+  question only for clients that answer questions, and a command answers if
+  and only if it can: it was given `--answer` values, dismisses, or asks at a
+  terminal it has; `do` and `login` too, so a login with neither a terminal
+  nor answers leaves its questions to another client. One that ignores them,
+  asks with no terminal to ask at, or only watches (`events` without
+  `--questions`, `channels open`) holds none: a question with no answering
+  client connected goes on to fail as unanswerable, which a tool asking for
+  approval takes as a no, and one an answering client holds is shown. Whether
+  a command answers is settled as it connects: once its `--answer` values run
+  out, it still holds the later questions, which it ignores
+  (`--questions ignore --answer x` answers the first with `x`, and holds the
+  rest until they are answered elsewhere). Once no answering client is connected,
   the host waits 15 seconds for one to come back
   ([`interactionGraceMs`](../../plugins/transport/README.md)) before the
   question fails, so one asked during a longer drop is lost. Within that,
@@ -93,10 +100,13 @@ so the two show the same records and accept the same queries.
   `run` that fails once its prompt may be placed (it gave up on the
   connection, say, or a read of the session failed) prints the id it chose
   (without `--json`; with it, the error has it as `requestId`): running it
-  again with that id, not a new one, rejoins the turn. When the agent stops
-  with the prompt and nothing answers for `agent.prompt` once its reload is
-  over, it may still resume the prompt, so `run` exits 3, as when it gives up
-  on the connection.
+  again with that id, not a new one, rejoins the turn. A prompt refused
+  (`Busy`, `NoModel`, `Retracted`, ...) was never placed, and one the host
+  refused as larger than its 100 MiB message limit (`TooLarge`, exit 1: an
+  attached image, say) never arrived: those are reported as they are. When
+  the agent stops with the prompt and nothing answers for `agent.prompt`
+  once its reload is over, it may still resume the prompt, so `run` exits 3,
+  as when it gives up on the connection.
 - **Following a turn.** `run --follow` opens `agent.activity` and the
   session's `sessions.log` before it sends the prompt, and shows the turn
   that places it from the prompt on: the log says what the turn did, in

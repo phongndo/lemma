@@ -1,46 +1,10 @@
 import { readFile } from "node:fs/promises";
-import { createConnection, createServer } from "node:net";
-import type { AddressInfo, Socket } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
-import { settled, startLemma } from "../../../scripts/e2e.ts";
-import type { Lemma } from "../../../scripts/e2e.ts";
+import { proxy, settled, startLemma } from "../../../scripts/e2e.ts";
+import type { Lemma, Link } from "../../../scripts/e2e.ts";
 import { ExitCode, run } from "../src/cli.ts";
 import { invoke, printOnFailure } from "./invoke.ts";
-
-/** A TCP proxy to the host that can be cut (every socket destroyed, new ones refused) and restored. */
-const proxy = async (target: number) => {
-  const sockets = new Set<Socket>();
-  let down = false;
-  const server = createServer((client) => {
-    if (down) return void client.destroy();
-    const upstream = createConnection(target, "127.0.0.1");
-    sockets.add(client);
-    sockets.add(upstream);
-    client.pipe(upstream);
-    upstream.pipe(client);
-    const end = () => {
-      client.destroy();
-      upstream.destroy();
-      sockets.delete(client);
-      sockets.delete(upstream);
-    };
-    client.on("error", end).on("close", end);
-    upstream.on("error", end).on("close", end);
-  });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
-  return {
-    port: (server.address() as AddressInfo).port,
-    cut: () => {
-      down = true;
-      for (const socket of sockets) socket.destroy();
-    },
-    restore: () => {
-      down = false;
-    },
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
-  };
-};
 
 const lost = "lemma: lost the connection to the host; reconnecting…";
 const back = "lemma: reconnected to the host";
@@ -50,7 +14,7 @@ describe("a run across a cut connection", () => {
   let lemma: Lemma;
   let home: string;
   let env: Record<string, string>;
-  let link: Awaited<ReturnType<typeof proxy>>;
+  let link: Link;
   beforeAll(async () => {
     lemma = await startLemma("lemma-cli-reconnect-");
     home = lemma.home;

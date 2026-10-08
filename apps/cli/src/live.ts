@@ -34,12 +34,17 @@ const policyOf = (io: Io, options: Options) => options.questions ?? (io.ask === 
 
 /**
  * Whether a command answers the host's questions, so the host holds them for
- * it: it has answers to give (`--answer`), asks at the terminal, or dismisses
- * them. `ignore` leaves them to another client: one that answers, or with
- * none, the question fails as unanswerable, which a tool asking for approval
- * takes as a no.
+ * it: if and only if it can, having answers to give (`--answer`), dismissing
+ * them, or asking at a terminal it has. Otherwise (`ignore`, or `ask` with no
+ * terminal) it leaves them to another client that answers, or with none, the
+ * question fails as unanswerable, which a tool asking for approval takes as
+ * a no. It is decided once, as the command connects: once its `--answer`
+ * values run out, it still holds the questions it then ignores.
  */
-export const answering = (io: Io, options: Options): boolean => options.answers.length > 0 || policyOf(io, options) !== "ignore";
+export const answering = (io: Io, options: Options): boolean => {
+  const policy = policyOf(io, options);
+  return options.answers.length > 0 || policy === "dismiss" || (policy === "ask" && io.ask !== undefined);
+};
 
 /** The answer a typed value means for this question, or an error message. */
 export const toAnswer = (request: InteractionRequest, raw: string): InteractionAnswer | string => {
@@ -433,7 +438,9 @@ export const providersCommand: Command = ({ rpc }) =>
 
 /**
  * `lemma login <provider>`: runs the provider's login, answering its questions
- * per the policy. Its link and one-time code print on lines of their own, so
+ * per the policy, and holding them only if it can answer them (`answering`):
+ * with neither a terminal nor answers, they go to another client, as a
+ * `run`'s do. Its link and one-time code print on lines of their own, so
  * they copy whole into a browser anywhere; with a browser here, the link opens
  * in it and Enter opens a code's page. A browser on another machine ends on a
  * page that cannot reach the host, so the paste prompt asks for that page's
@@ -453,7 +460,7 @@ export const loginCommand =
       if (method !== "api_key" && method !== "oauth") return yield* usage(`--method must be one of ${info.auth.map((auth) => auth.type).join(", ")}`);
       if (!info.auth.some((auth) => auth.type === method))
         return yield* usage(`${provider} does not offer ${method}; it offers ${info.auth.map((auth) => auth.type).join(", ")}`);
-      const host = yield* connection.host({ answers: true });
+      const host = yield* connection.host({ answers: answering(io, options) });
       const origin = `login:${provider}`;
       /** The paste-the-address fallback of a sign-in page, as the host marks it. */
       const isPaste = (request: InteractionRequest) => request.type === "ask" && request.kind === "sign-in-code";
@@ -583,7 +590,8 @@ export const listCommandsCommand: Command = ({ rpc }) =>
   Effect.map(call(rpc, CommandChannels.list, undefined), (commands) => ({ json: commands, text: formatCommands(commands) }));
 
 /**
- * `lemma do <id>`: runs one, answering its questions per the policy. One its
+ * `lemma do <id>`: runs one, answering its questions per the policy, and
+ * holding them only if it can answer them (`answering`). One its
  * plugin's reload stopped fails (`refined`), as does one whose connection
  * dropped (`callOn`), since a command run twice need not do what it does
  * once: whether to run it again is the person's call.
@@ -592,7 +600,7 @@ export const doCommand =
   (id: string): Command =>
   (connection, io, options) =>
     Effect.gen(function* () {
-      const host = yield* connection.host({ answers: true });
+      const host = yield* connection.host({ answers: answering(io, options) });
       const origin = `command:${randomUUID()}`;
       const questions = yield* questionHandler(host, io, options, origin);
       yield* hostEvents(host, (event) =>

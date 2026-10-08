@@ -1,7 +1,7 @@
 import { Duration, Effect } from "effect";
-import { HostError } from "@lemma/contracts";
 import type { RpcClientError } from "effect/rpc";
-import { makeHostRpcHttp } from "@lemma/client";
+import { makeHostRpcHttp, tooLarge } from "@lemma/client";
+import { HostError } from "@lemma/contracts";
 import { clearRemote, discoveryPath, findTarget as resolveTarget, normalizeUrl, readDiscovery, remotePath, writeRemote } from "@lemma/contracts/discovery";
 import type { Target } from "@lemma/contracts/discovery";
 import { resolvePaths } from "@lemma/host/paths";
@@ -51,6 +51,13 @@ export const toCliError = (error: Failure, target?: Target): CliError => {
       ...(error.subject === undefined ? {} : { subject: error.subject }),
       // Naming nothing, it is the host still starting (`Channel.List`, `Host.Inspectors`); see `starting`.
       exit: error.code === "Unavailable" && error.subject === undefined ? ExitCode.unavailable : ExitCode.failed,
+    });
+  }
+  if (tooLarge(error)) {
+    return new CliError({
+      code: "TooLarge",
+      message: "The host refused a message larger than its limit of 100 MiB (an attached image, say), closing the connection",
+      exit: ExitCode.failed,
     });
   }
   const remote = target !== undefined && target.source !== "local" ? target : undefined;

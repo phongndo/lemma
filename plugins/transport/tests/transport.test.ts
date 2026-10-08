@@ -479,6 +479,53 @@ describe("transport", () => {
     30_000,
   );
 
+  /** A subscriber in a scope of its own, which `leave` closes. */
+  const joining = (host: Parameters<Parameters<typeof withHost>[0]>[0], answers: boolean) =>
+    Effect.gen(function* () {
+      const scope = yield* Scope.make();
+      const events = yield* Scope.provide(
+        Effect.flatMap(host.connect("websocket"), (client) => subscribe(client, answers)),
+        scope,
+      );
+      return { events, leave: Scope.close(scope, Exit.void) };
+    });
+
+  test(
+    "a watcher that stays keeps no question once its answerer left: it fails after the grace period",
+    () =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          const interaction = yield* host.core.run(Interaction);
+          const watcher = yield* joining(host, false);
+          const answerer = yield* joining(host, true);
+          const confirm = yield* Effect.forkChild(interaction.confirm("Held?"));
+          yield* waitFor(watcher.events, (event) => event.type === "interaction");
+          yield* answerer.leave;
+          expect(interactionError(yield* Fiber.await(confirm))).toMatchObject({ reason: "Unavailable" });
+        }),
+      ),
+    30_000,
+  );
+
+  test(
+    "a watcher that joins in the grace period does not hold the question, though it is shown it",
+    () =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          const interaction = yield* host.core.run(Interaction);
+          const answerer = yield* joining(host, true);
+          const confirm = yield* Effect.forkChild(interaction.confirm("Held?"));
+          yield* waitFor(answerer.events, (event) => event.type === "interaction");
+          yield* answerer.leave;
+          const watcher = yield* joining(host, false);
+          yield* waitFor(watcher.events, (event) => event.type === "interaction");
+          expect(interactionError(yield* Fiber.await(confirm))).toMatchObject({ reason: "Unavailable" });
+          yield* waitFor(watcher.events, (event) => event.type === "interaction-closed");
+        }),
+      ),
+    30_000,
+  );
+
   test(
     "fails Unavailable when every client stays away past the grace period",
     () =>

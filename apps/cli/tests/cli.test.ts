@@ -55,6 +55,7 @@ describe("without a host", () => {
       ["session", "checkout", "s"],
       ["events", "x"],
       ["events", "--questions", "maybe"],
+      ["events", "--answer", "yes"],
       ["channels", "bogus"],
       ["channels", "list", "x"],
       ["channels", "call"],

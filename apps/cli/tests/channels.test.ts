@@ -8,6 +8,7 @@ import { call, follow, refined } from "../src/channels.ts";
 import { CliError, ExitCode } from "../src/command.ts";
 import type { Command, Io, Options } from "../src/command.ts";
 import { doCommand, eventsCommand } from "../src/live.ts";
+import { toCliError } from "../src/remote.ts";
 import { fakeHost, fed } from "./fake.ts";
 import type { Fed } from "./fake.ts";
 
@@ -84,13 +85,28 @@ describe("a channel's failure", () => {
     expect(failed.message).toContain("run the command again");
     expect(runs).toBe(1);
   });
+
+  test("`lemma do` whose message the host refused as too large fails TooLarge: it never arrived, so running it again would not help", async () => {
+    const host: ReturnType<typeof fakeHost> = fakeHost({
+      calls: {
+        "commands.run": () =>
+          Effect.suspend(() => {
+            host.refuseTooLarge();
+            return Effect.never;
+          }),
+      },
+    });
+    const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
+    const failed = await failure(Effect.scoped(doCommand("host.toggle-plugin")(host, io, { json: false, answers: [] } as unknown as Options)));
+    expect(toCliError(failed)).toMatchObject({ code: "TooLarge", exit: ExitCode.failed });
+  });
 });
 
 describe("a command that watches the host", () => {
   const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
   const options = { json: true, answers: [] } as unknown as Options;
 
-  test("holds the host's questions only when it answers them: watching, or leaving them to others, it holds none", async () => {
+  test("holds the host's questions if and only if it can answer them: watching, or leaving them to others, it holds none", async () => {
     const subscribed = async (command: Command, terminal: Partial<Io>, fields: Partial<Options>) => {
       const host = fakeHost({ calls: { "commands.run": () => Effect.never } });
       const running = Effect.runFork(Effect.scoped(command(host, { ...io, ...terminal }, { ...options, ...fields })));
@@ -102,9 +118,14 @@ describe("a command that watches the host", () => {
     expect(await subscribed(eventsCommand, ask, {})).toEqual([false]);
     expect(await subscribed(eventsCommand, ask, { questions: "ignore" })).toEqual([false]);
     expect(await subscribed(eventsCommand, ask, { questions: "ask" })).toEqual([true]);
+    // Asked to ask, with no terminal to ask at: it cannot answer, so it holds none.
+    expect(await subscribed(eventsCommand, {}, { questions: "ask" })).toEqual([false]);
     expect(await subscribed(eventsCommand, {}, { questions: "dismiss" })).toEqual([true]);
     expect(await subscribed(eventsCommand, {}, { questions: "ignore", answers: ["yes"] })).toEqual([true]);
-    expect(await subscribed(doCommand("x.y"), {}, {})).toEqual([true]);
+    // A command's own questions, as any: at a terminal it asks, and without one or answers it holds none.
+    expect(await subscribed(doCommand("x.y"), ask, {})).toEqual([true]);
+    expect(await subscribed(doCommand("x.y"), {}, {})).toEqual([false]);
+    expect(await subscribed(doCommand("x.y"), {}, { answers: ["main"] })).toEqual([true]);
   });
 
   test("fails at once when its first connection fails, saying why as a one-shot command would", async () => {

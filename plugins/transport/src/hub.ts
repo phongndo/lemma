@@ -71,23 +71,28 @@ export const makeHub = (
       for (const subscriber of subscribers) if (subscriber.answers) count++;
       return count;
     };
+    // Joining and leaving each change the set and `drained` in one synchronous step: no other subscriber comes or goes
+    // between them, so the first answerer in replaces a drained `drained`, and the last one out completes the one it
+    // replaced, which the grace period may be waiting on.
     const join = (answers: boolean) =>
       Effect.gen(function* () {
         const subscriber: Subscriber = { answers, feed: yield* Queue.sliding<RuntimeEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<RuntimeEvent>() };
-        // Synchronous from here: no interaction can open or close between the replay and joining the set.
+        // Nor can an interaction open or close between the replay and joining the set.
         yield* Effect.sync(() => {
           for (const request of open()) Queue.offerUnsafe(subscriber.inbox, { type: "interaction", request });
           subscribers.add(subscriber);
+          if (answers && answering() === 1) drained = Deferred.makeUnsafe<void>();
         });
-        if (answers && answering() === 1) drained = yield* Deferred.make<void>();
         return subscriber;
       });
     const leave = (subscriber: Subscriber) =>
       Effect.gen(function* () {
-        subscribers.delete(subscriber);
+        yield* Effect.sync(() => {
+          subscribers.delete(subscriber);
+          if (subscriber.answers && answering() === 0) Deferred.doneUnsafe(drained, Effect.void);
+        });
         yield* Queue.shutdown(subscriber.feed);
         yield* Queue.shutdown(subscriber.inbox);
-        if (subscriber.answers && answering() === 0) yield* Deferred.succeed(drained, undefined);
       });
 
     // `subscribed` first, once the subscriber has joined: a request's reply on the same socket can overtake the join.

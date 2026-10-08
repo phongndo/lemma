@@ -1,6 +1,8 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createConnection, createServer } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
@@ -177,4 +179,45 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
     await stopAll();
     throw error;
   }
+};
+
+/** A TCP proxy to a host's port that a test can cut (each socket destroyed, new ones refused until `restore`), as a network that fails does. */
+export interface Link {
+  readonly port: number;
+  readonly cut: () => void;
+  readonly restore: () => void;
+  readonly close: () => Promise<void>;
+}
+
+export const proxy = async (target: number): Promise<Link> => {
+  const sockets = new Set<Socket>();
+  let down = false;
+  const server = createServer((client) => {
+    if (down) return void client.destroy();
+    const upstream = createConnection(target, "127.0.0.1");
+    sockets.add(client);
+    sockets.add(upstream);
+    client.pipe(upstream);
+    upstream.pipe(client);
+    const end = () => {
+      client.destroy();
+      upstream.destroy();
+      sockets.delete(client);
+      sockets.delete(upstream);
+    };
+    client.on("error", end).on("close", end);
+    upstream.on("error", end).on("close", end);
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  return {
+    port: (server.address() as AddressInfo).port,
+    cut: () => {
+      down = true;
+      for (const socket of sockets) socket.destroy();
+    },
+    restore: () => {
+      down = false;
+    },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
 };

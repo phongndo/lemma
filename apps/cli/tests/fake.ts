@@ -74,11 +74,11 @@ class Wire extends EventTarget {
       if (this.readyState === 1) this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
     }, 0);
   }
-  /** Ends it as a network that fails does. */
-  fail() {
+  /** Ends it with `code`: as a network that fails does (1006, after an error), or as the host does, closing it. */
+  fail(code = 1006) {
     this.readyState = 3;
-    this.dispatchEvent(new Event("error"));
-    this.dispatchEvent(Object.assign(new Event("close"), { code: 1006, reason: "" }));
+    if (code === 1006) this.dispatchEvent(new Event("error"));
+    this.dispatchEvent(Object.assign(new Event("close"), { code, reason: "" }));
   }
 }
 
@@ -86,6 +86,8 @@ class Wire extends EventTarget {
 export interface FakeHost extends Connection {
   readonly drop: () => void;
   readonly restore: () => void;
+  /** Closes the connection as the host does over a message too big for it (1009); the next one is let in. */
+  readonly refuseTooLarge: () => void;
   /** What each `Host.Events` subscription said it does: whether it answers questions. */
   readonly subscriptions: () => readonly boolean[];
 }
@@ -225,6 +227,12 @@ export const fakeHost = (host: {
       for (const wire of wires) {
         hangUp(wire);
         wire.fail();
+      }
+    },
+    refuseTooLarge: () => {
+      for (const wire of wires) {
+        hangUp(wire);
+        wire.fail(1009);
       }
     },
     restore: () => {
