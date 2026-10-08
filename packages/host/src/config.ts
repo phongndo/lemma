@@ -7,13 +7,11 @@ import { ConfigFile } from "@lemma/contracts";
 import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
 import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts";
 import { Diagnostic } from "@lemma/core";
-import type { Composition, PluginEntry } from "@lemma/core";
-import { HOST_PLUGIN_ID } from "@lemma/composition";
 import type { PathsService } from "./paths.ts";
 
 interface LoadedComposition {
-  /** Always contains the `host` row carrying `paths`; the host plugin cannot be disabled by a file. */
-  readonly composition: Composition;
+  /** The `plugins` rows of both files, merged. */
+  readonly rows: Readonly<Record<string, PluginRow>>;
   /** Errors (unreadable or invalid files) and warnings. Every message names the file. */
   readonly diagnostics: readonly Diagnostic[];
   /** The files consulted, in merge order (user first), and whether each existed. */
@@ -95,26 +93,12 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
         }),
       );
     }
-    for (const file of [user, project]) {
-      if (file.plugins[HOST_PLUGIN_ID] !== undefined) {
-        diagnostics.push(
-          new Diagnostic({
-            severity: "warning",
-            pluginId: HOST_PLUGIN_ID,
-            message: `${file.path}: the "${HOST_PLUGIN_ID}" row is ignored; the host plugin is always loaded with the resolved paths`,
-            suggestion: `Remove the "${HOST_PLUGIN_ID}" row`,
-          }),
-        );
-      }
-    }
-    const withoutHost = (rows: Readonly<Record<string, PluginRow>>) => Object.fromEntries(Object.entries(rows).filter(([id]) => id !== HOST_PLUGIN_ID));
     const merged = mergeRows([
-      { scope: "user", rows: withoutHost(user.plugins) },
-      { scope: "project", rows: withoutHost(project.plugins) },
+      { scope: "user", rows: user.plugins },
+      { scope: "project", rows: project.plugins },
     ]);
-    const plugins: Record<string, PluginEntry> = { ...(merged.plugins as Record<string, PluginEntry>), [HOST_PLUGIN_ID]: { config: paths } };
     return {
-      composition: { plugins },
+      rows: merged.plugins,
       diagnostics,
       files: [
         { path: user.path, found: user.found },

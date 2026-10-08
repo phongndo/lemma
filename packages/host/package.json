@@ -22,7 +22,6 @@
     "@lemma/plugin-compaction": "workspace:*",
     "@lemma/plugin-credentials": "workspace:*",
     "@lemma/plugin-file-search-fff": "workspace:*",
-    "@lemma/plugin-interaction": "workspace:*",
     "@lemma/plugin-llm-pi-ai": "workspace:*",
     "@lemma/plugin-project-context": "workspace:*",
     "@lemma/plugin-sessions": "workspace:*",

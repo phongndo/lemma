@@ -42,11 +42,11 @@ describe("resolvePaths", () => {
 });
 
 describe("loadComposition", () => {
-  test("missing files yield the host row alone, without diagnostics", () =>
+  test("missing files yield no rows, without diagnostics", () =>
     withPaths(async (paths) => {
       const loaded = await Effect.runPromise(loadComposition(paths));
       expect(loaded.diagnostics).toEqual([]);
-      expect(loaded.composition).toEqual({ plugins: { host: { config: paths } } });
+      expect(loaded.rows).toEqual({});
       expect(loaded.files).toEqual([
         { path: paths.userConfig, found: false },
         { path: paths.projectConfig, found: false },
@@ -83,12 +83,11 @@ describe("loadComposition", () => {
       expect(loaded.diagnostics).toEqual([]);
       expect(loaded.trusted).toBe(true);
       expect(loaded.files.map((file) => file.found)).toEqual([true, true]);
-      expect(loaded.composition.plugins).toEqual({
+      expect(loaded.rows).toEqual({
         llm: { config: { default: "openai/gpt" } },
         tools: { enabled: false, config: { shell: "bash" } },
         sessions: {},
         mcp: { config: { servers: [] } },
-        host: { config: paths },
       });
       expect(loaded.enabledIn).toEqual({ tools: "project" });
       expect(loaded.configIn).toEqual({ llm: "project", tools: "user", mcp: "project" });
@@ -116,7 +115,7 @@ describe("loadComposition", () => {
       expect(schema?.message?.startsWith(`${paths.projectConfig}:`)).toBe(true);
       expect(schema?.pluginId).toBe("tools");
       expect(schema?.path).toEqual(["plugins", "tools", "enabled"]);
-      expect(loaded.composition.plugins).toEqual({ llm: { config: {} }, host: { config: paths } });
+      expect(loaded.rows).toEqual({ llm: { config: {} } });
     }));
 
   test("an untrusted project's file is not read, and a warning says how to trust it", () =>
@@ -125,7 +124,7 @@ describe("loadComposition", () => {
       await writeFile(paths.projectConfig, `{ "plugins": { "transport": { "config": { "host": "0.0.0.0", "token": "known" } } } }`);
       const loaded = await Effect.runPromise(loadComposition(paths));
       expect(loaded.trusted).toBe(false);
-      expect(loaded.composition.plugins).toEqual({ host: { config: paths } });
+      expect(loaded.rows).toEqual({});
       expect(loaded.files[1]).toEqual({ path: paths.projectConfig, found: true });
       expect(loaded.diagnostics.map((d) => d.severity)).toEqual(["warning"]);
       expect(loaded.diagnostics[0]?.suggestion).toContain("trustedProjects");
@@ -144,12 +143,12 @@ describe("loadComposition", () => {
       await writeFile(paths.projectConfig, `{ "trustedProjects": [${JSON.stringify(paths.cwd)}], "plugins": { "tools": {} } }`);
       const untrusted = await Effect.runPromise(loadComposition(paths));
       expect(untrusted.trusted).toBe(false);
-      expect(untrusted.composition.plugins).toEqual({ host: { config: paths } });
+      expect(untrusted.rows).toEqual({});
 
       await writeFile(paths.userConfig, `{ "trustedProjects": [${JSON.stringify(paths.cwd)}] }`);
       const trusted = await Effect.runPromise(loadComposition(paths));
       expect(trusted.trusted).toBe(true);
-      expect(trusted.composition.plugins).toEqual({ tools: {}, host: { config: paths } });
+      expect(trusted.rows).toEqual({ tools: {} });
       expect(trusted.diagnostics.map((d) => d.message)).toEqual([expect.stringContaining(`"trustedProjects" is ignored`)]);
     }));
 
@@ -162,16 +161,6 @@ describe("loadComposition", () => {
     expect(isTrusted("/work/app", ["app", "."])).toBe(false);
     expect(isTrusted("/work/app", [])).toBe(false);
   });
-
-  test("a host row in a file is ignored with a warning", () =>
-    withPaths(async (paths) => {
-      await writeFile(paths.userConfig, `{ "trustedProjects": [${JSON.stringify(paths.cwd)}] }`);
-      await writeFile(paths.projectConfig, `{ "plugins": { "host": { "enabled": false }, "tools": {} } }`);
-      const loaded = await Effect.runPromise(loadComposition(paths));
-      expect(loaded.diagnostics.map((d) => d.severity)).toEqual(["warning"]);
-      expect(loaded.diagnostics[0]?.message).toContain(paths.projectConfig);
-      expect(loaded.composition.plugins).toEqual({ tools: {}, host: { config: paths } });
-    }));
 });
 
 describe("patchConfig", () => {
@@ -285,7 +274,7 @@ describe("updateConfig", () => {
       expect(update.previous).toBeUndefined();
       expect(parseJsonc(update.text)).toEqual({ plugins: { bash: { enabled: false } } });
       let loaded = await Effect.runPromise(loadComposition(paths));
-      expect(loaded.composition.plugins.bash).toEqual({ enabled: false });
+      expect(loaded.rows.bash).toEqual({ enabled: false });
       expect(loaded.enabledIn).toEqual({ bash: "user" });
 
       await Effect.runPromise(update.restore);
@@ -295,9 +284,9 @@ describe("updateConfig", () => {
 
       await writeFile(paths.userConfig, `{ "plugins": { "edit": { "enabled": false } } } // note`);
       const second = await Effect.runPromise(updateConfig(paths.userConfig, { edit: { enabled: true } }));
-      expect((await Effect.runPromise(loadComposition(paths))).composition.plugins.edit).toBeUndefined();
+      expect((await Effect.runPromise(loadComposition(paths))).rows.edit).toBeUndefined();
       await Effect.runPromise(second.restore);
-      expect((await Effect.runPromise(loadComposition(paths))).composition.plugins.edit).toEqual({ enabled: false });
+      expect((await Effect.runPromise(loadComposition(paths))).rows.edit).toEqual({ enabled: false });
     }));
 
   test("writes through a link to the file it points to, keeping that file's mode and leaving no temporary file", () =>

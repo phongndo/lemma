@@ -24,9 +24,21 @@ edit rows in place, keeping comments, and write the file whole (through a
 link, to the file it points to); `compositionInfo`'s id is stable across
 processes, because session `request` events record it.
 
-## The host plugin
+## The host runtime
 
-`hostPlugin` provides `Paths`, `HostControl`, and the host API version. It activates inside `makeLoader`, before the loader value exists, so `main.ts` binds the handle through a `Deferred<Loader>` (see `tests/host-plugin.test.ts`; the handle's `composition` is `compositionInfo(yield* loader.composition, (yield* loader.core.inspect).plugins)`). Two kernel facts shape the rest:
+The host provides `Paths`, `HostControl`, `Interaction`, and the host API
+version to its plugins itself: `hostRuntime` (`src/runtime.ts`) is the
+loader's `provide`, so none of them is a plugin, has a row, or can be
+replaced ([configuration](../../docs/configuration.md)). Their contracts are
+documented where `@lemma/contracts` declares them. The runtime is built inside
+`makeLoader`, before the loader value exists, so the `HostControl` handle
+main.ts builds reaches the loader through a `Deferred<Loader>`, and its methods
+wait until the composition is up (see `tests/runtime.test.ts`).
+`reportFaults` logs each plugin fault and publishes it as an error `Notice`
+from that plugin and `PluginsChanged`, recording it in the fault history first
+so the list it publishes has it. The runtime is not a plugin, so its own
+failures are no `PluginFault`: what it starts logs them. Two kernel facts shape
+the rest:
 
-- `Loader.apply` retires the current revision and drains in-flight `core.run` work before swapping. A `HostControl.reload` executed _inside_ `core.run` therefore waits on itself until the dispose deadline. Call it from plugin code (a transport's handler runs in its plugin scope) or, in the app, from the service value captured once with `loader.core.run(HostControl)`.
+- `Loader.apply` retires the current revision and drains in-flight `core.run` work before swapping. A `HostControl.reload` executed _inside_ `core.run` therefore waits on itself until the dispose deadline. Call it from plugin code (a transport's handler runs in its plugin scope) or, in the app, from the service value read once with `loader.core.run(HostControl)`.
 - A fault raised while a plugin is still staging (activation inside a reload) is published with the pre-swap snapshot; the reload's own `PluginsChanged` follows with the final state. Events are losable by design: the app's log and `core.inspect` remain the source of truth.

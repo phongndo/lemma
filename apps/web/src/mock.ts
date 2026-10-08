@@ -313,9 +313,9 @@ export const createMockHost = (): Host => {
     const fields = describeConfig(schema);
     return { ...plugin, configFields: fields, config: configValues(schema, configRows[plugin.id] ?? {}, fields) };
   };
+  // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
+  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@1"];
   const plugins: PluginStatus[] = [
-    bundled("host", { provides: ["lemma/Paths", "lemma/HostControl"], locked: "Reads the config files and loads every other plugin" }),
-    bundled("interaction", { provides: ["lemma/Interaction"], locked: needed }),
     bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"], locked: needed }),
     bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"], locked: needed }),
     bundled("tools", { provides: ["lemma/Tools"], locked: needed }),
@@ -1193,6 +1193,7 @@ export const createMockHost = (): Host => {
         cwd: CWD,
         home: HOME,
         composition: { id: "c0ffee1234abcd", plugins: plugins.map((p) => ({ id: p.id, ...(p.version === undefined ? {} : { version: p.version }) })) },
+        runtime,
       }),
       plugins: async () => plugins.slice(),
       inspectors: async () => MOCK_INSPECTORS.map(({ snapshot: _snapshot, ...info }) => info),

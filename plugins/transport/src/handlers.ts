@@ -111,7 +111,7 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
     // `ChannelLifetime` finds the channel and runs the request within its lifetime; this serves what it found.
     "Channel.Open": () => openedStream,
 
-    "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition })),
+    "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition, runtime: control.runtime })),
     "Host.Events": (_, { headers }) => hub.events(headers[SUBSCRIBED_HEADER] !== undefined),
     "Host.Plugins": () => Effect.map(control.plugins, (plugins) => plugins.map(toPluginStatus)),
     "Host.Inspectors": () =>

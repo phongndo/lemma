@@ -32,7 +32,7 @@ class ScriptedWebSocket extends EventTarget {
   }
 }
 
-const info = Schema.encodeSync(HostInfo)({ version: "0.0.0", cwd: "/", home: "/", composition: { id: "c", plugins: [] } });
+const info = Schema.encodeSync(HostInfo)({ version: "0.0.0", cwd: "/", home: "/", composition: { id: "c", plugins: [] }, runtime: [] });
 
 describe("connect", () => {
   test("is not connected by a subscription that ended after acknowledging it", async () => {

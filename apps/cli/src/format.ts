@@ -121,10 +121,11 @@ const show = (value: unknown): string => (typeof value === "string" ? value : JS
 
 /**
  * One plugin as the web app's inspector shows it: its state and why, what it
- * provides and requires and who is on the other end, the hooks it intercepts,
- * the events it observes, what it contributes, and its recent faults.
+ * provides and requires and who is on the other end (the host, for what it
+ * provides itself: `runtime`), the hooks it intercepts, the events it
+ * observes, what it contributes, and its recent faults.
  */
-export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginStatus): string => {
+export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginStatus, runtime: readonly string[]): string => {
   const lines = [
     `${plugin.id}${plugin.version === undefined ? "" : ` ${plugin.version}`}  ${plugin.state}${plugin.enabled ? "" : " (off)"}  ${plugin.source}${plugin.shadows ? " (shadows bundled)" : ""}`,
     ...(pluginNote(plugins, plugin) === "" ? [] : [`  ${pluginNote(plugins, plugin)}`]),
@@ -136,7 +137,7 @@ export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginSta
     "Requires",
     ...(plugin.requires.length === 0
       ? ["  nothing"]
-      : plugin.requires.map((key) => `  ${capabilityName(key)}  from ${providerOf(plugins, key)?.id ?? "no plugin"}`)),
+      : plugin.requires.map((key) => `  ${capabilityName(key)}  from ${runtime.includes(key) ? "the host" : (providerOf(plugins, key)?.id ?? "no plugin")}`)),
     "Hooks",
     ...(plugin.hooks?.length
       ? plugin.hooks.map((hook) => {
@@ -608,17 +609,17 @@ export const formatEvents = (kernel: KernelView): string =>
     ? "No events are observed."
     : pad([["event", "observers"], ...kernel.events.map((event) => [event.name, event.observers.join(", ")])]);
 
-/** Each capability: who provides it, in what state, and who requires it. */
+/** Each capability: who provides it (the host, for what it provides itself), in what state, and who requires it. */
 export const formatCapabilities = (kernel: KernelView): string =>
   pad([
     ["capability", "provided by", "required by"],
-    ...kernel.capabilities.map((capability) => [
-      capability.key,
-      capability.providers.length === 0
-        ? "NOTHING"
-        : capability.providers.map((provider) => `${provider.plugin} (${provider.enabled ? provider.state : "off"})`).join(", "),
-      capability.users.join(", "),
-    ]),
+    ...kernel.capabilities.map((capability) => {
+      const providers = [
+        ...(capability.runtime ? ["the host"] : []),
+        ...capability.providers.map((provider) => `${provider.plugin} (${provider.enabled ? provider.state : "off"})`),
+      ];
+      return [capability.key, providers.length === 0 ? "NOTHING" : providers.join(", "), capability.users.join(", ")];
+    }),
   ]);
 
 export const formatInspectors = (inspectors: readonly InspectorInfo[]): string =>

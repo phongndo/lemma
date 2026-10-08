@@ -13,7 +13,6 @@ class Server extends Context.Service<Server, string>()("test/Server") {}
 class Slots extends Context.Service<Slots, string>()("test/Slots") {}
 class Clock extends Context.Service<Clock, string>()("test/Clock") {}
 
-const host = definePlugin({ id: "host", provides: [HostApi(1)], layer: Layer.succeed(HostApi(1), 1) });
 const llm = definePlugin({
   id: "llm",
   provides: [Llm],
@@ -34,9 +33,11 @@ const transport = definePlugin({
   config: Schema.Struct({ port: Schema.Int.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 7433))), staticDir: Schema.optional(Schema.String) }),
   layer: Layer.succeed(Server, "server"),
 });
-const bundled: readonly Plugin[] = [host, llm, agent, compaction, transport];
+const bundled: readonly Plugin[] = [llm, agent, compaction, transport];
 
-const plan = (input: Partial<PlanInput> = {}): Plan => planComposition({ bundled, local: [], rows: {}, pinned: ["host", "transport"], ...input });
+/** As the host plans: the transport pinned, and the host API version provided by the app itself. */
+const plan = (input: Partial<PlanInput> = {}): Plan =>
+  planComposition({ bundled, local: [], rows: {}, pinned: ["transport"], provided: [HostApi(1)], ...input });
 const running = (planned: Plan) =>
   Object.keys(planned.resolved.composition.plugins).filter((id) => planned.resolved.composition.plugins[id]?.enabled !== false);
 const messages = (planned: Plan, severity: "error" | "warning") =>
@@ -46,7 +47,7 @@ describe("planComposition", () => {
   test("runs every known plugin, with app defaults beneath a row's config key by key", () => {
     const defaults = { transport: { staticDir: "/web" }, agent: { cli: "lemma" } };
     const planned = plan({ defaults, rows: { transport: { config: { port: 8000 } }, llm: { config: { model: "big" } } } });
-    expect(running(planned)).toEqual(["host", "llm", "agent", "compaction", "transport"]);
+    expect(running(planned)).toEqual(["llm", "agent", "compaction", "transport"]);
     expect(planned.composition.plugins).toMatchObject({
       transport: { config: { staticDir: "/web", port: 8000 } },
       agent: { config: { cli: "lemma" } },
@@ -54,14 +55,14 @@ describe("planComposition", () => {
     });
     // A row that turns a plugin off keeps its defaults, for when it comes back.
     expect(plan({ defaults, rows: { agent: { enabled: false } } }).composition.plugins.agent).toEqual({ enabled: false, config: { cli: "lemma" } });
-    expect(planned.required).toEqual(["host", "transport"]);
+    expect(planned.required).toEqual(["transport"]);
     expect(planned.diagnostics).toEqual([]);
   });
 
   test("a local plugin replaces a bundled one by id, or by providing what it provides unless a row decides", () => {
     const mine = definePlugin({ id: "my-llm", provides: [Llm], layer: Layer.succeed(Llm, "mine") });
     const replaced = plan({ local: [{ plugin: mine, source: "user" }] });
-    expect(running(replaced)).toEqual(["host", "agent", "compaction", "transport", "my-llm"]);
+    expect(running(replaced)).toEqual(["agent", "compaction", "transport", "my-llm"]);
     expect(replaced.composition.plugins.llm).toMatchObject({ enabled: false });
     expect(plan({ local: [{ plugin: mine, source: "user" }], rows: { "my-llm": { enabled: false } } }).composition.plugins.llm?.enabled).toBeUndefined();
     const shadow = definePlugin({ id: "llm", provides: [Llm], layer: Layer.succeed(Llm, "shadow") });
@@ -118,7 +119,7 @@ describe("planComposition", () => {
 
   test("leaves out a plugin whose config does not decode, with what needs it, and runs the rest", () => {
     const planned = plan({ rows: { agent: { config: { maxSteps: "many" } } } });
-    expect(running(planned)).toEqual(["host", "llm", "transport"]);
+    expect(running(planned)).toEqual(["llm", "transport"]);
     expect(planned.composition.plugins.agent?.enabled).toBeUndefined();
     expect(planned.problems.get("agent")).toMatch(/^its config is invalid at maxSteps: Expected/);
     expect(planned.resolved.haltedBy.get("compaction")).toBe("agent");
@@ -135,7 +136,7 @@ describe("planComposition", () => {
     ]);
     const needed = plan({ rows: { compaction: { required: true }, llm: { config: { model: 5 } } } });
     expect(messages(needed, "error")).toEqual([expect.stringMatching(/^"llm" cannot run, and a required plugin needs it/)]);
-    expect(needed.required).toEqual(["host", "transport", "compaction"]);
+    expect(needed.required).toEqual(["transport", "compaction"]);
   });
 
   test("a plugin from a file is required under localRequired, unless its row says otherwise", () => {
@@ -164,10 +165,8 @@ describe("planComposition", () => {
     });
     expect(planned.problems.get("later")).toBe("it is written for version 2 of the lemma API, and this Lemma provides version 1");
     expect(running(planned)).toContain("current");
-    // The versions the app provides itself count too, and a plugin requiring one needs no plugin for it.
+    // Whichever versions the app provides are the ones that count, and a plugin requiring one needs no plugin for it.
     const appProvided = plan({
-      bundled: bundled.filter((plugin) => plugin.id !== "host"),
-      pinned: ["transport"],
       provided: [HostApi(2)],
       local: [
         { plugin: later, source: "user" },
@@ -184,7 +183,7 @@ describe("planComposition", () => {
     const local = [{ plugin: stray, source: "user" as const }];
     // Pinned or not, what requires the app's capability runs, and the stray plugin is neither needed by it nor halts it.
     for (const pinsPages of [true, false]) {
-      const planned = plan({ bundled: [...bundled, pages], local, pinned: ["host", "transport", ...(pinsPages ? ["pages"] : [])], provided: [Slots] });
+      const planned = plan({ bundled: [...bundled, pages], local, pinned: ["transport", ...(pinsPages ? ["pages"] : [])], provided: [Slots] });
       expect(running(planned)).toContain("pages");
       expect(running(planned)).not.toContain("stray");
       expect(planned.diagnostics).toEqual([
@@ -208,6 +207,16 @@ describe("planComposition", () => {
     ]);
   });
 
+  test("a bundled plugin providing what the app provides is left out, and what requires that runs without it", () => {
+    const current = definePlugin({ id: "current", requires: [HostApi(1)], layer: Layer.empty });
+    const stale = definePlugin({ id: "stale-host", provides: [HostApi(1)], layer: Layer.succeed(HostApi(1), 1) });
+    const planned = plan({ bundled: [...bundled, stale, current] });
+    expect(running(planned)).toContain("current");
+    expect(running(planned)).not.toContain("stale-host");
+    expect(planned.problems.get("stale-host")).toBe(`it provides "lemma/api@1", which the app provides itself`);
+    expect(messages(planned, "error")).toEqual([]);
+  });
+
   test("what the app provides wrongly stops the start, naming no plugin, one error per problem", () => {
     const { diagnostics } = plan({ provided: [Slots, Slots, Clock, Clock] });
     expect(diagnostics.map(({ severity, pluginId, message }) => [severity, pluginId, message])).toEqual([
@@ -228,7 +237,7 @@ describe("planComposition", () => {
     const shadow = definePlugin({ id: "llm", provides: [Llm], config: Schema.Struct({ key: Schema.String }), layer: Layer.succeed(Llm, "shadow") });
     const planned = plan({ local: [{ plugin: shadow, source: "user" }] });
     expect(planned.problems.get("llm")).toMatch(/its config is invalid/);
-    expect(running(planned)).toEqual(["host", "transport"]);
+    expect(running(planned)).toEqual(["transport"]);
     expect(planned.known.find((entry) => entry.plugin.id === "llm")?.plugin).toBe(shadow);
   });
 

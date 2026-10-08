@@ -3,9 +3,6 @@ import type { ConfigField, ConfigScope, FaultRecord, PluginChange, PluginInfo, P
 import { Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import type { Capability, Composition, EventSnapshot, HookSnapshot, Plugin, PluginSnapshot, RegistrySnapshot, ReportedFault } from "@lemma/core";
 
-/** The plugin that loads every other one. Defined here, in the browser-safe package, so the web app's catalog and the host share it. */
-export const HOST_PLUGIN_ID = "host";
-
 /** A plugin definition the app can load, with where it came from. */
 export interface KnownPlugin {
   readonly plugin: Plugin;
@@ -229,8 +226,7 @@ export function catalog({
     const haltedBy = snapshot?.haltedBy ?? resolved.haltedBy.get(plugin.id);
     const scope = enabledIn[plugin.id];
     const configScope = configIn[plugin.id];
-    // The host's own config is the resolved paths, which no file sets.
-    const fields = plugin.id === HOST_PLUGIN_ID ? undefined : formOf(plugin);
+    const fields = formOf(plugin);
     const intercepts = hooks.flatMap((hook) =>
       hook.handlers.filter((handler) => handler.pluginId === plugin.id).map(({ order }) => ({ name: hook.name, order })),
     );

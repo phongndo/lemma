@@ -4,19 +4,19 @@ import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
 import { appUrl, describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
-import type { Composition, CoreSnapshot, Event, Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, faultHistory, HOST_PLUGIN_ID, planComposition, restartedBy, withReplacements } from "@lemma/composition";
+import type { Composition, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
+import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ConfigScope, ConfigureReport, PluginChange, PluginRow, UiComposition } from "@lemma/contracts";
+import type { ConfigScope, ConfigureReport, PluginChange, UiComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import type { ConfigSection } from "./config.ts";
-import { hostPlugin } from "./host-plugin.ts";
-import type { HostControlService } from "./host-plugin.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
+import { hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
+import type { HostControlHandle } from "./runtime.ts";
 import { listUiFiles } from "./ui.ts";
 import { watchConfig, watchUi } from "./watch.ts";
 
@@ -35,9 +35,10 @@ const userPluginsDir = join(paths.home, "plugins");
 
 /** Plugins no config change may turn off, with the reason clients show. Everything they need is locked with them. */
 const pinned: Readonly<Record<string, string>> = {
-  host: "Reads the config files and loads every other plugin",
   transport: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
 };
+/** What the host provides itself (see `hostRuntime`): planned as present, and refused from a plugin. */
+const provided = runtimeCapabilities;
 
 const log = (message: string) =>
   Effect.sync(() => {
@@ -101,10 +102,9 @@ const EMPTY_UI: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, file
  * `planComposition`): what cannot run is left out with a warning unless it is
  * required, or a change brought it in. Warnings print here; errors fail.
  */
-const load = (host: Plugin): Effect.Effect<Loaded, ReloadError> =>
+const load = (): Effect.Effect<Loaded, ReloadError> =>
   Effect.gen(function* () {
-    const fixed = { [HOST_PLUGIN_ID]: { config: paths } };
-    const input = { bundled: bundled(host), pinned: Object.keys(pinned), defaults: appDefaults, fixed, localRequired: true };
+    const input = { bundled, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
     if (safe) {
       const planned = planComposition({ ...input, local: [], rows: {} });
       const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
@@ -116,11 +116,10 @@ const load = (host: Plugin): Effect.Effect<Loaded, ReloadError> =>
     const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir], {
       bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
     });
-    const { [HOST_PLUGIN_ID]: _, ...rows } = loaded.composition.plugins as Readonly<Record<string, PluginRow>>;
     const planned = planComposition({
       ...input,
       local: local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) })),
-      rows,
+      rows: loaded.rows,
     });
     // A change that would leave out a plugin not left out already is refused (the file is put back, the running
     // composition kept), whichever plugin it touched; one already left out stays so, and blocks nothing.
@@ -222,11 +221,10 @@ const checkConfigs = (next: Loaded, ids: readonly string[]): Effect.Effect<void,
 
 const program = Effect.gen(function* () {
   const programScope = yield* Effect.scope;
-  // The host plugin activates inside makeLoader, so its handle binds to the loader once it exists.
+  // The runtime's services are built inside makeLoader, before the loader exists: its handle binds to the loader once it does.
   const ready = yield* Deferred.make<Loader>();
   const reloading = yield* Semaphore.make(1);
   const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
-  let host: Plugin;
   const publish = <P>(loader: Loader, event: Event<P>, payload: P) => loader.core.run(Effect.flatMap(Events, (events) => events.publish(event, payload)));
   const faults = faultHistory();
   /** Every known plugin as clients see it, from the last applied load and a core snapshot. */
@@ -266,7 +264,7 @@ const program = Effect.gen(function* () {
       const update = yield* updateConfig(path, rows, scope, section).pipe(Effect.mapError(rejected));
       seenConfig.set(path, update.text);
       // The written rows are read back like any other change; if the host rejects them, the file is put back.
-      return yield* Effect.flatMap(load(host), (next) => apply(loader, next)).pipe(
+      return yield* Effect.flatMap(load(), (next) => apply(loader, next)).pipe(
         Effect.tapError(() => update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))))),
       );
     });
@@ -282,10 +280,10 @@ const program = Effect.gen(function* () {
       const update = yield* updateConfig(path, rows, scope, "plugins").pipe(Effect.mapError(rejected));
       seenConfig.set(path, update.text);
       const restore = update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))));
-      const next = yield* load(host).pipe(Effect.tapError(() => restore));
+      const next = yield* load().pipe(Effect.tapError(() => restore));
       yield* checkConfigs(next, Object.keys(rows)).pipe(Effect.tapError(() => restore));
       const later = reloading
-        .withPermits(1)(Effect.flatMap(load(host), (loaded) => apply(loader, loaded)))
+        .withPermits(1)(Effect.flatMap(load(), (loaded) => apply(loader, loaded)))
         .pipe(
           Effect.matchEffect({
             onSuccess: (report) =>
@@ -298,7 +296,7 @@ const program = Effect.gen(function* () {
                 Effect.andThen(
                   publish(loader, Notice, {
                     level: "error",
-                    source: HOST_PLUGIN_ID,
+                    source: "host",
                     message: `The config change could not be applied and was undone: ${error.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
                   }),
                 ),
@@ -328,8 +326,8 @@ const program = Effect.gen(function* () {
     );
   // One change at a time, reading and applying together: the watcher, `Host.Reload`, and `Host.Configure` can
   // race, and a reload that read the files earlier must not apply after one that read them later.
-  const reload = withLoader((loader) => reloading.withPermits(1)(Effect.flatMap(load(host), (next) => apply(loader, next))));
-  const handle: HostControlService = {
+  const reload = withLoader((loader) => reloading.withPermits(1)(Effect.flatMap(load(), (next) => apply(loader, next))));
+  const handle: HostControlHandle = {
     plugins: withLoader((loader) => Effect.map(loader.core.inspect, catalogOf)),
     ui: Effect.sync(() => applied.ui),
     configureUi: (rows, options) =>
@@ -382,16 +380,6 @@ const program = Effect.gen(function* () {
             // Checked here so the answer is immediate and the file is never touched: the load would refuse these too.
             const entries = catalogOf(yield* loader.core.inspect);
             for (const [id, row] of Object.entries(requested)) {
-              if (id === HOST_PLUGIN_ID) {
-                return yield* rejected(
-                  new Diagnostic({
-                    severity: "error",
-                    pluginId: id,
-                    message: `The "${id}" row is fixed: ${pinned[id]}`,
-                    suggestion: "Configure another plugin",
-                  }),
-                );
-              }
               // Resolving an unknown id yields the source's diagnostic, which lists the known plugins.
               const entry = entries.find((candidate) => candidate.id === id) ?? (yield* Effect.mapError(source.resolve(id), rejected), undefined);
               if (row.enabled === false && entry?.locked !== undefined) {
@@ -413,25 +401,21 @@ const program = Effect.gen(function* () {
               }
             }
             // The transport serves this call; a change that restarts it is applied after the reply.
-            const restarts = restartedBy(applied.known, Object.keys(rows));
+            const restarts = restartedBy(applied.known, Object.keys(rows), { provided });
             if (Object.keys(pinned).some((id) => restarts.has(id))) return yield* writeDeferred(loader, rows, scope);
             return yield* write(loader, rows, scope, "plugins");
           }),
         ),
       ),
   };
-  // Recorded on the stream the host plugin reacts to, so the catalog it publishes already has the fault.
-  host = hostPlugin({
-    control: handle,
-    faults: Stream.unwrap(withLoader((loader) => Effect.succeed(loader.core.faults))).pipe(Stream.tap((fault) => Effect.sync(() => faults.record(fault)))),
-  });
 
   if (safe) yield* log("safe mode: the bundled plugins as shipped; no config file or plugin file is read or written");
-  applied = yield* load(host);
+  applied = yield* load();
   // What cannot start is left failed, restartable, unless it is required: the essential plugins, your own, and rows marked so.
   const loader = yield* makeLoader({
     source,
     composition: applied.resolved.composition,
+    provide: hostRuntime({ paths, control: handle }),
     shutdownTimeout: SHUTDOWN_TIMEOUT,
     partialStart: { required: applied.required },
   }).pipe(
@@ -451,7 +435,7 @@ const program = Effect.gen(function* () {
     ),
   );
   yield* Deferred.succeed(ready, loader);
-  // Captured once: a reload drains in-flight core.run work, so it must not run inside core.run.
+  // The handle as plugins have it, publishing what its changes do. Read once: a reload drains in-flight core.run work, so it must not run inside core.run.
   const control = yield* loader.core.run(HostControl);
   const { plugins } = yield* loader.core.inspect;
   for (const plugin of plugins) {
@@ -488,13 +472,7 @@ const program = Effect.gen(function* () {
   );
   yield* log(`home ${paths.home}, project ${paths.cwd}`);
 
-  yield* Effect.forkScoped(
-    Stream.runForEach(loader.core.faults, (fault) =>
-      Effect.sync(() => {
-        console.error(`lemma: ${fault.message}\n${Cause.pretty(fault.cause)}`);
-      }),
-    ),
-  );
+  yield* Effect.forkScoped(reportFaults(loader, faults));
   // In safe mode no config file is read, even to remember it.
   if (!safe) for (const [path, text] of yield* readConfigFiles) seenConfig.set(path, text);
   // In safe mode the files are not read, so their changes are nothing to apply.

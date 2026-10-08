@@ -78,6 +78,7 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
   const scopes: (ConfigScope | undefined)[] = [];
   const unused = () => Effect.die("not used by the llm plugin");
   const service = {
+    runtime: [HostControl.key, Paths.key],
     plugins: Effect.succeed([{ id: "llm", ...(options.configScope === undefined ? {} : { configScope: options.configScope }) }]),
     composition: unused(),
     restart: unused,

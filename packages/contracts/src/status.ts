@@ -114,6 +114,8 @@ export const HostInfo = Schema.Struct({
   cwd: Schema.String,
   home: Schema.String,
   composition: CompositionInfo,
+  /** What the host provides itself, by capability key (`HostControl.runtime`): a plugin requiring one needs no plugin for it. */
+  runtime: Schema.Array(Schema.String),
 });
 export type HostInfo = typeof HostInfo.Type;
 

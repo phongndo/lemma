@@ -21,8 +21,16 @@ The Plugins settings page and `lemma plugins` write these rows and apply them;
 a plugin's config Schema is its settings form in both. Turning a plugin off
 also unloads the plugins that require what it provides, which return with it.
 A capability has one provider, so turning on a plugin that provides what
-another provides turns that one off. The `host` and `transport` plugins, and
-everything they need, stay on. Each plugin's README lists its settings.
+another provides turns that one off. The `transport` plugin, and everything it
+needs, stays on. Each plugin's README lists its settings.
+
+The host itself is not a plugin. It provides `Paths`, `HostControl` (managing
+the plugins), `Interaction` (questions to the user), and `HostApi` (its API
+version) to every plugin, so they have no row and nothing turns them off. A
+`host` or `interaction` row left from when they were plugins names no plugin,
+and is ignored with a warning. A plugin that provides one of them is left out,
+and one from your own files stops the start (they are required, below): to
+change how questions are answered, handle `InteractionHook` instead.
 
 Plugin files in `~/.lemma/plugins/` or `<project>/.lemma/plugins/` load
 automatically. One with a bundled plugin's id takes its place, and one
@@ -44,8 +52,8 @@ left out or failed. A config key a plugin does not read is a warning, which
 catches a setting renamed in an update. A row naming no plugin is ignored,
 unless it says `"required": true`.
 
-What is **required** must start, or the host does not: the `host` and
-`transport` plugins and what they need, every plugin from your own files (a
+What is **required** must start, or the host does not: the `transport` plugin
+and what it needs, every plugin from your own files (a
 file that does not load, which therefore names no plugin, too), and any plugin
 whose row says `"required": true`, with what it needs: a row turning off what
 a required plugin needs stops the start too, and a required plugin is never
@@ -63,7 +71,8 @@ plugins as shipped, reading no config file and no plugin file and writing
 neither: the way back when your config keeps the host from starting.
 
 A plugin says which version of the host's contracts it is written for by
-requiring `HostApi(version)` from `@lemma/contracts`, and a web app plugin by
+requiring `HostApi(version)` from `@lemma/contracts`, which the host provides
+for each version it supports, and a web app plugin by
 `defineUiPlugin({ api })`, so after an incompatible change it is left out with
 the version named rather than failing at some later call. A plugin that
 renames a setting reads its users' old rows with `migrateConfig` from

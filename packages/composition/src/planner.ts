@@ -27,8 +27,6 @@ export interface PlanInput {
   readonly pinned?: readonly string[];
   /** Config the app supplies beneath a row's `config`, key by key (the host's `staticDir`). */
   readonly defaults?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
-  /** Rows the app sets whatever the files say (the host plugin's paths). */
-  readonly fixed?: Readonly<Record<string, PluginEntry>>;
   /** Whether plugins from files must start unless their row says `required: false` (the host's policy). */
   readonly localRequired?: boolean;
   /** What the app provides itself (its `provide.provides`): every plugin has it, and a plugin providing it cannot run. */
@@ -119,7 +117,6 @@ export function planComposition(input: PlanInput): Plan {
     }
     plugins[id] = entryOf(plugins[id]!, row, input.defaults?.[id]);
   }
-  for (const [id, entry] of Object.entries(input.fixed ?? {})) plugins[id] = entry;
   const composition: Composition = { plugins };
 
   const sourceOf = (id: string) => byId.get(id)?.source;

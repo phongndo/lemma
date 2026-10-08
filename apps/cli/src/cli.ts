@@ -282,11 +282,11 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         return (
           extra(3) ??
           (({ rpc }) =>
-            Effect.flatMap(rpc["Host.Plugins"](), (plugins) => {
+            Effect.flatMap(Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"]()], { concurrency: "unbounded" }), ([info, plugins]) => {
               const plugin = plugins.find((candidate) => candidate.id === arg);
               return plugin === undefined
                 ? Effect.fail(new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg }))
-                : Effect.succeed({ json: plugin, text: formatPlugin(plugins, plugin) });
+                : Effect.succeed({ json: plugin, text: formatPlugin(plugins, plugin, info.runtime) });
             }))
         );
       }
@@ -384,8 +384,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return (
         extra(2) ??
         (({ rpc }) =>
-          Effect.map(rpc["Host.Plugins"](), (plugins) => {
-            const kernel = kernelOf(plugins);
+          Effect.map(Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"]()], { concurrency: "unbounded" }), ([info, plugins]) => {
+            const kernel = kernelOf(plugins, info.runtime);
             const key = view as keyof typeof views;
             return { json: kernel[key], text: views[key](kernel) };
           }))

@@ -12,6 +12,7 @@ import {
   InteractionHook,
   Llm,
   LlmError,
+  Paths,
   PluginsChanged,
   SessionAppended,
   SessionChanged,
@@ -317,6 +318,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
         );
         const changed = Effect.flatMap(plugins, (plugins) => events.publish(PluginsChanged, { plugins }));
         return {
+          runtime: [Paths.key, HostControl.key],
           plugins,
           composition: Effect.succeed({ id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] }),
           restart: (pluginId, options) =>

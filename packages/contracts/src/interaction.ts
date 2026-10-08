@@ -12,10 +12,8 @@ export const InteractionOrigin: Context.Reference<string | undefined> = Context.
 });
 
 /**
- * Questions for the human, answered by whichever client is attached. The
- * plugin providing `Interaction` runs `InteractionHook`; UI and transport
- * plugins answer by handling it. Interrupting the asking fiber withdraws the
- * question (a login callback that arrives first cancels a paste-the-code prompt).
+ * A question for the human, as `InteractionHook` carries it: `id` is fresh for
+ * each question, and `origin` is the asking fiber's `InteractionOrigin`.
  */
 export const InteractionRequest = Schema.Union([
   Schema.Struct({
@@ -63,8 +61,33 @@ export class InteractionError extends Data.TaggedError("InteractionError")<{
   readonly message: string;
 }> {}
 
+/**
+ * How a question reaches the human: UI and transport plugins answer by
+ * handling it, and a handler with nobody to ask passes it on. The terminal,
+ * reached when nobody answers, fails `Unavailable`. Interrupting the asking
+ * fiber interrupts the handler chain, which withdraws the question (a login
+ * callback that arrives first cancels a paste-the-code prompt; the transport
+ * then tells clients to close it).
+ */
 export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, InteractionError>("lemma/interaction.request");
 
+/**
+ * Questions for the human, provided by the host itself. Each runs
+ * `InteractionHook` with a fresh id and the asking fiber's
+ * `InteractionOrigin`; whichever client is attached answers by handling the
+ * hook, so the service knows nothing about how a question is shown. Callers
+ * see only `InteractionError`:
+ *
+ * - `Unavailable` when nobody answers, the hook or the core fails, or the
+ *   answer breaks the protocol (it is not of the question's type, or a
+ *   `select` answer is not one of the options offered), naming the question.
+ *   An answerer that breaks the protocol is no usable answerer rather than a
+ *   defect, so a login flow or a tool recovers as when nobody is attached.
+ * - `Dismissed` when the human closes the question.
+ *
+ * The core closes hooks before it disposes plugins and the application's
+ * services, so a plugin finalizer that asks gets `Unavailable`.
+ */
 export class Interaction extends Context.Service<
   Interaction,
   {

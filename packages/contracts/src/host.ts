@@ -167,24 +167,36 @@ export interface ConfigureReport extends ReloadReport {
 /**
  * The host contracts' API version: a major number that changes when one of
  * them changes incompatibly. A plugin written for a version requires
- * `HostApi(version)`, and the host plugin provides each version it supports,
- * so a plugin written for another is left out with a message naming the
- * version rather than failing at some later call. A breaking change gives the
- * changed capability a new key, keeping the old one provided by an adapter for
- * as long as its version is supported.
+ * `HostApi(version)`, and the host provides each version it supports, so a
+ * plugin written for another is left out with a message naming the version
+ * rather than failing at some later call. A breaking change gives the changed
+ * capability a new key, keeping the old one provided by an adapter for as long
+ * as its version is supported.
  */
 export const HOST_API = 1;
-/** A plugin written for host API `version` requires this; the host plugin provides the versions it supports. */
+/** A plugin written for host API `version` requires this; the host provides the versions it supports. */
 export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, number> => Context.Service<`lemma/api@${number}`, number>(`lemma/api@${version}`);
 
 /**
- * Handle on the loader, provided by the host application (which owns it) so
- * transports and UIs can inspect and change the running composition without
- * reaching into the kernel.
+ * Handle on the loader, provided by the host itself (it owns the loader; no
+ * plugin can provide this) so transports and UIs can inspect and change the
+ * running composition without reaching into the kernel. Its methods wait
+ * until the composition is up: a plugin may call one from work it starts
+ * while activating. A change through it publishes `PluginsChanged`.
+ *
+ * A change (`restart`, `reload`, `configure`) drains the work in flight in
+ * the plugins it replaces before swapping, so call it from a plugin's own code
+ * (a transport's handler, a command): from inside `core.run` it would wait on
+ * itself until the dispose deadline.
  */
 export class HostControl extends Context.Service<
   HostControl,
   {
+    /**
+     * What the host provides itself, by capability key: `Paths`, `HostControl`, `Interaction`, and each `HostApi`
+     * version. Any plugin may require them; none provides them, and none has a row. Fixed for the host's life.
+     */
+    readonly runtime: readonly string[];
     /** Every known plugin, enabled or not. */
     readonly plugins: Effect.Effect<readonly PluginInfo[]>;
     readonly composition: Effect.Effect<CompositionInfo>;

@@ -162,6 +162,7 @@ describe("transport", () => {
             cwd: "/work",
             home: host.home,
             composition: { id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] },
+            runtime: ["lemma/Paths", "lemma/HostControl"],
           });
           const plugins = yield* client["Host.Plugins"]();
           expect(plugins.find((plugin) => plugin.id === "transport")).toEqual({

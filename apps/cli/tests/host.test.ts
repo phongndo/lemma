@@ -25,7 +25,10 @@ describe("against a running host", () => {
     expect(result.code).toBe(ExitCode.ok);
     const status = JSON.parse(result.out);
     expect(status.info.home).toBe(home);
+    // What the host provides itself is no plugin's: it has no row.
+    expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@1"]);
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent");
+    expect(status.plugins.map((plugin: { id: string }) => plugin.id)).not.toContain("interaction");
     expect(status.plugins.every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
     expect(status.running).toEqual([]);
   });
@@ -130,6 +133,7 @@ describe("against a running host", () => {
     expect(shown.code).toBe(ExitCode.ok);
     expect(shown.out).toContain("Agent  used by transport");
     expect(shown.out).toContain("Llm  from llm");
+    expect(shown.out).toContain("HostControl  from the host");
     // What a plugin adds to other plugins' registries: bash its tool.
     expect((await invoke(["plugins", "show", "bash"], home)).out).toContain("Contributes\n  lemma/tools  bash");
     const transport = JSON.parse((await invoke(["plugins", "show", "transport", "--json"], home)).out);
@@ -142,6 +146,8 @@ describe("against a running host", () => {
     const capabilities = await invoke(["kernel"], home);
     expect(capabilities.code).toBe(ExitCode.ok);
     expect(capabilities.out).toMatch(/lemma\/Agent\s+agent \(active\)\s+transport/);
+    expect(capabilities.out).toMatch(/lemma\/Interaction\s+the host\s+\S/);
+    expect(capabilities.out).not.toContain("NOTHING");
     const hooks = JSON.parse((await invoke(["kernel", "hooks", "--json"], home)).out);
     expect(hooks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "lemma/interaction.request" })]));
     const registries = (await invoke(["kernel", "registries"], home)).out;
