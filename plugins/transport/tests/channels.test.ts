@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, Stream } from "effect";
+import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, SchemaTransformation, Stream } from "effect";
 import { Channels, FileSearchers, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { definePlugin, PluginContext, Registries } from "@lemma/core";
@@ -59,6 +59,84 @@ describe("channels", () => {
       {},
       undefined,
       [broken, steady],
+    );
+  }, 30_000);
+
+  test("a request whose schema throws, or whose result JSON cannot carry, fails alone", () => {
+    const throwsOnBadText = Schema.String.pipe(
+      Schema.decodeTo(
+        Schema.Unknown,
+        SchemaTransformation.transform({ decode: (text: string): unknown => JSON.parse(text), encode: (value) => JSON.stringify(value) }),
+      ),
+    );
+    const numbersOnly = Schema.String.pipe(
+      Schema.decodeTo(
+        Schema.Unknown,
+        SchemaTransformation.transform({
+          decode: (text: string): unknown => text,
+          encode: (value) => {
+            if (typeof value !== "number") throw new Error("not a number");
+            return String(value);
+          },
+        }),
+      ),
+    );
+    const call = (id: string, success: Schema.Codec<any, any>, handle: () => unknown) =>
+      serveChannel({ kind: "call", id, payload: Schema.Void, success }, handle);
+    const shapes = serving(
+      "shapes",
+      call("shapes.bigint", Schema.Unknown, () => Effect.succeed({ n: 1n })),
+      call("shapes.date", Schema.Unknown, () => Effect.succeed({ at: new Date(0) })),
+      call("shapes.dropped", Schema.Unknown, () => Effect.succeed({ kept: 1, dropped: undefined })),
+      // What the success schema can send, its JSON codec sends: NaN as a number would not survive JSON.
+      call("shapes.nan", Schema.Number, () => Effect.succeed(Number.NaN)),
+      call("shapes.void", Schema.Void, () => Effect.void),
+      call("shapes.quits", Schema.Void, () => Effect.interrupt),
+      serveChannel({ kind: "call", id: "shapes.parse", payload: throwsOnBadText, success: Schema.Unknown }, (value) => Effect.succeed(value)),
+      serveChannel({ kind: "stream", id: "shapes.throws", payload: Schema.Void, success: numbersOnly }, () => Stream.make(1, "two")),
+      serveChannel({ kind: "stream", id: "shapes.hole", payload: Schema.Void, success: Schema.Unknown }, () => Stream.make(1, undefined)),
+      serveChannel({ kind: "stream", id: "shapes.steady", payload: Schema.Void, success: Schema.Number }, () => Stream.concat(Stream.make(1), Stream.never)),
+    );
+    return withHost(
+      (host) =>
+        Effect.gen(function* () {
+          const client = yield* host.connect("websocket");
+          const events = yield* Effect.forkChild(Stream.runDrain(client["Host.Events"]()));
+          const steady = yield* open(client, "shapes.steady");
+          const called = (id: string, payload?: unknown) => Effect.exit(client["Channel.Call"](payload === undefined ? { id } : { id, payload }));
+          const opened = (id: string) => {
+            const elements: unknown[] = [];
+            return Effect.map(
+              Effect.exit(Stream.runForEach(client["Channel.Open"]({ id }), (element) => Effect.sync(() => void elements.push(element)))),
+              (exit) => ({ elements, exit }),
+            );
+          };
+
+          // What `Schema.Unknown` holds must be JSON already: a BigInt, a Date, or an `undefined` field is refused, not reshaped.
+          for (const id of ["shapes.bigint", "shapes.date", "shapes.dropped"]) {
+            expect(hostError(yield* called(id))).toMatchObject({ code: "Failed", subject: id, message: expect.stringContaining("Expected JSON value") });
+          }
+          expect(yield* called("shapes.nan")).toEqual(Exit.succeed("NaN"));
+          expect(yield* called("shapes.void")).toEqual(Exit.succeed(null));
+          // Interruption stays interruption, never `Failed`.
+          expect(Exit.hasInterrupts(yield* called("shapes.quits"))).toBe(true);
+          expect(hostError(yield* called("shapes.parse", "{not json"))).toMatchObject({ code: "InvalidPayload", subject: "shapes.parse" });
+          expect(yield* called("shapes.parse", '{"a":1}')).toEqual(Exit.succeed({ a: 1 }));
+          const thrown = yield* opened("shapes.throws");
+          expect(thrown.elements).toEqual(["1"]);
+          expect(hostError(thrown.exit)).toMatchObject({ code: "Failed", subject: "shapes.throws", message: expect.stringContaining("not a number") });
+          const hole = yield* opened("shapes.hole");
+          expect(hole.elements).toEqual([1]);
+          expect(hostError(hole.exit)).toMatchObject({ code: "Failed", subject: "shapes.hole", message: expect.stringContaining("Expected JSON value") });
+
+          // Nothing else on the connection ended.
+          expect((yield* client["Host.Info"]()).version).toBeDefined();
+          expect(events.pollUnsafe()).toBeUndefined();
+          expect(steady.fiber.pollUnsafe()).toBeUndefined();
+        }),
+      {},
+      undefined,
+      [shapes],
     );
   }, 30_000);
 

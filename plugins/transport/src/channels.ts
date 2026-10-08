@@ -47,20 +47,33 @@ const json = (schema: Schema.Top) => {
   return codec;
 };
 
+const reason = (cause: Cause.Cause<unknown>): string => {
+  const error = Cause.squash(cause);
+  return error instanceof Error ? error.message : String(error);
+};
+
+/**
+ * Runs one step of a request on its own: what its schema or handler throws
+ * becomes this request's `HostError`, never the connection's, while
+ * interruption stays interruption.
+ */
+const contained = <A, E>(step: () => Effect.Effect<A, E>, error: (cause: Cause.Cause<E>) => HostError): Effect.Effect<A, HostError> =>
+  Effect.catchCause(Effect.suspend(step), (cause) =>
+    Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause as Cause.Cause<never>) : Effect.fail(error(cause)),
+  );
+
 /** An absent payload is JSON's `null`, what `Schema.Void` takes. */
 const decode = (channel: Channel, payload: unknown) =>
-  Schema.decodeUnknownEffect(json(channel.payload))(payload === undefined ? null : payload).pipe(
-    Effect.mapError(
-      (error) => new HostError({ code: "InvalidPayload", subject: channel.id, message: `Invalid payload for "${channel.id}": ${error.message}` }),
-    ),
+  contained(
+    () => Schema.decodeUnknownEffect(json(channel.payload))(payload === undefined ? null : payload),
+    (cause) => new HostError({ code: "InvalidPayload", subject: channel.id, message: `Invalid payload for "${channel.id}": ${reason(cause)}` }),
   );
 
 const encode = (channel: Channel, value: unknown) =>
-  Schema.encodeUnknownEffect(json(channel.success))(value).pipe(
-    Effect.mapError(
-      (error) =>
-        new HostError({ code: "Failed", subject: channel.id, message: `"${channel.id}" produced a value its success schema cannot send: ${error.message}` }),
-    ),
+  contained(
+    () => Schema.encodeUnknownEffect(json(channel.success))(value),
+    (cause) =>
+      new HostError({ code: "Failed", subject: channel.id, message: `"${channel.id}" produced a value its success schema cannot send: ${reason(cause)}` }),
   );
 
 /** A domain error keeps its code, as `toHostError` gives it; any other failure, and any defect, is `Failed`. */
@@ -70,8 +83,7 @@ const failed = (id: string, cause: Cause.Cause<unknown>): HostError => {
     const { code, message } = toHostError(failure.value);
     return new HostError({ code, message, subject: id });
   }
-  const error = Cause.squash(cause);
-  return new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) });
+  return new HostError({ code: "Failed", subject: id, message: reason(cause) });
 };
 
 const withdrawn = (id: string) =>
@@ -97,7 +109,8 @@ export const callChannel = (registries: Reader, id: string, payload: unknown): E
     const channel = contribution.item;
     const input = yield* decode(channel, payload);
     const exit = yield* registries.run(contribution, () => Effect.exit(resultOf(channel, input))).pipe(Effect.mapError(lost(id)));
-    if (Exit.isFailure(exit)) return yield* Effect.fail(failed(id, exit.cause));
+    if (Exit.isFailure(exit))
+      return yield* Cause.hasInterruptsOnly(exit.cause) ? Effect.failCause(exit.cause as Cause.Cause<never>) : Effect.fail(failed(id, exit.cause));
     return yield* encode(channel, exit.value);
   });
 

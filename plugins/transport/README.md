@@ -46,7 +46,10 @@ After listening it writes `<Paths.home>/transport.json` (mode 0600), the entry b
   ([`ChannelRpcs`](../../packages/contracts/src/channels.ts)) serve whatever
   host plugins add to `Channels`, read at each call, so a plugin gives its own
   UI a call or a stream without a change here. Payloads and results cross as
-  JSON through the channel's own schemas' JSON codecs. Each call and stream
+  JSON through the channel's own schemas' JSON codecs, inside the request, so a
+  schema or handler that throws fails that request alone (`InvalidPayload`,
+  `Failed`), and a value its codec cannot send fails `Failed` rather than
+  reaching the protocol's serializer. Each call and stream
   runs as work with its channel's contribution (`Registries.run` in the core),
   so the plugin's finalizers wait for it. When the plugin stops or is
   replaced, a call in flight finishes on its own instance and is interrupted,
