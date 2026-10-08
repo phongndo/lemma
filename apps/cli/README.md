@@ -63,7 +63,9 @@ so the two show the same records and accept the same queries.
   the host, it is offered the host's questions, such as a login's API key or
   a tool asking to confirm: those open as it connects, and those asked while
   it runs. `--answer <value>` answers them in order (one that reaches a
-  question already closed, answered elsewhere or withdrawn, goes to the next);
+  question already closed, answered elsewhere or withdrawn, goes to the next,
+  but one a dropped connection cut off is used up, as it may have answered its
+  question);
   otherwise `--questions ask` prompts at the terminal (the default when
   stdin is one), `dismiss` fails them, and `ignore` (the default otherwise,
   so an agent never answers for the person) leaves them to another client

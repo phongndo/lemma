@@ -100,19 +100,20 @@ interface QuestionView {
  *
  * The handler takes every event the command hears (`hearing`), in order. An
  * `--answer` is sent before the next event is handled, so the values go to
- * questions in the order they arrive, and one is used up only once the host
- * takes it: one that reached a question already closed (`NotFound`: answered
- * elsewhere or withdrawn, as a question the host sends on connecting may be
- * by the time it is handled) goes to the next question. Any other question
- * is handled in its own fiber, so events keep flowing while the terminal
- * waits, and its prompt closes when the question is answered elsewhere or the
- * command ends. The host sends the questions still open to every client that
- * subscribes, so those open as the command connects reach the person. A
- * dropped connection loses the events meanwhile, so one asked during the
- * drop (a tool's approval) reaches them once the connection is back, as it
- * subscribes anew; the prompt of one that closed meanwhile closes then,
- * as `Interaction.List` no longer has it; and an answer given while it was
- * down goes once it is back.
+ * questions in the order they arrive, and one is used up unless it surely
+ * reached a question already closed (`NotFound`: answered elsewhere or
+ * withdrawn, as a question the host sends on connecting may be by the time
+ * it is handled), when it goes to the next question; one a dropped
+ * connection cut off may have answered its own, so is used up (`reply`). Any
+ * other question is handled in its own fiber, so events keep flowing while
+ * the terminal waits, and its prompt closes when the question is answered
+ * elsewhere or the command ends. The host sends the questions still open to
+ * every client that subscribes, so those open as the command connects reach
+ * the person. A dropped connection loses the events meanwhile, so one asked
+ * during the drop (a tool's approval) reaches them once the connection is
+ * back, as it subscribes anew; the prompt of one that closed meanwhile
+ * closes then, as `Interaction.List` no longer has it; and an answer given
+ * while it was down goes once it is back.
  */
 export const questionHandler = (host: Host, io: Io, options: Options, origin: string | undefined, view: QuestionView = {}) =>
   Effect.gen(function* () {
@@ -124,19 +125,22 @@ export const questionHandler = (host: Host, io: Io, options: Options, origin: st
     /**
      * Sends an answer or a dismissal, again on the next connection when the
      * connection dropped first: the first answer wins, so a second is safe.
-     * Says whether the question was still open: the host refuses it
-     * `NotFound` once it closed (answered elsewhere, or withdrawn). Any other
-     * refusal is not this command's concern.
+     * Says whether the question had closed before it came (answered
+     * elsewhere, or withdrawn): only when the host's first reply is
+     * `NotFound`, which is certain. One the connection dropped while it was on
+     * its way may have arrived and closed the question itself, so a `NotFound`
+     * when it is sent again says nothing, and it is not said to have. Any
+     * other refusal is not this command's concern.
      */
-    const reply = (send: () => Promise<void>): Effect.Effect<boolean> =>
+    const reply = (send: () => Promise<void>, again = false): Effect.Effect<boolean> =>
       Effect.suspend(() => {
         const { generation } = host.status();
         return Effect.tryPromise({ try: send, catch: (error) => error }).pipe(
-          Effect.as(true),
+          Effect.as(false),
           Effect.catch((error) =>
             dropped(error)
-              ? Effect.andThen(connectedAfter(host, generation), reply(send))
-              : Effect.succeed(!(error instanceof HostError && error.code === "NotFound")),
+              ? Effect.andThen(connectedAfter(host, generation), reply(send, true))
+              : Effect.succeed(!again && error instanceof HostError && error.code === "NotFound"),
           ),
         );
       });
@@ -195,11 +199,11 @@ export const questionHandler = (host: Host, io: Io, options: Options, origin: st
       if (next === undefined || answer === undefined || typeof answer === "string")
         return Effect.asVoid(FiberMap.run(prompts, request.id, handle(request, next)));
       // Sent before the next event is handled, so `--answer` values go to questions in the order they arrive, and one that
-      // reached a question already closed goes back for the next.
+      // surely reached a question already closed goes back for the next.
       return Effect.map(
         reply(() => host.interaction.answer(request.id, answer)),
-        (open) => {
-          if (!open) answers.unshift(next);
+        (closed) => {
+          if (closed) answers.unshift(next);
         },
       );
     };

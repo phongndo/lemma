@@ -302,8 +302,9 @@ describe("a command's --answer values", () => {
    * `NotFound`. What `meanwhile` is given runs as the next subscription reads
    * what is open, so what it does comes right after what that subscription
    * starts with: a question that closes elsewhere, or another asked, while the
-   * command connects. The connect probe answers once the client has passed on
-   * `beforeProbe` of the host's events.
+   * command connects. What `whenTaken` is given runs as the host takes the next
+   * answer, before it replies. The connect probe answers once the client has
+   * passed on `beforeProbe` of the host's events.
    */
   const asking = (open: readonly InteractionRequest[], beforeProbe = 0) => {
     const waiting = new Map(open.map((request) => [request.id, request]));
@@ -318,6 +319,7 @@ describe("a command's --answer values", () => {
       events.push({ type: "interaction-closed", id });
     };
     let next: (() => void) | undefined;
+    let taken: (() => void) | undefined;
     const connection: ReturnType<typeof fakeHost> = fakeHost({
       events: events.stream,
       rpcs: {
@@ -335,11 +337,22 @@ describe("a command's --answer values", () => {
             if (!waiting.has(id)) return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `No open interaction "${id}"` }));
             answered.push([id, answer.value]);
             close(id);
+            const then = taken;
+            taken = undefined;
+            then?.();
             return Effect.void;
           }),
       },
     });
-    return { connection, answered, ask, close, publish: (event: RuntimeEvent) => events.push(event), meanwhile: (run: () => void) => void (next = run) };
+    return {
+      connection,
+      answered,
+      ask,
+      close,
+      publish: (event: RuntimeEvent) => events.push(event),
+      meanwhile: (run: () => void) => void (next = run),
+      whenTaken: (run: () => void) => void (taken = run),
+    };
   };
 
   /** Runs `command` in the background: `until` waits for a condition, two seconds at most, and `stop` ends it. */
@@ -392,6 +405,24 @@ describe("a command's --answer values", () => {
     await command.until(() => host.answered.length > 0);
     await command.stop();
     expect(host.answered).toEqual([["live", true]]);
+  });
+
+  test("one the host may have taken before the connection dropped is used up, though sent again it finds the question closed", async () => {
+    const host = asking([confirm("first"), confirm("second")]);
+    // The host takes it, and the connection drops before its reply comes: sent again, it finds the question it closed.
+    host.whenTaken(() => {
+      host.connection.drop();
+      host.connection.restore();
+    });
+    const said: string[] = [];
+    const io: Io = { ...quiet, err: (text) => void said.push(text) };
+    const command = started(eventsCommand(host.connection, io, { ...options, questions: "ignore", answers: ["yes"] }));
+    // With no answer left for it, the next question is left to another client.
+    const leftToOthers = () => said.some((line) => line.includes('"second?"'));
+    await command.until(() => host.answered.length > 1 || leftToOthers());
+    await command.stop();
+    expect(host.answered).toEqual([["first", true]]);
+    expect(leftToOthers()).toBe(true);
   });
 
   test("keep their order past a question that closed before its answer came", async () => {
