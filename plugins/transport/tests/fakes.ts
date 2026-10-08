@@ -333,6 +333,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
               }
               holder.restarted.push(options?.force ? `${pluginId}!` : pluginId);
               yield* changed;
+              return {};
             }),
           reload: Effect.succeed({ started: ["x"], stopped: [], restarted: [], unchanged: [], failed: [], interrupted: 0, faults: [] }),
           configure: (rows, options) =>

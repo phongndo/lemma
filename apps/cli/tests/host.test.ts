@@ -475,30 +475,47 @@ export default definePlugin({
 describe("a change a plugin's own call asks for", () => {
   let lemma: Lemma;
   let home: string;
-  beforeAll(async () => {
-    lemma = await startLemma("lemma-cli-self-", {
-      prepare: async (home) => {
-        await mkdir(join(home, "plugins"));
-        // Its own call changes its config, and answers with whether the change was deferred and the value it still serves.
-        await writeFile(
-          join(home, "plugins", "selfconf.ts"),
-          `import { Effect, Schema } from "effect";
+  /**
+   * Its own calls change its config, restart it, and reload the host, each answering whether the change was deferred
+   * (`set` with the value it still serves); its stream changes its config and stays open. `edition` tells its file's
+   * versions apart, and `activation` counts its starts from one file.
+   */
+  const selfconf = (edition: number) => `import { Effect, Schema, Stream } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Channels, HostControl, serveChannel } from "@lemma/contracts";
+let activations = 0;
+const answer = (deferred) => ({ deferred: deferred === true });
+const Answer = Schema.Struct({ deferred: Schema.Boolean });
 export default definePlugin({
   id: "selfconf",
   config: { value: 0 },
   requires: { host: HostControl },
   setup: function* ({ host }, owner) {
+    const activation = ++activations;
     yield* owner.add(Channels, serveChannel({ kind: "call", id: "selfconf.value", payload: Schema.Void, success: Schema.Number }, () => owner.config.value));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "selfconf.edition", payload: Schema.Void, success: Schema.Number }, () => ${edition}));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "selfconf.activation", payload: Schema.Void, success: Schema.Number }, () => activation));
     yield* owner.add(Channels, serveChannel(
       { kind: "call", id: "selfconf.set", payload: Schema.Number, success: Schema.Struct({ deferred: Schema.Boolean, value: Schema.Number }) },
-      (value) => Effect.map(host.configure({ selfconf: { config: { value } } }), (report) => ({ deferred: report.deferred === true, value: owner.config.value })).pipe(Effect.orDie),
+      (value) => Effect.map(host.configure({ selfconf: { config: { value } } }), (report) => ({ ...answer(report.deferred), value: owner.config.value })).pipe(Effect.orDie),
+    ));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "selfconf.restart", payload: Schema.Void, success: Answer }, () =>
+      Effect.map(host.restart("selfconf", { force: true }), (report) => answer(report.deferred)).pipe(Effect.orDie),
+    ));
+    yield* owner.add(Channels, serveChannel({ kind: "call", id: "selfconf.reload", payload: Schema.Void, success: Answer }, () =>
+      Effect.map(host.reload, (report) => answer(report.deferred)).pipe(Effect.orDie),
+    ));
+    yield* owner.add(Channels, serveChannel({ kind: "stream", id: "selfconf.watch", payload: Schema.Number, success: Answer }, (value) =>
+      Stream.concat(Stream.fromEffect(Effect.map(host.configure({ selfconf: { config: { value } } }), (report) => answer(report.deferred)).pipe(Effect.orDie)), Stream.never),
     ));
   },
 });
-`,
-        );
+`;
+  beforeAll(async () => {
+    lemma = await startLemma("lemma-cli-self-", {
+      prepare: async (home) => {
+        await mkdir(join(home, "plugins"));
+        await writeFile(join(home, "plugins", "selfconf.ts"), selfconf(1));
       },
     });
     home = lemma.home;
@@ -506,17 +523,66 @@ export default definePlugin({
   afterAll(() => lemma?.stop());
   printOnFailure(() => lemma?.output());
 
+  /** Calls one of the plugin file's channels; it fails while the plugin is being replaced. */
+  const call = async (id: string, payload?: unknown) => {
+    const result = await invoke(["channels", "call", id, ...(payload === undefined ? [] : [JSON.stringify(payload)]), "--json"], home);
+    if (result.code !== ExitCode.ok) throw new Error(result.err);
+    return JSON.parse(result.out) as unknown;
+  };
+
   // Waiting on its own plugin's reload, a call would last the dispose deadline (10 seconds), then fail Withdrawn.
   test("is answered deferred at once, and applies once the call has ended", async () => {
     const started = Date.now();
-    const set = await invoke(["channels", "call", "selfconf.set", "7", "--json"], home);
-    expect(set.code).toBe(ExitCode.ok);
+    expect(await call("selfconf.set", 7)).toEqual({ deferred: true, value: 0 });
     expect(Date.now() - started).toBeLessThan(5_000);
-    expect(JSON.parse(set.out)).toEqual({ deferred: true, value: 0 });
-    const value = async () => JSON.parse((await invoke(["channels", "call", "selfconf.value", "--json"], home)).out) as number;
-    expect(await settled(value, (now) => now === 7)).toBe(7);
+    expect(
+      await settled(
+        () => call("selfconf.value"),
+        (now) => now === 7,
+      ),
+    ).toBe(7);
   });
 
+  test("a restart, or a reload, that restarts the plugin whose call asks for it is answered deferred at once, and applies once the call has ended", async () => {
+    const activation = (await call("selfconf.activation")) as number;
+    const restarting = Date.now();
+    expect(await call("selfconf.restart")).toEqual({ deferred: true });
+    expect(Date.now() - restarting).toBeLessThan(5_000);
+    expect(
+      await settled(
+        () => call("selfconf.activation"),
+        (now) => now === activation + 1,
+      ),
+    ).toBe(activation + 1);
+
+    // An edited plugin file is a new definition, which a reload replaces the running one with; the host does not watch it.
+    await writeFile(join(home, "plugins", "selfconf.ts"), selfconf(2));
+    const reloading = Date.now();
+    expect(await call("selfconf.reload")).toEqual({ deferred: true });
+    expect(Date.now() - reloading).toBeLessThan(5_000);
+    expect(
+      await settled(
+        () => call("selfconf.edition"),
+        (now) => now === 2,
+      ),
+    ).toBe(2);
+  });
+
+  // A stream ends as soon as its plugin leaves, so it holds nothing up: deferred, the change would wait until its client closed it.
+  test("a change a stream asks for applies at once, ending the stream Withdrawn", async () => {
+    const opened = await invoke(["channels", "open", "selfconf.watch", "9", "--json"], home);
+    expect(opened.code).toBe(ExitCode.failed);
+    expect(JSON.parse(opened.err).error).toMatchObject({ code: "Withdrawn", subject: "selfconf.watch" });
+    expect(
+      await settled(
+        () => call("selfconf.value"),
+        (now) => now === 9,
+      ),
+    ).toBe(9);
+  });
+
+  // Through the transport's own rule for now: the transport requires llm, so this change restarts it too. It covers the
+  // general rule (a change restarting the plugin whose call asks for it) once the transport requires only the runtime.
   test("llm.add-custom answers at once with the new provider's id, listed once llm has reloaded", async () => {
     const started = Date.now();
     const spec = { name: "Local", api: "openai-completions", baseUrl: "http://127.0.0.1:9/v1", models: ["m"] };

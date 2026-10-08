@@ -83,7 +83,7 @@ export const ReloadResult = Schema.Struct({
   stopped: Schema.Array(Schema.String),
   /** Plugins the change left failed or halted (`ReloadReport.failed`). */
   failed: Schema.optional(Schema.Array(Schema.String)),
-  /** Applied after the reply, because it restarts the transport; see `ConfigureReport`. */
+  /** Checked and answered now, and applied once the work asking for it has ended; see `ConfigureReport`. */
   deferred: Schema.optional(Schema.Boolean),
 });
 export type ReloadResult = typeof ReloadResult.Type;

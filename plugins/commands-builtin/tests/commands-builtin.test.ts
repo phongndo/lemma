@@ -72,7 +72,11 @@ describe("host commands", () => {
   const control = {
     plugins: Effect.sync(() => plugins),
     reload: Effect.succeed({ started: ["x"], restarted: [], stopped: ["y"], unchanged: [], failed: [], interrupted: 0, faults: [] }),
-    restart: (id: string, options: unknown) => Effect.sync(() => void restarted.push([id, options])),
+    restart: (id: string, options: unknown) =>
+      Effect.sync(() => {
+        restarted.push([id, options]);
+        return {};
+      }),
     configure: (rows: Record<string, { enabled?: boolean }>, options: unknown) =>
       Effect.sync(() => {
         configured.push([rows, options]);
@@ -125,6 +129,20 @@ describe("host commands", () => {
     expect(waiting).toMatchObject({ success: { message: "Turned project-context on; it starts when workspace is on" } });
     const deferred = await run(find(hostCommands(control, scripted("my-llm").ask), "host.toggle-plugin"));
     expect(deferred).toMatchObject({ success: { message: "Turning my-llm on: the host restarts the plugins that use it, and clients reconnect" } });
+  });
+
+  test("reload and restart plugin say so when the change restarts what runs the command, and so applies once it has ended", async () => {
+    const later = {
+      ...control,
+      reload: Effect.succeed({ started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true }),
+      restart: () => Effect.succeed({ deferred: true }),
+    } as unknown as Context.Service.Shape<typeof HostControl>;
+    expect(await run(find(hostCommands(later, scripted("").ask), "host.reload"))).toMatchObject({
+      success: { message: "Reloading config: the host restarts the plugins it changes once this command has ended" },
+    });
+    expect(await run(find(hostCommands(later, scripted("bash").ask), "host.restart-plugin"))).toMatchObject({
+      success: { message: "Restarting bash once this command has ended" },
+    });
   });
 });
 

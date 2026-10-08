@@ -56,7 +56,7 @@ const start = (plugins: readonly Plugin[], composition: Composition) =>
       composition: withLoader((loader) =>
         Effect.zipWith(loader.composition, loader.core.inspect, (composition, snapshot) => compositionInfo(composition, snapshot.plugins)),
       ),
-      restart: (id, options) => withLoader((loader) => loader.core.restart(id, options)),
+      restart: (id, options) => withLoader((loader) => Effect.as(loader.core.restart(id, options), {})),
       reload: withLoader((loader) => loader.apply(composition)),
       configure: (rows) =>
         withLoader((loader) => {

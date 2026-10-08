@@ -2,16 +2,17 @@
 import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
-import { appUrl, describeReload, faultMessage, HostControl, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
-import type { Composition, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
+import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
 import type { ConfigScope, ConfigureReport, PluginChange, UiComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
-import { deferral } from "./deferral.ts";
+import { changedBetween, deferral } from "./deferral.ts";
+import type { Running } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import type { ConfigSection } from "./config.ts";
 import { loadLocalPlugins } from "./local.ts";
@@ -195,6 +196,21 @@ const readConfigFiles = Effect.forEach([paths.userConfig, paths.projectConfig], 
  */
 const SHUTDOWN_TIMEOUT = Duration.seconds(40);
 
+/** What `loaded` runs, as `changedBetween` compares it. */
+const running = (loaded: Loaded): Running =>
+  new Map(
+    Object.entries(loaded.resolved.composition.plugins).flatMap(([id, entry]) => {
+      const plugin = loaded.known.find((known) => known.plugin.id === id)?.plugin;
+      return entry.enabled === false || plugin === undefined ? [] : [[id, { plugin, config: entry.config }] as const];
+    }),
+  );
+
+/** The plugins that applying `next` in place of `current` starts, stops, or restarts, with what needs them in either. */
+const touchedBy = (current: Loaded, next: Loaded): ReadonlySet<string> => {
+  const changed = changedBetween(running(current), running(next));
+  return new Set([...restartedBy(current.known, changed, { provided }), ...restartedBy(next.known, changed, { provided })]);
+};
+
 /** Decodes the configs of `ids` as the loader will, so a deferred change is refused before it is applied. */
 const checkConfigs = (next: Loaded, ids: readonly string[]): Effect.Effect<void, ReloadError> => {
   const diagnostics: Diagnostic[] = [];
@@ -267,12 +283,42 @@ const program = Effect.gen(function* () {
         Effect.tapError(() => update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))))),
       );
     });
+  /** Re-reads the config files and applies them, one change at a time. */
+  const reloadNow = (loader: Loader) => reloading.withPermits(1)(Effect.flatMap(load(), (loaded) => apply(loader, loaded)));
   /**
    * A change that restarts a plugin whose work is making it would wait on that
-   * work or cut it off (`deferral`), so it is checked and written now and
-   * applied once `after` (see `ConfigureReport`). If applying still fails, the
-   * file is put back and clients hear why.
+   * work or cut it off (`deferral`), so it is checked at once and `change`
+   * runs once `after` (see `ConfigureReport`). Clients then hear the plugin
+   * list (`change` logs what it did) or, if it failed, `failure` and why, once
+   * `undo` has run.
    */
+  const applyLater = (
+    loader: Loader,
+    after: Effect.Effect<void>,
+    change: Effect.Effect<void, ReloadError | CoreClosed>,
+    failure: string,
+    undo: Effect.Effect<void> = Effect.void,
+  ) =>
+    Effect.forkIn(
+      Effect.andThen(after, change).pipe(
+        Effect.matchEffect({
+          onSuccess: () => Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins })),
+          onFailure: (error) => {
+            const diagnostics = error._tag === "ReloadError" ? error.diagnostics : [];
+            const why = error._tag === "ReloadError" ? diagnostics.map((diagnostic) => diagnostic.message).join("; ") : "the host is closing";
+            return undo.pipe(
+              Effect.andThen(printDiagnostics(diagnostics)),
+              Effect.andThen(publish(loader, Notice, { level: "error", source: "host", message: `${failure}: ${why}` })),
+            );
+          },
+        }),
+        Effect.ignore,
+      ),
+      programScope,
+    );
+  /** The report of a change that applies later: it has changed nothing yet. */
+  const deferred: ConfigureReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
+  /** Writes rows now, checked as the loader will check them, and applies them once `after` (`applyLater`); if that fails, the file is put back. */
   const writeDeferred = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, after: Effect.Effect<void>) =>
     Effect.gen(function* () {
       const path = scope === "user" ? paths.userConfig : paths.projectConfig;
@@ -281,31 +327,9 @@ const program = Effect.gen(function* () {
       const restore = update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))));
       const next = yield* load().pipe(Effect.tapError(() => restore));
       yield* checkConfigs(next, Object.keys(rows)).pipe(Effect.tapError(() => restore));
-      const later = reloading
-        .withPermits(1)(Effect.flatMap(load(), (loaded) => apply(loader, loaded)))
-        .pipe(
-          Effect.matchEffect({
-            onSuccess: (report) =>
-              log(`applied a config change: ${describe(report)}`).pipe(
-                Effect.andThen(Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins }))),
-              ),
-            onFailure: (error) =>
-              restore.pipe(
-                Effect.andThen(printDiagnostics(error.diagnostics)),
-                Effect.andThen(
-                  publish(loader, Notice, {
-                    level: "error",
-                    source: "host",
-                    message: `The config change could not be applied and was undone: ${error.diagnostics.map((diagnostic) => diagnostic.message).join("; ")}`,
-                  }),
-                ),
-              ),
-          }),
-          Effect.ignore,
-        );
-      yield* Effect.forkIn(Effect.andThen(after, later), programScope);
-      const report: ConfigureReport = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
-      return report;
+      const change = Effect.flatMap(reloadNow(loader), (report) => log(`applied a config change: ${describe(report)}`));
+      yield* applyLater(loader, after, change, "The config change could not be applied and was undone", restore);
+      return deferred;
     });
   const safeMode = () =>
     rejected(
@@ -325,7 +349,22 @@ const program = Effect.gen(function* () {
     );
   // One change at a time, reading and applying together: the watcher, `Host.Reload`, and `Host.Configure` can
   // race, and a reload that read the files earlier must not apply after one that read them later.
-  const reload = withLoader((loader) => reloading.withPermits(1)(Effect.flatMap(load(), (next) => apply(loader, next))));
+  const reload = withLoader((loader) =>
+    reloading.withPermits(1)(
+      Effect.gen(function* () {
+        const next = yield* load();
+        // One that restarts the plugin asking for it (as `commands.run` runs `host.reload`), or the transport serving
+        // the request, is checked now and applied once that work is over.
+        const touched = touchedBy(applied, next);
+        const after = yield* deferral(touched, Object.keys(pinned));
+        if (after === undefined) return yield* apply(loader, next);
+        yield* checkConfigs(next, [...touched]);
+        const change = Effect.flatMap(reloadNow(loader), (report) => log(`reloaded: ${describe(report)}`));
+        yield* applyLater(loader, after, change, "The reload could not be applied; the running composition is unchanged");
+        return deferred;
+      }),
+    ),
+  );
   const handle: HostControlHandle = {
     plugins: withLoader((loader) => Effect.map(loader.core.inspect, catalogOf)),
     ui: Effect.sync(() => applied.ui),
@@ -351,9 +390,10 @@ const program = Effect.gen(function* () {
     restart: (pluginId, options) =>
       withLoader((loader) =>
         Effect.gen(function* () {
+          const snapshot = yield* loader.core.inspect;
           // Replacing a plugin the transport needs restarts the transport too, dropping the client that asked; refuse rather than surprise.
           if (options?.force) {
-            const entry = catalogOf(yield* loader.core.inspect).find((candidate) => candidate.id === pluginId);
+            const entry = catalogOf(snapshot).find((candidate) => candidate.id === pluginId);
             if (entry?.locked !== undefined && entry.state === "active") {
               return yield* rejected(
                 new Diagnostic({
@@ -365,7 +405,17 @@ const program = Effect.gen(function* () {
               );
             }
           }
-          return yield* loader.core.restart(pluginId, options);
+          // Only a loaded plugin that is not running, or is forced, restarts, with what needs it: one that restarts the
+          // plugin asking for it (as `commands.run` runs `host.restart-plugin`) applies once that work is over.
+          const state = snapshot.plugins.find((plugin) => plugin.id === pluginId)?.state;
+          const after =
+            state === undefined || (state === "active" && !options?.force)
+              ? undefined
+              : yield* deferral(restartedBy(applied.known, [pluginId], { provided }), Object.keys(pinned));
+          if (after === undefined) return yield* Effect.as(loader.core.restart(pluginId, options), {});
+          const change = Effect.andThen(loader.core.restart(pluginId, options), log(`restarted ${pluginId}`));
+          yield* applyLater(loader, after, change, `"${pluginId}" could not be restarted`);
+          return { deferred: true };
         }),
       ),
     reload,
@@ -437,8 +487,6 @@ const program = Effect.gen(function* () {
   yield* Deferred.succeed(ready, loader);
   // Heard from here on; faults from before, the sweep below records (once each, by sequence).
   yield* Effect.forkScoped(reportFaults(loader, faults), { startImmediately: true });
-  // The handle as plugins have it, publishing what its changes do. Read once: a reload drains in-flight core.run work, so it must not run inside core.run.
-  const control = yield* loader.core.run(HostControl);
   const { plugins } = yield* loader.core.inspect;
   for (const plugin of plugins) {
     // Raised before the reporter subscribed: the Plugins page's history gets them here.
@@ -486,10 +534,15 @@ const program = Effect.gen(function* () {
         if (changed.length === 0) return;
         for (const [path, text] of current) seenConfig.set(path, text);
         yield* log(`${changed.length === 1 ? changed[0] : changed.join(" and ")} changed; reloading`).pipe(
-          Effect.andThen(control.reload),
+          // The host's own change, no request: it applies at once, and clients hear of it as of one made through `HostControl`.
+          Effect.andThen(reloadNow(loader)),
           Effect.matchEffect({
             onFailure: (error) => printDiagnostics(error.diagnostics).pipe(Effect.andThen(log("reload rejected; the running composition is unchanged"))),
-            onSuccess: (report) => log(`reloaded: ${describe(report)}`),
+            onSuccess: (report) =>
+              log(`reloaded: ${describe(report)}`).pipe(
+                Effect.andThen(Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins }))),
+                Effect.ignore,
+              ),
           }),
         );
       }),

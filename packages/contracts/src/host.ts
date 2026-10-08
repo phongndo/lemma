@@ -155,16 +155,23 @@ export type NoticePayload = typeof NoticePayload.Type;
 export const Notice = Event.make<NoticePayload>("lemma/notice");
 
 /**
- * What a configure did. `deferred`: the change restarts a plugin whose work is
- * making it, which it would otherwise wait on or cut off: the transport
- * serving the call, or the plugin whose own work asks (a channel call it
- * serves, as `llm.add-custom` saves the llm plugin's config). So it was checked
- * and written, and applies once that work has ended, the reply sent; the
- * report is then empty, and if the transport restarts, clients reconnect. A
- * deferred change that still fails is undone in the file and reported as an
- * error `Notice`.
+ * What a configure or reload did. `deferred`: the change restarts a plugin
+ * whose work is asking for it, which the change would otherwise wait on or cut
+ * off: a call that plugin serves (as `llm.add-custom` saves the llm plugin's
+ * config, or `commands.run` runs `host.reload`), or the transport serving the
+ * request. So it was checked (and a configure's rows written), and applies
+ * once that work has ended, the reply sent; the report is then empty, and if
+ * the transport restarts, clients reconnect. A deferred change that still
+ * fails is reported as an error `Notice`, a configure's rows undone in the
+ * file. A stream a plugin serves is no such work: it ends as soon as its
+ * plugin leaves, so a change it asks for applies at once, ending it.
  */
 export interface ConfigureReport extends ReloadReport {
+  readonly deferred?: boolean;
+}
+
+/** What a restart did. `deferred`: as for a configure (`ConfigureReport`), the plugin restarting once the work asking for it has ended. */
+export interface RestartReport {
   readonly deferred?: boolean;
 }
 
@@ -195,9 +202,8 @@ export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, num
  * plugin's own code (a transport's handler, a command): from inside `core.run`
  * it would wait on itself until the dispose deadline. A plugin's disposal
  * also waits for the work run with its items, such as the channel calls it
- * serves: `configure` defers a change that would restart the plugin whose
- * work asks for it (see `ConfigureReport`), while a `restart` or `reload`
- * that restarts it from there waits on itself the same way.
+ * serves: a change that would restart the plugin whose work asks for it is
+ * deferred until that work has ended (see `ConfigureReport`).
  */
 export class HostControl extends Context.Service<
   HostControl,
@@ -210,10 +216,13 @@ export class HostControl extends Context.Service<
     /** Every known plugin, enabled or not. */
     readonly plugins: Effect.Effect<readonly PluginInfo[]>;
     readonly composition: Effect.Effect<CompositionInfo>;
-    /** A failed plugin and what it halted; with `force`, a running one too, unless the app depends on it (a `ReloadError` says so). */
-    readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<void, ReloadError | CoreClosed>;
-    /** Re-read the config files and apply the resulting composition. */
-    readonly reload: Effect.Effect<ReloadReport, ReloadError>;
+    /**
+     * A failed plugin and what it halted; with `force`, a running one too, and what needs it, unless the app depends
+     * on it (a `ReloadError` says so). Deferred as `ConfigureReport` says.
+     */
+    readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<RestartReport, ReloadError | CoreClosed>;
+    /** Re-read the config files and apply the resulting composition. Deferred as `ConfigureReport` says. */
+    readonly reload: Effect.Effect<ConfigureReport, ReloadError>;
     /**
      * Write plugin rows into a config file (the user's by default) and apply the
      * result. A change the host rejects is undone in the file, so a bad row never

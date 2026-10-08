@@ -145,7 +145,9 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
           ),
         );
       }),
-    "Host.RestartPlugin": ({ pluginId, force }) => control.restart(pluginId, force === undefined ? undefined : { force }).pipe(Effect.mapError(toHostError)),
+    // Never deferred from here: what the transport needs cannot be restarted while it serves this request.
+    "Host.RestartPlugin": ({ pluginId, force }) =>
+      control.restart(pluginId, force === undefined ? undefined : { force }).pipe(Effect.asVoid, Effect.mapError(toHostError)),
     "Host.Reload": () => control.reload.pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),
     "Host.Configure": ({ plugins, scope }) =>
       control.configure(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),

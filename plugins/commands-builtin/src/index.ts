@@ -18,6 +18,8 @@ export const hostCommands = (control: Context.Service.Shape<typeof HostControl>,
     keywords: ["plugins", "composition", "settings"],
     run: () =>
       Effect.map(control.reload, (report) => {
+        // It restarts what runs this command, so it applies once this answer is out.
+        if (report.deferred) return { message: "Reloading config: the host restarts the plugins it changes once this command has ended" };
         const summary = describeReload(report);
         return { message: summary === undefined ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` };
       }),
@@ -37,8 +39,9 @@ export const hostCommands = (control: Context.Service.Shape<typeof HostControl>,
           plugins.map((plugin) => ({ value: plugin.id, label: plugin.id, description: plugin.state! })),
         );
         const chosen = plugins.find((plugin) => plugin.id === id)!;
-        yield* control.restart(id, chosen.state === "active" ? { force: true } : undefined);
-        return { message: `Restarted ${id}` };
+        const report = yield* control.restart(id, chosen.state === "active" ? { force: true } : undefined);
+        // It restarts what runs this command, so it applies once this answer is out.
+        return { message: report.deferred ? `Restarting ${id} once this command has ended` : `Restarted ${id}` };
       }),
   },
   {

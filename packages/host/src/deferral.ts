@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { Duration, Effect } from "effect";
 import { Admitted } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
 
 /** How long a change that restarts the transport waits, once the work asking for it has ended, for its reply to leave. */
 const REPLY = Duration.millis(250);
@@ -23,4 +25,20 @@ export const deferral = (restarts: ReadonlySet<string>, serving: readonly string
     const replying = serving.some((id) => restarts.has(id));
     if (work === undefined && !replying) return undefined;
     return Effect.andThen(work?.ended ?? Effect.void, replying ? Effect.sleep(REPLY) : Effect.void);
+  });
+
+/** What a composition runs: each plugin's definition and config, by id. */
+export type Running = ReadonlyMap<string, { readonly plugin: Plugin; readonly config?: unknown }>;
+
+/**
+ * The plugins that applying `next` in place of `current` starts, stops, or
+ * replaces, as the loader decides it: one added or removed, or one whose
+ * definition or config differs. What needs them restarts with them
+ * (`restartedBy`).
+ */
+export const changedBetween = (current: Running, next: Running): string[] =>
+  [...new Set([...current.keys(), ...next.keys()])].filter((id) => {
+    const was = current.get(id);
+    const is = next.get(id);
+    return was === undefined || is === undefined || was.plugin !== is.plugin || !isDeepStrictEqual(was.config, is.config);
   });

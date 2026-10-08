@@ -128,7 +128,7 @@ export const host = (compositionId = "comp-1") =>
       runtime: [HostControl.key],
       plugins: Effect.succeed([]),
       composition: Effect.succeed({ id: compositionId, plugins: [] }),
-      restart: () => Effect.void,
+      restart: () => Effect.succeed({}),
       reload: Effect.die("unused"),
       configure: () => Effect.die("unused"),
       ui: Effect.succeed({ plugins: {}, enabledIn: {}, configIn: {}, files: [] }),
