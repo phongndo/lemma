@@ -47,6 +47,7 @@ const fakeConnection = () => {
       call: (channel: { readonly id: string }, payload: Call["payload"]) =>
         new Promise((resolve, reject) => calls.push({ id: channel.id, payload, resolve, reject })),
     },
+    onEvent: followable.onEvent,
   };
   return {
     connection: connection as unknown as PromptConnection,
@@ -188,6 +189,25 @@ describe("startPrompt", () => {
     expect(fake.calls.map((call) => call.payload.requestId)).toEqual([started.requestId]);
     fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1" });
     expect(await state(started.accepted)).toBe("resolved");
+  });
+
+  test("withdrawn, and then not served while the host lists no agent, it is refused as having no agent, whichever it hears first", async () => {
+    for (const listingFirst of [false, true]) {
+      const fake = fakeConnection();
+      const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
+      fake.end(withdrawn("agent.activity"));
+      await tick();
+      // The agent was turned off: its channels leave the listing, and opening its activity again finds nothing.
+      if (listingFirst) fake.emit({ type: "channels-changed", channels: listed("sessions.list") });
+      fake.end(unserved("agent.activity"));
+      if (!listingFirst) {
+        expect(await state(started.accepted)).toBe("pending");
+        fake.emit({ type: "channels-changed", channels: listed("sessions.list") });
+      }
+      await expect(started.accepted).rejects.toThrow("No agent");
+      await expect(started.done).rejects.toMatchObject({ code: "NotFound", subject: "agent.activity" });
+      expect([fake.calls.length, fake.streams.size, fake.listeners.size]).toEqual([0, 0, 0]);
+    }
   });
 
   test("a prompt still withdrawn is the host's answer: nothing answered it, and the client does not send it again", async () => {

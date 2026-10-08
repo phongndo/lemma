@@ -68,15 +68,17 @@ The file is written as soon as the transport listens, before the plugins after i
   reaching the protocol's serializer. Each call and stream runs as work with
   the channel answering for its id when it arrives (`Registries.run` in the
   core), from decoding its payload to encoding what it sends, so the plugin's
-  finalizers wait for it; a request is `NotFound` only when nothing answers.
+  finalizers wait for it; a request is `NotFound` only when nothing answers,
+  once any change to the composition under way has finished (one made during
+  an exclusive plugin's restart reaches its replacement).
   When the plugin stops or is replaced, a call in flight finishes on its own
   instance and is interrupted, `Withdrawn`, only if it outlives the dispose
   deadline, unless its handler stops at once for the plugin leaving, as one
   that waits on its plugin does: the transport hands it `left` and a `signal`
   (`CallLifetime`), and a call that stops for them ends `Withdrawn` too. A
-  call declared `repeatable` is made again instead, once the change that
-  withdrew it has finished, with what answers for its id then
-  (`withChannel` says how): `Withdrawn` exists only because the host
+  call declared `repeatable` is made again instead, on what answers for its
+  id next, a replacement or what the change left (`withChannel` says how,
+  and how these waits end): `Withdrawn` exists only because the host
   reloads plugins, so the host hides it where repeating is safe. A
   stream is stopped at once and ends `Withdrawn`, so it never holds its
   plugin's disposal, and it runs outside its plugin's `Admitted` work: a

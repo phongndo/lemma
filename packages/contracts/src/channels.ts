@@ -44,8 +44,9 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
    * effect as making it once: it only reads, or it recognises the second
    * time (`agent.prompt`, by its `requestId`). So when its plugin leaves while
    * the call waits (stops, fails, or is replaced, as a reload does), the host
-   * makes it again on what answers for the id once that change has finished
-   * (`withChannel`), and its client gets `Withdrawn` only when nothing does.
+   * makes it again on what answers for the id next, a replacement or what
+   * the change left (`withChannel`), and its client gets `Withdrawn` only
+   * when nothing does.
    * A call that is not (it writes, or asks the person something) ends
    * `Withdrawn`, and its client decides whether to make it again. A stream is
    * never repeatable: its client reopens it (`follow` in `@lemma/client`).
@@ -380,6 +381,26 @@ const find = <Kind extends ChannelKind>(registries: Context.Service.Shape<typeof
 const isWithdrawn = (error: unknown, id: string): boolean => error instanceof HostError && error.code === "Withdrawn" && error.subject === id;
 
 /**
+ * Waits until a channel other than `gone` answers for `id`, or until no change
+ * to the composition is under way (`Registries.settled`), whichever is first:
+ * what a request that found nothing, or was withdrawn, waits for before it
+ * looks again. `changes` sends what answers when it is subscribed, so nothing
+ * published meanwhile is missed.
+ */
+const answeredOrSettled = (registries: Context.Service.Shape<typeof Registries>, id: string, gone: Contribution<Channel> | undefined): Effect.Effect<void> =>
+  Effect.raceFirst(
+    registries.changes(Channels).pipe(
+      Stream.filter((items) => {
+        const now = answering(items, id);
+        return now !== undefined && now !== gone;
+      }),
+      Stream.runHead,
+      Effect.asVoid,
+    ),
+    registries.settled,
+  );
+
+/**
  * Runs `work` with the channel that answers for `id`, as a transport serves a
  * client's request: within its plugin's lifetime, with the one answering now
  * if a reload replaced it first (`withContribution`). It fails `NotFound`
@@ -387,13 +408,24 @@ const isWithdrawn = (error: unknown, id: string): boolean => error instanceof Ho
  * `Withdrawn` (`withdrawnFrom`) when it outlives its plugin's dispose
  * deadline or stops for its plugin leaving (`CallLifetime`).
  *
+ * A request that finds nothing may have come while a change replaces what
+ * answers (an `exclusive` plugin stops before its replacement starts): it
+ * waits until something answers or no change is under way
+ * (`Registries.settled`), then looks once more, and finding nothing then is
+ * final. It never ran, so the wait is safe for any request.
+ *
  * A `repeatable` call withdrawn so is made again. Once its own admission has
- * ended, so that it never holds the plugin that left, it waits for the change
- * that withdrew it to finish (`Registries.settled`), then runs with the
- * channel that answers for `id` then, or fails `Withdrawn` at once when none
- * does. If what it finds leaves before it runs (a change since), it waits for
- * that change too and looks again. No timer bounds the wait: the core's
- * deadlines bound each change, and interrupting the call ends it.
+ * ended, so that it never holds the plugin that left, it waits until another
+ * channel answers for `id` (a replacement published) or no change is under
+ * way, then runs with what answers then, or fails `Withdrawn` at once when
+ * nothing does but the channel it ran with (whose handler withdrew it while
+ * its plugin stayed). If what it finds leaves before it runs (a change since),
+ * it waits again and looks again.
+ *
+ * No timer bounds these waits: the core's deadlines bound each change, and
+ * interrupting the request ends them. Run it outside `core.run`, a change, and
+ * work `Registries.run` admitted, as the transport does: each would wait on
+ * the change it waits for.
  */
 export const withChannel = <Kind extends ChannelKind, A, E, R>(
   registries: Context.Service.Shape<typeof Registries>,
@@ -401,33 +433,42 @@ export const withChannel = <Kind extends ChannelKind, A, E, R>(
   kind: Kind,
   work: (contribution: Contribution<Extract<Channel, { readonly kind: Kind }>>, left: Effect.Effect<void>) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E | HostError, R> => {
-  // `again`: made again after a withdrawal, when finding nothing on a look after the change settled is final.
-  const serve = (again: boolean): Effect.Effect<A, E | HostError, R> =>
+  /**
+   * One look, and the run with what it finds. After the `first`, finding nothing waits, then looks once more (`last`);
+   * `again` is a repeat after `gone` withdrew the call, where finding nothing is final unless what it found left first.
+   */
+  const serve = (look: "first" | "last" | "again", gone?: Contribution<Channel>): Effect.Effect<A, E | HostError, R> =>
     Effect.suspend(() => {
-      // The channel the work ran with, and whether a look found one: what decides a repeat.
+      // The channel the work ran with, and whether a look found one: what decides what comes next.
       let ran: Contribution<Channel> | undefined;
       let seen = false;
-      const missing = again ? unanswered(id) : notFound(id);
+      const missing = look === "again" ? unanswered(id) : notFound(id);
       const served = withContribution(
         registries,
         () =>
-          Effect.tap(find(registries, id, kind), (found) =>
-            Effect.sync(() => {
-              seen ||= found !== undefined;
-            }),
-          ),
+          Effect.map(find(registries, id, kind), (found) => {
+            // The channel that withdrew the call is not asked again.
+            const fresh = found === gone ? undefined : found;
+            seen ||= fresh !== undefined;
+            return fresh;
+          }),
         (contribution, left) => {
           ran = contribution;
           return work(contribution, left);
         },
         { missing: () => missing, expired: () => withdrawnFrom(id, kind) },
       );
-      // Withdrawn while it ran; or, made again, what it found left before it could run.
-      const repeats = (error: E | HostError) =>
-        (ran?.item.kind === "call" && ran.item.repeatable === true && isWithdrawn(error, id)) || (again && seen && error === missing);
-      return Effect.catchIf(served, repeats, () => Effect.andThen(registries.settled, serve(true)));
+      const waits = (error: E | HostError) =>
+        error === missing
+          ? look === "first" || (look === "again" && seen)
+          : ran?.item.kind === "call" && ran.item.repeatable === true && isWithdrawn(error, id);
+      return Effect.catchIf(served, waits, (error) =>
+        error === missing
+          ? Effect.andThen(answeredOrSettled(registries, id, gone), serve(look === "first" ? "last" : "again", gone))
+          : Effect.andThen(answeredOrSettled(registries, id, ran), serve("again", ran)),
+      );
     });
-  return serve(false);
+  return serve("first");
 };
 
 /** A channel as clients list it: `source` is the plugin that added it. */

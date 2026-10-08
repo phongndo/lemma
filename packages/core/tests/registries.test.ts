@@ -453,10 +453,58 @@ describe("registries", () => {
         yield* turns(50);
         expect(after.pollUnsafe()).toBeUndefined();
         // A wait given up leaves the change to go on.
-        const abandoned = yield* Effect.forkChild(registries.settled);
+        const abandoned = yield* Effect.forkChild(registries.settled, { startImmediately: true });
+        yield* turns(5);
+        expect(abandoned.pollUnsafe()).toBeUndefined();
         yield* Fiber.interrupt(abandoned);
+        expect(Exit.hasInterrupts(yield* Fiber.await(abandoned))).toBe(true);
         yield* Deferred.succeed(open, undefined);
         expect(yield* Fiber.join(after)).toEqual(["exclusive 2"]);
+        yield* Fiber.join(restarting);
+      }),
+    );
+  });
+
+  test("settled waits for what the change replaced to be disposed, though its replacement is offered before that", async () => {
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const release = yield* Deferred.make<void>();
+        let instances = 0;
+        const kept = definePlugin({
+          id: "kept",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              const instance = ++instances;
+              yield* owner.add(Menu, { label: `kept ${instance}` });
+              yield* Effect.addFinalizer(() => Effect.sync(() => void log.push(`finalizer ${instance}`)));
+            }),
+          ),
+        });
+        const core = yield* makeCore([kept]);
+        const registries = yield* core.run(Registries);
+        const [first] = yield* registries.items(Menu);
+        // Work that takes no notice of its item leaving holds the old instance's disposal, and with it the change.
+        const holding = yield* Effect.forkChild(
+          registries.run(first!, () => Deferred.await(release)),
+          { startImmediately: true },
+        );
+        const restarting = yield* Effect.forkChild(core.restart("kept", { force: true }));
+        yield* waitFor(core.run(labels()), (now) => now[0] === "kept 2");
+        const settled = yield* Effect.forkChild(
+          Effect.andThen(
+            registries.settled,
+            Effect.sync(() => void log.push("settled")),
+          ),
+          { startImmediately: true },
+        );
+        yield* turns(50);
+        expect(settled.pollUnsafe()).toBeUndefined();
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(settled);
+        expect(log).toEqual(["finalizer 1", "settled"]);
+        yield* Fiber.join(holding);
         yield* Fiber.join(restarting);
       }),
     );

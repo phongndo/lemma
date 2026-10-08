@@ -104,7 +104,8 @@ export class RuntimeRpcs extends RpcGroup.make(
    * that instance before the instance's finalizers run. Fails with a
    * `HostError` whose `subject` is the channel, unless the handler's domain
    * error names its own (a session, a path): `NotFound` (no call answers for
-   * the id, as when its plugin has gone), `InvalidPayload`, the handler's
+   * the id once any change under way has finished, as when its plugin has
+   * gone; see `withChannel`), `InvalidPayload`, the handler's
    * domain error's code (its `reason` or tag), `Failed` (any other failure, a
    * defect, or a result its success schema cannot send), `Withdrawn` (its
    * plugin left while it waited on that plugin, see `CallLifetime`, or it was
