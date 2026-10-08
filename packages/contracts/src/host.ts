@@ -19,7 +19,7 @@ export class Paths extends Context.Service<
     readonly userConfig: string;
     /** `<cwd>/.lemma/config.jsonc` */
     readonly projectConfig: string;
-    /** Working directory the host was started in; the default for new sessions. */
+    /** Working directory the host was started in. */
     readonly cwd: string;
   }
 >()("lemma/Paths") {}

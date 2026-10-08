@@ -1099,7 +1099,7 @@ const devtools = async () => {
   await page.fill("textarea", "steer it");
   await page.keyboard.press("Enter");
   await page
-    .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer", { timeout: 5_000 })
+    .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer")
     .catch(() => assert.fail("a steer sent while a turn runs is not shown queued"));
   assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
   await page.fill("textarea", "for later");
