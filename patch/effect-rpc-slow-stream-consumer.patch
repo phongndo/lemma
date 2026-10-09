@@ -10,7 +10,7 @@ index 000000000..adc09b8fc
 +
 +Fix a slow `RpcClient` stream consumer stalling every other request on a socket or worker connection. A stream whose buffer is full now holds back only its own chunks, by withholding its `Ack`, so replies, other streams, and pongs keep arriving.
 diff --git a/packages/effect/src/rpc/RpcClient.ts b/packages/effect/src/rpc/RpcClient.ts
-index 615d168ad..9e3707247 100644
+index 615d168ad..051933563 100644
 --- a/packages/effect/src/rpc/RpcClient.ts
 +++ b/packages/effect/src/rpc/RpcClient.ts
 @@ -288,7 +288,12 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
@@ -37,18 +37,36 @@ index 615d168ad..9e3707247 100644
        } else {
          entry.resume(exit)
        }
-@@ -479,7 +482,9 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+@@ -474,13 +477,16 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+       }
+     )
+ 
+-    entries.set(id, {
++    const entry: QueueEntry = {
+       _tag: "Queue",
        rpc,
        queue,
        scope,
 -      context
+-    })
 +      context,
 +      delivering: undefined,
 +      afterDelivery: undefined
-     })
++    }
++    entries.set(id, entry)
  
      yield* middleware(
-@@ -568,24 +573,82 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+       (message) =>
+@@ -505,7 +511,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+       }
+     ).pipe(
+       span ? Effect.withParentSpan(span, { captureStackTrace: false }) : identity,
+-      Effect.onError((cause) => Queue.failCause(queue, cause)),
++      Effect.onError((cause) => Effect.sync(() => endQueue(entry, Exit.failCause(cause)))),
+       Effect.interruptible,
+       Effect.forkIn(scope, { startImmediately: true })
+     )
+@@ -568,24 +574,81 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
        })
      })
  
@@ -59,8 +77,7 @@ index 615d168ad..9e3707247 100644
 +        ? options.onFromClient({ message: { _tag: "Ack", requestId }, context: entry.context, discard: false })
 +        : Effect.void
 +    ).pipe(
-+      Effect.catchCause((cause) => Queue.failCause(entry.queue, cause)),
-+      Effect.asVoid
++      Effect.catchCause((cause) => Effect.sync(() => endQueue(entry, Exit.failCause(cause))))
 +    )
 +
 +  // The receive loop serves every request on the connection, so the part of a
@@ -155,7 +172,7 @@ index 615d168ad..9e3707247 100644
        case "Defect": {
          return clearEntries(Exit.die(message.defect))
 diff --git a/packages/effect/test/rpc/RpcClient.test.ts b/packages/effect/test/rpc/RpcClient.test.ts
-index 88c13947d..29c203628 100644
+index 88c13947d..d7accc169 100644
 --- a/packages/effect/test/rpc/RpcClient.test.ts
 +++ b/packages/effect/test/rpc/RpcClient.test.ts
 @@ -42,6 +42,59 @@ const makeChunkProtocol = (beforeInterrupt: Effect.Effect<void> = Effect.void) =
@@ -218,7 +235,7 @@ index 88c13947d..29c203628 100644
  const takeRequestId = (message: Parameters<RpcClient.Protocol["Service"]["send"]>[1]) => {
    assert(message._tag === "Request")
    return message.id
-@@ -188,6 +241,268 @@ describe("RpcClient", () => {
+@@ -188,6 +241,306 @@ describe("RpcClient", () => {
        assert.deepStrictEqual(yield* Queue.take(sent), { _tag: "Interrupt", requestId })
      }))
  
@@ -279,7 +296,7 @@ index 88c13947d..29c203628 100644
 +      }))
 +
 +    // A consumer that takes by hand, from a buffer of 2.
-+    const takeByHand = (client: RpcClient.FromGroup<typeof TestGroup, RpcClientError>) =>
++    const takeByHand = <E>(client: RpcClient.FromGroup<typeof TestGroup, E>) =>
 +      Effect.map(client.Events(undefined, { asQueue: true, streamBufferSize: 2 }), (queue) => ({
 +        queue,
 +        take: (count: number) => Effect.forEach(Array.from({ length: count }), () => Queue.take(queue))
@@ -390,6 +407,44 @@ index 88c13947d..29c203628 100644
 +
 +        yield* write(chunk("a"))
 +        assert.deepStrictEqual(yield* take(12), [...values("a", 6), ...values("b", 6)])
++      }))
++
++    it.effect("keeps a chunk written inline before the Ack send fails", () =>
++      Effect.gen(function*() {
++        const server: { write?: (message: RpcMessage.ResponseChunk<Rpcs>) => Effect.Effect<void> } = {}
++        let acks = 0
++        const { client, write } = yield* RpcClient.makeNoSerialization(TestGroup, {
++          supportsAck: true,
++          generateRequestId: () => requestId,
++          onFromClient: ({ message }) =>
++            message._tag === "Ack" && ++acks === 1
++              ? Effect.andThen(server.write!(chunk("b")), Effect.fail("ack failed"))
++              : Effect.void
++        })
++        server.write = write
++        const { queue, take } = yield* takeByHand(client)
++
++        yield* write(chunk("a"))
++        assert.deepStrictEqual(yield* take(12), [...values("a", 6), ...values("b", 6)])
++        assert.deepStrictEqual(yield* Effect.flip(Queue.take(queue)), "ack failed")
++      }))
++
++    it.effect("keeps a chunk written inline before the request send fails", () =>
++      Effect.gen(function*() {
++        const server: { write?: (message: RpcMessage.ResponseChunk<Rpcs>) => Effect.Effect<void> } = {}
++        const { client, write } = yield* RpcClient.makeNoSerialization(TestGroup, {
++          supportsAck: true,
++          generateRequestId: () => requestId,
++          onFromClient: ({ message }) =>
++            message._tag === "Request"
++              ? Effect.andThen(server.write!(chunk("a")), Effect.fail("send failed"))
++              : Effect.void
++        })
++        server.write = write
++        const { queue, take } = yield* takeByHand(client)
++
++        assert.deepStrictEqual(yield* take(6), values("a", 6))
++        assert.deepStrictEqual(yield* Effect.flip(Queue.take(queue)), "send failed")
 +      }))
 +
 +    for (const terminal of ["Exit", "Defect"] as const) {
