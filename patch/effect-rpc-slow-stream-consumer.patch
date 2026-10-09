@@ -10,7 +10,7 @@ index 000000000..adc09b8fc
 +
 +Fix a slow `RpcClient` stream consumer stalling every other request on a socket or worker connection. A stream whose buffer is full now holds back only its own chunks, by withholding its `Ack`, so replies, other streams, and pongs keep arriving.
 diff --git a/packages/effect/src/rpc/RpcClient.ts b/packages/effect/src/rpc/RpcClient.ts
-index 615d168ad..841e6d1f1 100644
+index 615d168ad..75c2c918c 100644
 --- a/packages/effect/src/rpc/RpcClient.ts
 +++ b/packages/effect/src/rpc/RpcClient.ts
 @@ -288,6 +288,25 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
@@ -80,7 +80,7 @@ index 615d168ad..841e6d1f1 100644
        Effect.interruptible,
        Effect.forkIn(scope, { startImmediately: true })
      )
-@@ -568,24 +589,138 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+@@ -568,24 +589,139 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
        })
      })
  
@@ -172,12 +172,13 @@ index 615d168ad..841e6d1f1 100644
 +  // Sent from a fiber of their own, so delivery never waits on an Ack or on
 +  // whatever sending it does, and one at a time.
 +  const oweAck = (requestId: RequestId, entry: QueueEntry): Effect.Effect<void> =>
-+    Effect.suspend(() => {
++    // uninterruptible, so `acking` is never left set without a fiber to clear it
++    Effect.uninterruptible(Effect.suspend(() => {
 +      entry.acksOwed++
 +      if (entry.acking) return Effect.void
 +      entry.acking = true
 +      return Effect.asVoid(Effect.forkIn(sendAcks(requestId, entry), entry.scope))
-+    })
++    }))
 +
 +  const sendAcks = (requestId: RequestId, entry: QueueEntry): Effect.Effect<void> =>
 +    Effect.suspend(() => {
@@ -231,7 +232,7 @@ index 615d168ad..841e6d1f1 100644
        }
        case "Exit": {
          const requestId = message.requestId
-@@ -596,9 +731,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+@@ -596,9 +732,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
            entry.resume(message.exit)
            return Effect.void
          }
@@ -243,7 +244,7 @@ index 615d168ad..841e6d1f1 100644
        case "Defect": {
          return clearEntries(Exit.die(message.defect))
 diff --git a/packages/effect/test/rpc/RpcClient.test.ts b/packages/effect/test/rpc/RpcClient.test.ts
-index 88c13947d..649b56384 100644
+index 88c13947d..9eb0af8da 100644
 --- a/packages/effect/test/rpc/RpcClient.test.ts
 +++ b/packages/effect/test/rpc/RpcClient.test.ts
 @@ -1,5 +1,19 @@
@@ -593,8 +594,8 @@ index 88c13947d..649b56384 100644
 +        yield* write(chunk("a"))
 +        assert.deepStrictEqual(yield* take(6), values("a", 6))
 +        yield* Deferred.await(ackSent)
-+        const next = yield* Effect.forkChild(write(chunk("b")), { startImmediately: true })
-+        assert.isDefined(next.pollUnsafe())
++        // completes while the first Ack is still being sent
++        yield* write(chunk("b"))
 +        assert.deepStrictEqual(yield* take(6), values("b", 6))
 +      }))
 +
