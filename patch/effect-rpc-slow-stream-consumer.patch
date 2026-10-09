@@ -10,7 +10,7 @@ index 000000000..adc09b8fc
 +
 +Fix a slow `RpcClient` stream consumer stalling every other request on a socket or worker connection. A stream whose buffer is full now holds back only its own chunks, by withholding its `Ack`, so replies, other streams, and pongs keep arriving.
 diff --git a/packages/effect/src/rpc/RpcClient.ts b/packages/effect/src/rpc/RpcClient.ts
-index 615d168ad..b8c9cfa56 100644
+index 615d168ad..9e3707247 100644
 --- a/packages/effect/src/rpc/RpcClient.ts
 +++ b/packages/effect/src/rpc/RpcClient.ts
 @@ -288,7 +288,12 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
@@ -48,7 +48,7 @@ index 615d168ad..b8c9cfa56 100644
      })
  
      yield* middleware(
-@@ -568,24 +573,80 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+@@ -568,24 +573,82 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
        })
      })
  
@@ -87,11 +87,13 @@ index 615d168ad..b8c9cfa56 100644
 +      entry.delivering = delivering
 +      const delivered = () => {
 +        if (entry.delivering !== delivering) return
-+        entry.delivering = undefined
-+        delivering.openUnsafe()
++        // taken before the latch resumes a waiting chunk, whose delivery can
++        // defer an end of its own
 +        const afterDelivery = entry.afterDelivery
++        entry.delivering = undefined
 +        entry.afterDelivery = undefined
 +        afterDelivery?.()
++        delivering.openUnsafe()
 +      }
 +      return Queue.offerAll(entry.queue, remaining).pipe(
 +        // before the Ack, so a chunk sent in reply is not held behind it
@@ -141,7 +143,7 @@ index 615d168ad..b8c9cfa56 100644
        }
        case "Exit": {
          const requestId = message.requestId
-@@ -596,9 +657,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+@@ -596,9 +659,7 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
            entry.resume(message.exit)
            return Effect.void
          }
@@ -153,7 +155,7 @@ index 615d168ad..b8c9cfa56 100644
        case "Defect": {
          return clearEntries(Exit.die(message.defect))
 diff --git a/packages/effect/test/rpc/RpcClient.test.ts b/packages/effect/test/rpc/RpcClient.test.ts
-index 88c13947d..a321e4aed 100644
+index 88c13947d..29c203628 100644
 --- a/packages/effect/test/rpc/RpcClient.test.ts
 +++ b/packages/effect/test/rpc/RpcClient.test.ts
 @@ -42,6 +42,59 @@ const makeChunkProtocol = (beforeInterrupt: Effect.Effect<void> = Effect.void) =
@@ -216,7 +218,7 @@ index 88c13947d..a321e4aed 100644
  const takeRequestId = (message: Parameters<RpcClient.Protocol["Service"]["send"]>[1]) => {
    assert(message._tag === "Request")
    return message.id
-@@ -188,6 +241,241 @@ describe("RpcClient", () => {
+@@ -188,6 +241,268 @@ describe("RpcClient", () => {
        assert.deepStrictEqual(yield* Queue.take(sent), { _tag: "Interrupt", requestId })
      }))
  
@@ -408,6 +410,33 @@ index 88c13947d..a321e4aed 100644
 +              : { _tag: "Defect", clientId: 0, defect: "boom" }
 +          )
 +          assert.deepStrictEqual(yield* take(6), values("a", 6))
++          const end = yield* Effect.exit(Queue.take(queue))
++          assert(Exit.isFailure(end))
++          assert.strictEqual(Cause.hasDies(end.cause), terminal === "Defect")
++        }))
++
++      it.effect(`keeps an early chunk's values when ${terminal} follows it`, () =>
++        Effect.gen(function*() {
++          const { client, write } = yield* RpcClient.makeNoSerialization(TestGroup, {
++            supportsAck: true,
++            generateRequestId: () => requestId,
++            onFromClient: () => Effect.void
++          })
++          const { queue, take } = yield* takeByHand(client)
++
++          yield* write(chunk("a"))
++          // A server that sends the next chunk before the Ack, then ends.
++          yield* write(chunk("b")).pipe(
++            Effect.andThen(() =>
++              write(
++                terminal === "Exit"
++                  ? { _tag: "Exit", clientId: 0, requestId, exit: Exit.void }
++                  : { _tag: "Defect", clientId: 0, defect: "boom" }
++              )
++            ),
++            Effect.forkChild({ startImmediately: true })
++          )
++          assert.deepStrictEqual(yield* take(12), [...values("a", 6), ...values("b", 6)])
 +          const end = yield* Effect.exit(Queue.take(queue))
 +          assert(Exit.isFailure(end))
 +          assert.strictEqual(Cause.hasDies(end.cause), terminal === "Defect")
