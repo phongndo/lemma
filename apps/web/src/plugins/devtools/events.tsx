@@ -1,7 +1,8 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
-import type { HostEvent } from "@lemma/contracts";
+import { AgentChannels, CommandChannels, LlmChannels, SessionChannels } from "@lemma/contracts";
+import type { AgentActivity, CommandInfo, LlmChange, RuntimeEvent, SessionsChange } from "@lemma/contracts";
 import { clockTime } from "../../model/format.ts";
 import { ThreadRoute } from "../../ui/contracts.ts";
 import type { ClientService, DevtoolsPanel, RouterService } from "../../ui/contracts.ts";
@@ -11,52 +12,98 @@ import type { SlotItem } from "../../ui/slots.ts";
 export const EVENTS_PANEL = "devtools.events";
 /** Lines kept, newest last; older ones drop off the top. */
 const LIMIT = 1000;
+/** The host's own event stream, beside the subsystems' streams. */
+const HOST_EVENTS = "Host.Events";
 
-/** A line of the log: an event from the stream, or a change in the connection carrying it. */
+/** What a line heard: one of the host's own events, or an element of a subsystem's stream. */
+type Heard =
+  | { readonly stream: typeof HOST_EVENTS; readonly event: RuntimeEvent }
+  | { readonly stream: "sessions.changes"; readonly event: SessionsChange }
+  | { readonly stream: "agent.activity"; readonly event: AgentActivity }
+  | { readonly stream: "llm.changes"; readonly event: LlmChange }
+  | { readonly stream: "commands.changes"; readonly event: readonly CommandInfo[] };
+
+/** A line of the log: what a stream sent, a stream ending, or a change in the connection carrying them. */
 type Line =
-  | { readonly seq: number; readonly at: number; readonly kind: "event"; readonly event: HostEvent; readonly bytes: number }
+  | ({ readonly seq: number; readonly at: number; readonly kind: "event"; readonly bytes: number } & Heard)
+  | { readonly seq: number; readonly at: number; readonly kind: "end"; readonly stream: string; readonly error?: string }
   | { readonly seq: number; readonly at: number; readonly kind: "conn"; readonly status: ConnectionStatus };
+
+/** Follows the subsystems' streams, each element heard and each ending told; returns the stops. */
+const followStreams = (client: ClientService, hear: (heard: Heard) => void, ended: (stream: string, error?: Error) => void): (() => void)[] => [
+  client.follow(
+    SessionChannels.changes,
+    undefined,
+    (event) => hear({ stream: "sessions.changes", event }),
+    (error) => ended(SessionChannels.changes.id, error),
+  ),
+  client.follow(
+    AgentChannels.activity,
+    undefined,
+    (event) => hear({ stream: "agent.activity", event }),
+    (error) => ended(AgentChannels.activity.id, error),
+  ),
+  client.follow(
+    LlmChannels.changes,
+    undefined,
+    (event) => hear({ stream: "llm.changes", event }),
+    (error) => ended(LlmChannels.changes.id, error),
+  ),
+  client.follow(
+    CommandChannels.changes,
+    undefined,
+    (event) => hear({ stream: "commands.changes", event }),
+    (error) => ended(CommandChannels.changes.id, error),
+  ),
+];
+
+const streamOf = (line: Line): string => (line.kind === "conn" ? "connection" : line.stream);
 
 /** What a line is about, for its colour. */
 const category = (line: Line): string => {
-  if (line.kind === "conn") return "conn";
+  if (line.kind !== "event") return "conn";
+  if (line.stream === "commands.changes") return "host";
   const event = line.event;
   if (event.type === "notice") return `notice-${event.notice.level}`;
   if (event.type === "delta" || event.type === "tool-output") return "delta";
   if (event.type.startsWith("session")) return "session";
-  if (event.type.startsWith("turn")) return "turn";
+  if (event.type.startsWith("turn") || event.type === "queue-changed") return "turn";
   if (event.type.startsWith("interaction")) return "interaction";
   return "host";
 };
 
-const typeOf = (line: Line): string => (line.kind === "conn" ? "connection" : line.event.type);
+const typeOf = (line: Line): string => {
+  if (line.kind === "conn") return line.status.state;
+  if (line.kind === "end") return "ended";
+  return line.stream === "commands.changes" ? "commands" : line.event.type;
+};
 
 const sessionOf = (line: Line): string | undefined => {
-  if (line.kind === "conn") return undefined;
+  if (line.kind !== "event" || line.stream === "commands.changes") return undefined;
   const event = line.event;
   if ("sessionId" in event) return event.sessionId;
   if (event.type === "session-changed") return event.info.id;
   return undefined;
 };
 
-/** The line's message, as `lemma events` prints it. */
+/** The line's message. */
 const describe = (line: Line): string => {
   if (line.kind === "conn") {
-    const { state, generation, attempts, error } = line.status;
-    return `${state} · generation ${generation}${attempts > 0 ? ` · attempt ${attempts}` : ""}${error === undefined ? "" : ` · ${error}`}`;
+    const { generation, attempts, error } = line.status;
+    return `generation ${generation}${attempts > 0 ? ` · attempt ${attempts}` : ""}${error === undefined ? "" : ` · ${error}`}`;
   }
+  if (line.kind === "end") return line.error ?? "finished";
+  if (line.stream === "commands.changes") return line.event.map((command) => command.id).join(" ") || "none";
   const event = line.event;
   switch (event.type) {
     case "subscribed":
-      return "subscribed";
+      return "running" in event ? `running: ${event.running.join(" ") || "none"}` : "from here on it hears every change";
     case "notice":
       return `${event.notice.level}${event.notice.source === undefined ? "" : ` ${event.notice.source}:`} ${event.notice.message}`;
     case "delta":
       return `${event.event.type}${event.event.type === "text-delta" ? ` ${JSON.stringify(event.event.delta)}` : ""} · turn ${event.turnId} step ${event.stepId}`;
     case "tool-output":
       return `${JSON.stringify(event.chunk.length > 80 ? `${event.chunk.slice(0, 80)}…` : event.chunk)} · call ${event.toolCallId}`;
-    case "session-appended":
-      return `#${event.event.seq} ${event.event.data.type} ${event.event.id}`;
     case "session-removed":
       return "deleted";
     case "session-changed":
@@ -67,16 +114,16 @@ const describe = (line: Line): string => {
       return event.queue.length === 0 ? "empty" : event.queue.map((queued) => `${queued.mode} ${queued.requestId}`).join(" · ");
     case "turn-ended":
       return `turn ${event.turnId} ${event.reason} · ↑${event.usage.input} ↓${event.usage.output}`;
+    case "models-changed":
+      return "list them again";
     case "interaction":
       return `${event.request.id} ${event.request.type}: ${event.request.title}`;
     case "interaction-closed":
       return event.id;
     case "plugins-changed":
       return event.plugins.map((plugin) => `${plugin.id}=${plugin.state}`).join(" ");
-    case "commands-changed":
-      return event.commands.map((command) => command.id).join(" ");
-    case "models-changed":
-      return "list them again";
+    case "channels-changed":
+      return event.channels.map((channel) => `${channel.id} (${channel.source})`).join(" ") || "none";
     case "ui-changed":
       return `${Object.keys(event.ui.plugins).length} rows · files ${event.ui.files.map((file) => file.name).join(" ") || "none"}`;
   }
@@ -86,11 +133,13 @@ const gap = (ms: number) => (ms < 1000 ? `+${ms}ms` : ms < 60_000 ? `+${(ms / 10
 const size = (bytes: number) => (bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).toFixed(1)}K`);
 
 /**
- * This page's subscription to `Host.Events` over the WebSocket, as a log: one
- * row per event with its time, the gap since the one before, its type,
- * session, and size, and changes in the connection itself. Follows the tail
- * while scrolled to the bottom; a row selected opens its raw JSON, and a
- * session its thread's trajectory.
+ * What this page hears from the host, as a log: the host's own events
+ * (`Host.Events`), the subsystems' streams while the devtools are open (their
+ * changes, and the agent's activity), and changes in the connection carrying
+ * them. One row per element with its time, the gap since the one before, its
+ * stream and type, session, and size. Follows the tail while scrolled to the
+ * bottom; a row selected opens its raw JSON, and a session its thread's
+ * trajectory.
  */
 function EventLog(props: { client: ClientService; router: RouterService; lines: Accessor<readonly Line[]>; clear: () => void }) {
   const [query, setQuery] = createSignal("");
@@ -105,9 +154,9 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
     const words = query().trim().toLowerCase().split(/\s+/).filter(Boolean);
     return source().filter((line) => {
       // Streamed output (model deltas, tool output) is hidden until asked for.
-      if (!deltas() && line.kind === "event" && (line.event.type === "delta" || line.event.type === "tool-output")) return false;
+      if (!deltas() && category(line) === "delta") return false;
       if (words.length === 0) return true;
-      const text = `${typeOf(line)} ${sessionOf(line) ?? ""} ${describe(line)}`.toLowerCase();
+      const text = `${streamOf(line)} ${typeOf(line)} ${sessionOf(line) ?? ""} ${describe(line)}`.toLowerCase();
       return words.every((word) => (word.startsWith("-") && word.length > 1 ? !text.includes(word.slice(1)) : text.includes(word)));
     });
   });
@@ -138,7 +187,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
       <div class="dt-toolbar" role="toolbar" aria-label="Host events toolbar">
         <label class="dt-filter">
           <input
-            placeholder="Filter: type, session, or text; -word excludes"
+            placeholder="Filter: stream, type, session, or text; -word excludes"
             aria-label="Filter events"
             autocomplete="off"
             spellcheck={false}
@@ -184,7 +233,8 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
               <tr>
                 <th style={{ width: "108px" }}>Time</th>
                 <th style={{ width: "62px" }}>Gap</th>
-                <th style={{ width: "150px" }}>Type</th>
+                <th style={{ width: "130px" }}>Stream</th>
+                <th style={{ width: "130px" }}>Type</th>
                 <th style={{ width: "120px" }}>Session</th>
                 <th style={{ width: "56px" }}>Size</th>
                 <th>Message</th>
@@ -195,7 +245,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
                 each={shown()}
                 fallback={
                   <tr>
-                    <td colSpan={6} class="dt-muted">
+                    <td colSpan={7} class="dt-muted">
                       {props.lines().length === 0 ? "Waiting for events…" : "No events match"}
                     </td>
                   </tr>
@@ -207,6 +257,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
                     <tr data-row data-selected={selected() === line.seq} onClick={() => setSelected(selected() === line.seq ? undefined : line.seq)}>
                       <td class="dt-code dt-muted">{clockTime(line.at)}</td>
                       <td class="dt-code dt-muted dt-num">{before() === undefined ? "" : gap(line.at - before()!.at)}</td>
+                      <td class="dt-code dt-muted">{streamOf(line)}</td>
                       <td class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</td>
                       <td class="dt-code">
                         <Show when={sessionOf(line)} fallback={<span class="dt-muted">·</span>}>
@@ -235,13 +286,16 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
             <aside class="dt-details dt-side" aria-label="Event details">
               <div class="dt-details-title">
                 <strong class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</strong>
+                <span class="dt-muted dt-code">{streamOf(line)}</span>
                 <span class="dt-muted">{clockTime(line.at)}</span>
                 <button class="dt-close" style={{ "margin-left": "auto" }} aria-label="Close details" onClick={() => setSelected(undefined)}>
                   <XIcon />
                 </button>
               </div>
               <div class="dt-side-body">
-                <pre class="dt-pre">{JSON.stringify(line.kind === "event" ? line.event : line.status, null, 2)}</pre>
+                <pre class="dt-pre">
+                  {JSON.stringify(line.kind === "event" ? line.event : line.kind === "end" ? { error: line.error } : line.status, null, 2)}
+                </pre>
               </div>
             </aside>
           )}
@@ -250,7 +304,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
       <div class="dt-status" role="status">
         <span>
           <span class={`dt-dot ${state() === "connected" ? "dt-ok" : state() === "closed" ? "dt-err" : "dt-warn"}`} />
-          Host.Events · {state()} · gen {props.client.status().generation}
+          {HOST_EVENTS} · {state()} · gen {props.client.status().generation}
         </span>
         <span class="dt-code">{url()}</span>
         <span>
@@ -263,29 +317,49 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
 }
 
 /**
- * Records the host's event stream, and the connection carrying it, from now
- * until `onCleanup` runs, for the Host events panel.
+ * Records what the host sends this page from now until `onCleanup` runs, for
+ * the Host events panel: its own events and the connection always, and the
+ * subsystems' streams while `following` (the devtools are open), since
+ * following them costs a subscription of the page's own, the agent's output
+ * included.
  */
-export function hostEventsPanel(client: ClientService, router: RouterService, onCleanup: (fn: () => void) => void): SlotItem<DevtoolsPanel> {
+export function hostEventsPanel(
+  client: ClientService,
+  router: RouterService,
+  following: Accessor<boolean>,
+  onCleanup: (fn: () => void) => void,
+): SlotItem<DevtoolsPanel> {
   const [lines, setLines] = createSignal<readonly Line[]>([]);
   let seq = 0;
   const push = (line: Line) => setLines((current) => [...(current.length >= LIMIT ? current.slice(current.length - LIMIT + 1) : current), line]);
-  onCleanup(client.onEvent((event) => push({ seq: ++seq, at: Date.now(), kind: "event", event, bytes: JSON.stringify(event).length })));
-  let last: string | undefined;
-  onCleanup(
-    client.host.onStatus((status) => {
-      // One line per change of state or generation, not per retry countdown.
-      const key = `${status.state}:${status.generation}`;
-      if (key === last) return;
-      last = key;
-      push({ seq: ++seq, at: Date.now(), kind: "conn", status });
+  const hear = (heard: Heard) => push({ seq: ++seq, at: Date.now(), kind: "event", bytes: JSON.stringify(heard.event).length, ...heard });
+  onCleanup(client.onEvent((event) => hear({ stream: HOST_EVENTS, event })));
+  let streams: (() => void)[] = [];
+  createEffect(
+    on(following, (now) => {
+      for (const stop of streams) stop();
+      streams = now
+        ? followStreams(client, hear, (stream, error) =>
+            push({ seq: ++seq, at: Date.now(), kind: "end", stream, ...(error === undefined ? {} : { error: error.message }) }),
+          )
+        : [];
     }),
+  );
+  onCleanup(() => {
+    for (const stop of streams) stop();
+  });
+  // One line per change of state or generation, not per retry countdown.
+  createEffect(
+    on(
+      () => `${client.status().state}:${client.status().generation}`,
+      () => push({ seq: ++seq, at: Date.now(), kind: "conn", status: client.status() }),
+    ),
   );
   return {
     id: EVENTS_PANEL,
     order: 15,
     title: "Host events",
     component: () => <EventLog client={client} router={router} lines={lines} clear={() => setLines([])} />,
-    snapshot: () => lines().map((line) => ({ at: line.at, type: typeOf(line), session: sessionOf(line), message: describe(line) })),
+    snapshot: () => lines().map((line) => ({ at: line.at, stream: streamOf(line), type: typeOf(line), session: sessionOf(line), message: describe(line) })),
   };
 }

@@ -1,5 +1,5 @@
-import { branchOf } from "@lemma/contracts";
-import type { QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
+import { branchOf, HostError, SessionChannels } from "@lemma/contracts";
+import type { QueuedPrompt, SessionEvent, SessionInfo, SessionsChange } from "@lemma/contracts";
 
 interface SessionGroup {
   readonly cwd: string;
@@ -43,6 +43,36 @@ export const upsertSession = (sessions: readonly SessionInfo[], info: SessionInf
   const next = sessions.slice();
   next[index] = info;
   return next;
+};
+
+/** The sessions after a change `sessions.changes` reports. */
+export const applySessionsChange = (sessions: readonly SessionInfo[], change: Exclude<SessionsChange, { type: "subscribed" }>): SessionInfo[] =>
+  change.type === "session-removed" ? sessions.filter((session) => session.id !== change.sessionId) : upsertSession(sessions, change.info);
+
+/**
+ * A log with `incoming` added: those past its last event. `sessions.log`
+ * sends each event once and in order, and a stream reopened after the last
+ * event a reader has resumes there, so what it sends follows on; one at or
+ * before the last (a log read just before) is already there.
+ */
+export const appendLog = (events: readonly SessionEvent[], incoming: readonly SessionEvent[]): readonly SessionEvent[] => {
+  const last = events.at(-1)?.seq ?? 0;
+  const fresh = incoming.filter((event) => event.seq > last);
+  return fresh.length === 0 ? events : [...events, ...fresh];
+};
+
+/**
+ * What the open thread says when its `sessions.log` ends, or undefined when
+ * following it carries on by itself: its plugin left (`Withdrawn`), the
+ * channel is not served for now (`NotFound` or `Unavailable` naming the
+ * channel: `sessions` being replaced, the host starting), or the connection
+ * dropped (not a `HostError`). What names the session (it is gone, its log
+ * unreadable) is said.
+ */
+export const logFailure = (error: unknown): string | undefined => {
+  if (!(error instanceof HostError) || error.code === "Withdrawn") return undefined;
+  if (error.subject === SessionChannels.log.id && (error.code === "NotFound" || error.code === "Unavailable")) return undefined;
+  return error.message;
 };
 
 /**

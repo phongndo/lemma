@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { checkComposition, definePlugin, Diagnostic, Hook, Hooks, makeLoader, PluginContext } from "../src/index.ts";
-import type { Composition, Plugin, PluginSource } from "../src/index.ts";
+import type { Composition, LoaderOptions, Plugin, PluginSource } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
 class Db extends Context.Service<Db, { readonly name: string; readonly generation: number }>()("test/Db") {}
@@ -340,7 +340,95 @@ describe("loader", () => {
       ["InvalidConfig", "greeter"],
     ]);
     expect(checkComposition([all.api!]).map((error) => error.reason)).toEqual(["MissingCapability"]);
+    // What the application provides is present for every plugin, and provided by none.
+    expect(checkComposition([all.api!], {}, { provided: [Db] })).toEqual([]);
+    expect(checkComposition([all.db!, all.api!], { db: { name: "main" } }, { provided: [Db] })).toMatchObject([
+      { reason: "ReservedCapability", plugins: ["db"], capability: Db.key },
+    ]);
+    expect(checkComposition([], {}, { provided: [Hooks] })).toMatchObject([{ reason: "ReservedCapability", plugins: [], capability: Hooks.key }]);
+    expect(checkComposition([], {}, { provided: [Db, Db] })).toMatchObject([{ reason: "DuplicateCapability", plugins: [], capability: Db.key }]);
     expect(log).toEqual([]);
+  });
+
+  test("an application whose services fail to build, or name a runtime capability, fails the loader with a diagnostic", async () => {
+    const { source } = fixtures([]);
+    const start = (provide: NonNullable<LoaderOptions["provide"]>) =>
+      Effect.runPromise(Effect.flip(Effect.scoped(makeLoader({ source, composition: composition({ api: {} }), provide }))));
+    const failed = await start({ provides: [Db], layer: Layer.effect(Db, Effect.fail("db is down")) });
+    expect(failed.diagnostics).toHaveLength(1);
+    expect(failed.diagnostics[0]?.pluginId).toBeUndefined();
+    expect(failed.diagnostics[0]?.message).toMatch(/^The application's services failed to build:\n[^]*db is down/);
+    const reserved = await start({ provides: [Hooks], layer: Layer.succeed(Hooks, { invoke: (_hook, value, end) => end(value) }) });
+    expect(reserved.diagnostics.map((diagnostic) => [diagnostic.pluginId, diagnostic.message])).toEqual([
+      [undefined, `The application cannot provide runtime capability "${Hooks.key}"`],
+    ]);
+  });
+
+  test("a plugin that requires only the application's capabilities is untouched by changes to plugins", async () => {
+    class Clock extends Context.Service<Clock, { readonly now: () => number }>()("test/Clock") {}
+    const clock = { now: () => 1 };
+    const provide = { provides: [Clock], layer: Layer.succeed(Clock, clock) };
+    const seen: unknown[] = [];
+    const timer = definePlugin({ id: "timer", requires: [Clock], layer: Layer.effectDiscard(Effect.map(Clock, (service) => void seen.push(service))) });
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const { all } = fixtures(log);
+        let generation = 0;
+        const port = definePlugin({
+          id: "port",
+          requires: [Clock],
+          provides: [Db],
+          exclusive: true,
+          config: Schema.Struct({ name: Schema.String }),
+          layer: (config) =>
+            Layer.effect(
+              Db,
+              Effect.gen(function* () {
+                yield* Clock;
+                const self = { name: config.name, generation: ++generation };
+                log.push(`port+${self.generation}`);
+                yield* Effect.addFinalizer(() => Effect.sync(() => void log.push(`port-${self.generation}`)));
+                return self;
+              }),
+            ),
+        });
+        const plugins: Record<string, Plugin> = { ...all, port, timer };
+        const source: PluginSource = { resolve: (id) => Effect.succeed(plugins[id]!) };
+        const loader = yield* makeLoader({ source, composition: composition({ port: { config: { name: "a" } }, api: {}, timer: {} }), provide });
+        // An exclusive plugin's gap stops the plugins that depend on it, not those that share an application capability with it.
+        const report = yield* loader.apply(composition({ port: { config: { name: "b" } }, api: {}, timer: {} }));
+        expect(report).toMatchObject({ restarted: ["port", "api"], unchanged: ["timer"] });
+        expect(log).toEqual(["port+1", "api+1", "api-1", "port-1", "port+2", "api+2"]);
+        yield* loader.core.restart("port", { force: true });
+        yield* loader.core.restart("timer");
+        expect(seen).toEqual([clock]);
+        // Forced, it restarts on its own, with the very same service.
+        yield* loader.core.restart("timer", { force: true });
+        expect(seen).toHaveLength(2);
+        expect(seen[1]).toBe(clock);
+        expect(yield* loader.core.run(Clock)).toBe(clock);
+      }),
+    );
+    // Required, it needs no plugin: one that cannot start beside it is left failed.
+    await run(
+      Effect.gen(function* () {
+        const { all } = fixtures([]);
+        const plugins: Record<string, Plugin> = { ...all, timer };
+        const loader = yield* makeLoader({
+          source: { resolve: (id) => Effect.succeed(plugins[id]!) },
+          composition: composition({ db: { config: { name: "main" } }, broken: {}, timer: {} }),
+          partialStart: { required: ["timer"] },
+          provide,
+        });
+        const states = (yield* loader.core.inspect).plugins.map((plugin) => [plugin.id, plugin.state]);
+        expect(states).toEqual([
+          ["db", "active"],
+          ["broken", "failed"],
+          ["timer", "active"],
+        ]);
+      }),
+    );
   });
 
   test("a partial start leaves a plugin that cannot start failed, halts its dependents, and runs the rest", async () => {

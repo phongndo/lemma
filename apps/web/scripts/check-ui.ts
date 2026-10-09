@@ -17,7 +17,14 @@ import { createServer } from "vite";
  * 1. The app boots without errors.
  * 2. Every part declared in `ui/contracts.ts` has a provider.
  * 3. Every plugin that is not pinned turns off and back on, as the Plugins
- *    page does it, and the page stays up and error-free either way.
+ *    page does it, and the page stays up and error-free either way; only the
+ *    pinned ones and what they need stay on, and the runtime is no row at all.
+ *    The Plugins page needs none of them: a line its summary shows leaves with
+ *    the plugin that adds it, and with `kit` off its parts are their plain
+ *    fallbacks, which still filter, edit a plugin's settings, and switch `kit`
+ *    back on. With every plugin off that can be, the runtime
+ *    still answers, and a UI file providing part of it is left out, saying so,
+ *    while the app's own goes on.
  * 4. A part replaced by a lower-order item changes what renders, and the
  *    default returns when the replacement goes, or when the replacement throws
  *    (named for its plugin, the rest of the app updating on).
@@ -30,15 +37,20 @@ import { createServer } from "vite";
  *    suggestions on their way, and a picked folder narrows to what is in it.
  * 7. The address names the page: settings sections and their state, threads
  *    and their views survive a reload and back and forward; a page whose
- *    plugin is off says so and returns with it; a plugin adds a page; a page
- *    that throws fails alone; routes in conflict are reported; a hovered
+ *    plugin is off says so, naming it, and returns with it; a plugin adds a
+ *    page; a page that throws fails alone, and one with no route is its
+ *    plugin's fault; routes in conflict are reported; a hovered
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
- * 8. The devtools dock under the app, and each panel shows it as it runs.
+ * 8. The devtools dock under the app, and each panel shows it as it runs (the
+ *    host's events and its subsystems' streams, the channels it serves): a
+ *    capability the runtime provides is the web app's, not a missing one.
  * 9. While a turn runs, the composer steers it or queues a prompt for after
  *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
- *    a steer shows in its turn. A send that fails is retried with its request
- *    id, until the prompt is edited.
+ *    a steer shows in its turn. A running turn's thread left and opened again,
+ *    and the agent restarting under it, leave the turn shown to its end and its
+ *    prompt placed once. A send that fails is retried with its request id,
+ *    until the prompt is edited.
  * 10. The prompt rail has a tick per prompt; the one pointed at, or chosen with
  *    the keys, shows its prompt in a card level with it, and a click or Enter
  *    goes there, lighting it; the previous and next buttons move a turn each.
@@ -134,6 +146,21 @@ const boot = async () => {
   expectNoErrors("while booting");
   return { page, errors, warnings, expectNoErrors };
 };
+/**
+ * Loads the `check` UI file, a plugin like a user's, and puts its own slots on `window.checkSlots`: what the checks
+ * add, they add through it, since the page's own slots belong to no plugin and refuse to add. Each item is the check
+ * plugin's, and leaves with it. A reload drops it, as it drops the mock host's files.
+ */
+const checkPlugin = async (page: Page) => {
+  await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
+  await page.evaluate(() => {
+    const source = `export default ({ defineUiPlugin, contracts: { Slots } }) =>
+      defineUiPlugin({ id: "check", requires: { slots: Slots }, setup: ({ slots }) => { window.checkSlots = slots; } });`;
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setUiFiles([{ name: "check.js", source: "user", kind: "script", path: "/check/check.js", url }]);
+  });
+  await page.waitForFunction(() => "checkSlots" in window, undefined, { timeout: 10_000 });
+};
 /** Turns a plugin on or off the way the Plugins page switches it, and says what state it is in after. */
 const switchTo = (page: Page, id: string, enabled: boolean) =>
   page.evaluate(
@@ -175,7 +202,6 @@ const toggling = async () => {
   const toggled: string[] = [];
   const locked: string[] = [];
   for (const { id, locked: isLocked } of plugins) {
-    if (id === "client") continue;
     const stylesheets = () => page.evaluate((plugin) => document.head.querySelectorAll(`style[data-plugin="${plugin}"]`).length, id);
     const styled = await stylesheets();
     const stateOff = await switchTo(page, id, false);
@@ -202,18 +228,153 @@ const toggling = async () => {
       .map((plugin: any) => plugin.id),
   );
   assert.deepEqual(off, [], "plugins not back on after the round trip");
+  // Only the pinned plugins and what they need stay on; the runtime is the app's, with no row to switch.
+  assert.deepEqual([...locked].sort(), ["pages", "plugins-page", "settings", "shell"], "the plugins kept on");
+  const runtimeRows = plugins.filter(({ id }) => ["client", "app", "slots", "router", "notify", "host-plugins", "interactions"].includes(id));
+  assert.deepEqual(runtimeRows, [], "the runtime has rows among the plugins");
   // Turning a plugin off takes what needs it along, as the Plugins page shows: nothing to warn about.
   assert.deepEqual(
     warnings.filter((warning) => warning.includes("is not loaded")),
     [],
     "turning plugins off warned about the plugins that need them",
   );
-  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")})`;
+
+  // The Plugins page needs no plugin that can be turned off: a line of its summary leaves with the plugin that adds it
+  // (the turns running, with threads), and its pieces work without kit, from the page itself.
+  await page.evaluate(async () => {
+    const { Settings } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Settings)).open("plugins");
+  });
+  const running = page.locator(".host-facts dt:text-is('Running')");
+  await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the Plugins page does not show the turns running"));
+  assert.notEqual(await switchTo(page, "threads", false), "active", "threads did not turn off");
+  await running.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("the turns running outlived threads"));
+  await switchTo(page, "threads", true);
+  await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the turns running did not return with threads"));
+  const kit = page.locator(".inspector-row[data-key='web:kit']");
+  const kitState = () => page.evaluate(() => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === "kit").state);
+  // A UI file can neither change a bundled part's fallback nor give its own part one: its `definePart` takes none.
+  const fallbacks = await page.evaluate(async () => {
+    const [{ api }, { fallbackOf }, { TogglePart }] = await Promise.all([
+      import("/src/ui/api.ts" as string),
+      import("/src/ui/slots.ts" as string),
+      import("/src/ui/contracts.ts" as string),
+    ]);
+    const declared = fallbackOf(TogglePart);
+    const mine = () => "a UI file's";
+    return { kept: fallbackOf(api.definePart("toggle", mine)) === declared, own: fallbackOf(api.definePart("check.own", mine)) === undefined };
+  });
+  assert.deepEqual(fallbacks, { kept: true, own: true }, "a UI file set a part's fallback");
+  await kit.locator("[role=switch]").click();
+  await kit
+    .locator("input[type=checkbox]")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("with kit off, the Plugins page has no switch to turn it back on"));
+  assert.notEqual(await kitState(), "active", "kit did not turn off from its switch");
+  // With kit off, the parts the page draws are their plain fallbacks: its search filters, a plugin's settings form
+  // refuses what is not of a field's type and saves what is, and its icons still mark their buttons.
+  const filter = page.locator("input[type=search][aria-label='Filter plugins']");
+  await filter.waitFor({ timeout: 5_000 }).catch(() => assert.fail("with kit off, the Plugins page has no search field"));
+  await filter.fill("agent");
+  const agent = page.locator(".inspector-row[data-key='host:agent']");
+  await kit.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("with kit off, the Plugins page's search does not filter"));
+  await agent.click();
+  await page.click(".inspector-tabs [role=tab] >> text=Settings");
+  const maxSteps = page.getByLabel("Max steps");
+  await maxSteps.waitFor({ timeout: 5_000 }).catch(() => assert.fail("with kit off, a plugin's settings form does not show"));
+  assert.notEqual((await page.locator("[aria-label='Close details']").textContent())?.trim(), "", "with kit off, an icon button is blank");
+  await maxSteps.fill("2.5");
+  await maxSteps.press("Tab");
+  assert.equal(
+    await maxSteps.evaluate((input: HTMLInputElement) => input.validationMessage),
+    "maxSteps must be a whole number",
+    "with kit off, a bad value is not refused",
+  );
+  await maxSteps.fill("150");
+  await maxSteps.press("Tab");
+  await expose(page, "HostPlugins");
+  await page
+    .waitForFunction(() => (window as any).services.HostPlugins.list().find((plugin: any) => plugin.id === "agent").config.values.maxSteps === 150, undefined, {
+      timeout: 5_000,
+    })
+    .catch(() => assert.fail("with kit off, a plugin's settings form does not save"));
+  await filter.fill("");
+  await kit.locator("input[type=checkbox]").click();
+  await kit
+    .locator("[role=switch]")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("the plain switch did not turn kit back on"));
+  assert.equal(await kitState(), "active", "kit is not back on");
+  expectNoErrors("turning threads and kit off and on with the Plugins page open");
+
+  // The runtime is not a plugin: with every plugin off that can be, the router and the messages still answer.
+  const unlocked = plugins.filter((plugin) => !plugin.locked).map((plugin) => plugin.id);
+  const configureAll = (enabled: boolean) =>
+    page.evaluate(
+      async ({ ids, enabled }) => {
+        const { Client } = await import("/src/ui/contracts.ts" as string);
+        await (await (window as any).lemma.service(Client)).ui.configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
+      },
+      { ids: unlocked, enabled },
+    );
+  const active = () =>
+    page.evaluate(() =>
+      (window as any).lemma.plugins
+        .list()
+        .filter((plugin: any) => plugin.state === "active")
+        .map((plugin: any) => plugin.id),
+    );
+  await configureAll(false);
+  await page.waitForFunction((count) => (window as any).lemma.plugins.list().filter((plugin: any) => plugin.state === "active").length === count, 4);
+  assert.deepEqual([...(await active())].sort(), ["pages", "plugins-page", "settings", "shell"], "plugins still running with every plugin off");
+  const answers = await page.evaluate(async () => {
+    const { Notify, Router } = await import("/src/ui/contracts.ts" as string);
+    const lemma = (window as any).lemma;
+    const notify = await lemma.service(Notify);
+    const id = notify.toast({ level: "info", message: "the runtime answers" });
+    return { path: (await lemma.service(Router)).location().pathname, kept: notify.toasts().some((toast: any) => toast.id === id) };
+  });
+  assert.deepEqual(answers, { path: "/settings/plugins", kept: true }, "with every plugin off, the runtime does not answer");
+  await configureAll(true);
+  await page.waitForFunction(
+    (count) => (window as any).lemma.plugins.list().filter((plugin: any) => plugin.state === "active").length === count,
+    plugins.length,
+  );
+  expectNoErrors("turning every plugin off and on at once");
+
+  // A UI file providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
+  await page.evaluate(() => {
+    const source = `export default ({ defineUiPlugin, contracts: { Notify } }) =>
+      defineUiPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`;
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setUiFiles([{ name: "my-notify.js", source: "user", kind: "script", path: "/check/my-notify.js", url }]);
+  });
+  await page
+    .waitForFunction(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
+      timeout: 10_000,
+    })
+    .catch(() => assert.fail("a UI file providing Notify was not left out"));
+  assert(
+    warnings.some((warning) => warning.includes('"my-notify" is left out') && warning.includes('Stop providing "lemma-ui/Notify"')),
+    "a UI file providing Notify was left out without a warning",
+  );
+  await page.evaluate(async () => {
+    const { Notify } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Notify)).toast({ level: "info", message: "still the app's own" });
+  });
+  await page
+    .waitForSelector(".toast >> text=still the app's own", { timeout: 5_000 })
+    .catch(() => assert.fail("toasts stopped with a UI file providing Notify"));
+  await page.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
+  await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
+  expectNoErrors("a UI file providing part of the runtime");
+  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a UI file providing Notify is left out`;
 };
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
 const parts = async () => {
   const { page, errors, expectNoErrors } = await boot();
+  await checkPlugin(page);
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
   await page.fill("textarea", "hello");
@@ -226,7 +387,7 @@ const parts = async () => {
   assert((await page.locator(".turn .md").count()) > 0, "the default markdown part renders");
   await page.evaluate(async () => {
     const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
-    const remove = (window as any).lemma.slots().add(MarkdownPart, {
+    const remove = (window as any).checkSlots.add(MarkdownPart, {
       id: "check.markdown",
       order: 0,
       component: (props: { text: string }) => {
@@ -248,7 +409,7 @@ const parts = async () => {
   // app keeps updating: a later turn still draws.
   await page.evaluate(async () => {
     const { MarkdownPart } = await import("/src/ui/contracts.ts" as string);
-    (window as any).removeBroken = (window as any).lemma.slots().add(MarkdownPart, {
+    (window as any).removeBroken = (window as any).checkSlots.add(MarkdownPart, {
       id: "check.broken-markdown",
       order: 0,
       component: () => {
@@ -268,7 +429,7 @@ const parts = async () => {
         .failures(MarkdownPart)
         .map((failure: any) => [failure.item.id, failure.pluginId, failure.error.message]);
     }),
-    [["check.broken-markdown", "slots", "check markdown boom"]],
+    [["check.broken-markdown", "check", "check markdown boom"]],
     "the failing part is not named for its plugin",
   );
   await page.waitForSelector(".turn .md");
@@ -295,7 +456,7 @@ const parts = async () => {
           element.textContent = slot;
           return element;
         };
-        const remove = (window as any).lemma.slots().add(contracts[slot], { id: `check.${slot}`, order: 1_000, component, ...extra });
+        const remove = (window as any).checkSlots.add(contracts[slot], { id: `check.${slot}`, order: 1_000, component, ...extra });
         ((window as any).removals ??= []).push(remove);
       },
       { slot, extra },
@@ -310,7 +471,7 @@ const parts = async () => {
   // A palette source: its items come up in the palette, and its prefix narrows to it.
   await page.evaluate(async () => {
     const { PaletteSources } = await import("/src/ui/contracts.ts" as string);
-    const remove = (window as any).lemma.slots().add(PaletteSources, {
+    const remove = (window as any).checkSlots.add(PaletteSources, {
       id: "check.source",
       order: 1_000,
       label: "checks",
@@ -345,7 +506,7 @@ const parts = async () => {
   // A plugin's source answers its own trigger; Escape closes the menu until the word is left, and Tab picks.
   await page.evaluate(async () => {
     const { ComposerCompletions, ComposerSuggestionPart } = await import("/src/ui/contracts.ts" as string);
-    const slots = (window as any).lemma.slots();
+    const slots = (window as any).checkSlots;
     ((window as any).removals ??= []).push(
       slots.add(ComposerCompletions, {
         id: "check.completion",
@@ -386,16 +547,16 @@ const parts = async () => {
   // until Enter is down, so it is still on its way however long the keys took to arrive.
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    const files = (await (window as any).lemma.service(Client)).host.files;
-    const search = files.search;
+    const channel = (await (window as any).lemma.service(Client)).channel;
+    const call = channel.call;
     let release!: () => void;
     const held = new Promise<void>((resolve) => (release = resolve));
-    files.search = async (...args: unknown[]) => {
-      await held;
-      return search.apply(files, args);
+    channel.call = async (target: string | { id: string }, payload?: unknown) => {
+      if ((typeof target === "string" ? target : target.id) === "files.search") await held;
+      return call(target, payload);
     };
     (window as any).releaseSearch = () => {
-      files.search = search;
+      channel.call = call;
       release();
     };
   });
@@ -432,7 +593,12 @@ const parts = async () => {
   await page.evaluate(async () => {
     const { PluginTabs, Settings } = await import("/src/ui/contracts.ts" as string);
     const lemma = (window as any).lemma;
-    const remove = lemma.slots().add(PluginTabs, { id: "check.tab", order: 1_000, label: () => "Checked", component: () => document.createElement("span") });
+    const remove = (window as any).checkSlots.add(PluginTabs, {
+      id: "check.tab",
+      order: 1_000,
+      label: () => "Checked",
+      component: () => document.createElement("span"),
+    });
     ((window as any).removals ??= []).push(remove);
     (await lemma.service(Settings)).open("plugins");
   });
@@ -476,9 +642,10 @@ const parts = async () => {
   await page.reload();
   await page.waitForSelector(".turn", { timeout: 10_000 }).catch(() => assert.fail("a reload does not reopen the thread"));
   // A tool view with a summary and no body retitles its calls and leaves the body to the chat's own.
+  await checkPlugin(page);
   await page.evaluate(async () => {
     const { ToolViews } = await import("/src/ui/contracts.ts" as string);
-    (window as any).removeToolView = (window as any).lemma.slots().add(ToolViews, { id: "bash", summary: () => ({ primary: "summarized by a plugin" }) });
+    (window as any).removeToolView = (window as any).checkSlots.add(ToolViews, { id: "bash", summary: () => ({ primary: "summarized by a plugin" }) });
   });
   if ((await page.locator(".work-head[aria-expanded=false]").count()) > 0) await page.click(".work-head[aria-expanded=false] >> nth=0");
   // Calls made one after another sit in a group of the fold.
@@ -583,9 +750,16 @@ const parts = async () => {
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   await archive(false);
   await page.waitForSelector(".turn");
-  // The thread page's plugin off: the address stays and says so; back on, the thread returns.
+  // The thread page's plugin off: the address stays and says so, naming the plugin that declares the route; back on,
+  // the thread returns.
   await switchTo(page, "thread-view", false);
   await page.waitForSelector(".page-missing >> text=This page is off");
+  await page.waitForSelector(".page-missing >> text=The “thread-view” plugin shows these pages");
+  assert.match(
+    (await page.getAttribute(".page-missing a:text-is('Plugins')", "href")) ?? "",
+    /[?&]plugin=thread-view(&|$)/,
+    "the off page's Plugins link does not open thread-view",
+  );
   assert.equal(await where(), thread, "turning the page's plugin off moved the address");
   await switchTo(page, "thread-view", true);
   await page.waitForSelector(".turn");
@@ -630,26 +804,34 @@ const parts = async () => {
   await page
     .waitForFunction(() => location.pathname === "/", undefined, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings over a deleted thread went to ${await where()}`));
-  // Resting on a thread's row fetches its log; opening it uses that rather than fetching again.
+  // Resting on a thread's row fetches its log; opening it follows the log on from there rather than reading it again.
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    const session = (await (window as any).lemma.service(Client)).host.session;
-    const events = session.events.bind(session);
+    const channel = (await (window as any).lemma.service(Client)).channel;
+    const { call, open } = channel;
     const fetched: unknown[] = ((window as any).fetched = []);
-    session.events = (id: string, after?: number) => (fetched.push([id, after ?? null]), events(id, after));
+    const idOf = (target: string | { id: string }) => (typeof target === "string" ? target : target.id);
+    channel.call = (target: string | { id: string }, payload?: any) => {
+      if (idOf(target) === "sessions.events") fetched.push(["events", payload.sessionId, payload.after ?? 0]);
+      return call(target, payload);
+    };
+    channel.open = (target: string | { id: string }, payload: any, ...rest: unknown[]) => {
+      if (idOf(target) === "sessions.log") fetched.push(["log", payload.sessionId, payload.after ?? 0]);
+      return open(target, payload, ...rest);
+    };
   });
+  const reads = (id: string) => page.evaluate((id) => (window as any).fetched.filter(([, session]: any) => session === id), id);
   const row = page.locator(`.session-open[href^="/threads/${seeded}"]`);
   await row.hover();
   await page
-    .waitForFunction((id) => (window as any).fetched.some(([fetched, after]: any) => fetched === id && after === null), seeded, { timeout: 2_000 })
+    .waitForFunction((id) => (window as any).fetched.some(([kind, session]: any) => kind === "events" && session === id), seeded, { timeout: 2_000 })
     .catch(() => assert.fail("resting on a thread's row did not preload it"));
   await row.click();
   await page.waitForSelector(".turn");
-  assert.equal(
-    await page.evaluate((id) => (window as any).fetched.filter(([fetched, after]: any) => fetched === id && after === null).length, seeded),
-    1,
-    "opening a preloaded thread fetched its log again",
-  );
+  await page.waitForFunction((id) => (window as any).fetched.some(([kind, session]: any) => kind === "log" && session === id), seeded);
+  const [preloaded, followed, ...more] = await reads(seeded);
+  assert.deepEqual([preloaded[0], followed[0], more], ["events", "log", []], "opening a preloaded thread read its log again");
+  assert(followed[2] > 0, "opening a preloaded thread followed its log from the start rather than from what the preload read");
   // Unsent text: closing or reloading the tab asks first, while settings show too; sent or cleared, it does not.
   const unloadAsks = () =>
     page.evaluate(() => {
@@ -682,6 +864,7 @@ const parts = async () => {
   // A plugin's own route and page, reached by an ordinary link without reloading.
   await page.goto(`${url}/?mock`);
   await settled(page);
+  await checkPlugin(page);
   await page.evaluate(async () => {
     const { api } = await import("/src/ui/api.ts" as string);
     const { Pages, Router, SidebarFooter } = api.contracts;
@@ -702,8 +885,8 @@ const parts = async () => {
       return element;
     };
     (window as any).removals = [
-      lemma.slots().add(Pages, { id: "check.note", route: Note, component: page }),
-      lemma.slots().add(SidebarFooter, { id: "check.link", order: 1_000, component: link }),
+      (window as any).checkSlots.add(Pages, { id: "check.note", route: Note, component: page }),
+      (window as any).checkSlots.add(SidebarFooter, { id: "check.link", order: 1_000, component: link }),
     ];
     (window as any).stayed = true;
   });
@@ -735,14 +918,14 @@ const parts = async () => {
       });
     });
     check.removals = [
-      lemma.slots().add(Pages, {
+      check.checkSlots.add(Pages, {
         id: "check.broken",
         route: Broken,
         component: () => {
           throw new Error("check boom");
         },
       }),
-      lemma.slots().add(Pages, { id: "check.twin", route: Twin, component: () => document.createElement("div") }),
+      check.checkSlots.add(Pages, { id: "check.twin", route: Twin, component: () => document.createElement("div") }),
     ];
     router.navigate(Broken, { id: "1" });
   });
@@ -767,6 +950,51 @@ const parts = async () => {
     const check = window as any;
     check.disposeCount();
     for (const remove of check.removals) remove();
+  });
+  // A `Pages` item whose route is not made with defineRoute is its plugin's fault, named for it and reported, and is
+  // left out: the runtime's router goes on taking in pages and navigating.
+  await page.evaluate(async () => {
+    const { Pages } = await import("/src/ui/contracts.ts" as string);
+    (window as any).removeMalformed = (window as any).checkSlots.add(Pages, {
+      id: "check.no-route",
+      route: { id: "check.no-route", path: "/no-route" },
+      component: () => document.createElement("div"),
+    });
+  });
+  await page.waitForFunction(async () => {
+    const { Pages } = await import("/src/ui/contracts.ts" as string);
+    return (window as any).lemma.slots().failures(Pages).length === 1;
+  });
+  assert.deepEqual(
+    await page.evaluate(async () => {
+      const { Pages } = await import("/src/ui/contracts.ts" as string);
+      return (window as any).lemma
+        .slots()
+        .failures(Pages)
+        .map((failure: any) => [failure.item.id, failure.pluginId]);
+    }),
+    [["check.no-route", "check"]],
+    "a page without a route is not named for its plugin",
+  );
+  await page.waitForSelector('.toast >> text=The "check.no-route" page has no route made with defineRoute');
+  await page.evaluate(async () => {
+    const { api } = await import("/src/ui/api.ts" as string);
+    const { Pages, Router } = api.contracts;
+    const After = api.defineRoute("check.after", { path: "/after/:id" });
+    const page = () => {
+      const element = document.createElement("div");
+      element.className = "check-after";
+      element.textContent = "after a page without a route";
+      return element;
+    };
+    (window as any).removeAfter = (window as any).checkSlots.add(Pages, { id: "check.after", route: After, component: page });
+    (await (window as any).lemma.service(Router)).navigate(After, { id: "1" });
+  });
+  await page.waitForSelector(".check-after");
+  assert.equal(await where(), "/after/1?mock=", "the router did not navigate after a page without a route");
+  await page.evaluate(() => {
+    (window as any).removeAfter();
+    (window as any).removeMalformed();
   });
   errors.splice(0);
   return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page";
@@ -826,10 +1054,13 @@ const devtools = async () => {
   // Navigation: the journal has what the router did.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Navigation");
   await page.waitForSelector("[aria-label='Router journal'] >> text=matched");
-  // Host events: the host's stream, and a session's id goes to its thread's trajectory.
+  // Host events: the host's own stream and its subsystems' streams, and a session's id goes to its thread's trajectory.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Host events");
   await page.waitForSelector("[aria-label=Events] tbody tr[data-row]");
-  // Pinning a thread has the host publish its change, naming the session.
+  await page
+    .waitForSelector("[aria-label=Events] tr:has(td:text-is('agent.activity')):has(td:text-is('subscribed'))", { timeout: 5_000 })
+    .catch(() => assert.fail("the Host events panel does not follow the agent's activity"));
+  // Pinning a thread has its sessions.changes report it, naming the session.
   const pinned: string = await page.evaluate(async () => {
     const { Threads } = await import("/src/ui/contracts.ts" as string);
     const threads = await (window as any).lemma.service(Threads);
@@ -841,14 +1072,22 @@ const devtools = async () => {
   await page.click(`[aria-label=Events] a >> text=${pinned}`);
   await page.waitForFunction((id) => location.pathname === `/threads/${id}/trajectory`, pinned);
   await page.waitForSelector(".devtools");
+  // Channels: what host plugins serve, each with the plugin that answers for it.
+  await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Channels");
+  await page.click("[aria-label=Channels] td:text-is('sessions.log')");
+  await page.waitForSelector("[aria-label='Channel details'] >> text=Session log");
+  await page.waitForSelector("[aria-label=Channels] tr:has(td:text-is('agent.prompt')) button:text-is('agent')");
   // A plugin's name anywhere opens it in the Plugins panel: everything it does, and what depends on it.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Routes");
   await page.click("[aria-label=Routes] tr:has(td:text-is('/threads/:id/:view?')) button:text-is('thread-view')");
   await page.waitForSelector("[aria-label='Plugin details'] .dt-details-title >> text=thread-view");
   await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('pages')):has(td:text-is('thread-view.new'))");
-  await page.fill("[aria-label='Filter plugins']", "router");
-  await page.click("[aria-label=Plugins] tr:has(td:first-child:text-is('router'))");
-  await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('lemma-ui/Router')) >> button:text-is('threads')");
+  // What the runtime provides is the web app's, not missing: no capability lacks a provider.
+  await page.fill("[aria-label='Filter plugins']", "threads");
+  await page.click("[aria-label=Plugins] tr:has(td:first-child:text-is('threads'))");
+  await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('lemma-ui/Router')) >> text=the web app");
+  await page.fill("[aria-label='Filter plugins']", "");
+  await page.waitForSelector(".dt-status >> text=/^0 capabilities without a provider$/");
   // The host's plugins too, and each hook's chain in run order.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Hooks");
   await page.click("[aria-label=Hooks] tr:has(td:text-is('lemma/agent.request'))");
@@ -870,6 +1109,7 @@ const devtools = async () => {
     return JSON.parse(JSON.stringify((await (window as any).lemma.service(Devtools)).snapshot()));
   });
   assert.deepEqual(Object.keys(snapshot).sort(), [
+    "devtools.channels",
     "devtools.events",
     "devtools.hooks",
     "devtools.inspectors",
@@ -900,16 +1140,17 @@ const devtools = async () => {
   await page.fill("textarea", "steer it");
   await page.keyboard.press("Enter");
   await page
-    .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer", { timeout: 5_000 })
+    .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer")
     .catch(() => assert.fail("a steer sent while a turn runs is not shown queued"));
   assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
   await page.fill("textarea", "for later");
   await page.keyboard.press("Alt+Enter");
   await page.waitForSelector(".queued:has-text('for later') .queued-mode >> text=Next");
   // The row is a part: a plugin's own replaces it, and the default returns when that goes.
+  await checkPlugin(page);
   await page.evaluate(async () => {
     const { ComposerQueuedPart } = await import("/src/ui/contracts.ts" as string);
-    (window as any).removeRow = (window as any).lemma.slots().add(ComposerQueuedPart, {
+    (window as any).removeRow = (window as any).checkSlots.add(ComposerQueuedPart, {
       id: "check.queued",
       order: 0,
       component: (props: { prompt: { requestId: string } }) => {
@@ -936,16 +1177,48 @@ const devtools = async () => {
   );
   expectNoErrors("steering and queueing");
 
+  // A turn runs on while the page leaves its thread and comes back, asking the agent what it has streamed, and while
+  // the agent restarts under it: the page follows on, and its prompt is placed once.
+  const turnPath = new URL(page.url()).pathname;
+  await page.fill("textarea", "keep going");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".assistant.draft", { timeout: 5_000 });
+  await page.evaluate(async () => {
+    const { Router } = await import("/src/ui/contracts.ts" as string);
+    (await (window as any).lemma.service(Router)).navigate("/");
+  });
+  await page.waitForFunction(() => location.pathname === "/");
+  await page.goBack();
+  await page.waitForFunction((path) => location.pathname === path, turnPath);
+  await page.evaluate(async () => {
+    const { Client } = await import("/src/ui/contracts.ts" as string);
+    await (await (window as any).lemma.service(Client)).restartPlugin("agent", { force: true });
+  });
+  await page
+    .waitForFunction(() => document.querySelectorAll(".turn-footer").length === 2, undefined, { timeout: 20_000 })
+    .catch(() => assert.fail("a turn did not finish on screen after its thread was left and the agent restarted"));
+  assert.equal(await page.locator(".user-text:text-is('keep going')").count(), 1, "a prompt sent again after the agent restarted was placed twice");
+  const reported: string[] = await page.evaluate(async () => {
+    const { Notify } = await import("/src/ui/contracts.ts" as string);
+    return (await (window as any).lemma.service(Notify))
+      .toasts()
+      .filter((toast: { level: string }) => toast.level === "error")
+      .map((toast: { message: string }) => toast.message);
+  });
+  assert.deepEqual(reported, [], "the agent restarting mid-turn was reported as a failure");
+  expectNoErrors("leaving a running turn's thread and restarting the agent under it");
+
   // A send that fails (the connection dropped, say) keeps its request id: sending the same prompt again, even after
   // moving to another thread and back, is a retry the host can recognise. An edit makes it a new prompt.
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    const agent = (await (window as any).lemma.service(Client)).host.agent;
-    const prompt = agent.prompt.bind(agent);
+    const channel = (await (window as any).lemma.service(Client)).channel;
+    const call = channel.call;
     const sent: (string | undefined)[] = ((window as any).sentIds = []);
-    agent.prompt = (sessionId: string, content: unknown, options: unknown, submit?: { requestId?: string }) => {
-      sent.push(submit?.requestId);
-      return sent.length === 1 || sent.length === 3 ? Promise.reject(new Error("connection lost")) : prompt(sessionId, content, options, submit);
+    channel.call = (target: string | { id: string }, payload?: { requestId?: string }) => {
+      if ((typeof target === "string" ? target : target.id) !== "agent.prompt") return call(target, payload);
+      sent.push(payload?.requestId);
+      return sent.length === 1 || sent.length === 3 ? Promise.reject(new Error("connection lost")) : call(target, payload);
     };
   });
   const sentIds = () => page.evaluate(() => (window as any).sentIds as (string | undefined)[]);
@@ -986,7 +1259,7 @@ const devtools = async () => {
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
-  return "the devtools show routes, navigation, host events, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts; a failed send is retried with its request id";
+  return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts, and outlives its thread being left and the agent restarting; a failed send is retried with its request id";
 };
 
 // 10: the prompt rail.

@@ -1,9 +1,13 @@
 # Developing the web app
 
-Every piece of the web app is **replaceable**: a user can turn it off, turn it
-on, configure it, or swap it for their own, without editing this repository.
-The bundled plugins are defaults that sit on the same footing as a user's UI
-file. Build every default so a user could have written it and could replace it.
+Everything the web app shows is a plugin, and every plugin is
+**replaceable**: a user can turn it off, turn it on, configure it, or swap it
+for their own, without editing this repository. The plugins are written
+against the runtime (`src/runtime/`), which the boot provides and nothing
+replaces: the connection, slots, the router, messages, the plugins, and
+questions. The bundled plugins are defaults that sit on the same footing as a
+user's UI file. Build every default so a user could have written it and could
+replace it.
 
 ## Where each kind of code goes
 
@@ -18,6 +22,14 @@ file. Build every default so a user could have written it and could replace it.
   service with one provider), a slot (a list or region many fill), a part, a
   shared id (`ActionIds`, `SectionIds`), or a DOM convention listed at the top
   of the file. When one plugin needs something from another, add it here.
+- **The runtime** (`src/runtime/`, its contracts in `src/ui/runtime.ts`) is
+  what every plugin is written against, the app's own: no plugin provides
+  it, replaces it, or turns it off. It imports no plugin, component, or
+  contract plugins provide, adds to no slot, and needs nothing a plugin
+  contributes but reactively (the router with no pages matches nothing). It
+  never throws into the page: a bad item from a plugin is that plugin's fault
+  (`slots.fail`), and its own failures are logged and reported. Add to it
+  only what no plugin could provide, since nothing can replace it.
 - **A slot** is a core registry (`defineSlot`): an item belongs to the plugin
   that added it, leaves when that plugin stops, and shows on the Plugins page.
 - **A part** is a replaceable piece plugins draw with (`definePart`): the first
@@ -25,7 +37,13 @@ file. Build every default so a user could have written it and could replace it.
   pieces through `ui/parts.tsx`; `kit` supplies the shared parts' defaults and
   is the only plugin that imports `components/`. A view that has pieces users
   would change on their own (a tool call, a row) defines parts for them and
-  adds its own defaults at `DEFAULT_PART_ORDER`, as `chat` does.
+  adds its own defaults at `DEFAULT_PART_ORDER`, as `chat` does. A part may
+  declare a plain fallback (`definePart(name, fallback)`): native markup with
+  no styling of its own, used while nothing provides the part. The parts the
+  always-on plugins draw (`shell`, `pages`, `settings`, `plugins-page`) have
+  one, in `ui/fallbacks.tsx`, so with `kit` off the Plugins page still works;
+  give one to any part they start to draw (`tests/ui.test.ts` fails until
+  you do).
 - **A component** (`src/components/`) is a default implementation of a part.
   It draws other parts through `ui/parts.tsx`.
 - **A model** (`src/model/`) is pure data and functions, tested in `tests/`.
@@ -67,9 +85,9 @@ file. Build every default so a user could have written it and could replace it.
    `lib/paint.ts`; what covers the page stacks by the `--z-*` tokens.
 4. Make it a plugin of its own only when someone would turn it off or replace
    it on its own (`highlight`, `palette`); when it is a model other plugins
-   need beside a view a user might drop, which is then two plugins (`notify`
-   and `toasts`); or when what it requires can be missing while the rest still
-   works. Size, tidiness, or being one more panel, tab, or section is no
+   need beside a view a user might drop, which is then two plugins (`models`
+   and `model-picker`); or when what it requires can be missing while the rest
+   still works. Size, tidiness, or being one more panel, tab, or section is no
    reason: those are files in a plugin's directory and items one plugin adds to
    a slot, as the devtools add their panels.
 5. Document new contracts where they are declared: `ui/contracts.ts` is the
@@ -83,8 +101,12 @@ nix develop .#browser -c pnpm --filter @lemma/web ui:check  # the real compositi
 ```
 
 `ui:check` boots the app and fails when a part has no provider, a plugin cannot
-turn off and on without errors or leaves its stylesheet behind, a replaced part
-does not show, or an extension slot does not render what a plugin adds.
+turn off and on without errors or leaves its stylesheet behind, more than the
+pinned plugins and what they need stay on, the runtime stops answering with
+every plugin off, a UI file providing part of the runtime is not left out, a
+replaced part does not show, or an extension slot does not render what a
+plugin adds. What it adds to slots it adds through a UI file's plugin
+(`check`), as a user's code does.
 
 For a change to how things look, compare screenshots of the main screens:
 
@@ -94,5 +116,7 @@ nix develop .#browser -c node apps/web/scripts/shots.ts /tmp/shots/after    # af
 nix develop .#browser -c node apps/web/scripts/compare-shots.ts /tmp/shots/before /tmp/shots/after
 ```
 
-The Plugins page shows the dev server's port and the chat a turn's duration, so
-those differ between runs by a hundredth of a percent.
+A few screens show what changes from run to run: the Plugins page the dev
+server's port, the devtools' Navigation and Host events panels their times and
+keys, and the trajectory a turn's timings. Those differ between runs by up to
+about a quarter of a percent; every other screen matches exactly.

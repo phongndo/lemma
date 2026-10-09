@@ -16,6 +16,7 @@ import {
   usersOf,
 } from "@lemma/contracts";
 import type {
+  ChannelInfo,
   CommandInfo,
   InspectorInfo,
   KernelView,
@@ -41,7 +42,7 @@ import type {
   WorkspaceStatus,
 } from "@lemma/contracts";
 import type { Target } from "./command.ts";
-import type { TurnResult } from "./live.ts";
+import type { TurnResult } from "./run.ts";
 
 /** Human-readable output. `--json` bypasses all of this and prints the contract shapes. */
 
@@ -69,14 +70,15 @@ const countStates = (plugins: readonly PluginStatus[]): string => {
   return [...counts].map(([state, count]) => `${count} ${state}`).join(", ");
 };
 
-export const formatStatus = (target: Target, info: HostInfo, plugins: readonly PluginStatus[], running: readonly string[]): string =>
+/** `running` is undefined when nothing serves `agent.running`. */
+export const formatStatus = (target: Target, info: HostInfo, plugins: readonly PluginStatus[], running: readonly string[] | undefined): string =>
   pad([
     ["host", `${target.url} (${target.pid === undefined ? `from ${target.from}` : `pid ${target.pid}`}, transport ${info.version})`],
     ["home", info.home],
     ["project", info.cwd],
     ["composition", `${info.composition.id.slice(0, 12)} (${info.composition.plugins.length} plugins)`],
     ["plugins", countStates(plugins) || "none"],
-    ["running", running.length ? running.join(", ") : "none"],
+    ["running", running === undefined ? "unknown: no agent runs" : running.length ? running.join(", ") : "none"],
   ]);
 
 /** `needs agent, which needs tools, which is off`: from a halted plugin to the one turned off or left out. */
@@ -120,10 +122,11 @@ const show = (value: unknown): string => (typeof value === "string" ? value : JS
 
 /**
  * One plugin as the web app's inspector shows it: its state and why, what it
- * provides and requires and who is on the other end, the hooks it intercepts,
- * the events it observes, what it contributes, and its recent faults.
+ * provides and requires and who is on the other end (the host, for what it
+ * provides itself: `runtime`), the hooks it intercepts, the events it
+ * observes, what it contributes, and its recent faults.
  */
-export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginStatus): string => {
+export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginStatus, runtime: readonly string[]): string => {
   const lines = [
     `${plugin.id}${plugin.version === undefined ? "" : ` ${plugin.version}`}  ${plugin.state}${plugin.enabled ? "" : " (off)"}  ${plugin.source}${plugin.shadows ? " (shadows bundled)" : ""}`,
     ...(pluginNote(plugins, plugin) === "" ? [] : [`  ${pluginNote(plugins, plugin)}`]),
@@ -135,7 +138,7 @@ export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginSta
     "Requires",
     ...(plugin.requires.length === 0
       ? ["  nothing"]
-      : plugin.requires.map((key) => `  ${capabilityName(key)}  from ${providerOf(plugins, key)?.id ?? "no plugin"}`)),
+      : plugin.requires.map((key) => `  ${capabilityName(key)}  from ${runtime.includes(key) ? "the host" : (providerOf(plugins, key)?.id ?? "no plugin")}`)),
     "Hooks",
     ...(plugin.hooks?.length
       ? plugin.hooks.map((hook) => {
@@ -199,10 +202,12 @@ export const formatUi = (ui: UiComposition): string => {
   ].join("\n\n");
 };
 
-export const formatReload = (report: ReloadResult): string =>
-  report.deferred
-    ? "applying: the host restarts the plugins that use it, the transport among them, so clients reconnect"
-    : (describeReload(report) ?? "nothing changed");
+/**
+ * What a change did. One the host defers restarts the transport serving the request: it applies once the reply has
+ * left, restarting `restarts`.
+ */
+export const formatReload = (report: ReloadResult, restarts = "the transport"): string =>
+  report.deferred ? `applying: the host restarts ${restarts}, so clients reconnect` : (describeReload(report) ?? "nothing changed");
 
 export const formatSessions = (sessions: readonly SessionInfo[], withCwd: boolean): string =>
   pad(
@@ -607,17 +612,17 @@ export const formatEvents = (kernel: KernelView): string =>
     ? "No events are observed."
     : pad([["event", "observers"], ...kernel.events.map((event) => [event.name, event.observers.join(", ")])]);
 
-/** Each capability: who provides it, in what state, and who requires it. */
+/** Each capability: who provides it (the host, for what it provides itself), in what state, and who requires it. */
 export const formatCapabilities = (kernel: KernelView): string =>
   pad([
     ["capability", "provided by", "required by"],
-    ...kernel.capabilities.map((capability) => [
-      capability.key,
-      capability.providers.length === 0
-        ? "NOTHING"
-        : capability.providers.map((provider) => `${provider.plugin} (${provider.enabled ? provider.state : "off"})`).join(", "),
-      capability.users.join(", "),
-    ]),
+    ...kernel.capabilities.map((capability) => {
+      const providers = [
+        ...(capability.runtime ? ["the host"] : []),
+        ...capability.providers.map((provider) => `${provider.plugin} (${provider.enabled ? provider.state : "off"})`),
+      ];
+      return [capability.key, providers.length === 0 ? "NOTHING" : providers.join(", "), capability.users.join(", ")];
+    }),
   ]);
 
 export const formatInspectors = (inspectors: readonly InspectorInfo[]): string =>
@@ -628,10 +633,19 @@ export const formatInspectors = (inspectors: readonly InspectorInfo[]): string =
         ...inspectors.map((inspector) => [inspector.id, inspector.title, inspector.source, inspector.description ?? ""]),
       ]);
 
-/** An inspector's snapshot: as tables when it has their shape, else as JSON. */
+export const formatChannels = (channels: readonly ChannelInfo[]): string =>
+  channels.length === 0
+    ? "No channels: no running plugin serves one."
+    : pad([
+        ["channel", "kind", "title", "from", "what it does"],
+        ...channels.map((channel) => [channel.id, channel.kind, channel.title ?? "", channel.source, channel.description ?? ""]),
+      ]);
+
+/** An inspector's snapshot or a channel call's result: as tables when it has their shape, else as JSON. */
 export const formatSnapshot = (value: unknown): string => {
   const tables = tablesOf(value);
-  if (tables === undefined) return JSON.stringify(value, undefined, 2);
+  // An object of no tables (`{}`) prints as itself, not as nothing.
+  if (tables === undefined || tables.length === 0) return JSON.stringify(value, undefined, 2);
   return tables
     .map((table) => {
       const body = table.rows.length === 0 ? "  (none)" : pad([[...table.columns], ...table.rows.map((row) => [...row])]);

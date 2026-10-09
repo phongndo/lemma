@@ -1,250 +1,11 @@
-import { randomUUID } from "node:crypto";
-import { Clock, Effect, Layer, Stream } from "effect";
-import {
-  Agent,
-  AgentError,
-  AssistantDelta,
-  Commands,
-  emptyUsage,
-  HostControl,
-  Interaction,
-  InteractionError,
-  InteractionHook,
-  Llm,
-  LlmError,
-  PluginsChanged,
-  SessionAppended,
-  SessionChanged,
-  SessionError,
-  SessionRemoved,
-  Sessions,
-  TurnEnded,
-  TurnStarted,
-  UiChanged,
-  Workspace,
-  WorkspaceError,
-  FileSearchError,
-  FileSearchers,
-} from "@lemma/contracts";
+import { Deferred, Effect, Layer } from "effect";
+import { Commands, HostControl, Interaction, InteractionError, InteractionHook, Paths, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { pathsPlugin } from "@lemma/contracts/testing";
-import type {
-  AssistantMessage,
-  ConfigScope,
-  GitBranch,
-  InteractionAnswer,
-  InteractionRequest,
-  ModelInfo,
-  PluginInfo,
-  PromptOptions,
-  SessionEvent,
-  SessionInfo,
-  UiComposition,
-  WorkspaceStatus,
-} from "@lemma/contracts";
-import { definePlugin, Events, Hooks, PluginContext, ReloadError, Diagnostic } from "@lemma/core";
+import type { ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, UiComposition } from "@lemma/contracts";
+import { definePlugin, Diagnostic, Events, Hooks, ReloadError } from "@lemma/core";
 import type { Core } from "@lemma/core";
 
-/** In-memory session logs that publish the same events the real plugin does. */
-export const fakeSessions = definePlugin({
-  id: "sessions",
-  provides: [Sessions],
-  layer: Layer.effect(
-    Sessions,
-    Effect.gen(function* () {
-      const events = yield* Events;
-      const store = new Map<string, { info: SessionInfo; events: SessionEvent[] }>();
-      let count = 0;
-      const find = (sessionId: string) =>
-        Effect.suspend(() => {
-          const session = store.get(sessionId);
-          return session === undefined
-            ? Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `No session "${sessionId}"` }))
-            : Effect.succeed(session);
-        });
-      return {
-        create: (options) =>
-          Effect.gen(function* () {
-            const now = yield* Clock.currentTimeMillis;
-            const info: SessionInfo = { id: `s${++count}`, cwd: options?.cwd ?? "/default", createdAt: now, updatedAt: now, lastSeq: 0 };
-            store.set(info.id, { info, events: [] });
-            yield* events.publish(SessionChanged, { info });
-            return info;
-          }),
-        list: (options) =>
-          Effect.sync(() =>
-            [...store.values()]
-              .map((session) => session.info)
-              .filter((info) => options?.cwd === undefined || info.cwd === options.cwd)
-              .sort((a, b) => b.updatedAt - a.updatedAt),
-          ),
-        get: (sessionId) => Effect.map(find(sessionId), (session) => session.info),
-        append: (sessionId, data, options) =>
-          Effect.gen(function* () {
-            const session = yield* find(sessionId);
-            if (options?.parent !== undefined && !session.events.some((event) => event.id === options.parent)) {
-              return yield* new SessionError({ sessionId, reason: "InvalidParent", message: `No event "${options.parent}"` });
-            }
-            const event: SessionEvent = {
-              seq: session.events.length + 1,
-              id: randomUUID(),
-              parent: options?.parent ?? session.info.leaf ?? null,
-              at: yield* Clock.currentTimeMillis,
-              data,
-            };
-            session.events.push(event);
-            session.info = {
-              ...session.info,
-              leaf: event.id,
-              lastSeq: event.seq,
-              updatedAt: event.at,
-              ...(data.type === "title" ? { title: data.title } : {}),
-            };
-            yield* events.publish(SessionAppended, { sessionId, event });
-            yield* events.publish(SessionChanged, { info: session.info });
-            return event;
-          }),
-        events: (sessionId, options) => Effect.map(find(sessionId), (session) => session.events.filter((event) => event.seq > (options?.after ?? 0))),
-        branch: (sessionId, options) =>
-          Effect.flatMap(find(sessionId), (session) => {
-            const byId = new Map(session.events.map((event) => [event.id, event]));
-            const leaf = options?.leaf ?? session.info.leaf;
-            if (options?.leaf !== undefined && !byId.has(options.leaf)) {
-              return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `No event "${options.leaf}"` }));
-            }
-            const path: SessionEvent[] = [];
-            for (let at = leaf === undefined ? undefined : byId.get(leaf); at !== undefined; at = at.parent === null ? undefined : byId.get(at.parent))
-              path.push(at);
-            return Effect.succeed(path.reverse());
-          }),
-        checkout: (sessionId, eventId) =>
-          Effect.gen(function* () {
-            const session = yield* find(sessionId);
-            if (!session.events.some((event) => event.id === eventId)) {
-              return yield* new SessionError({ sessionId, reason: "NotFound", message: `No event "${eventId}"` });
-            }
-            session.info = { ...session.info, leaf: eventId, updatedAt: yield* Clock.currentTimeMillis };
-            yield* events.publish(SessionChanged, { info: session.info });
-            return session.info;
-          }),
-        mark: (sessionId, marks) =>
-          Effect.gen(function* () {
-            const session = yield* find(sessionId);
-            const { pinned: _pinned, archived: _archived, ...rest } = session.info;
-            const pinned = marks.pinned ?? session.info.pinned === true;
-            const archived = marks.archived ?? session.info.archived === true;
-            session.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}) };
-            yield* events.publish(SessionChanged, { info: session.info });
-            return session.info;
-          }),
-        remove: (sessionId) =>
-          Effect.gen(function* () {
-            yield* find(sessionId);
-            store.delete(sessionId);
-            yield* events.publish(SessionRemoved, { sessionId });
-          }),
-      };
-    }),
-  ),
-});
-
-const reply = (text: string): AssistantMessage => ({
-  role: "assistant",
-  content: [{ type: "text", text }],
-  api: "fake",
-  provider: "fake",
-  model: "echo",
-  usage: emptyUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-});
-
-/** The options of every prompt the fake agent received, for checking what the transport passes on. */
-export const prompted: PromptOptions[] = [];
-
-/** Echoes the prompt in two deltas and records both messages. */
-export const fakeAgent = definePlugin({
-  id: "agent",
-  provides: [Agent],
-  requires: [Sessions],
-  layer: Layer.effect(
-    Agent,
-    Effect.gen(function* () {
-      const events = yield* Events;
-      const sessions = yield* Sessions;
-      const running = new Set<string>();
-      let turns = 0;
-      const session = (sessionId: string) => (error: SessionError) => new AgentError({ sessionId, reason: "Session", message: error.message, cause: error });
-      return {
-        prompt: (sessionId, content, options) =>
-          Effect.gen(function* () {
-            prompted.push(options ?? {});
-            if (running.has(sessionId)) return yield* new AgentError({ sessionId, reason: "Busy", message: "A turn is running" });
-            running.add(sessionId);
-            const turnId = `t${++turns}`;
-            yield* sessions
-              .append(sessionId, { type: "message", message: { role: "user", content, timestamp: Date.now() } })
-              .pipe(Effect.mapError(session(sessionId)));
-            yield* events.publish(TurnStarted, { sessionId, turnId });
-            const text = `echo: ${content.map((part) => (part.type === "text" ? part.text : "")).join("")}`;
-            for (const [index, delta] of [text.slice(0, 6), text.slice(6)].entries()) {
-              yield* events.publish(AssistantDelta, { sessionId, turnId, stepId: "p1", seq: index + 1, event: { type: "text-delta", index, delta } });
-            }
-            yield* sessions.append(sessionId, { type: "message", message: reply(text), turnId }).pipe(Effect.mapError(session(sessionId)));
-            yield* events.publish(TurnEnded, { sessionId, turnId, usage: emptyUsage, reason: "done" as const });
-          }).pipe(Effect.ensuring(Effect.sync(() => running.delete(sessionId)))),
-        cancel: () => Effect.void,
-        busy: (sessionId) => Effect.sync(() => running.has(sessionId)),
-        running: Effect.sync(() => [...running]),
-        queue: () => Effect.succeed([]),
-        withdraw: () => Effect.succeed(false),
-        view: () => Effect.succeed({ output: [], queue: [], queueRevision: 0 }),
-      };
-    }),
-  ),
-});
-
-const model: ModelInfo = {
-  ref: "fake/echo",
-  provider: "fake",
-  id: "echo",
-  name: "Echo",
-  api: "fake",
-  reasoning: false,
-  thinkingLevels: [],
-  input: ["text"],
-  contextWindow: 1000,
-  maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
-
-/** Login asks through `Interaction`, so a login RPC exercises the interaction round trip. */
-export const fakeLlm = definePlugin({
-  id: "llm",
-  provides: [Llm],
-  requires: [Interaction],
-  layer: Layer.effect(
-    Llm,
-    Effect.map(Interaction, (interaction) => ({
-      providers: Effect.succeed([{ id: "fake", name: "Fake", auth: [{ type: "api_key" as const, name: "API key", interactive: true }], configured: true }]),
-      models: (options) => Effect.succeed(options?.available === false ? [] : [model]),
-      model: (ref) => (ref === model.ref ? Effect.succeed(model) : Effect.fail(new LlmError({ reason: "UnknownModel", message: `No model ${ref}` }))),
-      stream: () => Stream.empty,
-      login: (provider) =>
-        provider !== "fake"
-          ? Effect.fail(new LlmError({ reason: "UnknownProvider", message: `No provider "${provider}"` }))
-          : interaction.ask("API key", { secret: true }).pipe(
-              Effect.flatMap((key) => (key === "good" ? Effect.void : Effect.fail(new LlmError({ reason: "LoginFailed", message: "bad key" })))),
-              Effect.mapError((error) => (error instanceof LlmError ? error : new LlmError({ reason: "LoginFailed", message: error.message, cause: error }))),
-            ),
-      logout: () => Effect.void,
-      addCustom: (spec) => Effect.succeed(spec.name.toLowerCase()),
-      removeCustom: () => Effect.void,
-      setLogo: () => Effect.void,
-    })),
-  ),
-});
-
-/** Runs `InteractionHook` the way the interaction plugin does: with no handler answering, `Unavailable`. */
+/** Runs `InteractionHook` the way the host's `Interaction` does: with no handler answering, `Unavailable`. */
 export const fakeInteraction = definePlugin({
   id: "interaction",
   provides: [Interaction],
@@ -286,7 +47,8 @@ export const fakeGreeter = definePlugin({
 });
 
 export interface ControlHolder {
-  core?: Core<any>;
+  /** The test's core, once `makeCore` has returned it: what the host app's loader is to its handle. */
+  readonly core: Deferred.Deferred<Core<any>>;
   /** Restarted ids; a forced restart is suffixed with `!`. */
   readonly restarted: string[];
   /** Plugins `configure` turned off, with the scope written. */
@@ -295,7 +57,7 @@ export interface ControlHolder {
   ui: UiComposition;
 }
 
-/** Delegates to the test's core once it exists, as the host app does with its loader. */
+/** Delegates to the test's core, waiting until it exists, as the host app does with its loader. */
 export const fakeHostControl = (holder: ControlHolder) =>
   definePlugin({
     id: "host",
@@ -304,7 +66,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
       HostControl,
       Effect.gen(function* () {
         const events = yield* Events;
-        const core = Effect.suspend(() => (holder.core === undefined ? Effect.die(new Error("core not attached")) : Effect.succeed(holder.core)));
+        const core = Deferred.await(holder.core);
         // Every running plugin as a bundled catalog entry; one `configure` turned off is reported disabled (it keeps running here).
         const plugins = Effect.flatMap(core, (core) =>
           Effect.map(core.inspect, (snapshot): PluginInfo[] =>
@@ -317,10 +79,14 @@ export const fakeHostControl = (holder: ControlHolder) =>
         );
         const changed = Effect.flatMap(plugins, (plugins) => events.publish(PluginsChanged, { plugins }));
         return {
+          runtime: [Paths.key, HostControl.key],
           plugins,
-          composition: Effect.succeed({ id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] }),
+          // Up once the core is, which the transport's startup gate waits for.
+          composition: Effect.as(core, { id: "c0ffee", plugins: [{ id: "transport", version: "0.1.0" }] }),
           restart: (pluginId, options) =>
             Effect.gen(function* () {
+              // As a bug in the host would.
+              if (pluginId === "defect") return yield* Effect.die(new Error("restart bug"));
               const runtime = yield* core;
               if (!(yield* runtime.inspect).plugins.some((plugin) => plugin.id === pluginId)) {
                 return yield* new ReloadError({
@@ -329,6 +95,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
               }
               holder.restarted.push(options?.force ? `${pluginId}!` : pluginId);
               yield* changed;
+              return {};
             }),
           reload: Effect.succeed({ started: ["x"], stopped: [], restarted: [], unchanged: [], failed: [], interrupted: 0, faults: [] }),
           configure: (rows, options) =>
@@ -362,83 +129,3 @@ export const fakeHostControl = (holder: ControlHolder) =>
   });
 
 export const fakePaths = (home: string) => pathsPlugin(home, { cwd: "/work" });
-
-/** `/work` is a repository with branches `main` (current) and `dev`; every other path is a plain directory. */
-export const fakeWorkspace = definePlugin({
-  id: "workspace",
-  provides: [Workspace],
-  layer: Layer.sync(Workspace, () => {
-    let current = "main";
-    const known = ["main", "dev"];
-    const status = (path: string): WorkspaceStatus =>
-      path !== "/work"
-        ? { path, exists: true }
-        : {
-            path,
-            exists: true,
-            git: { root: "/work", branch: current, head: "abc1234", changes: 0, ahead: 0, behind: 0 },
-          };
-    const repository = (path: string) =>
-      path === "/work" ? Effect.void : Effect.fail(new WorkspaceError({ path, reason: "NotRepository", message: `"${path}" is not in a git work tree` }));
-    return {
-      status: (path) => Effect.sync(() => status(path)),
-      browse: (partialPath) =>
-        Effect.succeed({
-          parent: "/",
-          entries: partialPath.startsWith("/w") ? [{ name: "work", path: "/work", git: true, matches: [0] }] : [],
-          truncated: false,
-        }),
-      createDirectory: (path) => Effect.succeed({ path, exists: true }),
-      createWorktree: (path, options) =>
-        Effect.succeed({
-          path: `/worktrees/${options.branch}`,
-          exists: true,
-          git: { root: `/worktrees/${options.branch}`, branch: options.branch, changes: 0, ahead: 0, behind: 0, worktreeOf: path },
-        }),
-      branches: (path) =>
-        Effect.as(
-          repository(path),
-          known.map((name): GitBranch => ({ name, current: name === current, remote: false, updatedAt: 0 })),
-        ),
-      checkout: (path, branch, options) =>
-        Effect.flatMap(repository(path), () =>
-          Effect.suspend(() => {
-            if (options?.create === true) known.push(branch);
-            else if (!known.includes(branch)) {
-              return Effect.fail(new WorkspaceError({ path, reason: "Failed", message: `fatal: invalid reference: ${branch}` }));
-            }
-            current = branch;
-            return Effect.succeed(status(path));
-          }),
-        ),
-    };
-  }),
-});
-
-/** `/work` holds `src/app.ts` and `src/`; any other path is not a directory. */
-export const fakeFileSearch = definePlugin({
-  id: "file-search",
-  layer: Layer.effectDiscard(
-    Effect.flatMap(PluginContext, (owner) =>
-      owner
-        .add(FileSearchers, {
-          id: owner.id,
-          search: (cwd, query, options) => {
-            if (cwd !== "/work") return Effect.fail(new FileSearchError({ path: cwd, reason: "NotFound", message: `"${cwd}" is not a directory` }));
-            const all = [
-              { path: "src/app.ts", kind: "file" as const },
-              { path: "src", kind: "directory" as const },
-            ].filter(
-              (entry) =>
-                entry.path.includes(query) &&
-                (options?.kind === undefined || entry.kind === options.kind) &&
-                (options?.within === undefined || entry.path.startsWith(`${options.within}/`)),
-            );
-            const limit = options?.limit ?? 50;
-            return Effect.succeed({ root: cwd, entries: all.slice(0, limit), truncated: all.length > limit });
-          },
-        })
-        .pipe(Effect.orDie),
-    ),
-  ),
-});

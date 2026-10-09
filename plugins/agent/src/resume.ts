@@ -34,8 +34,11 @@ export type ResumePoint =
   | { readonly kind: "between"; readonly outcome?: StepOutcome; readonly steered: boolean }
   /** A step was begun but nothing was asked of the model yet. */
   | { readonly kind: "before-request"; readonly stepId: string }
-  /** The request is logged but its answer is not: the call was cut off, or failed to be asked again (`logged` as an attempt already). */
-  | { readonly kind: "model"; readonly stepId: string; readonly logged: boolean }
+  /**
+   * The request is logged but its answer is not: the call was cut off, or failed to be asked again (`logged` as an
+   * attempt already). `model` is the model the request named.
+   */
+  | { readonly kind: "model"; readonly stepId: string; readonly logged: boolean; readonly model?: string }
   /**
    * The answer is logged; `pending` are its tool calls without a result, and `started` those of them that may have
    * begun running (all of them, in a log that does not say).
@@ -210,7 +213,9 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
       const started = open.started ?? new Set(marked ? [] : pending.map((call) => call.id));
       return { kind: "tools", stepId, message: open.message, results: open.results, pending, started };
     }
-    return open.requested ? { kind: "model", stepId, logged: false } : { kind: "before-request", stepId };
+    return open.requested
+      ? { kind: "model", stepId, logged: false, ...(requestModel === undefined ? {} : { model: requestModel }) }
+      : { kind: "before-request", stepId };
   })();
 
   model ??= requestModel;

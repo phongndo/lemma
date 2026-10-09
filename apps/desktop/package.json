@@ -12,8 +12,6 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
-    "@lemma/plugin-host": "workspace:*",
-    "@lemma/plugin-transport": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

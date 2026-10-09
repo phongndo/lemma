@@ -1,6 +1,6 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
 import { Effect, Schema } from "effect";
-import { newRequestId } from "@lemma/client";
+import { newRequestId } from "@lemma/client/prompt";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/contracts";
 import type { ImageContent, PromptContent, QueuedPrompt } from "@lemma/contracts";
 import { formatKeys, listKey, modKey, quickKey } from "../lib/keys.ts";

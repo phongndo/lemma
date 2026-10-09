@@ -2,7 +2,9 @@
 
 Provides `Agent` (`@lemma/contracts`): the turn loop. Requires `Sessions`, `Llm`,
 `Tools`, `HostControl`, and `Paths`. Exclusive: a reload stops it, suspending
-its turns, before the new instance resumes them.
+its turns, before the new instance resumes them. Serves the `agent.*` channels
+(`AgentChannels`, through `serveAgent`): the calls clients make, and
+`agent.activity`, its live output and each turn's and queue's change.
 
 ```ts
 Effect.gen(function* () {
@@ -113,8 +115,18 @@ A prompt sent while the session's turn runs does what its `whenBusy` says:
 - `steer`: queued; placed in the running turn after its current step (step 6).
 - `reject`: fails `Busy`.
 
+A session with a turn running cannot be deleted: each turn holds its session
+(`Sessions.hold`) from before it starts until it has stopped, through a
+stopping agent's grace too (see [Stopping](#stopping)). A prompt that would
+start a turn while a deletion runs starts it if the deletion has not reached
+the session's file, which it then finds held (`Busy`); otherwise it waits for
+the deletion and fails `Session`, as in a session that does not exist. The
+agent hears every session removed (`SessionRemoved`, with backpressure rather
+than loss): its queued prompts fail `Session` and its journal goes. One removed
+while no agent ran goes when the next starts.
+
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
-`Withdrawn`), and `QueueChanged` reports every change with a revision that only
+`Retracted`), and `QueueChanged` reports every change with a revision that only
 grows, across restarts too (`view` carries it as well), so a client keeps the
 newest queue it has heard of whichever arrives first. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
@@ -124,8 +136,11 @@ turn that placed its prompt ends.
 A `requestId` makes a submission exactly-once. A prompt whose id the session
 has seen (queued, placed in the running turn, or in a user message in its log)
 is not placed again: the call waits for that turn, or returns at once when it
-has ended. Without one, the agent gives the prompt an id of its own. Clients
-reuse the id when they retry after a lost connection.
+has ended. Clients must give one (`agent.prompt` refuses a call without):
+their call ends whenever their connection drops or the agent reloads (see
+[Stopping](#stopping)), and they call again with the same id. A plugin calling
+`Agent.prompt` may leave it out, and the agent gives the prompt an id of its
+own.
 
 `view` is what a client joining the session now needs beyond its log: the
 running turn's model output so far (`draft`, through the stream event numbered
@@ -138,19 +153,25 @@ so a client seeded from `view` skips what it already shows.
 A host that crashes, restarts, or reloads the agent loses no turn and no queued
 prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
-- `<session>.json`, the journal: the running turn (the prompts it was started
-  with, and whether it logs `agent.started` events) and the queue. Written, and
-  synced, before the log is: when a turn starts, a prompt is queued, placed, or
-  withdrawn, and when a turn ends.
+- `<session>.json`, the journal: the turn, running or suspended (the prompts it
+  was started with, whether it logs `agent.started` events, and whether it is
+  being cancelled), and the queue. Written, and synced, before the log is: when
+  a turn starts, a prompt is queued, placed, or withdrawn, and when a turn ends.
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 
-When the agent starts, it reads the journals. The log is the truth: a queued
-prompt the log already has was placed, and a turn the log ended is over. Each
-open turn resumes once the composition is up, from where its log stops, after a
-`custom` event (`agent.resumed`). Where it stops is the last event that names
-the turn, reached back to its `turn-start` by parents, so titles a rename hung
-off the turn meanwhile do not mislead it.
+When the agent starts, each journal becomes its session's state as it was: the
+queue, and the turn, _suspended_. Then the agent takes each session up: it
+holds the session and reads its log, once, and checks the queue against it at
+once, as that needs nothing more; then it reads the session, and the model a
+suspended turn continues on, unless it is being cancelled. The log is the
+truth: a queued prompt the log already has was placed, and leaves the queue,
+and a turn the log ended is over. A suspended turn then resumes once the
+composition is up, from where its log stops, after a `custom` event
+(`agent.resumed`); a session without one runs its queue on, unless the queue
+waits for the next prompt (see [Busy sessions](#busy-sessions)). Where a turn
+stops is the last event that names it, reached back to its `turn-start` by
+parents, so titles a rename hung off the turn meanwhile do not mislead it.
 
 - A model call cut off (its `request` logged, no answer) is logged as an
   `attempt` with what it had produced (from the live file), the error
@@ -165,12 +186,28 @@ off the turn meanwhile do not mislead it.
   started runs. In a turn an older agent started, which logged no such events,
   every call without a result counts as started.
 - A turn whose `cancel` was asked for closes as cancelled (one cut off before
-  its first event never runs); one whose model call had failed closes the way
-  it was closing. Steers it had placed before the restart are answered.
+  its first event never runs), needing no model: a cut-off call's `attempt`
+  names the model its `request` did, without the wire API (`api` is empty). One
+  whose model call had failed closes the way it was closing. Steers it had
+  placed before the restart are answered.
 
 The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
 restart can be awaited again with their `requestId`.
+
+Taking a session up changes nothing until all of that has been read, but for
+the queue's check. A session the store says does not exist (`NotFound`) goes,
+journal and all. One that cannot be taken up otherwise (the store fails, or no
+model resolves) stays as it was, its queue checked if the log was read, with a
+warning in the log; it is taken up when it is next prompted, the prompt failing
+as the reading did if it still cannot be, or at the next start. Until then its
+turn stays suspended, and is not running: `busy`, `running` and `view` leave it
+out, and nothing holds the session for it, so the session can be deleted, which
+drops the turn. `queue`, `view` and `withdraw` see the session's queue, checking
+it against the log first if that was not done, and fail as reading the log does
+if it still cannot be (see `Agent.queue`). `cancel` records the cancellation in
+the journal, then takes the session up at once if it can (see `Agent.cancel`
+for when it answers).
 
 ## Stopping
 
@@ -180,7 +217,11 @@ open, without a `turn-end`; a turn waiting to ask again stops at once. Calls
 already running get `stopGrace` seconds to finish and log their results; what
 still runs after that is interrupted, as a crash would cut it off. Either way
 the turn resumes when the agent starts again (see [Durability](#durability)),
-and the calls of its step that had not started run then.
+and the calls of its step that had not started run then. A call waiting on
+`agent.prompt` stops waiting as soon as the agent starts closing, before its
+turns are suspended, so it never holds the agent's stop; the call is
+`repeatable`, so once the reload has finished the host makes it again, with the
+same `requestId`, on the new instance, and its client waits on.
 
 A host stopping shuts the core's hooks before it closes the agent (they fail
 closed, so no guard is skipped), and a turn can take no step without them: one
@@ -222,5 +263,6 @@ asked again, or run (or reported interrupted) when the turn resumes.
 ## Inspector
 
 `agent.turns` (in `Inspectors`) lists the sessions with a turn running or
-prompts queued: the turn, since when, whether it is being cancelled, and how
-many prompts wait.
+suspended (see [Durability](#durability)), or prompts queued: the turn, since
+when it runs, whether it is suspended or being cancelled, and how many prompts
+wait, and whether that queue is still unchecked against the log.

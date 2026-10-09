@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { matchesQuery } from "../src/model/palette.ts";
 import { filterGroups } from "../src/model/settings.ts";
+import { SettingsRoute } from "../src/ui/contracts.ts";
+
+describe("SettingsRoute", () => {
+  it("names the section in the path and keeps the section's state in the search", () => {
+    expect(SettingsRoute.href({ section: "plugins" }, { plugin: "agent", kind: "host" })).toBe("/settings/plugins?plugin=agent&kind=host");
+  });
+});
 
 describe("matchesQuery", () => {
   it("needs every word, in any order and case", () => {

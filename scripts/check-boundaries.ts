@@ -1,5 +1,6 @@
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { isBuiltin } from "node:module";
+import { dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // The kernel stays domain-neutral: `packages/core` may depend on Effect only,
@@ -118,12 +119,154 @@ for (const dir of readdirSync(join(root, "plugins"))) {
 }
 report("Host plugin boundary violations", pluginProblems, "host plugin boundary: ok");
 
+// The runtime is the API every plugin is written against (AGENTS.md): the host's (packages/host, but not `bundled.ts`,
+// the list of bundled plugins, which the walk does not enter), the planner both apps share (packages/composition), the
+// web app's (`runtime/` and the boot's modules in `ui/`), and its contracts (`@lemma/contracts/runtime`). It knows no
+// domain: nothing it imports, however indirectly and if only for a type, is a domain contract, which is any module of
+// packages/contracts but the runtime's own (`runtimeContracts`; a new module counts as domain until it is listed
+// there). The barrel `@lemma/contracts` is every contract, so the runtime imports `@lemma/contracts/runtime`. The walk
+// follows relative imports, and workspace packages through their `exports`. The transport is a plugin, held to the
+// runtime by its `requires` instead.
+const contracts = join(root, "packages/contracts/src");
+const runtimeContracts = ["addresses", "channels", "config", "discovery", "fs", "host", "inspectors", "interaction", "kernel", "rpc", "runtime", "status"];
+const isCode = (path: string) => /\.(ts|tsx|mts|js|jsx|mjs)$/.test(path);
+const bundledList = join(root, "packages/host/src/bundled.ts");
+const runtimeCode = [
+  ...walk(join(root, "packages/host/src")).filter((path) => path !== bundledList),
+  ...walk(join(root, "packages/composition/src")),
+  ...walk(join(root, "apps/web/src/runtime")),
+  ...["boot.tsx", "define.ts", "draw.tsx", "files.ts", "runtime.ts", "slots.ts"].map((name) => join(root, "apps/web/src/ui", name)),
+  join(contracts, "runtime.ts"),
+].filter(isCode);
+const workspacePackages = new Map<string, { readonly dir: string; readonly exports: Readonly<Record<string, unknown>> }>();
+for (const group of ["apps", "examples", "packages", "plugins"]) {
+  for (const name of readdirSync(join(root, group))) {
+    const manifest = join(root, group, name, "package.json");
+    if (!existsSync(manifest)) continue;
+    const { name: id, exports = {} } = JSON.parse(readFileSync(manifest, "utf8"));
+    workspacePackages.set(id, { dir: join(root, group, name), exports: typeof exports === "string" ? { ".": exports } : exports });
+  }
+}
+const unresolved: string[] = [];
+/** What a relative import may name besides code, which the walk does not enter. */
+const isAsset = (path: string) => /\.(css|svg|png|jpe?g|gif|webp|avif|ico|woff2?|ttf|otf|json|wasm)$/.test(path);
+/** Bundler resolution and Vite read `./a.js` as `./a.ts` (or `.tsx`), `.jsx` as `.tsx`, and `.mjs` as `.mts`, when that source exists. */
+const sourcesOf: Readonly<Record<string, readonly string[]>> = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"] };
+/** The module `specifier` names from `from`: a file, `node:<name>` for Node's own, or none for an asset or a package from outside. */
+const resolveImport = (from: string, specifier: string): string | undefined => {
+  if (isBuiltin(specifier)) return specifier.startsWith("node:") ? specifier : `node:${specifier}`;
+  if (specifier.startsWith(".")) {
+    const path = resolve(dirname(from), specifier.replace(/\?.*$/, ""));
+    const extension = extname(path);
+    const sources = (sourcesOf[extension] ?? []).map((source) => path.slice(0, -extension.length) + source);
+    const found = [...sources, path].find((candidate) => isCode(candidate) && existsSync(candidate));
+    if (found !== undefined) return found;
+    if (isCode(path) || extension === "") unresolved.push(`${relative(root, from)}: imports "${specifier}", which names no file`);
+    else if (!isAsset(path)) unresolved.push(`${relative(root, from)}: imports "${specifier}", which is neither code nor a known asset`);
+    return undefined;
+  }
+  const [first = "", ...rest] = specifier.split("/");
+  const name = first.startsWith("@") ? `${first}/${rest.shift()}` : first;
+  const workspace = workspacePackages.get(name);
+  if (workspace === undefined) return undefined;
+  // A subpath's entry: a file, or conditions, of which processes here run `lemma-source` (docs/development.md).
+  const entry = workspace.exports[[".", ...rest].join("/")] as string | Readonly<Record<string, string>> | undefined;
+  const file = typeof entry === "string" ? entry : (entry?.["lemma-source"] ?? entry?.import);
+  if (file !== undefined) return join(workspace.dir, file);
+  unresolved.push(`${relative(root, from)}: imports "${specifier}", which ${name}'s exports do not name`);
+  return undefined;
+};
+/**
+ * Follows the imports of `roots` breadth-first, so each module is reached by its shortest chain. `onward` sees each
+ * import of a module reached and says whether to follow it. Returns the chain from a root to a module reached.
+ */
+const followImports = (roots: readonly string[], onward: (from: string, to: string) => boolean) => {
+  const via = new Map<string, string | undefined>(roots.map((file) => [file, undefined]));
+  const queue = [...via.keys()];
+  for (let next = 0; next < queue.length; next++) {
+    const file = queue[next]!;
+    for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
+      const to = resolveImport(file, match[1]!);
+      if (to === undefined || via.has(to) || !onward(file, to) || to.startsWith("node:")) continue;
+      via.set(to, file);
+      queue.push(to);
+    }
+  }
+  return (file: string) => {
+    const chain: string[] = [];
+    for (let at: string | undefined = file; at !== undefined; at = via.get(at)) chain.unshift(relative(root, at));
+    return chain;
+  };
+};
+const isDomain = (path: string) =>
+  !path.startsWith("node:") && !relative(contracts, path).startsWith("..") && !runtimeContracts.includes(relative(contracts, path).replace(/\.ts$/, ""));
+const crossings = new Map<string, { readonly from: string; readonly to: string }>();
+const runtimeChain = followImports(runtimeCode, (from, to) => {
+  if (to === bundledList) return false;
+  if (!isDomain(to)) return true;
+  crossings.set(`${relative(root, from)} → ${relative(root, to)}`, { from, to });
+  return false;
+});
+// The web app bundles the planner, so nothing it reaches is Node's.
+const nodeImports: { readonly from: string; readonly to: string }[] = [];
+const compositionChain = followImports(walk(join(root, "packages/composition/src")).filter(isCode), (from, to) => {
+  if (to.startsWith("node:")) nodeImports.push({ from, to });
+  return true;
+});
+const runtimeProblems = [...new Set(unresolved)];
+for (const { from, to } of crossings.values()) {
+  const what = relative(contracts, to) === "index.ts" ? "every contract, the domain's too (import @lemma/contracts/runtime)" : "a domain contract";
+  runtimeProblems.push(`${[...runtimeChain(from), relative(root, to)].join(" → ")}: ${what}`);
+}
+for (const { from, to } of nodeImports) {
+  runtimeProblems.push(`${[...compositionChain(from), to].join(" → ")}: Node's, in @lemma/composition, which the web app bundles`);
+}
+report("Runtime boundary violations (scripts/check-boundaries.ts)", runtimeProblems, "runtime boundary: ok");
+
+// The host's streams, `Host.Events` and `Channel.Open`, are read only in packages/client/src, which hands each element to
+// a callback at once. Effect's RPC client reads a WebSocket on one fiber, which puts a stream's chunk into that request's
+// bounded queue before it reads on, so a reader that stops taking a stream's elements stalls every call and stream on its
+// socket (`makeHostRpc` in packages/client/src/rpc.ts). The client @lemma/client hands out (`HostRpcClient`) has no such
+// RPCs, so reading one raw fails to compile. What types cannot see is a client made elsewhere with Effect's `RpcClient`,
+// which this finds: a value import of `RpcClient` (the module, from `effect/rpc` or `effect/rpc/RpcClient`) outside
+// packages/client/src; `RpcClientError` and type-only imports are fine. Tests are left out: they make their own to test
+// the host, a reader that stops included.
+const clientSource = join(root, "packages/client/src");
+const rpcImport = /import\s+(?!type\s)(\{[^}]*\}|\*\s+as\s+\w+)\s*from\s*["']effect\/rpc(\/RpcClient)?["']/g;
+const importsRpcClient = (names: string, module: string | undefined) =>
+  names.startsWith("*")
+    ? true
+    : module !== undefined ||
+      names
+        .slice(1, -1)
+        .split(",")
+        .some((name) => /^RpcClient(\s+as\s+\w+)?$/.test(name.trim()));
+const clientProblems: string[] = [];
+for (const dir of ["apps", "examples", "packages", "plugins", "scripts"]) {
+  for (const path of walk(join(root, dir)).filter(isCode)) {
+    const file = relative(root, path);
+    if (path.startsWith(`${clientSource}/`) || /(^|\/)tests\//.test(file) || /\.test\.tsx?$/.test(file)) continue;
+    const text = readFileSync(path, "utf8");
+    for (const match of text.matchAll(rpcImport)) {
+      if (!importsRpcClient(match[1]!, match[2])) continue;
+      clientProblems.push(
+        `${file}:${text.slice(0, match.index).split("\n").length}: makes an RPC client of its own: connect through @lemma/client (connect, or makeHostRpcHttp for one-shot calls), whose client reads the host's streams only into callbacks, since a reader that waits stalls every request on its connection`,
+      );
+    }
+  }
+}
+report("RPC clients outside @lemma/client (scripts/check-boundaries.ts)", clientProblems, "rpc clients: ok");
+
 // The web app is replaceable piece by piece: everything it shows comes from a
 // plugin (turn it off or replace it by id), and plugins reach each other only
 // through `ui/contracts.ts` (capabilities, slots, parts). So a plugin imports
 // no other plugin and no rendering component: it draws shared pieces through
 // `ui/parts.tsx`, whose providers anyone can replace. Only `kit` supplies the
-// shared parts' defaults, so only it imports `components/`. See apps/web/AGENTS.md.
+// shared parts' defaults, so only it imports `components/`. The runtime
+// (`runtime/`) is what plugins are written against: they reach it through its
+// capabilities, and it knows only its own contracts (`ui/runtime.ts`), never a
+// plugin, a component, or what plugins provide; the runtime boundary above
+// keeps it, and the boot, from every domain contract. See apps/web/AGENTS.md.
 const web = join(root, "apps/web/src");
 const uiProblems: string[] = [];
 const within = (file: string, dir: string) => relative(join(web, dir), file).split("/")[0] !== "..";
@@ -140,7 +283,12 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
       continue;
     }
     const to = target(file, specifier);
-    if (within(file, "plugins")) {
+    if (to.startsWith("runtime/") && !within(file, "runtime") && name !== "ui/boot.tsx") {
+      rule(`imports the runtime "${specifier}" (require its capability from ui/contracts)`);
+    } else if (within(file, "runtime")) {
+      if (!to.startsWith("runtime/") && !["ui/runtime.ts", "ui/slots.ts"].includes(to) && !to.startsWith("lib/"))
+        rule(`imports "${specifier}" (the runtime uses its own files, ui/runtime, ui/slots, and lib/)`);
+    } else if (within(file, "plugins")) {
       if (name === "plugins/index.ts") continue;
       // A plugin is a file with its own stylesheet beside it (`plugins/<id>.tsx`, `plugins/<id>.css`), or a directory
       // (`plugins/<id>/`) whose files are all its own; anything else under plugins/ is another plugin.
@@ -160,6 +308,10 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
       // The boot and the app's frame know plugins only as the bundled list: what runs is up to the composition.
       rule(`imports the plugin "${specifier}" (only plugins/index.ts, the bundled list)`);
     }
+    // A part's fallback is plain markup that draws while no plugin provides the part, so neither it nor the contracts
+    // declaring it reach a component (`kit`'s, gone with it) or a part (`ui/parts.tsx` imports the contracts: a cycle).
+    if (["ui/contracts.ts", "ui/fallbacks.tsx"].includes(name) && (to.startsWith("components/") || to === "ui/parts.tsx"))
+      rule(`imports "${specifier}" (a part's fallback is plain markup: it draws no component and no part)`);
   }
   if (within(file, "model") && name.endsWith(".tsx")) rule("is a .tsx model (models are pure data)");
   if (within(file, "plugins")) {
@@ -271,19 +423,18 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "apps/web/scripts/shots.ts": 1,
   "apps/web/tests/ui.test.ts": 1,
   "packages/client/tests/rpc.test.ts": 1,
-  "packages/client/tests/session-log.test.ts": 1,
   "packages/core/tests/events.test.ts": 5,
   "packages/core/tests/lifecycle-regressions.test.ts": 1,
   "packages/core/tests/supervision.test.ts": 3,
   "packages/core/tests/support.ts": 1,
   "packages/host/scripts/dev.ts": 2,
+  "packages/host/tests/watch.test.ts": 5,
   "plugins/agent/tests/crash.ts": 1,
   "plugins/agent/tests/fakes.ts": 1,
   "plugins/agent/tests/recovery.test.ts": 5,
   "plugins/compaction/tests/compaction.test.ts": 1,
   "plugins/credentials/tests/credentials.test.ts": 1,
   "plugins/file-search-fff/tests/file-search.test.ts": 1,
-  "plugins/host/tests/watch.test.ts": 5,
   "plugins/llm-pi-ai/tests/llm.test.ts": 2,
   "plugins/sessions/tests/sessions.test.ts": 7,
   "plugins/sessions/tests/simulation.test.ts": 1,
@@ -294,7 +445,7 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "scripts/mock-openai.ts": 1,
 };
 const tempNameCeilings: Readonly<Record<string, number>> = {
-  "plugins/host/tests/ui.test.ts": 2,
+  "packages/host/tests/ui.test.ts": 2,
   "plugins/transport/tests/transport.test.ts": 2,
 };
 const fixedWaits = [

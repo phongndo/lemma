@@ -77,8 +77,7 @@ time from Effect's `Clock`, and its randomness from Effect's `Random` or, where
 it must stay unguessable, a seedable source (the session ids' `IdBytes`), so
 these tests control all three; `scripts/check-boundaries.ts` fails on a seamed file that reaches
 around them. [`@lemma/testing`](../packages/testing/README.md) holds the
-simulated disk and the contract conformance suites that every implementation
-of a contract, a test's fake included, runs.
+simulated disk and the contract conformance suites.
 
 `scripts/mock-openai.ts` is a scripted provider for end-to-end runs without an
 API key; `scripts/e2e.ts` starts it and a host for tests.

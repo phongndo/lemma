@@ -7,10 +7,13 @@ const OUTPUT_TAIL_CHARS = 16 * 1024;
 
 type Block = AssistantMessage["content"][number];
 
+/** What an assistant message names of the model that produced it. */
+export type ModelIdentity = Pick<ModelInfo, "api" | "provider" | "id">;
+
 /** An assistant message made of what a call produced, for an `attempt` logged when the call did not finish. */
 export const partialMessage = (
   content: readonly Block[],
-  model: ModelInfo,
+  model: ModelIdentity,
   stopReason: "aborted" | "error",
   errorMessage: string,
   timestamp: number,
@@ -59,7 +62,7 @@ export class PartialMessage {
     return this.blocks.flatMap((block, index) => (block === undefined ? [] : [{ index, block }]));
   }
 
-  message(model: ModelInfo, stopReason: "aborted" | "error", errorMessage: string, timestamp: number): AssistantMessage {
+  message(model: ModelIdentity, stopReason: "aborted" | "error", errorMessage: string, timestamp: number): AssistantMessage {
     return partialMessage(this.content(), model, stopReason, errorMessage, timestamp);
   }
 }

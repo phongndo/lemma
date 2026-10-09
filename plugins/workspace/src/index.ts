@@ -4,8 +4,8 @@ import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { Effect, Schema } from "effect";
 import type { Context } from "effect";
-import { definePlugin } from "@lemma/core";
-import { Paths, Workspace, WorkspaceError } from "@lemma/contracts";
+import { definePlugin, Registries } from "@lemma/core";
+import { Channels, Paths, serveFiles, serveWorkspace, Workspace, WorkspaceError } from "@lemma/contracts";
 import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/contracts";
 import { expandHome, kindOf } from "@lemma/contracts/fs";
 
@@ -304,11 +304,21 @@ const WorkspaceConfig = Schema.Struct({
   }),
 });
 
+/**
+ * Provides `Workspace` and serves it to clients, with file search: `files.search`
+ * asks whichever plugin searches files at each call, so it stays served while
+ * they come and go.
+ */
 export default definePlugin({
   id: "workspace",
   version: "0.1.0",
   config: WorkspaceConfig,
   provides: { workspace: Workspace },
   requires: { paths: Paths },
-  setup: ({ paths }, { config }) => Effect.succeed({ workspace: makeWorkspace({ worktrees: config.worktrees ?? join(paths.home, "worktrees") }) }),
+  setup: function* ({ paths }, owner) {
+    const workspace = makeWorkspace({ worktrees: owner.config.worktrees ?? join(paths.home, "worktrees") });
+    const channels = [...serveWorkspace(workspace), ...serveFiles(yield* Registries)];
+    yield* Effect.forEach(channels, (channel) => owner.add(Channels, channel));
+    return { workspace };
+  },
 });

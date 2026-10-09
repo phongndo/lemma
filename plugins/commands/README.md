@@ -24,13 +24,18 @@ const greet = definePlugin({
 });
 ```
 
-No config.
+Serves `Commands` to clients as the channels `CommandChannels` declares
+(`commands.list`, `commands.run`, and `commands.changes`), with `serveCommands`
+from `@lemma/contracts`, which a replacement uses as well. Requires `Paths`: a
+run whose client names no `cwd` runs in the host's. No config.
 
 ## Behavior
 
 - **Inspector.** `commands.registered` (in `Inspectors`) lists every command with its
   category and the plugin that added it.
-- `register` records the registering plugin's id as `source` and removes the command when that plugin's scope closes. An id another plugin holds fails `Failed`, naming that plugin; a plugin's replacement takes its ids over when a reload swaps them, so contributors need not be `exclusive`.
-- Every registration and removal publishes `CommandsChanged` with the full list. The transport forwards it to clients as `commands-changed`.
-- `run` passes the caller's context (`cwd`, and `sessionId` when the client has a session open). Failures and defects become `CommandError` with reason `Failed` and the original message. A dismissed question becomes `Cancelled`, which clients treat as a quiet stop rather than an error. An unknown id is `NotFound`. Interruption, such as a dropped client, interrupts the command.
+- `register` records the registering plugin's id as `source` and removes the command when the scope it was registered in closes, or with that plugin, whichever is first. An id another plugin holds fails `Failed`, naming that plugin; a plugin's replacement takes its ids over when a reload swaps them, so contributors need not be `exclusive`.
+- Every registration and removal, once live, publishes `CommandsChanged` with the full list, which `commands.changes` sends its clients after the list they open it with.
+- `run` passes the caller's context (`cwd`, and `sessionId` when the client has a session open). Failures and defects become `CommandError` with reason `Failed` and the original message. A dismissed question becomes `Cancelled`, which clients treat as a quiet stop rather than an error. An unknown id is `NotFound`.
+- `run` makes the command part of the lifetime of the plugin that registered it (`Registries.run`), so what the command does finds that plugin in `Admitted` (see `ChangeReport` for what that defers); through `commands.run` it is also part of this plugin's call. A command found just as a reload replaced it runs on the replacement.
+- Interruption, such as a dropped client, interrupts the command, and so does the command being removed while it runs (the plugin that registered it stopping or reloading, or the scope it was registered in closing), or this plugin stopping or reloading while `commands.run` waits on it: the client gets `Withdrawn` at once either way (`run` itself fails `Withdrawn` when the command is removed), rather than a plugin waiting for a command that may wait on a question for good. Running it again reaches a replacement, if there is one.
 - `list` is sorted by category, then title.

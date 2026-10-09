@@ -1,21 +1,42 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
-import { HostError, configValues, describeConfig, emptyUsage, providerOf, secret } from "@lemma/contracts";
+import {
+  AgentChannels,
+  CommandChannels,
+  FileChannels,
+  HostError,
+  LlmChannels,
+  SessionChannels,
+  WorkspaceChannels,
+  configValues,
+  describeConfig,
+  emptyUsage,
+  providerOf,
+  secret,
+  wireCodec,
+  withdrawnFrom,
+} from "@lemma/contracts";
 import { fuzzy } from "./model/palette.ts";
 import type {
+  AgentActivity,
+  AgentView,
   AssistantMessage,
+  ChannelDeclaration,
+  ChannelInfo,
   EventData,
-  HostEvent,
   InteractionAnswer,
   InteractionRequest,
+  LlmChange,
   ModelInfo,
   NoticePayload,
   PluginStatus,
   PromptContent,
   QueuedPrompt,
   ProviderInfo,
+  RuntimeEvent,
   SessionEvent,
   SessionInfo,
+  SessionsChange,
   StreamEvent,
   TurnOptions,
   UiComposition,
@@ -24,9 +45,10 @@ import type {
 
 /**
  * Dev-only in-browser fake of the host (`?mock`, or `?mock=fresh` for a first
- * run with no sessions). Every provider starts logged out, so the fake never
- * looks like real credentials; its login flow only pretends. Not shipped:
- * `main.tsx` imports it only in dev.
+ * run with no sessions). It serves the bundled subsystems' channels as their
+ * plugins do, streams included, and the runtime's own calls and events. Every
+ * provider starts logged out, so the fake never looks like real credentials;
+ * its login flow only pretends. Not shipped: `main.tsx` imports it only in dev.
  */
 
 const HOME = "/home/dev";
@@ -216,6 +238,57 @@ const MOCK_COMMANDS = [
   { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands-host" },
 ];
 
+const noChannel = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
+
+/** Listeners to one kind of what a plugin publishes, which its streams follow. */
+const feed = <A>() => {
+  const listeners = new Set<(value: A) => void>();
+  return {
+    publish: (value: A) => {
+      for (const listener of listeners) listener(value);
+    },
+    subscribe: (listener: (value: A) => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+  };
+};
+
+/**
+ * A channel as the mock serves it, for the plugin `source`. A call that
+ * `waits` on what its plugin leaving would end (a turn, a login, a command)
+ * ends `Withdrawn` when that plugin restarts, as the host's do, and is made
+ * again if it is `repeatable` (a prompt); a stream does whatever it is.
+ */
+type Served =
+  | {
+      readonly kind: "call";
+      readonly declaration: ChannelDeclaration;
+      readonly source: string;
+      readonly waits?: boolean;
+      readonly handle: (payload: any) => Promise<unknown>;
+    }
+  | {
+      readonly kind: "stream";
+      readonly declaration: ChannelDeclaration;
+      readonly source: string;
+      /** Sends what it sends, `subscribed` first; returns its stop. */
+      readonly handle: (payload: any, send: (element: any) => void, fail: (error: HostError) => void) => () => void;
+    };
+
+const serveCall = <Payload, Success>(
+  source: string,
+  declaration: ChannelDeclaration<"call", Payload, Success>,
+  handle: (payload: Payload) => Promise<Success>,
+  options: { readonly waits?: boolean } = {},
+): Served => ({ kind: "call", declaration, source, handle, ...options });
+
+const serveStream = <Payload, Success>(
+  source: string,
+  declaration: ChannelDeclaration<"stream", Payload, Success>,
+  handle: (payload: Payload, send: (element: Success) => void, fail: (error: HostError) => void) => () => void,
+): Served => ({ kind: "stream", declaration, source, handle });
+
 export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
@@ -266,7 +339,6 @@ export const createMockHost = (): Host => {
     state: "active",
     ...extra,
   });
-  const needed = "Needed by transport";
   // Mirrors of real config Schemas, so the Plugins page shows settings forms.
   const configs: Record<string, Schema.Codec<any, any>> = {
     agent: Schema.Struct({
@@ -306,29 +378,30 @@ export const createMockHost = (): Host => {
     const fields = describeConfig(schema);
     return { ...plugin, configFields: fields, config: configValues(schema, configRows[plugin.id] ?? {}, fields) };
   };
+  // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
+  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@2"];
   const plugins: PluginStatus[] = [
-    bundled("host", { provides: ["lemma/Paths", "lemma/HostControl"], locked: "Reads the config files and loads every other plugin" }),
-    bundled("interaction", { provides: ["lemma/Interaction"], locked: needed }),
-    bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"], locked: needed }),
-    bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"], locked: needed }),
-    bundled("tools", { provides: ["lemma/Tools"], locked: needed }),
+    bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
+    bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
+    bundled("tools", { provides: ["lemma/Tools"] }),
     bundled("read", { requires: ["lemma/Tools"] }),
     bundled("write", { requires: ["lemma/Tools"] }),
     bundled("edit", { requires: ["lemma/Tools"] }),
     bundled("bash", { requires: ["lemma/Tools"] }),
     bundled("codemode", { requires: ["lemma/Tools"] }),
-    bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"], locked: needed }),
-    bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"], locked: needed }),
+    bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] }),
+    bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"] }),
     bundled("compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
     bundled("project-context", { requires: ["lemma/Paths"] }),
-    bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"], locked: needed }),
+    bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] }),
     bundled("file-search", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["file-search"] }] }),
-    bundled("commands", { provides: ["lemma/Commands"], locked: needed }),
+    bundled("commands", { provides: ["lemma/Commands"] }),
     bundled("commands-host", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/HostControl"] }),
     bundled("commands-llm", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
     bundled("commands-workspace", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Workspace"] }),
+    // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     bundled("transport", {
-      requires: ["lemma/Paths", "lemma/Sessions", "lemma/Agent", "lemma/Llm", "lemma/HostControl", "lemma/Workspace", "lemma/Commands"],
+      requires: ["lemma/Paths", "lemma/HostControl"],
       locked: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
     }),
   ];
@@ -340,14 +413,7 @@ export const createMockHost = (): Host => {
     agent: { hooks: [{ name: "lemma/agent.request", order: 0 }] },
     transport: {
       hooks: [{ name: "lemma/interaction.request", order: 0 }],
-      observes: [
-        "lemma/agent.turn.started",
-        "lemma/agent.turn.ended",
-        "lemma/session.appended",
-        "lemma/session.changed",
-        "lemma/notice",
-        "lemma/plugins.changed",
-      ],
+      observes: ["lemma/notice", "lemma/plugins.changed", "lemma/ui.changed"],
     },
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
@@ -370,10 +436,25 @@ export const createMockHost = (): Host => {
     }
   };
   const sessions = new Map<string, { info: SessionInfo; events: SessionEvent[] }>();
-  const listeners = new Set<(event: HostEvent) => void>();
-  const emit = (event: HostEvent) => {
+  /** The host's own events: the runtime's. Each subsystem's go to its streams, through the feeds below. */
+  const listeners = new Set<(event: RuntimeEvent) => void>();
+  const emit = (event: RuntimeEvent) => {
     for (const listener of listeners) listener(event);
   };
+  const sessionChanges = feed<Exclude<SessionsChange, { type: "subscribed" }>>();
+  /** Each append, and each session deleted, for `sessions.log`. */
+  const logs = feed<{ readonly sessionId: string; readonly event?: SessionEvent }>();
+  const activity = feed<Exclude<AgentActivity, { type: "subscribed" }>>();
+  const modelChanges = feed<LlmChange>();
+  /** The running turn per session as `agent.view` shows it: the step streaming now, and running tools' output so far. */
+  const turns = new Map<
+    string,
+    {
+      readonly turnId: string;
+      draft?: { readonly stepId: string; seq: number; readonly blocks: AssistantMessage["content"][number][] };
+      readonly output: Map<string, string>;
+    }
+  >();
   const pendingAnswers = new Map<string, (answer: InteractionAnswer | undefined) => void>();
   const openRequests = new Map<string, InteractionRequest>();
   /** Running logins, by provider, so `cancelLogin` can stop one. */
@@ -393,7 +474,7 @@ export const createMockHost = (): Host => {
   /** Each change to a queue moves the mock's one revision on, which keeps each session's growing. */
   let queueRevision = 0;
   const queueChanged = (sessionId: string) =>
-    emit({ type: "queue-changed", sessionId, queue: queueOf(sessionId).map((queued) => queued.prompt), revision: ++queueRevision });
+    activity.publish({ type: "queue-changed", sessionId, queue: queueOf(sessionId).map((queued) => queued.prompt), revision: ++queueRevision });
 
   const create = (cwd = CWD, at = Date.now()): SessionInfo => {
     const info: SessionInfo = { id: id("s"), cwd, createdAt: at, updatedAt: at, lastSeq: 0 };
@@ -412,8 +493,12 @@ export const createMockHost = (): Host => {
       ...(data.type === "title" ? { title: data.title } : {}),
     };
     if (!quiet) {
-      emit({ type: "session-appended", sessionId, event });
-      emit({ type: "session-changed", info: session.info });
+      // What the log now holds leaves the running turn's view, as the agent's does.
+      const turn = turns.get(sessionId);
+      if (data.type === "message" && data.message.role === "toolResult") turn?.output.delete(data.message.toolCallId);
+      else if ((data.type === "message" || data.type === "attempt") && data.stepId !== undefined && turn?.draft?.stepId === data.stepId) delete turn.draft;
+      logs.publish({ sessionId, event });
+      sessionChanges.publish({ type: "session-changed", info: session.info });
     }
     return event;
   };
@@ -633,30 +718,43 @@ export const createMockHost = (): Host => {
 
   const status: ConnectionStatus = { state: "connected", generation: 1, attempts: 0 };
 
+  /** Streams `message` as its step's deltas, numbered from 1 as the agent numbers them, keeping the draft `agent.view` shows. */
   const stream = async (sessionId: string, turnId: string, stepId: string, message: AssistantMessage) => {
-    emit({ type: "delta", sessionId, turnId, stepId, event: { type: "start" } });
+    const draft = { stepId, seq: 0, blocks: [] as AssistantMessage["content"][number][] };
+    const turn = turns.get(sessionId);
+    if (turn !== undefined) turn.draft = draft;
+    const delta = (event: StreamEvent) => {
+      draft.seq++;
+      const block = "index" in event ? draft.blocks[event.index] : undefined;
+      if (event.type === "text-delta") draft.blocks[event.index] = { type: "text", text: (block?.type === "text" ? block.text : "") + event.delta };
+      else if (event.type === "thinking-delta")
+        draft.blocks[event.index] = { type: "thinking", thinking: (block?.type === "thinking" ? block.thinking : "") + event.delta };
+      else if (event.type === "toolcall-start") draft.blocks[event.index] = { type: "toolCall", id: event.id, name: event.name, arguments: {} };
+      else if (event.type === "toolcall-end") draft.blocks[event.index] = event.toolCall;
+      activity.publish({ type: "delta", sessionId, turnId, stepId, seq: draft.seq, event });
+    };
+    delta({ type: "start" });
     for (const [index, part] of message.content.entries()) {
       if (cancelled.has(sessionId)) return false;
       if (part.type === "text" || part.type === "thinking") {
         const text = part.type === "text" ? part.text : part.thinking;
         for (let i = 0; i < text.length; i += 6) {
           if (cancelled.has(sessionId)) return false;
-          const delta = text.slice(i, i + 6);
-          const event: StreamEvent = part.type === "text" ? { type: "text-delta", index, delta } : { type: "thinking-delta", index, delta };
-          emit({ type: "delta", sessionId, turnId, stepId, event });
+          const chunk = text.slice(i, i + 6);
+          delta(part.type === "text" ? { type: "text-delta", index, delta: chunk } : { type: "thinking-delta", index, delta: chunk });
           await sleep(18);
         }
       } else if (part.type === "toolCall") {
-        emit({ type: "delta", sessionId, turnId, stepId, event: { type: "toolcall-start", index, id: part.id, name: part.name } });
+        delta({ type: "toolcall-start", index, id: part.id, name: part.name });
         const json = JSON.stringify(part.arguments);
         for (let i = 0; i < json.length; i += 8) {
-          emit({ type: "delta", sessionId, turnId, stepId, event: { type: "toolcall-delta", index, delta: json.slice(i, i + 8) } });
+          delta({ type: "toolcall-delta", index, delta: json.slice(i, i + 8) });
           await sleep(15);
         }
-        emit({ type: "delta", sessionId, turnId, stepId, event: { type: "toolcall-end", index, toolCall: part } });
+        delta({ type: "toolcall-end", index, toolCall: part });
       }
     }
-    emit({ type: "delta", sessionId, turnId, stepId, event: { type: "done", message } });
+    delta({ type: "done", message });
     return true;
   };
 
@@ -668,15 +766,18 @@ export const createMockHost = (): Host => {
     const started = Date.now();
     append(sessionId, { type: "turn-start", turnId, model: by.ref });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
-    emit({ type: "turn-started", sessionId, turnId });
     running.add(sessionId);
+    const turn = { turnId, output: new Map<string, string>() };
+    turns.set(sessionId, turn);
+    activity.publish({ type: "turn-started", sessionId, turnId });
     const text = content.find((part) => part.type === "text")?.text ?? "(image)";
     let total = emptyUsage;
     /** Steers placed in this turn, answered when it ends. */
     const steered: (() => void)[] = [];
     const end = (reason: "done" | "cancelled") => {
       append(sessionId, { type: "turn-end", turnId, reason });
-      emit({ type: "turn-ended", sessionId, turnId, usage: total, reason });
+      turns.delete(sessionId);
+      activity.publish({ type: "turn-ended", sessionId, turnId, usage: total, reason });
       running.delete(sessionId);
       cancelled.delete(sessionId);
       for (const done of steered) done();
@@ -709,7 +810,9 @@ export const createMockHost = (): Host => {
     // The command prints as it runs, like the host's bash tool.
     for (const line of ["drwxr-xr-x client\n", "drwxr-xr-x contracts\n", "drwxr-xr-x core\n"]) {
       await sleep(300);
-      emit({ type: "tool-output", sessionId, toolCallId: call.id, chunk: line });
+      const printed = turn.output.get(call.id) ?? "";
+      turn.output.set(call.id, printed + line);
+      activity.publish({ type: "tool-output", sessionId, toolCallId: call.id, chunk: line, offset: printed.length });
     }
     if (cancelled.has(sessionId)) return end("cancelled");
     append(sessionId, {
@@ -818,7 +921,12 @@ export const createMockHost = (): Host => {
     git: { root: path, branch: currentBranch, head: "84c3bfc", changes: 3, upstream: `origin/${currentBranch}`, ahead: 1, behind: 0 },
   });
 
-  const notFound = (sessionId: string) => new Error(`Session ${sessionId} not found`);
+  const notFound = (sessionId: string) => new HostError({ code: "NotFound", subject: sessionId, message: `Session ${sessionId} not found` });
+  const sessionOf = (sessionId: string) => {
+    const session = sessions.get(sessionId);
+    if (session === undefined) throw notFound(sessionId);
+    return session;
+  };
 
   /** Every project has these: the composer's `@` searches them. */
   const mockFiles = [
@@ -842,94 +950,156 @@ export const createMockHost = (): Host => {
     ...["src", "src/components", "src/lib", "tests"].map((path) => ({ path, kind: "directory" as const })),
   ];
 
-  return {
-    session: {
-      list: async () => [...sessions.values()].map((s) => s.info).sort((a, b) => b.updatedAt - a.updatedAt),
-      get: async (sessionId) => {
-        const s = sessions.get(sessionId);
-        if (!s) throw notFound(sessionId);
-        return s.info;
-      },
-      create: async (cwd) => {
-        const info = create(cwd);
-        emit({ type: "session-changed", info });
-        return info;
-      },
-      events: async (sessionId, after) => {
-        await sleep(120);
-        const s = sessions.get(sessionId);
-        if (!s) throw notFound(sessionId);
-        return s.events.filter((e) => e.seq > (after ?? 0));
-      },
-      // Points the leaf at the event, as the host does: the next append branches from there.
-      checkout: async (sessionId, eventId) => {
-        const session = sessions.get(sessionId);
-        if (!session) throw notFound(sessionId);
-        session.info = { ...session.info, leaf: eventId };
-        emit({ type: "session-changed", info: session.info });
-        return session.info;
-      },
-      setTitle: async (sessionId, title) => {
-        append(sessionId, { type: "title", title });
-        return sessions.get(sessionId)!.info;
-      },
-      mark: async (sessionId, marks) => {
-        const s = sessions.get(sessionId);
-        if (!s) throw notFound(sessionId);
-        const { pinned: _pinned, archived: _archived, ...rest } = s.info;
-        const pinned = marks.pinned ?? s.info.pinned === true;
-        const archived = marks.archived ?? s.info.archived === true;
-        s.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}) };
-        emit({ type: "session-changed", info: s.info });
-        return s.info;
-      },
-      remove: async (sessionId) => {
-        if (!sessions.has(sessionId)) throw notFound(sessionId);
-        if (running.has(sessionId)) throw new Error("A turn is running in this session; stop it before deleting");
-        sessions.delete(sessionId);
-        emit({ type: "session-removed", sessionId });
-      },
-    },
-    agent: {
-      prompt: async (sessionId, content, options, submit) => {
-        if (!running.has(sessionId)) return runTurn(sessionId, content, options, submit?.requestId);
-        const mode = submit?.whenBusy ?? "follow-up";
-        if (mode === "reject") throw new HostError({ code: "Busy", subject: sessionId, message: "A turn is already running" });
-        await new Promise<void>((resolve, reject) => {
-          const prompt: QueuedPrompt = {
-            requestId: submit?.requestId ?? id("r"),
+  /** Each prompt by session and request id: sending one again waits for it rather than placing it twice, as the agent does. */
+  const prompts = new Map<string, Promise<void>>();
+  const prompt = (sessionId: string, content: PromptContent, options: TurnOptions | undefined, requestId: string, whenBusy: string): Promise<void> => {
+    const key = `${sessionId} ${requestId}`;
+    const known = prompts.get(key);
+    if (known !== undefined) {
+      // Told again, so a client sending it again sees it taken.
+      if (queueOf(sessionId).some((queued) => queued.prompt.requestId === requestId)) queueChanged(sessionId);
+      return known;
+    }
+    sessionOf(sessionId);
+    if (running.has(sessionId) && whenBusy === "reject") throw new HostError({ code: "Busy", subject: sessionId, message: "A turn is already running" });
+    const placed = running.has(sessionId)
+      ? new Promise<void>((resolve, reject) => {
+          const queued: QueuedPrompt = {
+            requestId,
             content,
-            mode,
+            mode: whenBusy === "steer" ? "steer" : "follow-up",
             at: Date.now(),
             ...(options === undefined ? {} : { options }),
           };
-          queues.set(sessionId, [...queueOf(sessionId), { prompt, done: resolve, fail: reject }]);
+          queues.set(sessionId, [...queueOf(sessionId), { prompt: queued, done: resolve, fail: reject }]);
           queueChanged(sessionId);
-        });
-      },
-      cancel: async (sessionId) => {
-        if (running.has(sessionId)) cancelled.add(sessionId);
-      },
-      running: async () => [...running],
-      queue: async (sessionId) => queueOf(sessionId).map((queued) => queued.prompt),
-      withdraw: async (sessionId, requestId) => {
-        const found = queueOf(sessionId).find((queued) => queued.prompt.requestId === requestId);
-        if (found === undefined) return false;
-        queues.set(
-          sessionId,
-          queueOf(sessionId).filter((queued) => queued !== found),
-        );
-        found.fail(new HostError({ code: "Withdrawn", subject: sessionId, message: "The prompt was withdrawn from the queue" }));
-        queueChanged(sessionId);
-        return true;
-      },
-      view: async (sessionId) => ({ output: [], queue: queueOf(sessionId).map((queued) => queued.prompt), queueRevision }),
-    },
-    llm: {
-      providers: async () => providers.slice(),
-      models: async () => MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured),
-      login: async (provider, type) => {
-        const p = providers.find((x) => x.id === provider)!;
+        })
+      : runTurn(sessionId, content, options, requestId);
+    prompts.set(key, placed);
+    return placed;
+  };
+  /** The session as a client joining now shows it, beyond its log (`Agent.view`). */
+  const view = (sessionId: string): AgentView => {
+    const turn = turns.get(sessionId);
+    const draft = turn?.draft;
+    return {
+      ...(turn === undefined ? {} : { turnId: turn.turnId }),
+      ...(draft === undefined
+        ? {}
+        : { draft: { stepId: draft.stepId, seq: draft.seq, blocks: draft.blocks.flatMap((block, index) => (block === undefined ? [] : [{ index, block }])) } }),
+      output: [...(turn?.output ?? [])].map(([toolCallId, output]) => ({ toolCallId, output, length: output.length })),
+      queue: queueOf(sessionId).map((queued) => queued.prompt),
+      queueRevision,
+    };
+  };
+  /** As the llm plugin does after saving a change to its providers: it restarts, once the call asking for it has answered. */
+  const reloadLlm = () => setTimeout(() => restart("llm"), 50);
+  const noCustom = (provider: string) =>
+    new HostError({ code: "UnknownProvider", message: `No provider "${provider}" was added by the user`, subject: provider });
+
+  /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
+  const served: Served[] = [
+    serveCall("sessions", SessionChannels.list, async ({ cwd }) =>
+      [...sessions.values()]
+        .map((session) => session.info)
+        .filter((info) => cwd === undefined || info.cwd === cwd)
+        .sort((a, b) => b.updatedAt - a.updatedAt),
+    ),
+    serveCall("sessions", SessionChannels.get, async ({ sessionId }) => sessionOf(sessionId).info),
+    serveCall("sessions", SessionChannels.create, async ({ cwd }) => {
+      const info = create(cwd);
+      sessionChanges.publish({ type: "session-changed", info });
+      return info;
+    }),
+    serveCall("sessions", SessionChannels.events, async ({ sessionId, after }) => {
+      await sleep(120);
+      return sessionOf(sessionId).events.filter((event) => event.seq > (after ?? 0));
+    }),
+    serveStream("sessions", SessionChannels.log, ({ sessionId, after }, send, fail) => {
+      const session = sessions.get(sessionId);
+      if (session === undefined) {
+        fail(notFound(sessionId));
+        return () => {};
+      }
+      send({ type: "subscribed", events: session.events.filter((event) => event.seq > (after ?? 0)) });
+      return logs.subscribe((heard) => {
+        if (heard.sessionId !== sessionId) return;
+        if (heard.event === undefined) fail(new HostError({ code: "NotFound", subject: sessionId, message: `Session ${sessionId} was deleted` }));
+        else send({ type: "appended", event: heard.event });
+      });
+    }),
+    // Points the leaf at the event, as the host does: the next append branches from there.
+    serveCall("sessions", SessionChannels.checkout, async ({ sessionId, eventId }) => {
+      const session = sessionOf(sessionId);
+      session.info = { ...session.info, leaf: eventId };
+      sessionChanges.publish({ type: "session-changed", info: session.info });
+      return session.info;
+    }),
+    serveCall("sessions", SessionChannels.setTitle, async ({ sessionId, title }) => {
+      sessionOf(sessionId);
+      append(sessionId, { type: "title", title });
+      return sessionOf(sessionId).info;
+    }),
+    serveCall("sessions", SessionChannels.mark, async ({ sessionId, pinned: pin, archived: archive }) => {
+      const session = sessionOf(sessionId);
+      const { pinned: _pinned, archived: _archived, ...rest } = session.info;
+      const pinned = pin ?? session.info.pinned === true;
+      const archived = archive ?? session.info.archived === true;
+      session.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}) };
+      sessionChanges.publish({ type: "session-changed", info: session.info });
+      return session.info;
+    }),
+    serveCall("sessions", SessionChannels.delete, async ({ sessionId }) => {
+      sessionOf(sessionId);
+      if (running.has(sessionId))
+        throw new HostError({ code: "Busy", subject: sessionId, message: "This session is in use, by a running turn or other work; stop it before deleting" });
+      sessions.delete(sessionId);
+      logs.publish({ sessionId });
+      sessionChanges.publish({ type: "session-removed", sessionId });
+    }),
+    serveStream("sessions", SessionChannels.changes, (_, send) => {
+      send({ type: "subscribed" });
+      return sessionChanges.subscribe(send);
+    }),
+
+    serveCall(
+      "agent",
+      AgentChannels.prompt,
+      async ({ sessionId, content, options, requestId, whenBusy }) => prompt(sessionId, content, options, requestId, whenBusy ?? "follow-up"),
+      { waits: true },
+    ),
+    serveCall("agent", AgentChannels.cancel, async ({ sessionId }) => {
+      if (running.has(sessionId)) cancelled.add(sessionId);
+    }),
+    serveCall("agent", AgentChannels.running, async () => [...running]),
+    serveCall("agent", AgentChannels.queue, async ({ sessionId }) => queueOf(sessionId).map((queued) => queued.prompt)),
+    serveCall("agent", AgentChannels.withdraw, async ({ sessionId, requestId }) => {
+      const found = queueOf(sessionId).find((queued) => queued.prompt.requestId === requestId);
+      if (found === undefined) return false;
+      queues.set(
+        sessionId,
+        queueOf(sessionId).filter((queued) => queued !== found),
+      );
+      found.fail(new HostError({ code: "Retracted", subject: sessionId, message: "The prompt was withdrawn from the queue" }));
+      queueChanged(sessionId);
+      return true;
+    }),
+    serveCall("agent", AgentChannels.view, async ({ sessionId }) => view(sessionId)),
+    serveStream("agent", AgentChannels.activity, (_, send) => {
+      send({ type: "subscribed", running: [...running] });
+      return activity.subscribe(send);
+    }),
+
+    serveCall("llm", LlmChannels.providers, async () => providers.slice()),
+    serveCall("llm", LlmChannels.models, async ({ available }) =>
+      available === true ? MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured) : MODELS.slice(),
+    ),
+    serveCall(
+      "llm",
+      LlmChannels.login,
+      async ({ provider, type }) => {
+        const p = providers.find((x) => x.id === provider);
+        if (p === undefined) throw new HostError({ code: "UnknownProvider", subject: provider, message: `No provider "${provider}"` });
         const origin = `login:${p.id}`;
         const cancel = new AbortController();
         logins.set(p.id, cancel);
@@ -1009,132 +1179,128 @@ export const createMockHost = (): Host => {
         }
         const i = providers.indexOf(p);
         providers[i] = { ...p, configured: true, source: type === "oauth" ? "OAuth" : "auth.json" };
+        modelChanges.publish({ type: "models-changed" });
         notice({ kind: "signed-in", message: `Logged in to ${p.name}` });
       },
-      cancelLogin: async (provider) => {
-        const running = logins.get(provider);
-        running?.abort();
-        return running !== undefined;
-      },
-      logout: async (provider) => {
-        const i = providers.findIndex((x) => x.id === provider);
-        const { source: _source, ...rest } = providers[i]!;
-        providers[i] = { ...rest, configured: false };
-      },
-      // Like the llm plugin: an id from the name, free among the providers; listed once "saved".
-      addCustom: async (spec) => {
-        await sleep(300);
-        const base =
-          spec.name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/^-+|-+$/g, "") || "custom";
-        let id = base;
-        for (let n = 2; providers.some((provider) => provider.id === id); n++) id = `${base}-${n}`;
-        providers.push({
-          id,
-          name: spec.name,
-          auth: [{ type: "api_key", name: `${spec.name} API key`, interactive: true }],
-          configured: spec.key !== true,
-          ...(spec.key === true ? {} : { source: "no key required" }),
-          custom: true,
-        });
-        return id;
-      },
-      removeCustom: async (provider) => {
-        await sleep(300);
-        const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
-        if (at === -1) throw new HostError({ code: "LlmError", message: `No provider "${provider}" was added by the user`, subject: provider });
-        providers.splice(at, 1);
-      },
-      setLogo: async (provider, svg) => {
-        await sleep(200);
-        const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
-        if (at === -1) throw new HostError({ code: "LlmError", message: `No provider "${provider}" was added by the user`, subject: provider });
-        const { logo: _logo, ...rest } = providers[at]!;
-        providers[at] = svg === undefined ? rest : { ...rest, logo: svg };
-      },
-    },
-    workspace: {
-      status: async (path) => workspaceStatus(path),
-      browse: async (partialPath) => {
-        const parent = partialPath.endsWith("/") ? partialPath.replace(/\/+$/, "") || "/" : partialPath.slice(0, partialPath.lastIndexOf("/")) || "/";
-        const needle = partialPath.endsWith("/") ? "" : partialPath.slice(partialPath.lastIndexOf("/") + 1).toLowerCase();
-        const names = ["lemma", "dotfiles", "nix-config", "notes", "pi-extensions", "tau"];
-        const entries = names
-          .filter((name) => name.includes(needle))
-          .map((name) => ({
-            name,
-            path: `${parent}/${name}`,
-            git: name !== "notes",
-            matches: needle === "" ? [] : Array.from({ length: needle.length }, (_, i) => name.indexOf(needle) + i),
-          }));
-        return { parent, entries, truncated: false };
-      },
-      createDirectory: async (path) => ({ path, exists: true }),
-      createWorktree: async (path, options) => {
-        await sleep(300);
-        const tree = `${HOME}/worktrees/${path.split("/").pop()}/${options.branch.replace(/\//g, "-")}`;
-        return { path: tree, exists: true, git: { root: tree, branch: options.branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: path } };
-      },
-      branches: async () =>
-        mockBranches.map((name, index) => ({
+      { waits: true },
+    ),
+    serveCall("llm", LlmChannels.cancelLogin, async ({ provider }) => {
+      const running = logins.get(provider);
+      running?.abort();
+      return running !== undefined;
+    }),
+    serveCall("llm", LlmChannels.logout, async ({ provider }) => {
+      const i = providers.findIndex((x) => x.id === provider);
+      if (i === -1) throw new HostError({ code: "UnknownProvider", subject: provider, message: `No provider "${provider}"` });
+      const { source: _source, ...rest } = providers[i]!;
+      providers[i] = { ...rest, configured: false };
+      modelChanges.publish({ type: "models-changed" });
+    }),
+    // Like the llm plugin: an id from the name, free among the providers; listed once its config has reloaded.
+    serveCall("llm", LlmChannels.addCustom, async ({ spec }) => {
+      await sleep(300);
+      const base =
+        spec.name
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-+|-+$/g, "") || "custom";
+      let id = base;
+      for (let n = 2; providers.some((provider) => provider.id === id); n++) id = `${base}-${n}`;
+      providers.push({
+        id,
+        name: spec.name,
+        auth: [{ type: "api_key", name: `${spec.name} API key`, interactive: true }],
+        configured: spec.key !== true,
+        ...(spec.key === true ? {} : { source: "no key required" }),
+        custom: true,
+      });
+      reloadLlm();
+      return id;
+    }),
+    serveCall("llm", LlmChannels.removeCustom, async ({ provider }) => {
+      await sleep(300);
+      const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
+      if (at === -1) throw noCustom(provider);
+      providers.splice(at, 1);
+      reloadLlm();
+    }),
+    serveCall("llm", LlmChannels.setLogo, async ({ provider, svg }) => {
+      await sleep(200);
+      const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
+      if (at === -1) throw noCustom(provider);
+      const { logo: _logo, ...rest } = providers[at]!;
+      providers[at] = svg === undefined ? rest : { ...rest, logo: svg };
+      reloadLlm();
+    }),
+    serveStream("llm", LlmChannels.changes, (_, send) => {
+      send({ type: "subscribed" });
+      return modelChanges.subscribe(send);
+    }),
+
+    serveCall("workspace", WorkspaceChannels.status, async ({ path }) => workspaceStatus(path)),
+    serveCall("workspace", WorkspaceChannels.browse, async ({ partialPath }) => {
+      const parent = partialPath.endsWith("/") ? partialPath.replace(/\/+$/, "") || "/" : partialPath.slice(0, partialPath.lastIndexOf("/")) || "/";
+      const needle = partialPath.endsWith("/") ? "" : partialPath.slice(partialPath.lastIndexOf("/") + 1).toLowerCase();
+      const names = ["lemma", "dotfiles", "nix-config", "notes", "pi-extensions", "tau"];
+      const entries = names
+        .filter((name) => name.includes(needle))
+        .map((name) => ({
           name,
-          current: name === currentBranch,
-          remote: name.startsWith("origin/"),
-          updatedAt: Date.now() - index * 3_600_000,
-        })),
-      checkout: async (path, branch, options) => {
-        await sleep(250);
-        const name = branch.replace(/^origin\//, "");
-        if (options?.create === true || !mockBranches.includes(name)) mockBranches.unshift(name);
-        currentBranch = name;
-        return workspaceStatus(path);
-      },
-    },
-    files: {
-      search: async (cwd, query, options) => {
-        await sleep(40);
-        const within = options?.within?.replace(/\/+$/, "");
-        if (within !== undefined && !mockEntries.some((entry) => entry.kind === "directory" && entry.path === within)) {
-          throw new HostError({ code: "NotFound", message: `"${cwd}/${within}" is not a folder in ${cwd}`, subject: `${cwd}/${within}` });
-        }
-        const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
-        const ranked = mockEntries
-          .filter((entry) => options?.kind === undefined || entry.kind === options.kind)
-          .filter((entry) => within === undefined || entry.path.startsWith(`${within}/`))
-          .flatMap((entry) => {
-            let score = 0;
-            for (const token of tokens) {
-              const found = fuzzy(entry.path, token);
-              if (found === undefined) return [];
-              score += found.score;
-            }
-            return [{ entry, score }];
-          })
-          .sort((a, b) => b.score - a.score);
-        const limit = options?.limit ?? 50;
-        return { root: cwd, entries: ranked.slice(0, limit).map((item) => item.entry), truncated: ranked.length > limit };
-      },
-    },
-    interaction: {
-      list: async () => [...openRequests.values()],
-      answer: async (interactionId, answer) => {
-        pendingAnswers.get(interactionId)?.(answer);
-        pendingAnswers.delete(interactionId);
-        openRequests.delete(interactionId);
-        emit({ type: "interaction-closed", id: interactionId });
-      },
-      dismiss: async (interactionId) => {
-        pendingAnswers.get(interactionId)?.(undefined);
-        pendingAnswers.delete(interactionId);
-        openRequests.delete(interactionId);
-        emit({ type: "interaction-closed", id: interactionId });
-      },
-    },
-    commands: {
-      list: async () => MOCK_COMMANDS.slice(),
-      run: async (commandId) => {
+          path: `${parent}/${name}`,
+          git: name !== "notes",
+          matches: needle === "" ? [] : Array.from({ length: needle.length }, (_, i) => name.indexOf(needle) + i),
+        }));
+      return { parent, entries, truncated: false };
+    }),
+    serveCall("workspace", WorkspaceChannels.createDirectory, async ({ path }) => ({ path, exists: true })),
+    serveCall("workspace", WorkspaceChannels.createWorktree, async ({ path, branch }) => {
+      await sleep(300);
+      const tree = `${HOME}/worktrees/${path.split("/").pop()}/${branch.replace(/\//g, "-")}`;
+      return { path: tree, exists: true, git: { root: tree, branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: path } };
+    }),
+    serveCall("workspace", WorkspaceChannels.branches, async () =>
+      mockBranches.map((name, index) => ({
+        name,
+        current: name === currentBranch,
+        remote: name.startsWith("origin/"),
+        updatedAt: Date.now() - index * 3_600_000,
+      })),
+    ),
+    serveCall("workspace", WorkspaceChannels.checkout, async ({ path, branch, create }) => {
+      await sleep(250);
+      const name = branch.replace(/^origin\//, "");
+      if (create === true || !mockBranches.includes(name)) mockBranches.unshift(name);
+      currentBranch = name;
+      return workspaceStatus(path);
+    }),
+    serveCall("workspace", FileChannels.search, async ({ cwd, query, limit = 50, kind, within: folder }) => {
+      await sleep(40);
+      const within = folder?.replace(/\/+$/, "");
+      if (within !== undefined && !mockEntries.some((entry) => entry.kind === "directory" && entry.path === within)) {
+        throw new HostError({ code: "NotFound", message: `"${cwd}/${within}" is not a folder in ${cwd}`, subject: `${cwd}/${within}` });
+      }
+      const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const ranked = mockEntries
+        .filter((entry) => kind === undefined || entry.kind === kind)
+        .filter((entry) => within === undefined || entry.path.startsWith(`${within}/`))
+        .flatMap((entry) => {
+          let score = 0;
+          for (const token of tokens) {
+            const found = fuzzy(entry.path, token);
+            if (found === undefined) return [];
+            score += found.score;
+          }
+          return [{ entry, score }];
+        })
+        .sort((a, b) => b.score - a.score);
+      return { root: cwd, entries: ranked.slice(0, limit).map((item) => item.entry), truncated: ranked.length > limit };
+    }),
+
+    serveCall("commands", CommandChannels.list, async () => MOCK_COMMANDS.slice()),
+    serveCall(
+      "commands",
+      CommandChannels.run,
+      async ({ id: commandId }) => {
         const cancelled = () => new HostError({ code: "Cancelled", message: "Cancelled", subject: commandId });
         switch (commandId) {
           case "host.reload":
@@ -1166,6 +1332,145 @@ export const createMockHost = (): Host => {
             throw new HostError({ code: "NotFound", message: `No command "${commandId}"`, subject: commandId });
         }
       },
+      { waits: true },
+    ),
+    serveStream("commands", CommandChannels.changes, (_, send) => {
+      send(MOCK_COMMANDS.slice());
+      return () => {};
+    }),
+  ];
+  const channels = new Map(served.map((channel) => [channel.declaration.id, channel]));
+  const infoOf = ({ declaration: { id, title, description }, kind, source }: Served): ChannelInfo => ({
+    id,
+    kind,
+    source,
+    ...(title === undefined ? {} : { title }),
+    ...(description === undefined ? {} : { description }),
+  });
+  /**
+   * Payloads and results cross as they do to and from the host: in the JSON
+   * of their schemas (`wireCodec`), encoded by a client typed with the
+   * declaration and decoded by the channel's, and the other way for results.
+   */
+  const wire = (schema: Schema.Top) => ({
+    encode: (value: unknown) => Schema.encodeUnknownSync(wireCodec(schema))(value),
+    decode: (value: unknown) => Schema.decodeUnknownSync(wireCodec(schema))(value),
+  });
+  /** What a request sends: a typed client encodes the payload, one calling by id sends it as it is. */
+  const request = (target: string | ChannelDeclaration, channel: Served, payload: unknown) => {
+    try {
+      return wire(channel.declaration.payload).decode(typeof target === "string" ? payload : wire(target.payload).encode(payload));
+    } catch (error) {
+      throw new HostError({
+        code: "InvalidPayload",
+        subject: channel.declaration.id,
+        message: `Invalid payload for "${channel.declaration.id}": ${String(error)}`,
+      });
+    }
+  };
+  const reply = (target: string | ChannelDeclaration, channel: Served, value: unknown) => {
+    const json = wire(channel.declaration.success).encode(value);
+    return typeof target === "string" ? json : wire(target.success).decode(json);
+  };
+  const failed = (id: string, error: unknown) =>
+    error instanceof HostError ? error : new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) });
+  /** Open streams, and calls that wait on their plugin, so its restart ends them `Withdrawn`. */
+  const inFlight = new Set<{ readonly source: string; readonly withdraw: () => void }>();
+  /** A plugin restarts, as a reload or the Plugins page restarts it: what it serves ends `Withdrawn`, to be asked again (by `call` itself, if repeatable). */
+  const restart = (pluginId: string) => {
+    for (const entry of inFlight) if (entry.source === pluginId) entry.withdraw();
+    emit({ type: "channels-changed", channels: served.map(infoOf) });
+  };
+
+  /** One answer from a call, `Withdrawn` if it `waits` and its plugin restarts meanwhile. */
+  const answer = (channel: Extract<Served, { readonly kind: "call" }>, decoded: unknown): Promise<unknown> => {
+    const { id } = channel.declaration;
+    const answered = channel.handle(decoded).catch((error: unknown) => Promise.reject(failed(id, error)));
+    if (!channel.waits) return answered;
+    return new Promise((resolve, reject) => {
+      const entry = { source: channel.source, withdraw: () => reject(withdrawnFrom(id, "call")) };
+      inFlight.add(entry);
+      answered.then(resolve, reject).finally(() => inFlight.delete(entry));
+    });
+  };
+  const call = async (target: string | ChannelDeclaration, payload?: unknown): Promise<unknown> => {
+    const id = typeof target === "string" ? target : target.id;
+    const channel = channels.get(id);
+    if (channel === undefined || channel.kind !== "call") throw noChannel(id);
+    const decoded = request(target, channel, payload);
+    for (;;) {
+      try {
+        return reply(target, channel, await answer(channel, decoded));
+      } catch (error) {
+        // As the host does: a repeatable call its plugin's restart withdrew is made again, on the plugin started anew.
+        if (!(channel.declaration.repeatable === true && error instanceof HostError && error.code === "Withdrawn")) throw error;
+      }
+    }
+  };
+  const open = (target: string | ChannelDeclaration, payload: unknown, onElement: (element: unknown) => void, onEnd?: (error?: HostError | Error) => void) => {
+    const id = typeof target === "string" ? target : target.id;
+    let live = true;
+    let stop = () => {};
+    let entry: { readonly source: string; readonly withdraw: () => void } | undefined;
+    const end = (error?: HostError) => {
+      if (!live) return;
+      live = false;
+      if (entry !== undefined) inFlight.delete(entry);
+      stop();
+      onEnd?.(error);
+    };
+    // As the host answers it: once the request has gone out.
+    setTimeout(() => {
+      if (!live) return;
+      const channel = channels.get(id);
+      if (channel === undefined || channel.kind !== "stream") return end(noChannel(id));
+      try {
+        const decoded = request(target, channel, payload);
+        entry = { source: channel.source, withdraw: () => end(withdrawnFrom(id, "stream")) };
+        inFlight.add(entry);
+        const send = (element: unknown) => {
+          if (!live) return;
+          let sent: unknown;
+          try {
+            sent = reply(target, channel, element);
+          } catch (error) {
+            return end(failed(id, error));
+          }
+          onElement(sent);
+        };
+        stop = channel.handle(decoded, send, end);
+      } catch (error) {
+        end(failed(id, error));
+      }
+    }, 0);
+    return () => {
+      if (!live) return;
+      live = false;
+      if (entry !== undefined) inFlight.delete(entry);
+      stop();
+    };
+  };
+
+  return {
+    interaction: {
+      list: async () => [...openRequests.values()],
+      answer: async (interactionId, answer) => {
+        pendingAnswers.get(interactionId)?.(answer);
+        pendingAnswers.delete(interactionId);
+        openRequests.delete(interactionId);
+        emit({ type: "interaction-closed", id: interactionId });
+      },
+      dismiss: async (interactionId) => {
+        pendingAnswers.get(interactionId)?.(undefined);
+        pendingAnswers.delete(interactionId);
+        openRequests.delete(interactionId);
+        emit({ type: "interaction-closed", id: interactionId });
+      },
+    },
+    channel: {
+      list: async () => served.map(infoOf),
+      call: call as Host["channel"]["call"],
+      open: open as Host["channel"]["open"],
     },
     host: {
       info: async () => ({
@@ -1173,6 +1478,7 @@ export const createMockHost = (): Host => {
         cwd: CWD,
         home: HOME,
         composition: { id: "c0ffee1234abcd", plugins: plugins.map((p) => ({ id: p.id, ...(p.version === undefined ? {} : { version: p.version }) })) },
+        runtime,
       }),
       plugins: async () => plugins.slice(),
       inspectors: async () => MOCK_INSPECTORS.map(({ snapshot: _snapshot, ...info }) => info),
@@ -1185,10 +1491,12 @@ export const createMockHost = (): Host => {
         await sleep(600);
         const i = plugins.findIndex((p) => p.id === pluginId);
         plugins[i] = { ...plugins[i]!, state: "active", fault: undefined, haltedBy: undefined };
+        restart(pluginId);
         emit({ type: "plugins-changed", plugins: plugins.slice() });
       },
       reload: async () => {
         await sleep(400);
+        setTimeout(() => restart("agent"), 0);
         return { started: [], restarted: ["agent"], stopped: [] };
       },
       configure: async (rows, options) => {
@@ -1200,7 +1508,10 @@ export const createMockHost = (): Host => {
           if (plugins[i]!.locked !== undefined && row.enabled === false) {
             throw new HostError({ code: "ReloadError", message: `error [${id}]: "${id}" cannot be turned off: ${plugins[i]!.locked}`, subject: id });
           }
-          if (row.add !== undefined || row.remove !== undefined) return { started: [], restarted: [id], stopped: [] };
+          if (row.add !== undefined || row.remove !== undefined) {
+            setTimeout(() => restart(id), 0);
+            return { started: [], restarted: [id], stopped: [] };
+          }
           if (row.values !== undefined) {
             const next = { ...configRows[id] };
             for (const [key, value] of Object.entries(row.values)) {
@@ -1209,9 +1520,14 @@ export const createMockHost = (): Host => {
             }
             configRows[id] = next;
             plugins[i] = withConfig(plugins[i]!);
-            // Like the host: the transport needs every configurable plugin here, so the change applies after the reply.
-            setTimeout(() => emit({ type: "plugins-changed", plugins: plugins.slice() }), 300);
-            return { started: [], restarted: [], stopped: [], deferred: true };
+            // Like the host: a change that restarts the transport serving this call applies after the reply; any other at once.
+            if (id === "transport") {
+              setTimeout(() => emit({ type: "plugins-changed", plugins: plugins.slice() }), 300);
+              return { started: [], restarted: [], stopped: [], deferred: true };
+            }
+            restart(id);
+            emit({ type: "plugins-changed", plugins: plugins.slice() });
+            return { started: [], restarted: [id], stopped: [] };
           }
           if (row.enabled === undefined) continue;
           if (row.enabled) {

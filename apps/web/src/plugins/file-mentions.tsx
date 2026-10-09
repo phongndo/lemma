@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import type { FileEntry } from "@lemma/contracts";
-import { FILE_SEARCH_LIMIT, HostError } from "@lemma/contracts";
+import { FILE_SEARCH_LIMIT, FileChannels, HostError } from "@lemma/contracts";
 import { fileView, mentionPath } from "../model/completion.ts";
 import { Client, ComposerCompletions, Slots, Workspace } from "../ui/contracts.ts";
 import type { ComposerSuggestion } from "../ui/contracts.ts";
@@ -63,7 +63,7 @@ const suggestion = (entry: FileEntry, query: string, trigger: string): ComposerS
 /**
  * Mentions of the project's files in the prompt: a `ComposerCompletions`
  * source searching the working directory through the host's file search
- * (`Files.Search`). The mention is the path as text, relative to the thread's
+ * (`files.search`). The mention is the path as text, relative to the thread's
  * directory, which the agent reads like any path the prompt names. A folder
  * typed before the last `/` that exists narrows the search to it.
  */
@@ -91,12 +91,14 @@ export default defineUiPlugin({
         const slash = query.lastIndexOf("/");
         const inFolder =
           slash > 0
-            ? await client.host.files.search(cwd, query.slice(slash + 1), { ...options, within: query.slice(0, slash) }).catch((error: unknown) => {
-                if (error instanceof HostError && error.code === "NotFound") return undefined;
-                throw error;
-              })
+            ? await client.channel
+                .call(FileChannels.search, { cwd, query: query.slice(slash + 1), ...options, within: query.slice(0, slash) })
+                .catch((error: unknown) => {
+                  if (error instanceof HostError && error.code === "NotFound") return undefined;
+                  throw error;
+                })
             : undefined;
-        const result = inFolder ?? (await client.host.files.search(cwd, query, options));
+        const result = inFolder ?? (await client.channel.call(FileChannels.search, { cwd, query, ...options }));
         return {
           suggestions: result.entries.map((entry) => suggestion(entry, query, trigger)),
           note: result.indexing === true ? "Still reading the project: some files may be missing" : undefined,

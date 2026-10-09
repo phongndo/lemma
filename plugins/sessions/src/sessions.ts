@@ -1,9 +1,9 @@
 import * as path from "node:path";
-import { Clock, Duration, Effect, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
+import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
-import { Events, PluginContext } from "@lemma/core";
+import { Events, Hooks, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
-import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved } from "@lemma/contracts";
+import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, SessionRemoveHook } from "@lemma/contracts";
 import type { SessionInfo, Sessions } from "@lemma/contracts";
 import { errorCode } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
@@ -89,12 +89,13 @@ interface Options {
   readonly fs: FileSystem;
 }
 
-export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | PluginContext | Scope.Scope> =>
+export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | Hooks | PluginContext | Scope.Scope> =>
   Effect.gen(function* () {
     const paths = yield* Paths;
     const events = yield* Events;
+    const hooks = yield* Hooks;
     const owner = yield* PluginContext;
-    const root = paths.sessions;
+    const root = path.join(paths.home, "sessions");
     // Taken first, so it is released last, after every file is closed.
     const holder = yield* Effect.acquireRelease(acquireLock(root, undefined, fs), (holder) => releaseLock(root, holder, fs));
     // Kept fresh while the store runs, so another process sees it live; one that took it over stops this store.
@@ -252,12 +253,13 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       });
 
     /**
-     * Writes `line` and then applies `update` to the in-memory session, uninterruptibly: an
-     * interrupted write can still reach disk, and memory that missed it would reuse its `seq`.
-     * A file another program changed no longer matches memory, which is dropped. Callers hold
-     * `entry.lock`.
+     * Writes `line`, applies `update` to the in-memory session, and announces the change,
+     * uninterruptibly: an interrupted write can still reach disk, memory that missed it would
+     * reuse its `seq`, and a change made but never announced would leave a client following
+     * the session waiting. A file another program changed no longer matches memory, which is
+     * dropped. Callers hold `entry.lock`.
      */
-    const commit = (entry: Entry, open: Open, line: Line, update: () => void) =>
+    const commit = (entry: Entry, open: Open, line: Line, update: () => void, announce: Effect.Effect<void> = Effect.void) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
           const writer = yield* writerOf(entry, open);
@@ -267,6 +269,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
           open.tail = { validBytes: start + Buffer.byteLength(text), lines: open.tail.lines + 1, lastStart: start, lastHash: lineHash(text.slice(0, -1)) };
           update();
           entry.info = infoOfOpen(open);
+          yield* announce;
+          yield* changed(entry);
         }).pipe(Effect.tapError((error) => (error.cause === CHANGED_ON_DISK ? forget(entry) : Effect.void))),
       );
 
@@ -327,15 +331,19 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
               return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.failure}` });
             }
             const event = read.success;
-            yield* commit(entry, open, event, () => {
-              open.events.push(event);
-              open.byId.set(id, event);
-              open.leaf = id;
-              open.updatedAt = Math.max(open.updatedAt, event.at);
-              if (event.data.type === "title") open.title = event.data.title;
-            });
-            yield* events.publish(SessionAppended, { sessionId, event });
-            yield* changed(entry);
+            yield* commit(
+              entry,
+              open,
+              event,
+              () => {
+                open.events.push(event);
+                open.byId.set(id, event);
+                open.leaf = id;
+                open.updatedAt = Math.max(open.updatedAt, event.at);
+                if (event.data.type === "title") open.title = event.data.title;
+              },
+              events.publish(SessionAppended, { sessionId, event }),
+            );
             return event;
           }),
         );
@@ -353,7 +361,6 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
               open.leaf = target;
               open.updatedAt = Math.max(open.updatedAt, at);
             });
-            yield* changed(entry);
             return entry.info;
           }),
         );
@@ -369,33 +376,94 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
             yield* commit(entry, open, line, () => {
               open.marks = applyMarks(open.marks, marks);
             });
-            yield* changed(entry);
             return entry.info;
           }),
         );
       });
 
-    const remove: Service["remove"] = (sessionId) =>
+    /** How many holds each held session has (`hold`). */
+    const holds = new Map<string, number>();
+    /**
+     * The sessions whose file `removeNow` is deleting, each with what completes once it has, or has failed to. It
+     * checks for holds and marks the session in one step, and calls nothing outside the store until the mark goes,
+     * so a hold asked for meanwhile waits on the disk alone.
+     */
+    const deleting = new Map<string, Deferred.Deferred<void>>();
+    const busy = (sessionId: string) =>
+      new SessionError({ sessionId, reason: "Busy", message: "This session is in use, by a running turn or other work; stop it before deleting" });
+
+    const hold: Service["hold"] = (sessionId) =>
+      Effect.flatMap(locate(sessionId), (entry) =>
+        Effect.acquireRelease(
+          // Counted in the step that finds it is not being deleted.
+          Effect.suspend(() => {
+            if (entries.get(sessionId) !== entry) return Effect.fail(notFound(sessionId, `Session ${sessionId} does not exist`));
+            const deletion = deleting.get(sessionId);
+            if (deletion === undefined) holds.set(sessionId, (holds.get(sessionId) ?? 0) + 1);
+            return Effect.succeed(deletion);
+          }),
+          (deletion) =>
+            deletion !== undefined
+              ? Effect.void
+              : Effect.sync(() => {
+                  const left = (holds.get(sessionId) ?? 1) - 1;
+                  if (left === 0) holds.delete(sessionId);
+                  else holds.set(sessionId, left);
+                }),
+        ).pipe(
+          // Being deleted: whether it is gone is known once the deletion has ended.
+          Effect.flatMap((deletion) => (deletion === undefined ? Effect.void : Effect.andThen(Deferred.await(deletion), hold(sessionId)))),
+        ),
+      );
+
+    /** What `remove` does once every `SessionRemoveHook` handler let it. */
+    const removeNow = (sessionId: string) =>
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         yield* entry.lock.withPermits(1)(
-          // Uninterruptible, so memory matches whether the file went.
+          // Uninterruptible, so memory matches whether the file went, and its removal is announced.
           Effect.uninterruptible(
             Effect.gen(function* () {
-              if (entries.get(sessionId) !== entry) return yield* notFound(sessionId, `Session ${sessionId} does not exist`);
-              // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
-              yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
-              // So a crash does not bring it back. Best effort: the file is gone either way, and a session that
-              // returns after a crash on a failing disk is whole.
-              yield* Effect.promise(() => syncDirectory(fs, path.dirname(entry.file)).catch(() => undefined));
-              entries.delete(sessionId);
-              indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
-              yield* entry.open?.writer?.close ?? Effect.void;
+              const deletion = yield* Effect.suspend(() => {
+                if (entries.get(sessionId) !== entry) return Effect.fail(notFound(sessionId, `Session ${sessionId} does not exist`));
+                if (holds.has(sessionId)) return Effect.fail(busy(sessionId));
+                const deletion = Deferred.makeUnsafe<void>();
+                deleting.set(sessionId, deletion);
+                return Effect.succeed(deletion);
+              });
+              const deleted = yield* Effect.exit(
+                Effect.gen(function* () {
+                  // Delete before closing: a failed delete leaves the session exactly as it was, writer included.
+                  yield* Effect.tryPromise({ try: () => fs.rm(entry.file), catch: io(sessionId, `Cannot delete ${entry.file}`) });
+                  // So a crash does not bring it back. Best effort: the file is gone either way, and a session that
+                  // returns after a crash on a failing disk is whole.
+                  yield* Effect.promise(() => syncDirectory(fs, path.dirname(entry.file)).catch(() => undefined));
+                  entries.delete(sessionId);
+                  indexChanged = index.delete(keyOf(entry.file)) || indexChanged;
+                  yield* entry.open?.writer?.close ?? Effect.void;
+                }),
+              );
+              deleting.delete(sessionId);
+              yield* Deferred.succeed(deletion, undefined);
+              if (Exit.isFailure(deleted)) return yield* Effect.failCause(deleted.cause);
+              yield* events.publish(SessionRemoved, { sessionId });
             }),
           ),
         );
-        yield* events.publish(SessionRemoved, { sessionId });
       });
+
+    const remove: Service["remove"] = (sessionId) =>
+      Effect.suspend(() =>
+        // Refused before its handlers run, too, so they see no removal a hold refuses.
+        holds.has(sessionId)
+          ? Effect.fail(busy(sessionId))
+          : hooks
+              .invoke(SessionRemoveHook, { sessionId }, (input) => removeNow(input.sessionId))
+              .pipe(
+                // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
+                Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
+              ),
+      );
 
     const branch: Service["branch"] = (sessionId, options) =>
       Effect.flatMap(opened(sessionId), (open) => {
@@ -477,6 +545,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       branch,
       checkout,
       mark,
+      hold,
       remove,
     } satisfies Service;
   });

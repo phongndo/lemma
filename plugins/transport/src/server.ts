@@ -8,11 +8,14 @@ import type { HttpServerError } from "effect/http";
 import { NodeHttpServer } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
-import { HOST_PROTOCOL, HostRpcs } from "@lemma/contracts";
+import { HOST_PROTOCOL } from "@lemma/contracts";
 import type { UiComposition } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
+import { ServedRpcs } from "./channels.ts";
+import type { ChannelLifetime } from "./channels.ts";
+import type { Startup } from "./startup.ts";
 
-type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof HostRpcs>>>;
+type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof ServedRpcs>> | ChannelLifetime | Startup>;
 
 /** Where the server listens: the bound address as Node reports it (`0.0.0.0`, `::1`), and the port. */
 interface TcpAddress {
@@ -97,8 +100,15 @@ export const startServer = (options: ServerOptions, handlers: HostHandlers): Eff
 const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<typeof createServer>) =>
   Effect.gen(function* () {
     const handlerContext = yield* Layer.build(handlers);
-    const websocket = yield* RpcServer.toHttpEffectWebsocket(HostRpcs).pipe(Effect.provide(RpcSerialization.layerJson), Effect.provide(handlerContext));
-    const http = yield* RpcServer.toHttpEffect(HostRpcs).pipe(Effect.provide(RpcSerialization.layerNdjson), Effect.provide(handlerContext));
+    // A handler's defect fails its own request: by default it would end every request on the connection.
+    const websocket = yield* RpcServer.toHttpEffectWebsocket(ServedRpcs, { disableFatalDefects: true }).pipe(
+      Effect.provide(RpcSerialization.layerJson),
+      Effect.provide(handlerContext),
+    );
+    const http = yield* RpcServer.toHttpEffect(ServedRpcs, { disableFatalDefects: true }).pipe(
+      Effect.provide(RpcSerialization.layerNdjson),
+      Effect.provide(handlerContext),
+    );
     const platform = yield* Layer.build(NodeHttpServer.layerHttpServices);
     const root = options.staticDir === undefined ? undefined : resolve(options.staticDir);
 

@@ -71,6 +71,18 @@ if (argv[0] === "serve") {
     write: (text) => {
       process.stdout.write(text);
     },
+    drained: (signal) => {
+      if (!process.stdout.writableNeedDrain) return undefined;
+      return new Promise<void>((resolve) => {
+        const done = () => {
+          process.stdout.off("drain", done).off("close", done).off("error", done);
+          signal.removeEventListener("abort", done);
+          resolve();
+        };
+        process.stdout.once("drain", done).once("close", done).once("error", done);
+        signal.addEventListener("abort", done, { once: true });
+      });
+    },
     err: (text) => {
       process.stderr.write(`${text}\n`);
     },

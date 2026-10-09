@@ -322,6 +322,18 @@
   font-size: calc(12px * var(--text-scale));
 }
 
+.inspector-runtime summary {
+  cursor: pointer;
+}
+
+.inspector-runtime-users {
+  margin: 2px 0 4px 14px;
+}
+
+.inspector-runtime .host-facts {
+  margin-top: 8px;
+}
+
 .inspector-raw summary {
   cursor: pointer;
   font-size: calc(12.5px * var(--text-scale));

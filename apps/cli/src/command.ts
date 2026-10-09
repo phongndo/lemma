@@ -1,9 +1,9 @@
 import { Data } from "effect";
 import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
-import type { HostError, ThinkingLevel, WhenBusy } from "@lemma/contracts";
-import type { HostRpcClient } from "@lemma/client";
-import type { Target } from "@lemma/plugin-transport";
+import type { HostError, RuntimeEvent, ThinkingLevel, WhenBusy } from "@lemma/contracts";
+import type { Host, HostRpcClient } from "@lemma/client";
+import type { Target } from "@lemma/contracts/discovery";
 
 /** Exit codes a calling script or agent can branch on; `--json` errors also carry a `code`. */
 export const ExitCode = { ok: 0, failed: 1, usage: 2, unavailable: 3, interrupted: 130 } as const;
@@ -13,6 +13,8 @@ export class CliError extends Data.TaggedError("CliError")<{
   readonly message: string;
   readonly subject?: string;
   readonly exit: number;
+  /** The prompt a failed `run` may have placed: running it again with this id rejoins its turn. */
+  readonly requestId?: string;
 }> {}
 
 export const usage = (message: string) => new CliError({ code: "Usage", message: `${message}\nRun \`lemma --help\` for usage.`, exit: ExitCode.usage });
@@ -25,6 +27,15 @@ export interface Io {
   readonly out: (text: string) => void;
   /** Output without a line break, for streamed text. */
   readonly write?: (text: string) => void;
+  /**
+   * Resolves once what was written has room to go (stdout's `drain`), or is
+   * undefined when it has room now. A command printing a channel's stream
+   * waits on it after each write, so what it prints goes out at its reader's
+   * pace (an unread pipe, a paused `less`), and what the host sends meanwhile
+   * waits in the command's own queue, never holding back the connection. It
+   * resolves too when stdout closes or fails, or `signal` aborts.
+   */
+  readonly drained?: (signal: AbortSignal) => Promise<void> | undefined;
   readonly err: (text: string) => void;
   /** Asks the person at the terminal; absent when stdin is not one. Aborting `signal` withdraws the prompt. */
   readonly ask?: (question: string, secret: boolean, signal?: AbortSignal) => Promise<string>;
@@ -72,14 +83,23 @@ export interface Options {
 }
 
 /** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */
-export type { Target } from "@lemma/plugin-transport";
+export type { Target } from "@lemma/contracts/discovery";
 
 export interface Connection {
   readonly target: Target;
   /** One-shot HTTP calls: never subscribes to events, so never answers questions. */
   readonly rpc: HostRpcClient;
-  /** A WebSocket client for `Host.Events`, opened on first use and closed with the command. */
-  readonly live: Effect.Effect<HostRpcClient, never, Scope.Scope>;
+  /**
+   * `@lemma/client`'s `Host`, the reconnecting WebSocket the web app has, for
+   * a command that watches the host (its events and questions, its
+   * subsystems' streams) and the calls it makes meanwhile: opened once
+   * connected (`openHost`), and closed with the command; a command opens one.
+   * `answers` says whether the command answers the host's questions: the host
+   * holds a question only for clients that do (`ConnectOptions.answers`).
+   * `onEvent` hears the host's own events from the first subscription on
+   * (`ConnectOptions.onEvent`), for a command that hears them (`hearing`).
+   */
+  readonly host: (options: { readonly answers: boolean; readonly onEvent?: (event: RuntimeEvent) => void }) => Effect.Effect<Host, Failure, Scope.Scope>;
 }
 
 /** `json` is printed with `--json`, `text` otherwise; a command that streamed its output returns undefined. */

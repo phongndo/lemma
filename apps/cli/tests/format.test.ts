@@ -1,7 +1,19 @@
 import { describe, expect, test } from "vitest";
-import { ledger, promptDiff, trajectory } from "@lemma/contracts";
-import type { SessionEvent, SessionInfo } from "@lemma/contracts";
-import { formatDiff, formatPlugins, formatRecords, formatSession, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
+import { kernelOf, ledger, promptDiff, trajectory } from "@lemma/contracts";
+import type { PluginStatus, SessionEvent, SessionInfo } from "@lemma/contracts";
+import {
+  formatCapabilities,
+  formatChannels,
+  formatDiff,
+  formatPlugin,
+  formatPlugins,
+  formatRecords,
+  formatReload,
+  formatSession,
+  formatStep,
+  formatSystem,
+  formatTrajectory,
+} from "../src/format.ts";
 
 describe("formatSession", () => {
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
@@ -155,6 +167,24 @@ describe("inspect formatting", () => {
   });
 });
 
+describe("formatChannels", () => {
+  test("says so when no plugin serves one", () => {
+    expect(formatChannels([])).toBe("No channels: no running plugin serves one.");
+  });
+});
+
+describe("formatReload", () => {
+  test("says what changed, or what a deferred change restarts", () => {
+    const report = { started: [], restarted: ["llm"], stopped: [] };
+    expect(formatReload(report)).toBe("restarted llm");
+    expect(formatReload({ started: [], restarted: [], stopped: [] })).toBe("nothing changed");
+    expect(formatReload({ ...report, restarted: [], deferred: true })).toBe("applying: the host restarts the transport, so clients reconnect");
+    expect(formatReload({ ...report, restarted: [], deferred: true }, "the plugins the reload changes, the transport among them")).toBe(
+      "applying: the host restarts the plugins the reload changes, the transport among them, so clients reconnect",
+    );
+  });
+});
+
 describe("formatPlugins", () => {
   test("says why a plugin is left out, and what waits on it", () => {
     const base = { version: "1", source: "bundled" as const, enabled: true, provides: [], requires: [] };
@@ -164,5 +194,30 @@ describe("formatPlugins", () => {
     ]);
     expect(text).toContain("left out: its config is invalid at maxSteps: Expected number");
     expect(text).toContain("needs agent, which is left out");
+  });
+});
+
+test("channels say when no running plugin serves one", () => {
+  expect(formatChannels([])).toBe("No channels: no running plugin serves one.");
+});
+
+describe("what the host provides itself", () => {
+  const base = { version: "1", source: "bundled" as const, enabled: true, state: "active" as const, provides: [], requires: [] };
+  const plugins: PluginStatus[] = [
+    { ...base, id: "llm", provides: ["lemma/Llm"] },
+    { ...base, id: "agent", requires: ["lemma/Llm", "lemma/HostControl", "lemma/Missing"] },
+  ];
+  const runtime = ["lemma/Paths", "lemma/HostControl"];
+
+  test("a plugin's requirement on it is from the host, not from no plugin", () => {
+    const text = formatPlugin(plugins, plugins[1]!, runtime);
+    expect(text).toContain("  Llm  from llm\n  HostControl  from the host\n  Missing  from no plugin");
+  });
+
+  test("its capabilities are provided by the host, whether or not a plugin requires them, and only what nothing provides is NOTHING", () => {
+    const rows = formatCapabilities(kernelOf(plugins, runtime)).split("\n");
+    expect(rows.find((row) => row.startsWith("lemma/HostControl"))).toMatch(/^lemma\/HostControl\s+the host\s+agent$/);
+    expect(rows.find((row) => row.startsWith("lemma/Paths"))).toMatch(/^lemma\/Paths\s+the host$/);
+    expect(rows.find((row) => row.startsWith("lemma/Missing"))).toMatch(/^lemma\/Missing\s+NOTHING\s+agent$/);
   });
 });

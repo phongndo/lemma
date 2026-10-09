@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./prompt": "./src/prompt.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -15,6 +16,8 @@
     "effect": "4.0.1"
   },
   "devDependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/plugin-transport": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"

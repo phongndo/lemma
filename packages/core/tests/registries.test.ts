@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
-import { definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
-import type { Composition, Plugin, PluginSource } from "../src/index.ts";
+import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Schema, Stream } from "effect";
+import { Admitted, definePlugin, makeCore, makeLoader, PluginContext, PluginFault, Registries, Registry, RegistryError } from "../src/index.ts";
+import type { AdmittedWork, Composition, Contribution, Plugin, PluginSource } from "../src/index.ts";
 import { failure, run, waitFor } from "./support.ts";
 
 interface Entry {
@@ -19,6 +19,8 @@ const contributor = (id: string, entries: readonly (Entry & { readonly order?: n
       ),
     ),
   });
+/** Gives other fibers `count` turns, so work that does not wait for something runs first. */
+const turns = (count: number) => Effect.forEach(Array.from({ length: count }), () => Effect.yieldNow, { discard: true });
 const labels = (registry = Menu) =>
   Effect.flatMap(Registries, (registries) => registries.items(registry)).pipe(Effect.map((items) => items.map((item) => item.item.label)));
 
@@ -170,6 +172,374 @@ describe("registries", () => {
         expect(seen).toEqual([["a", "b"], ["a"]]);
         const collected = yield* core.run(Effect.flatMap(Registries, (registries) => Stream.runCollect(Stream.take(registries.changes(Menu), 1))));
         expect(Array.from(collected).map((items) => items.map((item) => item.item.label))).toEqual([["a"]]);
+      }),
+    );
+  });
+
+  test("a contribution keeps its identity while it is there, and leaves before its plugin's finalizers run", async () => {
+    await run(
+      Effect.gen(function* () {
+        // What a reader holds, and whether it was still there each time the plugin's finalizer ran.
+        let held: Contribution<Entry> | undefined;
+        const there: boolean[] = [];
+        const trigger = yield* Deferred.make<void>();
+        const owned = definePlugin({
+          id: "owned",
+          config: Schema.Struct({ generation: Schema.Number, fails: Schema.optional(Schema.Boolean) }),
+          layer: (config) =>
+            Layer.effectDiscard(
+              Effect.gen(function* () {
+                const owner = yield* PluginContext;
+                const registries = yield* Registries;
+                yield* owner.add(Menu, { label: "owned" });
+                // Released before the item's own cleanup would be, were the item still there.
+                yield* Effect.addFinalizer(() => Effect.map(registries.items(Menu), (items) => void there.push(items.includes(held!))));
+                if (config.fails) yield* owner.background("work", Effect.andThen(Deferred.await(trigger), Effect.fail("broken")), { required: true });
+              }),
+            ),
+        });
+        const source: PluginSource = { resolve: (id) => Effect.succeed(id === "owned" ? owned : contributor(id, [{ label: id }])) };
+        const loader = yield* makeLoader({ source, composition: { plugins: { owned: { config: { generation: 1 } } } } });
+        const items = loader.core.run(Effect.flatMap(Registries, (registries) => registries.items(Menu)));
+        held = (yield* items).find((contribution) => contribution.pluginId === "owned");
+        yield* loader.apply({ plugins: { owned: { config: { generation: 1 } }, other: {} } });
+        expect((yield* items).includes(held!)).toBe(true);
+
+        // Replaced: the replacement's item is another contribution, even with an equal value.
+        yield* loader.apply({ plugins: { owned: { config: { generation: 2, fails: true } }, other: {} } });
+        const replacement = (yield* items).find((contribution) => contribution.pluginId === "owned");
+        expect(replacement).not.toBe(held);
+        expect(replacement?.item).toEqual(held?.item);
+        expect(there).toEqual([false]);
+
+        // Failed, then removed after a restart: gone each time before its finalizers run.
+        held = replacement;
+        yield* Deferred.succeed(trigger, undefined);
+        yield* waitFor(
+          Effect.sync(() => there.length),
+          (count) => count === 2,
+        );
+        yield* loader.core.restart("owned");
+        held = (yield* items).find((contribution) => contribution.pluginId === "owned");
+        yield* loader.apply({ plugins: { other: {} } });
+        expect(there).toEqual([false, false, false]);
+      }),
+    );
+  });
+
+  test("run admits work only while its contribution is there; the contributor's finalizers wait for it, and `left` says when to stop", async () => {
+    await run(
+      Effect.gen(function* () {
+        // What happened, in order, across the plugin's finalizers and the work run with its item.
+        const log: string[] = [];
+        const finish = yield* Deferred.make<void>();
+        const served = definePlugin({
+          id: "served",
+          config: Schema.Struct({ generation: Schema.Number }),
+          layer: (config) =>
+            Layer.effectDiscard(
+              Effect.gen(function* () {
+                const owner = yield* PluginContext;
+                yield* owner.add(Menu, { label: `served ${config.generation}` });
+                yield* Effect.addFinalizer(() => Effect.sync(() => void log.push(`finalizer ${config.generation}`)));
+              }),
+            ),
+        });
+        const source: PluginSource = { resolve: () => Effect.succeed(served) };
+        const loader = yield* makeLoader({ source, composition: { plugins: { served: { config: { generation: 1 } } } } });
+        const registries = yield* loader.core.run(Registries);
+        const [first] = yield* registries.items(Menu);
+
+        // One piece of work stops when the item leaves; the other finishes what it was doing.
+        // Started at once, so each is admitted before the reload.
+        const watching = yield* Effect.forkChild(
+          registries.run(first!, (left) =>
+            Effect.andThen(
+              left,
+              Effect.sync(() => void log.push("watcher stopped")),
+            ),
+          ),
+          {
+            startImmediately: true,
+          },
+        );
+        const finishing = yield* Effect.forkChild(
+          registries.run(first!, () =>
+            Effect.andThen(
+              Deferred.await(finish),
+              Effect.sync(() => void log.push("call finished")),
+            ),
+          ),
+          { startImmediately: true },
+        );
+        const replacing = yield* Effect.forkChild(loader.apply({ plugins: { served: { config: { generation: 2 } } } }));
+        yield* Fiber.join(watching);
+        expect(log).toEqual(["watcher stopped"]);
+
+        // While the old instance waits on the call, its item takes no new work, and the replacement's does.
+        const absent = yield* Effect.exit(registries.run(first!, () => Effect.void));
+        expect(failure(absent)).toMatchObject({ _tag: "RegistryError", reason: "Absent", pluginId: "served" });
+        const [second] = yield* registries.items(Menu);
+        expect(second?.item.label).toBe("served 2");
+        expect(yield* registries.run(second!, () => Effect.succeed("answered"))).toBe("answered");
+        // Its finalizers would have run by now had they not waited.
+        yield* turns(50);
+        expect(log).toEqual(["watcher stopped"]);
+
+        yield* Deferred.succeed(finish, undefined);
+        yield* Fiber.join(finishing);
+        yield* Fiber.join(replacing);
+        expect(log).toEqual(["watcher stopped", "call finished", "finalizer 1"]);
+      }),
+    );
+  });
+
+  test("work still running at the dispose deadline is interrupted, `run` fails Expired, and the reload counts it", async () => {
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const stubborn = definePlugin({
+          id: "stubborn",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              yield* owner.add(Menu, { label: "stubborn" });
+              yield* Effect.addFinalizer(() => Effect.sync(() => void log.push("finalizer")));
+            }),
+          ),
+        });
+        const loader = yield* makeLoader({
+          source: { resolve: () => Effect.succeed(stubborn) },
+          composition: { plugins: { stubborn: {} } },
+          deadlines: { dispose: Duration.millis(50) },
+        });
+        const registries = yield* loader.core.run(Registries);
+        const [item] = yield* registries.items(Menu);
+        // Ignores `left`, and never ends by itself.
+        const forever = yield* Effect.forkChild(
+          registries.run(item!, () => Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void log.push("interrupted"))))),
+          { startImmediately: true },
+        );
+        const report = yield* loader.apply({ plugins: {} });
+        expect(report.interrupted).toBe(1);
+        expect(log).toEqual(["interrupted", "finalizer"]);
+        expect(failure(yield* Fiber.await(forever))).toMatchObject({ _tag: "RegistryError", reason: "Expired", pluginId: "stubborn" });
+      }),
+    );
+  });
+
+  test("a failure and shutdown end admitted work before the finalizers too; interrupting run interrupts the work", async () => {
+    const log: string[] = [];
+    await run(
+      Effect.gen(function* () {
+        const trigger = yield* Deferred.make<void>();
+        const fragile = (id: string, fails: boolean) =>
+          definePlugin({
+            id,
+            layer: Layer.effectDiscard(
+              Effect.gen(function* () {
+                const owner = yield* PluginContext;
+                yield* owner.add(Menu, { label: id });
+                yield* Effect.addFinalizer(() => Effect.sync(() => void log.push(`finalizer ${id}`)));
+                if (fails) yield* owner.background("work", Effect.andThen(Deferred.await(trigger), Effect.fail("broken")), { required: true });
+              }),
+            ),
+          });
+        const core = yield* makeCore([fragile("failing", true), fragile("lasting", false), fragile("third", false)]);
+        const registries = yield* core.run(Registries);
+        const items = yield* registries.items(Menu);
+        const watch = (label: string) => {
+          const item = items.find((contribution) => contribution.item.label === label)!;
+          // Takes a few turns to stop, so a finalizer that did not wait would run first.
+          const stop = Effect.andThen(
+            turns(10),
+            Effect.sync(() => void log.push(`stopped ${label}`)),
+          );
+          return Effect.forkDetach(
+            registries.run(item, (left) => Effect.andThen(left, stop)),
+            { startImmediately: true },
+          );
+        };
+        yield* watch("failing");
+        yield* watch("lasting");
+        const cancelled = yield* Effect.forkChild(
+          registries.run(
+            items.find((contribution) => contribution.item.label === "third")!,
+            () => Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void log.push("cancelled")))),
+          ),
+          { startImmediately: true },
+        );
+        yield* Fiber.interrupt(cancelled);
+        expect(log).toEqual(["cancelled"]);
+        yield* Deferred.succeed(trigger, undefined);
+        yield* waitFor(
+          Effect.sync(() => log.length),
+          (count) => count === 3,
+        );
+        expect(log).toEqual(["cancelled", "stopped failing", "finalizer failing"]);
+      }),
+    );
+    // The core closed with the scope: `lasting`'s work stopped before its finalizer (`third` had none to wait for).
+    expect(log.slice(3).sort()).toEqual(["finalizer lasting", "finalizer third", "stopped lasting"]);
+    expect(log.indexOf("stopped lasting")).toBeLessThan(log.indexOf("finalizer lasting"));
+  });
+
+  test("admitted work finds whose items it runs with in `Admitted`, outermost first, and `ended` says when each has ended", async () => {
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([contributor("outer", [{ label: "outer" }]), contributor("inner", [{ label: "inner" }])]);
+        const registries = yield* core.run(Registries);
+        const [inner, outer] = yield* registries.items(Menu);
+        expect(yield* Admitted).toEqual([]);
+        const release = yield* Deferred.make<void>();
+        const seen = yield* Deferred.make<readonly AdmittedWork[]>();
+        // Work with one plugin's item that runs work with another's, and waits to be let go.
+        const working = yield* Effect.forkChild(
+          registries.run(outer!, () =>
+            registries.run(inner!, () =>
+              Effect.andThen(
+                Effect.flatMap(Admitted, (admitted) => Deferred.succeed(seen, admitted)),
+                Deferred.await(release),
+              ),
+            ),
+          ),
+          { startImmediately: true },
+        );
+        const admitted = yield* Deferred.await(seen);
+        expect(admitted.map((work) => work.pluginId)).toEqual(["outer", "inner"]);
+        // Whoever holds them may wait for their end, which is not yet.
+        const ended = yield* Effect.forkChild(Effect.forEach(admitted, (work) => work.ended, { discard: true }));
+        yield* turns(20);
+        expect(ended.pollUnsafe()).toBeUndefined();
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(working);
+        yield* Fiber.join(ended);
+        // Asked after the end, it is over at once.
+        yield* Effect.forEach(admitted, (work) => work.ended, { discard: true });
+      }),
+    );
+  });
+
+  test("settled completes at once between changes, and else once the change in progress has finished: an exclusive replacement is offered by then", async () => {
+    await run(
+      Effect.gen(function* () {
+        const open = yield* Deferred.make<void>();
+        let instances = 0;
+        // Its replacement starts once the test lets it, which holds the change open.
+        const exclusive = definePlugin({
+          id: "exclusive",
+          exclusive: true,
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              const instance = ++instances;
+              if (instance > 1) yield* Deferred.await(open);
+              yield* owner.add(Menu, { label: `exclusive ${instance}` });
+            }),
+          ),
+        });
+        const core = yield* makeCore([exclusive]);
+        const registries = yield* core.run(Registries);
+        yield* registries.settled;
+        const [first] = yield* registries.items(Menu);
+        // Work that ends when its item leaves, then waits for the change that removed it and looks again.
+        const after = yield* Effect.forkChild(
+          registries.run(first!, (left) => left).pipe(Effect.andThen(registries.settled), Effect.andThen(core.run(labels()))),
+          { startImmediately: true },
+        );
+        const restarting = yield* Effect.forkChild(core.restart("exclusive", { force: true }));
+        // The old instance is gone and its replacement not yet offered: the change is still under way.
+        yield* waitFor(core.run(labels()), (now) => now.length === 0);
+        yield* turns(50);
+        expect(after.pollUnsafe()).toBeUndefined();
+        // A wait given up leaves the change to go on.
+        const abandoned = yield* Effect.forkChild(registries.settled, { startImmediately: true });
+        yield* turns(5);
+        expect(abandoned.pollUnsafe()).toBeUndefined();
+        yield* Fiber.interrupt(abandoned);
+        expect(Exit.hasInterrupts(yield* Fiber.await(abandoned))).toBe(true);
+        yield* Deferred.succeed(open, undefined);
+        expect(yield* Fiber.join(after)).toEqual(["exclusive 2"]);
+        yield* Fiber.join(restarting);
+      }),
+    );
+  });
+
+  test("settled waits for what the change replaced to be disposed, though its replacement is offered before that", async () => {
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const release = yield* Deferred.make<void>();
+        let instances = 0;
+        const kept = definePlugin({
+          id: "kept",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              const instance = ++instances;
+              yield* owner.add(Menu, { label: `kept ${instance}` });
+              yield* Effect.addFinalizer(() => Effect.sync(() => void log.push(`finalizer ${instance}`)));
+            }),
+          ),
+        });
+        const core = yield* makeCore([kept]);
+        const registries = yield* core.run(Registries);
+        const [first] = yield* registries.items(Menu);
+        // Work that takes no notice of its item leaving holds the old instance's disposal, and with it the change.
+        const holding = yield* Effect.forkChild(
+          registries.run(first!, () => Deferred.await(release)),
+          { startImmediately: true },
+        );
+        const restarting = yield* Effect.forkChild(core.restart("kept", { force: true }));
+        yield* waitFor(core.run(labels()), (now) => now[0] === "kept 2");
+        const settled = yield* Effect.forkChild(
+          Effect.andThen(
+            registries.settled,
+            Effect.sync(() => void log.push("settled")),
+          ),
+          { startImmediately: true },
+        );
+        yield* turns(50);
+        expect(settled.pollUnsafe()).toBeUndefined();
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(settled);
+        expect(log).toEqual(["finalizer 1", "settled"]);
+        yield* Fiber.join(holding);
+        yield* Fiber.join(restarting);
+      }),
+    );
+  });
+
+  test("a registry's check refuses a malformed item from the plugin adding it, before its key, and readers never see it", async () => {
+    await run(
+      Effect.gen(function* () {
+        const Labels = Registry.make<Entry>("test/labels", {
+          key: (entry) => entry.label.toUpperCase(),
+          check: (value) => (typeof (value as Entry | null)?.label === "string" ? undefined : "an entry needs a string `label`"),
+        });
+        const refused: unknown[] = [];
+        const sloppy = definePlugin({
+          id: "sloppy",
+          layer: Layer.effectDiscard(
+            Effect.gen(function* () {
+              const owner = yield* PluginContext;
+              yield* owner.add(Labels, { label: "fine" });
+              // An untyped plugin's item: `key` would throw on it, so the check must come first.
+              refused.push(yield* Effect.flip(owner.add(Labels, { name: "no label" } as unknown as Entry)));
+            }),
+          ),
+        });
+        const core = yield* makeCore([sloppy]);
+        expect(refused).toMatchObject([
+          {
+            _tag: "RegistryError",
+            reason: "Invalid",
+            registry: "test/labels",
+            pluginId: "sloppy",
+            message: "Invalid item for test/labels: an entry needs a string `label`",
+          },
+        ]);
+        expect(yield* core.run(labels(Labels))).toEqual(["fine"]);
       }),
     );
   });

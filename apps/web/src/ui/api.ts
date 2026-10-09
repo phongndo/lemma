@@ -2,6 +2,7 @@ import * as solid from "solid-js";
 import html from "solid-js/html";
 import * as store from "solid-js/store";
 import * as web from "solid-js/web";
+import { AgentChannels, CommandChannels, FileChannels, LlmChannels, SessionChannels, WorkspaceChannels } from "@lemma/contracts";
 import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
 import { ConfigForm as DefaultConfigForm } from "../components/config-form.tsx";
@@ -23,6 +24,7 @@ import { defineUiPlugin, extendUiPlugin } from "./define.ts";
 import * as parts from "./parts.tsx";
 import { UiSchema } from "./schema.ts";
 import { DEFAULT_PART_ORDER, definePart, defineSlot } from "./slots.ts";
+import type { Part } from "./slots.ts";
 
 /**
  * What a UI file's default export receives when it is a function: the page's
@@ -37,15 +39,28 @@ export const api = {
   defineUiPlugin,
   /** A plugin made from another's definition, such as a bundled one's: a replacement that keeps the original's later updates. */
   extendUiPlugin,
-  /** The bundled plugins by id: what a replacement with the same id wraps (`extendUiPlugin`) rather than copies. */
+  /**
+   * The bundled plugins by id: what a replacement with the same id wraps (`extendUiPlugin`) rather than copies. The
+   * runtime (`Client`, `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `UiPlugins`) is not among them:
+   * the app provides it, and no plugin replaces or provides it. Requiring it is as before, by its tag in `contracts`.
+   */
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
   defineSlot,
+  /**
+   * The bundled subsystems' channels, as `@lemma/contracts` declares them: what
+   * the bundled plugins reach the host's sessions, agent, models, workspace,
+   * files, and commands through, with `Client`. A UI file passes one to
+   * `client.channel.call` or `client.follow` to have its payload and results
+   * go through its schemas (`client.channel.call(channels.SessionChannels.list, {})`);
+   * by id, they are plain JSON.
+   */
+  channels: { SessionChannels, AgentChannels, LlmChannels, WorkspaceChannels, FileChannels, CommandChannels },
   /** A route of the plugin's own (`/notes/:id`), for a `Pages` item; links to it are `router.href(route, params)`. */
   defineRoute,
   /** Narrows `router.match()` to a route, with its typed params and search. */
   isRoute,
-  /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. */
-  definePart,
+  /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. It has no fallback: the plugin provides it. */
+  definePart: <P extends Record<string, any>>(name: string): Part<P> => definePart<P>(name),
   /** The order bundled parts are added at: add with a lower one to replace a part. */
   DEFAULT_PART_ORDER,
   contracts,
@@ -84,7 +99,7 @@ export const api = {
     SearchField: DefaultSearchField,
   },
   copyText,
-  /** For plugins written against the kernel directly. */
+  /** For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's context. */
   core: { definePlugin, Event, Hook },
   /** Enough of Effect Schema to declare a config and a route's params and search (see `UiSchema`). */
   Schema: UiSchema,

@@ -36,6 +36,7 @@ import styles from "./thread-view.css?inline";
 export default defineUiPlugin({
   id: "thread-view",
   styles,
+  routes: [NewThreadRoute, ThreadRoute],
   requires: { client: Client, threads: Threads, workspace: Workspace, slots: Slots, layout: Layout, notify: Notify, router: Router },
   setup: ({ client, threads, workspace, slots, layout, notify, router }) => {
     const views = () => slots.list(Views);

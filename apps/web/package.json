@@ -12,9 +12,9 @@
   },
   "dependencies": {
     "@lemma/client": "workspace:*",
+    "@lemma/composition": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "@lemma/plugin-host": "workspace:*",
     "@lemma/router": "workspace:*",
     "@lemma/router-solid": "workspace:*",
     "dompurify": "3.4.16",

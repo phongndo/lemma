@@ -1,5 +1,5 @@
 import { Order, Predicate } from "effect";
-import type { PluginStatus } from "./rpc.ts";
+import type { PluginStatus } from "./status.ts";
 
 /*
  * A composition as its kernel runs it, turned from per-plugin statuses (what
@@ -31,6 +31,8 @@ export interface CapabilityView {
   readonly key: string;
   /** Usually one; several when an enabled one replaces others that are off. */
   readonly providers: readonly { readonly plugin: string; readonly state: string; readonly enabled: boolean }[];
+  /** Provided by the app itself (its runtime, `HostControl.runtime` for the host), not by a plugin. */
+  readonly runtime: boolean;
   readonly users: readonly string[];
 }
 
@@ -66,7 +68,8 @@ export const hookChain = (plugins: readonly PluginStatus[], name: string): HookC
 export const recoverable = (plugin: { readonly state?: string | undefined; readonly haltedBy?: string | undefined }): boolean =>
   plugin.state === "failed" || (plugin.state === "closed" && plugin.haltedBy !== undefined);
 
-export const kernelOf = (plugins: readonly PluginStatus[]): KernelView => {
+/** `plugins` as their kernel runs them; `runtime` is what the app provides itself, by capability key. */
+export const kernelOf = (plugins: readonly PluginStatus[], runtime: readonly string[]): KernelView => {
   const hooks = new Map<string, { plugin: string; order: number }[]>();
   const registries = new Map<string, { plugin: string; items: number; keys: readonly string[] }[]>();
   const events = new Map<string, string[]>();
@@ -76,7 +79,8 @@ export const kernelOf = (plugins: readonly PluginStatus[]): KernelView => {
       registries.set(registry.name, [...(registries.get(registry.name) ?? []), { plugin: plugin.id, items: registry.items, keys: registry.keys ?? [] }]);
     for (const event of plugin.observes ?? []) events.set(event, [...(events.get(event) ?? []), plugin.id]);
   }
-  const keys = [...new Set(plugins.flatMap((plugin) => [...plugin.provides, ...plugin.requires]))].sort();
+  const provided = new Set(runtime);
+  const keys = [...new Set([...runtime, ...plugins.flatMap((plugin) => [...plugin.provides, ...plugin.requires])])].sort();
   return {
     hooks: [...hooks].map(([name, handlers]) => ({ name, handlers: handlers.sort(runOrder) })).sort(byName),
     registries: [...registries]
@@ -88,6 +92,7 @@ export const kernelOf = (plugins: readonly PluginStatus[]): KernelView => {
       providers: plugins
         .filter((plugin) => plugin.provides.includes(key))
         .map((plugin) => ({ plugin: plugin.id, state: plugin.state, enabled: plugin.enabled })),
+      runtime: provided.has(key),
       users: usersOf(plugins, key),
     })),
   };

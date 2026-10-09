@@ -1,9 +1,11 @@
 # Lemma
 
 Lemma is a coding-agent harness in which every part, including the agent loop
-and the web app, is a plugin that can be turned off or replaced by id. The
-bundled plugins are defaults on the same footing as a user's plugin file, so
-the extension points have to be good enough for Lemma's own plugins.
+and the web app's views, is a plugin that can be turned off or replaced by id.
+The runtime is the API they are written against, provided by the host and the
+web app. The bundled plugins are defaults on the same footing as a user's
+plugin file, so the runtime and the extension points have to be good enough
+for Lemma's own plugins.
 
 ## Working in the repository
 
@@ -23,6 +25,12 @@ Use:
   `ui/contracts.ts`).
 - Keep `@lemma/core` domain-neutral: application contracts, persistence,
   transports, and UI belong to plugins.
+- Add to the runtime only what no plugin could provide, since nothing replaces
+  it. It holds no domain (the agent, sessions, models, tools): no domain
+  contract, logic, or call, as a subsystem serves its own calls to clients as
+  channels. `scripts/check-boundaries.ts` fails when the runtime's code reaches
+  a domain contract, however indirectly; [Architecture](docs/architecture.md)
+  says where the runtime lives.
 - Keep the session log the source of truth: every model request stays
   rebuildable from it (`rebuildRequest`), with each part attributed to the
   plugin that contributed it.

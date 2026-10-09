@@ -101,17 +101,22 @@ describe("from another machine", () => {
 
   test("a remote host that does not answer is NoHost, naming its URL and the way back", async () => {
     await writeFile(remoteFile(), JSON.stringify({ url: dead, token }));
-    const down = await invoke(["status", "--json"], other);
-    expect(down.code).toBe(ExitCode.unavailable);
-    const error = JSON.parse(down.err).error;
-    expect(error.code).toBe("NoHost");
-    expect(error.message).toContain(dead);
-    expect(error.message).toContain("lemma remote clear");
+    // A command that watches the host fails as one that makes a call does: at once, saying the same.
+    for (const command of [["status"], ["events"]]) {
+      const down = await invoke([...command, "--json"], other);
+      expect(down.code).toBe(ExitCode.unavailable);
+      const error = JSON.parse(down.err).error;
+      expect(error.code).toBe("NoHost");
+      expect(error.message).toContain(dead);
+      expect(error.message).toContain("lemma remote clear");
+    }
 
     await writeFile(remoteFile(), JSON.stringify({ url, token: "stale" }));
-    const stale = JSON.parse((await invoke(["status", "--json"], other)).err).error;
-    expect(stale.code).toBe("Unauthorized");
-    expect(stale.message).toContain(remoteFile());
+    for (const command of [["status"], ["events"]]) {
+      const stale = JSON.parse((await invoke([...command, "--json"], other)).err).error;
+      expect(stale.code).toBe("Unauthorized");
+      expect(stale.message).toContain(remoteFile());
+    }
 
     // An unusable file is an error, never a silent fallback to the local host.
     await writeFile(remoteFile(), "{");

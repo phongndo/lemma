@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { Effect, Semaphore } from "effect";
 import { CredentialError, Credentials, Paths } from "@lemma/contracts";
 import type { Credential } from "@lemma/contracts";
@@ -9,7 +10,7 @@ export { decodeEntry, readStore, withFileLock, writeStore } from "./store.ts";
 export type { LockOptions, RawStore } from "./store.ts";
 
 /**
- * `auth.json` at `Paths.auth`. Reads take no lock (writes are atomic renames).
+ * `<Paths.home>/auth.json`. Reads take no lock (writes are atomic renames).
  * Writes queue in-process, then take the file lock and re-read the file, so
  * another process's change is never overwritten. Only the entry
  * being changed is replaced; every other entry is written back verbatim.
@@ -20,7 +21,7 @@ export default definePlugin({
   provides: { credentials: Credentials },
   requires: { paths: Paths },
   setup: function* ({ paths }) {
-    const path = paths.auth;
+    const path = join(paths.home, "auth.json");
     // The file lock is the whole file's, and waits only `waitMs` for its holder: this process's writers queue
     // here instead, however long the one before them takes.
     const writing = yield* Semaphore.make(1);

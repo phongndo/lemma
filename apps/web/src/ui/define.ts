@@ -3,7 +3,7 @@ import { catchError, createRoot } from "solid-js";
 import type { Capabilities, Plugin, Services } from "@lemma/core";
 import { definePlugin as definePlainPlugin } from "@lemma/core/plain";
 import type { AnyRoute } from "@lemma/router";
-import { Slots, UiApi } from "./contracts.ts";
+import { Slots, UiApi } from "./runtime.ts";
 import type { SlotsService } from "./slots.ts";
 
 /** Named capabilities (a plugin's `requires` or `provides`), and the services behind them: the kernel's. */
@@ -68,9 +68,13 @@ export const routesOf = (plugin: Plugin): readonly AnyRoute[] => definitions.get
  *   extendUiPlugin(api.bundled.toasts, (base) => ({ ...base, setup: (use, plugin) => { const made = base.setup(use, plugin); … return made; } }))
  */
 export function extendUiPlugin(
-  plugin: Plugin,
+  plugin: Plugin | undefined,
   change: (definition: UiPluginDefinition<Capabilities, Capabilities, any>) => UiPluginDefinition<Capabilities, Capabilities, any>,
 ): Plugin {
+  // `api.bundled.notify`, say: the runtime's services are the app's own, not plugins to extend.
+  if (plugin === undefined) {
+    throw new Error("No bundled plugin there: Client, Slots, Router, Notify, HostPlugins, Interactions, and UiPlugins are the web app's runtime, not plugins");
+  }
   const definition = definitions.get(plugin);
   if (definition === undefined) throw new Error(`"${plugin.id}" was not made with defineUiPlugin, so it has no definition to extend`);
   return defineUiPlugin(change(definition));

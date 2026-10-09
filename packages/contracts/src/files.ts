@@ -2,6 +2,8 @@ import { Data, Effect, Schema } from "effect";
 import type { Context } from "effect";
 import { awaitable, Registry } from "@lemma/core";
 import type { Awaitable, Registries } from "@lemma/core";
+import { defineChannel, serveChannel } from "./channels.ts";
+import type { Channel } from "./channels.ts";
 
 /** The most entries one search returns: providers answer on the host's thread, so a page stays small. */
 export const FILE_SEARCH_LIMIT = 200;
@@ -72,7 +74,8 @@ export interface FileSearcher {
  * The `file-search` plugin is the bundled one; a plugin replaces it by
  * contributing with a lower order (`PluginContext.add(FileSearchers, …, { order })`),
  * or by its being turned off. With none, searches fail `Unavailable`, and
- * nothing else stops: the transport reads this rather than requiring it.
+ * nothing else stops: `searchFiles` and `files.search` read this rather than
+ * requiring it.
  */
 export const FileSearchers = Registry.make<FileSearcher>("lemma/file-searchers", { key: (searcher) => searcher.id });
 
@@ -88,3 +91,32 @@ export const searchFiles = (
       ? Effect.fail(new FileSearchError({ path: cwd, reason: "Unavailable", message: "No plugin searches files: turn on file-search, or add one" }))
       : awaitable(() => first.item.search(cwd, query, options)),
   );
+
+/**
+ * How clients search files, served by the workspace plugin (`serveFiles`) so
+ * that the call stays while file searchers come and go: it searches with
+ * `searchFiles` at each call. A refused search fails with its
+ * `FileSearchError`'s reason as the code and the directory as the subject.
+ */
+export const FileChannels = {
+  search: defineChannel({
+    kind: "call",
+    id: "files.search",
+    title: "Search files",
+    description: "Files and directories in `cwd` matching `query`, best first; fails Unavailable when no plugin searches files",
+    payload: Schema.Struct({ cwd: Schema.String, query: Schema.String, ...FileSearchOptions.fields }),
+    success: FileSearchResult,
+    repeatable: true,
+  }),
+};
+
+/** `FileChannels` served from `FileSearchers`, read at each call. */
+export const serveFiles = (registries: Context.Service.Shape<typeof Registries>): readonly Channel[] => [
+  serveChannel(FileChannels.search, ({ cwd, query, limit, kind, within }) =>
+    searchFiles(registries, cwd, query, {
+      ...(limit === undefined ? {} : { limit }),
+      ...(kind === undefined ? {} : { kind }),
+      ...(within === undefined ? {} : { within }),
+    }),
+  ),
+];

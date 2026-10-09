@@ -18,7 +18,6 @@
   },
   "devDependencies": {
     "@lemma/plugin-commands": "workspace:*",
-    "@lemma/testing": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"

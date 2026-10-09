@@ -1,5 +1,6 @@
 export * from "./addresses.ts";
 export * from "./agent.ts";
+export * from "./channels.ts";
 export * from "./commands.ts";
 export * from "./config.ts";
 export * from "./credentials.ts";
@@ -14,6 +15,7 @@ export * from "./ledger.ts";
 export * from "./llm.ts";
 export * from "./rpc.ts";
 export * from "./sessions.ts";
+export * from "./status.ts";
 export * from "./tools.ts";
 export * from "./trajectory.ts";
 export * from "./workspace.ts";

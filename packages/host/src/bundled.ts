@@ -6,7 +6,6 @@ import compaction from "@lemma/plugin-compaction";
 import * as builtinCommands from "@lemma/plugin-commands-builtin";
 import credentials from "@lemma/plugin-credentials";
 import fileSearch from "@lemma/plugin-file-search-fff";
-import interaction from "@lemma/plugin-interaction";
 import llm from "@lemma/plugin-llm-pi-ai";
 import projectContext from "@lemma/plugin-project-context";
 import sessions from "@lemma/plugin-sessions";
@@ -22,34 +21,30 @@ export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.me
 export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url))}`;
 
 /**
- * Everything a fresh install runs. The host plugin is built by main.ts with a
- * closure over the loader, so it arrives as an argument.
+ * Everything a fresh install runs. What the host provides itself (`Paths`,
+ * `HostControl`, `Interaction`, the host API) is its runtime, not a plugin.
  */
-export function bundled(host: Plugin): readonly Plugin[] {
-  return [
-    host,
-    interaction,
-    credentials,
-    llm,
-    tools,
-    read,
-    write,
-    edit,
-    bash,
-    codemode,
-    sessions,
-    agent,
-    compaction,
-    projectContext,
-    workspace,
-    fileSearch,
-    commands,
-    builtinCommands.host,
-    builtinCommands.llm,
-    builtinCommands.workspace,
-    transport,
-  ];
-}
+export const bundled: readonly Plugin[] = [
+  credentials,
+  llm,
+  tools,
+  read,
+  write,
+  edit,
+  bash,
+  codemode,
+  sessions,
+  agent,
+  compaction,
+  projectContext,
+  workspace,
+  fileSearch,
+  commands,
+  builtinCommands.host,
+  builtinCommands.llm,
+  builtinCommands.workspace,
+  transport,
+];
 
 /**
  * Config the app supplies for bundled plugins (the planner's `defaults`): it

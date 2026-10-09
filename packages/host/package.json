@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/main.ts"
+    ".": "./src/main.ts",
+    "./paths": "./src/paths.ts"
   },
   "scripts": {
     "start": "node --conditions=lemma-source src/main.ts",
@@ -12,6 +13,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/composition": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/plugin-agent": "workspace:*",
@@ -20,8 +22,6 @@
     "@lemma/plugin-compaction": "workspace:*",
     "@lemma/plugin-credentials": "workspace:*",
     "@lemma/plugin-file-search-fff": "workspace:*",
-    "@lemma/plugin-host": "workspace:*",
-    "@lemma/plugin-interaction": "workspace:*",
     "@lemma/plugin-llm-pi-ai": "workspace:*",
     "@lemma/plugin-project-context": "workspace:*",
     "@lemma/plugin-sessions": "workspace:*",
@@ -29,7 +29,8 @@
     "@lemma/plugin-tools-builtin": "workspace:*",
     "@lemma/plugin-transport": "workspace:*",
     "@lemma/plugin-workspace": "workspace:*",
-    "effect": "4.0.1"
+    "effect": "4.0.1",
+    "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

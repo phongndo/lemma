@@ -1,5 +1,5 @@
 export { checkComposition, makeCore } from "./core.ts";
-export type { Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState, RestartOptions } from "./core.ts";
+export type { ApplicationServices, Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState, RestartOptions } from "./core.ts";
 export type { ReportedFault } from "./errors.ts";
 export {
   CapabilityMismatch,
@@ -21,8 +21,8 @@ export type { Observer, ObserveOptions } from "./events.ts";
 export { Hook, Hooks, PluginContext } from "./hooks.ts";
 export type { BackgroundOptions, FaultOptions, Handler, HookOptions, Next, PluginIdentity } from "./hooks.ts";
 export { makeLoader } from "./loader.ts";
-export { Registries, Registry } from "./registries.ts";
-export type { ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";
+export { Admitted, Registries, Registry } from "./registries.ts";
+export type { AdmittedWork, ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";
 export type { RegistrySnapshot } from "./internal/registries.ts";
 export type { Composition, Loader, LoaderOptions, PluginEntry, PluginSource, ReloadReport } from "./loader.ts";
 export { awaitable, fail, isExpectedFailure } from "./awaitable.ts";

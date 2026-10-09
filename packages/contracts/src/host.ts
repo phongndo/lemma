@@ -2,11 +2,13 @@ import { Cause, Context, Schema } from "effect";
 import type { Effect } from "effect";
 import { Event } from "@lemma/core";
 import type { CoreClosed, PluginFault, PluginState, ReloadError, ReloadReport, RestartOptions } from "@lemma/core";
-import type { PluginStatus } from "./rpc.ts";
+import type { PluginStatus } from "./status.ts";
 
 /**
- * Locations the host resolves once. Plugins never compute paths themselves.
- * Defaults: `~/.lemma` for user data; `<cwd>/.lemma` for project data.
+ * Locations the host resolves once: Lemma's home, the config files, and the
+ * working directory. Defaults: `~/.lemma` for user data; `<cwd>/.lemma` for
+ * project data. A plugin keeps its own files in `home`, under a name of its
+ * own that its README gives.
  */
 export class Paths extends Context.Service<
   Paths,
@@ -17,11 +19,7 @@ export class Paths extends Context.Service<
     readonly userConfig: string;
     /** `<cwd>/.lemma/config.jsonc` */
     readonly projectConfig: string;
-    /** `<home>/auth.json` */
-    readonly auth: string;
-    /** `<home>/sessions` */
-    readonly sessions: string;
-    /** Working directory the host was started in; the default for new sessions. */
+    /** Working directory the host was started in. */
     readonly cwd: string;
   }
 >()("lemma/Paths") {}
@@ -155,43 +153,76 @@ export type NoticePayload = typeof NoticePayload.Type;
 export const Notice = Event.make<NoticePayload>("lemma/notice");
 
 /**
- * What a configure did. `deferred`: the change restarts the transport serving
- * this call, so it was checked and written, and applies once the reply is sent;
- * the report is then empty, and clients reconnect. A deferred change that still
- * fails is undone in the file and reported as an error `Notice`.
+ * What a configure or reload did. `deferred`: the change restarts a plugin
+ * whose work is asking for it, which the change would otherwise wait on or cut
+ * off: a call that plugin serves (as `llm.add-custom` saves the llm plugin's
+ * config) or a command it registered (as `host.reload` restarts
+ * `commands-host`), or the transport serving the request. So it was checked
+ * (and a configure's rows written), and applies once that work has ended, the
+ * reply sent; the report is then empty, and if the transport restarts,
+ * clients reconnect. A deferred change that still fails is reported as an
+ * error `Notice`, a configure's rows undone in the file. A stream a plugin
+ * serves is no such work: it ends as soon as its plugin leaves, so a change it
+ * asks for applies at once, ending it.
  */
-export interface ConfigureReport extends ReloadReport {
+export interface ChangeReport extends ReloadReport {
+  readonly deferred?: boolean;
+}
+
+/** What a restart did. `deferred`: as for a configure or reload (`ChangeReport`), the plugin restarting once the work asking for it has ended. */
+export interface RestartReport {
   readonly deferred?: boolean;
 }
 
 /**
  * The host contracts' API version: a major number that changes when one of
  * them changes incompatibly. A plugin written for a version requires
- * `HostApi(version)`, and the host plugin provides each version it supports,
- * so a plugin written for another is left out with a message naming the
- * version rather than failing at some later call. A breaking change gives the
- * changed capability a new key, keeping the old one provided by an adapter for
- * as long as its version is supported.
+ * `HostApi(version)`, and the host provides the version it implements, this
+ * one, so a plugin written for another is left out with a message naming the
+ * version rather than failing at some later call.
  */
-export const HOST_API = 1;
-/** A plugin written for host API `version` requires this; the host plugin provides the versions it supports. */
+export const HOST_API = 2;
+/** What a plugin written for host API `version` requires; the host provides `HostApi(HOST_API)`. */
 export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, number> => Context.Service<`lemma/api@${number}`, number>(`lemma/api@${version}`);
 
 /**
- * Handle on the loader, provided by the host application (which owns it) so
- * transports and UIs can inspect and change the running composition without
- * reaching into the kernel.
+ * Handle on the loader, provided by the host itself (it owns the loader; no
+ * plugin can provide this) so transports and UIs can inspect and change the
+ * running composition without reaching into the kernel. Its methods wait
+ * until the composition is up, so a plugin may call one from work it forks
+ * while activating (`owner.background`); called directly in its setup, one
+ * waits on that plugin's own activation until the activate deadline. A change
+ * through it publishes `PluginsChanged`.
+ *
+ * A change (`restart`, `reload`, `configure`) drains all work in flight under
+ * `core.run` before swapping, whichever plugins it touches, so call it from a
+ * plugin's own code (a transport's handler, a command): from inside `core.run`
+ * it would wait on itself until the dispose deadline. A plugin's disposal
+ * also waits for the work run with its items, such as the channel calls it
+ * serves and the commands it registered: a change that would restart the
+ * plugin whose work asks for it is deferred until that work has ended (see
+ * `ChangeReport`). Once asked, a change runs to its end and publishes
+ * `PluginsChanged` even if its caller stops waiting, as a stream does when the
+ * change restarts its plugin.
  */
 export class HostControl extends Context.Service<
   HostControl,
   {
+    /**
+     * What the host provides itself, by capability key: `Paths`, `HostControl`, `Interaction`, and
+     * `HostApi(HOST_API)`. Any plugin may require them; none provides them, and none has a row. Fixed for the host's life.
+     */
+    readonly runtime: readonly string[];
     /** Every known plugin, enabled or not. */
     readonly plugins: Effect.Effect<readonly PluginInfo[]>;
     readonly composition: Effect.Effect<CompositionInfo>;
-    /** A failed plugin and what it halted; with `force`, a running one too, unless the app depends on it (a `ReloadError` says so). */
-    readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<void, ReloadError | CoreClosed>;
-    /** Re-read the config files and apply the resulting composition. */
-    readonly reload: Effect.Effect<ReloadReport, ReloadError>;
+    /**
+     * A failed plugin and what it halted; with `force`, a running one too, and what needs it, unless the app depends
+     * on it (a `ReloadError` says so). Deferred as `ChangeReport` says.
+     */
+    readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<RestartReport, ReloadError | CoreClosed>;
+    /** Re-read the config files and apply the resulting composition. Deferred as `ChangeReport` says. */
+    readonly reload: Effect.Effect<ChangeReport, ReloadError>;
     /**
      * Write plugin rows into a config file (the user's by default) and apply the
      * result. A change the host rejects is undone in the file, so a bad row never
@@ -200,7 +231,7 @@ export class HostControl extends Context.Service<
     readonly configure: (
       plugins: Readonly<Record<string, PluginChange>>,
       options?: { readonly scope?: ConfigScope },
-    ) => Effect.Effect<ConfigureReport, ReloadError>;
+    ) => Effect.Effect<ChangeReport, ReloadError>;
     /** The web app's rows and files. */
     readonly ui: Effect.Effect<UiComposition>;
     /** Write `ui` rows into a config file; web apps apply them when `UiChanged` arrives. */

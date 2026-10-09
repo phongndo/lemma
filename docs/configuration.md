@@ -21,8 +21,19 @@ The Plugins settings page and `lemma plugins` write these rows and apply them;
 a plugin's config Schema is its settings form in both. Turning a plugin off
 also unloads the plugins that require what it provides, which return with it.
 A capability has one provider, so turning on a plugin that provides what
-another provides turns that one off. The `host` and `transport` plugins, and
-everything they need, stay on. Each plugin's README lists its settings.
+another provides turns that one off. The `transport` plugin stays on, and
+needs only what the host provides itself (below), so any other plugin turns
+off, or restarts with a change, without dropping a client's connection. A
+change to the transport itself is answered first and applied after, and
+clients reconnect. Each plugin's README lists its settings.
+
+The host itself is not a plugin. It provides `Paths`, `HostControl` (managing
+the plugins), `Interaction` (questions to the user), and `HostApi` (its API
+version) to every plugin, so they have no row and nothing turns them off. A
+`host` or `interaction` row left from when they were plugins names no plugin,
+and is ignored with a warning. A plugin that provides one of them is left out,
+and one from your own files stops the start (they are required, below): to
+change how questions are answered, handle `InteractionHook` instead.
 
 Plugin files in `~/.lemma/plugins/` or `<project>/.lemma/plugins/` load
 automatically. One with a bundled plugin's id takes its place, and one
@@ -31,7 +42,8 @@ decides; [approvals](../examples/approvals/README.md) is an example. A file whos
 default export is a function receives `{ bundled }`, the bundled plugins by
 id, so a replacement can wrap the plugin it replaces and keep its updates
 rather than copy it. The web app is composed the same way from its own
-plugins, through `"ui"` rows and files in `~/.lemma/ui/`: see
+plugins, through `"ui"` rows and files in `~/.lemma/ui/`; the runtime they
+are written against is the app's own, with no row: see
 [its README](../apps/web/README.md).
 
 ## When something cannot run
@@ -44,8 +56,8 @@ left out or failed. A config key a plugin does not read is a warning, which
 catches a setting renamed in an update. A row naming no plugin is ignored,
 unless it says `"required": true`.
 
-What is **required** must start, or the host does not: the `host` and
-`transport` plugins and what they need, every plugin from your own files (a
+What is **required** must start, or the host does not: the `transport` plugin,
+every plugin from your own files (a
 file that does not load, which therefore names no plugin, too), and any plugin
 whose row says `"required": true`, with what it needs: a row turning off what
 a required plugin needs stops the start too, and a required plugin is never
@@ -63,7 +75,8 @@ plugins as shipped, reading no config file and no plugin file and writing
 neither: the way back when your config keeps the host from starting.
 
 A plugin says which version of the host's contracts it is written for by
-requiring `HostApi(version)` from `@lemma/contracts`, and a web app plugin by
+requiring `HostApi(version)` from `@lemma/contracts`, which the host provides
+for the version it implements (`HOST_API`), and a web app plugin by
 `defineUiPlugin({ api })`, so after an incompatible change it is left out with
 the version named rather than failing at some later call. A plugin that
 renames a setting reads its users' old rows with `migrateConfig` from

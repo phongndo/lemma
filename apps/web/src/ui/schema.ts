@@ -2,7 +2,7 @@ import { Effect, Option, Schema, SchemaTransformation } from "effect";
 import type { SchemaAST } from "effect";
 
 // The members of `api.Schema` that Effect 4 dropped or changed, in the forms
-// Effect 3 gave them, so UI files written for `UI_API` 1 keep their meaning.
+// Effect 3 gave them: UI files get these with the rest of Effect 4's Schema.
 
 // Effect 3 schemas annotate with `.annotations(…)`, Effect 4's with `.annotate(…)`. Every schema shares the
 // prototype that defines `annotate`; the old name is added there, in this app's copy of Effect only.

@@ -2,7 +2,9 @@
 
 The core (`packages/core`) is a domain-neutral TypeScript library for composing plugins.
 It supplies capabilities, hooks, events, lifetimes, and configuration. The embedding
-application chooses its domain contracts, plugin sources, and composition.
+application chooses its domain contracts, plugin sources, and composition, and
+provides the capabilities its plugins are written against; a plugin's requirement
+is met by another plugin or by the application.
 
 Usage details live in [the package README](README.md); this page
 holds the rationale and constraints.
@@ -10,7 +12,7 @@ holds the rationale and constraints.
 ## Principles
 
 1. **Resolve once, at composition time.** Dependencies, config, and handler order are checked when a composition is planned. At call time a capability is a captured value and a hook with no handlers calls straight through. No proxies, no per-call graph walks, no meta-events.
-2. **Typed dependencies.** A plugin declares `requires` and `provides` as Effect tags; the Layer's requirements must match at compile time, and actual exports are checked at activation. Planning rejects missing dependencies. Runtime failures can revoke capabilities, so callers must still handle the resulting failure or interruption.
+2. **Typed dependencies.** A plugin declares `requires` and `provides` as Effect tags; the Layer's requirements must match at compile time, and actual exports are checked at activation. Each requirement is met by a plugin or by the application, and planning rejects one that neither meets. Runtime failures can revoke plugins' capabilities, so callers must still handle the resulting failure or interruption.
 3. **Three extension primitives, with explicit rules.** _Hooks_ (interceptors) wrap an operation and fail closed. _Events_ notify and are isolated. _Registries_ collect what plugins offer, owned by the plugin that offered it. See below.
 4. **Failure domains.** A required background task failing stops its plugin and dependents while unrelated plugins keep running. Optional tasks and observers report faults without failing their plugin. There is no automatic restart unless the plugin declares a `restart` schedule, and that schedule persists across failures so a broken plugin can exhaust it. An explicit restart retries the named plugin and its halted dependents; forced, it also replaces a running plugin.
 5. **Staged change.** Replacements activate before the old composition is swapped out. A staging failure preserves the old instances, except for exclusive resources, which require a documented interruption gap.
@@ -20,15 +22,15 @@ holds the rationale and constraints.
 
 ## Primitives
 
-| Primitive       | Declared by                | Contract                                                                                                                                                                          |
-| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Capability      | `Context.Service`          | A named, replaceable service. One provider per composition.                                                                                                                       |
-| Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `restart`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`. |
-| Hook            | `Hook.make`                | Around middleware on the critical path. Sequential, ordered, awaited. A handler may call `next` at most once. A handler failure fails the operation.                              |
-| Event           | `Event.make`               | Notification with isolated observer failures. Bounded queue, default drop-oldest without waiting; explicit `suspend` applies backpressure.                                        |
-| Registry        | `Registry.make`            | A collection plugins contribute items to (`PluginContext.add`). Ordered, attributed, staged and swapped with its contributor, removed when the contributor's scope closes.        |
-| Background work | `PluginContext.background` | Supervised work owned by the plugin scope; its exit is reported. `required` work failing fails the plugin.                                                                        |
-| Loader          | `makeLoader`               | Runs a composition described by data (`Composition`) and changes it at runtime.                                                                                                   |
+| Primitive       | Declared by                | Contract                                                                                                                                                                                                                    |
+| --------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Capability      | `Context.Service`          | A named service. One provider per composition: a plugin, which can be replaced, or the application.                                                                                                                         |
+| Plugin          | `definePlugin`             | Manifest (`id`, `config` schema, `provides`, `requires`, `exclusive`, `restart`, `deadlines`) plus a `Layer` that receives decoded config and owns resources through its `Scope`.                                           |
+| Hook            | `Hook.make`                | Around middleware on the critical path. Sequential, ordered, awaited. A handler may call `next` at most once. A handler failure fails the operation.                                                                        |
+| Event           | `Event.make`               | Notification with isolated observer failures. Bounded queue, default drop-oldest without waiting; explicit `suspend` applies backpressure.                                                                                  |
+| Registry        | `Registry.make`            | A collection plugins contribute items to (`PluginContext.add`). Ordered, attributed, staged and swapped with its contributor, removed when the contributor's scope closes; work with an item (`Registries.run`) ends first. |
+| Background work | `PluginContext.background` | Supervised work owned by the plugin scope; its exit is reported. `required` work failing fails the plugin.                                                                                                                  |
+| Loader          | `makeLoader`               | Runs a composition described by data (`Composition`) and changes it at runtime.                                                                                                                                             |
 
 **Rule for choosing a primitive:** an _operation_ others may change is a hook; _news_ others may react to is an event; a _thing a plugin offers_ (an entry in a list others read) is a registry item. If the caller must learn when it fails, use a hook or a direct capability call. Events carry only information that is safe to lose. Applications own authoritative state and recovery after missed notifications.
 
@@ -81,8 +83,10 @@ pending → activating → active → draining → closed
                 ↘ failed ↗ (restart policy or explicit restart)
 ```
 
-Plugins activate in dependency order and dispose in reverse. `draining` admits
-no new work while in-flight work finishes. The [lifetime contract](README.md#lifetime-and-failure-semantics)
+Plugins activate in dependency order and dispose in reverse. The application's
+capabilities come before the first plugin and outlive the last: they have no
+lifecycle of their own while the core runs. `draining` admits no new work while
+in-flight work finishes. The [lifetime contract](README.md#lifetime-and-failure-semantics)
 specifies shutdown, deadlines, and what cooperative cancellation can and cannot
 stop.
 
@@ -95,6 +99,17 @@ unique name kept in a plugin's own data structure) makes its plugin
 `exclusive`, stopped before its replacement starts: that gap is explicit rather
 than pretending the swap was transactional. A core registry's items follow
 their contributor through the swap, so a contributor to one needs no such gap.
+Work a reader runs with an item belongs to the item's contributor instead
+(`Registries.run`): it is admitted only while the item is there and told when
+the item leaves, and the old instance's finalizers wait for it, up to the
+dispose deadline, then interrupt it. Such work may finish on the retired
+instance, as in-flight `core.run` work does, but never runs once its
+finalizers have begun. It knows whose it is (`Admitted`), so a change it asks
+for that would replace its own plugin can wait for it to end, rather than the
+disposal waiting on the work that waits on the disposal. Changes run one at a
+time, so a reader whose work an item's leaving ended can wait for the change
+under way to finish (`Registries.settled`) and see what it left, rather than
+guess how long a replacement takes to start.
 The [loader contract](README.md#loader-and-reload) gives the
 steps and what each failure leaves running.
 
@@ -125,6 +140,34 @@ drain is abandoned and its stale work interrupted.
 ## Limits
 
 Plugins are trusted, in-process code. Dependency visibility and scopes organize code; they are not a security boundary. Detached fibers, raw timers, and module-import side effects are outside the kernel's guarantees. Compositions supplied through the loader are validated when planned, so a loader-driven core is not statically typed (`Core<any>`).
+
+## The application's capabilities
+
+An application's runtime is the API its plugins are written against: what
+every plugin may assume, such as the connection to a host or a way to ask its
+user. Written as plugins, they were plugins the application could never let be
+turned off, which forced it to keep everything they required as well. The
+application provides them instead (`provide`): plugins require them as before,
+and planning counts them as present.
+
+They are fixed for the life of the core. Nearly every plugin requires some
+runtime capability, so replacing one would restart nearly everything, which is
+a new core rather than a reload; and a replaceable one would need staging,
+draining, and `haltedBy`, the lifecycle that makes something a plugin. A
+service that reflects changing state is a stable handle over that state.
+
+Their layer gets `Hooks`, `Events`, and `Registries`, but no `PluginContext`. A
+runtime piece uses extension points (it invokes a hook plugins handle, reads a
+registry), which takes no owner. An owner brings an id, attributed faults, a
+scope a reload swaps, and a row in `inspect`: all that the application's
+services are not. Work that registers a handler or contributes an item belongs
+in a plugin.
+
+A plugin that provides one is refused (`ReservedCapability`) rather than
+overriding it. The composition has no last-writer-wins anywhere, and an
+override would let one plugin change, unseen, what the application and every
+other plugin rely on. Which runtime the plugins get is the application's
+decision, made where it provides it.
 
 ## Outside the kernel
 

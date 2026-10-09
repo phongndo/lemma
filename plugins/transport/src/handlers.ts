@@ -1,108 +1,31 @@
-import { Cause, Effect } from "effect";
+import { Cause, Effect, Schema } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, HostRpcs, Inspectors, InteractionOrigin, searchFiles, snapshotOf, SUBSCRIBED_HEADER, toPluginStatus } from "@lemma/contracts";
-import type { Agent, Commands, ConfigureReport, HostControl, Llm, Paths, ReloadResult, Sessions, Workspace } from "@lemma/contracts";
+import { HostError, Inspectors, snapshotOf, toPluginStatus } from "@lemma/contracts";
+import type { ChangeReport, HostControl, Paths, ReloadResult } from "@lemma/contracts";
+import { callChannel, listChannels, openedStream, ServedRpcs } from "./channels.ts";
 import { toHostError } from "./errors.ts";
 import type { Hub } from "./hub.ts";
 import type { Interactions } from "./interactions.ts";
-import type { makeLogins } from "./logins.ts";
 
 interface HandlerServices {
   readonly version: string;
   readonly hub: Hub;
   readonly interactions: Interactions;
   readonly paths: Context.Service.Shape<typeof Paths>;
-  readonly sessions: Context.Service.Shape<typeof Sessions>;
-  readonly agent: Context.Service.Shape<typeof Agent>;
-  readonly llm: Context.Service.Shape<typeof Llm>;
   readonly control: Context.Service.Shape<typeof HostControl>;
-  readonly workspace: Context.Service.Shape<typeof Workspace>;
-  readonly commands: Context.Service.Shape<typeof Commands>;
-  /** The core's registries: host plugins' `Inspectors` and `FileSearchers` are read from them. */
+  /** The core's registries: host plugins' `Inspectors` and `Channels` are read from them. */
   readonly registries: Context.Service.Shape<typeof Registries>;
-  /** Runs `Llm.login` in the plugin's scope, and cancels it; see `makeLogins`. */
-  readonly logins: ReturnType<typeof makeLogins>;
 }
 
-const cwdOption = (cwd: string | undefined) => (cwd === undefined ? undefined : { cwd });
+/** What an inspector's snapshot must be to cross the wire: JSON as it is. */
+const asJson = Schema.encodeUnknownEffect(Schema.toCodecJson(Schema.Unknown));
 
-/** Every RPC maps to one capability call; only the error boundary is transport-specific. */
-export const makeHandlers = ({ version, hub, interactions, paths, sessions, agent, llm, control, workspace, commands, registries, logins }: HandlerServices) =>
-  HostRpcs.of({
-    "Session.List": ({ cwd }) => sessions.list(cwdOption(cwd)).pipe(Effect.mapError(toHostError)),
-    "Session.Get": ({ sessionId }) => sessions.get(sessionId).pipe(Effect.mapError(toHostError)),
-    "Session.Create": ({ cwd }) => sessions.create({ cwd: cwd ?? paths.cwd }).pipe(Effect.mapError(toHostError)),
-    "Session.Events": ({ sessionId, after }) => sessions.events(sessionId, after === undefined ? undefined : { after }).pipe(Effect.mapError(toHostError)),
-    "Session.Checkout": ({ sessionId, eventId }) => sessions.checkout(sessionId, eventId).pipe(Effect.mapError(toHostError)),
-    "Session.SetTitle": ({ sessionId, title }) =>
-      sessions.append(sessionId, { type: "title", title }).pipe(Effect.andThen(sessions.get(sessionId)), Effect.mapError(toHostError)),
-    "Session.Mark": ({ sessionId, pinned, archived }) =>
-      sessions
-        .mark(sessionId, { ...(pinned === undefined ? {} : { pinned }), ...(archived === undefined ? {} : { archived }) })
-        .pipe(Effect.mapError(toHostError)),
-    "Session.Delete": ({ sessionId }) =>
-      Effect.gen(function* () {
-        if ((yield* agent.running).includes(sessionId)) {
-          return yield* new HostError({ code: "Busy", subject: sessionId, message: "A turn is running in this session; stop it before deleting" });
-        }
-        yield* sessions.remove(sessionId).pipe(Effect.mapError(toHostError));
-      }),
-
-    // The agent owns the turn's lifetime; this call only waits for it.
-    "Agent.Prompt": ({ sessionId, content, options, requestId, whenBusy }) =>
-      agent
-        .prompt(sessionId, content, {
-          ...options,
-          ...(requestId === undefined ? {} : { requestId }),
-          ...(whenBusy === undefined ? {} : { whenBusy }),
-        })
-        .pipe(Effect.mapError(toHostError)),
-    "Agent.Cancel": ({ sessionId }) => agent.cancel(sessionId),
-    "Agent.Running": () => agent.running,
-    "Agent.Queue": ({ sessionId }) => agent.queue(sessionId),
-    "Agent.Withdraw": ({ sessionId, requestId }) => agent.withdraw(sessionId, requestId),
-    "Agent.View": ({ sessionId }) => agent.view(sessionId),
-
-    "Llm.Providers": () => llm.providers,
-    "Llm.Models": ({ available }) => llm.models(available === undefined ? undefined : { available }),
-    // Like a turn, the login outlives this call: a dropped client can return and answer its questions.
-    "Llm.Login": ({ provider, type }) => logins.login(provider, type).pipe(Effect.mapError(toHostError)),
-    "Llm.CancelLogin": ({ provider }) => logins.cancel(provider),
-    "Llm.Logout": ({ provider }) => llm.logout(provider).pipe(Effect.mapError(toHostError)),
-    "Llm.AddCustom": ({ spec }) => llm.addCustom(spec).pipe(Effect.mapError(toHostError)),
-    "Llm.RemoveCustom": ({ provider }) => llm.removeCustom(provider).pipe(Effect.mapError(toHostError)),
-    "Llm.SetLogo": ({ provider, svg }) => llm.setLogo(provider, svg).pipe(Effect.mapError(toHostError)),
-
-    "Interaction.List": () => Effect.sync(() => [...interactions.open()]),
-    "Interaction.Answer": ({ id, answer }) => interactions.answer(id, answer),
-    "Interaction.Dismiss": ({ id }) => interactions.dismiss(id),
-
-    "Workspace.Status": ({ path }) => workspace.status(path),
-    "Workspace.Browse": ({ partialPath }) => workspace.browse(partialPath),
-    "Workspace.CreateDirectory": ({ path }) => workspace.createDirectory(path).pipe(Effect.mapError(toHostError)),
-    "Workspace.CreateWorktree": ({ path, branch, base }) =>
-      workspace.createWorktree(path, base === undefined ? { branch } : { branch, base }).pipe(Effect.mapError(toHostError)),
-    "Workspace.Branches": ({ path }) => workspace.branches(path).pipe(Effect.mapError(toHostError)),
-    "Workspace.Checkout": ({ path, branch, create }) =>
-      workspace.checkout(path, branch, create === undefined ? undefined : { create }).pipe(Effect.mapError(toHostError)),
-
-    // Read at each call, not required: turning file search off leaves the transport, and everything else, running.
-    "Files.Search": ({ cwd, query, limit, kind, within }) =>
-      searchFiles(registries, cwd, query, {
-        ...(limit === undefined ? {} : { limit }),
-        ...(kind === undefined ? {} : { kind }),
-        ...(within === undefined ? {} : { within }),
-      }).pipe(Effect.mapError(toHostError)),
-
-    "Command.List": () => commands.list,
-    "Command.Run": ({ id, cwd, sessionId, origin }) =>
-      commands
-        .run(id, { cwd: cwd ?? paths.cwd, ...(sessionId === undefined ? {} : { sessionId }) })
-        .pipe((run) => (origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin)), Effect.mapError(toHostError)),
-
-    "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition })),
-    "Host.Events": (_, { headers }) => hub.events(headers[SUBSCRIBED_HEADER] !== undefined),
+/** The runtime's calls; every subsystem serves its own as channels, which this serves as they are registered. */
+export const makeHandlers = ({ version, hub, interactions, paths, control, registries }: HandlerServices) =>
+  ServedRpcs.of({
+    "Host.Info": () => Effect.map(control.composition, (composition) => ({ version, cwd: paths.cwd, home: paths.home, composition, runtime: control.runtime })),
+    "Host.Events": ({ answers }) => hub.events(answers),
     "Host.Plugins": () => Effect.map(control.plugins, (plugins) => plugins.map(toPluginStatus)),
     "Host.Inspectors": () =>
       Effect.map(registries.items(Inspectors), (items) =>
@@ -123,18 +46,41 @@ export const makeHandlers = ({ version, hub, interactions, paths, sessions, agen
             const error = Cause.squash(cause);
             return Effect.fail(new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) }));
           }),
+          // Nor does a snapshot JSON cannot carry, which the protocol would refuse as a defect. One of nothing is no value.
+          Effect.flatMap((snapshot) =>
+            snapshot === undefined
+              ? Effect.succeed(null)
+              : asJson(snapshot).pipe(
+                  Effect.mapError(
+                    (error) => new HostError({ code: "Failed", subject: id, message: `Inspector "${id}"'s snapshot cannot be sent: ${error.message}` }),
+                  ),
+                ),
+          ),
         );
       }),
-    "Host.RestartPlugin": ({ pluginId, force }) => control.restart(pluginId, force === undefined ? undefined : { force }).pipe(Effect.mapError(toHostError)),
+    // Never deferred from here: the transport serving it, the one plugin a change from here waits for, is pinned, so it is
+    // not restarted from here (`HostControl.restart` refuses to force a locked plugin).
+    "Host.RestartPlugin": ({ pluginId, force }) =>
+      control.restart(pluginId, force === undefined ? undefined : { force }).pipe(Effect.asVoid, Effect.mapError(toHostError)),
     "Host.Reload": () => control.reload.pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),
     "Host.Configure": ({ plugins, scope }) =>
       control.configure(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),
 
     "Ui.Composition": () => control.ui,
     "Ui.Configure": ({ plugins, scope }) => control.configureUi(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.mapError(toHostError)),
+
+    "Interaction.List": () => Effect.sync(() => [...interactions.open()]),
+    "Interaction.Answer": ({ id, answer }) => interactions.answer(id, answer),
+    "Interaction.Dismiss": ({ id }) => interactions.dismiss(id),
+
+    // Read at each call, not required: a channel's plugin stops, reloads, or is off without the transport noticing.
+    "Channel.List": () => listChannels(registries),
+    "Channel.Call": ({ id, payload }) => callChannel(registries, id, payload),
+    // `ChannelLifetime` finds the channel and runs the request within its lifetime; this serves what it found.
+    "Channel.Open": () => openedStream,
   });
 
-const toReloadResult = (report: ConfigureReport): ReloadResult => ({
+const toReloadResult = (report: ChangeReport): ReloadResult => ({
   started: report.started,
   restarted: report.restarted,
   stopped: report.stopped,

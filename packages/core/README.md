@@ -1,6 +1,6 @@
 # @lemma/core
 
-An Effect-native, domain-neutral plugin runtime. It composes typed capabilities,
+An Effect-native, domain-neutral plugin kernel. It composes typed capabilities,
 plugin-defined hooks and events, configuration, and scoped lifetimes. Applications
 and plugin authors define their own contracts and behavior.
 [`DESIGN.md`](DESIGN.md) holds the design rationale.
@@ -48,12 +48,12 @@ See [`examples/hello.ts`](examples/hello.ts) for a capability implementation ext
 - `config` is an Effect Schema or, with `setup`, the defaults one is derived from (`configSchema`: each field takes its default's type and decodes to it when absent; nested objects default field by field). `makeCore(plugins, { configs })` decodes every plugin's config before any activation; a missing value decodes as `{}`; an invalid one is a `CompositionError` (`InvalidConfig`) naming the plugin and the failing path. Write the Schema for titles, descriptions, or constraints.
 - `exclusive` marks a plugin that cannot coexist with its replacement (a port, a lock, a unique registration in a retained registry); a reload stops it before starting the new instance. `restart` is an Effect `Schedule` consulted after a runtime failure; without one the plugin stays failed. `deadlines` bound activation and disposal (defaults 30s and 10s, overridable per core).
 - Capabilities are ordinary Effect `Context.Service` keys. Share the keys between consumers and providers; use namespaced key names. Effect identifies capabilities by their key names.
-- `provides` declares exports; `requires` declares dependencies supplied by other plugins: with `setup`, by name (`{ store: Store }`), the names under which `setup` receives and returns them; with `layer`, as a list of tags. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
+- `provides` declares exports; `requires` declares dependencies supplied by other plugins or by the application ([below](#capabilities-the-application-provides)): with `setup`, by name (`{ store: Store }`), the names under which `setup` receives and returns them; with `layer`, as a list of tags. `PluginContext`, `Hooks`, `Events`, and `Registries` are available without declaration. The runtime rejects attempts to provide these built-ins or `Scope`.
 - `setup(services, plugin)` runs when the plugin activates, in its scope: an Effect, or a generator function yielding Effects as `Effect.gen` takes. `plugin` is the `PluginContext` with the decoded `config` and a `signal` that aborts when the plugin stops, before its own finalizers run. It returns the provided services by name. TypeScript checks that it uses only what it requires and the built-ins, and returns what it provides.
 - `layer` is an ordinary Effect `Layer`, the form `setup` is built on. Use `Layer.effect` (its Effect may use the layer's `Scope`), `Effect.acquireRelease`, and `Effect.forkScoped` for resources and background work. Dependencies constructed privately inside a Layer need not be declared. `layer` may be a function of the decoded config.
 - The manifest is needed for runtime graph inspection and validation: Effect's type-level requirements alone cannot describe a dynamically supplied composition. Construction and cleanup still belong to Effect, not a second dependency-injection system.
 
-The complete graph is validated before Layers execute. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`; `checkComposition(plugins, configs)` returns the same errors without running anything, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.
+The complete graph is validated before any plugin's Layer executes; the application's services (below) are built first, and released if validation fails. Missing dependencies, duplicate ids, competing providers, and cycles produce `CompositionError`, as does a plugin providing what the runtime or the application provides (`ReservedCapability`); what the application provides is present for every plugin. `checkComposition(plugins, configs, { provided })` returns the same errors without running anything, `provided` being the application's `provide.provides`, so an application can decide what to leave out first. There is no implicit last-writer-wins override: replace a provider by supplying a different composition. Dependencies activate before consumers; independent plugins are ordered by code-unit id comparison. Activation receives only declared capabilities and the runtime context, not incidental capabilities from the host or unrelated plugins.
 
 Each Layer's actual exports must exactly match `provides`. A mismatch, startup failure, defect, or deadline produces a `PluginFault` (phase `activate`) with the plugin id and original Effect cause. Pure interruption stays interruption. TypeScript checks declared inputs and outputs; runtime validation also covers untyped plugins.
 
@@ -72,6 +72,52 @@ collection a plugin keeps in its own data structure must be released with the
 contributor's scope too; if it rejects duplicate names, mark the contributor
 `exclusive: true` so reload can unregister the old value before installing the
 new one, which incurs the same interruption gap as any exclusive resource.
+
+## Capabilities the application provides
+
+The application that embeds the core is the runtime its plugins are written
+against, and provides capabilities of its own with `provide`, on `makeCore` and
+`makeLoader` alike:
+
+```ts
+class Clock extends Context.Service<Clock, { readonly now: () => number }>()("example/Clock") {}
+
+const provide = { provides: [Clock], layer: Layer.succeed(Clock, { now: Date.now }) };
+const core = makeCore(plugins, { provide }); // makeLoader({ source, composition, provide }) alike
+```
+
+- `provides` lists what it provides, known without building anything, so
+  planning and `checkComposition` can count on it; each is listed once. `layer`
+  builds exactly those services: TypeScript catches a listed one it does not
+  build, and the core an unlisted extra when it builds them, as a defect from
+  `makeCore` or a `ReloadError` diagnostic from `makeLoader`, naming the missing
+  and undeclared keys. Several services are `Layer.mergeAll(…)`; what the layer
+  needs from the application is provided into it beforehand (`Layer.provide`).
+- Plugins require them as any other capability, and `core.run` supplies them.
+  A plugin that provides one is a `CompositionError` (`ReservedCapability`),
+  never an override; so is an application that provides a built-in or `Scope`,
+  or lists a capability twice (`DuplicateCapability`).
+- The layer may use `Hooks`, `Events`, and `Registries`: a service can invoke a
+  hook plugins handle, publish an event, or read a registry. It has no
+  `PluginContext`, because it uses extension points rather than contributing to
+  them; registering a handler or a registry item belongs in a plugin. Of the
+  caller's context it sees only runtime settings, as an activation does.
+- It is built once, before the first plugin activates, and released after the
+  last plugin is disposed, within the core's dispose deadline and
+  `shutdownTimeout`. Hooks, events, and registries have closed by the time its
+  finalizers run.
+- The services are fixed for the life of the core or loader: never stopped,
+  restarted, or replaced, never revoked by a plugin's failure, and never a
+  plugin's `haltedBy`. A service that reflects changing state is a stable handle
+  over that state; changing the services themselves takes a new core.
+- A build failure fails `makeCore` with the layer's error, and `makeLoader` with
+  a `ReloadError` whose diagnostic names no plugin; either leaves nothing
+  behind. The application's failures are not `PluginFault`s and nothing
+  supervises the work its layer starts, so the application reports its own.
+
+A plugin written with promises receives such a service as its own `Plain<S>`
+view, like any other: the view refuses calls once that plugin stops, while the
+service goes on serving the rest.
 
 ## Plugins written with promises
 
@@ -203,7 +249,9 @@ await tested.close();
 It fails as `makeCore` does: a `CompositionError` when the plugin cannot plan, a
 `PluginFault` when it cannot start. `faults` holds what is reported while it
 runs, including each plugin's latest fault from its start. `with` runs other
-plugins beside it.
+plugins beside it. The `provide` stand-ins are provided as the application
+provides capabilities, so they have no plugin rows (`inspect().provided` lists
+them), and a plugin that provides one is refused (`ReservedCapability`).
 
 ## Plugin-defined hooks
 
@@ -278,18 +326,25 @@ Effect.gen(function* () {
   const registries = yield* Registries;
   const items = yield* registries.items(Menu); // [{ item, pluginId, order }], in order
   const updates = registries.changes(Menu); // the items now, then after each change
+  const result = yield* registries.run(items[0]!, (left) => work); // work with an item, inside its contributor's lifetime
+  yield* registries.settled; // once no change to the composition is under way
 });
 ```
 
 - Items come in `order` (lower first), then by plugin id, then in the order that plugin added them. Each carries the contributing plugin's id; `core.inspect` lists who contributes what.
 - An item belongs to the plugin instance that added it. It is hidden while its plugin stages, appears when the plugin is published, and leaves when the plugin is retired or its scope closes. The effect `add` returns removes it sooner.
+- A contribution keeps its identity while it is there, so a reader can tell whether the one it holds is still offered (`items.includes(contribution)`); a replacement's item is another contribution, even with an equal value.
+- Work a reader does with an item (calling a function it carries, following a stream it opens) goes through `run`, which makes the work part of the contributor's lifetime. It is admitted only while the contribution is there, checked in the same step, or fails `RegistryError` (`Absent`). `left` completes when the contribution leaves: removed, its plugin replaced, failed, or stopped, or the core closing; it is heard once the change that removed the item is complete. When a reload replaced the plugin, its replacement is published by then, except an `exclusive` plugin's, which starts only once the old instance is disposed, after this work ends. Work that must not outlive it, such as a long-lived watch, stops then; other work may finish. Before the contributor's finalizers run, its disposal waits for admitted work, for at most the core's dispose deadline (the deadline drained `core.run` tasks get); work still running then is interrupted, `run` fails `RegistryError` (`Expired`), and a reload counts it in `ReloadReport.interrupted`. The work runs on its own fiber with the caller's context, and interrupting `run` interrupts it. Work done with an item outside `run` is not waited for and can outlive the plugin's resources.
+- `settled` completes once no change to the composition is under way: at once between changes, else once the one in progress has finished, its replacements published or failed and what it replaced disposed. Changes run one at a time, each bounded by the core's deadlines. Since an item leaves while the change that removes it runs, and what replaces it may come only later in that change (an `exclusive` plugin's replacement starts once its predecessor is disposed), work that `left` ended waits for `settled`, once `run` has returned, then looks again for what is offered. Never wait for it within a change (a plugin starting or stopping) or within work `run` admitted, which a change disposing its contributor waits for: each would wait on the other until a deadline.
+- Admitted work finds itself in `Admitted`: the work `run` admitted that it runs within, outermost first, each with the plugin whose item it runs with and `ended`, which completes once that work has ended. Since a contributor's disposal waits for its admitted work, that work must not wait for the disposal, or it waits on itself until the deadline: code that replaces plugins on request (an application's reload) reads `Admitted` to tell whose work is asking, and leaves a change that would replace one of them until its work has ended.
 - With `unique`, a key held by another plugin (visible or staged) fails `add` with `RegistryError` (`Conflict`, naming the `holder`). The plugin's own replacement may take the key over, so a reload swaps without an exclusive gap.
+- With `check`, `add` first asks it whether the value can be an item, typed or not, before `key` sees it: a value it refuses fails `add` with `RegistryError` (`Invalid`, with the reason) for the plugin adding it, and never reaches readers. It suits a registry that untyped plugin files contribute to.
 - `items` returns an immutable array that changes only when the registry does. `changes` never backs up: a slow reader gets the latest items, not every intermediate list.
 - A name identifies one token per core, as for hooks.
 
 ## Supervision
 
-`PluginContext.background(name, work, { required })` runs work owned by the plugin's scope and reports its exit. An optional task's failure is a `PluginFault` (phase `background`) and nothing else changes. A required task's failure fails the plugin: it and every plugin depending on it stop, in reverse order, while unrelated plugins keep running. Dependents are `closed` with `haltedBy` naming the root; the root is `failed` with its fault. The runtime tracks capability resolutions by `core.run` tasks and drains only tasks that resolved an affected capability. Copying the whole context or resolving `Hooks` conservatively counts as using the composition. Unresolved failed capabilities are revoked from existing task contexts. Its capabilities disappear from new `core.run` environments, so callers that still ask for them get Effect's missing-service defect.
+`PluginContext.background(name, work, { required })` runs work owned by the plugin's scope and reports its exit. An optional task's failure is a `PluginFault` (phase `background`) and nothing else changes. A required task's failure fails the plugin: it and every plugin depending on it stop, in reverse order, while unrelated plugins keep running. Dependents are `closed` with `haltedBy` naming the root; the root is `failed` with its fault. The runtime tracks capability resolutions by `core.run` tasks and drains only tasks that resolved an affected capability. Copying the whole context or resolving `Hooks` conservatively counts as using the composition. Unresolved failed capabilities are revoked from existing task contexts. Its capabilities disappear from new `core.run` environments, so callers that still ask for them get Effect's missing-service defect. What the application provides is never revoked: a task that resolved only such capabilities is neither drained nor interrupted, and `haltedBy` always names a plugin.
 
 `PluginContext.fault(operation, cause, { fatal })` reports a failure of a plugin's own work that the core does not run, such as a callback another library calls or a view it draws: a `PluginFault` (phase `service`) attributed to the plugin, which with `fatal` fails as a required task's failure fails it, as soon as it is published when it is still starting. A stopped or retired plugin's reports are dropped: its replacement owns the faults.
 
@@ -314,7 +369,7 @@ overwrite its replacement's fault. Observer failures leave their plugin active.
 1. Plan the whole target: resolve, decode config, validate the graph. Every problem is returned at once as `ReloadError.diagnostics`, each with a plugin id, config path where relevant, and a suggestion.
 2. Only plugins whose definition or config changed, plus their dependents, are touched. Replacements start in a staging scope, hidden from dispatch, while the old instances keep serving.
 3. Swap: new callers see the new environment, hooks, and observers in one step. Work already in flight finishes on the environment it entered with.
-4. Old instances drain, then close in reverse order. Work that outlives the dispose deadline is interrupted and counted in `ReloadReport.interrupted`.
+4. Old instances drain, then close in reverse order, each after the work run with its registry items (`Registries.run`) has ended. Work that outlives the dispose deadline is interrupted and counted in `ReloadReport.interrupted`.
 
 A replacement can start where its predecessor left off. `PluginContext.handoff(save)` registers what the running instance hands over; `save` runs when the replacement starts staging (an `exclusive` plugin's once its work has drained, just before it stops, so everything it did is included; otherwise changes after that moment are not carried), and a structured clone of its result is the replacement's `PluginContext.previous`. The clone means the two never share an object: a replacement that fails to start cannot change the state the old instance keeps serving with. State must therefore be what `structuredClone` copies (data, `Map`, `Set`, `Date`; not functions or sockets); what it cannot copy is reported as the old instance's fault, and the replacement starts fresh. A first start, a restart after a failure (a failed instance's state is not trusted), and a `save` that throws (reported as the old instance's fault) all start with `previous` undefined. With `setup`, a `carry` Schema checks what arrives first: state whose shape changed in an update fails to decode, is reported as the plugin's fault (`handoff`), and the plugin starts fresh instead of trusting it. The state stays in memory; durable state belongs to the plugin's own storage.
 
@@ -324,21 +379,24 @@ If any replacement fails to start, staged instances are disposed and the running
 
 `makeLoader({ partialStart: { required } })` starts the first composition with what can start. A plugin that fails to activate is left `failed`, with its fault in `core.inspect` (no `core.faults` subscriber exists yet to hear it), and its dependents are halted, as a restart leaves a dependent that cannot activate; `core.restart` retries it. The `required` plugins, and every plugin they need, must still activate, or the loader fails and leaves nothing behind. `apply` is never partial.
 
+`apply` changes plugins only. The application's services (`makeLoader({ provide })`) are fixed for the loader's life: a change, restart, or failure never touches them, so a plugin that requires nothing else is restarted only on its own account. Their build failure fails `makeLoader` with a `ReloadError` whose diagnostic names no plugin.
+
 ## Lifetime and failure semantics
 
 `makeCore` mounts a fixed composition as a scoped resource: the same runtime as the loader without `apply`.
 
 `core.run(effect)` supplies capabilities while preserving unrelated caller requirements. Enter it around a task, not around every internal function call. Each entry uses an owned Effect fiber—not a new runtime—so both caller cancellation and core shutdown interrupt and await that work. Capability calls and hook dispatch inside it do not create an extra runtime or fiber per call.
 
-Closing the owner scope stops new work, interrupts initialization and in-flight `core.run` tasks, then disposes plugins in reverse dependency order. Cleanup defects remain visible, and remaining finalizers still run. Failed or interrupted activation rolls back immediately, even when caught inside a longer-lived caller scope. Closing an already-closed core scope cannot reactivate it.
+Closing the owner scope stops new work, interrupts initialization and in-flight `core.run` tasks, then disposes plugins in reverse dependency order, and releases the application's services last. Cleanup defects remain visible, and remaining finalizers still run. Failed or interrupted activation rolls back immediately, even when caught inside a longer-lived caller scope. Closing an already-closed core scope cannot reactivate it.
 
 Both `makeCore` and `makeLoader` accept `shutdownTimeout`, a total limit on the
 closing caller's wait, including active tasks and lifecycle supervision. It
 defaults to the core's `deadlines.dispose` (10 seconds), independently of per-plugin
 deadlines. Expiry surfaces a `ShutdownTimeout` defect from scope closure and is
 retained as `core.inspect.shutdownFault`. A plugin disposal deadline may surface
-its attributed fault sooner. Scope finalizers use the defect channel because
-Effect finalizers cannot have typed failures.
+its attributed fault sooner, and the application's services outlasting the
+core's dispose deadline an unattributed defect. Scope finalizers use the defect
+channel because Effect finalizers cannot have typed failures.
 
 Cleanup continues after a timeout. Inspection stays `closing` and new `core.run`
 work is rejected until cleanup finishes; it then becomes `closed`, retaining any
@@ -358,9 +416,9 @@ Rollback releases acquired resources and registrations. It cannot undo arbitrary
 
 ## Inspection and tracing
 
-`core.inspect` returns a detached snapshot of plugin identities, lifecycle state, latest fault, provided/required capability keys, ordered hook ownership, and event observers. It does not expose implementations or configuration secrets.
+`core.inspect` returns a detached snapshot of plugin identities, lifecycle state, latest fault, provided/required capability keys, ordered hook ownership, and event observers. `provided` lists the keys the application provides, in declared order; they have no plugin row, and the plugins requiring one name it in their `requires`. It does not expose implementations or configuration secrets.
 
-Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable. With tracing turned off (`Effect.withTracerEnabled(false)`) a handler gets no span at all, which makes dispatch several times cheaper (`bench/budgets.ts`). `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
+Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable; building the application's services emits `core.provide`. With tracing turned off (`Effect.withTracerEnabled(false)`) a handler gets no span at all, which makes dispatch several times cheaper (`bench/budgets.ts`). `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
 
 These spans and composition snapshots describe runtime provenance. Applications
 own durable audit history, persistence, domain events, and payload redaction.
@@ -386,8 +444,9 @@ packed manifest, so a consumer sees only `types` and `import`.
 
 `package:check` checks the emitted declarations and runs a consumer through the
 package export, outside this workspace: provider replacement, dependent
-reconstruction, cleanup, and an HTTP listener. Its temporary install may need
-network access. `browser:check` also drives a DOM consumer in Chromium.
+reconstruction, cleanup, application-provided capabilities, and an HTTP
+listener. Its temporary install may need network access. `browser:check` also
+drives a DOM consumer in Chromium.
 
 The property test (`tests/sequences.test.ts`) runs random
 load/reload/fail/restart sequences against a fault-injecting fixture and checks

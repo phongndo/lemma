@@ -1,22 +1,27 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
+import type { Context } from "effect";
 import { definePlugin, Events, Hooks } from "@lemma/core";
 import {
   Agent,
   AgentError,
+  Channels,
   HostControl,
   Inspectors,
   InteractionOrigin,
   Llm,
   Paths,
   QueueChanged,
+  serveAgent,
+  SessionError,
   SessionRemoved,
   Sessions,
   ToolOutput,
   Tools,
 } from "@lemma/contracts";
-import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, SessionInfo, TurnOptions } from "@lemma/contracts";
+import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, SessionEvent, SessionInfo, TurnEndReason, TurnOptions } from "@lemma/contracts";
 import { LiveTurn } from "./live.ts";
 import { planResume } from "./resume.ts";
+import type { ResumePlan } from "./resume.ts";
 import { makeSlots } from "./slots.ts";
 import type { SlotHolder } from "./slots.ts";
 import { LIVE_INTERVAL_MS, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
@@ -68,7 +73,7 @@ type AgentConfig = typeof AgentConfig.Type;
 /** A submitted prompt, queued or placed in a turn. */
 interface Item {
   readonly prompt: QueuedPrompt;
-  /** Settles when the turn that placed it ends; fails `Withdrawn` when it is taken out of the queue first. */
+  /** Settles when the turn that placed it ends; fails `Retracted` when it is taken out of the queue first. */
   readonly done: Deferred.Deferred<void, AgentError>;
   /** A queued steer the running turn is placing: it can no longer be withdrawn. */
   placing: boolean;
@@ -100,8 +105,45 @@ interface Running extends SlotHolder {
   cancelling: boolean;
 }
 
+/** A turn the last instance left open, not running: it resumes once its session is taken up (`reopen`). */
+interface Suspended {
+  readonly turnId: string;
+  readonly prompts: readonly Item[];
+  readonly marked: boolean;
+  /** `cancel` was asked for: it resumes only to close as cancelled. */
+  cancelling: boolean;
+}
+
+/**
+ * How a suspended turn resumes, as its log says (`prepare`), with the model it continues on: none when it was being
+ * cancelled, as it then only closes, asking nothing.
+ */
+type Resumption =
+  | { readonly kind: "ended"; readonly reason: TurnEndReason }
+  | { readonly kind: "not-started"; readonly model: ModelInfo | undefined }
+  | { readonly kind: "open"; readonly plan: ResumePlan; readonly model: ModelInfo | undefined };
+
+/** What taking up a restored session needs from the store and the models, read once (`prepare`). */
+interface Prepared {
+  readonly info: SessionInfo;
+  /** Its suspended turn, as it was when read, and how that resumes. */
+  readonly turn?: { readonly suspended: Suspended; readonly resumption: Resumption };
+}
+
+/** The store said the session does not exist. */
+const gone = (error: AgentError): boolean => error.cause instanceof SessionError && error.cause.reason === "NotFound";
+
 interface SessionState {
   turn: Running | undefined;
+  /** Never set with `turn`. */
+  suspended: Suspended | undefined;
+  /**
+   * Restored from the journal the last instance left, and not taken up yet (`reopen`): its suspended turn, if any,
+   * waits, and so does its queue.
+   */
+  restored: boolean;
+  /** Restored, and its queue not yet checked against its log (`reconcile`): nothing reads or changes the queue until it is. */
+  unchecked: boolean;
   queue: Item[];
   /** Grows with every change to the queue, from the clock so it keeps growing across restarts (see `QueueChanged`). */
   revision: number;
@@ -187,36 +229,51 @@ export default definePlugin({
     const requests = makeRequestIndex(sessions);
     /** The session has no turn and nothing queued: what is kept for it goes (its queue revision stays, to keep growing). */
     const forget = (sessionId: string, state: SessionState) => {
-      if (state.turn !== undefined || state.queue.length > 0) return;
+      if (state.turn !== undefined || state.suspended !== undefined || state.queue.length > 0) return;
       requests.drop(sessionId);
     };
     const stateOf = (sessionId: string): SessionState => {
       let state = states.get(sessionId);
       if (state === undefined) {
-        state = { turn: undefined, queue: [], revision: Date.now(), held: false };
+        state = { turn: undefined, suspended: undefined, restored: false, unchecked: false, queue: [], revision: Date.now(), held: false };
         states.set(sessionId, state);
       }
       return state;
     };
     /** Serializes queue and turn changes: admission, placement, a turn ending and the next starting. */
     const admit = yield* Semaphore.make(1);
+    /**
+     * The session held (`Sessions.hold`) for a turn about to start, in a scope `start` closes once the turn has
+     * stopped: the session cannot be deleted under it. Fails `Session` when the session is gone. Taken under
+     * `admit` only while the session is held already (before admission, by `ready`, or by the turn ending), so it
+     * never waits there on a deletion, which would hold up every session.
+     */
+    const holdFor = (sessionId: string) =>
+      Effect.flatMap(Scope.make(), (lease) =>
+        sessions.hold(sessionId).pipe(Scope.provide(lease), Effect.as(lease), Effect.mapError(failedAs(sessionId, "Session"))),
+      );
     /** Serializes journal writes, so the last one written is the latest state. */
     const writing = yield* Semaphore.make(1);
 
-    const journalOf = (state: SessionState): Journal => ({
-      ...(state.turn === undefined
-        ? {}
-        : {
-            turn: {
-              turnId: state.turn.turnId,
-              prompts: state.turn.prompts,
-              ...(state.turn.cancelling ? { cancelling: true } : {}),
-              ...(state.turn.marked ? { marked: true } : {}),
-            },
-          }),
-      queue: state.queue.map((item) => item.prompt),
-      ...(state.held && state.queue.length > 0 ? { held: true } : {}),
-    });
+    const journalOf = (state: SessionState): Journal => {
+      // The running turn, or the suspended one, as the last instance left it.
+      const turn =
+        state.turn ?? (state.suspended === undefined ? undefined : { ...state.suspended, prompts: state.suspended.prompts.map((item) => item.prompt) });
+      return {
+        ...(turn === undefined
+          ? {}
+          : {
+              turn: {
+                turnId: turn.turnId,
+                prompts: turn.prompts,
+                ...(turn.cancelling ? { cancelling: true } : {}),
+                ...(turn.marked ? { marked: true } : {}),
+              },
+            }),
+        queue: state.queue.map((item) => item.prompt),
+        ...(state.held && state.queue.length > 0 ? { held: true } : {}),
+      };
+    };
     const persist = (sessionId: string) => writing.withPermits(1)(Effect.suspend(() => writeJournal(home, sessionId, journalOf(stateOf(sessionId)))));
     /** Replaces the queue, moving its revision on with it, so a view never pairs a new queue with an old revision. */
     const setQueue = (state: SessionState, queue: Item[]) => {
@@ -343,37 +400,39 @@ export default definePlugin({
         // Cancelled while it waited for a slot, it never runs, as a queued prompt withdrawn.
         if (yield* begin(entry)) return "cancelled" as const;
         const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
-        const last = entry.prompts[entry.prompts.length - 1]?.options;
-        const model = yield* resolveModel(sessionId, last);
-        return yield* runTurn(services, settings, {
-          ...turnInput(sessionId, entry, info),
-          model,
-          prompts: entry.prompts.map(({ requestId, content }) => ({ requestId, content })),
-          ...(last?.thinking === undefined ? {} : { thinking: last.thinking }),
-        });
+        return yield* begun(sessionId, entry, info, yield* resolveModel(sessionId, entry.prompts.at(-1)?.options));
       });
+    /** A new turn, begun, on `model`. */
+    const begun = (sessionId: string, entry: Running, info: SessionInfo, model: ModelInfo) => {
+      const thinking = entry.prompts.at(-1)?.options?.thinking;
+      return runTurn(services, settings, {
+        ...turnInput(sessionId, entry, info),
+        model,
+        prompts: entry.prompts.map(({ requestId, content }) => ({ requestId, content })),
+        ...(thinking === undefined ? {} : { thinking }),
+      });
+    };
 
-    /** A turn a restart cut off, continued once the composition is up (the tools it may run again are registered). */
-    const resumed = (sessionId: string, entry: Running) =>
+    /**
+     * A turn a restart cut off, continued once the composition is up (the tools it may run again are registered), as
+     * `prepare` read it: nothing it needed from the store or the models is left to fail before it runs.
+     */
+    const resumed = (sessionId: string, entry: Running, info: SessionInfo, resumption: Resumption) =>
       Effect.gen(function* () {
         // Stopping before then, it stays as it is, for the next start. Cancelled, it closes without the tools.
-        const ready = yield* Effect.raceAll([
+        const up = yield* Effect.raceAll([
           Effect.as(host.composition, true),
           Effect.as(Deferred.await(entry.cancelled), true),
           Effect.as(Deferred.await(stopping), false),
         ]);
-        if (!ready) return yield* Effect.interrupt;
+        if (!up) return yield* Effect.interrupt;
         const cancelling = yield* begin(entry);
-        const log = yield* sessions.events(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
-        const resume = planResume(log, entry.turnId, entry.marked);
-        // Cut off before its first event: cancelled meanwhile, it never runs.
-        if (resume.kind === "not-started") return cancelling ? ("cancelled" as const) : yield* fresh(sessionId, entry);
-        if (resume.kind === "ended") return resume.reason;
-        const { plan } = resume;
-        const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
-        // The model it ran on, if it still exists; else the default, as a new turn would get.
-        const model =
-          plan.model === undefined ? yield* resolveModel(sessionId) : yield* llm.model(plan.model).pipe(Effect.catch(() => resolveModel(sessionId)));
+        // Cut off before its first event: cancelled meanwhile, it never runs. (It has no model only if cancelled.)
+        if (resumption.kind === "not-started") {
+          return cancelling || resumption.model === undefined ? ("cancelled" as const) : yield* begun(sessionId, entry, info, resumption.model);
+        }
+        if (resumption.kind === "ended") return resumption.reason;
+        const { plan, model } = resumption;
         const restored = yield* readLive(home, sessionId);
         const turnResume: TurnResume = {
           plan,
@@ -382,7 +441,7 @@ export default definePlugin({
         };
         return yield* runTurn(services, settings, {
           ...turnInput(sessionId, entry, info),
-          model,
+          ...(model === undefined ? {} : { model }),
           prompts: entry.prompts.filter((prompt) => !plan.placed.has(prompt.requestId)).map(({ requestId, content }) => ({ requestId, content })),
           resume: turnResume,
           ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
@@ -390,15 +449,22 @@ export default definePlugin({
       });
 
     /**
-     * Starts a turn in the session (under `admit`): it is recorded in the
-     * journal before anything reaches the log, with the prompts it starts
-     * with, so a crash at any point leaves enough to resume or restart it.
+     * Starts a turn in the session (under `admit`), holding it with `lease`
+     * (`holdFor`) until the turn has stopped. It is recorded in the journal
+     * before anything reaches the log, with the prompts it starts with, so a
+     * crash at any point leaves enough to resume or restart it.
      */
     const start = (
       sessionId: string,
       turnId: string,
       prompts: readonly Item[],
-      options: { readonly resume?: boolean; readonly cancelling?: boolean; readonly marked?: boolean } = {},
+      lease: Scope.Closeable,
+      options: {
+        /** It resumes, as `prepare` read it. */
+        readonly resume?: { readonly info: SessionInfo; readonly resumption: Resumption };
+        readonly cancelling?: boolean;
+        readonly marked?: boolean;
+      } = {},
     ): Effect.Effect<Running> =>
       Effect.gen(function* () {
         const state = stateOf(sessionId);
@@ -420,7 +486,11 @@ export default definePlugin({
         state.turn = entry;
         state.held = false;
         yield* persist(sessionId);
-        const body = owner.trace("agent.turn", inSlot(entry, options.resume === true ? resumed(sessionId, entry) : fresh(sessionId, entry)));
+        const { resume } = options;
+        const body = owner.trace(
+          "agent.turn",
+          inSlot(entry, resume === undefined ? fresh(sessionId, entry) : resumed(sessionId, entry, resume.info, resume.resumption)),
+        );
         const fiber = yield* Effect.forkIn(
           Effect.interruptible(
             Effect.provideService(
@@ -431,9 +501,10 @@ export default definePlugin({
               InteractionOrigin,
               `session:${sessionId}`,
             ),
-          ).pipe(Effect.onExit((exit) => ended(sessionId, entry, exit))),
+          ).pipe(Effect.onExit((exit) => Effect.ensuring(ended(sessionId, entry, exit), Scope.close(lease, Exit.void)))),
           turns,
-          // Uninterruptible until the body begins, so `ended` runs however early the turn is cut off.
+          // Uninterruptible until the body begins, so `ended` runs, and the hold goes, however early the turn is cut
+          // off. The hold goes after `ended`, which holds the session again for the next turn it starts.
           { uninterruptible: true },
         );
         yield* Deferred.succeed(entry.fiber, fiber);
@@ -467,10 +538,15 @@ export default definePlugin({
           const reason: TurnOutcome = Exit.isSuccess(exit) ? exit.value : interrupted ? "cancelled" : "error";
           const next = state.queue[0];
           if (next !== undefined && (reason === "done" || reason === "max-steps")) {
-            setQueue(state, state.queue.slice(1));
-            yield* start(sessionId, newId(), [next]);
-            yield* queueChanged(sessionId);
-            return;
+            // This turn holds the session still, so it is not being deleted: only one gone some other way refuses, and
+            // the queue then waits for the next prompt, which reports it.
+            const lease = yield* Effect.result(holdFor(sessionId));
+            if (Result.isSuccess(lease)) {
+              setQueue(state, state.queue.slice(1));
+              yield* start(sessionId, newId(), [next], lease.success);
+              yield* queueChanged(sessionId);
+              return;
+            }
           }
           state.held = state.queue.length > 0;
           forget(sessionId, state);
@@ -484,60 +560,77 @@ export default definePlugin({
         // Outside the lock: the first exactly-once check of a session reads its log.
         if (requestId !== undefined) yield* requests.load(sessionId);
         // Admission cannot be split by the caller's interruption, or a prompt could be queued and forgotten.
-        const waitOn = yield* admit.withPermits(1)(
-          Effect.uninterruptible(
-            Effect.gen(function* () {
-              const state = stateOf(sessionId);
-              if (requestId !== undefined) {
-                // Dropped meanwhile if the session went idle: read again, under the lock, so the check is complete.
-                yield* requests.load(sessionId);
-                const queued = state.queue.find((item) => item.prompt.requestId === requestId);
-                if (queued !== undefined) {
-                  // Held after a failed or cancelled turn: the retry starts it, as a new prompt would.
-                  if (state.turn === undefined) {
-                    const prompts = state.queue;
-                    setQueue(state, []);
-                    yield* start(sessionId, newId(), prompts);
+        const admitted = (prepared: Prepared | undefined) =>
+          admit.withPermits(1)(
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                // What the last instance left runs first, as it would have had this one started with it.
+                if (prepared !== undefined) yield* reopen(sessionId, prepared);
+                const state = stateOf(sessionId);
+                if (requestId !== undefined) {
+                  // Dropped meanwhile if the session went idle: read again, under the lock, so the check is complete.
+                  yield* requests.load(sessionId);
+                  const queued = state.queue.find((item) => item.prompt.requestId === requestId);
+                  if (queued !== undefined) {
+                    // Held after a failed or cancelled turn: the retry starts it, as a new prompt would.
+                    if (state.turn === undefined) {
+                      const lease = yield* holdFor(sessionId);
+                      const prompts = state.queue;
+                      setQueue(state, []);
+                      yield* start(sessionId, newId(), prompts, lease);
+                    }
+                    // Told again, so a client retrying sees its prompt taken.
+                    yield* queueChanged(sessionId);
+                    return queued.done;
                   }
-                  // Told again, so a client retrying sees its prompt taken.
+                  const placed = state.turn?.items.get(requestId);
+                  if (placed !== undefined) return placed.done;
+                  if (requests.of(sessionId).has(requestId)) {
+                    const running = state.turn;
+                    return running !== undefined && requests.of(sessionId).get(requestId) === running.turnId ? running.ended : undefined;
+                  }
+                }
+                if (state.turn !== undefined) {
+                  const whenBusy = options.whenBusy ?? "follow-up";
+                  if (whenBusy === "reject") {
+                    return yield* new AgentError({ sessionId, reason: "Busy", message: `Session ${sessionId} already has a turn in progress` });
+                  }
+                  const item = yield* makeItem(content, options, whenBusy);
+                  setQueue(state, [...state.queue, item]);
+                  yield* persist(sessionId);
                   yield* queueChanged(sessionId);
-                  return queued.done;
+                  return item.done;
                 }
-                const placed = state.turn?.items.get(requestId);
-                if (placed !== undefined) return placed.done;
-                if (requests.of(sessionId).has(requestId)) {
-                  const running = state.turn;
-                  return running !== undefined && requests.of(sessionId).get(requestId) === running.turnId ? running.ended : undefined;
-                }
-              }
-              if (state.turn !== undefined) {
-                const whenBusy = options.whenBusy ?? "follow-up";
-                if (whenBusy === "reject") {
-                  return yield* new AgentError({ sessionId, reason: "Busy", message: `Session ${sessionId} already has a turn in progress` });
-                }
-                const item = yield* makeItem(content, options, whenBusy);
-                setQueue(state, [...state.queue, item]);
-                yield* persist(sessionId);
-                yield* queueChanged(sessionId);
+                const lease = yield* holdFor(sessionId);
+                // Prompts held after a failed or cancelled turn go first, then this one.
+                const item = yield* makeItem(content, options, "follow-up");
+                const prompts = [...state.queue, item];
+                if (state.queue.length > 0) setQueue(state, []);
+                yield* start(sessionId, newId(), prompts, lease);
+                if (prompts.length > 1) yield* queueChanged(sessionId);
                 return item.done;
-              }
-              yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
-              // Prompts held after a failed or cancelled turn go first, then this one.
-              const item = yield* makeItem(content, options, "follow-up");
-              const prompts = [...state.queue, item];
-              if (state.queue.length > 0) setQueue(state, []);
-              yield* start(sessionId, newId(), prompts);
-              if (prompts.length > 1) yield* queueChanged(sessionId);
-              return item.done;
-            }),
-          ),
-        );
+              }),
+            ),
+          );
+        const waitOn = yield* Effect.scoped(Effect.flatMap(ready(sessionId), admitted));
         // Awaiting, not joining: a caller that goes away leaves the turn running. A cancelled turn resolves normally.
         if (waitOn !== undefined) yield* Deferred.await(waitOn);
       });
 
     const cancel = (sessionId: string) =>
       Effect.gen(function* () {
+        const suspended = states.get(sessionId)?.suspended;
+        if (suspended !== undefined) {
+          // Not running: marked in the journal, it closes as cancelled when it resumes, asking the model nothing. Now,
+          // if the session can be taken up.
+          yield* admit.withPermits(1)(
+            Effect.suspend(() => {
+              suspended.cancelling = true;
+              return persist(sessionId);
+            }),
+          );
+          yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
+        }
         const entry = stateOf(sessionId).turn;
         if (entry === undefined) return;
         // In the journal first: a host that stops while the turn closes resumes it as cancelled.
@@ -555,31 +648,174 @@ export default definePlugin({
       });
 
     const withdraw = (sessionId: string, requestId: string) =>
-      admit.withPermits(1)(
-        Effect.gen(function* () {
-          const state = states.get(sessionId);
-          const item = state?.queue.find((candidate) => candidate.prompt.requestId === requestId);
-          // Being placed in the running turn: too late to take out.
-          if (state === undefined || item === undefined || item.placing) return false;
-          setQueue(
-            state,
-            state.queue.filter((candidate) => candidate !== item),
-          );
-          yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Withdrawn", message: "The prompt was withdrawn from the queue" }));
-          forget(sessionId, state);
-          yield* persist(sessionId);
-          yield* queueChanged(sessionId);
-          return true;
-        }),
+      Effect.andThen(
+        checked(sessionId),
+        admit.withPermits(1)(
+          Effect.gen(function* () {
+            const state = states.get(sessionId);
+            const item = state?.queue.find((candidate) => candidate.prompt.requestId === requestId);
+            // Being placed in the running turn: too late to take out.
+            if (state === undefined || item === undefined || item.placing) return false;
+            setQueue(
+              state,
+              state.queue.filter((candidate) => candidate !== item),
+            );
+            yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Retracted", message: "The prompt was withdrawn from the queue" }));
+            forget(sessionId, state);
+            yield* persist(sessionId);
+            yield* queueChanged(sessionId);
+            return true;
+          }),
+        ),
       );
 
-    const view = (sessionId: string): Effect.Effect<AgentView> =>
-      Effect.sync(() => {
-        // A session never prompted here gets no state: a view keeps nothing.
-        const state = states.get(sessionId) ?? { turn: undefined, queue: [], revision: Date.now(), held: false };
-        const queue = { queue: state.queue.map((item) => item.prompt), queueRevision: state.revision };
-        return state.turn === undefined ? { output: [], ...queue } : { ...state.turn.live.view(), ...queue };
+    /**
+     * A deleted session's queue, suspended turn and journal go with it. No turn runs in it: each held it (see
+     * `holdFor`). It takes no lock but `writing`, whose holders wait on the disk alone, and calls nothing outside the
+     * agent.
+     */
+    const removed = (sessionId: string) =>
+      Effect.gen(function* () {
+        const state = states.get(sessionId);
+        states.delete(sessionId);
+        requests.drop(sessionId);
+        for (const item of state?.queue ?? []) {
+          yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
+        }
+        // After a journal write under way, which would bring the file back.
+        yield* writing.withPermits(1)(removeState(home, sessionId));
       });
+
+    /**
+     * Checks a restored session's queue against its log (under `admit`), which is all it needs: queued prompts the
+     * log has were placed before the last instance stopped, whatever the journal said, so they leave the queue.
+     */
+    const reconcile = (sessionId: string, log: readonly SessionEvent[]) =>
+      Effect.gen(function* () {
+        const state = states.get(sessionId);
+        if (state === undefined || !state.unchecked) return;
+        requests.index(sessionId, log);
+        const placed = requests.of(sessionId);
+        const queue = state.queue.filter((item) => !placed.has(item.prompt.requestId));
+        state.unchecked = false;
+        if (queue.length === state.queue.length) return;
+        setQueue(state, queue);
+        yield* persist(sessionId);
+        yield* queueChanged(sessionId);
+      });
+
+    /**
+     * What reading or changing a session's queue needs first: a restored one's checked against its log (`reconcile`),
+     * reading the log if that was not done yet. Fails as the reading does, as the queue cannot be told without it; a
+     * session found gone takes its state with it.
+     */
+    const checked = (sessionId: string): Effect.Effect<void, AgentError> =>
+      Effect.suspend(() =>
+        states.get(sessionId)?.unchecked !== true
+          ? Effect.void
+          : sessions.events(sessionId).pipe(
+              Effect.mapError(failedAs(sessionId, "Session")),
+              Effect.flatMap((log) => admit.withPermits(1)(reconcile(sessionId, log))),
+              Effect.catchIf(gone, () => removed(sessionId)),
+            ),
+      );
+
+    /**
+     * Reads what taking up a restored session needs, once: its log, checking its queue against it (`reconcile`) at
+     * once, as that needs nothing more; then its info and, for its suspended turn, how that resumes and the model it
+     * continues on. Outside `admit`, as it waits on the store, the session held (`ready`). It changes nothing else,
+     * so a failure leaves the session as it was, its queue checked if the log was read, to be taken up later.
+     */
+    const prepare = (sessionId: string, suspended: Suspended | undefined): Effect.Effect<Prepared, AgentError> =>
+      Effect.gen(function* () {
+        const log = yield* sessions.events(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
+        yield* admit.withPermits(1)(reconcile(sessionId, log));
+        const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
+        if (suspended === undefined) return { info };
+        const resume = planResume(log, suspended.turnId, suspended.marked);
+        if (resume.kind === "ended") return { info, turn: { suspended, resumption: resume } };
+        // Being cancelled, it only closes, so no model need resolve.
+        if (suspended.cancelling) return { info, turn: { suspended, resumption: { ...resume, model: undefined } } };
+        const resumption: Resumption =
+          resume.kind === "not-started"
+            ? { kind: "not-started", model: yield* resolveModel(sessionId, suspended.prompts.at(-1)?.prompt.options) }
+            : {
+                kind: "open",
+                plan: resume.plan,
+                // The model it ran on, if it still exists; else the default, as a new turn would get.
+                model:
+                  resume.plan.model === undefined
+                    ? yield* resolveModel(sessionId)
+                    : yield* llm.model(resume.plan.model).pipe(Effect.catch(() => resolveModel(sessionId))),
+              };
+        return { info, turn: { suspended, resumption } };
+      });
+
+    /**
+     * Holds the session until the scope closes, before admission, so a wait for its deletion to end holds up no
+     * other session and can be interrupted, and the hold a turn takes under `admit` does not wait (see `holdFor`); and
+     * reads it if it is restored (`prepare`). A session found gone takes its state with it.
+     */
+    const ready = (sessionId: string): Effect.Effect<Prepared | undefined, AgentError, Scope.Scope> =>
+      Effect.gen(function* () {
+        yield* sessions.hold(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
+        const state = states.get(sessionId);
+        return state?.restored === true ? yield* prepare(sessionId, state.suspended) : undefined;
+      }).pipe(Effect.tapError((error) => (gone(error) ? removed(sessionId) : Effect.void)));
+
+    /**
+     * Takes a restored session up as `prepared` read it (under `admit`, the session held already, its queue checked):
+     * its suspended turn resumes, or else its queue runs on, unless held. Nothing changes before the turn's hold is
+     * taken, which can fail.
+     */
+    const reopen = (sessionId: string, prepared: Prepared) =>
+      Effect.gen(function* () {
+        const state = states.get(sessionId);
+        // Taken up meanwhile, or gone.
+        if (state === undefined || !state.restored || state.unchecked || state.suspended !== prepared.turn?.suspended) return;
+        const { turn } = prepared;
+        const next = turn === undefined && !state.held ? state.queue[0] : undefined;
+        const lease = turn !== undefined || next !== undefined ? yield* holdFor(sessionId) : undefined;
+        state.restored = false;
+        state.suspended = undefined;
+        if (lease !== undefined && turn !== undefined) {
+          const { suspended, resumption } = turn;
+          yield* start(sessionId, suspended.turnId, suspended.prompts, lease, {
+            resume: { info: prepared.info, resumption },
+            cancelling: suspended.cancelling,
+            marked: suspended.marked,
+          });
+        } else if (lease !== undefined && next !== undefined) {
+          setQueue(state, state.queue.slice(1));
+          yield* start(sessionId, newId(), [next], lease);
+          yield* queueChanged(sessionId);
+        }
+      });
+
+    /** A restored session `resume` could not take up stays as it was, to be taken up when next prompted, or at the next start. */
+    const notTakenUp = (sessionId: string) => (error: AgentError) =>
+      gone(error)
+        ? Effect.void
+        : Effect.logWarning(`agent: could not take up session ${sessionId}: ${error.message}; it is taken up when next prompted, or at the next start`);
+
+    /** Takes a restored session up now (`ready`, then `reopen`); fails as `ready` does, the session left as it was. */
+    const resume = (sessionId: string): Effect.Effect<void, AgentError> =>
+      Effect.scoped(
+        Effect.flatMap(ready(sessionId), (prepared) =>
+          prepared === undefined ? Effect.void : admit.withPermits(1)(Effect.uninterruptible(reopen(sessionId, prepared))),
+        ),
+      );
+
+    const view = (sessionId: string): Effect.Effect<AgentView, AgentError> =>
+      Effect.andThen(
+        checked(sessionId),
+        Effect.sync(() => {
+          // A session never prompted here gets no state: a view keeps nothing. A suspended turn is not running: no view.
+          const state = states.get(sessionId) ?? { turn: undefined, queue: [], revision: Date.now() };
+          const queue = { queue: state.queue.map((item) => item.prompt), queueRevision: state.revision };
+          return state.turn === undefined ? { output: [], ...queue } : { ...state.turn.live.view(), ...queue };
+        }),
+      );
 
     // Running tools' output, kept for `view` and for a turn resumed after a crash. Backpressure rather than loss:
     // keeping it is cheap, and a dropped chunk would leave a hole.
@@ -591,79 +827,53 @@ export default definePlugin({
         }),
       { buffer: 1024, overflow: "suspend" },
     );
-    // A deleted session's queue and journal go with it.
-    yield* owner.observe(SessionRemoved, ({ sessionId }) =>
-      admit.withPermits(1)(
-        Effect.gen(function* () {
-          const state = states.get(sessionId);
-          if (state?.turn !== undefined) return;
-          states.delete(sessionId);
-          requests.drop(sessionId);
-          for (const item of state?.queue ?? []) {
-            yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
-          }
-          yield* removeState(home, sessionId);
-        }),
-      ),
-    );
+    // Every deletion heard, so no queued prompt's caller waits on a session that is gone: one that finds no room waits
+    // for it. Never for good: the store announces a deletion once no hold waits on it, and `removed` takes no lock
+    // that a call into the store is made under (not `admit`). One deleted while no instance listened (between two,
+    // say) is found gone when the next starts.
+    yield* owner.observe(SessionRemoved, ({ sessionId }) => removed(sessionId), { overflow: "suspend" });
 
-    // What the last instance left: turns to resume, and queues to run on. Prompts the log already has were placed
-    // before it stopped, whatever the journal says.
-    for (const [sessionId, journal] of yield* readJournals(home)) {
-      const exists = yield* Effect.result(sessions.get(sessionId));
-      if (Result.isFailure(exists)) {
-        yield* removeState(home, sessionId);
-        continue;
-      }
-      const log = yield* sessions.events(sessionId).pipe(Effect.orElseSucceed(() => []));
-      requests.index(sessionId, log);
-      const placed = requests.of(sessionId);
+    // What the last instance left: each session's journal becomes its state, as it was, its turn suspended.
+    const journals = yield* readJournals(home);
+    for (const [sessionId, journal] of journals) {
       const state = stateOf(sessionId);
-      state.queue = yield* Effect.forEach(
-        journal.queue.filter((prompt) => !placed.has(prompt.requestId)),
-        restore,
-      );
+      state.restored = true;
+      state.unchecked = true;
+      state.queue = yield* Effect.forEach(journal.queue, restore);
       state.held = journal.held === true;
-      yield* admit.withPermits(1)(
-        Effect.gen(function* () {
-          if (journal.turn !== undefined) {
-            const prompts = yield* Effect.forEach(journal.turn.prompts, restore);
-            yield* start(sessionId, journal.turn.turnId, prompts, {
-              resume: true,
-              cancelling: journal.turn.cancelling === true,
-              marked: journal.turn.marked === true,
-            });
-            return;
-          }
-          const next = state.queue[0];
-          if (next !== undefined && !state.held) {
-            setQueue(state, state.queue.slice(1));
-            yield* start(sessionId, newId(), [next]);
-            return;
-          }
-          yield* persist(sessionId);
-        }),
-      );
+      if (journal.turn !== undefined) {
+        state.suspended = {
+          turnId: journal.turn.turnId,
+          prompts: yield* Effect.forEach(journal.turn.prompts, restore),
+          marked: journal.turn.marked === true,
+          cancelling: journal.turn.cancelling === true,
+        };
+      }
     }
+    // Each taken up now if it can be; one that cannot is when its session is next prompted, or at the next start.
+    for (const sessionId of journals.keys()) yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
 
     // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the agent.
     yield* owner
       .add(Inspectors, {
         id: "agent.turns",
         title: "Running turns",
-        description: "Each session with a turn running now, how long it has run, and what is queued",
+        description: "Each session with a turn running now, how long it has run, or one suspended until it resumes, and what is queued",
         snapshot: Effect.sync(() =>
           [...states].flatMap(([sessionId, state]) =>
-            state.turn === undefined && state.queue.length === 0
+            state.turn === undefined && state.suspended === undefined && state.queue.length === 0
               ? []
               : [
                   {
                     session: sessionId,
-                    turn: state.turn?.turnId ?? "",
+                    turn: (state.turn ?? state.suspended)?.turnId ?? "",
                     started: state.turn === undefined ? "" : new Date(state.turn.startedAt).toISOString(),
                     runningMs: state.turn === undefined ? 0 : Date.now() - state.turn.startedAt,
-                    cancelling: state.turn?.cancelling ?? false,
+                    suspended: state.suspended !== undefined,
+                    cancelling: (state.turn ?? state.suspended)?.cancelling ?? false,
                     queued: state.queue.length,
+                    // Restored, and not yet checked against the log: some may have been placed.
+                    unchecked: state.unchecked,
                   },
                 ],
           ),
@@ -671,16 +881,21 @@ export default definePlugin({
       })
       .pipe(Effect.ignore);
 
-    return {
-      agent: {
-        prompt,
-        cancel,
-        busy: (sessionId: string) => Effect.sync(() => states.get(sessionId)?.turn !== undefined),
-        running: Effect.sync(() => [...states].flatMap(([sessionId, state]) => (state.turn === undefined ? [] : [sessionId]))),
-        queue: (sessionId: string) => Effect.sync(() => (states.get(sessionId)?.queue ?? []).map((item) => item.prompt)),
-        withdraw,
-        view,
-      },
+    const agent: Context.Service.Shape<typeof Agent> = {
+      prompt,
+      cancel,
+      busy: (sessionId: string) => Effect.sync(() => states.get(sessionId)?.turn !== undefined),
+      running: Effect.sync(() => [...states].flatMap(([sessionId, state]) => (state.turn === undefined ? [] : [sessionId]))),
+      queue: (sessionId: string) =>
+        Effect.andThen(
+          checked(sessionId),
+          Effect.sync(() => (states.get(sessionId)?.queue ?? []).map((item) => item.prompt)),
+        ),
+      withdraw,
+      view,
     };
+    // How clients reach it: the transport serves what `Channels` holds.
+    for (const channel of serveAgent(agent, events)) yield* owner.add(Channels, channel);
+    return { agent };
   },
 });

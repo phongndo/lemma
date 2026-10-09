@@ -19,7 +19,7 @@ export interface SlotOptions {
   readonly shows?: "first" | "all";
 }
 
-const named = new Map<string, { readonly slot: Slot<any>; shows: "first" | "all" }>();
+const named = new Map<string, { readonly slot: Slot<any>; shows: "first" | "all"; fallback?: Component<any> }>();
 
 /**
  * The slot with this name: the same token each time, so a UI file loaded
@@ -47,9 +47,26 @@ export interface Region<P extends Record<string, any> = {}> {
  * `part.<name>`, whose first item by order renders wherever the part is used
  * (see `ui/parts.tsx`). A plugin replaces a part by adding an item with a
  * lower order than the default's; `P` is the props every provider takes.
+ *
+ * `fallback` renders wherever the part is drawn while no plugin provides it:
+ * plain native markup, belonging to no plugin. Without one, a part nothing
+ * provides renders nothing. The declaration that gives a fallback fixes it:
+ * defining the part again keeps it, and refuses another. A UI file's
+ * `definePart` (`api.definePart`) takes none, since a part of its own is its
+ * plugin's to provide.
  */
 export type Part<P extends Record<string, any>> = Slot<Region<P>>;
-export const definePart = <P extends Record<string, any>>(name: string): Part<P> => defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
+export const definePart = <P extends Record<string, any>>(name: string, fallback?: Component<P>): Part<P> => {
+  const part = defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
+  if (fallback === undefined) return part;
+  const entry = named.get(part.name)!;
+  if (entry.fallback !== undefined && entry.fallback !== fallback) throw new Error(`${part.name} has a fallback from its declaration, which nothing changes`);
+  entry.fallback = fallback;
+  return part;
+};
+
+/** What renders for `slot` while nothing provides it: a part's fallback (`definePart`), or undefined. */
+export const fallbackOf = (slot: Slot<any>): Component<any> | undefined => named.get(slot.name)?.fallback;
 
 /** Where the defaults of parts are added: a replacement uses a lower order. */
 export const DEFAULT_PART_ORDER = 100;
@@ -66,7 +83,10 @@ export type SlotItem<T> = T & { readonly id: string; readonly order?: number };
 type Contributor = Context.Service.Shape<typeof PluginContext>;
 
 export interface SlotsService {
-  /** Adds an item as this plugin's; returns its removal. It also leaves when the plugin stops, and an add once it is stopping does nothing. */
+  /**
+   * Adds an item as this plugin's; returns its removal. It also leaves when the plugin stops, and an add once it is
+   * stopping does nothing. The page's own view belongs to no plugin, and throws: every item has a plugin to leave with.
+   */
   readonly add: <T>(slot: Slot<T>, item: SlotItem<T>) => () => void;
   /** The slot's items in order. Reactive. */
   readonly list: <T>(slot: Slot<T>) => readonly SlotItem<T>[];
@@ -87,7 +107,10 @@ export interface SlotsService {
   readonly fail: <T>(slot: Slot<T>, item: SlotItem<T>, error: unknown) => void;
   /** The slot's items that failed, with who added each and what it threw. Reactive. */
   readonly failures: <T>(slot: Slot<T>) => readonly SlotFailure<T>[];
-  /** The same registry, adding as `contributor`'s. `defineUiPlugin` hands each plugin its own. */
+  /**
+   * The same registry, adding as `contributor`'s. `defineUiPlugin` hands each plugin its own; a plugin written against
+   * the kernel directly makes its own from its `PluginContext`.
+   */
   readonly as: (contributor: Contributor) => SlotsService;
 }
 
@@ -106,11 +129,11 @@ export type RunSync = <A, E>(effect: Effect.Effect<A, E>) => A;
  * Slots over the core's registries, with a Solid signal per slot so views
  * re-render when it changes: from a local add or removal at once, and from a
  * plugin starting or stopping through the registry's change stream, which
- * `watch` runs for as long as the slots' plugin does.
+ * `watch` follows for as long as the core runs. Returns the page's own view,
+ * which reads and refuses to add (see `SlotsService.add`).
  */
 export function createSlots(
   registries: Context.Service.Shape<typeof Registries>,
-  contributor: Contributor,
   run: RunSync,
   watch: (name: string, changes: Stream.Stream<readonly Contribution<unknown>[]>, apply: (items: readonly Contribution<unknown>[]) => void) => void,
 ): SlotsService {
@@ -144,8 +167,9 @@ export function createSlots(
     return failed.has(slot.name) ? all.filter((contribution) => working(slot.name, contribution)) : all;
   };
   const items = <T>(slot: Slot<T>) => visible(slot).map((contribution) => contribution.item as SlotItem<T>);
-  const service = (owner: Contributor): SlotsService => ({
+  const service = (owner: Contributor | undefined): SlotsService => ({
     add: (slot, item) => {
+      if (owner === undefined) throw new Error("Slots: add through a plugin's own slots, the ones its setup receives");
       // A stopping plugin's effects can still run; what they add would leave with it at once.
       const remove = run(
         owner.add(slot, item, { order: item.order ?? 0 }).pipe(
@@ -189,5 +213,5 @@ export function createSlots(
       signal(slot)[0]().map((contribution) => ({ item: contribution.item as SlotItem<T>, pluginId: contribution.pluginId, order: contribution.order })),
     as: service,
   });
-  return service(contributor);
+  return service(undefined);
 }

@@ -1,7 +1,10 @@
 # @lemma/plugin-sessions
 
 Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
-`SessionEvent`s stored as one JSONL file. Requires `Paths`.
+`SessionEvent`s stored as one JSONL file. Requires `Paths`. Serves the
+`sessions.*` channels (`SessionChannels`, through `serveSessions`): the calls
+clients make on sessions; `sessions.log`, one session's log as it grows; and
+`sessions.changes`, every session created, changed, or removed.
 
 ```ts
 Effect.gen(function* () {
@@ -23,7 +26,8 @@ Effect.gen(function* () {
 
 ## Storage
 
-`<Paths.sessions>/<encoded cwd>/<createdAt ISO>_<id>.jsonl`. The cwd is encoded
+`<Paths.home>/sessions/<encoded cwd>/<createdAt ISO>_<id>.jsonl`, the directory
+`~/.lemma/sessions` unless `$LEMMA_HOME` moves the home. The cwd is encoded
 pi-style (`/home/me/app` → `--home-me-app--`); the header's `cwd` is authoritative.
 
 | Line     | Shape                                                                       |
@@ -38,7 +42,7 @@ event appended or the last checkout, whichever is later. The title is the latest
 `title` event; `pinned` and `archived` are the latest value each marks line gave
 (a marks line moves neither the leaf nor `updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
 
-`<Paths.sessions>/.index.json` is the listing index: for each file, its size,
+`<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
 to those bytes, and a hash of its last line. It is a cache, so deleting it only
 costs re-reading the files.
@@ -85,7 +89,7 @@ costs re-reading the files.
   file, and the next use reloads it. A loaded session takes about 1.1× its file
   size in heap, and reloading a 40 MB one about 70 ms: without unloading, a
   long-running host's heap and open files grow with every session it touches.
-- **One process per directory.** The store holds `<Paths.sessions>/.lock`
+- **One process per directory.** The store holds `<Paths.home>/sessions/.lock`
   (`{ pid, hostname, token, startedAt }`) while it runs, and touches it every 10
   seconds, so a second host on the same directory fails to activate this plugin
   instead of interleaving appends with the first (and resuming its turns
@@ -116,12 +120,20 @@ costs re-reading the files.
   and a session larger than the longest string Node allows still opens (each line
   must still fit in one). Opening validates every line; listing uses `JSON.parse`
   alone.
-- **Removal.** `remove` deletes the file and closes it, then fsyncs its directory
-  so a power loss does not bring the session back (best effort: on a failing disk
-  it may come back, whole); the session is gone from memory and listings, and
-  `SessionRemoved` is published.
+- **Removal.** Holds (`hold`) are counted per session, in memory: the store
+  starts with none, as the plugins that held sessions through it restart with
+  it. `remove` of a session nothing holds runs through `SessionRemoveHook`; a
+  handler that refuses keeps the session. Otherwise, holding the session's
+  lock, it checks again that nothing holds the session and marks it as being
+  deleted in one step, deletes the file and closes it, then fsyncs its
+  directory so a power loss does not bring the session back (best effort: on a
+  failing disk it may come back, whole). Only then does the mark go, and the
+  session, gone from memory and listings, is announced with `SessionRemoved`: a
+  hold that waited on the mark waits on the disk alone, never on an observer of
+  that event.
 - `SessionAppended` and `SessionChanged` are published after each write. They are
-  losable; the file is the source of truth.
+  losable; the file is the source of truth, from which `sessions.log` reads
+  what its client missed.
 
 ## Testing
 

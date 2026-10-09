@@ -1,7 +1,9 @@
 # Lemma
 
 Lemma is a coding-agent harness in which every part, including the agent loop
-and the web app, is a plugin that can be turned off or replaced by id.
+and the web app's views, is a plugin that can be turned off or replaced by id.
+The plugins are written against a runtime the host and the web app provide, so
+a plugin of yours stands where a bundled one does.
 
 Lemma runs from a checkout and is under active development.
 
@@ -12,7 +14,7 @@ Lemma runs from a checkout and is under active development.
 - [Remote access](docs/remote.md): run the host on one machine and use it from another
 - [Web app](apps/web/README.md): UI plugins and files, addresses, and devtools
 - [CLI](apps/cli/README.md): `lemma`, for people and agents
-- [Architecture](docs/architecture.md): packages, plugins, and the session log
-- [Kernel design](packages/core/DESIGN.md): the plugin runtime's rationale and limits
+- [Architecture](docs/architecture.md): packages, plugins, the runtime, and the session log
+- [Kernel design](packages/core/DESIGN.md): the plugin kernel's rationale and limits
 - [Development](docs/development.md): dev shell, checks, and git hooks
 - [App icons](assets/brand/README.md): shared light and dark artwork

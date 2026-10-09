@@ -4,10 +4,22 @@ import { FetchHttpClient, HttpClient, HttpClientRequest } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import type { RpcClientError, RpcGroup } from "effect/rpc";
 import { Socket } from "effect/socket";
-import { HostRpcs } from "@lemma/contracts";
+import { RuntimeRpcs } from "@lemma/contracts/runtime";
 
-/** The typed Effect surface: `rpc["Session.List"]({})`, `rpc["Host.Events"]()`, ... */
-export type HostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof HostRpcs>, RpcClientError.RpcClientError>;
+/** Every RPC the host serves (`RuntimeRpcs`), as Effect's RPC client makes them: held only in this package (see `makeHostRpc`). */
+export type RawHostRpcClient = RpcClient.RpcClient<RpcGroup.Rpcs<typeof RuntimeRpcs>, RpcClientError.RpcClientError>;
+
+/**
+ * The typed Effect surface of what the host serves (`RuntimeRpcs`), as
+ * clients get it: `rpc["Host.Info"]()`, `rpc["Channel.Call"]({ id })`, ...
+ * Its streams' RPCs, `Host.Events` and `Channel.Open`, are left out, so a
+ * client reads them only through `connect`'s `Host` (see `makeHostRpc`);
+ * reading one raw fails to compile.
+ */
+export type HostRpcClient = Omit<RawHostRpcClient, "Host.Events" | "Channel.Open">;
+
+/** The whole client behind one this package made, for its own readers of the streams' RPCs. */
+export const raw = (rpc: HostRpcClient): RawHostRpcClient => rpc as RawHostRpcClient;
 
 /**
  * `ws(s)://<origin>/rpc?token=…` for a page or host base URL. `http:` maps to
@@ -28,6 +40,20 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * Transient errors are not retried silently: a ping timeout (a connection
  * that died across sleep or a network change) must fail the `Host.Events`
  * subscription, or it would wait forever on a stream the server has dropped.
+ *
+ * What `connect` holds. Its streams (`Host.Events`, `Channel.Open`) are read
+ * only through this package, which hands each element to a callback at
+ * once: the `Host`'s `onEvent` and `channel.open`, which `follow` uses.
+ * Effect's RPC client reads the socket on one fiber, which puts a stream's
+ * chunk into that request's bounded queue (16 elements) and only then
+ * acknowledges it, so a consumer that stops taking a stream's elements
+ * suspends that fiber, and every call and stream on the socket waits behind
+ * it: a reply its consumer waits for never arrives. A client that orders or
+ * paces what it reads (the CLI) does so in a queue of its own, after the
+ * callback. The rule holds by construction: the client this hands out has no
+ * stream RPCs (`HostRpcClient`), and `scripts/check-boundaries.ts` finds a
+ * client made elsewhere. The owner is reporting the reader's behavior to
+ * Effect.
  */
 export const makeHostRpc = (
   url: string,
@@ -40,7 +66,7 @@ export const makeHostRpc = (
       Layer.provide(RpcSerialization.layerJson),
     );
     const context = yield* Layer.build(protocol);
-    return yield* RpcClient.make(HostRpcs).pipe(Effect.provide(context));
+    return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
   });
 
 /**
@@ -65,5 +91,5 @@ export const makeHostRpcHttp = (base: string, token: string | undefined): Effect
       Layer.provide(RpcSerialization.layerNdjson),
     );
     const context = yield* Layer.build(protocol);
-    return yield* RpcClient.make(HostRpcs).pipe(Effect.provide(context));
+    return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
   });

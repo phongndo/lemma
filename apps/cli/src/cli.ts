@@ -1,8 +1,9 @@
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
-import { Cause, Effect, Exit, Schema } from "effect";
+import { Cause, Effect, Exit, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import {
+  AgentChannels,
   appUrl,
   branchOf,
   FILE_SEARCH_LIMIT,
@@ -20,16 +21,19 @@ import {
   recordStart,
   recordsBetween,
   recordSummary,
+  SessionChannels,
   sortRecords,
   ThinkingLevel,
   trajectory,
   WhenBusy,
 } from "@lemma/contracts";
 import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
-import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "@lemma/client";
-import { resolvePaths } from "@lemma/plugin-host";
+import { makeHostRpcHttp } from "@lemma/client";
+import type { HostRpcClient } from "@lemma/client";
+import { resolvePaths } from "@lemma/host/paths";
+import { call, ofChannel, openHost, over, received, refined, starting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
-import type { Command, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
+import type { Command, Connection, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
   formatConfig,
   formatDiff,
@@ -49,6 +53,7 @@ import {
   formatRegistries,
   formatEvents,
   formatCapabilities,
+  formatChannels,
   formatInspectors,
   formatSnapshot,
 } from "./format.ts";
@@ -65,10 +70,10 @@ import {
   listCommandsCommand,
   queueCommand,
   questionsCommand,
-  runCommand,
   withdrawCommand,
 } from "./live.ts";
-import { findTarget, noLocalHost, reasonOf, remoteCommand, statusOf, tokenCommand } from "./remote.ts";
+import { findTarget, noLocalHost, remoteCommand, toCliError, tokenCommand } from "./remote.ts";
+import { readSession, runCommand } from "./run.ts";
 import { workspaceCommand } from "./workspace.ts";
 
 export { ExitCode } from "./command.ts";
@@ -109,7 +114,10 @@ Web app (plugins the web app loads: bundled, and files in ~/.lemma/ui)
   ui enable <id>                 Turn a web app plugin on (--project: in the project's config)
   ui disable <id>                Turn one off; open web apps apply it at once
   ui config <id> <key> <value>   Set one field of its config (JSON or text; --unset removes it)
-  events [--session <id>]        Follow everything the host publishes (NDJSON with --json)
+  events                         Follow what the host publishes: its own events (notices, questions, plugin
+                                 changes) and its subsystems' streams (agent.activity, sessions.changes,
+                                 llm.changes, commands.changes); NDJSON of {from, element} with --json
+    --session <id>               ...only that session's turns and changes, and its log from now on
 
 Sessions and turns
   session list [--cwd <dir>]     Sessions for a directory (default: the current one); --all for every one
@@ -142,13 +150,20 @@ Commands (what the web app's command palette runs; plugins add them)
   do <command>                   Run one in the current directory (or --cwd); --session <id> for its session
                                  Its questions are answered like a login's (see --questions, --answer)
 
+Channels (calls and streams host plugins serve their clients)
+  channels                       What host plugins serve: id, call or stream, title, plugin, and what it does
+  channels call <id> [<json>]    Call one with a JSON payload and print the result
+  channels open <id> [<json>]    Open a stream and print each element as a line of JSON until it ends or
+                                 is stopped; it fails Withdrawn when its plugin stops or reloads
+
 Questions the host asks (logins, tools that confirm)
   questions                      Open questions, with their ids
   answer <question> <value>      Answer one: yes/no, text, or an option (value, label, or number)
   dismiss <question>             Dismiss one
     While run, login, do, or events --questions … is attached:
     --questions ask|ignore|dismiss   ask at the terminal (default when there is one), leave them
-                                     to another client such as the web app (default otherwise), or dismiss
+                                     to another client such as the web app, holding none (default
+                                     otherwise), or dismiss
     --answer <value>               Answer the next question with this (repeatable, in order)
 
 Providers and models
@@ -196,7 +211,8 @@ Options
   -h, --help  Show this help
 
 Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
-2 usage error, 3 no running host or it could not be reached, 130 interrupted (Ctrl+C).`;
+2 usage error, 3 no running host, it could not be reached (or the connection to it
+was lost), or it is still starting, 130 interrupted (Ctrl+C).`;
 
 /** `90s`, `1m30s`, `500ms`, `2m`, or bare seconds, in milliseconds. */
 export const parseOffset = (text: string): number | undefined => {
@@ -210,12 +226,18 @@ export const parseOffset = (text: string): number | undefined => {
   return rest === "" && text !== "" ? total : undefined;
 };
 
+/** Sessions with a turn running, or undefined when nothing serves `agent.running` (the agent is off): the host's status says so rather than failing. */
+const runningTurns = (rpc: HostRpcClient) =>
+  call(rpc, AgentChannels.running, undefined).pipe(
+    Effect.catch((error) => (ofChannel(error, AgentChannels.running.id, "NotFound") ? Effect.succeed(undefined) : Effect.fail(error))),
+  );
+
 /** The web app's address for a session (checked to exist) or a new thread, with the token; opened unless `--json` or there is no browser here. */
 const openCommand =
   (sessionId: string | undefined, view: string | undefined, options: Options): Command =>
   ({ target, rpc }, io) =>
     Effect.gen(function* () {
-      if (sessionId !== undefined) yield* rpc["Session.Get"]({ sessionId });
+      if (sessionId !== undefined) yield* call(rpc, SessionChannels.get, { sessionId });
       const path = sessionId === undefined ? NewThreadRoute.href({}) : ThreadRoute.href({ id: sessionId, ...(view === undefined ? {} : { view }) });
       const url = appUrl(target.url, path, target.token);
       if (!options.json) io.open?.(url);
@@ -230,7 +252,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return (
         extra(1) ??
         (({ target, rpc }) =>
-          Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"](), rpc["Agent.Running"]()], { concurrency: "unbounded" }).pipe(
+          Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"](), runningTurns(rpc)], { concurrency: "unbounded" }).pipe(
             Effect.map(([info, plugins, running]) => ({
               json: { url: target.url, source: target.source, pid: target.pid, startedAt: target.startedAt, info, plugins, running },
               text: formatStatus(target, info, plugins, running),
@@ -275,11 +297,11 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         return (
           extra(3) ??
           (({ rpc }) =>
-            Effect.flatMap(rpc["Host.Plugins"](), (plugins) => {
+            Effect.flatMap(Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"]()], { concurrency: "unbounded" }), ([info, plugins]) => {
               const plugin = plugins.find((candidate) => candidate.id === arg);
               return plugin === undefined
                 ? Effect.fail(new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg }))
-                : Effect.succeed({ json: plugin, text: formatPlugin(plugins, plugin) });
+                : Effect.succeed({ json: plugin, text: formatPlugin(plugins, plugin, info.runtime) });
             }))
         );
       }
@@ -325,8 +347,17 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "ui":
       return uiCommand(sub, arg, rest, options);
     case "reload":
-      return extra(1) ?? (({ rpc }) => Effect.map(rpc["Host.Reload"](), (report) => ({ json: report, text: formatReload(report) })));
+      return (
+        extra(1) ??
+        (({ rpc }) =>
+          Effect.map(rpc["Host.Reload"](), (report) => ({
+            json: report,
+            text: formatReload(report, "the plugins the reload changes, the transport among them"),
+          })))
+      );
     case "events":
+      // Watching answers nothing unless asked to: answers given alone would go unused.
+      if (options.answers.length > 0 && options.questions === undefined) return usage("events answers questions only with --questions ask, ignore, or dismiss");
       return extra(1) ?? eventsCommand;
     case "session":
       return sessionCommand(sub, arg, rest, options, io);
@@ -348,6 +379,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "do":
       if (sub === undefined) return listCommandsCommand;
       return extra(2) ?? doCommand(sub);
+    case "channels":
+      return channelsCommand(sub, arg, rest);
     case "questions":
       return extra(1) ?? questionsCommand;
     case "answer":
@@ -375,8 +408,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return (
         extra(2) ??
         (({ rpc }) =>
-          Effect.map(rpc["Host.Plugins"](), (plugins) => {
-            const kernel = kernelOf(plugins);
+          Effect.map(Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"]()], { concurrency: "unbounded" }), ([info, plugins]) => {
+            const kernel = kernelOf(plugins, info.runtime);
             const key = view as keyof typeof views;
             return { json: kernel[key], text: views[key](kernel) };
           }))
@@ -385,7 +418,14 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     case "inspectors":
       if (sub === undefined)
         return extra(1) ?? (({ rpc }) => Effect.map(rpc["Host.Inspectors"](), (inspectors) => ({ json: inspectors, text: formatInspectors(inspectors) })));
-      return extra(2) ?? (({ rpc }) => Effect.map(rpc["Host.Inspect"]({ id: sub }), (snapshot) => ({ json: snapshot, text: formatSnapshot(snapshot) })));
+      return (
+        extra(2) ??
+        (({ rpc }) =>
+          rpc["Host.Inspect"]({ id: sub }).pipe(
+            Effect.mapError(starting(sub)),
+            Effect.map((snapshot) => ({ json: snapshot, text: formatSnapshot(snapshot) })),
+          ))
+      );
     case "inspect":
       if (sub === undefined) return usage("inspect needs a session id");
       return extra(2) ?? inspectCommand(sub, options);
@@ -394,6 +434,65 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
     default:
       return usage(`Unknown command "${command}"`);
   }
+};
+
+/**
+ * `channels`: the list, a call, or a stream. The stream is read once over
+ * the command's `Host`, printing what it sends as it is: a connection that
+ * drops ends it (exit 3), as its plugin's reload does (`Withdrawn`), rather
+ * than opening it again.
+ */
+const channelsCommand = (sub: string | undefined, id: string | undefined, rest: readonly string[]): Command | CliError => {
+  if (sub === undefined || sub === "list") {
+    if (id !== undefined) return usage(`Unexpected argument "${id}"`);
+    return ({ rpc }) => Effect.map(rpc["Channel.List"](), (channels) => ({ json: channels, text: formatChannels(channels) }));
+  }
+  if (sub !== "call" && sub !== "open") return usage(`Unknown channels command "${sub}"`);
+  if (id === undefined) return usage(`channels ${sub} needs a channel id`);
+  const [text, ...more] = rest;
+  if (more.length) return usage(`Unexpected argument "${more[0]}"`);
+  let request: { readonly id: string; readonly payload?: unknown } = { id };
+  if (text !== undefined) {
+    try {
+      request = { id, payload: JSON.parse(text) };
+    } catch (error) {
+      return usage(`The payload must be JSON: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+  if (sub === "call") {
+    // A call with no result (`Schema.Void`) answers `null`.
+    return ({ rpc }) =>
+      Effect.map(Effect.mapError(rpc["Channel.Call"](request), refined(id)), (result) =>
+        result === null ? { json: null, text: `called ${id}: no result` } : { json: result, text: formatSnapshot(result) },
+      );
+  }
+  return (connection, io) =>
+    Effect.gen(function* () {
+      const host = yield* connection.host({ answers: false });
+      const elements = yield* received<unknown>((onElement, onEnd) => host.channel.open(id, request.payload, onElement, onEnd));
+      yield* Stream.runForEach(Stream.mapError(elements, refined(id)), (element) =>
+        Effect.andThen(
+          Effect.sync(() => io.out(JSON.stringify(element))),
+          caughtUp(io),
+        ),
+      );
+      return undefined;
+    });
+};
+
+/**
+ * Waits while stdout is behind (`Io.drained`), so what is printed goes out at
+ * its reader's pace. What the host sends meanwhile waits in the command's
+ * queue (`received`), never on the connection.
+ */
+const caughtUp = (io: Io): Effect.Effect<void> => {
+  const drained = io.drained;
+  if (drained === undefined) return Effect.void;
+  return Effect.callback<void>((resume, signal) => {
+    const pending = drained(signal);
+    if (pending === undefined) resume(Effect.void);
+    else void pending.then(() => resume(Effect.void));
+  });
 };
 
 /** The web app plans its own composition from these rows; the host only stores them and tells open web apps. */
@@ -441,7 +540,7 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (options.all && options.cwd !== undefined) return usage("Use either --all or --cwd");
       const cwd = options.all ? undefined : resolve(io.cwd, options.cwd ?? ".");
       return ({ rpc }) =>
-        Effect.map(rpc["Session.List"](cwd === undefined ? {} : { cwd }), (sessions) => ({
+        Effect.map(call(rpc, SessionChannels.list, cwd === undefined ? {} : { cwd }), (sessions) => ({
           json: sessions,
           text: sessions.length ? formatSessions(sessions, cwd === undefined) : `No sessions${cwd === undefined ? "" : ` in ${cwd}`}.`,
         }));
@@ -451,19 +550,19 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
       return ({ rpc }) =>
         Effect.gen(function* () {
-          const [info, events] = yield* Effect.all([rpc["Session.Get"]({ sessionId: arg }), rpc["Session.Events"]({ sessionId: arg })], {
-            concurrency: "unbounded",
-          });
+          const [info, events] = yield* readSession(over(rpc), arg);
           const branch = branchOf(events, info.leaf);
           return { json: { info, branch }, text: formatSession(info, branch) };
         });
     case "new":
       if (arg !== undefined) return usage(`Unexpected argument "${arg}"`);
-      return ({ rpc }) => Effect.map(rpc["Session.Create"]({ cwd: resolve(io.cwd, options.cwd ?? ".") }), (info) => ({ json: info, text: info.id }));
+      return ({ rpc }) =>
+        Effect.map(call(rpc, SessionChannels.create, { cwd: resolve(io.cwd, options.cwd ?? ".") }), (info) => ({ json: info, text: info.id }));
     case "title": {
       const title = rest.join(" ").trim();
       if (arg === undefined || title === "") return usage("session title needs a session id and a title");
-      return ({ rpc }) => Effect.map(rpc["Session.SetTitle"]({ sessionId: arg, title }), (info) => ({ json: info, text: `${info.id}  ${info.title ?? ""}` }));
+      return ({ rpc }) =>
+        Effect.map(call(rpc, SessionChannels.setTitle, { sessionId: arg, title }), (info) => ({ json: info, text: `${info.id}  ${info.title ?? ""}` }));
     }
     case "pin":
     case "unpin":
@@ -473,18 +572,19 @@ const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: 
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
       const marks = sub === "pin" || sub === "unpin" ? { pinned: sub === "pin" } : { archived: sub === "archive" };
       const done = { pin: "pinned", unpin: "unpinned", archive: "archived", unarchive: "unarchived" }[sub];
-      return ({ rpc }) => Effect.map(rpc["Session.Mark"]({ sessionId: arg, ...marks }), (info) => ({ json: info, text: `${info.id}  ${done}` }));
+      return ({ rpc }) => Effect.map(call(rpc, SessionChannels.mark, { sessionId: arg, ...marks }), (info) => ({ json: info, text: `${info.id}  ${done}` }));
     }
     case "delete":
       if (arg === undefined) return usage("session delete needs a session id");
       if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
-      return ({ rpc }) => Effect.map(rpc["Session.Delete"]({ sessionId: arg }), () => ({ json: { id: arg, deleted: true }, text: `${arg}  deleted` }));
+      return ({ rpc }) =>
+        Effect.map(call(rpc, SessionChannels.delete, { sessionId: arg }), () => ({ json: { id: arg, deleted: true }, text: `${arg}  deleted` }));
     case "checkout": {
       const eventId = rest[0];
       if (arg === undefined || eventId === undefined) return usage("session checkout needs a session id and an event id");
       if (rest.length > 1) return usage(`Unexpected argument "${rest[1]}"`);
       return ({ rpc }) =>
-        Effect.map(rpc["Session.Checkout"]({ sessionId: arg, eventId }), (info) => ({
+        Effect.map(call(rpc, SessionChannels.checkout, { sessionId: arg, eventId }), (info) => ({
           json: info,
           text: `${info.id} now continues from ${eventId}; the next prompt starts a new branch there`,
         }));
@@ -517,7 +617,7 @@ const inspectCommand = (sessionId: string, options: Options): Command | CliError
   }
   return ({ rpc }) =>
     Effect.gen(function* () {
-      const [info, events] = yield* Effect.all([rpc["Session.Get"]({ sessionId }), rpc["Session.Events"]({ sessionId })], { concurrency: "unbounded" });
+      const [info, events] = yield* readSession(over(rpc), sessionId);
       const branch = branchOf(events, info.leaf);
       const turns = trajectory(branch);
       if (listing) {
@@ -587,16 +687,17 @@ const findStep = (turns: readonly TrajectoryTurn[], selector: string): { turn: T
 
 /**
  * The host commands go to (see `findTarget`): one-shot HTTP calls for most
- * commands, and a WebSocket (opened only when a command follows events) for
- * streaming and questions, as the web app uses.
+ * commands, and `@lemma/client`'s reconnecting `Host` (opened only by a
+ * command that watches the host) for its events, questions, and streams, as
+ * the web app has it.
  */
 const connect = (io: Io) =>
   Effect.gen(function* () {
     const target = yield* findTarget(io);
     if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
     const rpc = yield* makeHostRpcHttp(target.url, target.token);
-    const live = yield* Effect.cached(makeHostRpc(rpcUrl(target.url, target.token)));
-    return { target, rpc, live };
+    const host: Connection["host"] = (options) => openHost({ url: target.url, token: target.token, ...options }, rpc);
+    return { target, rpc, host };
   });
 
 /**
@@ -625,39 +726,18 @@ const otherProtocol = (target: Target): Effect.Effect<CliError | undefined> =>
     }
   });
 
-/** A remote target that cannot be reached is the remote's "no host"; a local one that was found but did not answer is unreachable. */
-const toCliError = (error: Failure, target?: Target): CliError => {
-  if (error instanceof CliError) return error;
-  if (error instanceof HostError) {
-    return new CliError({
-      code: error.code,
-      message: error.message,
-      ...(error.subject === undefined ? {} : { subject: error.subject }),
-      exit: ExitCode.failed,
-    });
-  }
-  const remote = target !== undefined && target.source !== "local" ? target : undefined;
-  // `filterStatusOk` turns a rejected token into a failed send; the response status says which it was.
-  if (statusOf(error) === 401) {
-    const message =
-      remote === undefined
-        ? "The host rejected the token in transport.json"
-        : `The host at ${remote.url} rejected the token from ${remote.from}. \`lemma token\` there prints the current one; ${remote.source === "env" ? "set LEMMA_TOKEN to it" : `save it with \`lemma remote set ${remote.url} --token <token>\``}.`;
-    return new CliError({ code: "Unauthorized", message, exit: ExitCode.unavailable });
-  }
-  if (remote !== undefined) {
-    return new CliError({
-      code: "NoHost",
-      message: `No Lemma host answers at ${remote.url} (from ${remote.from}): ${reasonOf(error)}. Check that the host runs on that machine and that this one can reach it, or ${remote.source === "env" ? "unset LEMMA_URL" : "run `lemma remote clear`"} to use the local host.`,
-      exit: ExitCode.unavailable,
-    });
-  }
-  return new CliError({ code: "Unreachable", message: `Cannot reach the host: ${reasonOf(error)}`, exit: ExitCode.unavailable });
-};
-
 const report = (io: Io, json: boolean, error: CliError): number => {
   if (json) {
-    io.err(JSON.stringify({ error: { code: error.code, message: error.message, ...(error.subject === undefined ? {} : { subject: error.subject }) } }));
+    io.err(
+      JSON.stringify({
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.subject === undefined ? {} : { subject: error.subject }),
+          ...(error.requestId === undefined ? {} : { requestId: error.requestId }),
+        },
+      }),
+    );
   } else {
     io.err(`lemma: ${error.message}`);
   }

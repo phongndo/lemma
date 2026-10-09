@@ -42,7 +42,7 @@ import type {
   Usage,
 } from "@lemma/contracts";
 import { partialMessage } from "./live.ts";
-import type { LiveTurn, PartialMessage } from "./live.ts";
+import type { LiveTurn, ModelIdentity, PartialMessage } from "./live.ts";
 import { baseSection, environmentSection, titleFrom } from "./prompt.ts";
 import { INTERRUPTED_CALL, RESUMED, TOOLS_STARTED } from "./resume.ts";
 import type { ResumePlan, StepOutcome } from "./resume.ts";
@@ -113,7 +113,8 @@ interface TurnInput {
   readonly cwd: string;
   /** Session title before the turn; a missing title is set from the first prompt. */
   readonly title?: string;
-  readonly model: ModelInfo;
+  /** The model it asks. Only a resumed turn that closes as cancelled may have none: it asks nothing. */
+  readonly model?: ModelInfo;
   readonly thinking?: ThinkingLevel;
   /** Placed first, in order: a new turn's prompts, or those a resumed turn had not placed yet. */
   readonly prompts: readonly Placed[];
@@ -227,8 +228,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const state: {
     lastId: string | undefined;
     usage: Usage;
-    /** Open step, closed by `step-end`. */
-    step: { readonly id: string; readonly model: ModelInfo } | undefined;
+    /** Open step, closed by `step-end`, and the model it asks (none in a turn closing as cancelled after a restart). */
+    step: { readonly id: string; readonly model: ModelIdentity | undefined } | undefined;
     /** Output of a model call in flight. */
     partial: PartialMessage | undefined;
     partialStartedAt: number;
@@ -348,8 +349,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     }
   });
 
-  /** Builds, logs, and returns the exact request for this step. */
-  const prepareRequest = (stepId: string) =>
+  /** The model a turn that runs steps asks: it has one (see `TurnInput.model`). */
+  const asked = Effect.suspend(() => (input.model === undefined ? Effect.die(new Error(`Turn ${turnId} has no model to ask`)) : Effect.succeed(input.model)));
+
+  /** Builds, logs, and returns the exact request for this step, asking `asking` unless a handler names another. */
+  const prepareRequest = (stepId: string, asking: ModelInfo) =>
     Effect.gen(function* () {
       const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! }).pipe(Effect.mapError(sessionError));
       const listed = yield* tools.list;
@@ -357,7 +361,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         sessionId,
         turnId,
         cwd,
-        model: input.model.ref,
+        model: asking.ref,
         ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
         sections: [
           baseSection(source, new Set(listed.map((tool) => tool.spec.name)), settings.systemPrompt),
@@ -389,7 +393,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           }),
         )
         .pipe(Effect.mapError(hookError("AgentRequestHook")));
-      const model = plan.model === input.model.ref ? input.model : yield* llm.model(plan.model).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
+      const model = plan.model === asking.ref ? asking : yield* llm.model(plan.model).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
       const system = plan.sections
         .map((section) => section.text)
         .filter((text) => text.length > 0)
@@ -674,14 +678,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    */
   const steps = (first: number) =>
     Effect.gen(function* () {
+      const asking = yield* asked;
       for (let step = first; ;) {
         // A resumed turn can come here out of steps: a cut-off call counted as one.
         if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
         yield* boundary;
         const stepId = newId();
         yield* append({ type: "step-start", turnId, stepId });
-        state.step = { id: stepId, model: input.model };
-        const { request, model, offered } = yield* prepareRequest(stepId);
+        state.step = { id: stepId, model: asking };
+        const { request, model, offered } = yield* prepareRequest(stepId, asking);
         state.step = { id: stepId, model };
         const outcome = yield* callModel(stepId, request, model);
         if ("retry" in outcome) {
@@ -727,8 +732,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       // What the cut-off call had produced, when the output file got that far.
       const cutStep = restored?.step !== undefined && restored.step.stepId === stepId ? restored.step : undefined;
       const now = yield* Clock.currentTimeMillis;
+      /** The model the cut-off call asked: the turn's, or, for one closing as cancelled with none, the one its request named, by name alone. */
+      const cutModel = (): ModelIdentity => {
+        if (input.model !== undefined) return input.model;
+        const ref = at.kind === "model" ? (at.model ?? "") : "";
+        const slash = ref.indexOf("/");
+        return { api: "", provider: ref.slice(0, Math.max(slash, 0)), id: ref.slice(slash + 1) };
+      };
       const cutOff = () =>
-        partialMessage(cutStep?.content ?? [], input.model, cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL, now);
+        partialMessage(cutStep?.content ?? [], cutModel(), cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL, now);
       const timing = () => ({ startedAt: cutStep?.startedAt ?? now, endedAt: now });
       /** The next step, once a retry's wait (cut short by the restart) is over. */
       const again = () => Effect.andThen(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
@@ -818,7 +830,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           : { reason: "error", error: causeMessage(exit.cause) };
       const cancelled = ended.reason === "cancelled";
       const step = state.step;
-      if (step !== undefined && state.partial !== undefined) {
+      // Only a call in flight has output so far, and its step a model.
+      if (step?.model !== undefined && state.partial !== undefined) {
         const endedAt = yield* Clock.currentTimeMillis;
         const message = state.partial.message(step.model, cancelled ? "aborted" : "error", cancelled ? "Cancelled" : (ended.error ?? "Turn failed"), endedAt);
         yield* append({ type: "attempt", turnId, stepId: step.id, message, timing: { startedAt: state.partialStartedAt, endedAt } });
@@ -857,7 +870,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       yield* append({
         type: "turn-start",
         turnId,
-        model: input.model.ref,
+        model: (yield* asked).ref,
         ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
       });
     }

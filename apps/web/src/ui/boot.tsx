@@ -4,24 +4,22 @@ import { Show, createSignal } from "solid-js";
 import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import { faultMessage, toPluginStatus } from "@lemma/contracts";
-import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
+import { faultMessage, toPluginStatus } from "@lemma/contracts/runtime";
+import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts/runtime";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
 import { settlePaint } from "../lib/paint.ts";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, faultHistory, withReplacements } from "@lemma/plugin-host/catalog";
-import { planComposition } from "@lemma/plugin-host/planner";
-import type { Plan } from "@lemma/plugin-host/planner";
+import { catalog, faultHistory, planComposition, withReplacements } from "@lemma/composition";
+import type { Plan } from "@lemma/composition";
 import type { AnyRoute } from "@lemma/router";
-import { createClientPlugin } from "./client.ts";
-import { Notify, Root, Slots, UI_API, UiApi, UiPlugins } from "./contracts.ts";
-import type { UiPluginsService } from "./contracts.ts";
-import { defineUiPlugin, routesOf } from "./define.ts";
-import { First, SlotsContext } from "./parts.tsx";
+import { createWebRuntime, provides } from "../runtime/index.ts";
+import { routesOf } from "./define.ts";
+import { First, SlotsContext } from "./draw.tsx";
 import { createFileLoader } from "./files.ts";
+import { Root, Slots } from "./runtime.ts";
+import type { UiPluginsService } from "./runtime.ts";
 import type { SlotsService } from "./slots.ts";
 
-const APP_ID = "app";
 /**
  * Always on, with everything they need ("Needed by …"): the switches that turn
  * plugins back on, and the frame they are shown in. Without these a switch on
@@ -29,12 +27,12 @@ const APP_ID = "app";
  * from a UI file that breaks them.
  */
 const PINNED: Readonly<Record<string, string>> = {
-  [APP_ID]: "Runs the web app's plugins; with it off, nothing could turn them back on",
   "plugins-page": "Where plugins are turned back on; replace it with a UI file instead of turning it off",
   shell: "Draws the frame every other view shows in, settings included; replace it with a UI file instead of turning it off",
-  router: "Turns the page's address into what it shows; the threads and settings follow it",
   pages: "Shows the page the address names, settings included; replace it with a UI file instead of turning it off",
 };
+/** The keys of what the runtime provides (`UiPlugins.runtime`). */
+const RUNTIME = provides.map((tag) => tag.key);
 const EMPTY: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
 /** How long the first paint waits for the host's `ui` rows before starting with the defaults. */
 const FIRST_ROWS_MS = 3_000;
@@ -42,8 +40,14 @@ const FIRST_ROWS_MS = 3_000;
 export interface BootOptions {
   readonly host: Host;
   readonly token: string | undefined;
-  /** The app's own plugins, in order; the boot adds `client` and `app`. */
+  /** The app's own plugins, in order. The runtime they are written against is the boot's (`src/runtime/`), not among them. */
   readonly bundled: readonly Plugin[];
+  /**
+   * The app's own addresses, which links from outside the page name (`lemma
+   * open`, a desktop deep link, a bookmark): known whatever plugins run, so one
+   * whose page's plugin is off says so rather than that nothing lives there.
+   */
+  readonly appRoutes: readonly AnyRoute[];
   /** Loads the object UI files receive (see `createFileLoader`). */
   readonly api: () => Promise<unknown>;
   readonly element: HTMLElement;
@@ -62,27 +66,29 @@ const timeout = <A,>(promise: Promise<A>, ms: number): Promise<A | undefined> =>
 
 /**
  * Runs the web app as a composition of UI plugins on the kernel, planned from
- * the bundled plugins, the host's `ui` rows, and UI files, and renders the
- * `root` slot. A `ui-changed` from the host (an edited config file, a file
- * added to `~/.lemma/ui`, a switch on the Plugins page) is applied in place:
- * only what changed, and what depends on it, restarts.
+ * the bundled plugins, the host's `ui` rows, and UI files, over the runtime
+ * the app provides them (`createWebRuntime`), and renders the `root` slot. A
+ * `ui-changed` from the host (an edited config file, a file added to
+ * `~/.lemma/ui`, a switch on the Plugins page) is applied in place: only what
+ * changed, and what depends on it, restarts.
  */
 export async function boot(options: BootOptions): Promise<void> {
   const { host, safe } = options;
   const [statuses, setStatuses] = createSignal<readonly PluginStatus[]>([]);
   const [files, setFiles] = createSignal<readonly UiFile[]>([]);
   const [problems, setProblems] = createSignal<readonly string[]>([]);
-  const [slots, setSlots] = createSignal<SlotsService>();
   const [routes, setRoutes] = createSignal<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>([]);
   const fileLoader = createFileLoader(options.token, options.api);
   let ui: UiComposition = EMPTY;
   let plan!: Plan;
   let loader!: Loader;
+  /** The page's slots, the running core's: set once it has started. */
+  let slots!: SlotsService;
   let queue: Promise<unknown> = Promise.resolve();
   const toasted = new Set<string>();
   const faults = faultHistory();
 
-  /** A capability of the running composition, or undefined when no plugin provides it. */
+  /** A capability of the running composition (the runtime's, or a plugin's), or undefined when nothing provides it. */
   const serviceOf = <I, S>(tag: Context.Key<I, S>): Promise<S | undefined> =>
     Effect.runPromiseExit(loader.core.run(tag)).then((exit) => (Exit.isSuccess(exit) ? exit.value : undefined));
   const refresh = async () => {
@@ -102,22 +108,11 @@ export async function boot(options: BootOptions): Promise<void> {
       pinned: PINNED,
     });
     setStatuses(infos.map(toPluginStatus));
-    setSlots(await serviceOf(Slots));
-  };
-  /** New problems become warnings, once each, where a Notify is running; all of them stay listed on the Plugins page. */
-  const report = async (found: readonly string[]) => {
-    setProblems(found);
-    const fresh = found.filter((problem) => !toasted.has(problem));
-    for (const problem of found) toasted.add(problem);
-    if (fresh.length === 0) return;
-    for (const problem of fresh) console.warn(`lemma ui: ${problem}`);
-    const notify = await serviceOf(Notify);
-    for (const problem of fresh) notify?.toast({ level: "warning", source: "ui", message: problem });
   };
 
-  const client = createClientPlugin(host);
   const service: UiPluginsService = {
     list: statuses,
+    runtime: () => RUNTIME,
     files,
     routes,
     problems,
@@ -138,9 +133,17 @@ export async function boot(options: BootOptions): Promise<void> {
       return toResult(await apply(next));
     },
   };
-  // The app provides the contracts' version, so a plugin written for another is left out rather than run.
-  const app = defineUiPlugin({ id: APP_ID, provides: { plugins: UiPlugins, api: UiApi(UI_API) }, setup: () => ({ plugins: service, api: UI_API }) });
-  const fixed = [client, app, ...options.bundled];
+  const runtime = createWebRuntime({ host, plugins: service, appRoutes: options.appRoutes });
+  /** New problems become warnings, once each; all of them stay listed on the Plugins page. */
+  const report = (found: readonly string[]) => {
+    setProblems(found);
+    const fresh = found.filter((problem) => !toasted.has(problem));
+    for (const problem of found) toasted.add(problem);
+    for (const problem of fresh) {
+      console.warn(`lemma ui: ${problem}`);
+      runtime.notify.toast({ level: "warning", source: "ui", message: problem });
+    }
+  };
 
   /**
    * The composition for these rows and files (`planComposition`): what cannot
@@ -149,7 +152,13 @@ export async function boot(options: BootOptions): Promise<void> {
    */
   const planFor = async (next: UiComposition) => {
     const loaded = safe ? { plugins: [], problems: [] } : await fileLoader.load(next.files);
-    const planned = planComposition({ bundled: fixed, local: loaded.plugins, rows: safe ? {} : next.plugins, pinned: Object.keys(PINNED) });
+    const planned = planComposition({
+      bundled: options.bundled,
+      local: loaded.plugins,
+      rows: safe ? {} : next.plugins,
+      pinned: Object.keys(PINNED),
+      provided: runtime.services.provides,
+    });
     const said = (diagnostic: Diagnostic) => `${diagnostic.message}${diagnostic.suggestion === undefined ? "" : `. ${diagnostic.suggestion}`}`;
     return {
       plan: planned,
@@ -190,7 +199,7 @@ export async function boot(options: BootOptions): Promise<void> {
       if (safe || JSON.stringify(next) === JSON.stringify(ui)) return undefined;
       const planned = await planFor(next);
       if (planned.errors.length > 0) {
-        await report([...planned.problems, ...planned.errors]);
+        report([...planned.problems, ...planned.errors]);
         return undefined;
       }
       const previous = plan;
@@ -203,7 +212,7 @@ export async function boot(options: BootOptions): Promise<void> {
         setFiles(next.files);
       } else plan = previous;
       await refresh();
-      await report(Exit.isSuccess(exit) ? planned.problems : [...planned.problems, ...describeFailure(exit.cause)]);
+      report(Exit.isSuccess(exit) ? planned.problems : [...planned.problems, ...describeFailure(exit.cause)]);
       return Exit.isSuccess(exit) ? exit.value : undefined;
     });
     queue = run.catch(() => {});
@@ -221,10 +230,16 @@ export async function boot(options: BootOptions): Promise<void> {
       });
   const initial = firstRows === undefined ? EMPTY : ((await timeout(firstRows, FIRST_ROWS_MS).catch(() => undefined)) ?? EMPTY);
   const scope = await runPromise(Scope.make());
-  /** Starts `planned` with what can start: a plugin that fails is left failed, unless it is pinned or a pinned plugin needs it. */
+  /**
+   * Starts `planned` with what can start: a plugin that fails is left failed, unless it is pinned or a pinned plugin
+   * needs it. The runtime's slots and router are built for the loader, and released with it.
+   */
   const start = (planned: Plan) =>
     Effect.runPromiseExit(
-      Scope.provide(makeLoader({ source, composition: planned.resolved.composition, partialStart: { required: planned.required } }), scope),
+      Scope.provide(
+        makeLoader({ source, composition: planned.resolved.composition, partialStart: { required: planned.required }, provide: runtime.services }),
+        scope,
+      ),
     );
   let first = await planFor(initial);
   adopt(first.plan);
@@ -240,6 +255,7 @@ export async function boot(options: BootOptions): Promise<void> {
     if (Exit.isFailure(made)) throw new Error(`The web app cannot start: ${describeFailure(made.cause).join("; ")}`);
   }
   loader = made.value;
+  slots = await runPromise(loader.core.run(Slots));
   // The look the last load remembered stays only if a plugin painted it again.
   settlePaint();
   // Plugins that failed to start, left failed: no fault stream existed yet to hear them.
@@ -252,13 +268,13 @@ export async function boot(options: BootOptions): Promise<void> {
   await refresh();
 
   // Development builds: the running composition for DevTools and the UI check (`scripts/check-ui.ts`).
-  if (import.meta.env.DEV) Object.assign(window, { lemma: { slots, plugins: service, faults, service: serviceOf } });
+  if (import.meta.env.DEV) Object.assign(window, { lemma: { slots: () => slots, plugins: service, faults, service: serviceOf } });
   render(() => {
     // The frame failing leaves nothing that could say so: the page says it itself, with the way back.
-    const failure = () => slots()?.failures(Root)[0];
+    const failure = () => slots.failures(Root)[0];
     // Parts anywhere on the page find their providers through this.
     return (
-      <SlotsContext.Provider value={slots}>
+      <SlotsContext.Provider value={() => slots}>
         <First
           slot={Root}
           fallback={
@@ -280,7 +296,7 @@ export async function boot(options: BootOptions): Promise<void> {
       </SlotsContext.Provider>
     );
   }, options.element);
-  await report(bootProblems);
+  report(bootProblems);
 
   Effect.runFork(
     Stream.runForEach(loader.core.faults, (fault) =>
@@ -288,8 +304,7 @@ export async function boot(options: BootOptions): Promise<void> {
         console.error(`lemma ui: ${fault.message}`, Cause.pretty(fault.cause));
         faults.record(fault);
         await refresh();
-        const notify = await serviceOf(Notify);
-        notify?.toast({ level: "error", source: fault.pluginId, message: faultMessage(fault) });
+        runtime.notify.toast({ level: "error", source: fault.pluginId, message: faultMessage(fault) });
       }),
     ),
   );

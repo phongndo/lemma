@@ -67,6 +67,7 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
 export default defineUiPlugin({
   id: "settings",
   styles,
+  routes: [SettingsRoute],
   requires: { slots: Slots, router: Router, uiPlugins: UiPlugins, layout: Layout },
   provides: { settings: Settings },
   setup: ({ slots, router, uiPlugins, layout }) => {

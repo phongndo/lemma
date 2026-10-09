@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { capabilityName, hookChain, kernelOf, providerOf, recoverable, tablesOf, usersOf } from "../src/kernel.ts";
-import type { PluginStatus } from "../src/rpc.ts";
+import type { PluginStatus } from "../src/status.ts";
 
 const plugin = (id: string, fields: Partial<PluginStatus> = {}): PluginStatus => ({
   id,
@@ -55,7 +55,7 @@ describe("kernelOf", () => {
     plugin("llm-off", { enabled: false, state: "disabled", provides: ["lemma/Llm"] }),
     plugin("orphan", { requires: ["lemma/Nothing"] }),
   ];
-  const kernel = kernelOf(plugins);
+  const kernel = kernelOf(plugins, []);
 
   test("each hook's chain runs in order, lowest first", () => {
     expect(kernel.hooks).toEqual([
@@ -79,9 +79,17 @@ describe("kernelOf", () => {
   test("each event lists its observers; each capability its providers, in what state, and its dependents", () => {
     expect(kernel.events).toEqual([{ name: "tool.executed", observers: ["agent", "tools"] }]);
     expect(kernel.capabilities).toEqual([
-      { key: "lemma/Agent", providers: [{ plugin: "agent", state: "active", enabled: true }], users: [] },
-      { key: "lemma/Llm", providers: [{ plugin: "llm-off", state: "disabled", enabled: false }], users: ["agent"] },
-      { key: "lemma/Nothing", providers: [], users: ["orphan"] },
+      { key: "lemma/Agent", providers: [{ plugin: "agent", state: "active", enabled: true }], runtime: false, users: [] },
+      { key: "lemma/Llm", providers: [{ plugin: "llm-off", state: "disabled", enabled: false }], runtime: false, users: ["agent"] },
+      { key: "lemma/Nothing", providers: [], runtime: false, users: ["orphan"] },
+    ]);
+  });
+
+  test("what the app provides itself is a capability with no plugin behind it, listed whether or not a plugin requires it", () => {
+    const hosted = kernelOf([plugin("agent", { requires: ["lemma/Paths"] })], ["lemma/Paths", "lemma/api@2"]);
+    expect(hosted.capabilities).toEqual([
+      { key: "lemma/Paths", providers: [], runtime: true, users: ["agent"] },
+      { key: "lemma/api@2", providers: [], runtime: true, users: [] },
     ]);
   });
 });

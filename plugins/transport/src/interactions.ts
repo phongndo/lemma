@@ -10,12 +10,13 @@ interface Pending {
 }
 
 /**
- * Answers `InteractionHook` on behalf of connected clients. A request is
- * broadcast to every subscriber (and replayed to clients that subscribe while
+ * Answers `InteractionHook` on behalf of connected clients that answer
+ * questions (`Host.Events`' `answers`). A request is broadcast to every
+ * subscriber, watchers included (and replayed to clients that subscribe while
  * it is open); the first answer wins and every client then receives
- * `interaction-closed`. With nobody attached the request passes to the next
- * handler. If every client stays away for `graceMs` the request fails
- * `Unavailable`, so a page reload does not abort a login.
+ * `interaction-closed`. With no answering client attached the request passes
+ * to the next handler. If every answering client stays away for `graceMs` the
+ * request fails `Unavailable`, so a page reload does not abort a login.
  */
 export interface Interactions {
   readonly handle: Handler<InteractionRequest, InteractionAnswer, InteractionError>;

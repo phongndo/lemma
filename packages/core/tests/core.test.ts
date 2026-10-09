@@ -1,8 +1,22 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Context, Deferred, Effect, Exit, Fiber, FileSystem, Layer, Option, References, Result, Schema, Scope } from "effect";
-import { PluginFault, CapabilityMismatch, CompositionError, CoreClosed, definePlugin, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
+import {
+  CapabilityMismatch,
+  CompositionError,
+  CoreClosed,
+  definePlugin,
+  Event,
+  Events,
+  Hook,
+  Hooks,
+  makeCore,
+  PluginContext,
+  PluginFault,
+  Registries,
+  Registry,
+} from "../src/index.ts";
 import type { Core, Plugin } from "../src/index.ts";
-import { failure, run } from "./support.ts";
+import { failure, run, waitFor } from "./support.ts";
 
 class Prefix extends Context.Service<Prefix, string>()("test/Prefix") {}
 class Format extends Context.Service<Format, (text: string) => string>()("test/Format") {}
@@ -31,7 +45,7 @@ describe("composition", () => {
       Effect.gen(function* () {
         core = yield* makeCore([]);
         expect(yield* core.run(Effect.succeed(42))).toBe(42);
-        expect(yield* core.inspect).toEqual({ state: "active", faultSequence: 0, plugins: [], hooks: [], events: [], registries: [] });
+        expect(yield* core.inspect).toEqual({ state: "active", faultSequence: 0, provided: [], plugins: [], hooks: [], events: [], registries: [] });
       }),
     );
     expect((await Effect.runPromise(core.inspect)).state).toBe("closed");
@@ -527,5 +541,223 @@ describe("lifetimes", () => {
       expect(resources).toBe(0);
       expect((await Effect.runPromise(core.inspect)).hooks).toEqual([]);
     }
+  });
+});
+
+describe("capabilities the application provides", () => {
+  class Clock extends Context.Service<Clock, { readonly now: () => number }>()("test/Clock") {}
+  const clock = { now: () => 7 };
+  const stamper = definePlugin({
+    id: "stamper",
+    requires: [Clock],
+    provides: [Prefix],
+    layer: Layer.effect(
+      Prefix,
+      Effect.map(Clock, (service) => `${service.now()} `),
+    ),
+  });
+
+  test("plugins require them as any other capability, and work run in the core gets them", async () => {
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([formatter, stamper], { provide: { provides: [Clock], layer: Layer.succeed(Clock, clock) } });
+        expect(yield* core.run(Clock)).toBe(clock);
+        expect(yield* core.run(Effect.map(Format, (format) => format("o'clock")))).toBe("7 o'clock");
+        const snapshot = yield* core.inspect;
+        expect(snapshot.provided).toEqual([Clock.key]);
+        // The application has no plugin row; a plugin's requires still names what it uses.
+        expect(snapshot.plugins.map((plugin) => [plugin.id, plugin.requires])).toEqual([
+          ["stamper", [Clock.key]],
+          ["formatter", [Prefix.key]],
+        ]);
+      }),
+    );
+  });
+
+  test("no plugin may provide one, and the application may not provide the runtime's own", async () => {
+    let starts = 0;
+    let built = 0;
+    let released = 0;
+    const marker = definePlugin({ id: "marker", layer: Layer.effectDiscard(Effect.sync(() => starts++)) });
+    const rival = definePlugin({ id: "rival", provides: [Clock], layer: Layer.succeed(Clock, clock) });
+    const counted = Layer.effect(
+      Clock,
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          built++;
+          return clock;
+        }),
+        () => Effect.sync(() => void released++),
+      ),
+    );
+    const error = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([marker, rival], { provide: { provides: [Clock], layer: counted } }))));
+    expect(error).toMatchObject({ _tag: "CompositionError", reason: "ReservedCapability", plugins: ["rival"], capability: Clock.key });
+    expect(error.message).toContain("the application provides it");
+    expect([starts, built, released]).toEqual([0, 1, 1]);
+
+    // Refused before anything is built: merged over the built-ins, it would replace the core's own.
+    const hooks = Layer.sync(Hooks, () => {
+      built++;
+      return { invoke: (_hook, value, end) => end(value) };
+    });
+    const refused = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([marker], { provide: { provides: [Hooks], layer: hooks } }))));
+    expect(refused).toMatchObject({ _tag: "CompositionError", reason: "ReservedCapability", plugins: [], capability: Hooks.key });
+    expect([starts, built]).toEqual([0, 1]);
+
+    // A key listed twice is refused as a plugin's would be, also before anything is built.
+    const twice = failure(await Effect.runPromiseExit(Effect.scoped(makeCore([marker], { provide: { provides: [Clock, Clock], layer: counted } }))));
+    expect(twice).toMatchObject({ _tag: "CompositionError", reason: "DuplicateCapability", plugins: [], capability: Clock.key });
+    expect([starts, built]).toEqual([0, 1]);
+  });
+
+  test("their layer uses the core's hooks, events, and registries, and nothing of the caller's", async () => {
+    class Ambient extends Context.Service<Ambient, string>()("test/Ambient") {}
+    const Ask = Hook.make<string, string>("test/ask");
+    const Saved = Event.make<string>("test/saved");
+    const Menu = Registry.make<string>("test/menu");
+    class Desk extends Context.Service<
+      Desk,
+      {
+        readonly ask: (question: string) => Effect.Effect<string, unknown>;
+        readonly save: (text: string) => Effect.Effect<void>;
+        readonly menu: Effect.Effect<readonly string[]>;
+        readonly ambient: Option.Option<string>;
+      }
+    >()("test/Desk") {}
+    const desk = Layer.effect(
+      Desk,
+      Effect.gen(function* () {
+        const hooks = yield* Hooks;
+        const events = yield* Events;
+        const registries = yield* Registries;
+        return {
+          ask: (question: string) => hooks.invoke(Ask, question, () => Effect.succeed("unanswered")),
+          save: (text: string) => events.publish(Saved, text),
+          menu: Effect.map(registries.items(Menu), (items) => items.map((entry) => entry.item)),
+          ambient: yield* Effect.serviceOption(Ambient),
+        };
+      }),
+    );
+    const saved: string[] = [];
+    const helper = definePlugin({
+      id: "helper",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          yield* owner.on(Ask, (question) => Effect.succeed(`answered ${question}`));
+          yield* owner.observe(Saved, (text) => Effect.sync(() => void saved.push(text)));
+          yield* owner.add(Menu, "Open");
+        }),
+      ),
+    });
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([helper], { provide: { provides: [Desk], layer: desk } }).pipe(Effect.provideService(Ambient, "caller"));
+        const service = yield* core.run(Desk);
+        expect(service.ambient).toEqual(Option.none());
+        expect(yield* service.ask("why")).toBe("answered why");
+        expect(yield* service.menu).toEqual(["Open"]);
+        yield* service.save("draft");
+        expect(
+          yield* waitFor(
+            Effect.sync(() => saved),
+            (texts) => texts.length > 0,
+          ),
+        ).toEqual(["draft"]);
+      }),
+    );
+  });
+
+  test("they are built before the first plugin activates and released after the last is disposed", async () => {
+    const log: string[] = [];
+    const logged = Layer.effect(
+      Clock,
+      Effect.acquireRelease(
+        Effect.sync(() => {
+          log.push("application+");
+          return clock;
+        }),
+        () => Effect.sync(() => void log.push("application-")),
+      ),
+    );
+    const user = (id: string) =>
+      definePlugin({
+        id,
+        requires: [Clock],
+        layer: Layer.effectDiscard(
+          Effect.acquireRelease(
+            Effect.sync(() => void log.push(`${id}+`)),
+            () => Effect.sync(() => void log.push(`${id}-`)),
+          ),
+        ),
+      });
+    await run(makeCore([user("a"), user("b")], { provide: { provides: [Clock], layer: logged } }));
+    expect(log).toEqual(["application+", "a+", "b+", "b-", "a-", "application-"]);
+  });
+
+  test("a build failure fails makeCore with its error, activating nothing and leaving nothing behind", async () => {
+    let starts = 0;
+    const log: string[] = [];
+    const marker = definePlugin({ id: "marker", requires: [Clock], layer: Layer.effectDiscard(Effect.sync(() => starts++)) });
+    const failing = Layer.effect(
+      Clock,
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.sync(() => void log.push("released")));
+        return yield* Effect.fail({ reason: "no clock" } as const);
+      }),
+    );
+    await run(
+      Effect.gen(function* () {
+        const exit = yield* Effect.exit(makeCore([marker], { provide: { provides: [Clock], layer: failing } }));
+        const error: { readonly reason: "no clock" } | CompositionError | PluginFault = failure(exit);
+        expect(error).toEqual({ reason: "no clock" });
+        // Still inside the caller's scope, and what the build acquired is already released.
+        expect(log).toEqual(["released"]);
+      }),
+    );
+    expect(starts).toBe(0);
+    expect(log).toEqual(["released"]);
+  });
+
+  test("an interrupted build releases what it acquired, without converting cancellation to failure", async () => {
+    let released = false;
+    await run(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const waiting = Layer.effect(
+          Clock,
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() => Effect.sync(() => void (released = true)));
+            yield* Deferred.succeed(entered, undefined);
+            return yield* Effect.never;
+          }),
+        );
+        const fiber = yield* Effect.forkChild(makeCore([], { provide: { provides: [Clock], layer: waiting } }));
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+        expect(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause)).toBe(true);
+        expect(released).toBe(true);
+      }),
+    );
+  });
+
+  test("services that differ from what the application declares are a defect naming the difference", async () => {
+    const released: string[] = [];
+    const wrong = Layer.effectContext(
+      Effect.gen(function* () {
+        yield* Effect.addFinalizer(() => Effect.sync(() => void released.push("wrong")));
+        return Context.make(Prefix, "undeclared");
+      }),
+    );
+    const exit = await Effect.runPromiseExit(Effect.scoped(makeCore([], { provide: { provides: [Clock], layer: wrong as unknown as Layer.Layer<Clock> } })));
+    expect(Exit.isFailure(exit)).toBe(true);
+    if (Exit.isFailure(exit)) {
+      expect(Cause.findErrorOption(exit.cause)).toEqual(Option.none());
+      expect(Result.getOrThrow(Cause.findDefect(exit.cause))).toMatchObject({
+        message: expect.stringContaining(`missing: ${Clock.key}; undeclared: ${Prefix.key}`),
+      });
+    }
+    expect(released).toEqual(["wrong"]);
   });
 });

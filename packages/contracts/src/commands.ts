@@ -1,7 +1,10 @@
-import { Context, Data, Schema } from "effect";
-import type { Effect, Scope } from "effect";
+import { Context, Data, Effect, Schema, Stream } from "effect";
+import type { Scope } from "effect";
 import { Event } from "@lemma/core";
-import type { Awaitable, PluginContext } from "@lemma/core";
+import type { Awaitable, Events, PluginContext } from "@lemma/core";
+import { defineChannel, eventFeed, serveChannel, withdrawnFrom } from "./channels.ts";
+import type { Channel } from "./channels.ts";
+import { InteractionOrigin } from "./interaction.ts";
 
 /** Where a command runs: the client's working directory and, when it has one open, its session. */
 export const CommandContext = Schema.Struct({
@@ -34,11 +37,14 @@ export type CommandResult = typeof CommandResult.Type;
 
 /**
  * `NotFound`: no command has the id. `Cancelled`: the person dismissed one of
- * its questions. `Failed`: anything else the command failed with.
+ * its questions. `Withdrawn`: the command was removed while it ran, as when
+ * the plugin that registered it stopped or was replaced, which stopped it;
+ * running it again reaches a replacement, if there is one. `Failed`: anything
+ * else the command failed with.
  */
 export class CommandError extends Data.TaggedError("CommandError")<{
   readonly command: string;
-  readonly reason: "NotFound" | "Failed" | "Cancelled";
+  readonly reason: "NotFound" | "Failed" | "Cancelled" | "Withdrawn";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -53,21 +59,123 @@ export interface Command extends Omit<CommandInfo, "source"> {
   readonly run: (context: CommandContext) => Awaitable<CommandResult | void, unknown>;
 }
 
-/** Published whenever a command is registered or removed. */
+/** Every command (`Commands.list`), published by its provider whenever one is registered or removed, once that is live. */
 export const CommandsChanged = Event.make<{ readonly commands: readonly CommandInfo[] }>("lemma/commands.changed");
 
+/**
+ * The commands plugins register and clients list and run. Its provider
+ * publishes `CommandsChanged`, and serves it to clients as `CommandChannels`
+ * (`serveCommands`).
+ */
 export class Commands extends Context.Service<
   Commands,
   {
     /**
      * Call during activation: the registering plugin's `PluginContext` supplies
-     * `source`. Removed when that plugin's scope closes. A duplicate id fails
-     * with `Failed`.
+     * `source`. Removed when the scope it was registered in closes, or with
+     * that plugin, whichever is first. A duplicate id fails with `Failed`.
      */
     readonly register: (command: Command) => Effect.Effect<void, CommandError, Scope.Scope | PluginContext>;
     /** Sorted by category, then title. */
     readonly list: Effect.Effect<readonly CommandInfo[]>;
-    /** Interruption stays interruption; every failure becomes a `CommandError`. */
+    /**
+     * Runs the command as part of the lifetime of the plugin that registered
+     * it (`Registries.run`), where what it does finds that plugin in
+     * `Admitted` (what that defers: `ChangeReport`). When the command is
+     * removed while it runs, as when that plugin stops or is replaced, it
+     * stops at once and fails `Withdrawn`. Interruption stays interruption;
+     * every failure becomes a `CommandError`.
+     */
     readonly run: (id: string, context: CommandContext) => Effect.Effect<CommandResult, CommandError>;
   }
 >()("lemma/Commands") {}
+
+/**
+ * What clients call on `Commands`, served by its provider (`serveCommands`).
+ * A refused run fails with its `CommandError`'s reason as the code
+ * (`NotFound`, `Cancelled`, `Failed`) and the command's id as the subject.
+ */
+export const CommandChannels = {
+  list: defineChannel({
+    kind: "call",
+    id: "commands.list",
+    title: "Commands",
+    description: "Every command clients can run, by category then title",
+    payload: Schema.Void,
+    success: Schema.Array(CommandInfo),
+    repeatable: true,
+  }),
+  /**
+   * Answers when the command ends, and interrupting the call (a client that
+   * leaves) interrupts the command, as does its provider leaving (stopping or
+   * reloading) or the command being removed (`Commands.run`): the call then
+   * fails `Withdrawn` either way, and running it again reaches a replacement,
+   * if there is one. It is not `repeatable`: a command run twice need not do
+   * what it does once (`host.toggle-plugin` flips the plugin back), and it may
+   * ask the person again. It runs in `cwd`, the host's when absent; its questions
+   * carry `origin` as their `InteractionOrigin`, so the client that ran it can
+   * tell them from others'.
+   */
+  run: defineChannel({
+    kind: "call",
+    id: "commands.run",
+    title: "Run command",
+    description: "Runs a command in `cwd` (default: the host's) and answers when it ends; its questions carry `origin`",
+    payload: Schema.Struct({
+      id: Schema.String,
+      cwd: Schema.optional(Schema.String),
+      sessionId: Schema.optional(Schema.String),
+      origin: Schema.optional(Schema.String),
+    }),
+    success: CommandResult,
+  }),
+  /**
+   * Every command now, then the whole list again after each registration or
+   * removal (`CommandsChanged`; see `eventFeed`). The first list says the
+   * stream is live and resyncs a client that reconnects. Each list is whole,
+   * so a client keeps the last it received, which is current once the
+   * commands stop changing. Lists are published after the change they
+   * report, so one from changes made just as the stream opened can follow the
+   * first though older than it, the current list then following. A client
+   * that falls behind receives the latest, skipping the ones in between, and
+   * never holds back the commands.
+   */
+  changes: defineChannel({
+    kind: "stream",
+    id: "commands.changes",
+    title: "Command changes",
+    description: "Every command now, then the whole list again whenever one is registered or removed",
+    payload: Schema.Void,
+    success: Schema.Array(CommandInfo),
+  }),
+};
+
+/** What a client's `commands.changes`, and its source, hold: the latest list (see `eventFeed`). */
+const FEED = { buffer: 1 };
+
+/**
+ * `CommandChannels` served from `commands`: what a provider of `Commands` adds
+ * to `Channels`, each with `PluginContext.add`. A run naming no `cwd` runs in
+ * `defaults.cwd`, the host's (`Paths`).
+ */
+export const serveCommands = (
+  commands: Context.Service.Shape<typeof Commands>,
+  events: Context.Service.Shape<typeof Events>,
+  defaults: { readonly cwd: string },
+): readonly Channel[] => [
+  serveChannel(CommandChannels.list, () => commands.list),
+  // A command can wait on a question for good: it stops when the provider leaves rather than hold that up. One stopped
+  // because it was removed (`Withdrawn`) ends as the call's withdrawal too, so a client sees one withdrawal.
+  serveChannel(CommandChannels.run, ({ id, cwd, sessionId, origin }, { left }) => {
+    const run = commands.run(id, { cwd: cwd ?? defaults.cwd, ...(sessionId === undefined ? {} : { sessionId }) }).pipe(
+      Effect.catchIf(
+        (error) => error.reason === "Withdrawn",
+        () => Effect.fail(withdrawnFrom(CommandChannels.run.id, "call")),
+      ),
+    );
+    return Effect.raceFirst(origin === undefined ? run : Effect.provideService(run, InteractionOrigin, origin), left);
+  }),
+  serveChannel(CommandChannels.changes, () =>
+    eventFeed(commands.list, [Stream.map(events.stream(CommandsChanged, FEED), (changed) => changed.commands)], FEED.buffer),
+  ),
+];

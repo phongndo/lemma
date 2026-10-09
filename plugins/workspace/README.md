@@ -2,6 +2,8 @@
 
 Provides `Workspace` by reading the filesystem and running the `git` CLI: `status`, `browse`, `createDirectory`, `branches`, `createWorktree`, and `checkout`. Requires `Paths`.
 
+Serves it to clients as the channels `WorkspaceChannels` declares (`workspace.status`, `workspace.branches`, …), and file search as `files.search` (`FileChannels`), with `serveWorkspace` and `serveFiles` from `@lemma/contracts`, which a replacement uses as well. File search is served here rather than by a file searcher so that the call stays while searchers come and go: it asks `FileSearchers` at each call, and with none fails `Unavailable`.
+
 ## Config
 
 | Key         | Default                  | Meaning                                                               |

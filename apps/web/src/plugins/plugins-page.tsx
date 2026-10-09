@@ -12,15 +12,15 @@ import {
   HostPlugins,
   Notify,
   PluginTabs,
+  PluginsFacts,
   SectionIds,
-  Threads,
   Settings,
   SettingsGroups,
   SettingsSections,
   Slots,
   UiPlugins,
 } from "../ui/contracts.ts";
-import type { ClientService, PluginTab, PluginsService, ThreadsService, UiPluginsService } from "../ui/contracts.ts";
+import type { ClientService, PluginTab, PluginsFact, PluginsService, UiPluginsService } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 import type { SlotsService } from "../ui/slots.ts";
 import { ConfigForm, Contained, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "../ui/parts.tsx";
@@ -29,6 +29,8 @@ import styles from "./plugins-page.css?inline";
 const SECTION = SectionIds.plugins;
 const DEFAULT_TAB = "plugins.overview";
 const KIND_LABEL: Readonly<Record<PluginKind, string>> = { host: "host", web: "web app" };
+/** Who provides a runtime capability: the app itself, which no plugin replaces. */
+const RUNTIME_LABEL: Readonly<Record<PluginKind, string>> = { web: "the web app", host: "the host" };
 
 /** A tab's id in the `plugins.tabs` slot. */
 type Tab = string;
@@ -63,7 +65,6 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-dig
 /** Everything the inspector's parts share. */
 interface Inspector {
   readonly client: ClientService;
-  readonly threads: ThreadsService;
   readonly ui: UiPluginsService;
   readonly slots: SlotsService;
   readonly services: Readonly<Record<PluginKind, PluginsService>>;
@@ -345,7 +346,10 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
                     {capabilityName(key)}
                   </span>
                   <span class="muted"> from </span>
-                  <Show when={providerOf(all(), key)} fallback={<span class="muted">no plugin</span>}>
+                  <Show
+                    when={providerOf(all(), key)}
+                    fallback={<span class="muted">{inspector.services[props.kind].runtime().includes(key) ? RUNTIME_LABEL[props.kind] : "no plugin"}</span>}
+                  >
                     {(provider) => <PluginLink inspector={inspector} kind={props.kind} id={provider().id} />}
                   </Show>
                 </li>
@@ -447,8 +451,17 @@ function Faults(props: { plugin: PluginStatus }) {
   );
 }
 
-function HostFacts(props: { client: ClientService; threads: ThreadsService; ui: UiPluginsService }) {
-  const running = () => props.threads.running();
+/** A plugin's line in the summary, drawn contained: one that throws leaves, a fault of the plugin that added it. */
+function Fact(props: { fact: PluginsFact }) {
+  return (
+    <Show when={props.fact.value() !== undefined}>
+      <dt>{props.fact.label}</dt>
+      <dd data-tip={props.fact.tip}>{props.fact.value()}</dd>
+    </Show>
+  );
+}
+
+function HostFacts(props: { client: ClientService; slots: SlotsService; ui: UiPluginsService }) {
   const files = () => props.ui.files();
   return (
     <Show when={props.client.info()}>
@@ -478,11 +491,51 @@ function HostFacts(props: { client: ClientService; threads: ThreadsService; ui: 
           <dd class="mono" data-tip={info().composition.id}>
             {info().composition.id.slice(0, 16)}
           </dd>
-          <dt>Running</dt>
-          <dd>{running().length === 0 ? "no turns" : `${running().length} turn${running().length === 1 ? "" : "s"}`}</dd>
+          <For each={props.slots.list(PluginsFacts)}>{(fact) => <Contained slot={PluginsFacts} item={fact} component={Fact} props={{ fact }} />}</For>
         </dl>
       )}
     </Show>
+  );
+}
+
+/** What each app provides itself, and who uses each: the runtime plugins are written against, which has no row. */
+function Runtime(props: { inspector: Inspector }) {
+  const { inspector } = props;
+  const kinds = () => (["web", "host"] as const).filter((kind) => inspector.services[kind].runtime().length > 0);
+  return (
+    <section class="inspector-wiring inspector-runtime">
+      <h3>Runtime</h3>
+      <For each={kinds()}>
+        {(kind) => (
+          <>
+            <p class="muted small">Provided by {RUNTIME_LABEL[kind]} itself, for its plugins to require; none replaces it, and it has no switch.</p>
+            <ul>
+              <For each={inspector.services[kind].runtime()}>
+                {(key) => {
+                  const users = () => usersOf(inspector.services[kind].list(), key);
+                  return (
+                    <li>
+                      <details>
+                        <summary>
+                          <span class="capability" data-tip={key}>
+                            {capabilityName(key)}
+                          </span>
+                          <span class="muted"> used by {users().length === 1 ? "1 plugin" : `${users().length} plugins`}</span>
+                        </summary>
+                        <div class="inspector-runtime-users">
+                          <Links inspector={inspector} kind={kind} ids={users()} none="no plugin" />
+                        </div>
+                      </details>
+                    </li>
+                  );
+                }}
+              </For>
+            </ul>
+          </>
+        )}
+      </For>
+      <HostFacts client={inspector.client} slots={inspector.slots} ui={inspector.ui} />
+    </section>
   );
 }
 
@@ -504,7 +557,7 @@ function Summary(props: { inspector: Inspector; entries: readonly KindedPlugin[]
           ],
         ]}
       />
-      <HostFacts client={props.inspector.client} threads={props.inspector.threads} ui={props.inspector.ui} />
+      <Runtime inspector={props.inspector} />
     </div>
   );
 }
@@ -643,8 +696,8 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
 export default defineUiPlugin({
   id: "plugins-page",
   styles,
-  requires: { client: Client, threads: Threads, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: UiPlugins },
-  setup: ({ client, threads, notify, settings, slots, host, ui }) => {
+  requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: UiPlugins },
+  setup: ({ client, notify, settings, slots, host, ui }) => {
     // In the address (`?plugin=agent&kind=host&tab=…&filter=…`): a link, a reload, and back and forward return to them, and
     // settings reopen the section as it was left.
     const params = () => (settings.section() === SECTION ? settings.params() : {});
@@ -671,11 +724,12 @@ export default defineUiPlugin({
         setBusy(undefined);
       }
     };
-    const deferredNote = "the host restarts it and the plugins that use it, and this page reconnects";
+    // The host defers a change asked for here only when it restarts the transport serving the request: it applies once
+    // the reply is out, dropping the connection.
+    const deferredNote = "the host restarts the transport once this reply is out, and this page reconnects";
 
     const inspector: Inspector = {
       client,
-      threads,
       ui,
       slots,
       services,
@@ -767,8 +821,16 @@ export default defineUiPlugin({
     const reload = () =>
       run("reload", async () => {
         try {
-          const summary = describeReload(await host.reload());
-          notify.toast({ level: "info", message: summary === undefined ? "Config reloaded; nothing changed" : `Config reloaded: ${summary}` });
+          const result = await host.reload();
+          const summary = describeReload(result);
+          notify.toast({
+            level: "info",
+            message: result.deferred
+              ? "Reloading config: the host restarts the plugins it changes, the transport among them, and this page reconnects"
+              : summary === undefined
+                ? "Config reloaded; nothing changed"
+                : `Config reloaded: ${summary}`,
+          });
         } catch (error) {
           notify.report(error, "Reload failed");
         }

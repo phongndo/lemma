@@ -1,13 +1,12 @@
 // Runs in a separate Node process: increments a counter credential `count` times through the plugin.
-import { dirname } from "node:path";
 import { Effect } from "effect";
 import { Credentials } from "@lemma/contracts";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { makeCore } from "@lemma/core";
 import credentials from "../../src/index.ts";
 
-const [auth, provider, count] = process.argv.slice(2) as [string, string, string];
-const paths = pathsPlugin(dirname(auth), { auth });
+const [home, provider, count] = process.argv.slice(2) as [string, string, string];
+const paths = pathsPlugin(home);
 
 await Effect.runPromise(
   Effect.scoped(

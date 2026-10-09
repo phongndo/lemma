@@ -21,6 +21,13 @@ afterEach(async () => {
 
 const paths = () => pathsPlugin(dir, { cwd: "/work/app" });
 
+/** A promise and the function that resolves it. */
+const resolvable = () => {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => (resolve = done));
+  return { promise, resolve };
+};
+
 /** Runs `body` against a fresh core over the same directory, as a restarted host would. */
 const run = <A, E>(body: Effect.Effect<A, E, Sessions | Events>, config?: { readonly unloadAfter?: number }) =>
   Effect.runPromise(
@@ -387,6 +394,54 @@ describe("sessions", () => {
       }),
     );
     expect((await sessionFiles()).map(idOfFile)).toHaveLength(1);
+  });
+
+  it("announces a removal and an append whose callers are interrupted while the disk works", async () => {
+    const FileHandle = await fileHandles();
+    const datasync = FileHandle.datasync;
+    const rm = fs.rm;
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const events = yield* Events;
+        const appended = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(SessionAppended), 1)));
+        const removed = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(SessionRemoved), 1)));
+        yield* Effect.yieldNow;
+        const { id } = yield* store.create();
+        // Each held on the disk until its caller has been interrupted: what was written is announced all the same.
+        const interruptedDuring = <A, E>(hold: (started: () => void, done: Promise<void>) => void, work: Effect.Effect<A, E>) =>
+          Effect.gen(function* () {
+            const started = resolvable();
+            const done = resolvable();
+            hold(started.resolve, done.promise);
+            const fiber = yield* Effect.forkChild(work);
+            yield* Effect.promise(() => started.promise);
+            const interrupting = yield* Effect.forkChild(Fiber.interrupt(fiber));
+            done.resolve();
+            yield* Fiber.join(interrupting);
+          });
+        yield* interruptedDuring(
+          (started, done) =>
+            vi.spyOn(FileHandle, "datasync").mockImplementationOnce(async function (this: fs.FileHandle) {
+              started();
+              await done;
+              return datasync.call(this);
+            }),
+          store.append(id, custom(1)),
+        );
+        expect((yield* Fiber.join(appended)).map((event) => event.event.seq)).toEqual([1]);
+        yield* interruptedDuring(
+          (started, done) =>
+            vi.spyOn(fs, "rm").mockImplementationOnce(async (...args: Parameters<typeof fs.rm>) => {
+              started();
+              await done;
+              return rm(...args);
+            }),
+          store.remove(id),
+        );
+        expect(yield* Fiber.join(removed)).toEqual([{ sessionId: id }]);
+      }),
+    );
   });
 
   it("fails writes queued behind a removal instead of recreating the file", async () => {
