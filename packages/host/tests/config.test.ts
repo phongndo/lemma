@@ -40,6 +40,46 @@ describe("resolvePaths", () => {
 });
 
 describe("loadComposition", () => {
+  test("merges feature selection and definitions only from trusted scopes, preserving raw rows", () =>
+    withPaths(async (paths) => {
+      const app = { id: "feature", title: "Shipped", host: ["agent"], ui: ["chat"] };
+      const user = { ...app, title: "User", host: ["mine"] };
+      const project = { ...app, title: "Project", ui: ["custom-chat"] };
+      await writeFile(
+        paths.userConfig,
+        JSON.stringify({ bundleDefinitions: [user], bundles: { feature: { enabled: false } }, plugins: { mine: { enabled: true } } }),
+      );
+      await writeFile(paths.projectConfig, JSON.stringify({ bundleDefinitions: [project], bundles: { feature: { enabled: true } } }));
+      const untrusted = await Effect.runPromise(loadComposition(paths, [app]));
+      expect(untrusted.bundleDefinitions).toEqual([user]);
+      expect(untrusted.bundles).toEqual({ feature: { enabled: false } });
+      expect(untrusted.bundleEnabledIn).toEqual({ feature: "user" });
+      await writeFile(
+        paths.userConfig,
+        JSON.stringify({
+          trustedProjects: [paths.cwd],
+          bundleDefinitions: [user],
+          bundles: { feature: { enabled: false } },
+          plugins: { mine: { enabled: true } },
+        }),
+      );
+      const trusted = await Effect.runPromise(loadComposition(paths, [app]));
+      expect(trusted.bundleDefinitions).toEqual([project]);
+      expect(trusted.bundles).toEqual({ feature: { enabled: true } });
+      expect(trusted.bundleEnabledIn).toEqual({ feature: "project" });
+      expect(trusted.rows).toEqual({ mine: { enabled: true } });
+      expect(trusted.ui.plugins).toEqual({});
+      expect(trusted.diagnostics).toEqual([]);
+    }));
+
+  test("rejects duplicate definitions within one file, but permits cross-scope overrides", () =>
+    withPaths(async (paths) => {
+      const definition = { id: "feature", title: "Feature", host: [], ui: [] };
+      await writeFile(paths.userConfig, JSON.stringify({ bundleDefinitions: [definition, definition] }));
+      const loaded = await Effect.runPromise(loadComposition(paths));
+      expect(loaded.diagnostics).toMatchObject([{ severity: "error", message: expect.stringContaining("duplicate bundle definition") }]);
+    }));
+
   test("missing files yield no rows, without diagnostics", () =>
     withPaths(async (paths) => {
       const loaded = await Effect.runPromise(loadComposition(paths));
@@ -162,6 +202,14 @@ describe("loadComposition", () => {
 });
 
 describe("patchConfig", () => {
+  test("keeps explicit enables when bundle defaults may disable a member", () => {
+    expect(parseJsonc(patchConfig("", { agent: { enabled: true } }, "user", "plugins", true))).toEqual({ plugins: { agent: { enabled: true } } });
+    expect(parseJsonc(patchConfig("", { chat: { enabled: true } }, "user", "ui", true))).toEqual({ ui: { chat: { enabled: true } } });
+    const text = patchConfig('{ "bundles": { "feature": { "enabled": false } } } // kept', { feature: { enabled: true } }, "user", "bundles");
+    expect(parseJsonc(text)).toEqual({ bundles: { feature: { enabled: true } } });
+    expect(text).toContain("// kept");
+  });
+
   test("adds rows to an empty file and removes defaults, keeping comments and other rows", () => {
     const empty = patchConfig("", { bash: { enabled: false } });
     expect(parseJsonc(empty)).toEqual({ plugins: { bash: { enabled: false } } });
@@ -266,6 +314,18 @@ describe("patchConfig", () => {
 });
 
 describe("updateConfig", () => {
+  test("a delayed rollback preserves newer config edits and restores only its own current write", () =>
+    withPaths(async (paths) => {
+      const first = await Effect.runPromise(updateConfig(paths.userConfig, { feature: { enabled: false } }, "user", "bundles"));
+      expect(await Effect.runPromise(first.restoreIfUnchanged)).toBe(true);
+      expect((await Effect.runPromise(loadComposition(paths))).files[0]?.found).toBe(false);
+      const second = await Effect.runPromise(updateConfig(paths.userConfig, { feature: { enabled: false } }, "user", "bundles"));
+      const newer = '{ "bundles": { "feature": { "enabled": true } }, "plugins": { "agent": { "config": { "maxSteps": 8 } } } }';
+      await writeFile(paths.userConfig, newer);
+      expect(await Effect.runPromise(second.restoreIfUnchanged)).toBe(false);
+      expect(await readFile(paths.userConfig, "utf8")).toBe(newer);
+    }));
+
   test("writes the file, records enabledIn, and restore puts it back or removes it", () =>
     withPaths(async (paths) => {
       const update = await Effect.runPromise(updateConfig(paths.userConfig, { bash: { enabled: false } }));

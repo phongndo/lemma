@@ -1,6 +1,8 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
 import { capabilityName, describeReload, hookChain, providerOf, recoverable, usersOf } from "@lemma/contracts";
+import type { BundleStatus } from "@lemma/contracts/runtime";
+import { bundleState } from "../model/bundles.ts";
 import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "../model/format.ts";
 import { PLUGIN_FILTERS, dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "../model/plugins.ts";
@@ -76,6 +78,7 @@ interface Inspector {
   readonly setConfirming: (next: Confirmation | undefined) => void;
   /** `<kind>:<id>` of the change running, which locks the others; "reload" while config reloads. */
   readonly busy: () => string | undefined;
+  readonly toggleBundle: (bundle: BundleStatus, enabled: boolean) => void;
   readonly restart: (kind: PluginKind, plugin: PluginStatus, force: boolean) => void;
   readonly toggle: (kind: PluginKind, plugin: PluginStatus, enabled: boolean) => void;
   readonly configure: (kind: PluginKind, plugin: PluginStatus, values: Readonly<Record<string, unknown>>) => Promise<void>;
@@ -613,6 +616,66 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
   );
 }
 
+/** Feature selections above the advanced inspector; individual overrides remain available below. */
+function Bundles(props: { inspector: Inspector }) {
+  const { inspector } = props;
+  const bundles = () => inspector.ui.bundles?.() ?? [];
+  return (
+    <Show when={bundles().length > 0}>
+      <section class="plugin-bundles" aria-label="Features">
+        <h2>Features</h2>
+        <p class="muted small">Choose a feature across the host and web app. Each applies changes separately; individual plugin overrides take priority.</p>
+        <div class="plugin-bundle-grid">
+          <For each={bundles()}>
+            {(bundle) => {
+              const state = () => bundleState(bundle, inspector.services.host.list(), inspector.services.web.list(), inspector.ui.bundleUiApplied?.() ?? true);
+              return (
+                <article class="plugin-bundle" data-bundle={bundle.id}>
+                  <header>
+                    <h3>{bundle.title}</h3>
+                    <span class="spacer" />
+                    <Show when={inspector.busy() === `bundle:${bundle.id}`}>
+                      <Spinner />
+                    </Show>
+                    <Toggle
+                      label={`${bundle.title} selected`}
+                      checked={bundle.enabled}
+                      disabled={
+                        inspector.busy() !== undefined || inspector.ui.safe || inspector.ui.setBundleEnabled === undefined || !inspector.client.connected()
+                      }
+                      onChange={(enabled) => inspector.toggleBundle(bundle, enabled)}
+                    />
+                  </header>
+                  <Show when={bundle.description}>
+                    <p class="muted small">{bundle.description}</p>
+                  </Show>
+                  <p class="small" role="status">
+                    {state().label}
+                    <Show when={bundle.customized}> · Customized</Show>
+                  </p>
+                  <Show when={bundle.enabled && state().missing.length > 0}>
+                    <p class="muted small">Not running: {state().missing.join(", ")}</p>
+                  </Show>
+                  <details>
+                    <summary class="muted small">Member plugins</summary>
+                    <p class="small">
+                      Host: <Links inspector={inspector} kind="host" ids={bundle.host} none="none" />
+                    </p>
+                    <p class="small">
+                      Web app: <Links inspector={inspector} kind="web" ids={bundle.ui} none="none" />
+                    </p>
+                  </details>
+                </article>
+              );
+            }}
+          </For>
+        </div>
+        <h2>Advanced plugins</h2>
+      </section>
+    </Show>
+  );
+}
+
 /**
  * Every plugin of the host and of this web app in one table, filtered like
  * the trajectory (`is:failed kind:web`), and the selected one in detail:
@@ -664,6 +727,7 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
           </ul>
         </div>
       </Show>
+      <Bundles inspector={inspector} />
       <SearchField value={props.filter()} onInput={props.setFilter} placeholder={`Filter: ${PLUGIN_FILTERS.slice(0, 4).join(" ")} …`} label="Filter plugins">
         <span class="muted small">{shown().length === entries().length ? `${entries().length} plugins` : `${shown().length} of ${entries().length}`}</span>
       </SearchField>
@@ -717,6 +781,7 @@ export default defineUiPlugin({
     const [busy, setBusy] = createSignal<string>();
     const services: Readonly<Record<PluginKind, PluginsService>> = { host, web: ui };
     const run = async (key: string, action: () => Promise<void>) => {
+      if (busy() !== undefined) return;
       setBusy(key);
       try {
         await action();
@@ -743,6 +808,36 @@ export default defineUiPlugin({
       confirming,
       setConfirming,
       busy,
+      toggleBundle: (bundle, enabled) =>
+        void run(`bundle:${bundle.id}`, async () => {
+          try {
+            if (ui.setBundleEnabled === undefined) return;
+            const result = await ui.setBundleEnabled(bundle, enabled);
+            if (result.deferred) {
+              notify.toast({ level: "info", message: `Saved ${bundle.title} selection; ${deferredNote}` });
+              return;
+            }
+            await host.refresh();
+            if (result.uiApplied === false) {
+              notify.toast({
+                level: "warning",
+                message: `Saved ${bundle.title} selection; the web app could not apply it. Its previous UI plugins are still running. Check the reported problems.`,
+              });
+              return;
+            }
+            const after = ui.bundles?.().find((candidate) => candidate.id === bundle.id);
+            const state = after === undefined ? undefined : bundleState(after, host.list(), ui.list());
+            const incomplete = after === undefined || after.enabled !== enabled || state?.label === "Incomplete";
+            notify.toast({
+              level: incomplete ? "warning" : "info",
+              message: incomplete
+                ? `Saved ${bundle.title} selection; it is ${state?.label.toLowerCase() ?? "unavailable"}. Check its member plugins and any reported problems.`
+                : `${bundle.title} is ${state!.label.toLowerCase()}${after.customized ? "; individual plugin overrides still apply" : ""}`,
+            });
+          } catch (error) {
+            notify.report(error, `Could not change ${bundle.title}`);
+          }
+        }),
       restart: (kind, target, force) =>
         void run(`${kind}:${target.id}`, async () => {
           try {

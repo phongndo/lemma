@@ -5,11 +5,15 @@ import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "js
 import type { ParseError } from "jsonc-parser";
 import { ConfigFile } from "@lemma/contracts/runtime";
 import { isInside, kindOf, writeFileAtomic } from "@lemma/contracts/fs";
-import type { ConfigScope, PluginChange, PluginRow } from "@lemma/contracts/runtime";
+import type { BundleManifest, BundleRow, ConfigScope, PluginChange, PluginRow } from "@lemma/contracts/runtime";
 import { Diagnostic } from "@lemma/core";
 import type { PathsService } from "./paths.ts";
 
-interface LoadedComposition {
+export interface LoadedComposition {
+  /** Definitions merged by id: application, user, then trusted project. */
+  readonly bundleDefinitions: readonly BundleManifest[];
+  readonly bundles: Readonly<Record<string, BundleRow>>;
+  readonly bundleEnabledIn: Readonly<Record<string, ConfigScope>>;
   /** The `plugins` rows of both files, merged. */
   readonly rows: Readonly<Record<string, PluginRow>>;
   /** Errors (unreadable or invalid files) and warnings. Every message names the file. */
@@ -33,7 +37,7 @@ interface MergedRows {
 }
 
 /** Which part of a config file rows live in: the host's plugins, or the web app's. */
-export type ConfigSection = "plugins" | "ui";
+export type ConfigSection = "plugins" | "ui" | "bundles";
 
 /** Project rows override user rows by plugin id: `enabled` and `config` are each taken from the project row when present. */
 function mergeRows(files: readonly { readonly scope: ConfigScope; readonly rows: Readonly<Record<string, PluginRow>> }[]): MergedRows {
@@ -69,7 +73,7 @@ export function isTrusted(cwd: string, trustedProjects: readonly string[]): bool
  * Missing files are normal; malformed ones are reported and skipped, so the
  * result is usable for diagnostics even when it must not be applied.
  */
-export function loadComposition(paths: PathsService): Effect.Effect<LoadedComposition> {
+export function loadComposition(paths: PathsService, defaults: readonly BundleManifest[] = []): Effect.Effect<LoadedComposition> {
   return Effect.gen(function* () {
     const user = yield* readConfig(paths.userConfig);
     const trusted = isTrusted(paths.cwd, user.trustedProjects);
@@ -93,11 +97,28 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
         }),
       );
     }
+    const definitions = new Map(defaults.map((definition) => [definition.id, definition]));
+    for (const file of [user, project]) {
+      const seen = new Set<string>();
+      for (const definition of file.bundleDefinitions) {
+        if (seen.has(definition.id))
+          diagnostics.push(new Diagnostic({ severity: "error", message: `${file.path}: duplicate bundle definition "${definition.id}"` }));
+        seen.add(definition.id);
+        definitions.set(definition.id, definition);
+      }
+    }
+    const selections = mergeRows([
+      { scope: "user", rows: user.bundles },
+      { scope: "project", rows: project.bundles },
+    ]);
     const merged = mergeRows([
       { scope: "user", rows: user.plugins },
       { scope: "project", rows: project.plugins },
     ]);
     return {
+      bundleDefinitions: [...definitions.values()],
+      bundles: selections.plugins,
+      bundleEnabledIn: selections.enabledIn,
       rows: merged.plugins,
       diagnostics,
       files: [
@@ -122,7 +143,10 @@ const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" 
  * other rows. A key present in `row` is written, and a row left with no keys is
  * removed. In the user file `enabled: true` is the default, so it removes the
  * key; in the project file it is written out, because only an explicit `true`
- * overrides a user row that says `false`. `values` edits single keys of the
+ * overrides a user row that says `false`. With bundle definitions active,
+ * `preserveEnabled` keeps explicit true overrides in either file; bundle
+ * selections always preserve true because their default may be false.
+ * `values` edits single keys of the
  * row's `config` (null removes one), dropping a `config` left empty. `add`
  * and `remove` edit list keys by their items' `id`. The text must be valid
  * JSONC (or empty); check with `parseConfig` first.
@@ -132,6 +156,7 @@ export function patchConfig(
   rows: Readonly<Record<string, PluginChange>>,
   scope: ConfigScope = "user",
   section: ConfigSection = "plugins",
+  preserveEnabled = false,
 ): string {
   let next = text;
   const rowOf = (id: string): Record<string, unknown> => {
@@ -140,7 +165,7 @@ export function patchConfig(
   };
   for (const [id, row] of Object.entries(rows)) {
     const edits: Record<string, unknown> = {};
-    if (row.enabled !== undefined) edits.enabled = row.enabled && scope === "user" ? undefined : row.enabled;
+    if (row.enabled !== undefined) edits.enabled = row.enabled && scope === "user" && section !== "bundles" && !preserveEnabled ? undefined : row.enabled;
     if (row.config !== undefined) edits.config = row.config;
     const before = rowOf(id);
     for (const [key, value] of Object.entries(edits)) {
@@ -206,6 +231,8 @@ interface ConfigUpdate {
   readonly previous: string | undefined;
   /** Puts the file back as it was (removing it if it did not exist). Never fails; a file that cannot be restored is left as written. */
   readonly restore: Effect.Effect<void>;
+  /** Restores only while this update is still current; false preserves a newer edit or reports failed restoration. Call under the change semaphore. */
+  readonly restoreIfUnchanged: Effect.Effect<boolean>;
 }
 
 /**
@@ -244,11 +271,12 @@ export function updateConfig(
   rows: Readonly<Record<string, PluginChange>>,
   scope: ConfigScope = "user",
   section: ConfigSection = "plugins",
+  preserveEnabled = false,
 ): Effect.Effect<ConfigUpdate, Diagnostic> {
   return Effect.gen(function* () {
     const previous = yield* readConfigText(path);
     if (previous !== undefined && previous.trim() !== "") yield* Effect.fromResult(parseConfig(path, previous));
-    const text = patchConfig(previous ?? "", rows, scope, section);
+    const text = patchConfig(previous ?? "", rows, scope, section, preserveEnabled);
     yield* Effect.tryPromise({
       try: () => writeConfig(path, text),
       catch: (cause) =>
@@ -258,18 +286,23 @@ export function updateConfig(
           suggestion: "Fix the directory's permissions",
         }),
     });
+    const restore = Effect.tryPromise(async () => (previous === undefined ? unlink((await destination(path)).file) : writeConfig(path, previous)));
     return {
       text,
       previous,
       // A file this made goes again (through a link, the file it points to, so the link stays); one it changed is put back.
-      restore: Effect.tryPromise(async () => (previous === undefined ? unlink((await destination(path)).file) : writeConfig(path, previous))).pipe(
-        Effect.ignore,
+      restore: restore.pipe(Effect.ignore),
+      restoreIfUnchanged: readConfigText(path).pipe(
+        Effect.flatMap((current) => (current === text ? Effect.as(restore, true) : Effect.succeed(false))),
+        Effect.orElseSucceed(() => false),
       ),
     };
   });
 }
 
 interface ReadConfig {
+  readonly bundles: Readonly<Record<string, BundleRow>>;
+  readonly bundleDefinitions: readonly BundleManifest[];
   readonly path: string;
   readonly found: boolean;
   readonly plugins: NonNullable<ConfigFile["plugins"]>;
@@ -282,7 +315,7 @@ const exists = (path: string): Effect.Effect<boolean> => Effect.promise(async ()
 
 /** An untrusted project's file: only whether it exists, never its contents. */
 const skipConfig = (path: string): Effect.Effect<ReadConfig> =>
-  Effect.map(exists(path), (found) => ({ path, found, plugins: {}, ui: {}, trustedProjects: [], diagnostics: [] }));
+  Effect.map(exists(path), (found) => ({ path, found, plugins: {}, ui: {}, bundles: {}, bundleDefinitions: [], trustedProjects: [], diagnostics: [] }));
 
 const readConfig = (path: string): Effect.Effect<ReadConfig> =>
   Effect.gen(function* () {
@@ -291,6 +324,8 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
       found,
       plugins: {},
       ui: {},
+      bundles: {},
+      bundleDefinitions: [],
       trustedProjects: [],
       diagnostics,
     });
@@ -312,6 +347,8 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
       found: true,
       plugins: parsed.success.plugins ?? {},
       ui: parsed.success.ui ?? {},
+      bundles: parsed.success.bundles ?? {},
+      bundleDefinitions: parsed.success.bundleDefinitions ?? [],
       trustedProjects: parsed.success.trustedProjects ?? [],
       diagnostics: [],
     };

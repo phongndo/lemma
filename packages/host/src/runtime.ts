@@ -66,6 +66,9 @@ export function hostRuntime(options: { readonly paths: PathsService; readonly co
         configure: (plugins, options) => detached(control.configure(plugins, options).pipe(Effect.ensuring(changed))),
         ui: control.ui,
         configureUi: control.configureUi,
+        ...(control.configureBundles === undefined
+          ? {}
+          : { configureBundles: (bundles, options) => detached(control.configureBundles!(bundles, options).pipe(Effect.ensuring(changed))) }),
       } satisfies HostControlService;
     }),
   );

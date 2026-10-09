@@ -1642,9 +1642,72 @@ const separate = async () => {
   return "with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a UI file's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
 };
 
+/** Feature cards are an optional view over host metadata, with the old inspector kept available. */
+const bundles = async () => {
+  const { page, expectNoErrors } = await boot();
+  await page.goto(`${url}/settings/plugins?mock`);
+  await settled(page);
+  await page.waitForSelector(".inspector-table");
+  assert.equal(await page.locator(".plugin-bundle").count(), 0, "older hosts should keep the original inspector");
+  await page.screenshot({ path: "/tmp/lemma-bundle-settings-before.png", fullPage: true });
+  await page.evaluate(() =>
+    (window as any).lemmaMock.setBundles([
+      { id: "check-tools", title: "Check tools", description: "Host and web members", host: ["bash"], ui: ["highlight"], enabled: true, customized: false },
+      { id: "check-missing", title: "Check missing", host: ["not-installed"], ui: ["also-not-installed"], enabled: true, customized: true },
+    ]),
+  );
+  const card = page.locator('[data-bundle="check-tools"]');
+  await card.waitFor();
+  await page.locator('[data-bundle="check-missing"] [role=status]').filter({ hasText: "Incomplete · Customized" }).waitFor();
+  assert.match(await page.locator('[data-bundle="check-missing"]').innerText(), /host:not-installed, web:also-not-installed/);
+  const toggle = card.getByRole("switch").or(card.locator('input[type="checkbox"]'));
+  // Dispatch two events in the same task: a UI race must still create just one host request.
+  await toggle.evaluate((element) => {
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    element.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await page.waitForFunction(() => (window as any).lemmaMock.bundleCalls() === 1);
+  assert.equal(await toggle.isDisabled(), true, "a bundle switch stays disabled while its request is pending");
+  await card.locator("[role=status]").filter({ hasText: /^Off$/ }).waitFor();
+  await page.waitForFunction(() => (window as any).lemma.plugins.list().find((p: any) => p.id === "highlight").state === "disabled");
+  await expose(page, "HostPlugins");
+  assert.equal(await page.evaluate(() => (window as any).services.HostPlugins.list().find((p: any) => p.id === "bash").state), "disabled");
+  await toggle.click();
+  await card.locator("[role=status]").filter({ hasText: /^On$/ }).waitFor();
+  await page.waitForFunction(() => (window as any).lemma.plugins.list().find((p: any) => p.id === "highlight").state === "active");
+  await page.evaluate(() => (window as any).lemmaMock.setBundleError("Bundle test rejection"));
+  await toggle.click();
+  await page.getByText("Could not change Check tools: Bundle test rejection", { exact: false }).waitFor();
+  assert.equal(await toggle.isDisabled(), false, "a rejected bundle request releases its switch");
+  assert.equal(await card.locator("[role=status]").innerText(), "On");
+  await page.evaluate(() => {
+    (window as any).lemmaMock.setBundleError(undefined);
+    (window as any).lemmaMock.setBundleUiError(true);
+  });
+  await toggle.click();
+  await page.getByText("Saved Check tools selection; the web app could not apply it.", { exact: false }).waitFor();
+  await card
+    .locator("[role=status]")
+    .filter({ hasText: /^UI not applied$/ })
+    .waitFor();
+  assert.equal(await toggle.getAttribute("aria-checked"), "false", "the saved desired selection stays visible after UI rejection");
+  assert.equal(await page.evaluate(() => (window as any).lemma.plugins.list().find((p: any) => p.id === "highlight").state), "active");
+  // Rejected enable also reports failure, even though all the previous members are already running.
+  await toggle.click();
+  await page.waitForFunction(() => (window as any).lemmaMock.bundleCalls() === 5);
+  await page.waitForFunction(() => !(document.querySelector('[data-bundle="check-tools"] [role=switch]') as HTMLButtonElement).disabled);
+  assert.equal(await card.locator("[role=status]").innerText(), "UI not applied");
+  assert.equal(await toggle.getAttribute("aria-checked"), "true");
+  assert.equal(await page.locator(".inspector-table").count(), 1, "advanced recovery controls remain available");
+  await page.screenshot({ path: "/tmp/lemma-bundle-settings.png", fullPage: true });
+  await page.close();
+  expectNoErrors("feature selections, reconciliation and rejected changes");
+  return "optional feature cards coordinate host and UI selection, show missing members and customization, and recover from rejected changes";
+};
+
 try {
   // In this order, every other lane makes two shares that take about as long.
-  const lanes = [toggling, parts, rail, devtools, separate].filter((_, at) => at % shards === shard - 1);
+  const lanes = [toggling, parts, rail, devtools, separate, bundles].filter((_, at) => at % shards === shard - 1);
   const done = await Promise.all(lanes.map((lane) => lane()));
   console.log(`UI check${shards > 1 ? ` (${shard}/${shards})` : ""}: ${done.join("; ")}.`);
 } catch (error) {

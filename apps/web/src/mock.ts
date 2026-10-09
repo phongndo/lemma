@@ -418,9 +418,23 @@ export const createMockHost = (): Host => {
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
   let ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+  let bundleError: string | undefined;
+  let bundleCalls = 0;
+  let bundleUiError = false;
   // For the UI check: UI files as the host would list them from `~/.lemma/ui` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
     lemmaMock: {
+      setBundles: (bundles: UiComposition["bundles"]) => {
+        ui = { ...ui, bundles };
+        emit({ type: "ui-changed", ui });
+      },
+      setBundleError: (message: string | undefined) => {
+        bundleError = message;
+      },
+      bundleCalls: () => bundleCalls,
+      setBundleUiError: (enabled: boolean) => {
+        bundleUiError = enabled;
+      },
       setUiFiles: (files: UiComposition["files"]) => {
         ui = { ...ui, files };
         emit({ type: "ui-changed", ui });
@@ -1498,6 +1512,34 @@ export const createMockHost = (): Host => {
         await sleep(400);
         setTimeout(() => restart("agent"), 0);
         return { started: [], restarted: ["agent"], stopped: [] };
+      },
+      configureBundles: async (rows, options) => {
+        bundleCalls++;
+        await sleep(200);
+        if (bundleError !== undefined) throw new HostError({ code: "ReloadError", message: bundleError });
+        const bundles = (ui.bundles ?? []).map((bundle) => ({
+          ...bundle,
+          enabled: rows[bundle.id]?.enabled ?? bundle.enabled,
+          scope: rows[bundle.id] === undefined ? bundle.scope : (options?.scope ?? "user"),
+        }));
+        const uiRows = { ...ui.plugins };
+        const members = (kind: "host" | "ui", id: string) => bundles.filter((bundle) => bundle[kind].includes(id));
+        for (const [i, plugin] of plugins.entries()) {
+          const selections = members("host", plugin.id);
+          if (selections.length === 0 || plugin.scope !== undefined || plugin.locked !== undefined) continue;
+          const enabled = selections.some((bundle) => bundle.enabled);
+          plugins[i] = { ...plugin, enabled, state: enabled ? "active" : "disabled" };
+        }
+        for (const id of new Set(bundles.flatMap((bundle) => bundle.ui))) {
+          if (ui.enabledIn[id] !== undefined) continue;
+          uiRows[id] = { ...uiRows[id], enabled: members("ui", id).some((bundle) => bundle.enabled) };
+        }
+        if (bundleUiError) uiRows["shell"] = { enabled: false };
+        ui = { ...ui, bundles, plugins: uiRows };
+        halted();
+        emit({ type: "plugins-changed", plugins: plugins.slice() });
+        emit({ type: "ui-changed", ui });
+        return { started: [], restarted: [], stopped: [] };
       },
       configure: async (rows, options) => {
         await sleep(500);

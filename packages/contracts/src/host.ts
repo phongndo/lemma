@@ -38,6 +38,27 @@ export const PluginRow = Schema.Struct({
 });
 export type PluginRow = typeof PluginRow.Type;
 
+/** A named composition preset: host and UI plugin ids, with optional default rows. */
+export const BundleManifest = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  description: Schema.optional(Schema.String),
+  host: Schema.Array(Schema.String),
+  ui: Schema.Array(Schema.String),
+  enabledByDefault: Schema.optional(Schema.Boolean),
+  defaults: Schema.optional(
+    Schema.Struct({
+      plugins: Schema.optional(Schema.Record(Schema.String, PluginRow)),
+      ui: Schema.optional(Schema.Record(Schema.String, PluginRow)),
+    }),
+  ),
+});
+export type BundleManifest = typeof BundleManifest.Type;
+
+/** A bundle's explicit on/off override in a composition file. */
+export const BundleRow = Schema.Struct({ enabled: Schema.optional(Schema.Boolean) });
+export type BundleRow = typeof BundleRow.Type;
+
 /**
  * A change to one plugin's row. `config` replaces the row's whole config;
  * `values` sets single config keys and keeps the others (`null` removes a key),
@@ -60,6 +81,19 @@ export type PluginChange = typeof PluginChange.Type;
 export const ConfigScope = Schema.Literals(["user", "project"]);
 export type ConfigScope = typeof ConfigScope.Type;
 
+/** Public bundle state. Default plugin configs are deliberately excluded: they may contain secrets. */
+export const BundleStatus = Schema.Struct({
+  id: Schema.String,
+  title: Schema.String,
+  description: Schema.optional(Schema.String),
+  host: Schema.Array(Schema.String),
+  ui: Schema.Array(Schema.String),
+  enabled: Schema.Boolean,
+  customized: Schema.Boolean,
+  scope: Schema.optional(ConfigScope),
+});
+export type BundleStatus = typeof BundleStatus.Type;
+
 /**
  * Composition file (JSONC). User and project files merge: project rows override
  * user rows by plugin id; `config` objects are replaced, not deep-merged.
@@ -70,6 +104,8 @@ export type ConfigScope = typeof ConfigScope.Type;
 export const ConfigFile = Schema.Struct({
   /** User file only: absolute directories whose projects (and their subdirectories) may configure the host and load plugins. */
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
+  bundles: Schema.optional(Schema.Record(Schema.String, BundleRow)),
+  bundleDefinitions: Schema.optional(Schema.Array(BundleManifest)),
   plugins: Schema.optional(Schema.Record(Schema.String, PluginRow)),
   ui: Schema.optional(Schema.Record(Schema.String, PluginRow)),
 });
@@ -232,6 +268,11 @@ export class HostControl extends Context.Service<
       plugins: Readonly<Record<string, PluginChange>>,
       options?: { readonly scope?: ConfigScope },
     ) => Effect.Effect<ChangeReport, ReloadError>;
+    /** Write bundle overrides and apply both host and UI composition; rejected changes are undone. */
+    readonly configureBundles?: (
+      bundles: Readonly<Record<string, BundleRow>>,
+      options?: { readonly scope?: ConfigScope },
+    ) => Effect.Effect<ChangeReport, ReloadError>;
     /** The web app's rows and files. */
     readonly ui: Effect.Effect<UiComposition>;
     /** Write `ui` rows into a config file; web apps apply them when `UiChanged` arrives. */
@@ -260,6 +301,8 @@ export type UiFile = typeof UiFile.Type;
 
 /** What the web app needs to plan its own composition: the `ui` rows of both config files, and the files to load. */
 export const UiComposition = Schema.Struct({
+  /** Bundle state without defaults or raw configuration. Absent on hosts without bundle support. */
+  bundles: Schema.optional(Schema.Array(BundleStatus)),
   plugins: Schema.Record(Schema.String, PluginRow),
   /** Per plugin id, the file whose row sets `enabled` (the project's wins). */
   enabledIn: Schema.Record(Schema.String, ConfigScope),

@@ -46,6 +46,84 @@ plugins, through `"ui"` rows and files in `~/.lemma/ui/`; the runtime they
 are written against is the app's own, with no row: see
 [its README](../apps/web/README.md).
 
+## Feature bundles
+
+The Plugins page groups related host and web app plugins into features, with
+individual plugin controls still available in the advanced inspector. One
+feature switch writes a desired bundle selection:
+
+```jsonc
+{
+  "bundles": {
+    "compaction": { "enabled": false },
+  },
+  "plugins": {
+    "compaction": { "enabled": true }, // explicit plugin overrides win
+  },
+}
+```
+
+A bundle is a composition manifest, not a runtime plugin. It has no lifecycle,
+capability, hook, or dependency of its own. Plugins continue requiring
+capabilities, never bundle ids. A selected bundle includes its members; a
+member shared by several bundles stays included while any of them is selected.
+With none selected, expansion writes an effective off row rather than letting
+the planner's default-on behavior turn it back on. Explicit `plugins` and `ui`
+rows always win, including `enabled: true` against a disabled bundle. The
+settings page preserves that explicit override when saving it.
+
+Selections merge by bundle id, project over user, and require the same project
+trust as plugin rows. Turning a feature off does not override required or
+pinned runtime protections. A capability dependency may keep a plugin from
+running even when its feature is selected; the inspector explains that chain.
+
+The feature switch coordinates desired host and UI settings in one config
+change. The host applies its composition, then connected web apps reconcile
+theirs independently. This is not an atomic transaction across runtimes:
+missing, disabled, failed, or not-yet-applied members are shown as incomplete.
+Explicit member overrides are shown as customized. Unselected bundles may
+still have running members because another bundle or an override needs them.
+
+### Authoring a bundle
+
+Add `bundleDefinitions` to the user config, or a trusted project's config, to
+group existing plugins, including third-party plugin ids:
+
+```jsonc
+{
+  "bundleDefinitions": [
+    {
+      "id": "my-feature",
+      "title": "My feature",
+      "description": "A related host capability and its view",
+      "host": ["my-provider"],
+      "ui": ["my-view"],
+      "enabledByDefault": true,
+      "defaults": {
+        "plugins": { "my-provider": { "config": { "limit": 10 } } },
+        "ui": { "my-view": { "config": { "compact": true } } },
+      },
+    },
+  ],
+}
+```
+
+Members must still be installed as ordinary plugin files. Definitions later in
+the configuration hierarchy replace earlier definitions with the same id;
+duplicate definitions in one file are errors. The host supplies the shipped
+feature definitions. Defaults may set `config` and `required`, only for declared
+members; enablement comes from selection, so `defaults.enabled` is rejected.
+Omitting `enabledByDefault` means selected. Defaults from selected bundles
+merge by top-level config key; equal values are accepted, conflicting values
+are diagnosed regardless of manifest order. An explicit member config replaces
+the complete bundle default config, and an explicit `required` resolves a
+conflict in that field. Existing app defaults still sit underneath the result.
+
+Neither old configs nor third-party plugins need bundle declarations. Selected
+members remain eligible for the existing capability-based provider replacement.
+Manifests and desired selection do not guarantee an implementation is active;
+the individual plugin catalog remains the source of runtime status.
+
 ## When something cannot run
 
 The host starts with what can run. A plugin whose `config` no longer decodes

@@ -1,7 +1,7 @@
 import { Rpc, RpcGroup } from "effect/rpc";
 import { Schema } from "effect";
 import { ChannelInfo } from "./channels.ts";
-import { ConfigScope, NoticePayload, PluginChange, UiComposition } from "./host.ts";
+import { BundleRow, ConfigScope, NoticePayload, PluginChange, UiComposition } from "./host.ts";
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
 import { HostError, HostInfo, PluginStatus, ReloadResult } from "./status.ts";
@@ -78,6 +78,13 @@ export class RuntimeRpcs extends RpcGroup.make(
   /** Write plugin rows (`enabled`, `config`, `values`) into the user or project config file and apply; a rejected change is undone. */
   Rpc.make("Host.Configure", {
     payload: { plugins: Schema.Record(Schema.String, PluginChange), scope: Schema.optional(ConfigScope) },
+    success: ReloadResult,
+    error: HostError,
+  }),
+
+  /** Write bundle on/off overrides and apply host and UI composition together; rejected changes are undone. */
+  Rpc.make("Host.ConfigureBundles", {
+    payload: { bundles: Schema.Record(Schema.String, BundleRow), scope: Schema.optional(ConfigScope) },
     success: ReloadResult,
     error: HostError,
   }),

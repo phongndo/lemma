@@ -109,7 +109,8 @@ describe("against a running host", () => {
       expect(await invoke(["status"], home)).toMatchObject({ code: ExitCode.ok, out: expect.stringMatching(/\nrunning +unknown: no agent runs/) });
       const llmOn = await invoke(["plugins", "enable", "llm", "--json"], home);
       expect(JSON.parse(llmOn.out)).toMatchObject({ enabled: "llm", started: expect.arrayContaining(["llm", "agent"]) });
-      expect((await rows(userConfig)).llm.enabled).toBeUndefined();
+      // Enabling is an explicit override, retained even if a feature bundle is later turned off.
+      expect((await rows(userConfig)).llm.enabled).toBe(true);
 
       // The project file is only written for a trusted project.
       const untrusted = await invoke(["plugins", "disable", "bash", "--project", "--json"], home);
@@ -128,7 +129,7 @@ describe("against a running host", () => {
 
       const on = await invoke(["plugins", "enable", "project-context", "--json"], home);
       expect(JSON.parse(on.out)).toMatchObject({ enabled: "project-context", started: ["project-context"] });
-      expect((await rows(userConfig))["project-context"]).toBeUndefined();
+      expect((await rows(userConfig))["project-context"]).toEqual({ enabled: true });
     } finally {
       await rm(join(home, ".lemma"), { recursive: true, force: true });
       await writeFile(userConfig, original);
@@ -280,7 +281,10 @@ describe("against a running host", () => {
     const original = await readFile(userConfig, "utf8");
     const ui = async () => JSON.parse((await invoke(["ui", "--json"], home)).out);
     try {
-      expect(await ui()).toEqual({ plugins: {}, enabledIn: {}, configIn: {}, files: [] });
+      const initial = await ui();
+      expect(initial).toMatchObject({ enabledIn: {}, configIn: {}, files: [] });
+      expect(initial.bundles).toEqual(expect.arrayContaining([expect.objectContaining({ id: "conversation", enabled: true })]));
+      expect(Object.values(initial.plugins)).toEqual(expect.arrayContaining([{}]));
       expect((await invoke(["ui", "disable", "composer"], home)).out).toBe("disabled composer in the user config; open web apps apply it");
       await invoke(["ui", "config", "theme", "accent", "red"], home);
       await invoke(["ui", "config", "theme", "scale", "1.2"], home);
@@ -288,7 +292,7 @@ describe("against a running host", () => {
       expect(await ui()).toMatchObject({ enabledIn: { composer: "user" }, configIn: { theme: "user" } });
       await invoke(["ui", "enable", "composer"], home);
       await invoke(["ui", "config", "theme", "accent", "--unset"], home);
-      expect(JSON.parse(await readFile(userConfig, "utf8")).ui).toEqual({ theme: { config: { scale: 1.2 } } });
+      expect(JSON.parse(await readFile(userConfig, "utf8")).ui).toEqual({ composer: { enabled: true }, theme: { config: { scale: 1.2 } } });
 
       await mkdir(join(home, "ui"), { recursive: true });
       await writeFile(join(home, "ui", "theme.css"), ":root { --accent: red; }");

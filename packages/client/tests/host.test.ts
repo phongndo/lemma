@@ -8,17 +8,28 @@ import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Core } from "@lemma/core";
+import type { BundleRow, ConfigScope } from "@lemma/contracts/runtime";
 import transport from "@lemma/plugin-transport";
 import { settled } from "../../../scripts/e2e.ts";
 import { callChannel, connect } from "../src/host.ts";
 import type { Host } from "../src/host.ts";
 import { makeHostRpc, makeHostRpcHttp, rpcUrl } from "../src/rpc.ts";
 
-/** What the host provides the transport besides `Paths`, as far as these tests reach it: `Host.Info` for the connect probe. */
+const bundleWrites: { bundles: Readonly<Record<string, BundleRow>>; scope?: ConfigScope }[] = [];
+
+/** What the host provides the transport besides `Paths`, as far as these tests reach it. */
 const control = definePlugin({
   id: "host",
   provides: [HostControl],
-  layer: Layer.succeed(HostControl, { composition: Effect.succeed({ id: "test", plugins: [] }), runtime: [] } as never),
+  layer: Layer.succeed(HostControl, {
+    composition: Effect.succeed({ id: "test", plugins: [] }),
+    runtime: [],
+    configureBundles: (bundles: Readonly<Record<string, BundleRow>>, options?: { scope?: ConfigScope }) =>
+      Effect.sync(() => {
+        bundleWrites.push({ bundles, ...options });
+        return { started: [], restarted: [], stopped: ["writer"], failed: [], unchanged: [], interrupted: 0, faults: [], deferred: true };
+      }),
+  } as never),
 });
 
 // The declarations, as a contract module would export them for clients to import.
@@ -173,6 +184,15 @@ describe("the channel facade", () => {
       const third = listener();
       host.channel.open("doubler.instance", undefined, third.push);
       expect(await third.until(1)).toBe(before + 1);
+    }));
+
+  test("configures bundles through the promise client and transport, preserving scope and deferred reports", () =>
+    withHost(async (host) => {
+      bundleWrites.length = 0;
+      const bundles = { writing: { enabled: false } };
+      expect(await host.host.configureBundles(bundles)).toEqual({ started: [], restarted: [], stopped: ["writer"], deferred: true });
+      expect(await host.host.configureBundles(bundles, { scope: "project" })).toEqual({ started: [], restarted: [], stopped: ["writer"], deferred: true });
+      expect(bundleWrites).toEqual([{ bundles }, { bundles, scope: "project" }]);
     }));
 
   test("a stream whose connection drops ends with an RpcClientError, and stops on the host", () =>

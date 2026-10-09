@@ -2,8 +2,8 @@ import { describe, expect, test } from "vitest";
 import { Layer, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import type { PluginRow } from "@lemma/contracts";
-import { planComposition } from "@lemma/composition";
-import { appDefaults, bundled as shipped, cliCommand, webDist } from "../src/bundled.ts";
+import { expandBundles, planComposition } from "@lemma/composition";
+import { appBundles, appDefaults, bundled as shipped, cliCommand, webDist } from "../src/bundled.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
 
 const plugin = (id: string) => definePlugin({ id, config: Schema.Record(Schema.String, Schema.Unknown), layer: Layer.empty });
@@ -11,6 +11,24 @@ const bundled = [plugin("agent"), plugin("transport"), plugin("tools")];
 const entries = (rows: Readonly<Record<string, PluginRow>> = {}) => planComposition({ bundled, local: [], rows, defaults: appDefaults }).composition.plugins;
 
 describe("bundled", () => {
+  test("feature defaults preserve the shipped composition and keep transport outside switchable features", () => {
+    const expanded = expandBundles({ manifests: appBundles, rows: {}, plugins: {}, ui: {} });
+    const planned = planComposition({
+      bundled: shipped,
+      local: [],
+      rows: expanded.plugins,
+      pinned: ["transport"],
+      defaults: appDefaults,
+      provided: runtimeCapabilities,
+    });
+    const baseline = planComposition({ bundled: shipped, local: [], rows: {}, pinned: ["transport"], defaults: appDefaults, provided: runtimeCapabilities });
+    expect(expanded.diagnostics).toEqual([]);
+    expect(planned.diagnostics).toEqual([]);
+    expect(planned.resolved.composition).toEqual(baseline.resolved.composition);
+    expect(appBundles.flatMap((bundle) => bundle.host)).not.toContain("transport");
+    expect(appBundles.flatMap((bundle) => bundle.host).every((id) => shipped.some((plugin) => plugin.id === id))).toBe(true);
+  });
+
   test("every bundled plugin runs on what the host provides itself, and none provides any of it", () => {
     const planned = planComposition({ bundled: shipped, local: [], rows: {}, pinned: ["transport"], defaults: appDefaults, provided: runtimeCapabilities });
     expect(planned.diagnostics).toEqual([]);

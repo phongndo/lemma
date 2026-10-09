@@ -4,6 +4,7 @@ import { RpcClientError } from "effect/rpc";
 import type { Socket } from "effect/socket";
 import { HostError, wireCodec } from "@lemma/contracts/runtime";
 import type {
+  BundleRow,
   ChannelDeclaration,
   ChannelInfo,
   ConfigScope,
@@ -114,6 +115,8 @@ export interface Host {
     readonly reload: () => Promise<ReloadResult>;
     /** Write plugin rows into the user (default) or project config file and apply them; a rejected change is undone. */
     readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { scope?: ConfigScope }) => Promise<ReloadResult>;
+    /** Write bundle on/off overrides and apply the host and UI composition together. */
+    readonly configureBundles: (bundles: Readonly<Record<string, BundleRow>>, options?: { scope?: ConfigScope }) => Promise<ReloadResult>;
   };
   readonly ui: {
     /** The web app's `ui` rows and UI files, which it plans and runs itself. */
@@ -452,6 +455,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       inspect: (id) => runPromise(rpc["Host.Inspect"]({ id })),
       restartPlugin: (pluginId, options) => unit(rpc["Host.RestartPlugin"](options?.force === undefined ? { pluginId } : { pluginId, force: options.force })),
       reload: () => runPromise(rpc["Host.Reload"]()),
+      configureBundles: (bundles, options) =>
+        runPromise(rpc["Host.ConfigureBundles"](options?.scope === undefined ? { bundles } : { bundles, scope: options.scope })),
       configure: (plugins, options) => runPromise(rpc["Host.Configure"](options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
     ui: {

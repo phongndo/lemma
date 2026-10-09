@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
+import type { BundleManifest } from "@lemma/contracts/runtime";
 import agent from "@lemma/plugin-agent";
 import commands from "@lemma/plugin-commands";
 import compaction from "@lemma/plugin-compaction";
@@ -55,3 +56,56 @@ export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknow
   transport: { staticDir: webDist },
   agent: { cli: cliCommand },
 };
+
+/** Application features are metadata only: ids, never lifecycle wrappers. */
+export const appBundles: readonly BundleManifest[] = [
+  {
+    id: "conversation",
+    title: "Conversations",
+    description: "Agent conversations, models, history, and their views",
+    enabledByDefault: true,
+    host: ["agent", "sessions", "llm", "credentials", "tools"],
+    ui: ["threads", "models", "workspace", "thread-view", "chat", "composer", "model-picker", "providers", "sidebar", "archived-page"],
+  },
+  {
+    id: "workspace",
+    title: "Workspace",
+    description: "Projects, context, file search, and workspace controls",
+    enabledByDefault: true,
+    host: ["workspace", "sessions", "project-context", "file-search"],
+    ui: ["threads", "workspace", "workspace-bar", "projects-page", "add-project", "file-mentions"],
+  },
+  {
+    id: "builtin-tools",
+    title: "Built-in tools",
+    description: "Read, write, edit, shell, and code tools",
+    enabledByDefault: true,
+    host: ["tools", "read", "write", "edit", "bash", "codemode"],
+    ui: [],
+  },
+  {
+    id: "commands",
+    title: "Commands",
+    description: "Host, model, and workspace commands and command palette",
+    enabledByDefault: true,
+    host: ["commands", "commands-host", "commands-llm", "commands-workspace"],
+    ui: ["commands", "palette"],
+  },
+  { id: "compaction", title: "Compaction", description: "Compact conversation context", enabledByDefault: true, host: ["compaction"], ui: [] },
+  {
+    id: "appearance",
+    title: "Appearance",
+    description: "Theme and appearance settings",
+    enabledByDefault: true,
+    host: [],
+    ui: ["appearance", "appearance-page"],
+  },
+  {
+    id: "developer-tools",
+    title: "Developer tools",
+    description: "Inspect runtime activity and conversation trajectories",
+    enabledByDefault: true,
+    host: [],
+    ui: ["devtools", "trajectory"],
+  },
+];

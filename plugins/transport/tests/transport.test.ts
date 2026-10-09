@@ -139,6 +139,17 @@ describe("transport", () => {
     30_000,
   );
 
+  test("reports bundle configuration as unavailable on hosts without bundle support", () =>
+    withHost((host) =>
+      Effect.gen(function* () {
+        for (const protocol of ["http", "websocket"] as const) {
+          const client = yield* host.connect(protocol);
+          const error = hostError(yield* Effect.exit(client["Host.ConfigureBundles"]({ bundles: { writing: { enabled: false } } })));
+          expect(error).toMatchObject({ code: "Unavailable", message: "This host does not support configuring bundles" });
+        }
+      }),
+    ));
+
   test("requires only what the host provides itself", () => {
     const runtime = new Set(runtimeCapabilities.map((tag) => tag.key));
     expect(transport.requires.map((tag) => tag.key).filter((key) => !runtime.has(key))).toEqual([]);

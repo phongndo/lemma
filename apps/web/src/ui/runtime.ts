@@ -2,6 +2,7 @@ import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
 import type { ConnectionStatus, Host } from "@lemma/client";
 import type {
+  BundleStatus,
   ChannelDeclaration,
   ConfigScope,
   HostError,
@@ -110,6 +111,11 @@ export interface ClientService {
   readonly reload: () => Promise<ReloadResult>;
   /** Writes host plugin rows into the user (default) or project config file and applies them; a rejected change is undone. */
   readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { readonly scope?: ConfigScope }) => Promise<ReloadResult>;
+  /** Writes desired feature selections; UI pages reconcile separately from the host reload. */
+  readonly configureBundles?: (
+    bundles: Readonly<Record<string, { readonly enabled?: boolean }>>,
+    options?: { readonly scope?: ConfigScope },
+  ) => Promise<ReloadResult>;
   /** What host plugins let you look into (`Inspectors`), and one's snapshot as plain JSON. */
   readonly inspectors: () => Promise<readonly InspectorInfo[]>;
   readonly inspect: (id: string) => Promise<unknown>;
@@ -183,6 +189,12 @@ export interface HostPluginsService extends PluginsService {
 export class HostPlugins extends Context.Service<HostPlugins, HostPluginsService>()("lemma-ui/HostPlugins") {}
 
 export interface UiPluginsService extends PluginsService {
+  /** Desired feature selections advertised by the host; absent on older hosts. Actual state is in both plugin lists. */
+  readonly bundles?: Accessor<readonly BundleStatus[]>;
+  /** Whether this page applied the latest advertised UI composition; false preserves desired selections with a failure state. */
+  readonly bundleUiApplied?: Accessor<boolean>;
+  /** Persists a selection on the host, then reconciles this page. This is not a cross-runtime transaction. */
+  readonly setBundleEnabled?: (bundle: BundleStatus, enabled: boolean) => Promise<ReloadResult & { readonly uiApplied?: boolean }>;
   /** Files loaded from `~/.lemma/ui` and a trusted project's `.lemma/ui`. */
   readonly files: Accessor<readonly UiFile[]>;
   /** The routes known plugins declare (`defineUiPlugin({ routes })`), running or not, with the plugin declaring each. */

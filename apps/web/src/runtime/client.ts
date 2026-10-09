@@ -50,6 +50,7 @@ export function createClient(host: Host): { readonly client: ClientService; read
       restartPlugin: (pluginId, options) => host.host.restartPlugin(pluginId, options?.force === undefined ? undefined : { force: options.force }),
       reload: () => host.host.reload(),
       configure: (plugins, options) => host.host.configure(plugins, options?.scope === undefined ? undefined : { scope: options.scope }),
+      configureBundles: (bundles, options) => host.host.configureBundles(bundles, options?.scope === undefined ? undefined : { scope: options.scope }),
       inspectors: () => host.host.inspectors(),
       inspect: (id) => host.host.inspect(id),
       ui: {

@@ -39,3 +39,27 @@ change to the contracts or the transport.
 The [session log](../plugins/sessions/README.md) is the source of truth: every
 model request can be rebuilt from it (`rebuildRequest` in the contracts), along
 with which plugins contributed each part.
+
+## Boundaries and composition
+
+The boundaries separate replaceable behavior from the machinery required to
+host and recover it:
+
+- The product-agnostic kernel owns generic lifecycle, capabilities, hooks,
+  events, and registries. It knows no features or bundles.
+- Host/bootstrap composition control owns config loading, planning, activation,
+  diagnostics, and recovery. Its fixed services are the current runtime API.
+- Agent, sessions, tools, providers, workspace, compaction, and transport remain
+  plugins. A required plugin is still a plugin: startup policy does not move
+  its implementation into the kernel. A stable capability contract does not
+  require a fixed provider.
+- Feature bundles are authoring and settings metadata expanded by
+  `@lemma/composition` into existing host/UI rows before the ordinary capability
+  planner runs. They add no runtime dependency edge, lifecycle, or hook.
+
+The current `Interaction` service retains its runtime lifetime and hooks. This
+change does not decide whether a future interaction broker should have another
+lifetime, nor change approval/fail-closed behavior. That design needs a separate
+contract and recovery analysis. Bundles also do not promise atomic activation
+across host and browser: they coordinate desired configuration and expose the
+actual state of each member.

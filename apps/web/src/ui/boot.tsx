@@ -5,7 +5,7 @@ import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { faultMessage, toPluginStatus } from "@lemma/contracts/runtime";
-import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts/runtime";
+import type { BundleStatus, PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts/runtime";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
 import { settlePaint } from "../lib/paint.ts";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
@@ -75,6 +75,8 @@ const timeout = <A,>(promise: Promise<A>, ms: number): Promise<A | undefined> =>
 export async function boot(options: BootOptions): Promise<void> {
   const { host, safe } = options;
   const [statuses, setStatuses] = createSignal<readonly PluginStatus[]>([]);
+  const [bundleUiApplied, setBundleUiApplied] = createSignal(true);
+  const [bundles, setBundles] = createSignal<readonly BundleStatus[]>([]);
   const [files, setFiles] = createSignal<readonly UiFile[]>([]);
   const [problems, setProblems] = createSignal<readonly string[]>([]);
   const [routes, setRoutes] = createSignal<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>([]);
@@ -114,6 +116,14 @@ export async function boot(options: BootOptions): Promise<void> {
     list: statuses,
     runtime: () => RUNTIME,
     files,
+    bundles,
+    bundleUiApplied,
+    setBundleEnabled: async (bundle, enabled) => {
+      const result = await host.host.configureBundles({ [bundle.id]: { enabled } }, bundle.scope === "project" ? { scope: "project" } : undefined);
+      if (result.deferred) return result;
+      const applied = await apply(await host.ui.composition());
+      return { ...result, uiApplied: applied.applied };
+    },
     routes,
     problems,
     safe,
@@ -126,11 +136,11 @@ export async function boot(options: BootOptions): Promise<void> {
       // Turning on a plugin that provides what another does turns that one off, as on the host.
       const rows = withReplacements(plan.known, plan.composition, { [plugin.id]: { enabled } });
       const next = await host.ui.configure(rows, ui.enabledIn[plugin.id] === "project" ? { scope: "project" } : undefined);
-      return toResult(await apply(next));
+      return toResult((await apply(next)).report);
     },
     setConfig: async (plugin, values) => {
       const next = await host.ui.configure({ [plugin.id]: { values } }, ui.configIn[plugin.id] === "project" ? { scope: "project" } : undefined);
-      return toResult(await apply(next));
+      return toResult((await apply(next)).report);
     },
   };
   const runtime = createWebRuntime({ host, plugins: service, appRoutes: options.appRoutes });
@@ -194,13 +204,20 @@ export async function boot(options: BootOptions): Promise<void> {
    * time, in arrival order. A change that cannot start keeps the running
    * composition (the plugins it would replace go on as they were), and says why.
    */
-  const apply = (next: UiComposition): Promise<ReloadReport | undefined> => {
+  const apply = (next: UiComposition): Promise<{ readonly applied: boolean; readonly report?: ReloadReport }> => {
     const run = queue.then(async () => {
-      if (safe || JSON.stringify(next) === JSON.stringify(ui)) return undefined;
+      // Desired selections remain visible even when this page cannot apply their UI composition.
+      setBundles(next.bundles ?? []);
+      if (safe) return { applied: false };
+      if (JSON.stringify(next) === JSON.stringify(ui)) {
+        setBundleUiApplied(true);
+        return { applied: true };
+      }
       const planned = await planFor(next);
       if (planned.errors.length > 0) {
+        setBundleUiApplied(false);
         report([...planned.problems, ...planned.errors]);
-        return undefined;
+        return { applied: false };
       }
       const previous = plan;
       // The source resolves ids against the plan being applied.
@@ -213,7 +230,8 @@ export async function boot(options: BootOptions): Promise<void> {
       } else plan = previous;
       await refresh();
       report(Exit.isSuccess(exit) ? planned.problems : [...planned.problems, ...describeFailure(exit.cause)]);
-      return Exit.isSuccess(exit) ? exit.value : undefined;
+      setBundleUiApplied(Exit.isSuccess(exit));
+      return Exit.isSuccess(exit) ? { applied: true, report: exit.value } : { applied: false };
     });
     queue = run.catch(() => {});
     return run;
@@ -264,6 +282,8 @@ export async function boot(options: BootOptions): Promise<void> {
     faults.record(plugin.fault as ReportedFault);
     bootProblems = [...bootProblems, `"${plugin.id}" failed to start: ${faultMessage(plugin.fault)}`];
   }
+  setBundleUiApplied(ui === initial);
+  setBundles(initial.bundles ?? []);
   setFiles(ui.files);
   await refresh();
 

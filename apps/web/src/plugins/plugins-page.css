@@ -408,3 +408,33 @@
   gap: 8px;
   flex-wrap: wrap;
 }
+
+.plugin-bundle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(260px, 100%), 1fr));
+  gap: 12px;
+  margin: 12px 0 20px;
+}
+.plugin-bundle {
+  border: 1px solid var(--border);
+  border-radius: calc(8px * var(--radius-scale));
+  padding: 12px;
+}
+.plugin-bundle header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-bundle h3 {
+  margin: 0;
+}
+.plugin-bundle p {
+  overflow-wrap: anywhere;
+}
+
+/* Keep recovery controls reachable even when a host advertises many features. */
+.plugin-bundles {
+  max-height: 50%;
+  overflow-y: auto;
+  flex-shrink: 0;
+}

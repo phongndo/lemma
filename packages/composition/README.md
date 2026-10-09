@@ -32,3 +32,20 @@ and `restartedBy`. Like the core's own capabilities, what it provides needs no
 plugin. A plugin offering it too is refused by the core, so it is left out like
 any plugin that cannot run, and it neither keeps on nor halts the plugins that
 require it.
+
+## Bundles stay outside the kernel
+
+`expandBundles({ manifests, rows, plugins, ui })` expands authoring manifests
+and desired selections into ordinary host and UI plugin rows. Apply neither
+result when its diagnostics contain an error. Then feed the host result to
+`planComposition`, and let each web app plan the UI result. `bundleEnabled`
+reports selection, not runtime health.
+
+Shared membership is unioned, inactive members receive effective off rows,
+and explicit per-plugin rows win. Selected members do not receive generated
+on rows, so third-party capability replacement keeps working. Config defaults
+merge at the top level; incompatible defaults fail deterministically unless
+an explicit member config replaces them. Bundle ids never enter the kernel
+composition, capabilities, or plugin dependency graph. See
+[feature bundle configuration](../../docs/configuration.md#feature-bundles)
+for the manifest, precedence, and host/UI reconciliation contract.

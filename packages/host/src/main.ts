@@ -5,11 +5,12 @@ import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, Schema
 import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, UiChanged } from "@lemma/contracts/runtime";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
+import { catalog, expandBundles, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ChangeReport, ConfigScope, PluginChange, UiComposition } from "@lemma/contracts/runtime";
+import type { BundleManifest, ChangeReport, ConfigScope, PluginChange, PluginRow, UiComposition } from "@lemma/contracts/runtime";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { appDefaults, bundled } from "./bundled.ts";
+import { appBundles, appDefaults, bundled } from "./bundled.ts";
+import { bundleStatuses } from "./bundles.ts";
 import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
@@ -56,6 +57,10 @@ const printDiagnostics = (diagnostics: readonly Diagnostic[]) =>
 
 /** What one read of the config files and plugin directories produced. */
 interface Loaded {
+  readonly bundleDefinitions: readonly BundleManifest[];
+  /** Raw rows retained separately from bundle-expanded planner input. */
+  readonly explicitPlugins: Readonly<Record<string, PluginRow>>;
+  readonly explicitUi: Readonly<Record<string, PluginRow>>;
   readonly known: readonly KnownPlugin[];
   /** Every known plugin with its row, as the files and app defaults describe it. */
   readonly composition: Composition;
@@ -111,18 +116,47 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       const planned = planComposition({ ...input, local: [], rows: {} });
       const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
       if (errors.length) return yield* new ReloadError({ diagnostics: errors });
-      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, ui: EMPTY_UI };
+      return {
+        ...planned,
+        bundleDefinitions: appBundles,
+        explicitPlugins: {},
+        explicitUi: {},
+        enabledIn: {},
+        configIn: {},
+        trusted: false,
+        ui: { ...EMPTY_UI, bundles: bundleStatuses({ bundleDefinitions: appBundles, bundles: {}, bundleEnabledIn: {}, rows: {}, ui: EMPTY_UI }) },
+      };
     }
-    const loaded = yield* loadComposition(paths);
+    const loaded = yield* loadComposition(paths, appBundles);
+    const expanded = expandBundles({ manifests: loaded.bundleDefinitions, rows: loaded.bundles, plugins: loaded.rows, ui: loaded.ui.plugins });
     // Project plugins run only in a project the user config trusts; see `loadComposition`.
     const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir], {
       bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
     });
+    // A feature must not silently switch off a required policy plugin from a
+    // user's files. An explicit plugin opt-out retains its existing meaning.
+    const requiredMembers = local.plugins.flatMap(({ plugin }) =>
+      expanded.plugins[plugin.id]?.enabled === false && loaded.rows[plugin.id]?.enabled !== false && loaded.rows[plugin.id]?.required !== false
+        ? [
+            new Diagnostic({
+              severity: "error",
+              pluginId: plugin.id,
+              message: `A bundle cannot turn off required local plugin "${plugin.id}"`,
+              suggestion: `Keep its bundle enabled, or explicitly set "required": false in the plugin row`,
+            }),
+          ]
+        : [],
+    );
     const planned = planComposition({
       ...input,
       local: local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) })),
-      rows: loaded.rows,
+      rows: expanded.plugins,
     });
+    const lockedMembers = planned.resolved.overridden.flatMap((id) =>
+      loaded.rows[id]?.enabled !== false
+        ? [new Diagnostic({ severity: "error", pluginId: id, message: `A bundle cannot turn off "${id}": it is pinned or needed by a pinned plugin` })]
+        : [],
+    );
     // A change that would leave out a plugin not left out already is refused (the file is put back, the running
     // composition kept), whichever plugin it touched; one already left out stays so, and blocks nothing.
     const previous: Loaded | undefined = applied;
@@ -130,6 +164,9 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     const diagnostics = [
       ...local.diagnostics,
       ...loaded.diagnostics,
+      ...expanded.diagnostics,
+      ...requiredMembers,
+      ...lockedMembers,
       ...planned.diagnostics.filter(
         (diagnostic) => !refused.some(([id]) => diagnostic.pluginId === id && diagnostic.message.startsWith(`"${id}" is left out`)),
       ),
@@ -143,6 +180,9 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     yield* printDiagnostics(diagnostics.filter((diagnostic) => diagnostic.severity === "warning"));
     const files = yield* listUiFiles(paths, loaded.trusted);
     return {
+      bundleDefinitions: loaded.bundleDefinitions,
+      explicitPlugins: loaded.rows,
+      explicitUi: loaded.ui.plugins,
       known: planned.known,
       composition: planned.composition,
       resolved: planned.resolved,
@@ -151,7 +191,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       enabledIn: loaded.enabledIn,
       configIn: loaded.configIn,
       trusted: loaded.trusted,
-      ui: { ...loaded.ui, files },
+      ui: { ...loaded.ui, plugins: expanded.ui, bundles: bundleStatuses(loaded), files },
     };
   });
 
@@ -276,7 +316,7 @@ const program = Effect.gen(function* () {
   const write = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, section: ConfigSection) =>
     Effect.gen(function* () {
       const path = scope === "user" ? paths.userConfig : paths.projectConfig;
-      const update = yield* updateConfig(path, rows, scope, section).pipe(Effect.mapError(rejected));
+      const update = yield* updateConfig(path, rows, scope, section, applied.bundleDefinitions.length > 0).pipe(Effect.mapError(rejected));
       seenConfig.set(path, update.text);
       // The written rows are read back like any other change; if the host rejects them, the file is put back.
       return yield* Effect.flatMap(load(), (next) => apply(loader, next)).pipe(
@@ -322,7 +362,7 @@ const program = Effect.gen(function* () {
   const writeDeferred = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, after: Effect.Effect<void>) =>
     Effect.gen(function* () {
       const path = scope === "user" ? paths.userConfig : paths.projectConfig;
-      const update = yield* updateConfig(path, rows, scope, "plugins").pipe(Effect.mapError(rejected));
+      const update = yield* updateConfig(path, rows, scope, "plugins", applied.bundleDefinitions.length > 0).pipe(Effect.mapError(rejected));
       seenConfig.set(path, update.text);
       const restore = update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))));
       const next = yield* load().pipe(Effect.tapError(() => restore));
@@ -368,6 +408,38 @@ const program = Effect.gen(function* () {
   const handle: HostControlHandle = {
     plugins: withLoader((loader) => Effect.map(loader.core.inspect, catalogOf)),
     ui: Effect.sync(() => applied.ui),
+    configureBundles: (rows, options) =>
+      withLoader((loader) =>
+        reloading.withPermits(1)(
+          Effect.gen(function* () {
+            if (safe) return yield* safeMode();
+            const scope = options?.scope ?? "user";
+            if (scope === "project" && !applied.trusted) return yield* untrustedProject();
+            for (const id of Object.keys(rows)) {
+              if (!applied.bundleDefinitions.some((manifest) => manifest.id === id))
+                return yield* rejected(new Diagnostic({ severity: "error", message: `No bundle "${id}"` }));
+            }
+            const path = scope === "user" ? paths.userConfig : paths.projectConfig;
+            const update = yield* updateConfig(path, rows, scope, "bundles", true).pipe(Effect.mapError(rejected));
+            seenConfig.set(path, update.text);
+            const restore = update.restoreIfUnchanged.pipe(
+              Effect.flatMap((restored) =>
+                restored
+                  ? Effect.sync(() => seenConfig.set(path, update.previous))
+                  : log("The feature change was rejected; its config was not restored because it changed again or could not be restored"),
+              ),
+            );
+            const next = yield* load().pipe(Effect.tapError(() => restore));
+            const touched = touchedBy(applied, next);
+            const after = yield* deferral(touched, Object.keys(pinned));
+            if (after === undefined) return yield* apply(loader, next).pipe(Effect.tapError(() => restore));
+            yield* checkConfigs(next, [...touched]).pipe(Effect.tapError(() => restore));
+            const change = Effect.flatMap(reloadNow(loader), (report) => log(`applied a feature change: ${describe(report)}`));
+            yield* applyLater(loader, after, change, "The feature change could not be applied", reloading.withPermits(1)(restore));
+            return deferred;
+          }),
+        ),
+      ),
     configureUi: (rows, options) =>
       withLoader((loader) =>
         reloading.withPermits(1)(

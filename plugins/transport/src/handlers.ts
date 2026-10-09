@@ -66,6 +66,11 @@ export const makeHandlers = ({ version, hub, interactions, paths, control, regis
     "Host.Configure": ({ plugins, scope }) =>
       control.configure(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),
 
+    "Host.ConfigureBundles": ({ bundles, scope }) =>
+      control.configureBundles === undefined
+        ? Effect.fail(new HostError({ code: "Unavailable", message: "This host does not support configuring bundles" }))
+        : control.configureBundles(bundles, scope === undefined ? undefined : { scope }).pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),
+
     "Ui.Composition": () => control.ui,
     "Ui.Configure": ({ plugins, scope }) => control.configureUi(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.mapError(toHostError)),
 
