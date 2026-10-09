@@ -10,7 +10,7 @@ index 000000000..adc09b8fc
 +
 +Fix a slow `RpcClient` stream consumer stalling every other request on a socket or worker connection. A stream whose buffer is full now holds back only its own chunks, by withholding its `Ack`, so replies, other streams, and pongs keep arriving.
 diff --git a/packages/effect/src/rpc/RpcClient.ts b/packages/effect/src/rpc/RpcClient.ts
-index 615d168ad..33539c73f 100644
+index 615d168ad..161391183 100644
 --- a/packages/effect/src/rpc/RpcClient.ts
 +++ b/packages/effect/src/rpc/RpcClient.ts
 @@ -288,7 +288,9 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
@@ -33,7 +33,7 @@ index 615d168ad..33539c73f 100644
      })
  
      yield* middleware(
-@@ -568,24 +571,58 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
+@@ -568,24 +571,60 @@ export const makeNoSerialization: <Rpcs extends Rpc.Any, E, const Flatten extend
        })
      })
  
@@ -67,7 +67,9 @@ index 615d168ad..33539c73f 100644
 +      if (remaining.length === 0) return sendAck(requestId, entry)
 +      return Queue.offerAll(entry.queue, remaining).pipe(
 +        Effect.andThen(sendAck(requestId, entry)),
-+        Effect.forkIn(entry.scope),
++        // start now, so the rest of the chunk is queued before a later Exit or
++        // Defect closes the queue
++        Effect.forkIn(entry.scope, { startImmediately: true }),
 +        Effect.map((fiber) => {
 +          entry.delivery = fiber
 +          fiber.addObserver(() => {
@@ -105,10 +107,10 @@ index 615d168ad..33539c73f 100644
        case "Exit": {
          const requestId = message.requestId
 diff --git a/packages/effect/test/rpc/RpcClient.test.ts b/packages/effect/test/rpc/RpcClient.test.ts
-index 88c13947d..bae2bf154 100644
+index 88c13947d..4d9e660f1 100644
 --- a/packages/effect/test/rpc/RpcClient.test.ts
 +++ b/packages/effect/test/rpc/RpcClient.test.ts
-@@ -42,6 +42,57 @@ const makeChunkProtocol = (beforeInterrupt: Effect.Effect<void> = Effect.void) =
+@@ -42,6 +42,59 @@ const makeChunkProtocol = (beforeInterrupt: Effect.Effect<void> = Effect.void) =
      return { client, handle, sent }
    })
  
@@ -149,8 +151,10 @@ index 88c13947d..bae2bf154 100644
 +  )
 +  const client = yield* RpcClient.make(TestGroup).pipe(Effect.provideService(RpcClient.Protocol, protocol))
 +  yield* Queue.take(pulled)
-+  const receive = (message: object) =>
-+    Queue.offer(frames, JSON.stringify(message) + "\n").pipe(Effect.andThen(Queue.take(pulled)))
++  const receive = (...messages: ReadonlyArray<object>) =>
++    Queue.offer(frames, messages.map((message) => JSON.stringify(message) + "\n").join("")).pipe(
++      Effect.andThen(Queue.take(pulled))
++    )
 +  // Takes sent messages up to the next one with the given tag.
 +  const next = (tag: string) =>
 +    Effect.gen(function*() {
@@ -166,7 +170,7 @@ index 88c13947d..bae2bf154 100644
  const takeRequestId = (message: Parameters<RpcClient.Protocol["Service"]["send"]>[1]) => {
    assert(message._tag === "Request")
    return message.id
-@@ -188,6 +239,182 @@ describe("RpcClient", () => {
+@@ -188,6 +241,197 @@ describe("RpcClient", () => {
        assert.deepStrictEqual(yield* Queue.take(sent), { _tag: "Interrupt", requestId })
      }))
  
@@ -273,18 +277,34 @@ index 88c13947d..bae2bf154 100644
 +        const remaining = yield* Queue.collect(queue)
 +        yield* Fiber.join(rest)
 +        assert.deepStrictEqual(remaining, [...values("a", 6).slice(2), ...values("b", 6)])
-+        // The request ended before its second chunk was buffered, so only the first is acked.
-+        assert.deepStrictEqual(yield* acksFor(sent, id), [{ _tag: "Ack", requestId: id }])
++        // The second chunk is acked only if it was buffered before the Exit ended the request.
++        const acks = yield* acksFor(sent, id)
++        assert.isTrue(acks.length === 1 || acks.length === 2)
++        assert.deepStrictEqual(acks[0], { _tag: "Ack", requestId: id })
++      }))
++
++    it.effect("keeps a chunk's values when the connection fails in the same frame", () =>
++      Effect.gen(function*() {
++        const { client, receive, requestId } = yield* makeSocketClient
++        const { queue, take } = yield* takeByHand(client)
++        const id = yield* requestId
++
++        yield* receive(
++          { _tag: "Chunk", requestId: id, values: values("a", 6) },
++          { _tag: "Defect", defect: "boom" }
++        )
++        assert.deepStrictEqual(yield* take(6), values("a", 6))
++        assert(Exit.isFailure(yield* Effect.exit(Queue.take(queue))))
 +      }))
 +
 +    it.effect("holds a chunk sent before the Ack until the previous one is buffered", () =>
 +      Effect.gen(function*() {
-+        const log: Array<string> = []
++        const acks: Array<RpcMessage.RequestId> = []
 +        const requestId = RpcMessage.RequestId("0")
 +        const { client, write } = yield* RpcClient.makeNoSerialization(TestGroup, {
 +          supportsAck: true,
 +          generateRequestId: () => requestId,
-+          onFromClient: ({ message }) => Effect.sync(() => message._tag === "Ack" && log.push("ack"))
++          onFromClient: ({ message }) => Effect.sync(() => message._tag === "Ack" && acks.push(message.requestId))
 +        })
 +        const { take } = yield* takeByHand(client)
 +        const chunk = (prefix: string): RpcMessage.ResponseChunk<RpcGroup.Rpcs<typeof TestGroup>> => ({
@@ -295,14 +315,13 @@ index 88c13947d..bae2bf154 100644
 +        })
 +
 +        yield* write(chunk("a"))
-+        const early = yield* write(chunk("b")).pipe(
-+          Effect.andThen(Effect.sync(() => log.push("b"))),
-+          Effect.forkChild
-+        )
++        // Started at once, the write runs until it suspends. Without waiting,
++        // every early chunk would hold a fiber and its values.
++        const early = yield* Effect.forkChild(write(chunk("b")), { startImmediately: true })
++        assert.isUndefined(early.pollUnsafe())
 +        assert.deepStrictEqual(yield* take(12), [...values("a", 6), ...values("b", 6)])
 +        yield* Fiber.join(early)
-+        // Without waiting, every early chunk would hold a fiber and its values.
-+        assert.deepStrictEqual(log.slice(0, 2), ["ack", "b"])
++        assert.deepStrictEqual(acks.slice(0, 1), [requestId])
 +      }))
 +
 +    it.effect("releases the stream when its consumer is interrupted", () =>
