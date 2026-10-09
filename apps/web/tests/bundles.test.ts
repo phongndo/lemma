@@ -1,3 +1,4 @@
+import { planComposition } from "@lemma/composition";
 import { describe, expect, it } from "vitest";
 import type { BundleStatus, PluginStatus } from "@lemma/contracts/runtime";
 import { bundleState } from "../src/model/bundles.ts";
@@ -12,6 +13,15 @@ const plugin = (id: string, extra: Partial<PluginStatus> = {}): PluginStatus => 
   ...extra,
 });
 const bundle: BundleStatus = { id: "tools", title: "Tools", host: ["tools"], ui: ["tools"], enabled: true, customized: false };
+
+describe("bundle rejection fixture", () => {
+  it("rejects the missing required UI row used by the mock host", () => {
+    const plan = planComposition({ bundled: [], local: [], rows: { "check-required-ui": { required: true } } });
+    expect(plan.diagnostics.filter((diagnostic) => diagnostic.severity === "error").map((diagnostic) => diagnostic.message)).toEqual([
+      '"check-required-ui" is required, but no plugin has that id',
+    ]);
+  });
+});
 
 describe("bundleState", () => {
   it("requires members from both runtimes, distinguishing identical ids", () => {

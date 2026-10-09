@@ -1534,7 +1534,8 @@ export const createMockHost = (): Host => {
           if (ui.enabledIn[id] !== undefined) continue;
           uiRows[id] = { ...uiRows[id], enabled: members("ui", id).some((bundle) => bundle.enabled) };
         }
-        if (bundleUiError) uiRows["shell"] = { enabled: false };
+        // Pinned plugins ignore disabled rows. A missing required plugin actually rejects the UI plan.
+        if (bundleUiError) uiRows["check-required-ui"] = { required: true };
         ui = { ...ui, bundles, plugins: uiRows };
         halted();
         emit({ type: "plugins-changed", plugins: plugins.slice() });

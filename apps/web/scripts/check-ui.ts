@@ -112,6 +112,8 @@ const expose = (page: Page, ...names: string[]) =>
 
 /** Every page opened, traced, so that a failure can leave its trace and a screenshot behind. */
 const pages: Page[] = [];
+const artifactDirectory = process.env.LEMMA_UI_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "lemma-ui-check-"));
+mkdirSync(artifactDirectory, { recursive: true });
 const open = async () => {
   const page = await browser.newPage({ viewport: { width: 1200, height: 900 } });
   await page.context().tracing.start({ screenshots: true, snapshots: true });
@@ -119,8 +121,7 @@ const open = async () => {
   return page;
 };
 const saveArtifacts = async () => {
-  const directory = process.env.LEMMA_UI_ARTIFACTS ?? mkdtempSync(join(tmpdir(), "lemma-ui-check-"));
-  mkdirSync(directory, { recursive: true });
+  const directory = artifactDirectory;
   for (const [index, page] of pages.entries()) {
     if (page.isClosed()) continue;
     await page.screenshot({ path: join(directory, `page-${index + 1}.png`), fullPage: true }).catch(() => {});
@@ -1649,7 +1650,7 @@ const bundles = async () => {
   await settled(page);
   await page.waitForSelector(".inspector-table");
   assert.equal(await page.locator(".plugin-bundle").count(), 0, "older hosts should keep the original inspector");
-  await page.screenshot({ path: "/tmp/lemma-bundle-settings-before.png", fullPage: true });
+  await page.screenshot({ path: join(artifactDirectory, "bundle-settings-before.png"), fullPage: true });
   await page.evaluate(() =>
     (window as any).lemmaMock.setBundles([
       { id: "check-tools", title: "Check tools", description: "Host and web members", host: ["bash"], ui: ["highlight"], enabled: true, customized: false },
@@ -1685,6 +1686,7 @@ const bundles = async () => {
     (window as any).lemmaMock.setBundleUiError(true);
   });
   await toggle.click();
+  await page.locator(".inspector .problems").filter({ hasText: '"check-required-ui" is required, but no plugin has that id' }).waitFor();
   await page.getByText("Saved Check tools selection; the web app could not apply it.", { exact: false }).waitFor();
   await card
     .locator("[role=status]")
@@ -1699,7 +1701,7 @@ const bundles = async () => {
   assert.equal(await card.locator("[role=status]").innerText(), "UI not applied");
   assert.equal(await toggle.getAttribute("aria-checked"), "true");
   assert.equal(await page.locator(".inspector-table").count(), 1, "advanced recovery controls remain available");
-  await page.screenshot({ path: "/tmp/lemma-bundle-settings.png", fullPage: true });
+  await page.screenshot({ path: join(artifactDirectory, "bundle-settings.png"), fullPage: true });
   await page.close();
   expectNoErrors("feature selections, reconciliation and rejected changes");
   return "optional feature cards coordinate host and UI selection, show missing members and customization, and recover from rejected changes";
