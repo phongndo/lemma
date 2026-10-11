@@ -1,5 +1,4 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { describe, expect, it } from "vitest";
@@ -7,7 +6,7 @@ import { Events, definePlugin, makeCore } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { InteractionOrigin } from "@lemma/contracts";
 import { ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/tools";
-import { textOf } from "@lemma/tools/testing";
+import { tempDir, textOf } from "@lemma/tools/testing";
 import tools from "@lemma/tools-registry";
 import bash from "@lemma/tools-bash";
 import edit from "@lemma/tools-edit";
@@ -30,6 +29,22 @@ const run = (code: string, cwd = process.cwd(), extra: readonly Plugin[] = [], s
       }),
     ),
   );
+
+describe("codemode's registration", () => {
+  it("registers under its name, with its plugin as the source and a clean schema", async () => {
+    const listed = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([tools, ...builtin]);
+          return yield* core.run(Effect.flatMap(Tools, (registry) => registry.list));
+        }),
+      ),
+    );
+    const own = listed.find((tool) => tool.spec.name === "codemode");
+    expect([own?.spec.name, own?.source]).toEqual(["codemode", "tools.codemode"]);
+    expect(JSON.stringify(own)).not.toContain("$schema");
+  });
+});
 
 /** One codemode call, with what the agent passes: the request's tools, an origin, and the registry's config. */
 const call = (
@@ -81,7 +96,7 @@ const call = (
 
 describe("pi codemode", () => {
   it("composes the coding tools in the session cwd and returns only selected output", async () => {
-    const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "lemma-tools-"));
+    const cwd = await tempDir();
     try {
       const result = await run(
         `

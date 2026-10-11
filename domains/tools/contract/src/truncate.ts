@@ -29,7 +29,8 @@ export interface Limits {
   readonly maxBytes?: number;
 }
 
-const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+const encoder = new TextEncoder();
+const bytes = (text: string) => encoder.encode(text).length;
 
 function countedLines(content: string): string[] {
   if (content.length === 0) return [];
@@ -134,9 +135,9 @@ export function truncateTail(content: string, limits: Limits = {}): Truncation {
 
 /** The last `maxBytes` of a string, starting on a UTF-8 character boundary. */
 export function tailBytes(text: string, maxBytes: number): string {
-  const buffer = Buffer.from(text, "utf8");
+  const buffer = encoder.encode(text);
   if (buffer.length <= maxBytes) return text;
   let start = buffer.length - maxBytes;
   while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start++;
-  return buffer.subarray(start).toString("utf8");
+  return new TextDecoder().decode(buffer.subarray(start));
 }

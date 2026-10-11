@@ -1,4 +1,7 @@
 /** `@lemma/tools/testing`: calls a tool as the registry would, without a registry, for a tool's own tests. */
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Effect, Schema } from "effect";
 import type { Tool, ToolContext, ToolResult } from "./tools.ts";
 
@@ -21,3 +24,6 @@ export const attempt = async <I>(tool: Tool<I>, input: unknown, ctx: ToolContext
 
 /** A result's text, an image as `<image type>`. */
 export const textOf = (result: ToolResult): string => result.content.map((part) => (part.type === "text" ? part.text : `<image ${part.mimeType}>`)).join("\n");
+
+/** A new, empty directory for a test to work in. */
+export const tempDir = (): Promise<string> => mkdtemp(join(tmpdir(), "lemma-tools-"));

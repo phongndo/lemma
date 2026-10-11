@@ -9,7 +9,7 @@ describe("a host killed mid-turn", () => {
   let lemma: Lemma;
   let home: string;
   beforeAll(async () => {
-    lemma = await startLemma("lemma-cli-crash-", { plugins: { agent: { config: { defaultModel: "mock/scripted" } } } });
+    lemma = await startLemma("lemma-cli-crash-", { plugins: { "agent.loop": { config: { defaultModel: "mock/scripted" } } } });
     home = lemma.home;
   }, 30_000);
   afterAll(() => lemma?.stop());
