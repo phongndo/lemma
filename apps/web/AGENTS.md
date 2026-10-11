@@ -6,7 +6,7 @@ for their own, without editing this repository. The plugins are written
 against the runtime, which the boot provides (`src/runtime/`) and nothing
 replaces: the connection, slots, the router, messages, the plugins, and
 questions. The bundled plugins are defaults that sit on the same footing as a
-user's UI file. Build every default so a user could have written it and could
+user's web half. Build every default so a user could have written it and could
 replace it.
 
 ## Where each kind of code goes
@@ -124,9 +124,9 @@ nix develop .#browser -c pnpm --filter @lemma/web ui:check  # the real compositi
 `ui:check` boots the app and fails when a part has no provider, a plugin cannot
 turn off and on without errors or leaves its stylesheet behind, more than the
 pinned plugins and what they need stay on, the runtime stops answering with
-every plugin off, a UI file providing part of the runtime is not left out, a
+every plugin off, a web half providing part of the runtime is not left out, a
 replaced part does not show, or an extension slot does not render what a
-plugin adds. What it adds to slots it adds through a UI file's plugin
+plugin adds. What it adds to slots it adds through a web half
 (`check`), as a user's code does.
 
 For a change to how things look, compare screenshots of the main screens:

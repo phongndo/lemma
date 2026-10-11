@@ -3,7 +3,8 @@ import type { FSWatcher } from "node:fs";
 import { basename, dirname } from "node:path";
 import { Duration, Effect, Queue, Stream } from "effect";
 import type { PathsService } from "./paths.ts";
-import { projectUiDir, userUiDir } from "./ui.ts";
+import { projectPluginsDir } from "./config.ts";
+import { userPluginsDir } from "./ui.ts";
 
 interface WatchOptions {
   /** Quiet period before a burst of changes becomes one emission. Default 250ms. */
@@ -48,22 +49,23 @@ export function watchConfig(paths: PathsService, options: WatchOptions = {}): St
 }
 
 /**
- * Emits after a file in `<home>/ui` or the project's `.lemma/ui` changes. A
- * directory created while the host runs is picked up: its parent is watched
- * for it, and any change to that entry (created, removed, replaced) swaps in
- * a fresh watcher, since a removed directory's watcher on Linux goes quiet
- * without an error.
+ * Emits after anything in `<home>/plugins` or the project's `.lemma/plugins`
+ * changes, a package's files included: a host half, a web half, or a
+ * stylesheet. A directory created while the host runs is picked up: its parent
+ * is watched for it, and any change to that entry (created, removed, replaced)
+ * swaps in a fresh watcher, since a removed directory's watcher on Linux goes
+ * quiet without an error.
  */
-export function watchUi(paths: PathsService, options: WatchOptions = {}): Stream.Stream<void> {
-  const dirs = [userUiDir(paths), projectUiDir(paths)];
+export function watchPlugins(paths: PathsService, options: WatchOptions = {}): Stream.Stream<void> {
+  const dirs = [userPluginsDir(paths), projectPluginsDir(paths)];
   return Stream.callback<void>((queue) =>
     Effect.acquireRelease(
       Effect.sync(() => {
         const watchers = new Map<string, FSWatcher>();
-        const attach = (path: string, onChange: (name: string | null) => void) => {
+        const attach = (path: string, recursive: boolean, onChange: (name: string | null) => void) => {
           if (watchers.has(path)) return;
           try {
-            const watcher = watch(path, (_, name) => onChange(name));
+            const watcher = watch(path, { recursive }, (_, name) => onChange(name));
             watcher.on("error", () => {
               watcher.close();
               watchers.delete(path);
@@ -77,9 +79,9 @@ export function watchUi(paths: PathsService, options: WatchOptions = {}): Stream
           const watchDir = () => {
             watchers.get(dir)?.close();
             watchers.delete(dir);
-            attach(dir, () => Queue.offerUnsafe(queue, undefined));
+            attach(dir, true, () => Queue.offerUnsafe(queue, undefined));
           };
-          attach(dirname(dir), (name) => {
+          attach(dirname(dir), false, (name) => {
             if (name !== null && name !== basename(dir)) return;
             watchDir();
             Queue.offerUnsafe(queue, undefined);

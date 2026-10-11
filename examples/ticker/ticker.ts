@@ -5,13 +5,14 @@ import { Channels, defineChannel, serveChannel } from "@lemma/contracts";
 /**
  * Made-up prices for a few symbols, moving by a random walk, served to
  * clients through two channels: `ticker.prices`, a stream of every symbol's
- * quote on each tick, and `ticker.quote`, one symbol's quote now. Its UI file
- * (`ticker-ui.js`) shows them at `/ticker` in the web app.
+ * quote on each tick, and `ticker.quote`, one symbol's quote now. Its web
+ * half (`web.js`) shows them at `/ticker` in the web app.
  *
- * A plugin file, written the way a user writes one: copy or link it into
- * `~/.lemma/plugins/` and run `lemma reload`. It imports only packages the
- * host supplies, and needs no change to Lemma's contracts or transport. Its
- * channels' declarations are exported, so a typed client can import them.
+ * The host half of a folder plugin, written the way a user writes one: link
+ * or copy the folder into `~/.lemma/plugins/` and run `lemma reload`. It
+ * imports only packages the host supplies, and needs no change to Lemma's
+ * contracts or transport. Its channels' declarations are exported, so a typed
+ * client can import them.
  */
 
 const Config = Schema.Struct({

@@ -1,9 +1,18 @@
 import { describe, expect, it } from "vitest";
 import type { EventData } from "@lemma/sessions";
 import { summarizeTools, workEntries } from "../src/work.ts";
-import type { WorkEntry } from "../src/work.ts";
+import type { ActionOf, WorkEntry } from "../src/work.ts";
 import { assistant, branch, toolResult, transcriptOf, user } from "@lemma/threads/testing";
 
+/** As the bundled tools' views say; `grep` stands for a tool of a plugin's own. */
+const ACTIONS: ReadonlyMap<string, readonly [string, string, string]> = new Map([
+  ["bash", ["ran", "command", "commands"]],
+  ["read", ["read", "file", "files"]],
+  ["edit", ["changed", "file", "files"]],
+  ["write", ["changed", "file", "files"]],
+  ["grep", ["searched", "time", "times"]],
+]);
+const actionOf: ActionOf = (name) => ACTIONS.get(name);
 const call = (id: string, name = "bash") => ({ type: "toolCall" as const, id, name, arguments: { command: "ls" } });
 const itemsOf = (...data: EventData[]) =>
   transcriptOf(branch({ type: "turn-start", turnId: "t1" }, user("hi", "t1"), ...data)).turns[0]!.items.filter((item) => item.kind !== "user");
@@ -18,12 +27,15 @@ const shape = (entries: readonly WorkEntry[]) =>
 
 describe("summarizeTools", () => {
   it("says what the calls did, naming two kinds and counting the rest", () => {
-    expect(summarizeTools(["bash", "bash", "edit", "bash"])).toBe("Ran 3 commands and changed 1 file");
-    expect(summarizeTools(["read", "read", "bash", "grep", "find", "mcp"])).toBe("Read 2 files, ran 1 command, and 3 other actions");
-    expect(summarizeTools(["edit", "write"])).toBe("Changed 2 files");
-    expect(summarizeTools(["mcp", "web"])).toBe("Used 2 tools");
+    expect(summarizeTools(["bash", "bash", "edit", "bash"], actionOf)).toBe("Ran 3 commands and changed 1 file");
+    expect(summarizeTools(["read", "read", "bash", "grep", "find", "mcp"], actionOf)).toBe("Read 2 files, ran 1 command, and 3 other actions");
+    expect(summarizeTools(["mcp", "web"], actionOf)).toBe("Used 2 tools");
     // A tool may be named anything, a name objects have too among them.
-    expect(summarizeTools(["constructor", "toString", "bash"])).toBe("Ran 1 command and 2 other actions");
+    expect(summarizeTools(["constructor", "toString", "bash"], actionOf)).toBe("Ran 1 command and 2 other actions");
+  });
+
+  it("counts calls whose tools say the same words as one kind", () => {
+    expect(summarizeTools(["edit", "write"], actionOf)).toBe("Changed 2 files");
   });
 });
 
@@ -38,18 +50,19 @@ describe("workEntries", () => {
       toolResult("c3", "ok"),
       { type: "message", turnId: "t1", stepId: "s4", message: assistant([{ type: "thinking", thinking: "next" }]) },
     );
-    const entries = workEntries(items);
+    const entries = workEntries(items, actionOf);
     expect(shape(entries)).toEqual([{ group: "Ran 1 command and changed 1 file", rows: ["thinking", "tool", "tool"] }, "text", "tool", "thinking"]);
     expect(entries[0]).toMatchObject({ kind: "group", failed: 1, tools: ["bash", "edit"] });
   });
 
   it("keys a group by its first row, so it keeps its key as the run grows", () => {
-    const one = workEntries(itemsOf({ type: "message", turnId: "t1", stepId: "s1", message: assistant([call("c1"), call("c2")]) }));
+    const one = workEntries(itemsOf({ type: "message", turnId: "t1", stepId: "s1", message: assistant([call("c1"), call("c2")]) }), actionOf);
     const two = workEntries(
       itemsOf(
         { type: "message", turnId: "t1", stepId: "s1", message: assistant([call("c1"), call("c2")]) },
         { type: "message", turnId: "t1", stepId: "s2", message: assistant([call("c3")]) },
       ),
+      actionOf,
     );
     expect(two[0]!.key).toBe(one[0]!.key);
   });

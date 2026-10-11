@@ -1,5 +1,5 @@
 import { Effect, Schema } from "effect";
-import type { ThreadsService } from "@lemma/threads";
+import type { ThreadsService, ToolView } from "@lemma/threads";
 import type { RouterService } from "@lemma/ui";
 
 /** The chat's settings. */
@@ -35,4 +35,6 @@ export interface Chat {
   readonly seen: (id: string, before?: string) => number;
   /** The time, ticking each second while a turn runs, for elapsed-time labels. */
   readonly now: () => number;
+  /** How calls to a tool show, when its plugin says (`ToolViews`). */
+  readonly toolView: (name: string) => ToolView | undefined;
 }

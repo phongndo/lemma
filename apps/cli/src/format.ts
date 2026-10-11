@@ -155,18 +155,26 @@ export const formatConfig = (plugin: PluginStatus): string => {
 };
 
 /** The web app's rows and files; which plugins exist is known only to the web app, which loads them. */
-export const formatUi = (ui: UiComposition): string => {
-  const rows = Object.entries(ui.plugins).map(([id, row]) => [
-    id,
-    row.enabled === false ? "off" : row.enabled === true ? "on" : "",
-    row.config === undefined ? "" : JSON.stringify(row.config),
-    ui.enabledIn[id] ?? ui.configIn[id] ?? "",
-  ]);
+/**
+ * What the host knows of the web app's halves: rows naming plugins the host does not have (the web app's), and the web
+ * halves and stylesheets in the plugin directories. Empty when there are none.
+ */
+export const formatWebHalves = (ui: UiComposition, hostIds: ReadonlySet<string>): string => {
+  const rows = Object.entries(ui.plugins)
+    .filter(([id]) => !hostIds.has(id))
+    .map(([id, row]) => [
+      id,
+      row.enabled === false ? "off" : row.enabled === true ? "on" : "",
+      row.config === undefined ? "" : JSON.stringify(row.config),
+      ui.enabledIn[id] ?? ui.configIn[id] ?? "",
+    ]);
   const files = ui.files.map((file) => [`${file.source}/${file.name}`, file.kind, file.path]);
   return [
-    rows.length ? `Rows\n${pad(rows)}` : "No ui rows: every web app plugin runs with its default config.",
-    files.length ? `Files\n${pad(files)}` : "No UI files in ~/.lemma/ui.",
-  ].join("\n\n");
+    rows.length ? `Rows for the web app's plugins (its Plugins page lists them all)\n${pad(rows)}` : "",
+    files.length ? `Web halves and stylesheets\n${pad(files)}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 };
 
 /**

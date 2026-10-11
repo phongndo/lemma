@@ -65,7 +65,6 @@ export function hostRuntime(options: { readonly paths: PathsService; readonly co
         reload: detached(control.reload.pipe(Effect.tap(() => changed))),
         configure: (plugins, options) => detached(control.configure(plugins, options).pipe(Effect.ensuring(changed))),
         ui: control.ui,
-        configureUi: control.configureUi,
       } satisfies HostControlService;
     }),
   );

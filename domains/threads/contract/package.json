@@ -17,6 +17,7 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/ui": "workspace:*",
     "effect": "4.0.1",

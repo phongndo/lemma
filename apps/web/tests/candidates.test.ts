@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { extractCandidates } from "../src/model/candidates.ts";
 
 describe("extractCandidates", () => {
-  it("finds the classes in a UI file's html templates and strings", () => {
+  it("finds the classes in a web half's html templates and strings", () => {
     const source = [
       'html`<span class="muted tw:text-xs">${count}</span>`',
       "html`<div class=${open() ? 'tw:bg-accent-soft' : 'tw:bg-bg-raised'}>`",

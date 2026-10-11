@@ -54,7 +54,7 @@ export interface ControlHolder {
   readonly restarted: string[];
   /** Plugins `configure` turned off, with the scope written. */
   readonly off: Record<string, ConfigScope>;
-  /** The web app's rows and files; `configureUi` merges rows in and publishes it, as the host app does. */
+  /** What the web app plans from: the rows (`configure` merges its rows in and publishes it, as the host app does) and files. */
   ui: UiComposition;
 }
 
@@ -113,19 +113,16 @@ export const fakeHostControl = (holder: ControlHolder) =>
                 if (row.enabled === false) holder.off[id] = scope;
                 else if (row.enabled === true) delete holder.off[id];
               }
+              // Every row is the web app's to read too: a plugin's one row decides both its halves.
+              const written = { ...holder.ui.plugins };
+              for (const [id, row] of Object.entries(rows)) written[id] = { ...written[id], ...(row.enabled === undefined ? {} : { enabled: row.enabled }) };
+              holder.ui = { ...holder.ui, plugins: written };
+              yield* events.publish(UiChanged, holder.ui);
               yield* changed;
               const ids = Object.keys(rows);
               return { started: [], stopped: ids.filter((id) => holder.off[id]), restarted: [], unchanged: [], failed: [], interrupted: 0, faults: [] };
             }),
           ui: Effect.sync(() => holder.ui),
-          configureUi: (rows) =>
-            Effect.gen(function* () {
-              const plugins = { ...holder.ui.plugins };
-              for (const [id, row] of Object.entries(rows)) plugins[id] = { ...plugins[id], ...(row.enabled === undefined ? {} : { enabled: row.enabled }) };
-              holder.ui = { ...holder.ui, plugins };
-              yield* events.publish(UiChanged, holder.ui);
-              return holder.ui;
-            }),
         };
       }),
     ),

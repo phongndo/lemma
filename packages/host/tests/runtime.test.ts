@@ -48,7 +48,7 @@ const start = (plugins: readonly Plugin[], composition: Composition, reloading: 
     const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
     const history = faultHistory();
     const configured: Record<string, unknown>[] = [];
-    let ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+    const ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
     const handle: HostControlHandle = {
       // Each plugin with its recorded faults, as the catalog lists them.
       plugins: withLoader((loader) =>
@@ -67,11 +67,6 @@ const start = (plugins: readonly Plugin[], composition: Composition, reloading: 
           return loader.apply(composition);
         }),
       ui: Effect.sync(() => ui),
-      configureUi: (rows) =>
-        Effect.sync(() => {
-          ui = { ...ui, plugins: { ...ui.plugins, ...rows } };
-          return ui;
-        }),
     };
     const byId = new Map(plugins.map((plugin) => [plugin.id, plugin]));
     const source: PluginSource = {

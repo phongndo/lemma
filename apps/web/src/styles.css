@@ -8,7 +8,7 @@
  * `defineUiPlugin`), in the `plugins` layer; the shared parts' styles sit in
  * its `parts` sublayer, under the views. Tailwind's utilities (`tailwind.css`)
  * come last of the layers, so a class in a plugin's markup beats a rule in a
- * stylesheet. Stylesheets in `~/.lemma/ui` are not layered, so they override
+ * stylesheet. Stylesheets in `~/.lemma/plugins` are not layered, so they override
  * all of it.
  */
 @layer theme, foundation, plugins, utilities;
@@ -76,7 +76,7 @@
     --radius: calc(8px * var(--radius-scale));
     --radius-sm: calc(6px * var(--radius-scale));
     --sidebar: 264px;
-    /* Stacking of what covers the page, lowest first. A layer from a UI file slots in between by picking a value. */
+    /* Stacking of what covers the page, lowest first. A layer from a web half slots in between by picking a value. */
     --z-drawer: 40;
     --z-dialog: 50;
     --z-menu: 60;

@@ -31,7 +31,7 @@ const bracketed = (source: string): string[] => {
 };
 
 /**
- * The words in a UI file's source that could be Tailwind classes, as the
+ * The words in a web half's source that could be Tailwind classes, as the
  * build's scanner finds them in the app's own: what lies between quotes,
  * backticks, and whitespace, with the markup around a class in an `html`
  * template trimmed off, and each class with brackets whole, quotes inside

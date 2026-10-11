@@ -115,8 +115,8 @@ export interface ChannelStream<Payload = any, Success = any> extends ChannelDecl
 }
 
 /**
- * A call or a stream a host plugin serves to clients: its own web plugin, a
- * UI file, a script, or the CLI (`lemma channels`). The transport serves every
+ * A call or a stream a host plugin serves to clients: its own web half,
+ * another plugin, a script, or the CLI (`lemma channels`). The transport serves every
  * channel through `RuntimeRpcs`' `Channel.*`, so a plugin offers its own data
  * without a change to these contracts or the transport. A plugin adds one to
  * `Channels` with `PluginContext.add`; it belongs to that plugin and leaves

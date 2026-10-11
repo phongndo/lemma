@@ -22,20 +22,23 @@ and Alt with the send key queues the prompt for after the turn.
 
 1. The bundled plugins, listed in [`bundled.ts`](src/bundled.ts): each a package in its domain's folder
    (`domains/<domain>/<name>`, id `<domain>.<name>`), as `frame.shell` is `domains/frame/shell`.
-2. UI files in `~/.lemma/ui/` and, for a trusted project, `<project>/.lemma/ui/`:
-   `.js`/`.mjs` files load as plugins, and `.css` files apply over the app's
-   styles. Every color, radius, width, and stacking level is a `--` token in
-   [`styles.css`](src/styles.css), and a file's rules win over the app's own.
-3. The `"ui"` rows of `config.jsonc`, which work like the host's
-   [`"plugins"` rows](../../docs/configuration.md):
-   `{ "ui": { "threads.transcript": { "config": { "expandTools": true } } } }`.
+2. Web halves and stylesheets in `~/.lemma/plugins/` and, for a trusted
+   project, `<project>/.lemma/plugins/` (laid out as
+   [Configuration](../../docs/configuration.md#your-plugins) says): a web half
+   (`notes.web.js`, a folder plugin's `lemma.web`) loads as a plugin, and a
+   stylesheet applies over the app's styles. Every color, radius, width, and
+   stacking level is a `--` token in [`styles.css`](src/styles.css), and a
+   stylesheet's rules win over the app's own.
+3. The rows of `config.jsonc`, the host's too: one row decides both halves of
+   a plugin (`{ "plugins": { "threads.transcript": { "config": { "expandTools": true } } } }`),
+   and a web half whose host half is not running waits for it.
 
 Edits apply without a reload: the plugins that changed, and what depends on
-them, restart. Change rows from the Plugins settings page or with
-`lemma ui enable|disable|config`. Keyboard shortcuts are the `actions.keymap`
-plugin's config, which Settings › Keyboard records. The runtime is not a
-plugin: it has no row, and the Plugins page lists what it provides in its
-summary.
+them, restart. Change rows from the Plugins settings page, which shows a
+plugin's two halves as one row, or with `lemma plugins enable|disable|config`.
+Keyboard shortcuts are the `actions.keymap` plugin's config, which Settings ›
+Keyboard records. The runtime is not a plugin: it has no row, and the Plugins
+page lists what it provides in its summary.
 
 A customization that breaks fails alone. A plugin that cannot run (a file
 that does not load, a config that does not decode, a plugin written for
@@ -64,7 +67,7 @@ tint from them. A plugin's own colors are tokens in its stylesheet:
 The look is the `look.appearance` plugin's config, which it paints on the page:
 
 ```jsonc
-"ui": { "look.appearance": { "config": {
+"plugins": { "look.appearance": { "config": {
   "scheme": "dark",              // system (the default), light, or dark
   "darkTheme": "tokyo-night",    // a theme a plugin offers; unset, Lemma's own
   "accent": "blue",              // an accent a plugin offers, or any CSS color
@@ -76,15 +79,15 @@ The look is the `look.appearance` plugin's config, which it paints on the page:
 ```
 
 Settings › Appearance (the `look.appearance-page` plugin) edits that row, as
-`lemma ui config look.appearance accent blue` or an agent's edit to `config.jsonc`
+`lemma plugins config look.appearance accent blue` or an agent's edit to `config.jsonc`
 does, and the palette's Appearance commands switch the scheme. What there is
 to choose from is three slots, `Themes`, `Accents`, and `Fonts`: `look.appearance`
 adds Lemma's own there, and a plugin adds others beside them, so a theme pack
-is a UI file, offered while it loads and gone with it. A theme is its base
+is a web half, offered while it loads and gone with it. A theme is its base
 colors, and `tokens` for any other:
 
 ```js
-// ~/.lemma/ui/tokyo-night.js
+// ~/.lemma/plugins/tokyo-night.web.js
 export default ({ defineUiPlugin, contracts: { Slots, Themes, Accents } }) =>
   defineUiPlugin({
     id: "tokyo-night",
@@ -105,7 +108,7 @@ export default ({ defineUiPlugin, contracts: { Slots, Themes, Accents } }) =>
 A font plugin declares its file with `@font-face` in its `styles` and adds a
 `Fonts` item; the file loads only once the font is chosen. A plugin's rows in
 the `SectionIds.appearance` settings section sit beside the look's own. A
-stylesheet in `~/.lemma/ui` sets any token the look leaves unset, and a
+stylesheet in `~/.lemma/plugins` sets any token the look leaves unset, and a
 plugin that replaces `look.appearance` paints through `api.look` (`paint`,
 `unpaint`), so the next load shows its look before plugins start; a renderer
 that does not draw with CSS reads the look there too (`tokenColor`,
@@ -113,7 +116,7 @@ that does not draw with CSS reads the look there too (`tokenColor`,
 
 ### Utilities
 
-A UI file's markup can use Tailwind utilities, prefixed `tw:`, as the bundled
+A web half's markup can use Tailwind utilities, prefixed `tw:`, as the bundled
 plugins do:
 
 ```js
@@ -122,17 +125,17 @@ html`<div class="tw:flex tw:gap-2 tw:bg-bg-raised tw:rounded">${label}</div>`;
 
 Each is named for its token, not Tailwind's palette: `--x` is the value `x`
 (`tw:bg-bg-raised`, `tw:text-text-2`, `tw:border-border`, `tw:bg-accent`;
-[`tailwind.css`](src/tailwind.css)), so they follow the look. While a UI file has a script, the page
+[`tailwind.css`](src/tailwind.css)), so they follow the look. While there is a web half, the page
 compiles its classes with the app's own; a class must appear whole in the
 file, as Tailwind requires. A plugin's `styles` and the stylesheets in
-`~/.lemma/ui` are plain CSS: Tailwind's `@apply` does not reach them, and the
+`~/.lemma/plugins` are plain CSS: Tailwind's `@apply` does not reach them, and the
 tokens do.
 
 ## Writing a plugin
 
 A plugin requires and provides capabilities, and adds items to slots.
 The contracts declare them all: the runtime's in [`@lemma/ui`](../../packages/ui/src/index.ts), and each
-domain's in its own package (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …; a UI file gets them all
+domain's in its own package (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …; a web half gets them all
 as `api.contracts`). The bundled plugins use nothing else:
 
 - **Capabilities** are services with one provider, such as `Threads` or
@@ -153,12 +156,12 @@ as `api.contracts`). The bundled plugins use nothing else:
 The devtools' Registries panel (`mod+shift+d`) lists every slot and who fills
 it.
 
-A UI file needs no build step: its default export may be a function that
+A web half needs no build step: its default export may be a function that
 receives [the api](src/ui/api.ts), including Solid, the contracts,
 `defineUiPlugin`, and `html` (Solid's JSX without a compiler).
 
 ```js
-// ~/.lemma/ui/tool-count.js
+// ~/.lemma/plugins/tool-count.web.js
 export default ({ defineUiPlugin, contracts: { Slots, Threads, SidebarFooter }, html }) =>
   defineUiPlugin({
     id: "tool-count",
@@ -171,7 +174,7 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, SidebarFooter }, 
 ```
 
 ```js
-// ~/.lemma/ui/quiet-thoughts.js: thoughts as a single muted line
+// ~/.lemma/plugins/quiet-thoughts.web.js: thoughts as a single muted line
 export default ({ defineUiPlugin, contracts: { Slots, ChatThinkingPart }, html }) =>
   defineUiPlugin({
     id: "quiet-thoughts",
@@ -183,7 +186,7 @@ export default ({ defineUiPlugin, contracts: { Slots, ChatThinkingPart }, html }
 ```
 
 ```js
-// ~/.lemma/ui/thread-links.js: `#` in the composer offers threads by title
+// ~/.lemma/plugins/thread-links.web.js: `#` in the composer offers threads by title
 export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletions } }) =>
   defineUiPlugin({
     id: "thread-links",
@@ -207,22 +210,22 @@ release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
 `Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
 `propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps
 working) becomes the plugin's settings form. `styles` apply while it runs.
-`api: 2` says which version of
+`api: 3` says which version of
 the contracts it is written for (`contracts.UI_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while
 it is off. Draw what a slot holds with `api.parts.Contained`, `Each`, or
 `First`, so an item that throws fails alone. A file is one ES module: bundle
 anything it imports, and take from the api what it offers, so it shares the
-page's module instances. UI files run with the page's permissions and token,
-as host plugins run with the host's.
+page's module instances. Web halves run with the page's permissions and token,
+as host halves run with the host's.
 
 `Client` is the page's connection to the host: its status, the host's own
-calls and events (its plugins, inspectors, the `ui` rows), and the
+calls and events (its plugins, inspectors, the rows), and the
 [channels](../../packages/contracts/src/channels.ts) host plugins serve. Every
 domain is reached through channels: the bundled plugins reach sessions,
 the agent, models, the workspace, files, and commands that way, and a host
-plugin serves its own UI the same way. A UI plugin requires `Client` and calls
+plugin serves its own web half the same way. A web plugin requires `Client` and calls
 `client.channel.call(id, payload)`, or follows a stream with
 `client.follow(id, payload, onElement, onEnd)`, which keeps it open: again on
 every reconnect, at once when it ends `Withdrawn` (its plugin restarted), and
@@ -232,8 +235,8 @@ domain's stream starts with `subscribed`, from which its reader resyncs.
 Passing a channel's declaration instead of its id (`api.channels` holds the
 bundled domains', each domain's contract its own) types the call: the
 payload and the results go through its schemas.
-[`examples/ticker`](../../examples/ticker/README.md) is a host plugin file and a
-UI file that shows its prices at `/ticker`.
+[`examples/ticker`](../../examples/ticker/README.md) is a folder plugin whose
+host half serves prices and whose web half shows them at `/ticker`.
 
 A replacement with a bundled plugin's id can wrap it rather than copy it, and
 so keep what it gains in later versions: `api.bundled` holds the bundled
@@ -243,7 +246,7 @@ capabilities is left out: draw messages differently by replacing `frame.toasts`,
 which decides how long each shows, rather than `Notify`.
 
 ```js
-// ~/.lemma/ui/toasts.js: the bundled toasts, logging each one too
+// ~/.lemma/plugins/toasts.web.js: the bundled toasts, logging each one too
 export default ({ bundled, extendUiPlugin }) =>
   extendUiPlugin(bundled["frame.toasts"], (base) => ({
     ...base,

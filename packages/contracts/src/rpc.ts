@@ -82,14 +82,8 @@ export class RuntimeRpcs extends RpcGroup.make(
     error: HostError,
   }),
 
-  /** The web app's `ui` rows and UI files; it plans and runs that composition itself. */
+  /** What the web app plans its halves from: the rows and its files; it runs them itself. `Host.Configure` writes the rows. */
   Rpc.make("Ui.Composition", { success: UiComposition }),
-  /** Write `ui` rows into the user or project config file; clients apply them on `ui-changed`. */
-  Rpc.make("Ui.Configure", {
-    payload: { plugins: Schema.Record(Schema.String, PluginChange), scope: Schema.optional(ConfigScope) },
-    success: UiComposition,
-    error: HostError,
-  }),
 
   /** Questions still waiting on an answer, so a client can show them without resubscribing. */
   Rpc.make("Interaction.List", { success: Schema.Array(InteractionRequest) }),

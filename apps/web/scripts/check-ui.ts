@@ -7,6 +7,7 @@ import { parseArgs } from "node:util";
 import { chromium, firefox, webkit } from "playwright";
 import type { Page } from "playwright";
 import { createServer } from "vite";
+import { domainPlugins } from "../../../scripts/plugins.ts";
 
 /**
  * The web app's replaceability, checked on the real composition: the dev
@@ -23,7 +24,7 @@ import { createServer } from "vite";
  *    the plugin that adds it, and with `kit` off its parts are their plain
  *    fallbacks, which still filter, edit a plugin's settings, and switch `kit`
  *    back on. With every plugin off that can be, the runtime
- *    still answers, and a UI file providing part of it is left out, saying so,
+ *    still answers, and a web half providing part of it is left out, saying so,
  *    while the app's own goes on.
  * 4. A part replaced by a lower-order item changes what renders, and the
  *    default returns when the replacement goes, or when the replacement throws
@@ -147,7 +148,7 @@ const boot = async () => {
   return { page, errors, warnings, expectNoErrors };
 };
 /**
- * Loads the `check` UI file, a plugin like a user's, and puts its own slots on `window.checkSlots`: what the checks
+ * Loads the `check` web half, a plugin like a user's, and puts its own slots on `window.checkSlots`: what the checks
  * add, they add through it, since the page's own slots belong to no plugin and refuse to add. Each item is the check
  * plugin's, and leaves with it. A reload drops it, as it drops the mock host's files.
  */
@@ -196,8 +197,20 @@ const toggling = async () => {
   assert.deepEqual(unfilled, [], "parts nothing provides");
 
   // 3. Every plugin turns off and on, the way the Plugins page switches it; a locked one (pinned, or needed by one) stays on.
-  const plugins: { id: string; locked: boolean }[] = await page.evaluate(() =>
-    (window as any).lemma.plugins.list().map((plugin: any) => ({ id: plugin.id, locked: plugin.locked !== undefined })),
+  const plugins: { id: string; locked: boolean; source: string }[] = await page.evaluate(() =>
+    (window as any).lemma.plugins.list().map((plugin: any) => ({ id: plugin.id, locked: plugin.locked !== undefined, source: plugin.source })),
+  );
+  // The bundled list holds the web half of every plugin in domains/, under the id its folder names.
+  assert.deepEqual(
+    plugins
+      .filter((plugin) => plugin.source === "bundled")
+      .map((plugin) => plugin.id)
+      .sort(),
+    [...domainPlugins()]
+      .filter(([, plugin]) => plugin.web !== undefined)
+      .map(([id]) => id)
+      .sort(),
+    "the bundled web halves are not those the domains' manifests list (src/bundled.ts, scripts/plugins.ts)",
   );
   const toggled: string[] = [];
   const locked: string[] = [];
@@ -253,15 +266,15 @@ const toggling = async () => {
   await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the turns running did not return with threads"));
   const kit = page.locator(".inspector-row[data-key='web:look.kit']");
   const kitState = () => page.evaluate(() => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === "look.kit").state);
-  // A UI file can neither change a bundled part's fallback nor give its own part one: its `definePart` takes none.
+  // A web half can neither change a bundled part's fallback nor give its own part one: its `definePart` takes none.
   const fallbacks = await page.evaluate(async () => {
     const { api } = await import("/src/ui/api.ts" as string);
     const { fallbackOf, TogglePart } = api.contracts;
     const declared = fallbackOf(TogglePart);
-    const mine = () => "a UI file's";
+    const mine = () => "a web half's";
     return { kept: fallbackOf(api.definePart("toggle", mine)) === declared, own: fallbackOf(api.definePart("check.own", mine)) === undefined };
   });
-  assert.deepEqual(fallbacks, { kept: true, own: true }, "a UI file set a part's fallback");
+  assert.deepEqual(fallbacks, { kept: true, own: true }, "a web half set a part's fallback");
   await kit.locator("[role=switch]").click();
   await kit
     .locator("input[type=checkbox]")
@@ -314,7 +327,7 @@ const toggling = async () => {
     page.evaluate(
       async ({ ids, enabled }) => {
         const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-        await (await (window as any).lemma.service(Client)).ui.configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
+        await (await (window as any).lemma.service(Client)).configure(Object.fromEntries(ids.map((id: string) => [id, { enabled }])));
       },
       { ids: unlocked, enabled },
     );
@@ -347,7 +360,7 @@ const toggling = async () => {
   );
   expectNoErrors("turning every plugin off and on at once");
 
-  // A UI file providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
+  // A web half providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
   await page.evaluate(() => {
     const source = `export default ({ defineUiPlugin, contracts: { Notify } }) =>
       defineUiPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`;
@@ -358,10 +371,10 @@ const toggling = async () => {
     .waitForFunction(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
       timeout: 10_000,
     })
-    .catch(() => assert.fail("a UI file providing Notify was not left out"));
+    .catch(() => assert.fail("a web half providing Notify was not left out"));
   assert(
     warnings.some((warning) => warning.includes('"my-notify" is left out') && warning.includes('Stop providing "lemma-ui/Notify"')),
-    "a UI file providing Notify was left out without a warning",
+    "a web half providing Notify was left out without a warning",
   );
   await page.evaluate(async () => {
     const { Notify } = (await import("/src/ui/api.ts" as string)).api.contracts;
@@ -369,11 +382,11 @@ const toggling = async () => {
   });
   await page
     .waitForSelector(".toast >> text=still the app's own", { timeout: 5_000 })
-    .catch(() => assert.fail("toasts stopped with a UI file providing Notify"));
+    .catch(() => assert.fail("toasts stopped with a web half providing Notify"));
   await page.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
   await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
-  expectNoErrors("a UI file providing part of the runtime");
-  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a UI file providing Notify is left out`;
+  expectNoErrors("a web half providing part of the runtime");
+  return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a web half providing Notify is left out`;
 };
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
@@ -1437,7 +1450,7 @@ const rail = async () => {
   return "the prompt rail previews a prompt level with its tick and goes to it";
 };
 
-// 11 on: pages that start elsewhere: with no provider, connecting one, with a UI file, and from an older app.
+// 11 on: pages that start elsewhere: with no provider, connecting one, with a web half, and from an older app.
 const separate = async () => {
   const { errors, expectNoErrors } = log();
 
@@ -1530,7 +1543,7 @@ const separate = async () => {
   await connect.close();
   expectNoErrors("connecting providers each way");
 
-  // A UI file's Tailwind classes work as the app's own: compiled in the page with them into one sheet, so a file's
+  // A web half's Tailwind classes work as the app's own: compiled in the page with them into one sheet, so a file's
   // `tw:px-4` beats the app's `tw:p-0.5` as one build would, drawn from the tokens, and gone with the file. The same
   // file is a theme pack: its theme, accent, and Appearance row are offered beside Lemma's own, and leave with it.
   const styled = await open();
@@ -1550,7 +1563,7 @@ const separate = async () => {
     const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
     (window as any).lemmaMock.setUiFiles([{ name: "check-look.js", source: "user", kind: "script", path: "/check/check-look.js", url }]);
   });
-  await styled.waitForSelector(".check-utilities", { timeout: 10_000 }).catch(() => assert.fail("a UI file's plugin did not draw"));
+  await styled.waitForSelector(".check-utilities", { timeout: 10_000 }).catch(() => assert.fail("a web half's plugin did not draw"));
   const look = () =>
     styled.evaluate(() => {
       const style = getComputedStyle(document.querySelector(".check-utilities")!);
@@ -1568,10 +1581,10 @@ const separate = async () => {
   assert.deepEqual(
     await look(),
     { left: "16px", top: "2px", radius: "8px", background: await accentNow() },
-    "a UI file's utilities are not compiled in order, or not from the tokens",
+    "a web half's utilities are not compiled in order, or not from the tokens",
   );
   await styled.evaluate(() => document.documentElement.style.setProperty("--accent", "rgb(1, 2, 3)"));
-  assert.equal((await look()).background, "rgb(1, 2, 3)", "a UI file's utility does not follow its token");
+  assert.equal((await look()).background, "rgb(1, 2, 3)", "a web half's utility does not follow its token");
   await styled.evaluate(() => document.documentElement.style.removeProperty("--accent"));
 
   const painted = (token: string) => styled.evaluate((token) => document.documentElement.style.getPropertyValue(token), token);
@@ -1601,7 +1614,7 @@ const separate = async () => {
   const day = await styled.evaluate(async () => (await import("/src/ui/api.ts" as string)).api.look.tokenColor("--bg-raised"));
   const [red, , blue] = [1, 3, 5].map((at) => Number.parseInt(day.slice(at, at + 2), 16)) as [number, number, number];
   assert(day !== "#ffffff" && red - blue > 15, `a light theme's raised surface does not follow its background: ${day}`);
-  // The look changes with a stylesheet too (a UI file's), once a linked one has loaded: what renderers redraw on.
+  // The look changes with a stylesheet too (a web half's), once a linked one has loaded: what renderers redraw on.
   await styled.evaluate(async () => {
     const { onLookChange } = (await import("/src/ui/api.ts" as string)).api.look;
     (window as any).looks = 0;
@@ -1630,14 +1643,14 @@ const separate = async () => {
   await styled.waitForSelector(".check-utilities", { state: "detached", timeout: 10_000 });
   await styled
     .waitForFunction(() => document.querySelector("style[data-lemma-utilities]") === null, undefined, { timeout: 5_000 })
-    .catch(() => assert.fail("the UI files' utilities outlived the files"));
+    .catch(() => assert.fail("the web halves' utilities outlived the files"));
   // What the file offered leaves with it: the look falls back, and the page says what is missing.
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "", undefined, { timeout: 5_000 });
   assert.equal(await painted("--accent"), "", "an accent outlived the plugin that offered it");
   assert.equal(await styled.locator(".check-look-row").count(), 0, "a plugin's Appearance row outlived it");
   await styled.waitForSelector('text="check-teal" is not offered', { timeout: 5_000 }).catch(() => assert.fail("a missing accent is not explained"));
   await styled.close();
-  expectNoErrors("a UI file's Tailwind classes and theme pack");
+  expectNoErrors("a web half's Tailwind classes and theme pack");
 
   // An older app kept the scheme and width in the browser: the first start carries them into config and forgets them.
   const carried = await open();
@@ -1663,7 +1676,7 @@ const separate = async () => {
     .catch(() => assert.fail("an older app's scheme and width were not carried into config"));
   await carried.close();
   expectNoErrors("carrying an older app's appearance into config");
-  return "with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a UI file's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
+  return "with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
 };
 
 try {

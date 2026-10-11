@@ -1,18 +1,19 @@
-import { readdir, stat } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import { registerHooks } from "node:module";
-import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { Diagnostic } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
+import { entriesOf } from "./manifest.ts";
 
 /**
- * Local plugins are `.ts`, `.js`, or `.mjs` files in `<home>/plugins` and, for a
- * trusted project, `<cwd>/.lemma/plugins`, whose default export is a plugin,
- * an array of plugins, or a function of `{ bundled }` (the bundled plugins by
- * id) returning either, so a replacement can wrap the bundled plugin it
- * replaces and keep its updates. They run with the host's permissions, like
- * every plugin.
+ * Local plugins' host halves are `.ts`, `.js`, or `.mjs` files in `<home>/plugins`
+ * and, for a trusted project, `<cwd>/.lemma/plugins` (not `.web.js`: those are
+ * web halves), or a package's `lemma.host` (see `manifest.ts`), whose default
+ * export is a plugin, an array of plugins, or a function of `{ bundled }` (the
+ * bundled plugins by id) returning either, so a replacement can wrap the
+ * bundled plugin it replaces and keep its updates. They run with the host's
+ * permissions, like every plugin.
  *
  * Bare imports that the file's own location cannot resolve (`effect`,
  * `@lemma/core`, `@lemma/contracts`, a domain's contract such as
@@ -68,9 +69,10 @@ export function loadLocalPlugins(dirs: readonly string[], context: LocalContext)
     const plugins: LocalPlugin[] = [];
     const diagnostics: Diagnostic[] = [];
     for (const dir of dirs) {
-      const names = await readdir(dir).catch(() => [] as string[]);
-      for (const name of names.filter((file) => /\.(ts|js|mjs)$/.test(file) && !file.endsWith(".d.ts")).sort()) {
-        const file = join(dir, name);
+      const files = (await entriesOf(dir)).flatMap((entry) =>
+        entry.kind === "host" ? [entry.path] : entry.kind === "package" && entry.manifest.host !== undefined ? [entry.manifest.host] : [],
+      );
+      for (const file of files) {
         shareHostPackages();
         try {
           // Keyed by mtime: an unchanged file returns the cached module (the same

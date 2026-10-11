@@ -36,7 +36,7 @@ import type { Region, SlotItem, SlotsService } from "./slots.ts";
 /*
  * The web app's runtime: the API its plugins are written against. The boot
  * provides it (`src/runtime/`) for as long as the page runs, so it has no row
- * on the Plugins page, no `ui` row turns it off, and it is not in
+ * on the Plugins page, no row turns it off, and it is not in
  * `api.bundled`. Plugins require these capabilities as they require any
  * other; none provides one: a plugin that does is left out, saying so, and
  * the page keeps its own. `contracts.ts` re-exports them beside what plugins
@@ -108,16 +108,17 @@ export interface ClientService {
   readonly restartPlugin: (pluginId: string, options?: { readonly force?: boolean }) => Promise<void>;
   /** Re-reads the host's config files and applies them; `deferred` says it applies once this call has ended. */
   readonly reload: () => Promise<ReloadResult>;
-  /** Writes host plugin rows into the user (default) or project config file and applies them; a rejected change is undone. */
+  /**
+   * Writes plugin rows into the user (default) or project config file and applies them; a rejected change is undone. A
+   * plugin's one row decides both its halves: the host applies its own, and the page its web halves on `ui-changed`.
+   */
   readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { readonly scope?: ConfigScope }) => Promise<ReloadResult>;
   /** What host plugins let you look into (`Inspectors`), and one's snapshot as plain JSON. */
   readonly inspectors: () => Promise<readonly InspectorInfo[]>;
   readonly inspect: (id: string) => Promise<unknown>;
-  /** The web app's own rows and UI files, which the boot plans and runs (`UiPlugins` changes them). */
+  /** What the boot plans the web halves from: every plugin's row, and the web halves' files (`UiPlugins` changes them). */
   readonly ui: {
     readonly composition: () => Promise<UiComposition>;
-    /** Writes `ui` rows; every page hears `ui-changed`. */
-    readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { readonly scope?: ConfigScope }) => Promise<UiComposition>;
   };
 }
 export class Client extends Context.Service<Client, ClientService>()("lemma-ui/Client") {}
@@ -183,13 +184,13 @@ export interface HostPluginsService extends PluginsService {
 export class HostPlugins extends Context.Service<HostPlugins, HostPluginsService>()("lemma-ui/HostPlugins") {}
 
 export interface UiPluginsService extends PluginsService {
-  /** Files loaded from `~/.lemma/ui` and a trusted project's `.lemma/ui`. */
+  /** The web halves and stylesheets loaded from `~/.lemma/plugins` and a trusted project's `.lemma/plugins`. */
   readonly files: Accessor<readonly UiFile[]>;
   /** The routes known plugins declare (`defineUiPlugin({ routes })`), running or not, with the plugin declaring each. */
   readonly routes: Accessor<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>;
-  /** What went wrong loading UI files or planning the composition; each names its file or plugin. */
+  /** What went wrong loading those files or planning the composition; each names its file or plugin. */
   readonly problems: Accessor<readonly string[]>;
-  /** Opened with `?safe`: `ui` rows and UI files are ignored. */
+  /** Opened with `?safe`: the rows and the plugin directories are ignored. */
   readonly safe: boolean;
 }
 /** The web app's own plugins, which this page runs; its `runtime` lists the capabilities this file declares. */
@@ -232,7 +233,7 @@ export const UiApi = (version: number): Context.Key<`lemma-ui/api@${number}`, nu
  * what a plugin shows at one. The router knows the app's own routes (the
  * boot's `appRoutes`) and those every known plugin declares
  * (`defineUiPlugin({ routes })`), so a link to one works while nothing shows
- * it: the page then says its plugin is off, and returns with it. A UI file
+ * it: the page then says its plugin is off, and returns with it. A web half
  * declares its own with `api.defineRoute` and adds a `Pages` item for it.
  */
 

@@ -28,12 +28,13 @@ import {
   Views,
 } from "@lemma/threads";
 import { Client, Router, Slots } from "@lemma/ui";
+import type { SlotsService } from "@lemma/ui";
 import type { ChatThinkingProps, ChatTurnFooterProps, ChatUserProps, ChatWorkGroupProps, ChatWorkingProps, ChatWorkProps } from "@lemma/threads";
 import { defineUiPlugin } from "@lemma/ui";
 import { DEFAULT_PART_ORDER } from "@lemma/ui";
 import type { Part } from "@lemma/ui";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, Spinner, CopyButton } from "@lemma/look";
-import { ChatThinking, ChatTurnFooter, ChatUser, ChatWork, ChatWorkGroup, ChatWorking } from "@lemma/threads";
+import { ChatThinking, ChatTurnFooter, ChatUser, ChatWork, ChatWorkGroup, ChatWorking, ToolViews } from "@lemma/threads";
 import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
@@ -293,7 +294,7 @@ function Keyed<T extends { readonly key: string }>(props: { each: readonly T[]; 
  */
 function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }>; drafts: readonly StepDraft[]; startedAt: number }) {
   const live = () => props.work.live === true;
-  const entries = createMemo(() => workEntries(props.work.items));
+  const entries = createMemo(() => workEntries(props.work.items, (name) => props.chat.toolView(name)?.action));
   const duration = () => (live() ? Math.max(0, props.chat.now() - props.startedAt) : props.work.duration);
   return (
     <ChatWork
@@ -356,33 +357,41 @@ function WorkView(props: ChatWorkProps) {
   );
 }
 
-/** The default `chat.work-group` part: calls made one after another as one line, what they did, that opens to them. */
-function WorkGroupView(props: ChatWorkGroupProps) {
-  const commands = () => props.tools.every((name) => name === "bash");
-  return (
-    <div class="work-group" classList={{ open: props.open }}>
-      <button class="row-head work-group-head" aria-expanded={props.open} onClick={() => props.onToggle()}>
-        <span class="row-icon">
-          <Icon name={commands() ? "terminal" : "hammer"} />
-        </span>
-        <span class="row-label">
-          <span class="work-group-summary">{props.summary}</span>
-          <Show when={props.failed > 0}>
-            <span class="work-sep" aria-hidden="true">
-              ·
-            </span>
-            <span class="work-failed">{props.failed} failed</span>
-          </Show>
-        </span>
-        <span class="row-time">{new Date(props.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
-        <ChevronIcon class="chevron row-chevron" />
-      </button>
-      <Show when={props.open}>
-        <div class="work-group-body">{props.children}</div>
-      </Show>
-    </div>
-  );
-}
+/**
+ * The default `chat.work-group` part: calls made one after another as one line, what they did, that opens to them.
+ * Its icon is their tools' when they share one (`ToolViews`).
+ */
+const workGroupView = (slots: SlotsService) =>
+  function WorkGroupView(props: ChatWorkGroupProps) {
+    const icon = () => {
+      const icons = new Set(props.tools.map((name) => slots.get(ToolViews, name)?.icon));
+      const [only] = icons;
+      return icons.size === 1 && only !== undefined ? only : "hammer";
+    };
+    return (
+      <div class="work-group" classList={{ open: props.open }}>
+        <button class="row-head work-group-head" aria-expanded={props.open} onClick={() => props.onToggle()}>
+          <span class="row-icon">
+            <Icon name={icon()} />
+          </span>
+          <span class="row-label">
+            <span class="work-group-summary">{props.summary}</span>
+            <Show when={props.failed > 0}>
+              <span class="work-sep" aria-hidden="true">
+                ·
+              </span>
+              <span class="work-failed">{props.failed} failed</span>
+            </Show>
+          </span>
+          <span class="row-time">{new Date(props.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>
+          <ChevronIcon class="chevron row-chevron" />
+        </button>
+        <Show when={props.open}>
+          <div class="work-group-body">{props.children}</div>
+        </Show>
+      </div>
+    );
+  };
 
 /** The default `chat.working` part. */
 function WorkingView(props: ChatWorkingProps) {
@@ -735,6 +744,7 @@ export default defineUiPlugin({
         return at;
       },
       now,
+      toolView: (name) => slots.get(ToolViews, name),
     };
     // Its own parts' defaults; any plugin replaces one by adding with a lower order.
     const part = <P extends Record<string, any>>(slot: Part<P>, component: Component<P>) =>
@@ -743,7 +753,7 @@ export default defineUiPlugin({
     part(ChatThinkingPart, ThinkingView);
     part(ChatToolPart, toolView({ client, threads, slots }));
     part(ChatWorkPart, WorkView);
-    part(ChatWorkGroupPart, WorkGroupView);
+    part(ChatWorkGroupPart, workGroupView(slots));
     part(ChatWorkingPart, WorkingView);
     part(ChatTurnFooterPart, TurnFooter);
     // Before a view added without an order (0), whatever its plugin's id: a thread opens on its transcript.

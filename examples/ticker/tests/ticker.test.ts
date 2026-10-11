@@ -82,9 +82,9 @@ describe("its channels", () => {
 
 const execFileAsync = promisify(execFile);
 const cliMain = fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url));
-const file = fileURLToPath(new URL("../ticker.ts", import.meta.url));
+const folder = fileURLToPath(new URL("..", import.meta.url));
 
-// The user's path: the file dropped into `<home>/plugins`, loaded by a real host, its channels used from the CLI.
+// The user's path: the folder dropped into `<home>/plugins`, loaded by a real host, its channels used from the CLI.
 describe("as a plugin file in a real host", () => {
   let started: Lemma;
   let home: string;
@@ -104,8 +104,8 @@ describe("as a plugin file in a real host", () => {
     started = await startLemma("lemma-ticker-", {
       plugins: { ticker: { config: { intervalMs: 100 } } },
       prepare: async (home) => {
-        await mkdir(join(home, "plugins"));
-        await copyFile(file, join(home, "plugins", "ticker.ts"));
+        await mkdir(join(home, "plugins", "ticker"), { recursive: true });
+        for (const name of ["package.json", "ticker.ts", "web.js"]) await copyFile(join(folder, name), join(home, "plugins", "ticker", name));
       },
     });
     home = started.home;
@@ -115,6 +115,13 @@ describe("as a plugin file in a real host", () => {
   beforeEach(({ onTestFailed }) => {
     onTestFailed(() => console.error(started?.output()));
   });
+
+  test("is one plugin with two halves: the host runs one, and lists the other for the web app", async () => {
+    expect((JSON.parse(await lemma("plugins", "--json")) as { id: string; state: string }[]).find((plugin) => plugin.id === "ticker")).toMatchObject({
+      state: "active",
+    });
+    expect(await lemma("plugins")).toMatch(/user\/ticker\/web\.js\s+script/);
+  }, 30_000);
 
   test("lists its channels, quotes a symbol, and streams prices", async () => {
     // Beside the bundled plugins' own.

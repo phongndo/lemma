@@ -35,16 +35,33 @@ and is ignored with a warning. A plugin that provides one of them is left out,
 and one from your own files stops the start (they are required, below): to
 change how questions are answered, handle `InteractionHook` instead.
 
-Plugin files in `~/.lemma/plugins/` or `<project>/.lemma/plugins/` load
-automatically. One with a bundled plugin's id takes its place, and one
-providing what a bundled plugin provides turns that one off unless a row
-decides; [approvals](../examples/approvals/README.md) is an example. A file whose
+## Your plugins
+
+`~/.lemma/plugins/` and a trusted project's `<project>/.lemma/plugins/` hold
+your plugins. What is there loads by itself, and again when it changes:
+
+| Entry                          | What it is                                                                                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `approvals.ts` (`.js`, `.mjs`) | A host half, which the host runs                                                                                                           |
+| `notes.web.js` (`.web.mjs`)    | A web half, which open web apps run                                                                                                        |
+| `theme.css`                    | A stylesheet the web app applies after its own                                                                                             |
+| `ticker/`                      | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
+
+A plugin is one id, with a host half, a web half, or both. Both halves of one
+plugin define its id, so its one row decides both, and the web app runs the
+web half only while the host half runs; [ticker](../examples/ticker/README.md)
+is an example. The bundled plugins are laid out the same way, a package each
+in its domain's folder (`domains/tools/bash` is `tools.bash`), whose
+`package.json` names its halves.
+
+A plugin with a bundled plugin's id takes its place, and one providing what a
+bundled plugin provides turns that one off unless a row decides;
+[approvals](../examples/approvals/README.md) is an example. A host half whose
 default export is a function receives `{ bundled }`, the bundled plugins by
 id, so a replacement can wrap the plugin it replaces and keep its updates
-rather than copy it. The web app is composed the same way from its own
-plugins, through `"ui"` rows and files in `~/.lemma/ui/`; the runtime they
-are written against is the app's own, with no row: see
-[its README](../apps/web/README.md).
+rather than copy it; what a web half receives is in
+[the web app's README](../apps/web/README.md), with the runtime the web
+halves are written against.
 
 ## When something cannot run
 
@@ -57,7 +74,7 @@ catches a setting renamed in an update. A row naming no plugin is ignored,
 unless it says `"required": true`.
 
 What is **required** must start, or the host does not: the `transport.server` plugin,
-every plugin from your own files (a
+every host half from your own files (a
 file that does not load, which therefore names no plugin, too), and any plugin
 whose row says `"required": true`, with what it needs: a row turning off what
 a required plugin needs stops the start too, and a required plugin is never
@@ -84,8 +101,8 @@ renames a setting reads its users' old rows with `migrateConfig` from
 
 ## Project trust
 
-Project files can run code and redirect credentials, so a project's config,
-plugins, and UI files load only for a project listed (or under a directory
+Project files can run code and redirect credentials, so a project's config
+and plugins load only for a project listed (or under a directory
 listed) in `"trustedProjects"` in `~/.lemma/config.jsonc`. Otherwise the host
 warns and ignores them.
 

@@ -424,7 +424,7 @@ for (const pkg of pluginPackages.filter((pkg) => webPackages.includes(pkg.dir)))
     }
   }
 }
-// What covers the page stacks by the `--z-*` tokens, so a layer from a UI file can slot in between. And the look is
+// What covers the page stacks by the `--z-*` tokens, so a layer from a web half can slot in between. And the look is
 // tokens all through, so a theme or a setting reaches every plugin: a color is written only where a token is declared
 // (its default), and a font size or a corner's radius is scaled by `--text-scale` or `--radius-scale`.
 const COLOR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(/i;
@@ -518,7 +518,7 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "packages/core/tests/supervision.test.ts": 3,
   "packages/core/tests/support.ts": 1,
   "packages/host/scripts/dev.ts": 2,
-  "packages/host/tests/watch.test.ts": 5,
+  "packages/host/tests/watch.test.ts": 4,
   "domains/agent/loop/tests/crash.ts": 1,
   "domains/agent/loop/tests/fakes.ts": 1,
   "domains/agent/loop/tests/recovery.test.ts": 5,
