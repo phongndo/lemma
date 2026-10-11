@@ -122,7 +122,11 @@ web half through a channel the host half serves
 
 `@lemma/core/plain` writes a plugin with promises: its setup receives the
 services it requires with their Effect methods as promises, and a context
-with `add`, `on`, `observe`, `onCleanup`, and its `config`. `definePlugin`
+with `add`, `on`, `observe`, `onCleanup`, and its `config`. The context also
+starts timers, listeners, and callbacks as the plugin's own (`after`, `every`,
+`listen`, `task`, `action`): they end when it stops, and what fails in them is
+its fault, named for it, so a plugin gets Effect's supervision without writing
+Effects. `definePlugin`
 from `@lemma/core` writes one with Effects:
 
 ```ts

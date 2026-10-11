@@ -96,6 +96,8 @@ export interface SlotsService {
   readonly get: <T>(slot: Slot<T>, id: string) => SlotItem<T> | undefined;
   /** The id of the plugin that added the item with this id (to name it when the item fails). Reactive. */
   readonly owner: <T>(slot: Slot<T>, id: string) => string | undefined;
+  /** The id of the plugin that added `item`, while it is in a slot (`Contained` draws it as that plugin's). */
+  readonly pluginOf: (item: SlotItem<unknown>) => string | undefined;
   /** The slot's items in order, each with the plugin that added it and its order. Reactive. */
   readonly contributions: <T>(slot: Slot<T>) => readonly { readonly item: SlotItem<T>; readonly pluginId: string; readonly order: number }[];
   /**
@@ -209,6 +211,7 @@ export function createSlots(
     first: (slot) => items(slot)[0],
     get: (slot, id) => items(slot).find((item) => item.id === id),
     owner: (slot, id) => signal(slot)[0]().find((contribution) => (contribution.item as SlotItem<unknown>).id === id)?.pluginId,
+    pluginOf: (item) => contributors.get(item)?.id,
     contributions: <T>(slot: Slot<T>) =>
       signal(slot)[0]().map((contribution) => ({ item: contribution.item as SlotItem<T>, pluginId: contribution.pluginId, order: contribution.order })),
     as: service,

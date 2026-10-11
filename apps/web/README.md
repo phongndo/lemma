@@ -206,8 +206,14 @@ export default ({ defineWebPlugin, contracts: { Slots, Threads, ComposerCompleti
 
 `defineWebPlugin` is the kernel's promise-based `definePlugin`
 ([`@lemma/core/plain`](../../packages/core/README.md#plugins-written-with-promises))
-with the page's conventions. `setup` runs in its own Solid root. What it adds to slots leaves when it stops;
-release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
+with the page's conventions. `setup` runs in its own Solid root. What it adds to slots leaves when it stops,
+and so does what it starts through its `plugin` handle: `plugin.listen(window, "resize", fn)`, `plugin.every(ms, fn)`,
+`plugin.after(ms, fn)`, and `plugin.action(name, fn)` for an event handler, whose throw or rejection is then the
+plugin's fault, named for it. A component it draws (its slot item, or the children it hands a part) reaches the same
+handle with `usePlugin()`; a listener a component adds while it shows is removed with it too
+(`onCleanup(plugin.listen(…))`). Release anything else it holds with `plugin.onCleanup`. Its `Client` is its own:
+what it follows or subscribes to ends when it stops, and a call it made rejects with `PluginStopped` then, rather than
+answer into a plugin that is gone. A
 `config` Schema (from `api.Schema`, Effect 4's Schema with Effect 3's `Literal`,
 `Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
 `propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps

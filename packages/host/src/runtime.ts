@@ -1,7 +1,7 @@
 import { Cause, Effect, Fiber, Layer, Stream } from "effect";
 import type { Context } from "effect";
 import { HOST_API, HostApi, HostControl, Interaction, Notice, Paths, PluginsChanged } from "@lemma/contracts";
-import { Events } from "@lemma/core";
+import { Events, reportUnhandled } from "@lemma/core";
 import type { ApplicationServices, Loader, ReportedFault } from "@lemma/core";
 import { interactionLayer } from "./interaction.ts";
 import type { PathsService } from "./paths.ts";
@@ -92,3 +92,21 @@ export const reportFaults = (loader: Loader, history: { readonly record: (fault:
       yield* events.publish(PluginsChanged, { plugins: yield* control.plugins });
     }).pipe(Effect.catchCause(logFailure(`could not report a fault of "${fault.pluginId}"`))),
   ).pipe(Effect.catchCause(logFailure("stopped reporting plugin faults")));
+
+/**
+ * Keeps an error nothing handled from ending the host. One raised by a plugin's work (a stray timer or promise) is that
+ * plugin's fault (`reportUnhandled`), reported as its others are, and it and every session keep running; one from no
+ * plugin's work that can be told is logged; a call a stopped plugin made, refused, is expected and dropped. Returns
+ * the removal.
+ */
+export const catchUnhandled = (): (() => void) => {
+  const unhandled = (error: unknown) => {
+    if (reportUnhandled(error).kind === "unknown") console.error(`lemma: an error nothing handled\n${Cause.pretty(Cause.die(error))}`);
+  };
+  process.on("unhandledRejection", unhandled);
+  process.on("uncaughtException", unhandled);
+  return () => {
+    process.off("unhandledRejection", unhandled);
+    process.off("uncaughtException", unhandled);
+  };
+};

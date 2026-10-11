@@ -43,7 +43,6 @@ export default defineWebPlugin({
         return;
       }
     };
-    document.addEventListener("keydown", onKey);
-    plugin.onCleanup(() => document.removeEventListener("keydown", onKey));
+    plugin.listen(document, "keydown", onKey);
   },
 });

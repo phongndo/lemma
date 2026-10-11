@@ -160,8 +160,8 @@ export default definePlugin({
   not keep that operation's references for the next.
 - **`setup`** may be `async`, and receives the `PluginContext` operations as
   promise-based functions (`on`, `add`, `observe`, `publish`, `invoke`,
-  `items`, `changes`, `background`, `fault`, `run`) plus `config`, `signal`, and
-  `onCleanup`. The plugin is active once setup has returned and every call it
+  `items`, `changes`, `background`, `fault`, `run`) plus `config`, `signal`,
+  `onCleanup`, and the helpers below. The plugin is active once setup has returned and every call it
   made before it returned has settled (calls a background task or a loop
   makes later are not setup's). A call
   that failed, which setup neither awaited nor caught, fails the activation, as
@@ -198,6 +198,26 @@ export default definePlugin({
 - **Unawaited failures.** A call that fails with nothing awaiting or chaining its
   promise is reported as the plugin's fault (`unawaited <operation>`), not as an
   unhandled rejection that would end a Node.js process.
+- **Timers, listeners, and callbacks.** What a plugin would start with
+  `setTimeout`, `setInterval`, `addEventListener`, a promise left running, or a
+  function handed to a library, it starts with `after(ms, fn)`, `every(ms, fn)`,
+  `listen(target, type, fn)` (an `EventTarget` or an `on`/`off` emitter),
+  `task(name, fn)`, and `action(name, fn)`. Each ends when the plugin stops, or
+  when the cancel or removal it returns runs, and what throws or rejects in it is
+  the plugin's fault, named for it, rather than an error nobody hears. `every`
+  waits for a run to end before the next, and goes on after one fails; an
+  `action` called once the plugin has stopped does nothing; `task` resolves with
+  what its work resolves with, or `undefined` when it failed or the plugin
+  stopped.
+- **Errors nothing handled.** `reportUnhandled(error)` (from `@lemma/core`) is
+  for an application's last-resort handlers: a process's `unhandledRejection`
+  and `uncaughtException`, a page's `unhandledrejection`. An error raised by a
+  plugin's work becomes that plugin's fault (`unhandled`), which does not stop
+  it; a `PluginStopped` is expected, a call a stopped plugin made; anything else
+  is nobody's that can be told. With `AsyncLocalStorage`, work follows the
+  timers and promises it starts, so a plugin's stray `setTimeout` is still its
+  own; in a browser only refusals are told apart. The host installs it, so no
+  plugin's stray error ends the process.
 - **Reloading.** `handoff(() => state)` and `previous` carry state to the
   replacement, as `PluginContext.handoff` does, checked by `carry` when given.
 - **Nested services.** Objects inside a service are converted as the service

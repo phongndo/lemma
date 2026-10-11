@@ -6,7 +6,7 @@ import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { faultMessage, toPluginStatus } from "@lemma/contracts";
 import type { PluginStatus, ReloadResult, WebComposition, WebFile } from "@lemma/contracts";
-import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
+import { Diagnostic, makeLoader, ReloadError, reportUnhandled } from "@lemma/core";
 import { settlePaint } from "@lemma/web/paint";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, withReplacements } from "@lemma/composition";
@@ -355,6 +355,13 @@ export async function boot(options: BootOptions): Promise<void> {
   }, options.element);
   report(bootProblems);
 
+  // A call a plugin made, refused because it has stopped (`PluginStopped`), is expected: no error for the console. What a
+  // plugin's work raised that can be told is its fault, reported below; the rest the browser logs as it does.
+  const unhandled = (event: { readonly preventDefault: () => void }, error: unknown) => {
+    if (reportUnhandled(error).kind !== "unknown") event.preventDefault();
+  };
+  window.addEventListener("unhandledrejection", (event) => unhandled(event, event.reason));
+  window.addEventListener("error", (event) => unhandled(event, event.error));
   Effect.runFork(
     Stream.runForEach(loader.core.faults, (fault) =>
       Effect.promise(async () => {

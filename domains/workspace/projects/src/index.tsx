@@ -72,7 +72,7 @@ export default defineWebPlugin({
   id: "workspace.projects",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, settings: Settings, dialogs: Dialogs, notify: Notify, slots: Slots },
-  setup: ({ client, threads, workspace, settings, dialogs, notify, slots }) => {
+  setup: ({ client, threads, workspace, settings, dialogs, notify, slots }, plugin) => {
     /** The project chosen, in the address (`?project=<directory>`). */
     const chosen = () => (settings.section() === SECTION ? settings.params().project : undefined);
     const setChosen = (cwd: string) => settings.setParams({ project: cwd });
@@ -201,7 +201,7 @@ export default defineWebPlugin({
           <SettingRow title="Location" description={cwd === client.info()?.cwd ? "The host's own directory." : "The folder on the host that threads work in."}>
             <div class="project-location">
               <code>{path(cwd)}</code>
-              <button class="icon-button" aria-label="Copy path" data-tip="Copy path" onClick={() => void copyAndTell(notify, cwd)}>
+              <button class="icon-button" aria-label="Copy path" data-tip="Copy path" onClick={plugin.action("copy path", () => copyAndTell(notify, cwd))}>
                 <CopyIcon />
               </button>
             </div>

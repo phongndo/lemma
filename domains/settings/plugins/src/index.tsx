@@ -853,7 +853,7 @@ export default defineWebPlugin({
   id: "settings.plugins",
   styles,
   requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, webPlugins: WebPlugins },
-  setup: ({ client, notify, settings, slots, host, webPlugins }) => {
+  setup: ({ client, notify, settings, slots, host, webPlugins }, plugin) => {
     // In the address (`?plugin=agent&kind=host&tab=…&filter=…`): a link, a reload, and back and forward return to them, and
     // settings reopen the section as it was left.
     const params = () => (settings.section() === SECTION ? settings.params() : {});
@@ -1007,7 +1007,7 @@ export default defineWebPlugin({
             class="icon-button"
             aria-label="Reload config"
             disabled={busy() !== undefined}
-            onClick={() => void reload()}
+            onClick={plugin.action("reload config", reload)}
             data-tip="Reload config: re-read the config files and apply them"
           >
             <Show when={busy() === "reload"} fallback={<RefreshIcon />}>
