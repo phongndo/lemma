@@ -44,6 +44,20 @@ export function createDetails(view: View) {
     );
   }
 
+  /** Copies the request exactly as it was sent, rebuilt from the log. */
+  function CopyRequest(props: { eventId: string }) {
+    const plugin = usePlugin();
+    const copyRequest = plugin.action("copy the request", async () => {
+      const rebuilt = rebuildRequest(deps.threads.branch(), props.eventId);
+      if (rebuilt !== undefined) await copy(json(rebuilt));
+    });
+    return (
+      <button class="icon-button" aria-label="Copy exact request" data-tip="Copy exact request" onClick={() => copyRequest()}>
+        <CopyIcon />
+      </button>
+    );
+  }
+
   function Pre(props: { text: string; error?: boolean }) {
     const plugin = usePlugin();
     return (
@@ -245,17 +259,7 @@ export function createDetails(view: View) {
             <Section title="Prompt by source" aside={`${request.sections.length} sections · ${request.tools.length} tools`}>
               <Sources request={request} />
             </Section>
-            <button
-              class="icon-button"
-              aria-label="Copy exact request"
-              data-tip="Copy exact request"
-              onClick={() => {
-                const rebuilt = rebuildRequest(deps.threads.branch(), request.eventId);
-                if (rebuilt !== undefined) void copy(json(rebuilt));
-              }}
-            >
-              <CopyIcon />
-            </button>
+            <CopyRequest eventId={request.eventId} />
           </>
         ),
       },

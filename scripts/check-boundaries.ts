@@ -496,6 +496,19 @@ for (const pkg of pluginPackages.filter((pkg) => webPackages.includes(pkg.dir)))
     ] as const) {
       if (pattern.test(text)) rule(why);
     }
+    // And one whose body, in braces, drops a promise it starts (`void save()`).
+    for (const start of text.matchAll(/\bon[A-Z]\w*=\{\s*(?:\([^()]*\)|\w+)\s*=>\s*\{/g)) {
+      let depth = 0;
+      let end = start.index + start[0].length - 1;
+      for (; end < text.length; end++) {
+        if (text[end] === "{") depth++;
+        else if (text[end] === "}" && --depth === 0) break;
+      }
+      if (/\bvoid\s+[\w.]+\s*\(/.test(text.slice(start.index, end))) {
+        rule("drops a promise in an event handler's body (plugin.action, so a rejection is its fault)");
+        break;
+      }
+    }
   }
 }
 // What covers the page stacks by the `--z-*` tokens, so a layer from a web half can slot in between. And the look is

@@ -139,7 +139,10 @@ export const api = {
     SearchField: defaults.SearchField,
   },
   copyText,
-  /** For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's context. */
+  /**
+   * For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's
+   * context. Its items have no `usePlugin`, so they draw the kit's parts through `partView`, not `defaults`.
+   */
   core: { definePlugin, Event, Hook },
   /** Enough of Effect Schema to declare a config and a route's params and search (see `WebSchema`). */
   Schema: WebSchema,

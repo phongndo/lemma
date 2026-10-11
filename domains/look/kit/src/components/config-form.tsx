@@ -2,7 +2,6 @@ import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
 import { configEdit, configText, Toggle } from "@lemma/look";
 import type { ConfigFormProps } from "@lemma/look";
-import { usePlugin } from "@lemma/web";
 
 /**
  * A plugin's settings, projected from its config Schema: a control per
@@ -14,16 +13,18 @@ export function ConfigForm(props: ConfigFormProps) {
   const [saving, setSaving] = createSignal<string>();
   const [errors, setErrors] = createSignal<Readonly<Record<string, string>>>({});
   const value = (field: ConfigField) => props.config?.values[field.key];
-  // What a failed save says is `onSave`'s to report; a rejection it lets through is a fault.
-  const save = usePlugin().action("save setting", async (field: ConfigField, next: unknown) => {
+  // `onSave` is the caller's: what it rejects with is the field's error, not this form's fault.
+  const save = async (field: ConfigField, next: unknown) => {
     setErrors((all) => ({ ...all, [field.key]: "" }));
     setSaving(field.key);
     try {
       await props.onSave({ [field.key]: next });
+    } catch (error) {
+      setErrors((all) => ({ ...all, [field.key]: error instanceof Error ? error.message : String(error) }));
     } finally {
       setSaving(undefined);
     }
-  });
+  };
   /** Text typed into a field: parsed as its type, saved when it changed, unset when cleared. */
   const commit = (field: ConfigField, text: string) => {
     const edit = configEdit(field, value(field), text);

@@ -34,12 +34,24 @@ export default defineWebPlugin({
         if (modal && !action.global) continue;
         const binding = keysFor(action.id, action.keys, overrides).find((candidate) => matchesKeys(candidate, event));
         if (binding === undefined || (inField && bindsTyping(binding) && !action.whileTyping)) continue;
-        if (action.when !== undefined && !action.when()) continue;
+        // What an action throws is the fault of the plugin that added it, not the keymap's: it leaves the slot.
+        const failed = (item: typeof action) => (error: unknown) => slots.fail(Actions, item, error);
+        try {
+          if (action.when !== undefined && !action.when()) continue;
+        } catch (error) {
+          failed(action)(error);
+          continue;
+        }
         event.preventDefault();
         // One that needs a value asks for it in the palette, as picking it there would.
         const palette = action.input === undefined ? undefined : slots.get(Actions, ActionIds.palette);
-        if (palette !== undefined) palette.run(action.id);
-        else action.run();
+        const runs = palette ?? action;
+        try {
+          const result: unknown = palette !== undefined ? palette.run(action.id) : action.run();
+          if (typeof (result as PromiseLike<unknown> | undefined)?.then === "function") (result as PromiseLike<unknown>).then(undefined, failed(runs));
+        } catch (error) {
+          failed(runs)(error);
+        }
         return;
       }
     };

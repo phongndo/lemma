@@ -35,7 +35,7 @@ import type {
 import { Actions } from "@lemma/actions";
 import { Models } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, DEFAULT_PART_ORDER, Each, Highlighted, Isolated } from "@lemma/web";
+import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, DEFAULT_PART_ORDER, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
@@ -349,6 +349,7 @@ function Composer(props: { deps: Deps }) {
     next = undefined;
     if (ok && queued !== undefined && text() === queued.text && images() === queued.images) void submit(queued.whenBusy);
   };
+  const send = usePlugin().action("send the prompt", () => submit());
 
   const insert = (value: string) => {
     const start = input.selectionStart ?? text().length;
@@ -477,7 +478,7 @@ function Composer(props: { deps: Deps }) {
         classList={{ dragging: dragging(), busy: threads.busy() }}
         onSubmit={(event) => {
           event.preventDefault();
-          void submit();
+          send();
         }}
         onDragOver={(event) => {
           if (event.dataTransfer?.types.includes("Files")) {
@@ -691,6 +692,7 @@ function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
 
 /** The default composer action: pick images to attach. */
 function AttachImages(props: ComposerActionProps) {
+  const attach = usePlugin().action("attach images", (files: File[]) => props.addFiles(files));
   let picker!: HTMLInputElement;
   return (
     <>
@@ -704,7 +706,7 @@ function AttachImages(props: ComposerActionProps) {
         multiple
         hidden
         onChange={(event) => {
-          void props.addFiles([...(event.currentTarget.files ?? [])]);
+          attach([...(event.currentTarget.files ?? [])]);
           event.currentTarget.value = "";
         }}
       />

@@ -205,10 +205,14 @@ export default definePlugin({
   `task(name, fn)`, and `action(name, fn)`. Each ends when the plugin stops, or
   when the cancel or removal it returns runs, and what throws or rejects in it is
   the plugin's fault, named for it, rather than an error nobody hears. `every`
-  waits for a run to end before the next, and goes on after one fails; an
-  `action` called once the plugin has stopped does nothing; `task` resolves with
-  what its work resolves with, or `undefined` when it failed or the plugin
-  stopped.
+  waits for a run to end before the next, and goes on after one fails. Once the
+  plugin is stopping (its signal aborted, its cleanups running), nothing would
+  end what starts, so `after`, `every`, and `listen` start nothing and an
+  `action` does nothing; a `task` asked then (a cleanup's flush) runs at once,
+  as part of stopping. An `action` runs as its plugin's own work wherever it is
+  called (another plugin's emit), and one that rejects with `PluginStopped`, a
+  call refused as a plugin stopped, is no fault. `task` resolves with what its
+  work resolves with, or `undefined` when it failed or the plugin had stopped.
 - **Errors nothing handled.** `reportUnhandled(error)` (from `@lemma/core`) is
   for an application's last-resort handlers: a process's `unhandledRejection`
   and `uncaughtException`, a page's `unhandledrejection`. An error raised by a
@@ -216,8 +220,12 @@ export default definePlugin({
   it; a `PluginStopped` is expected, a call a stopped plugin made; anything else
   is nobody's that can be told. With `AsyncLocalStorage`, work follows the
   timers and promises it starts, so a plugin's stray `setTimeout` is still its
-  own; in a browser only refusals are told apart. The host installs it, so no
-  plugin's stray error ends the process.
+  own; in a browser only refusals are told apart. Work a promise-based plugin
+  calls into (an Effect-written plugin's handler) runs in its context, so a
+  stray error there is reported as the caller's. A plugin that has stopped
+  records no fault, so a caller logs what is not a refusal. The host installs
+  it: a plugin's stray error does not end the process, and one that is
+  nobody's does, as Node.js would end it, since the host's state may be broken.
 - **Reloading.** `handoff(() => state)` and `previous` carry state to the
   replacement, as `PluginContext.handoff` does, checked by `carry` when given.
 - **Nested services.** Objects inside a service are converted as the service

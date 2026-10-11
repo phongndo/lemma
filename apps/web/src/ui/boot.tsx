@@ -356,9 +356,10 @@ export async function boot(options: BootOptions): Promise<void> {
   report(bootProblems);
 
   // A call a plugin made, refused because it has stopped (`PluginStopped`), is expected: no error for the console. What a
-  // plugin's work raised that can be told is its fault, reported below; the rest the browser logs as it does.
+  // plugin's work raised that can be told is its fault, reported below; the browser logs it too, as it does the rest, since
+  // a plugin that has stopped records no fault.
   const unhandled = (event: { readonly preventDefault: () => void }, error: unknown) => {
-    if (reportUnhandled(error).kind !== "unknown") event.preventDefault();
+    if (reportUnhandled(error).kind === "stopped") event.preventDefault();
   };
   window.addEventListener("unhandledrejection", (event) => unhandled(event, event.reason));
   window.addEventListener("error", (event) => unhandled(event, event.error));

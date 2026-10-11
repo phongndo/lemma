@@ -17,7 +17,10 @@ export type Unhandled =
  * `unhandledrejection`) as a fault of the plugin whose work raised it, so it shows with that plugin's faults rather than
  * end the process. Where the runtime has async-local storage (Node.js), a callback's context follows the timers and
  * promises it starts, so a throw from a plugin's stray `setTimeout` is still its own; elsewhere only a refused call is
- * told apart. The fault does not stop the plugin.
+ * told apart. The fault does not stop the plugin, and one that has stopped records none, so a caller logs it as well.
+ *
+ * The context is a promise-based plugin's (`within`): its setup, handlers, actions, and what they start. Work it calls
+ * into runs in it too, so a stray error from an Effect-written plugin's handler it invoked is reported as the caller's.
  */
 export function reportUnhandled(error: unknown): Unhandled {
   if (error instanceof PluginStopped) return { kind: "stopped", pluginId: error.pluginId };

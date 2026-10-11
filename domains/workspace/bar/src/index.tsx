@@ -143,6 +143,7 @@ function ProjectPicker(props: { deps: Deps }) {
   const current = () => workspace.workingDir() ?? "";
   const addProject = () => slots.get(Actions, WorkspaceActionIds.addProject);
   const standalone = () => workspace.isStandalone(current());
+  const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
   const label = () => (
     <Show
       when={!standalone()}
@@ -211,7 +212,7 @@ function ProjectPicker(props: { deps: Deps }) {
               aria-checked={standalone()}
               onClick={() => {
                 close();
-                void workspace.newStandalone();
+                newStandalone();
               }}
             >
               <span class="menu-check">

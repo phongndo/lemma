@@ -2,6 +2,7 @@ import { For, Show, createSignal } from "solid-js";
 import { CUSTOM_APIS, customProviderProblem, logoProblem, logoSource } from "@lemma/llm/web";
 import type { CustomProviderDraft } from "@lemma/llm/web";
 import { Dialog, PlusIcon, Spinner } from "@lemma/look";
+import { usePlugin } from "@lemma/web";
 
 /** Asks for an SVG file and hands over its text. */
 export const pickSvg = (use: (svg: string) => void) => {
@@ -40,6 +41,7 @@ export function CustomProviderDialog(props: {
     const ok = await props.add(draft(), key(), logo()).finally(() => setBusy(false));
     if (ok) props.onClose();
   };
+  const submitting = usePlugin().action("add a custom provider", submit);
   return (
     <Dialog
       class="connect custom-provider"
@@ -77,7 +79,7 @@ export function CustomProviderDialog(props: {
         class="custom-provider-form"
         onSubmit={(event) => {
           event.preventDefault();
-          void submit();
+          submitting();
         }}
       >
         <label class="custom-provider-field">

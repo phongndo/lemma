@@ -1,7 +1,7 @@
 import { ErrorBoundary, For, Show, createContext, useContext } from "solid-js";
 import type { Accessor, Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
-import { owners, PluginOwner } from "./owner.ts";
+import { ownerOf, PluginOwner } from "./owner.ts";
 import { fallbackOf } from "./slots.ts";
 import type { Region, Slot, SlotItem, SlotsService } from "./slots.ts";
 
@@ -40,7 +40,7 @@ export function Contained<P extends Record<string, any>>(props: {
         return null;
       }}
     >
-      <PluginOwner.Provider value={owners.get(slots()?.pluginOf(props.item) ?? "")}>
+      <PluginOwner.Provider value={ownerOf(slots()?.pluginOf(props.item))}>
         <Dynamic component={props.component} {...(props.props ?? ({} as P))} />
       </PluginOwner.Provider>
     </ErrorBoundary>
