@@ -51,7 +51,7 @@ export const api = {
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
   defineSlot,
   /**
-   * The bundled subsystems' channels, as `@lemma/contracts` declares them: what
+   * The bundled subsystems' channels, as each one's contract declares them: what
    * the bundled plugins reach the host's sessions, agent, models, workspace,
    * files, and commands through, with `Client`. A UI file passes one to
    * `client.channel.call` or `client.follow` to have its payload and results

@@ -14,7 +14,7 @@ import { resolveToCwd } from "@lemma/plugin-tools-builtin";
  *
  * A plugin file, written the way a user writes one: copy or link it into
  * `~/.lemma/plugins/` and run `lemma reload`. It imports only packages the
- * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, and the file
+ * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, `@lemma/tools`, and the file
  * tools' own path resolution, so it judges the file a tool will touch. It is
  * written with promises (`@lemma/core/plain`): its services are promise-based
  * views of the same contracts an Effect plugin uses.

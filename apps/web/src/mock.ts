@@ -1,6 +1,6 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
-import { HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
+import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
@@ -357,7 +357,7 @@ export const createMockHost = (): Host => {
     return { ...plugin, configFields: fields, config: configValues(schema, configRows[plugin.id] ?? {}, fields) };
   };
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
-  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@3"];
+  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", `lemma/api@${HOST_API}`];
   const plugins: PluginStatus[] = [
     bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
     bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),

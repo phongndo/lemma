@@ -1,6 +1,6 @@
 # @lemma/plugin-sessions
 
-Provides `Sessions` (`@lemma/contracts`): each session is an append-only tree of
+Provides `Sessions` (`@lemma/sessions`): each session is an append-only tree of
 `SessionEvent`s stored as one JSONL file. Requires `Paths`. Serves the
 `sessions.*` channels (`SessionChannels`, through `serveSessions`): the calls
 clients make on sessions; `sessions.log`, one session's log as it grows; and

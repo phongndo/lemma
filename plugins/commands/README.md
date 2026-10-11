@@ -1,6 +1,6 @@
 # @lemma/plugin-commands
 
-Provides `Commands` (`@lemma/contracts`): the registry of actions a person can
+Provides `Commands` (`@lemma/commands`): the registry of actions a person can
 run from any client, such as the web app's command palette (Cmd+K on macOS,
 Ctrl+K elsewhere) or `lemma do <id>`. Command plugins require `Commands` and
 register during activation. A command that needs input asks for it with
@@ -26,7 +26,7 @@ const greet = definePlugin({
 
 Serves `Commands` to clients as the channels `CommandChannels` declares
 (`commands.list`, `commands.run`, and `commands.changes`), with `serveCommands`
-from `@lemma/contracts`, which a replacement uses as well. Requires `Paths`: a
+from `@lemma/commands`, which a replacement uses as well. Requires `Paths`: a
 run whose client names no `cwd` runs in the host's. No config.
 
 ## Behavior

@@ -1,6 +1,6 @@
 # @lemma/plugin-agent
 
-Provides `Agent` (`@lemma/contracts`): the turn loop. Requires `Sessions`, `Llm`,
+Provides `Agent` (`@lemma/agent`): the turn loop. Requires `Sessions`, `Llm`,
 `Tools`, `HostControl`, and `Paths`. Exclusive: a reload stops it, suspending
 its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and

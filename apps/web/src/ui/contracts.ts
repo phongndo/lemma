@@ -248,7 +248,7 @@ export class Layout extends Context.Service<Layout, LayoutService>()("lemma-ui/L
 
 // ------------------------------------------------------------------ addresses
 
-/** A session's addresses, where the web app shows it as a thread (`@lemma/contracts`, shared with the desktop app's deep links and `lemma open`). */
+/** A session's addresses, where the web app shows it as a thread (`@lemma/sessions`, shared with the desktop app's deep links and `lemma open`). */
 export { NewThreadRoute, ThreadRoute };
 
 // ------------------------------------------------------------------ devtools

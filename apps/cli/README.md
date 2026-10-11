@@ -14,8 +14,9 @@ nix develop -c pnpm lemma inspectors tools.registered   # what a host plugin let
 nix develop -c pnpm lemma channels open ticker.prices   # a host plugin's stream, one JSON line per element
 ```
 
-The CLI and the web app share their logic through `@lemma/contracts` (the
-trajectory, the filter language, prompt diffs, the kernel and inspector views),
+The CLI and the web app share their logic through the contracts (the
+trajectory and the filter language in `@lemma/sessions`, prompt diffs, the kernel
+and inspector views in `@lemma/contracts`),
 so the two show the same records and accept the same queries.
 
 ## Behavior
@@ -48,7 +49,7 @@ so the two show the same records and accept the same queries.
 - **Channels.** Sessions, turns, models, the workspace, and commands are
   reached through the channels their plugins serve (`sessions.*`, `agent.*`,
   `llm.*`, `workspace.*`, `files.search`, `commands.*`), typed by their
-  declarations in `@lemma/contracts`; the host's own calls (plugins, config,
+  declarations in their domains' contracts (`@lemma/sessions`, …); the host's own calls (plugins, config,
   the web app's rows, questions) and its event stream are the runtime's. A
   channel whose plugin is off fails `NotFound`, naming the channel. While the
   host is still starting, a command fails `Unavailable` naming what it called

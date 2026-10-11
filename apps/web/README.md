@@ -228,7 +228,7 @@ when a `channels-changed` event lists it after nothing served it, the policy
 every client of the host shares (`follow` in `@lemma/client`). A
 subsystem's stream starts with `subscribed`, from which its reader resyncs.
 Passing a channel's declaration instead of its id (`api.channels` holds the
-bundled subsystems', `@lemma/contracts` all of them) types the call: the
+bundled subsystems', each subsystem's contract its own) types the call: the
 payload and the results go through its schemas.
 [`examples/ticker`](../../examples/ticker/README.md) is a host plugin file and a
 UI file that shows its prices at `/ticker`.
