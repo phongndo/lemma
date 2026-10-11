@@ -61,13 +61,13 @@ function environment(facts: EnvironmentFacts): string {
 
 /** The agent's base prompt, for the tools on offer; `override` (its `systemPrompt` setting) replaces it. */
 export const baseSection = (override?: string): PromptSection => ({
-  id: "base",
+  id: "agent.base",
   text: ({ tools }) => override ?? basePrompt(new Set(tools.map((tool) => tool.spec.name))),
 });
 
 /** Where and when the agent runs; `cli` (its setting) names the `lemma` CLI. */
 export const environmentSection = (cli?: string): PromptSection => ({
-  id: "environment",
+  id: "agent.environment",
   text: ({ cwd, sessionId }) => environment({ cwd, sessionId, ...(cli === undefined ? {} : { cli }) }),
 });
 

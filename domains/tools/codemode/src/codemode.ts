@@ -149,7 +149,8 @@ export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>)
       const listed = yield* registry.list;
       let count = 0;
       const tools = listed
-        .filter(({ spec }) => spec.name !== "codemode" && (offered === undefined || offered.includes(spec.name)))
+        // Not a tool only the model calls (`direct`): its result must be logged as its own.
+        .filter(({ spec, direct }) => spec.name !== "codemode" && direct !== true && (offered === undefined || offered.includes(spec.name)))
         .map(({ spec }): CodemodeTool => ({
           name: spec.name,
           // `ALL_TOOLS` entries carry the declaration.

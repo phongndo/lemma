@@ -90,6 +90,11 @@ export interface SectionRequest {
   readonly model: ModelRef;
   /** The tools on offer, before `AgentRequestHook` changes them. */
   readonly tools: readonly ToolContribution[];
+  /**
+   * The turn's branch as the request is built, its last event the turn's latest: a section that reads the log reads it
+   * here, not at the session's current leaf, which a checkout during the turn can move elsewhere.
+   */
+  readonly branch: readonly SessionEvent[];
 }
 
 /**
@@ -118,7 +123,7 @@ export const PromptSections = Registry.make<PromptSection>("lemma/agent.sections
 });
 
 /** Where the agent's own sections sit among `PromptSections`: the base prompt first, the environment last. */
-export const SectionOrder = { base: 0, environment: 1000 } as const;
+export const SectionOrder = { base: -1000, environment: 1000 } as const;
 
 /**
  * The model-facing request before it is logged and sent. Handlers of

@@ -326,7 +326,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     Effect.gen(function* () {
       const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! }).pipe(Effect.mapError(sessionError));
       const listed = yield* tools.list;
-      const sections = yield* services.sections({ sessionId, turnId, cwd, model: asking.ref, tools: listed });
+      const sections = yield* services.sections({ sessionId, turnId, cwd, model: asking.ref, tools: listed, branch });
       const draft: RequestDraft = {
         sessionId,
         turnId,
@@ -489,6 +489,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         input: call.arguments,
         cwd,
         ...(offered === undefined ? {} : { offered }),
+        ...(state.lastId === undefined ? {} : { leafId: state.lastId }),
       });
       // Run as the core shuts down, the call would fail for that alone (its tool not found, its guards closed).
       if (!interrupted.has(call.id)) yield* unlessClosing;

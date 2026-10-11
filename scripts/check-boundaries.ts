@@ -245,6 +245,27 @@ for (const domain of readdirSync(domainsDir).filter((entry) => statSync(join(dom
     }
   }
 }
+// The plugin guide's tables (what to plug into, and coming from Pi) name extension points for a task; each name must be
+// one a contract exports, so a rename or removal there cannot leave the guide pointing at nothing.
+const guide = readFileSync(join(root, "docs/plugins.md"), "utf8");
+const exported = new Set(
+  [...domainPackages.map((pkg) => join(pkg.dir, "src")), join(root, "packages/contracts/src"), join(root, "packages/ui/src")]
+    .flatMap((dir) => walk(dir).filter((path) => /\.(ts|tsx)$/.test(path)))
+    .flatMap((file) => [...readFileSync(file, "utf8").matchAll(/^export (?:const|class|interface|type|function) (\w+)/gm)].map((match) => match[1]!)),
+);
+for (const heading of ["## What to plug into", "## Coming from Pi"]) {
+  const start = guide.indexOf(heading);
+  if (start === -1) continue;
+  const section = guide.slice(start, guide.indexOf("\n## ", start + heading.length) === -1 ? undefined : guide.indexOf("\n## ", start + heading.length));
+  for (const line of section.split("\n").filter((row) => row.startsWith("|"))) {
+    // The Lemma column: the last cell but one in the plug-in table, the last in Pi's.
+    const cells = line.split("|").slice(1, -1);
+    const lemma = heading === "## Coming from Pi" ? cells.at(-1) : cells.at(-2);
+    for (const [, name] of (lemma ?? "").matchAll(/`([A-Z]\w*)(?:[.(][^`]*)?`/g)) {
+      if (!exported.has(name!)) docProblems.push(`docs/plugins.md: names \`${name}\` (${heading.slice(3)}), which no contract exports`);
+    }
+  }
+}
 report("Domain READMEs missing what their contracts offer", docProblems, "domain docs: ok");
 
 const pluginProblems: string[] = [];

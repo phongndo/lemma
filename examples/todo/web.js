@@ -28,7 +28,10 @@ export default ({ defineUiPlugin, contracts: { Icon, Slots, Threads, ToolViews, 
       slots.add(ToolViews, {
         id: "todo",
         icon: "check",
-        summary: (args) => ({ primary: args?.action === "add" ? args.text : args?.action === "done" ? `#${args.id} done` : "list" }),
+        // While a call's arguments stream in, a field may not be there yet.
+        summary: (args) => ({
+          primary: args?.action === "add" ? args.text : args?.action === "done" ? (args.id === undefined ? "done" : `#${args.id} done`) : "list",
+        }),
         streaming: "text",
         action: ["updated", "todo list", "todo lists"],
       });

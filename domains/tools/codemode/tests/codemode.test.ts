@@ -30,6 +30,27 @@ const run = (code: string, cwd = process.cwd(), extra: readonly Plugin[] = [], s
     ),
   );
 
+describe("a tool only the model calls", () => {
+  it("is not offered to a script: its result must be logged as its own", async () => {
+    const direct = definePlugin({
+      id: "direct",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(Tools, {
+            name: "notebook",
+            description: "Keeps notes in its results",
+            input: Schema.Struct({}),
+            direct: true,
+            execute: () => new ToolResult({ content: [{ type: "text", text: "noted" }] }),
+          }),
+        ),
+      ),
+    });
+    const result = await run(`text(ALL_TOOLS.map((t) => t.name).includes("notebook") ? "offered" : "not offered");`, process.cwd(), [direct]);
+    expect(textOf(result)).toContain("not offered");
+  });
+});
+
 describe("codemode's registration", () => {
   it("registers under its name, with its plugin as the source and a clean schema", async () => {
     const listed = await Effect.runPromise(

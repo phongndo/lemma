@@ -76,7 +76,8 @@ describe("as a plugin", () => {
               const [added] = (yield* Effect.flatMap(Registries, (registries) => registries.items(PromptSections))).filter(
                 (contribution) => contribution.pluginId === "todo",
               );
-              const section = yield* awaitable(() => added!.item.text({ sessionId: "s", turnId: "t", cwd: "/", model: "p/m", tools: [] }));
+              // The turn's branch, as the agent hands a section.
+              const section = yield* awaitable(() => added!.item.text({ sessionId: "s", turnId: "t", cwd: "/", model: "p/m", tools: [], branch: [...log] }));
               return [texts, section] as const;
             }),
           );

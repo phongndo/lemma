@@ -1,7 +1,7 @@
 # agent.loop
 
 Provides `Agent` (`@lemma/agent`): the turn loop. Requires `Sessions`, `Llm`,
-`ToolRunner`, `HostControl`, and `Paths`. Adds its `base` and `environment`
+`ToolRunner`, `HostControl`, and `Paths`. Adds its `agent.base` and `agent.environment`
 sections to `PromptSections` (at `SectionOrder`). Exclusive: a reload stops it, suspending
 its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and
