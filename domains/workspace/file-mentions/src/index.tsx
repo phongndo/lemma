@@ -4,10 +4,10 @@ import { HostError } from "@lemma/contracts";
 import { FILE_SEARCH_LIMIT, FileChannels } from "@lemma/workspace";
 import { fileView, mentionPath } from "./mentions.ts";
 import { ComposerCompletions } from "@lemma/threads";
-import { Client, Slots } from "@lemma/ui";
+import { Client, Slots } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ComposerSuggestion } from "@lemma/threads";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 import { FileTypeIcon } from "@lemma/look";
 
 const FileMentionsConfig = Schema.Struct({
@@ -70,7 +70,7 @@ const suggestion = (entry: FileEntry, query: string, trigger: string): ComposerS
  * directory, which the agent reads like any path the prompt names. A folder
  * typed before the last `/` that exists narrows the search to it.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "workspace.file-mentions",
   config: FileMentionsConfig,
   requires: { client: Client, workspace: Workspace, slots: Slots },

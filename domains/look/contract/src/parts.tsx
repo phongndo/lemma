@@ -1,5 +1,5 @@
 import type { ConfigField, ConfigValues } from "@lemma/contracts";
-import { definePart, partView } from "@lemma/ui";
+import { definePart, partView } from "@lemma/web";
 import type { JSX } from "solid-js";
 import { ConfigFormFallback, IconFallback, SearchFieldFallback, SegmentedFallback, ToggleFallback } from "./fallbacks.tsx";
 

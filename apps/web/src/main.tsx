@@ -2,7 +2,7 @@
 import "./lib/immediate.ts";
 import { connect, describeError } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import { preloadPaint } from "@lemma/ui/paint";
+import { preloadPaint } from "@lemma/web/paint";
 import { takeToken } from "./lib/token.ts";
 import { bundled } from "./bundled.ts";
 import { boot } from "./ui/boot.tsx";

@@ -5,9 +5,9 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { projectPluginsDir } from "../src/config.ts";
 import { resolvePaths } from "../src/paths.ts";
-import { listUiFiles, userPluginsDir } from "../src/ui.ts";
+import { listWebFiles, userPluginsDir } from "../src/web.ts";
 
-describe("listUiFiles", () => {
+describe("listWebFiles", () => {
   test("lists web halves and stylesheets, a package's too, user files first, and a project's only when trusted", async () => {
     const root = await mkdtemp(join(tmpdir(), "lemma-ui-"));
     try {
@@ -32,7 +32,7 @@ describe("listUiFiles", () => {
       await writeFile(join(user, "scratch", "web.js"), "");
       await writeFile(join(projectPluginsDir(paths), "panel.web.mjs"), "");
 
-      const untrusted = await Effect.runPromise(listUiFiles(paths, false));
+      const untrusted = await Effect.runPromise(listWebFiles(paths, false));
       expect(untrusted.map((file) => [file.source, file.name, file.kind])).toEqual([
         ["user", "composer.web.js", "script"],
         ["user", "theme.css", "style"],
@@ -40,10 +40,10 @@ describe("listUiFiles", () => {
         ["user", "ticker/ticker.css", "style"],
       ]);
       expect(untrusted[0]!.path).toBe(join(user, "composer.web.js"));
-      expect(untrusted[0]!.url).toMatch(/^\/api\/ui\/user\/composer\.web\.js\?v=\d+$/);
-      expect(untrusted[2]!.url).toMatch(/^\/api\/ui\/user\/ticker\/web\.js\?v=\d+$/);
+      expect(untrusted[0]!.url).toMatch(/^\/api\/web\/user\/composer\.web\.js\?v=\d+$/);
+      expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user\/ticker\/web\.js\?v=\d+$/);
 
-      const trusted = await Effect.runPromise(listUiFiles(paths, true));
+      const trusted = await Effect.runPromise(listWebFiles(paths, true));
       expect(trusted.map((file) => `${file.source}/${file.name}`).slice(-1)).toEqual(["project/panel.web.mjs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -52,6 +52,6 @@ describe("listUiFiles", () => {
 
   test("a missing directory lists nothing", async () => {
     const paths = resolvePaths({ env: { LEMMA_HOME: join(tmpdir(), "lemma-absent-home") }, cwd: join(tmpdir(), "lemma-absent-project") });
-    expect(await Effect.runPromise(listUiFiles(paths, true))).toEqual([]);
+    expect(await Effect.runPromise(listWebFiles(paths, true))).toEqual([]);
   });
 });

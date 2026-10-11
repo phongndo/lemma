@@ -1,5 +1,5 @@
 import { createSignal, onCleanup } from "solid-js";
-import { copyText } from "@lemma/ui/clipboard";
+import { copyText } from "@lemma/web/clipboard";
 import type { CopyButtonProps } from "@lemma/look";
 import { CheckIcon, CopyIcon, XIcon } from "@lemma/look";
 

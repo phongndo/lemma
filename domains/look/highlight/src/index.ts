@@ -1,6 +1,6 @@
 import { CodeBlocks } from "@lemma/look";
-import { Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Slots } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
 import styles from "./highlight.css?inline";
 
 type Highlighter = typeof import("./highlight.ts");
@@ -10,7 +10,7 @@ type Highlighter = typeof import("./highlight.ts");
  * Shiki and each grammar load on first use. Code that is still streaming is
  * highlighted as it grows once its language has loaded, plain until then.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "look.highlight",
   styles,
   requires: { slots: Slots },

@@ -16,7 +16,7 @@
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/threads": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "effect": "4.0.1",
     "solid-js": "1.9.15"
   },

@@ -4,7 +4,7 @@ import { RECORD_KIND_LABEL, recordWithin } from "@lemma/sessions";
 import type { AssistantRecord, LedgerRecord, LedgerSpan, ToolRecord } from "@lemma/sessions";
 import { panned, place, ticks, ttftPercent } from "./scale.ts";
 import type { Scale } from "./scale.ts";
-import { clockTime } from "@lemma/ui/format";
+import { clockTime } from "@lemma/web/format";
 import type { View } from "./state.ts";
 
 /** The overview: three lanes of spans over the session's active time, zoomed with the wheel and ranged by dragging. */

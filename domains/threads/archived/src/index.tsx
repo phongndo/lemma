@@ -1,14 +1,14 @@
 import type { SessionInfo } from "@lemma/sessions";
-import { relativeTime, tildePath } from "@lemma/ui/format";
+import { relativeTime, tildePath } from "@lemma/web/format";
 import { sessionTitle } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { Threads } from "@lemma/threads";
-import { Client, Slots } from "@lemma/ui";
+import { Client, Slots } from "@lemma/web";
 import type { SettingsService } from "@lemma/settings";
 import type { ThreadsService } from "@lemma/threads";
-import type { ClientService } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import type { ClientService } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
 import { ArchiveIcon } from "@lemma/look";
 import styles from "./archived-page.css?inline";
 
@@ -42,7 +42,7 @@ function ArchivedRow(props: { client: ClientService; threads: ThreadsService; se
 }
 
 /** Archived threads, as a settings section: open, unarchive, or delete each. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.archived",
   styles,
   requires: { client: Client, threads: Threads, settings: Settings, slots: Slots },

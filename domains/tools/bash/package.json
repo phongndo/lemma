@@ -16,7 +16,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

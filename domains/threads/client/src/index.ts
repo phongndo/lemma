@@ -13,9 +13,9 @@ import type { KnownQueue } from "@lemma/threads";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { PluginsFacts } from "@lemma/settings";
 import { Threads } from "@lemma/threads";
-import { Client, Notify, Router, Slots } from "@lemma/ui";
+import { Client, Notify, Router, Slots } from "@lemma/web";
 import type { LogState } from "@lemma/threads";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 
 /** How long a preloaded log stays fresh enough to open with (ms). */
 const PRELOAD_MS = 15_000;
@@ -38,7 +38,7 @@ const hashThread = (): string | undefined => {
  * It follows the host through `sessions.changes`, `agent.activity`, and the
  * open thread's `sessions.log`.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.client",
   requires: { client: Client, notify: Notify, router: Router, slots: Slots },
   provides: { threads: Threads },

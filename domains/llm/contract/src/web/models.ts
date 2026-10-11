@@ -37,7 +37,7 @@ export interface ModelsService {
   readonly refresh: () => Promise<void>;
 }
 
-export class Models extends Context.Service<Models, ModelsService>()("lemma-ui/Models") {}
+export class Models extends Context.Service<Models, ModelsService>()("lemma-web/Models") {}
 
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const LlmActionIds = { providers: "providers.open" } as const;

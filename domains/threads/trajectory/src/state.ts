@@ -2,10 +2,10 @@ import { createSignal } from "solid-js";
 import { recordFailed, recordStatus } from "@lemma/sessions";
 import type { AssistantRecord, LedgerRecord, LedgerSort } from "@lemma/sessions";
 import { wheeled } from "./scale.ts";
-import { copyText } from "@lemma/ui/clipboard";
+import { copyText } from "@lemma/web/clipboard";
 import type { ThreadsService } from "@lemma/threads";
-import type { NotifyService } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import type { NotifyService } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 
 export interface TrajectoryDeps {
   readonly threads: ThreadsService;

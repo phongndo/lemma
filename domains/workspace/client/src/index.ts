@@ -1,15 +1,15 @@
 import { createEffect, createMemo, createSignal, on } from "solid-js";
 import { WorkspaceChannels } from "@lemma/workspace";
 import type { WorkspaceStatus } from "@lemma/workspace";
-import { load, loadJson, save } from "@lemma/ui/storage";
+import { load, loadJson, save } from "@lemma/web/storage";
 import { branchSlug } from "./slug.ts";
 import { knownProjects, patchProjectSettings, projectName } from "@lemma/workspace/web";
 import type { ProjectSettings } from "@lemma/workspace/web";
 import { Threads } from "@lemma/threads";
-import { Client, Notify } from "@lemma/ui";
+import { Client, Notify } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { WorktreeDraft } from "@lemma/workspace/web";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 
 const PROJECTS_KEY = "lemma.projects";
 const WORKTREE_KEY = "lemma.newWorktree";
@@ -21,7 +21,7 @@ const HIDDEN_KEY = "lemma.hiddenProjects";
  * fresh while connected (a turn or a command may commit or switch branches),
  * and whether a new chat starts in its own worktree.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "workspace.client",
   requires: { client: Client, notify: Notify, threads: Threads },
   provides: { workspace: Workspace },

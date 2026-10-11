@@ -1,7 +1,7 @@
 import { Rpc, RpcGroup } from "effect/rpc";
 import { Schema } from "effect";
 import { ChannelInfo } from "./channels.ts";
-import { ConfigScope, NoticePayload, PluginChange, UiComposition } from "./host.ts";
+import { ConfigScope, NoticePayload, PluginChange, WebComposition } from "./host.ts";
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
 import { HostError, HostInfo, PluginStatus, ReloadResult } from "./status.ts";
@@ -26,7 +26,7 @@ export const RuntimeEvent = Schema.Union([
    * `Withdrawn`, or whose open found nothing, opens it again when its id is listed.
    */
   Schema.Struct({ type: Schema.Literal("channels-changed"), channels: Schema.Array(ChannelInfo) }),
-  Schema.Struct({ type: Schema.Literal("ui-changed"), ui: UiComposition }),
+  Schema.Struct({ type: Schema.Literal("web-changed"), web: WebComposition }),
 ]);
 export type RuntimeEvent = typeof RuntimeEvent.Type;
 
@@ -83,7 +83,7 @@ export class RuntimeRpcs extends RpcGroup.make(
   }),
 
   /** What the web app plans its halves from: the rows and its files; it runs them itself. `Host.Configure` writes the rows. */
-  Rpc.make("Ui.Composition", { success: UiComposition }),
+  Rpc.make("Web.Composition", { success: WebComposition }),
 
   /** Questions still waiting on an answer, so a client can show them without resubscribing. */
   Rpc.make("Interaction.List", { success: Schema.Array(InteractionRequest) }),

@@ -5,7 +5,7 @@ import { RECORD_KIND_LABEL, rebuildRequest, recordDuration, recordFailed, record
 import type { AssistantRecord, LedgerRecord, LedgerSpan } from "@lemma/sessions";
 import { inputTokens, ledgerStats, ttftPercent } from "./scale.ts";
 import type { Scale } from "./scale.ts";
-import { clockTime } from "@lemma/ui/format";
+import { clockTime } from "@lemma/web/format";
 import { TrajectoryActions } from "@lemma/threads";
 import type { View, SortKey } from "./state.ts";
 

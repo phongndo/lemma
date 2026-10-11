@@ -2,8 +2,8 @@ import type { PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { MenuAction } from "@lemma/frame";
 import type { IconName } from "@lemma/look";
 import type { LedgerRecord, SessionEvent, SessionInfo, SessionMarks } from "@lemma/sessions";
-import { defineSlot } from "@lemma/ui";
-import type { Region } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
+import type { Region } from "@lemma/web";
 import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
 import type { LiveState } from "./live.ts";
@@ -72,7 +72,7 @@ export interface ThreadsService {
   readonly checkout: (eventId: string) => Promise<void>;
 }
 
-export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-ui/Threads") {}
+export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-web/Threads") {}
 
 /** What a session's menu item can do to its row. */
 export interface ThreadRowControl {

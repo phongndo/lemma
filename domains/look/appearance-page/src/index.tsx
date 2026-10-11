@@ -1,12 +1,12 @@
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
-import { load, save } from "@lemma/ui/storage";
+import { load, save } from "@lemma/web/storage";
 import { APPEARANCE_PLUGIN, LEGACY_KEYS, decodeSettings, legacySettings, resolveLook, schemeTokens, settingValue } from "@lemma/look";
 import type { AppearanceSettings, Field, Scheme, SchemeChoice } from "@lemma/look";
 import { Actions } from "@lemma/actions";
 import { Accents, Fonts, Themes } from "@lemma/look";
 import { SectionIds, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Notify, Slots, UiPlugins } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Notify, Slots, WebPlugins } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
 import { PaletteIcon } from "@lemma/look";
 import styles from "./appearance-page.css?inline";
 import { AccentPicker, CornersSetting, FontSetting, Preview, SchemePicker, TextSizeSetting, ThemeChoice, WidthSetting } from "./views.tsx";
@@ -33,10 +33,10 @@ const same = (a: AppearanceSettings, b: AppearanceSettings) => {
  * start it carries the scheme and width an older app kept in the browser into
  * that config.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "look.appearance-page",
   styles,
-  requires: { slots: Slots, uiPlugins: UiPlugins, notify: Notify },
+  requires: { slots: Slots, uiPlugins: WebPlugins, notify: Notify },
   setup: ({ slots, uiPlugins, notify }, plugin) => {
     const row = () => uiPlugins.list().find((candidate) => candidate.id === APPEARANCE_PLUGIN);
     const saved = createMemo(() => decodeSettings(row()?.config?.values), undefined, { equals: same });

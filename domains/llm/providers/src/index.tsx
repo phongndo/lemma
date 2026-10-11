@@ -10,10 +10,10 @@ import { Dialogs, Layers } from "@lemma/frame";
 import { Models, ProviderRowPart, LlmActionIds } from "@lemma/llm/web";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { ComposerNotices } from "@lemma/threads";
-import { Client, Interactions, Notify, Slots, UiPlugins } from "@lemma/ui";
+import { Client, Interactions, Notify, Slots, WebPlugins } from "@lemma/web";
 import type { ModelsService, ProviderRowProps } from "@lemma/llm/web";
-import { defineUiPlugin } from "@lemma/ui";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
+import { DEFAULT_PART_ORDER } from "@lemma/web";
 import { ProviderLogo, ProviderRowView } from "@lemma/llm/web";
 import { CheckIcon, FilterIcon, KeyIcon, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
@@ -196,7 +196,7 @@ const ProvidersConfig = Schema.Struct({
  * come first. Opened from the chat's notice (or the palette) with nothing set
  * up, it says why and closes once a provider is connected.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "llm.providers",
   styles,
   config: ProvidersConfig,
@@ -208,7 +208,7 @@ export default defineUiPlugin({
     slots: Slots,
     interactions: Interactions,
     notify: Notify,
-    uiPlugins: UiPlugins,
+    uiPlugins: WebPlugins,
   },
   setup: ({ client, dialogs, models, settings, slots, interactions, notify, uiPlugins }, plugin) => {
     const moving = Object.entries(plugin.config.logos ?? {});

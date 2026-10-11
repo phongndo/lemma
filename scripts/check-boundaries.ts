@@ -102,7 +102,7 @@ report("Framework doc links leaving the framework packages", linkProblems, "fram
 
 // Each domain is a folder under domains/: its contract (`domains/<domain>/contract`, the package `@lemma/<domain>`) and
 // its plugins (`domains/<domain>/<name>`). A contract declares and implements no plugin: of this workspace it depends
-// only on the runtime's packages (its contracts, the core, the router, the client, and the web plugin API, `@lemma/ui`)
+// only on the runtime's packages (its contracts, the core, the router, the client, and the web plugin API, `@lemma/web`)
 // and other domains' contracts, which form no cycle, and defines no plugin. A bundled plugin is one a user could have
 // written: it meets the others only through contracts (AGENTS.md), so its package depends on no other plugin and its
 // source imports none.
@@ -131,7 +131,7 @@ const pluginNames = new Set(pluginPackages.map((pkg) => pkg.manifest.name as str
 const dependenciesOf = (manifest: { dependencies?: object; peerDependencies?: object }) =>
   Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies });
 const contractProblems: string[] = [];
-const runtimePackages = ["@lemma/contracts", "@lemma/core", "@lemma/router", "@lemma/client", "@lemma/ui"];
+const runtimePackages = ["@lemma/contracts", "@lemma/core", "@lemma/router", "@lemma/client", "@lemma/web"];
 const contractAllowed = (name: string) => !name.startsWith("@lemma/") || runtimePackages.includes(name) || contractPackages.has(name);
 for (const [name, pkg] of contractPackages) {
   const home = relative(root, pkg.dir);
@@ -287,7 +287,7 @@ report("Plugin boundary violations", pluginProblems, "plugin boundary: ok");
 
 // The runtime is the API every plugin is written against (AGENTS.md): the host's (packages/host, but not `bundled.ts`,
 // the list of bundled plugins, which the walk does not enter), the planner both apps share (packages/composition), the
-// web app's (its boot and `runtime/`, and `@lemma/ui`, the plugin API they provide), and its contracts
+// web app's (its boot and `runtime/`, and `@lemma/web`, the plugin API they provide), and its contracts
 // (`@lemma/contracts`). It knows no domain:
 // nothing it imports, however indirectly and if only for a type, is anything under domains/, a domain's contract or one
 // of its plugins. The walk follows relative imports, and workspace packages through their `exports`. The transport is a
@@ -300,7 +300,7 @@ const runtimeCode = [
   ...walk(join(root, "packages/composition/src")),
   ...walk(join(root, "apps/web/src/runtime")),
   ...["boot.tsx", "files.ts"].map((name) => join(root, "apps/web/src/ui", name)),
-  ...walk(join(root, "packages/ui/src")),
+  ...walk(join(root, "packages/web/src")),
   ...walk(contracts),
 ].filter(isCode);
 const workspacePackages = new Map<string, { readonly dir: string; readonly exports: Readonly<Record<string, unknown>> }>();
@@ -426,7 +426,7 @@ report("RPC clients outside @lemma/client (scripts/check-boundaries.ts)", client
 
 // The web app is replaceable piece by piece: everything it shows comes from a plugin (turn it off or replace it by id),
 // a package in its domain's folder that reaches others only through contracts (above): the web plugin API
-// (`@lemma/ui`, the runtime's) and each domain's (`@lemma/frame`, `@lemma/threads`, …). So a web plugin draws shared
+// (`@lemma/web`, the runtime's) and each domain's (`@lemma/frame`, `@lemma/threads`, …). So a web plugin draws shared
 // pieces through their parts, whose providers anyone can replace; only `look.kit` supplies the shared parts' defaults.
 // The web app itself (apps/web) is its boot, its runtime (`runtime/`, which only the boot imports and which uses only
 // its own files and the runtime's packages), and the bundled list. See apps/web/AGENTS.md.
@@ -448,7 +448,7 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
     }
     const to = relative(web, resolve(dirname(file), specifier));
     if (to.startsWith("runtime/") && !inRuntime && name !== "ui/boot.tsx") {
-      uiProblems.push(`apps/web/src/${name}: imports the runtime "${specifier}" (require its capability from @lemma/ui)`);
+      uiProblems.push(`apps/web/src/${name}: imports the runtime "${specifier}" (require its capability from @lemma/web)`);
     } else if (inRuntime && !to.startsWith("runtime/")) {
       uiProblems.push(`apps/web/src/${name}: imports "${specifier}" (the runtime uses its own files and the runtime's packages)`);
     }
@@ -460,7 +460,7 @@ const fallbacks = join(root, "domains/look/contract/src/fallbacks.tsx");
 for (const match of readFileSync(fallbacks, "utf8").matchAll(/^import\s+(?!type\b)[^;]*from\s+["']\.\/parts\.tsx["']/gm)) {
   uiProblems.push(`${relative(root, fallbacks)}: ${match[0]} (a fallback is plain markup: it draws no part)`);
 }
-const webPackages = [...domainPackages.filter((pkg) => dependenciesOf(pkg.manifest).includes("@lemma/ui")).map((pkg) => pkg.dir), join(root, "packages/ui")];
+const webPackages = [...domainPackages.filter((pkg) => dependenciesOf(pkg.manifest).includes("@lemma/web")).map((pkg) => pkg.dir), join(root, "packages/web")];
 // One owner of the page's keys: the keymap's Actions, and the tooltips that follow the pointer and focus.
 const ownsKeys = ["domains/actions/keymap", "domains/frame/tooltips"].map((dir) => join(root, dir));
 for (const pkg of pluginPackages.filter((pkg) => webPackages.includes(pkg.dir))) {
@@ -468,19 +468,19 @@ for (const pkg of pluginPackages.filter((pkg) => webPackages.includes(pkg.dir)))
     const text = readFileSync(file, "utf8");
     const rule = (message: string) => uiProblems.push(`${relative(root, file)}: ${message}`);
     // A plugin keeps to what it owns: its DOM (through refs), its slot items, and the page's look only through
-    // `@lemma/ui/paint`.
+    // `@lemma/web/paint`.
     for (const [pattern, why] of [
       [/document\.(querySelector|querySelectorAll|getElementById|getElementsBy\w+)\b/, "queries the whole page (use a ref, or query your own element)"],
       [/document\.body\b/, "reaches into <body> (draw overlays as Layers items)"],
-      [/document\.documentElement\b/, "touches <html> (the look goes through @lemma/ui/paint)"],
+      [/document\.documentElement\b/, "touches <html> (the look goes through @lemma/web/paint)"],
     ] as const) {
       if (pattern.test(text)) rule(why);
     }
-    // What a slot holds is drawn contained (`Contained`, `Each`, `First` in @lemma/ui), so a throw fails that item alone,
+    // What a slot holds is drawn contained (`Contained`, `Each`, `First` in @lemma/web), so a throw fails that item alone,
     // named for its plugin, rather than freezing every view updated after it. `look.kit`'s components draw no slot's
     // items: they are the parts' defaults, which `First` draws contained.
     if (!file.startsWith(join(root, "domains/look/kit/src/components/")) && /import\s*\{[^}]*\bDynamic\b[^}]*\}\s*from\s*["']solid-js\/web["']/.test(text)) {
-      rule("draws with Dynamic (draw slot items with Contained, Each, or First from @lemma/ui, so a throw fails alone)");
+      rule("draws with Dynamic (draw slot items with Contained, Each, or First from @lemma/web, so a throw fails alone)");
     }
     // App keys are Actions, and an overlay handles keys on its own element.
     if (!ownsKeys.includes(pkg.dir) && /(document|window)\.addEventListener\(\s*["']key/.test(text)) {
@@ -599,7 +599,7 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "scripts/mock-openai.ts": 1,
 };
 const tempNameCeilings: Readonly<Record<string, number>> = {
-  "packages/host/tests/ui.test.ts": 2,
+  "packages/host/tests/web.test.ts": 2,
   "domains/transport/server/tests/transport.test.ts": 2,
 };
 const fixedWaits = [

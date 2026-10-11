@@ -16,7 +16,7 @@ replace it.
   declares what it `requires` and `provides`, adds to slots, draws, and brings
   its own stylesheet (`src/<name>.css?inline`, passed as `styles`). Its files
   import each other, and nothing outside it imports them. It imports only
-  `@lemma/ui` (the plugin API), contracts (`@lemma/<domain>`, and a host
+  `@lemma/web` (the plugin API), contracts (`@lemma/<domain>`, and a host
   domain's web contract, `@lemma/<domain>/web`), and npm packages: never
   another plugin (`check-boundaries` fails it). `apps/web/src/bundled.ts`
   lists the bundled ones, and `ui:check` fails unless it lists every web half
@@ -24,7 +24,7 @@ replace it.
   package (`src/web.ts`, exported as `./web`), with its id, as the tools' do.
 - **A contract** is how plugins meet: a capability (a service with one
   provider), a slot (a list or region many fill), a part, a shared id
-  (`SectionIds`, `ActionIds`), or a DOM convention (listed in `@lemma/ui`'s
+  (`SectionIds`, `ActionIds`), or a DOM convention (listed in `@lemma/web`'s
   index). Each lives in its domain's contract package: `@lemma/frame` (the
   regions, layers, layout, dialogs), `@lemma/look` (themes, fonts, the shared
   parts), `@lemma/settings`, `@lemma/actions`, `@lemma/threads`,
@@ -33,7 +33,7 @@ replace it.
   something from another, add it to the contract of the domain that owns it.
   What two plugins of a domain share (a projection, a model) goes in its
   contract too, as the threads contract's transcript does.
-- **The runtime** (`src/runtime/`, its contracts in `@lemma/ui`) is what
+- **The runtime** (`src/runtime/`, its contracts in `@lemma/web`) is what
   every plugin is written against, the app's own: no plugin provides it,
   replaces it, or turns it off. It imports no plugin or domain contract, adds
   to no slot, and needs nothing a plugin contributes but reactively (the
@@ -41,8 +41,8 @@ replace it.
   item from a plugin is that plugin's fault (`slots.fail`), and its own
   failures are logged and reported. Add to it only what no plugin could
   provide, since nothing can replace it.
-- **`@lemma/ui`** (`packages/ui`) is the plugin API: the runtime's contracts,
-  `defineUiPlugin`, slots and parts (`defineSlot`, `definePart`, `partView`),
+- **`@lemma/web`** (`packages/web`) is the plugin API: the runtime's contracts,
+  `defineWebPlugin`, slots and parts (`defineSlot`, `definePart`, `partView`),
   drawing what slots hold (`Contained`, `Each`, `First`, `Isolated`), and
   helpers any plugin may use (`/keys`, `/storage`, `/now`, `/clipboard`,
   `/quick-pick`, `/paint`, `/match`, `/format`). It is part of the runtime:
@@ -67,7 +67,7 @@ replace it.
   (`tests/ui.test.ts` fails until you do).
 - **A model** is pure data and functions: in the plugin that uses it, or in
   its domain's contract when two plugins share it. Test it in its package's
-  `tests/` (`vitest.config.ts` default-exports `@lemma/ui/vitest`).
+  `tests/` (`vitest.config.ts` default-exports `@lemma/web/vitest`).
 - **The foundation** (`src/styles.css`) holds the tokens, base styles, and
   the class vocabulary several plugins share (`.button`, `.field`,
   `.menu-*`). A rule one plugin's markup needs goes in that plugin's
@@ -86,7 +86,7 @@ replace it.
   restyle across the app, keeps a semantic class and a part, so one rule in a
   stylesheet restyles it everywhere. Write a class whole (`tw:bg-accent`,
   never `tw:bg-${name}`): the build finds classes by reading the source
-  (`src/`, `domains/`, and `packages/ui`).
+  (`src/`, `domains/`, and `packages/web`).
 
 ## Adding or changing UI
 
@@ -98,13 +98,13 @@ replace it.
    would use, as the sidebar's buttons and the palette's sources do.
 3. Keep the plugin's effects inside what it owns: its slot items, its parts,
    its own DOM (through refs), its stylesheet. Draw what a slot holds with
-   `Contained`, `Each`, or `First` from `@lemma/ui`, never a bare
+   `Contained`, `Each`, or `First` from `@lemma/web`, never a bare
    `Dynamic`: an item that throws then fails alone, named for its plugin, and
    a region shows its next item. A component handed over as data (a
    completion's icon) draws with `Isolated`. Overlays are `Layers` items drawn
    with the `dialog` part; app-wide keys are `Actions`, and an overlay handles
    its own keys on its own element; the page's theme goes through
-   `@lemma/ui/paint`; what covers the page stacks by the `--z-*` tokens.
+   `@lemma/web/paint`; what covers the page stacks by the `--z-*` tokens.
 4. Make it a plugin of its own only when someone would turn it off or replace
    it on its own (`look.highlight`, `actions.palette`); when it is a model other
    plugins need beside a view a user might drop, which is then two plugins
@@ -120,7 +120,7 @@ Done means these pass:
 
 ```sh
 nix develop -c node scripts/check-boundaries.ts             # imports, page-wide DOM and keys, stacking (also in `pnpm check`)
-nix develop .#browser -c pnpm --filter @lemma/web ui:check  # the real composition in Chromium, against the mock host
+nix develop .#browser -c pnpm --filter @lemma/web-app ui:check  # the real composition in Chromium, against the mock host
 ```
 
 `ui:check` boots the app and fails when a part has no provider, a plugin cannot

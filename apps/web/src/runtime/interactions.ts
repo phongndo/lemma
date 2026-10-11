@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import type { Host } from "@lemma/client";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
-import type { ClientService, InteractionsService, NotifyService } from "@lemma/ui";
+import type { ClientService, InteractionsService, NotifyService } from "@lemma/web";
 
 /**
  * The runtime's `Interactions`: the questions the host is waiting on. Plugins

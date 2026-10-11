@@ -1,4 +1,4 @@
-import { matchesQuery } from "@lemma/ui/match";
+import { matchesQuery } from "@lemma/web/match";
 
 /** A searchable entry in the settings view: `text` is everything a search can match. */
 export interface Searchable {

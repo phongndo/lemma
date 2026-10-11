@@ -2,7 +2,7 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { JSX } from "solid-js";
 import { capabilityName, describeReload, hookChain, providerOf, recoverable, usersOf } from "@lemma/contracts";
 import type { PluginStatus } from "@lemma/contracts";
-import { tildePath } from "@lemma/ui/format";
+import { tildePath } from "@lemma/web/format";
 import {
   PLUGIN_FILTERS,
   dependentsOf,
@@ -18,16 +18,16 @@ import {
   waitingOn,
 } from "./plugins.ts";
 import type { KindedPlugin, PluginGroup, PluginKind } from "./plugins.ts";
-import { stepFor } from "@lemma/ui/keys";
+import { stepFor } from "@lemma/web/keys";
 import { Actions } from "@lemma/actions";
 import { PluginTabs, PluginsFacts, SectionIds, Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Client, HostPlugins, Notify, Slots, UiPlugins } from "@lemma/ui";
+import { Client, HostPlugins, Notify, Slots, WebPlugins } from "@lemma/web";
 import type { PluginTab, PluginsFact } from "@lemma/settings";
-import type { ClientService, PluginsService, UiPluginsService } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import type { ClientService, PluginsService, WebPluginsService } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 import { ChevronIcon, ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/ui";
+import { Contained } from "@lemma/web";
 import styles from "./plugins-page.css?inline";
 
 const SECTION = SectionIds.plugins;
@@ -69,7 +69,7 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-dig
 /** Everything the inspector's parts share. */
 interface Inspector {
   readonly client: ClientService;
-  readonly ui: UiPluginsService;
+  readonly ui: WebPluginsService;
   readonly slots: SlotsService;
   readonly services: Readonly<Record<PluginKind, PluginsService>>;
   readonly selected: () => Selection | undefined;
@@ -555,7 +555,7 @@ function Fact(props: { fact: PluginsFact }) {
   );
 }
 
-function HostFacts(props: { client: ClientService; slots: SlotsService; ui: UiPluginsService }) {
+function HostFacts(props: { client: ClientService; slots: SlotsService; ui: WebPluginsService }) {
   const files = () => props.ui.files();
   return (
     <Show when={props.client.info()}>
@@ -852,10 +852,10 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
 }
 
 /** The Plugins section: the inspector over the host's plugins and this web app's. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "settings.plugins",
   styles,
-  requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: UiPlugins },
+  requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: WebPlugins },
   setup: ({ client, notify, settings, slots, host, ui }) => {
     // In the address (`?plugin=agent&kind=host&tab=…&filter=…`): a link, a reload, and back and forward return to them, and
     // settings reopen the section as it was left.

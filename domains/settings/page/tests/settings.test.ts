@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchesQuery } from "@lemma/ui/match";
+import { matchesQuery } from "@lemma/web/match";
 import { filterGroups } from "../src/settings.ts";
 import { SettingsRoute } from "@lemma/settings";
 

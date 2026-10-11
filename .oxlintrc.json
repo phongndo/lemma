@@ -13,7 +13,7 @@
   },
   "overrides": [
     {
-      "files": ["apps/web/src/**/*.tsx", "domains/**/*.tsx", "packages/ui/src/**/*.tsx"],
+      "files": ["apps/web/src/**/*.tsx", "domains/**/*.tsx", "packages/web/src/**/*.tsx"],
       "rules": {
         "no-unassigned-vars": "off"
       }

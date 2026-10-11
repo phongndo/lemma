@@ -1,8 +1,8 @@
 import { Deferred, Effect, Layer } from "effect";
-import { HostControl, Interaction, InteractionError, InteractionHook, Paths, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { HostControl, Interaction, InteractionError, InteractionHook, Paths, PluginsChanged, WebChanged } from "@lemma/contracts";
 import { Commands } from "@lemma/commands";
 import { pathsPlugin } from "@lemma/contracts/testing";
-import type { ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, UiComposition } from "@lemma/contracts";
+import type { ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, WebComposition } from "@lemma/contracts";
 import { definePlugin, Diagnostic, Events, Hooks, PluginContext, ReloadError } from "@lemma/core";
 import type { Core } from "@lemma/core";
 
@@ -55,7 +55,7 @@ export interface ControlHolder {
   /** Plugins `configure` turned off, with the scope written. */
   readonly off: Record<string, ConfigScope>;
   /** What the web app plans from: the rows (`configure` merges its rows in and publishes it, as the host app does) and files. */
-  ui: UiComposition;
+  web: WebComposition;
 }
 
 /** Delegates to the test's core, waiting until it exists, as the host app does with its loader. */
@@ -114,15 +114,15 @@ export const fakeHostControl = (holder: ControlHolder) =>
                 else if (row.enabled === true) delete holder.off[id];
               }
               // Every row is the web app's to read too: a plugin's one row decides both its halves.
-              const written = { ...holder.ui.plugins };
+              const written = { ...holder.web.plugins };
               for (const [id, row] of Object.entries(rows)) written[id] = { ...written[id], ...(row.enabled === undefined ? {} : { enabled: row.enabled }) };
-              holder.ui = { ...holder.ui, plugins: written };
-              yield* events.publish(UiChanged, holder.ui);
+              holder.web = { ...holder.web, plugins: written };
+              yield* events.publish(WebChanged, holder.web);
               yield* changed;
               const ids = Object.keys(rows);
               return { started: [], stopped: ids.filter((id) => holder.off[id]), restarted: [], unchanged: [], failed: [], interrupted: 0, faults: [] };
             }),
-          ui: Effect.sync(() => holder.ui),
+          web: Effect.sync(() => holder.web),
         };
       }),
     ),

@@ -1,7 +1,7 @@
 import { stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Effect } from "effect";
-import type { UiFile } from "@lemma/contracts";
+import type { WebFile } from "@lemma/contracts";
 import { projectPluginsDir } from "./config.ts";
 import { entriesOf } from "./manifest.ts";
 import type { PathsService } from "./paths.ts";
@@ -17,12 +17,12 @@ export const userPluginsDir = (paths: PathsService): string => join(paths.home, 
  * the page's token. The URL carries the file's mtime, so an edited file is
  * fetched again rather than served from the module cache.
  */
-export function listUiFiles(paths: PathsService, trusted: boolean): Effect.Effect<UiFile[]> {
+export function listWebFiles(paths: PathsService, trusted: boolean): Effect.Effect<WebFile[]> {
   const dirs = [{ dir: userPluginsDir(paths), source: "user" as const }, ...(trusted ? [{ dir: projectPluginsDir(paths), source: "project" as const }] : [])];
   return Effect.promise(async () => {
-    const files: UiFile[] = [];
+    const files: WebFile[] = [];
     for (const { dir, source } of dirs) {
-      const found = (await entriesOf(dir)).flatMap((entry): { readonly path: string; readonly kind: UiFile["kind"] }[] => {
+      const found = (await entriesOf(dir)).flatMap((entry): { readonly path: string; readonly kind: WebFile["kind"] }[] => {
         if (entry.kind === "web") return [{ path: entry.path, kind: "script" }];
         if (entry.kind === "style") return [{ path: entry.path, kind: "style" }];
         if (entry.kind !== "package") return [];
@@ -33,7 +33,7 @@ export function listUiFiles(paths: PathsService, trusted: boolean): Effect.Effec
         const info = await stat(path).catch(() => undefined);
         if (!info?.isFile()) continue;
         const name = relative(dir, path);
-        const url = `/api/ui/${source}/${name.split("/").map(encodeURIComponent).join("/")}?v=${Math.round(info.mtimeMs)}`;
+        const url = `/api/web/${source}/${name.split("/").map(encodeURIComponent).join("/")}?v=${Math.round(info.mtimeMs)}`;
         files.push({ name, source, kind, path, url });
       }
     }

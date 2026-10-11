@@ -6,9 +6,9 @@ import { Actions } from "@lemma/actions";
 import { Models, LlmActionIds } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, ThreadsActionIds } from "@lemma/threads";
-import { Slots } from "@lemma/ui";
+import { Slots } from "@lemma/web";
 import type { ModelsService } from "@lemma/llm/web";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 import { ProviderLogo } from "@lemma/llm/web";
 import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
@@ -289,7 +289,7 @@ function ModelPicker(props: {
  * The model and reasoning pickers: in the composer's toolbar, in General
  * settings, and behind "Switch model…".
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "llm.model-picker",
   styles,
   requires: { models: Models, slots: Slots },

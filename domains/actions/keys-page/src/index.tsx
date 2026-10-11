@@ -1,15 +1,15 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { bindingOf, formatKeys } from "@lemma/ui/keys";
+import { bindingOf, formatKeys } from "@lemma/web/keys";
 import { KEYMAP_PLUGIN, bindingRows, conflicts, defaultKeys, formatBindings, keysFor, labelOf, overridesFrom, withOverride } from "@lemma/actions";
 import type { KeyOverrides } from "@lemma/actions";
-import { matchesQuery } from "@lemma/ui/match";
+import { matchesQuery } from "@lemma/web/match";
 import { Actions } from "@lemma/actions";
 import { SectionIds, Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Notify, Slots, UiPlugins } from "@lemma/ui";
+import { Notify, Slots, WebPlugins } from "@lemma/web";
 import type { Action } from "@lemma/actions";
-import type { UiPluginsService } from "@lemma/ui";
-import type { SlotItem, SlotsService } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import type { WebPluginsService } from "@lemma/web";
+import type { SlotItem, SlotsService } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
 import { CommandIcon, PlusIcon, Popover, RefreshIcon, SearchField, SearchIcon, XIcon } from "@lemma/look";
 import styles from "./keys-page.css?inline";
 
@@ -19,7 +19,7 @@ type Item = SlotItem<Action>;
 
 interface Deps {
   readonly slots: SlotsService;
-  readonly uiPlugins: UiPluginsService;
+  readonly uiPlugins: WebPluginsService;
   readonly overrides: () => KeyOverrides;
   readonly save: (next: KeyOverrides) => Promise<void>;
   /** Every action's keys now, for finding conflicts. */
@@ -326,10 +326,10 @@ function KeysBody(props: { deps: Deps }) {
  * them without depending on that plugin, so it stays put while the keymap
  * restarts with them.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "actions.keys-page",
   styles,
-  requires: { slots: Slots, settings: Settings, uiPlugins: UiPlugins, notify: Notify },
+  requires: { slots: Slots, settings: Settings, uiPlugins: WebPlugins, notify: Notify },
   setup: ({ slots, settings, uiPlugins, notify }) => {
     // What was just saved, shown until the plugin list catches up with it.
     const [pending, setPending] = createSignal<KeyOverrides>();

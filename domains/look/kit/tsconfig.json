@@ -5,5 +5,5 @@
     "jsxImportSource": "solid-js",
     "types": ["node"]
   },
-  "include": ["src", "tests", "../../../packages/ui/assets.d.ts"]
+  "include": ["src", "tests", "../../../packages/web/assets.d.ts"]
 }

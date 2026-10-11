@@ -1,4 +1,4 @@
-import { defineSlot } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
 import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
 
@@ -33,7 +33,7 @@ export interface DevtoolsService {
   readonly snapshot: () => Readonly<Record<string, unknown>>;
 }
 
-export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemma-ui/Devtools") {}
+export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemma-web/Devtools") {}
 
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const DevtoolsActionIds = { eventLog: "event-log.open" } as const;

@@ -6,13 +6,13 @@ import { folderName } from "@lemma/workspace/web";
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerFooter, Threads } from "@lemma/threads";
-import { Client, Notify, Slots } from "@lemma/ui";
+import { Client, Notify, Slots } from "@lemma/web";
 import { Workspace, WorkspaceBarItems, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { ThreadsService } from "@lemma/threads";
-import type { ClientService, NotifyService } from "@lemma/ui";
+import type { ClientService, NotifyService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineUiPlugin } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 import {
   ChatIcon,
   CheckIcon,
@@ -27,7 +27,7 @@ import {
   Toggle,
   WorktreeIcon,
 } from "@lemma/look";
-import { Each } from "@lemma/ui";
+import { Each } from "@lemma/web";
 import styles from "./workspace-bar.css?inline";
 
 interface Deps {
@@ -427,7 +427,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
 }
 
 /** The project and branch strip under the composer, and the worktree setting for new chats. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "workspace.bar",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },

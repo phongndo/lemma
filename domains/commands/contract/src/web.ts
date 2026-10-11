@@ -9,4 +9,4 @@ export interface CommandsService {
   readonly run: (command: CommandInfo) => Promise<boolean>;
 }
 
-export class Commands extends Context.Service<Commands, CommandsService>()("lemma-ui/Commands") {}
+export class Commands extends Context.Service<Commands, CommandsService>()("lemma-web/Commands") {}

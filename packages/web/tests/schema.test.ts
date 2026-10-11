@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Option, Result, Schema } from "effect";
 import { describeConfig } from "@lemma/contracts";
-import { UiSchema as S } from "../src/schema.ts";
+import { WebSchema as S } from "../src/schema.ts";
 
 const decodes = (schema: Schema.Codec<any, any>, input: unknown) => Result.isSuccess(Schema.decodeUnknownResult(schema)(input));
 const decode = (schema: Schema.Codec<any, any>, input: unknown) => Schema.decodeUnknownSync(schema)(input);

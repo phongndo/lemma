@@ -1,14 +1,14 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
-import { withKeys } from "@lemma/ui/keys";
+import { withKeys } from "@lemma/web/keys";
 import { shownKeys } from "@lemma/actions";
 import { Actions } from "@lemma/actions";
 import { Devtools, DevtoolsPanels, DevtoolsActionIds } from "@lemma/devtools";
 import { Docks } from "@lemma/frame";
-import { Client, HostPlugins, Router, Slots, UiPlugins } from "@lemma/ui";
+import { Client, HostPlugins, Router, Slots, WebPlugins } from "@lemma/web";
 import type { DevtoolsService } from "@lemma/devtools";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 import { CodeIcon, LogIcon, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/ui";
+import { Contained } from "@lemma/web";
 import styles from "./devtools.css?inline";
 import { channelsPanel } from "./channels.tsx";
 import { EVENTS_PANEL, hostEventsPanel } from "./events.tsx";
@@ -40,10 +40,10 @@ const load = (): Saved => {
  * registries, and inspectors) are added there like any
  * plugin's. Whether they are open, and at which panel, lasts the tab's life.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "devtools.dock",
   styles,
-  requires: { slots: Slots, router: Router, client: Client, ui: UiPlugins, host: HostPlugins },
+  requires: { slots: Slots, router: Router, client: Client, ui: WebPlugins, host: HostPlugins },
   provides: { devtools: Devtools },
   setup: ({ slots, router, client, ui, host }, plugin) => {
     const saved = load();

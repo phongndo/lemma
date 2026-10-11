@@ -1,6 +1,12 @@
 // The ticker plugin's web half: its prices, live, at /ticker in the web app (see README.md).
 // It needs no build step; package.json's `lemma` manifest names it beside the host half, ticker.ts.
-export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pages, Router, Slots }, solid: { createSignal, For, onCleanup, Show }, html }) => {
+export default ({
+  defineWebPlugin,
+  defineRoute,
+  contracts: { Actions, Client, Pages, Router, Slots },
+  solid: { createSignal, For, onCleanup, Show },
+  html,
+}) => {
   const TickerRoute = defineRoute("ticker", { path: "/ticker" });
 
   const styles = `
@@ -15,7 +21,7 @@ export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pag
     .ticker .down { color: var(--err); }
   `;
 
-  return defineUiPlugin({
+  return defineWebPlugin({
     id: "ticker",
     api: 3,
     routes: [TickerRoute],

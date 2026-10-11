@@ -25,7 +25,7 @@ Use:
 
 - Build a bundled plugin so a user could have written it: it meets other
   plugins only through contracts, the runtime's (`@lemma/contracts`, and in the
-  web app `@lemma/ui`) and each domain's (`domains/<domain>/contract`). Its
+  web app `@lemma/web`) and each domain's (`domains/<domain>/contract`). Its
   package names its halves in its `lemma` manifest, as a user's folder plugin
   does, and a host plugin's web half shares its package and id.
 - Offer an extension point in one of the five shapes ([Writing

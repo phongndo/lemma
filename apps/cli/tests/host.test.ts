@@ -147,7 +147,7 @@ describe("against a running host", () => {
     expect((await invoke(["plugins", "show", "tools.bash"], home)).out).toContain("Contributes\n  lemma/tools  bash");
     const transport = JSON.parse((await invoke(["plugins", "show", "transport.server", "--json"], home)).out);
     // It observes the runtime's events only: each domain streams its own.
-    expect([...transport.observes].sort()).toEqual(["lemma/notice", "lemma/plugins.changed", "lemma/ui.changed"]);
+    expect([...transport.observes].sort()).toEqual(["lemma/notice", "lemma/plugins.changed", "lemma/web.changed"]);
     expect(transport.hooks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "lemma/interaction.request" })]));
     expect(JSON.parse((await invoke(["plugins", "show", "nope", "--json"], home)).err).error.code).toBe("NotFound");
   });

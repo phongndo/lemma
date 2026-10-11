@@ -1,19 +1,19 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
-import { copyAndTell } from "@lemma/ui/clipboard";
-import { tildePath } from "@lemma/ui/format";
+import { copyAndTell } from "@lemma/web/clipboard";
+import { tildePath } from "@lemma/web/format";
 import { folderName } from "@lemma/workspace/web";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { Threads } from "@lemma/threads";
-import { Client, Notify, Slots } from "@lemma/ui";
+import { Client, Notify, Slots } from "@lemma/web";
 import { ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { ThreadsService } from "@lemma/threads";
-import type { ClientService } from "@lemma/ui";
+import type { ClientService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 import { CheckIcon, ChevronDownIcon, CopyIcon, Dialog, FolderIcon, FolderPlusIcon, GearIcon, Popover, Segmented, SettingRow, TrashIcon } from "@lemma/look";
 import styles from "./projects-page.css?inline";
 
@@ -70,7 +70,7 @@ function DeleteProjectDialog(props: { client: ClientService; threads: ThreadsSer
 }
 
 /** Settings for one project at a time: its name, where it is, how new threads start there, and removing it. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "workspace.projects",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, settings: Settings, dialogs: Dialogs, notify: Notify, slots: Slots },

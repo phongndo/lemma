@@ -2,19 +2,19 @@ import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount
 import { WorkspaceChannels } from "@lemma/workspace";
 import type { DirectoryEntry } from "@lemma/workspace";
 import { Portal } from "solid-js/web";
-import { listKey, quickKey } from "@lemma/ui/keys";
-import { createQuickHold } from "@lemma/ui/quick-pick";
-import { tildePath } from "@lemma/ui/format";
+import { listKey, quickKey } from "@lemma/web/keys";
+import { createQuickHold } from "@lemma/web/quick-pick";
+import { tildePath } from "@lemma/web/format";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
-import { Client, Notify, Slots } from "@lemma/ui";
+import { Client, Notify, Slots } from "@lemma/web";
 import { Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { DialogsService } from "@lemma/frame";
-import type { ClientService, NotifyService } from "@lemma/ui";
+import type { ClientService, NotifyService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineUiPlugin } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
 import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, Spinner } from "@lemma/look";
-import { Highlighted } from "@lemma/ui";
+import { Highlighted } from "@lemma/web";
 import styles from "./add-project.css?inline";
 
 const DIALOG = "add-project";
@@ -302,7 +302,7 @@ function AddProjectDialog(props: { deps: Deps }) {
 }
 
 /** Pick a folder on the host to start chats in. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "workspace.add-project",
   styles,
   requires: { client: Client, workspace: Workspace, notify: Notify, dialogs: Dialogs, slots: Slots },

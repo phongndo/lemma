@@ -14,8 +14,8 @@ import type {
   PluginStatus,
   ReloadResult,
   RuntimeEvent,
-  UiComposition,
-  UiFile,
+  WebComposition,
+  WebFile,
 } from "@lemma/contracts";
 import type {
   AnyRoute,
@@ -51,7 +51,7 @@ import type { Region, SlotItem, SlotsService } from "./slots.ts";
  * `core.run(Slots)` gives) reads, and refuses to add: every item belongs to a
  * plugin, and leaves with it.
  */
-export class Slots extends Context.Service<Slots, SlotsService>()("lemma-ui/Slots") {}
+export class Slots extends Context.Service<Slots, SlotsService>()("lemma-web/Slots") {}
 
 /** What the page renders. Empty: a blank page. */
 export const Root = defineSlot<Region>("root", { shows: "first" });
@@ -110,18 +110,18 @@ export interface ClientService {
   readonly reload: () => Promise<ReloadResult>;
   /**
    * Writes plugin rows into the user (default) or project config file and applies them; a rejected change is undone. A
-   * plugin's one row decides both its halves: the host applies its own, and the page its web halves on `ui-changed`.
+   * plugin's one row decides both its halves: the host applies its own, and the page its web halves on `web-changed`.
    */
   readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { readonly scope?: ConfigScope }) => Promise<ReloadResult>;
   /** What host plugins let you look into (`Inspectors`), and one's snapshot as plain JSON. */
   readonly inspectors: () => Promise<readonly InspectorInfo[]>;
   readonly inspect: (id: string) => Promise<unknown>;
-  /** What the boot plans the web halves from: every plugin's row, and the web halves' files (`UiPlugins` changes them). */
-  readonly ui: {
-    readonly composition: () => Promise<UiComposition>;
+  /** What the boot plans the web halves from: every plugin's row, and the web halves' files (`WebPlugins` changes them). */
+  readonly web: {
+    readonly composition: () => Promise<WebComposition>;
   };
 }
-export class Client extends Context.Service<Client, ClientService>()("lemma-ui/Client") {}
+export class Client extends Context.Service<Client, ClientService>()("lemma-web/Client") {}
 
 /** A message for the user. One with a `code` or `links` is something to act on, which stays until dismissed. */
 export interface Toast {
@@ -161,7 +161,7 @@ export interface NotifyService {
   /** Some view shows this message itself. */
   readonly claimed: (toast: Toast) => boolean;
 }
-export class Notify extends Context.Service<Notify, NotifyService>()("lemma-ui/Notify") {}
+export class Notify extends Context.Service<Notify, NotifyService>()("lemma-web/Notify") {}
 
 /** Plugins and the changes the Plugins page makes. Changes reject when refused; whoever asked reports it. */
 export interface PluginsService {
@@ -181,12 +181,12 @@ export interface HostPluginsService extends PluginsService {
   readonly edit: (plugin: PluginStatus, change: Pick<PluginChange, "add" | "remove">) => Promise<ReloadResult>;
 }
 /** The host's plugins, kept current from `plugins-changed`; `runtime` is `HostInfo.runtime`. */
-export class HostPlugins extends Context.Service<HostPlugins, HostPluginsService>()("lemma-ui/HostPlugins") {}
+export class HostPlugins extends Context.Service<HostPlugins, HostPluginsService>()("lemma-web/HostPlugins") {}
 
-export interface UiPluginsService extends PluginsService {
+export interface WebPluginsService extends PluginsService {
   /** The web halves and stylesheets loaded from `~/.lemma/plugins` and a trusted project's `.lemma/plugins`. */
-  readonly files: Accessor<readonly UiFile[]>;
-  /** The routes known plugins declare (`defineUiPlugin({ routes })`), running or not, with the plugin declaring each. */
+  readonly files: Accessor<readonly WebFile[]>;
+  /** The routes known plugins declare (`defineWebPlugin({ routes })`), running or not, with the plugin declaring each. */
   readonly routes: Accessor<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>;
   /** What went wrong loading those files or planning the composition; each names its file or plugin. */
   readonly problems: Accessor<readonly string[]>;
@@ -194,7 +194,7 @@ export interface UiPluginsService extends PluginsService {
   readonly safe: boolean;
 }
 /** The web app's own plugins, which this page runs; its `runtime` lists the capabilities this file declares. */
-export class UiPlugins extends Context.Service<UiPlugins, UiPluginsService>()("lemma-ui/UiPlugins") {}
+export class WebPlugins extends Context.Service<WebPlugins, WebPluginsService>()("lemma-web/WebPlugins") {}
 
 export interface InteractionsService {
   /** Questions the host is waiting on, oldest first: a login's API key, a tool that asks to confirm. */
@@ -210,20 +210,20 @@ export interface InteractionsService {
   /** Some view shows this question itself. */
   readonly claimed: (request: InteractionRequest) => boolean;
 }
-export class Interactions extends Context.Service<Interactions, InteractionsService>()("lemma-ui/Interactions") {}
+export class Interactions extends Context.Service<Interactions, InteractionsService>()("lemma-web/Interactions") {}
 
 // ------------------------------------------------------------------ version
 
 /**
  * The version of the web app's contracts: a major number that changes when
  * one of them changes incompatibly. A plugin says which it is written for
- * with `defineUiPlugin({ api })`, which requires `UiApi(api)`; the app
+ * with `defineWebPlugin({ api })`, which requires `WebApi(api)`; the app
  * provides the version it implements, this one, so a plugin written for
  * another is left out, saying so, rather than failing at some later call.
  */
-export const UI_API = 3;
-/** Required by a plugin written for version `version` of these contracts (see `UI_API`). */
-export const UiApi = (version: number): Context.Key<`lemma-ui/api@${number}`, number> => Context.Service(`lemma-ui/api@${version}`);
+export const WEB_API = 3;
+/** Required by a plugin written for version `version` of these contracts (see `WEB_API`). */
+export const WebApi = (version: number): Context.Key<`lemma-web/api@${number}`, number> => Context.Service(`lemma-web/api@${version}`);
 
 // ------------------------------------------------------------------ addresses
 
@@ -232,7 +232,7 @@ export const UiApi = (version: number): Context.Key<`lemma-ui/api@${number}`, nu
  * address and the Schemas its params and search decode through; a page is
  * what a plugin shows at one. The router knows the app's own routes (the
  * boot's `appRoutes`) and those every known plugin declares
- * (`defineUiPlugin({ routes })`), so a link to one works while nothing shows
+ * (`defineWebPlugin({ routes })`), so a link to one works while nothing shows
  * it: the page then says its plugin is off, and returns with it. A web half
  * declares its own with `api.defineRoute` and adds a `Pages` item for it.
  */
@@ -297,4 +297,4 @@ export interface RouterService {
  * navigate in place, so any plugin links with an ordinary `<a href>`, and
  * hovering one preloads its page.
  */
-export class Router extends Context.Service<Router, RouterService>()("lemma-ui/Router") {}
+export class Router extends Context.Service<Router, RouterService>()("lemma-web/Router") {}
