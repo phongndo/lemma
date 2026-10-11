@@ -29,6 +29,10 @@ export const Timing = Schema.Struct({
 });
 export type Timing = typeof Timing.Type;
 
+/** How a provider answered a model call, before its body: its HTTP status, and its request id when it named one. */
+export const ProviderAnswer = Schema.Struct({ status: Schema.Number, requestId: Schema.optional(Schema.String) });
+export type ProviderAnswer = typeof ProviderAnswer.Type;
+
 /** Who put a piece of the request there. `source` is a plugin id. */
 export const Contribution = Schema.Struct({
   source: Schema.String,
@@ -90,6 +94,8 @@ export const EventData = Schema.Union([
     contributions: Schema.Array(Contribution),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),
+    /** What the provider was told to pass on (`LlmRequest.providerOptions`), as a handler set them. */
+    providerOptions: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
   /** Model-visible history. Assistant messages carry stream timing; tool results carry execution timing and UI details. */
   Schema.Struct({
@@ -101,8 +107,13 @@ export const EventData = Schema.Union([
     details: Schema.optional(Schema.Unknown),
     /** On a user message: the submission's id (see `Agent.prompt`), so a retried submission is not placed twice. */
     requestId: Schema.optional(Schema.String),
-    /** On a tool result: who shaped it (`ToolExecuteHook`'s handlers, the guards, the registry's cut). */
+    /**
+     * Who shaped it: on a tool result, `ToolExecuteHook`'s handlers, the guards, and the registry's cut; on a user
+     * message, `AgentInputHook`'s handlers; on an answer, `LlmProviderHeadersHook`'s (the headers each changed).
+     */
     credit: Schema.optional(ResultCredit),
+    /** On an answer: the provider's HTTP status, and its request id when it named one. */
+    response: Schema.optional(ProviderAnswer),
   }),
   /** A failed, cancelled, or retried model call. Kept for inspection; never model-visible. */
   Schema.Struct({
@@ -119,6 +130,9 @@ export const EventData = Schema.Union([
      * counts no failure).
      */
     retry: Schema.optional(Schema.Struct({ reason: Schema.Literals(["failure", "restart"]), attempt: Schema.Number, at: Schema.Number })),
+    /** The provider's answer, when it gave one before the call failed, and who shaped the headers sent. */
+    response: Schema.optional(ProviderAnswer),
+    credit: Schema.optional(ResultCredit),
   }),
   /** Replaces the history before `firstKeptId` with `summary` in the model's view; the originals stay in the log. */
   Schema.Struct({

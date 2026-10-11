@@ -2,7 +2,7 @@ import { Cause, Context, Data, Deferred, Effect, Exit, Fiber, Result, Schema, St
 import type { Scope } from "effect";
 import { Event, Hook, Registry } from "@lemma/core";
 import type { Events } from "@lemma/core";
-import { defineChannel, eventFeed, serveChannel } from "@lemma/contracts";
+import { defineChannel, eventFeed, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { InteractionOrigin } from "@lemma/contracts";
 
@@ -280,6 +280,11 @@ export class LlmRequest extends Schema.Class<LlmRequest>("lemma/LlmRequest")({
   maxTokens: Schema.optional(Schema.Number),
   /** Lets providers key prompt caches and pooled connections. */
   sessionId: Schema.optional(Schema.String),
+  /**
+   * What the provider passes on as it is, as its plugin documents (`llm.pi-ai`: `temperature`, `samplingParams`,
+   * `metadata`). Logged with the request, so a request rebuilt from the log carries them.
+   */
+  providerOptions: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 }) {}
 
 /**
@@ -310,6 +315,17 @@ export const StreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("toolcall-end"), index: Schema.Number, toolCall: ToolCall }),
   Schema.Struct({ type: Schema.Literal("done"), message: AssistantMessage }),
   /**
+   * The provider answered with a response it streams (sent after `start`, before the body): its HTTP status, its request id when it names
+   * one, and who shaped what was sent (`LlmProviderHeadersHook`'s handlers: the headers each changed, never their
+   * values). Not model output. One that refused the request says so in the `error` event instead.
+   */
+  Schema.Struct({
+    type: Schema.Literal("provider"),
+    status: Schema.Number,
+    requestId: Schema.optional(Schema.String),
+    credit: Schema.optional(ResultCredit),
+  }),
+  /**
    * `message.stopReason` is `error` or `aborted`; `message.errorMessage` explains it, and `failure` classifies an error.
    * An error without `failure` is one the caller cannot tell will pass: the agent ends the turn rather than ask again.
    */
@@ -333,6 +349,43 @@ export class LlmError extends Data.TaggedError("LlmError")<{
 
 /** Wraps every model request: logging, retries, routing, and gates can be plugins. The terminal is the provider. */
 export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, LlmError>, LlmError>("lemma/llm.request");
+
+/** The HTTP headers a provider is about to send a request with (a `null` value drops a default one), and for what. */
+export interface ProviderHeaders {
+  readonly request: LlmRequest;
+  /** The provider's id. */
+  readonly provider: string;
+  readonly headers: Readonly<Record<string, string | null>>;
+}
+
+/**
+ * Around the headers of every request a provider of `Llm` sends: a handler adds, changes, or drops headers (a
+ * gateway's key, a trace id), returning what `next` gives it changed. The terminal returns them as they are. Who
+ * changed which header is told back as the stream's `provider` event, and logged with the answer; values never are.
+ */
+export const LlmProviderHeadersHook = Hook.make<ProviderHeaders, Readonly<Record<string, string | null>>>("lemma/llm.provider-headers", {
+  summary: { input: (input) => ({ provider: input.provider, headers: Object.keys(input.headers).length }) },
+});
+
+/** A provider answered a request with a response it streams: its status and headers, before its body. Published by a provider of `Llm`. */
+export const LlmProviderResponse = Event.make<{
+  readonly sessionId?: string;
+  readonly provider: string;
+  readonly model: ModelRef;
+  readonly status: number;
+  readonly headers: Readonly<Record<string, string>>;
+}>("lemma/llm.provider.response");
+
+/**
+ * Each event of a provider's stream as the provider sent it, before it is made a `StreamEvent`: for debugging an
+ * adapter. Published only while its provider plugin is told to (`llm.pi-ai`'s `providerEvents`), as it is costly.
+ */
+export const LlmProviderStreamEvent = Event.make<{
+  readonly sessionId?: string;
+  readonly provider: string;
+  readonly model: ModelRef;
+  readonly data: unknown;
+}>("lemma/llm.provider.stream-event");
 
 /**
  * What `Llm.providers` and `Llm.models` list changed; clients list them

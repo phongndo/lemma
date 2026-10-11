@@ -11,7 +11,7 @@ import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
 import { InteractionError, InteractionOrigin } from "@lemma/contracts";
-import { Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
+import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
@@ -782,6 +782,55 @@ describe("deviceId", () => {
 });
 
 describe("identity", () => {
+  it("lets a plugin change a request's headers, and tells who changed which, how the provider answered, and what it passed on", async () => {
+    const received: { trace?: string | undefined; body?: unknown } = {};
+    const server = createServer((request, response) => {
+      received.trace = request.headers["x-trace"] as string | undefined;
+      let body = "";
+      request.on("data", (chunk) => (body += String(chunk)));
+      request.on("end", () => {
+        received.body = JSON.parse(body);
+        const chunk = (delta: object, finish: string | null) =>
+          `data: ${JSON.stringify({ id: "c1", object: "chat.completion.chunk", created: 1, model: "m", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+        response.writeHead(200, { "content-type": "text/event-stream", "x-request-id": "req-7" });
+        response.end(`${chunk({ role: "assistant", content: "hi" }, null)}${chunk({}, "stop")}data: [DONE]\n\n`);
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const providers = [{ id: "local", api: "openai-completions", baseUrl: `http://127.0.0.1:${port}/v1`, apiKey: { value: "sk-test" }, models: [{ id: "m" }] }];
+    const responses: unknown[] = [];
+    const tracer = definePlugin({
+      id: "tracer",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          yield* owner.on(LlmProviderHeadersHook, (input, next) => Effect.map(next(input), (headers) => ({ ...headers, "x-trace": "t-1" })));
+          yield* owner.observe(LlmProviderResponse, (response) => Effect.sync(() => void responses.push(response)));
+        }),
+      ),
+    });
+    const { plugins } = setup({ providers: () => [] });
+    try {
+      const events = await runWith(
+        [...plugins, tracer],
+        collect(new LlmRequest({ model: "local/m", messages: [user("hi")], sessionId: "s1", providerOptions: { temperature: 0.2 } })),
+        { "llm.pi-ai": { providers } },
+      );
+      expect(received).toMatchObject({ trace: "t-1", body: { temperature: 0.2 } });
+      expect([...events].find((event) => event.type === "provider")).toEqual({
+        type: "provider",
+        status: 200,
+        requestId: "req-7",
+        credit: { handlers: [{ source: "tracer", ms: expect.any(Number), changed: ["x-trace"] }] },
+      });
+      await expect.poll(() => responses.length).toBe(1);
+      expect(responses[0]).toMatchObject({ sessionId: "s1", provider: "local", model: "local/m", status: 200, headers: { "x-request-id": "req-7" } });
+    } finally {
+      server.close();
+    }
+  });
+
   it("names Lemma, not pi, on every wire API, unless a model sends its own User-Agent", async () => {
     const agents: Record<string, string | undefined> = {};
     const server = createServer((request, response) => {

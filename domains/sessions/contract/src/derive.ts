@@ -116,6 +116,8 @@ export function rebuildRequest(branch: readonly SessionEvent[], requestId: strin
   if (index === -1 || branch[index]!.data.type !== "request") return undefined;
   const prefix = branch.slice(0, index + 1);
   const state = requestState(prefix);
+  const logged = branch[index]!.data;
+  const providerOptions = logged.type === "request" ? logged.providerOptions : undefined;
   return new LlmRequest({
     model: state.model!,
     messages: deriveMessages(branch.slice(0, index)),
@@ -123,5 +125,6 @@ export function rebuildRequest(branch: readonly SessionEvent[], requestId: strin
     ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
     ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
     ...(sessionId === undefined ? {} : { sessionId }),
+    ...(providerOptions === undefined ? {} : { providerOptions }),
   });
 }

@@ -155,6 +155,12 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
               <Facts
                 rows={[
                   ["Answered", `${response().message.provider}/${response().message.model}`],
+                  [
+                    "Provider",
+                    response().provider === undefined
+                      ? undefined
+                      : `HTTP ${response().provider!.status}${response().provider!.requestId === undefined ? "" : ` · request ${response().provider!.requestId}`}`,
+                  ],
                   ["Stop", response().message.stopReason],
                   ["Tokens", `${formatTokens(inputTokens(response().message.usage))} in · ${formatTokens(response().message.usage.output)} out`],
                   [
@@ -167,6 +173,13 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
             )}
           </Show>
         </Section>
+        <Show when={step().response?.credit?.handlers ?? step().attempts.find((attempt) => attempt.credit?.handlers !== undefined)?.credit?.handlers}>
+          {(handlers) => (
+            <Section title="Headers" aside="LlmProviderHeadersHook">
+              <Handlers handlers={handlers()} none="No plugin changed the headers sent." />
+            </Section>
+          )}
+        </Show>
         <Show when={then()}>
           {(title) => (
             <Section title={title()} aside="AgentContinueHook">

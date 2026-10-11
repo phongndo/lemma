@@ -156,6 +156,11 @@ export interface RequestDraft {
   readonly sections: readonly SystemSection[];
   readonly tools: readonly ToolContribution[];
   /**
+   * What the provider passes on as it is (`LlmRequest.providerOptions`: a temperature, sampling parameters,
+   * metadata), set by a handler; logged with the request.
+   */
+  readonly providerOptions?: Readonly<Record<string, unknown>>;
+  /**
    * The previous call failed because its request was too long for the model: a handler that shortens the history
    * (compaction) does so now, whatever its own estimate says. Asked once: another overflow before the model answers
    * ends the turn.

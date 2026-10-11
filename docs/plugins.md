@@ -107,7 +107,11 @@ Give both halves the plugin's id. The web half waits for the host half: while
 the host half is off or failed, the web half does not run, and the Plugins page
 says why. Its row's `config` goes to both halves.
 
-Keep state where it belongs. State about a session goes in the session's log:
+Keep state where it belongs. A plugin runs once for the whole host, not once
+per session or agent: what it does for one session, it keys by the session
+(every hook's and event's input names it: `sessionId`), and what it keeps for
+one, it drops when the session goes (`SessionRemoved`). State about a session
+goes in the session's log:
 a tool's result carries it in `details`, and both halves read it back from
 the branch, so it follows the branch when the session is checked out
 elsewhere and survives a restart with nothing stored

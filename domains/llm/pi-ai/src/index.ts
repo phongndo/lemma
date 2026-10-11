@@ -3,12 +3,23 @@ import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
-import type { Contribution } from "@lemma/core";
-import { Channels, HostControl, Interaction, InteractionError, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
+import type { Contribution, HandlerStep } from "@lemma/core";
+import { Channels, creditOf, HostControl, inChainOrder, Interaction, InteractionError, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
-import { Llm, LlmError, LlmRequestHook, ModelsChanged, Providers, parseModelRef, serveLlm } from "@lemma/llm";
+import {
+  Llm,
+  LlmError,
+  LlmProviderHeadersHook,
+  LlmProviderResponse,
+  LlmProviderStreamEvent,
+  LlmRequestHook,
+  ModelsChanged,
+  Providers,
+  parseModelRef,
+  serveLlm,
+} from "@lemma/llm";
 import type { NoticePayload } from "@lemma/contracts";
-import type { AuthType, LlmRequest, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
+import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
@@ -42,8 +53,38 @@ const Config = Schema.Struct({
       title: "Prompt cache retention",
       description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
     }),
+  providerEvents: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
+    title: "Provider events",
+    description: "Publish each event of a provider's stream as it sent it (LlmProviderStreamEvent), for debugging an adapter. Costly; off by default.",
+  }),
 });
 type Config = typeof Config.Type;
+
+/** The response header a provider names its request id in, by the names providers use. */
+const REQUEST_ID_HEADERS = ["request-id", "x-request-id", "openai-request-id", "x-amzn-requestid", "cf-ray"];
+const requestIdOf = (headers: Readonly<Record<string, string>>): string | undefined => {
+  const lower = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+  return REQUEST_ID_HEADERS.map((name) => lower.get(name)).find((value) => value !== undefined);
+};
+
+type Headers = Readonly<Record<string, string | null>>;
+/** The headers whose values differ between `before` and `after`, by name. */
+const headerChanges = (before: Headers, after: Headers): string[] =>
+  [...new Set([...Object.keys(before), ...Object.keys(after)])].filter((name) => before[name] !== after[name]).sort();
+
+/** What `providerOptions` (`LlmRequest`) pi-ai passes on: a temperature, sampling parameters, and metadata. */
+const passedOn = (options: LlmRequest["providerOptions"]): Pick<SimpleStreamOptions, "temperature" | "samplingParams" | "metadata"> => {
+  if (options === undefined) return {};
+  const record = (value: unknown) => (typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined);
+  const temperature = typeof options.temperature === "number" ? options.temperature : undefined;
+  const samplingParams = record(options.samplingParams);
+  const metadata = record(options.metadata);
+  return {
+    ...(temperature === undefined ? {} : { temperature }),
+    ...(samplingParams === undefined ? {} : { samplingParams }),
+    ...(metadata === undefined ? {} : { metadata }),
+  };
+};
 
 /**
  * Times pi-ai asks again itself, before a response starts, when the provider
@@ -264,23 +305,71 @@ export function makeLlmPlugin(options: Options = {}) {
           const provider = model === undefined ? undefined : models.getProvider(model.provider);
           if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
           const reasoning = reasoningFor(model, request.thinking);
-          const headers = identityHeaders(model);
+          // Plugins may add, change, or drop headers; who changed which is told back with the answer, values never.
+          const steps: HandlerStep<ProviderHeaders, Headers>[] = [];
+          const headers = yield* hooks
+            .invoke(
+              LlmProviderHeadersHook,
+              { request, provider: model.provider, headers: identityHeaders(model) ?? {} },
+              (input) => Effect.succeed(input.headers),
+              {
+                onStep: (step) => void steps.push(step),
+              },
+            )
+            .pipe(Effect.orDie);
+          const handlers = inChainOrder(steps).map((step) =>
+            creditOf(step, [
+              ...new Set([
+                ...(step.next === undefined ? [] : headerChanges(step.input.headers, step.next.input.headers)),
+                ...(step.output === undefined ? [] : headerChanges(step.next?.output ?? step.input.headers, step.output)),
+              ]),
+            ]),
+          );
+          const where = { ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }), provider: model.provider, model: request.model };
           return Stream.callback<StreamEvent>((queue) =>
             Effect.acquireRelease(
               Effect.sync(() => {
                 const controller = new AbortController();
+                const mapper = makeEventMapper(model, provider);
+                let closed = false;
+                /** The provider's answer, held until `start` has gone out: a stream begins with `start`. */
+                let answer: StreamEvent | undefined;
+                let started = false;
+                const send = (out: StreamEvent[]) => {
+                  if (closed || out.length === 0) return;
+                  // Where in `out` what was held goes: first once the stream has started, else right after its `start`.
+                  const at = started ? 0 : out.findIndex((event) => event.type === "start") + 1;
+                  if (at > 0) started = true;
+                  if (answer !== undefined && started) {
+                    out = [...out.slice(0, at), answer, ...out.slice(at)];
+                    answer = undefined;
+                  }
+                  Queue.offerAllUnsafe(queue, out);
+                };
                 const streamOptions: SimpleStreamOptions = {
                   signal: controller.signal,
                   cacheRetention: config.cacheRetention,
                   maxRetries: SDK_RETRIES,
-                  ...(headers === undefined ? {} : { headers }),
+                  ...(Object.keys(headers).length === 0 ? {} : { headers }),
                   ...(reasoning === undefined ? {} : { reasoning }),
                   ...(request.maxTokens === undefined ? {} : { maxTokens: request.maxTokens }),
                   ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }),
+                  ...passedOn(request.providerOptions),
+                  // Before its body: told to the caller, logged with the answer, and published.
+                  onResponse: (response) => {
+                    const requestId = requestIdOf(response.headers);
+                    answer = {
+                      type: "provider",
+                      status: response.status,
+                      ...(requestId === undefined ? {} : { requestId }),
+                      ...(handlers.length === 0 ? {} : { credit: { handlers } }),
+                    };
+                    Effect.runFork(events.publish(LlmProviderResponse, { ...where, status: response.status, headers: response.headers }));
+                  },
+                  ...(config.providerEvents
+                    ? { onProviderStreamEvent: (data: unknown) => void Effect.runFork(events.publish(LlmProviderStreamEvent, { ...where, data })) }
+                    : {}),
                 };
-                const mapper = makeEventMapper(model, provider);
-                let closed = false;
-                const send = (out: StreamEvent[]) => !closed && out.length > 0 && Queue.offerAllUnsafe(queue, out);
                 const close = (out: StreamEvent[]) => {
                   send(out);
                   if (!closed) Queue.endUnsafe(queue);
