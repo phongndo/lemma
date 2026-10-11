@@ -1996,9 +1996,6 @@ importers:
       effect:
         specifier: 4.0.1
         version: 4.0.1
-      solid-js:
-        specifier: 1.9.15
-        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2098,9 +2095,6 @@ importers:
       effect:
         specifier: 4.0.1
         version: 4.0.1
-      solid-js:
-        specifier: 1.9.15
-        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2132,9 +2126,6 @@ importers:
       effect:
         specifier: 4.0.1
         version: 4.0.1
-      solid-js:
-        specifier: 1.9.15
-        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2203,9 +2194,6 @@ importers:
       effect:
         specifier: 4.0.1
         version: 4.0.1
-      solid-js:
-        specifier: 1.9.15
-        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2604,9 +2592,6 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
     devDependencies:
-      '@lemma/contracts':
-        specifier: workspace:*
-        version: link:../../packages/contracts
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../domains/tools/registry

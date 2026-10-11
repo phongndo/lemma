@@ -365,7 +365,7 @@ export const createMockHost = (): Host => {
     bundled("llm.pi-ai", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
     bundled("llm.commands", {
       requires: ["lemma/Interaction", "lemma/Llm"],
-      contributes: [{ name: "lemma/commands", items: 2, keys: ["llm.login", "llm.logout"] }],
+      contributes: [{ name: "lemma/commands", items: 1, keys: ["llm.logout"] }],
     }),
     bundled("tools.registry", { provides: ["lemma/ToolRunner"] }),
     bundled("tools.read", { contributes: [{ name: "lemma/tools", items: 1, keys: ["read"] }] }),
@@ -390,7 +390,7 @@ export const createMockHost = (): Host => {
     bundled("commands.registry", { provides: ["lemma/CommandRunner"] }),
     bundled("commands.host", {
       requires: ["lemma/Interaction", "lemma/HostControl"],
-      contributes: [{ name: "lemma/commands", items: 2, keys: ["host.reload", "host.restart-plugin"] }],
+      contributes: [{ name: "lemma/commands", items: 3, keys: ["host.reload", "host.restart-plugin", "host.toggle-plugin"] }],
     }),
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     bundled("transport.server", {

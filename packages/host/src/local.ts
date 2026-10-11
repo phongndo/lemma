@@ -20,7 +20,8 @@ import { entriesOf } from "./manifest.ts";
  * Bare imports that the file's own location cannot resolve (`effect`,
  * `@lemma/core`, `@lemma/contracts`, a domain's contract such as
  * `@lemma/tools`) fall back to the host's packages, so a plugin file needs no
- * install step and shares the host's module instances.
+ * install step and shares the host's module instances. That is why the host's
+ * package.json lists every host domain's contract, though it imports none.
  *
  * A plugin's own modules are versioned with it: its entry is imported as
  * `<file>?lemma-v=<version>`, and its relative imports carry the same version,

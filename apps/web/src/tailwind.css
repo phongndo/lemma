@@ -16,7 +16,7 @@
  * Every utility starts with `tw:` (`tw:flex`, `tw:hover:bg-bg-hover`), so it
  * never meets a class of the app's or a plugin's own (`.hidden`, `.static`),
  * and only a word written so becomes one. The build compiles the classes in
- * `src/`, the plugins' (`domains/`), and `@lemma/ui`'s; the page compiles UI files' classes with this same file
+ * `src/`, the plugins' (`domains/`), and `@lemma/ui`'s; the page compiles web halves' classes with this same file
  * (`ui/utilities.ts`), so both name the same utilities.
  */
 @import "tailwindcss/theme.css" layer(theme) prefix(tw);
