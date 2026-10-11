@@ -88,8 +88,7 @@ export default defineWebPlugin({
     const dark = window.matchMedia("(prefers-color-scheme: dark)");
     const [prefersDark, setPrefersDark] = createSignal(dark.matches);
     const onScheme = () => setPrefersDark(dark.matches);
-    dark.addEventListener("change", onScheme);
-    plugin.onCleanup(() => dark.removeEventListener("change", onScheme));
+    plugin.listen(dark, "change", onScheme);
 
     const choices = createMemo<Choices>(() => ({ themes: slots.list(Themes), accents: slots.list(Accents), fonts: slots.list(Fonts) }));
     const look = createMemo(() => resolveLook(settings(), choices(), prefersDark(), isColor));

@@ -6,6 +6,7 @@ import type { AssistantRecord, LedgerRecord, LedgerSpan } from "@lemma/sessions"
 import { inputTokens, ledgerStats, ttftPercent } from "./scale.ts";
 import type { Scale } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
+import { usePlugin } from "@lemma/web";
 import { TrajectoryActions } from "@lemma/threads";
 import type { View, SortKey } from "./state.ts";
 
@@ -308,14 +309,11 @@ export function createTable(view: View) {
   }
 
   function ContextMenu() {
+    const plugin = usePlugin();
     onMount(() => {
       const close = () => setMenu(undefined);
-      window.addEventListener("pointerdown", close);
-      window.addEventListener("blur", close);
-      onCleanup(() => {
-        window.removeEventListener("pointerdown", close);
-        window.removeEventListener("blur", close);
-      });
+      onCleanup(plugin.listen(window, "pointerdown", close));
+      onCleanup(plugin.listen(window, "blur", close));
     });
     const items = (record: LedgerRecord): { label: string; run: () => void }[] => {
       const request = recordRequest(record);

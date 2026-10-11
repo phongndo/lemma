@@ -6,7 +6,7 @@ import { folderName, Workspace, WorkspaceBarItems, WorkspaceActionIds } from "@l
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerFooter, Threads } from "@lemma/threads";
-import { Client, Notify, Slots, defineWebPlugin, Each } from "@lemma/web";
+import { Client, Notify, Slots, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { ThreadsService } from "@lemma/threads";
 import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
@@ -250,6 +250,7 @@ function ProjectPicker(props: { deps: Deps }) {
 
 function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]>; onChanged: (status: WorkspaceStatus) => void }) {
   const { client, threads, workspace, notify } = props.deps;
+  const plugin = usePlugin();
   const workingDir = workspace.workingDir;
   const [branches, setBranches] = createSignal<readonly GitBranch[]>([]);
   const [query, setQuery] = createSignal("");
@@ -335,7 +336,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
       triggerClass="strip-chip"
       placement="top-end"
       menuClass="branch-menu"
-      onOpen={() => void load()}
+      onOpen={plugin.action("load branches", () => load())}
       trigger={
         <>
           <GitBranchIcon />
@@ -370,7 +371,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
           />
           <div class="menu-list">
             <Show when={canCreate()}>
-              <button class="menu-item" role="menuitem" onClick={() => void checkout(query().trim(), true, close)}>
+              <button class="menu-item" role="menuitem" onClick={plugin.action("create branch", () => checkout(query().trim(), true, close))}>
                 <span class="menu-check">
                   <PlusIcon />
                 </span>

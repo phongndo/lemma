@@ -26,6 +26,8 @@ export type { AdmittedWork, ContributeOptions, Contribution, RegistryOptions } f
 export type { RegistrySnapshot } from "./internal/registries.ts";
 export type { Composition, Loader, LoaderOptions, PluginEntry, PluginSource, ReloadReport } from "./loader.ts";
 export { awaitable, fail, isExpectedFailure } from "./awaitable.ts";
+export { reportUnhandled } from "./unhandled.ts";
+export type { Unhandled } from "./unhandled.ts";
 export type { Awaitable } from "./awaitable.ts";
 export { configSchema } from "./config.ts";
 export type { ConfigDefaults, ConfigInput, ConfigOf, ConfigValue } from "./config.ts";

@@ -68,22 +68,19 @@ export default defineWebPlugin({
   setup: ({ notify, slots }, plugin) => {
     const shown = createMemo(() => notify.toasts().filter((item) => !notify.claimed(item)));
     /** Each message's timer, from when this plugin first saw it; one with a code or links has none. */
-    const timers = new Map<number, number>();
-    plugin.onCleanup(() => {
-      for (const timer of timers.values()) window.clearTimeout(timer);
-    });
+    const timers = new Map<number, () => void>();
     createEffect(() => {
       const all = notify.toasts();
-      for (const [id, timer] of timers) {
+      for (const [id, cancel] of timers) {
         if (all.some((item) => item.id === id)) continue;
-        window.clearTimeout(timer);
+        cancel();
         timers.delete(id);
       }
       for (const item of all) {
         if (timers.has(item.id) || item.code !== undefined || (item.links?.length ?? 0) > 0) continue;
         timers.set(
           item.id,
-          window.setTimeout(() => notify.dismiss(item.id), SHOWS_FOR[item.level]),
+          plugin.after(SHOWS_FOR[item.level], () => notify.dismiss(item.id), { name: "dismiss toast" }),
         );
       }
     });

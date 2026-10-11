@@ -64,11 +64,9 @@ export default defineWebPlugin({
         const move = (moved: PointerEvent) =>
           setHeight(Math.round(Math.min(window.innerHeight * 0.85, Math.max(MIN_HEIGHT, window.innerHeight - moved.clientY))));
         const stop = () => {
-          window.removeEventListener("pointermove", move);
-          window.removeEventListener("pointerup", stop);
+          for (const remove of listening) remove();
         };
-        window.addEventListener("pointermove", move);
-        window.addEventListener("pointerup", stop);
+        const listening = [plugin.listen(window, "pointermove", move), plugin.listen(window, "pointerup", stop)];
       };
       return (
         <section class="devtools dt-scope" aria-label="Devtools" style={{ height: `${height()}px` }}>

@@ -1,6 +1,7 @@
 import { Show, createSignal, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
 
+import { usePlugin } from "@lemma/web";
 import { listKey, modKey, quickKey } from "@lemma/web/keys";
 import type { Placement, PopoverProps } from "@lemma/look";
 
@@ -130,19 +131,21 @@ export function Popover(props: PopoverProps) {
   };
   const onReflow = () => place();
   const onBlur = () => close(false);
+  const plugin = usePlugin();
+  let listening: readonly (() => void)[] = [];
   const attach = () => {
-    document.addEventListener("pointerdown", onPointerDown, true);
-    window.addEventListener("resize", onReflow);
-    window.addEventListener("scroll", onReflow, true);
-    window.addEventListener("blur", onBlur);
+    listening = [
+      plugin.listen(document, "pointerdown", onPointerDown, { capture: true }),
+      plugin.listen(window, "resize", onReflow),
+      plugin.listen(window, "scroll", onReflow, { capture: true }),
+      plugin.listen(window, "blur", onBlur),
+    ];
   };
   const detach = () => {
     observer?.disconnect();
     observer = undefined;
-    document.removeEventListener("pointerdown", onPointerDown, true);
-    window.removeEventListener("resize", onReflow);
-    window.removeEventListener("scroll", onReflow, true);
-    window.removeEventListener("blur", onBlur);
+    for (const remove of listening) remove();
+    listening = [];
   };
   onCleanup(detach);
 

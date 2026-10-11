@@ -97,9 +97,7 @@ export default defineWebPlugin({
       if (client.connected() && standaloneDir() !== undefined && threads.activeId() === undefined && threads.pendingCwd() === undefined)
         void newStandalone(true);
     });
-    const onFocus = () => void refresh();
-    window.addEventListener("focus", onFocus);
-    plugin.onCleanup(() => window.removeEventListener("focus", onFocus));
+    plugin.listen(window, "focus", refresh);
 
     const add = (path: string) => {
       if (hidden().includes(path)) setHiddenSaved(hidden().filter((project) => project !== path));

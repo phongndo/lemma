@@ -3,7 +3,8 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { Context, Effect, Exit, Layer, Schema, Scope } from "effect";
-import { createEffect, createRoot, createSignal } from "solid-js";
+import { createComponent, createEffect, createRoot, createSignal } from "solid-js";
+import type { Component, JSX } from "solid-js";
 import { checkComposition, definePlugin, makeLoader } from "@lemma/core";
 import type { ApplicationServices, Loader, Plugin } from "@lemma/core";
 import { planComposition } from "@lemma/composition";
@@ -13,8 +14,9 @@ import * as look from "@lemma/look";
 import * as llm from "@lemma/llm/web";
 import * as threads from "@lemma/threads";
 import { TogglePart } from "@lemma/look";
-import { Notify, Slots, WEB_API, WebApi, defineWebPlugin, extendWebPlugin, routesOf, definePart, defineSlot, fallbackOf } from "@lemma/web";
-import type { Part, SlotsService } from "@lemma/web";
+import { Notify, Slots, WEB_API, WebApi, defineWebPlugin, extendWebPlugin, routesOf, definePart, defineSlot, fallbackOf, Client, usePlugin, Contained, partView, SlotsContext } from "@lemma/web";
+import type { Part, SlotsService, ClientService } from "@lemma/web";
+import { PluginStopped } from "@lemma/core/plain";
 
 /** Resolves once `ready` holds; slot changes from a plugin starting or stopping arrive asynchronously. */
 const waitFor = async (ready: () => boolean) => {
@@ -231,8 +233,21 @@ const runtime: ApplicationServices<readonly [typeof Slots, ReturnType<typeof Web
   layer: Layer.effectContext(Effect.map(makeSlots, (slots) => Context.make(Slots, slots).pipe(Context.add(WebApi(WEB_API), WEB_API)))),
 };
 
+/** The runtime with a connection too, `client`. */
+const connected = (client: ClientService): ApplicationServices<readonly [typeof Slots, ReturnType<typeof WebApi>, typeof Client]> => ({
+  provides: [Slots, WebApi(WEB_API), Client],
+  layer: Layer.effectContext(
+    Effect.map(makeSlots, (slots) => Context.make(Slots, slots).pipe(Context.add(WebApi(WEB_API), WEB_API), Context.add(Client, client))),
+  ),
+});
+
 /** Runs `plugins` on the kernel the way the boot does, over the runtime, starting with those in `running`, and closes it. */
-const run = async (plugins: readonly Plugin[], body: (loader: Loader) => Promise<void>, running = plugins.map((plugin) => plugin.id)) => {
+const run = async (
+  plugins: readonly Plugin[],
+  body: (loader: Loader) => Promise<void>,
+  running = plugins.map((plugin) => plugin.id),
+  provide: ApplicationServices<readonly any[]> = runtime,
+) => {
   const scope = Effect.runSync(Scope.make());
   try {
     const loader = await Effect.runPromise(
@@ -240,7 +255,7 @@ const run = async (plugins: readonly Plugin[], body: (loader: Loader) => Promise
         makeLoader({
           source: { resolve: (id) => Effect.succeed(plugins.find((plugin) => plugin.id === id)!) },
           composition: { plugins: Object.fromEntries(running.map((id) => [id, {}])) },
-          provide: runtime,
+          provide,
         }),
         scope,
       ),
@@ -362,6 +377,147 @@ describe("defineWebPlugin", () => {
       ["warning", `Stop providing "lemma-web/api@${WEB_API}": the app provides it, or turn it off`],
       ["warning", 'Stop providing "lemma-web/Notify": the app provides it, or turn it off'],
     ]);
+  });
+
+  it("hands its helpers to setup and to what it draws (usePlugin), and ends what they started when it stops", async () => {
+    const Views = defineSlot<{ readonly component: Component }>("test.views");
+    const seen: string[] = [];
+    let click: (() => void) | undefined;
+    const View: Component = () => {
+      const plugin = usePlugin();
+      seen.push(`drawn by ${plugin.id}`);
+      click = plugin.action("click", () => void seen.push("clicked"));
+      return null;
+    };
+    const viewer = defineWebPlugin({
+      id: "viewer",
+      requires: { slots: Slots },
+      setup: ({ slots }, plugin) => {
+        slots.add(Views, { id: "view", component: View });
+        plugin.every(1, () => void seen.push("tick"));
+      },
+    });
+    await run([viewer], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      const item = slots.first(Views)!;
+      const dispose = createRoot((dispose) => {
+        createComponent(SlotsContext.Provider, {
+          value: () => slots,
+          get children() {
+            return createComponent(Contained, { slot: Views, item, component: item.component });
+          },
+        });
+        return dispose;
+      });
+      expect(seen.filter((entry) => entry !== "tick")).toEqual(["drawn by viewer"]);
+      await waitFor(() => seen.includes("tick"));
+      await Effect.runPromise(loader.apply({ plugins: { viewer: { enabled: false } } }));
+      await waitFor(() => slots.list(Views).length === 0);
+      const ticks = seen.length;
+      // Its handlers do nothing once it has stopped, and its timer has ended with it.
+      click!();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(seen.length).toBe(ticks);
+      dispose();
+    });
+    // Outside any plugin's slot item, there is no plugin to find.
+    expect(() => createRoot(() => usePlugin())).toThrow(/outside any plugin's slot item/);
+  });
+
+  it("draws what a plugin hands a part (its children) as that plugin's, though another plugin provides the part", async () => {
+    const Views = defineSlot<{ readonly component: Component }>("test.views");
+    const Box = definePart<{ readonly children: JSX.Element }>("test.box");
+    const Popup = definePart<{ readonly children: (close: () => void) => JSX.Element }>("test.popup");
+    const [BoxView, PopupView] = [partView(Box), partView(Popup)];
+    const seen: string[] = [];
+    const Probe: Component<{ readonly name: string }> = (props) => {
+      seen.push(`${props.name} as ${usePlugin().id}`);
+      return null;
+    };
+    const boxer = defineWebPlugin({
+      id: "boxer",
+      requires: { slots: Slots },
+      setup: ({ slots }) => {
+        slots.add(Box, { id: "box", component: (props) => [createComponent(Probe, { name: "the box" }), props.children] as unknown as JSX.Element });
+        slots.add(Popup, { id: "popup", component: (props) => props.children(() => {}) });
+      },
+    });
+    const caller = defineWebPlugin({
+      id: "caller",
+      requires: { slots: Slots },
+      setup: ({ slots }) =>
+        void slots.add(Views, {
+          id: "view",
+          component: () =>
+            [
+              createComponent(BoxView, {
+                get children() {
+                  return createComponent(Probe, { name: "box content" });
+                },
+              }),
+              createComponent(PopupView, { children: () => createComponent(Probe, { name: "popup content" }) }),
+            ] as unknown as JSX.Element,
+        }),
+    });
+    await run([boxer, caller], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      const item = slots.first(Views)!;
+      createRoot((dispose) => {
+        createComponent(SlotsContext.Provider, {
+          value: () => slots,
+          get children() {
+            return createComponent(Contained, { slot: Views, item, component: item.component });
+          },
+        });
+        dispose();
+      });
+      expect(seen).toEqual(["the box as boxer", "box content as caller", "popup content as caller"]);
+    });
+  });
+
+  it("gives it its own view of the connection: its subscriptions end and its calls are refused when it stops", async () => {
+    const open = new Set<string>();
+    const subscribe = (name: string) => () => {
+      open.add(name);
+      return () => void open.delete(name);
+    };
+    const client = {
+      onEvent: subscribe("events"),
+      onConnect: subscribe("connect"),
+      follow: subscribe("follow"),
+      channel: { list: async () => [], call: () => new Promise(() => {}), open: subscribe("open") },
+      plugins: async () => [],
+      web: { composition: async () => ({}) },
+    } as unknown as ClientService;
+    let pending: Promise<unknown> | undefined;
+    let mine: ClientService | undefined;
+    const caller = defineWebPlugin({
+      id: "caller",
+      requires: { client: Client },
+      setup: ({ client }) => {
+        mine = client;
+        client.onEvent(() => {});
+        client.follow("sessions.log", {}, () => {});
+        const end = client.onConnect(() => {});
+        end();
+        pending = client.channel.call("slow", {});
+      },
+    });
+    await run(
+      [caller],
+      async (loader) => {
+        expect([...open].sort()).toEqual(["events", "follow"]);
+        await Effect.runPromise(loader.apply({ plugins: { caller: { enabled: false } } }));
+        expect(open.size).toBe(0);
+        // The answer it waited for never lands in it, and what it calls afterwards is refused.
+        await expect(pending).rejects.toBeInstanceOf(PluginStopped);
+        await expect(mine!.plugins()).rejects.toMatchObject({ pluginId: "caller", operation: "plugins" });
+        expect(mine!.onEvent(() => {})).toBeTypeOf("function");
+        expect(open.size).toBe(0);
+      },
+      undefined,
+      connected(client),
+    );
   });
 
   it("a setup that throws fails only its own plugin, releasing what it added", async () => {

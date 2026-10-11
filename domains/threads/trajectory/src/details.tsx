@@ -8,7 +8,7 @@ import { inputTokens } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
 import { ToolViews, TrajectoryTabs } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/web";
+import { Contained, usePlugin } from "@lemma/web";
 import type { View, Kind } from "./state.ts";
 
 /** The selected record's or request's details, in tabs. */
@@ -45,9 +45,10 @@ export function createDetails(view: View) {
   }
 
   function Pre(props: { text: string; error?: boolean }) {
+    const plugin = usePlugin();
     return (
       <div class="trj-pre-wrap">
-        <button class="trj-copy" aria-label="Copy" data-tip="Copy" onClick={() => void copy(props.text)}>
+        <button class="trj-copy" aria-label="Copy" data-tip="Copy" onClick={plugin.action("copy", () => copy(props.text))}>
           <CopyIcon />
         </button>
         <pre class="trj-pre" classList={{ "trj-error": props.error === true }}>

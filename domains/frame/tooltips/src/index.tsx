@@ -1,7 +1,7 @@
-import { Show, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createSignal, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
 import { Layers } from "@lemma/frame";
-import { Slots, defineWebPlugin } from "@lemma/web";
+import { Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import styles from "./tooltips.css?inline";
 
 const DELAY = 450;
@@ -64,25 +64,19 @@ function TooltipLayer() {
     const element = event.target as HTMLElement;
     if (element.matches?.(":focus-visible") && element.dataset.tip !== undefined) schedule(element);
   };
-  onMount(() => {
-    document.addEventListener("pointerover", onOver);
-    document.addEventListener("focusin", onFocus);
-    document.addEventListener("focusout", hide);
-    document.addEventListener("pointerdown", hide, true);
-    document.addEventListener("keydown", hide, true);
-    window.addEventListener("scroll", hide, true);
-    window.addEventListener("blur", hide);
-  });
-  onCleanup(() => {
-    window.clearTimeout(timer);
-    document.removeEventListener("pointerover", onOver);
-    document.removeEventListener("focusin", onFocus);
-    document.removeEventListener("focusout", hide);
-    document.removeEventListener("pointerdown", hide, true);
-    document.removeEventListener("keydown", hide, true);
-    window.removeEventListener("scroll", hide, true);
-    window.removeEventListener("blur", hide);
-  });
+  const plugin = usePlugin();
+  for (const remove of [
+    plugin.listen(document, "pointerover", onOver),
+    plugin.listen(document, "focusin", onFocus),
+    plugin.listen(document, "focusout", hide),
+    plugin.listen(document, "pointerdown", hide, { capture: true }),
+    plugin.listen(document, "keydown", hide, { capture: true }),
+    plugin.listen(window, "scroll", hide, { capture: true }),
+    plugin.listen(window, "blur", hide),
+  ]) {
+    onCleanup(remove);
+  }
+  onCleanup(() => window.clearTimeout(timer));
 
   return (
     <Show when={tip()} keyed>

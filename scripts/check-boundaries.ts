@@ -483,8 +483,18 @@ for (const pkg of pluginPackages.filter((pkg) => webPackages.includes(pkg.dir)))
       rule("draws with Dynamic (draw slot items with Contained, Each, or First from @lemma/web, so a throw fails alone)");
     }
     // App keys are Actions, and an overlay handles keys on its own element.
-    if (!ownsKeys.includes(pkg.dir) && /(document|window)\.addEventListener\(\s*["']key/.test(text)) {
+    if (!ownsKeys.includes(pkg.dir) && /(?:\b(?:document|window)\.addEventListener\(|\blisten\(\s*(?:document|window)\s*,)\s*["']key/.test(text)) {
       rule("listens to keys page-wide (add an Action, or handle keys on your own element)");
+    }
+    // What a plugin starts beyond its own elements goes through its handle (`plugin` in setup, `usePlugin()` in a
+    // component it draws): it ends when the plugin stops, and what throws in it is the plugin's fault, named for it,
+    // rather than an error nobody hears.
+    for (const [pattern, why] of [
+      [/\b(?:window|document)(?:\.fonts)?\.addEventListener\(/, "listens page-wide outside its plugin (plugin.listen)"],
+      [/\bsetInterval\(/, "repeats on a timer outside its plugin (plugin.every)"],
+      [/\bon[A-Z]\w*=\{\s*(?:\([^()]*\)|\w+)\s*=>\s*void\b/, "drops what an event handler returns (plugin.action, so a rejection is its fault)"],
+    ] as const) {
+      if (pattern.test(text)) rule(why);
     }
   }
 }

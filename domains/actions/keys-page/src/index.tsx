@@ -326,7 +326,7 @@ export default defineWebPlugin({
   id: "actions.keys-page",
   styles,
   requires: { slots: Slots, settings: Settings, webPlugins: WebPlugins, notify: Notify },
-  setup: ({ slots, settings, webPlugins, notify }) => {
+  setup: ({ slots, settings, webPlugins, notify }, plugin) => {
     // What was just saved, shown until the plugin list catches up with it.
     const [pending, setPending] = createSignal<KeyOverrides>();
     const overrides = () => pending() ?? overridesFrom(webPlugins.list());
@@ -355,7 +355,7 @@ export default defineWebPlugin({
       icon: CommandIcon,
       actions: () => (
         <Show when={Object.keys(overrides()).length > 0}>
-          <button class="button small" onClick={() => void save({})}>
+          <button class="button small" onClick={plugin.action("reset keys", () => save({}))}>
             Reset all
           </button>
         </Show>
