@@ -12,7 +12,7 @@ import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
 import * as webRuntime from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
-import { PLUGIN_PANEL } from "@lemma/devtools/web";
+import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
 import type { DevtoolsService } from "@lemma/devtools/web";
@@ -209,7 +209,20 @@ function PluginView(props: {
         <strong class="dt-code">{plugin().id}</strong>
         <span class="dt-muted">{plugin().version ?? ""}</span>
         <span class={stateClass(plugin().state, plugin().enabled)}>{stateLabel(plugin())}</span>
-        <a style={{ "margin-left": "auto" }} href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}>
+        {/* Its spans, while a plugin shows the trace (`devtools.trace`). */}
+        <Show when={deps.slots.get(DevtoolsPanels, TRACE_PANEL)}>
+          <button
+            class="dt-link"
+            style={{ "margin-left": "auto" }}
+            onClick={() => deps.devtools.show(TRACE_PANEL, `trace:${props.kind === "web" ? "page" : "host"} plugin:${plugin().id}`)}
+          >
+            Spans
+          </button>
+        </Show>
+        <a
+          style={{ "margin-left": deps.slots.get(DevtoolsPanels, TRACE_PANEL) === undefined ? "auto" : "8px" }}
+          href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}
+        >
           Plugins page
         </a>
       </div>

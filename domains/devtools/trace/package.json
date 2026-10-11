@@ -16,6 +16,8 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/devtools": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/threads": "workspace:*",
     "@lemma/web": "workspace:*",
     "effect": "4.0.1",
     "solid-js": "1.9.15"

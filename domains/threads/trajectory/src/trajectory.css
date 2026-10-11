@@ -659,3 +659,24 @@
   font-size: calc(13px * var(--text-scale));
   line-height: 1.55;
 }
+
+/* The Pipeline tab: what shaped a model call or a tool's result, stage by stage. */
+.trj-pipeline-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.trj-pipeline td {
+  vertical-align: top;
+}
+
+.trj-change {
+  display: inline-block;
+  margin: 0 4px 2px 0;
+  padding: 0 5px;
+  border-radius: calc(4px * var(--radius-scale));
+  background: var(--bg-raised);
+  color: var(--text);
+  font-family: var(--font-mono);
+}

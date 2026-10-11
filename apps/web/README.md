@@ -308,7 +308,9 @@ plugin, until it returns, and a page that throws fails alone.
 host's events (with, while the devtools are open, its domains' streams:
 sessions' and commands' changes, models to list again, the agent's activity),
 the channels host plugins serve, and, for the web app and the host alike,
-plugins, hooks, registries, and inspectors. A capability the runtime provides
+plugins, hooks, registries, inspectors, and the trace (`devtools.trace`: every
+span their plugins' work ends, as waterfalls, each plugin's time, the
+composition's changes, and its faults). A capability the runtime provides
 shows as the web app's or the host's, not as missing. They show the app as it
 runs; the Plugins page is where things change. A web plugin adds a panel with
 a `DevtoolsPanels` item, and a host plugin adds an inspector to the

@@ -920,6 +920,12 @@ importers:
       '@lemma/devtools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
@@ -1910,6 +1916,9 @@ importers:
       '@lemma/client':
         specifier: workspace:*
         version: link:../../../packages/client
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract

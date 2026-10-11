@@ -1,0 +1,45 @@
+/* The Trace panel: traces as rows, each opening to a waterfall of its spans. */
+.trc {
+  --trc-bar: var(--dt-link);
+}
+
+.trc .dt-main {
+  overflow: auto;
+}
+
+.trc-table td {
+  white-space: nowrap;
+}
+
+.trc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trc-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--text-3);
+}
+
+/* A span the filter does not pick, shown for its place in the trace. */
+.trc-dim td {
+  opacity: 0.55;
+}
+
+.trc-bar-cell {
+  position: relative;
+}
+
+.trc-bar {
+  position: absolute;
+  top: 30%;
+  height: 40%;
+  min-width: 1px;
+  border-radius: calc(2px * var(--radius-scale));
+  background: var(--trc-bar);
+}
+
+.trc-bar-error {
+  background: var(--err);
+}

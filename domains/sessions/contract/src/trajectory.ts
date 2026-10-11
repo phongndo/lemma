@@ -1,6 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
-import type { AssistantMessage, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
-import type { Contribution, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
+import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
+import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
+import type { Contribution, EventData, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
  * The trajectory of a branch: per turn, per step, what the model was sent,
@@ -43,7 +44,23 @@ export interface TrajectoryRequest {
   readonly tools: readonly TrajectoryTool[];
   /** Section ids and tool names that were contributed before and are gone now. */
   readonly removed: readonly string[];
+  /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
+  readonly handlers?: readonly HandlerCredit[];
 }
+
+/** A compaction a step's request made before it was sent: who wrote the summary, and what it replaced. */
+export interface TrajectoryCompaction {
+  readonly eventId: string;
+  readonly at: number;
+  /** The plugin that wrote it. */
+  readonly source: string;
+  readonly tokensBefore: number;
+  readonly summary: string;
+  readonly usage?: Usage;
+}
+
+/** Whether the turn took another step after this one, and why (the `step-end` event's `decision`). */
+export type StepDecision = NonNullable<Extract<EventData, { readonly type: "step-end" }>["decision"]>;
 
 export interface TrajectoryToolRun {
   readonly call: ToolCall;
@@ -52,12 +69,18 @@ export interface TrajectoryToolRun {
   readonly eventId?: string;
   readonly timing?: Timing;
   readonly details?: unknown;
+  /** Who shaped its result: the handlers around it, the guards, a cut. */
+  readonly credit?: ResultCredit;
 }
 
 export interface TrajectoryAttempt {
   readonly eventId: string;
   readonly message: AssistantMessage;
   readonly timing: Timing;
+  /** How the call failed, as the provider's answer was classified. */
+  readonly failure?: LlmFailure;
+  /** Asked again, and when (see the `attempt` event). */
+  readonly retry?: { readonly reason: "failure" | "restart"; readonly attempt: number; readonly at: number };
 }
 
 export interface TrajectoryStep {
@@ -71,6 +94,9 @@ export interface TrajectoryStep {
   readonly response?: { readonly eventId: string; readonly message: AssistantMessage; readonly timing?: Timing };
   readonly attempts: readonly TrajectoryAttempt[];
   readonly tools: readonly TrajectoryToolRun[];
+  /** Compactions its request made, before it was logged. */
+  readonly compactions: readonly TrajectoryCompaction[];
+  readonly decision?: StepDecision;
 }
 
 export interface TrajectoryTurn {
@@ -127,6 +153,8 @@ interface MutableStep {
   response?: NonNullable<TrajectoryStep["response"]>;
   attempts: TrajectoryAttempt[];
   tools: { -readonly [K in keyof TrajectoryToolRun]: TrajectoryToolRun[K] }[];
+  compactions: TrajectoryCompaction[];
+  decision?: StepDecision;
 }
 interface MutableTurn {
   turnId: string;
@@ -163,7 +191,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
     if (existing !== undefined) return existing;
     const turn = turnById.get(turnId);
     if (turn === undefined) return undefined;
-    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], tools: [] };
+    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], tools: [], compactions: [] };
     turn.steps.push(step);
     stepById.set(stepId, step);
     return step;
@@ -190,7 +218,9 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         return;
       case "step-end": {
         const step = stepById.get(data.stepId);
-        if (step !== undefined) step.endedAt = event.at;
+        if (step === undefined) return;
+        step.endedAt = event.at;
+        if (data.decision !== undefined) step.decision = data.decision;
         return;
       }
       case "request": {
@@ -242,6 +272,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           sections,
           tools,
           removed,
+          ...(data.handlers === undefined ? {} : { handlers: data.handlers }),
         };
         return;
       }
@@ -252,13 +283,31 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         // Writing the summary is part of what the turn cost.
         const turn = data.turnId === undefined ? undefined : turnById.get(data.turnId);
         if (turn !== undefined && data.usage !== undefined) turn.usage = addUsage(turn.usage, data.usage);
+        // Made by the request of the step open in its turn.
+        const open = turn?.steps.at(-1);
+        if (open !== undefined && open.endedAt === undefined) {
+          open.compactions.push({
+            eventId: event.id,
+            at: event.at,
+            source: data.source,
+            tokensBefore: data.tokensBefore,
+            summary: data.summary,
+            ...(data.usage === undefined ? {} : { usage: data.usage }),
+          });
+        }
         return;
       }
       case "attempt": {
         const turn = turnById.get(data.turnId);
         const step = stepFor(data.turnId, data.stepId, event.at);
         if (turn === undefined || step === undefined) return;
-        step.attempts.push({ eventId: event.id, message: data.message, timing: data.timing });
+        step.attempts.push({
+          eventId: event.id,
+          message: data.message,
+          timing: data.timing,
+          ...(data.failure === undefined ? {} : { failure: data.failure }),
+          ...(data.retry === undefined ? {} : { retry: data.retry }),
+        });
         turn.usage = addUsage(turn.usage, data.message.usage);
         return;
       }
@@ -287,6 +336,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           run.eventId = event.id;
           if (data.timing !== undefined) run.timing = data.timing;
           if (data.details !== undefined) run.details = data.details;
+          if (data.credit !== undefined) run.credit = data.credit;
           return;
         }
         return;

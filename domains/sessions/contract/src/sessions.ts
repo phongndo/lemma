@@ -53,7 +53,23 @@ export const EventData = Schema.Union([
     error: Schema.optional(Schema.String),
   }),
   Schema.Struct({ type: Schema.Literal("step-start"), turnId: Schema.String, stepId: Schema.String }),
-  Schema.Struct({ type: Schema.Literal("step-end"), turnId: Schema.String, stepId: Schema.String }),
+  Schema.Struct({
+    type: Schema.Literal("step-end"),
+    turnId: Schema.String,
+    stepId: Schema.String,
+    /**
+     * Whether the turn takes another step after it, and why: the default's reason (`the model asked for tools`), and
+     * `AgentContinueHook`'s handlers, each one's own time and whether it changed the decision. Absent on a step that
+     * did not finish (a retry, a cancel).
+     */
+    decision: Schema.optional(
+      Schema.Struct({
+        result: Schema.Literals(["continue", "stop"]),
+        why: Schema.String,
+        handlers: Schema.optional(Schema.Array(HandlerCredit)),
+      }),
+    ),
+  }),
   /**
    * The request header, logged before the model call. `system` and `tools` are
    * omitted when unchanged since the previous `request` on the branch.
