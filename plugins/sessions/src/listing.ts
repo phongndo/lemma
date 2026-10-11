@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { Effect, Schema } from "effect";
-import { SessionInfo } from "@lemma/contracts";
+import { SessionInfo } from "@lemma/sessions";
 import { readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import type { Scanned } from "./file.ts";

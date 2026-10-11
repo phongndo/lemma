@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ledger, trajectory } from "@lemma/contracts";
-import type { EventData, LedgerSpan } from "@lemma/contracts";
+import { ledger, trajectory } from "@lemma/sessions";
+import type { EventData, LedgerSpan } from "@lemma/sessions";
 import { GAP, ledgerStats, panned, place, ticks, timeScale, ttftPercent, wheeled } from "../src/model/timeline.ts";
 import { assistant, usage, user } from "./fixtures.ts";
 

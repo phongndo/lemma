@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { EventData } from "@lemma/contracts";
+import type { EventData } from "@lemma/sessions";
 import { summarizeTools, workEntries } from "../src/model/work.ts";
 import type { WorkEntry } from "../src/model/work.ts";
 import { assistant, branch, toolResult, transcriptOf, user } from "./fixtures.ts";

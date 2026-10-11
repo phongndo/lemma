@@ -15,7 +15,7 @@ import {
   reconcileLive,
 } from "../src/model/live.ts";
 import type { LiveState } from "../src/model/live.ts";
-import type { StreamEvent } from "@lemma/contracts";
+import type { StreamEvent } from "@lemma/llm";
 import { assistant, branch, toolResult } from "./fixtures.ts";
 
 const feed = (events: StreamEvent[], state: LiveState = emptyLive, stepId = "s1") => events.reduce((s, event) => applyDelta(s, "t1", stepId, event), state);

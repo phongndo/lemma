@@ -4,8 +4,8 @@ import { TestClock } from "effect/testing";
 import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { SessionAppended, SessionChanged, SessionError, SessionRemoved, SessionRemoveHook, Sessions } from "@lemma/contracts";
-import type { EventData, SessionEvent } from "@lemma/contracts";
+import { SessionAppended, SessionChanged, SessionError, SessionRemoved, SessionRemoveHook, Sessions } from "@lemma/sessions";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 
 type Store = Context.Service.Shape<typeof Sessions>;
 

@@ -1,7 +1,7 @@
 import { realpath } from "node:fs/promises";
 import { homedir } from "node:os";
 import * as path from "node:path";
-import { ToolResult } from "@lemma/contracts";
+import { ToolResult } from "@lemma/tools";
 import { errorCode, expandHome, kindOf } from "@lemma/contracts/fs";
 
 export const text = (value: string, details?: unknown): ToolResult =>

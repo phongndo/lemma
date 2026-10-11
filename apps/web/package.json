@@ -11,12 +11,17 @@
     "ui:check": "node scripts/check-ui.ts"
   },
   "dependencies": {
+    "@lemma/agent": "workspace:*",
     "@lemma/client": "workspace:*",
+    "@lemma/commands": "workspace:*",
     "@lemma/composition": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
     "@lemma/router": "workspace:*",
     "@lemma/router-solid": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/workspace": "workspace:*",
     "dompurify": "3.4.16",
     "effect": "4.0.1",
     "marked": "18.0.14",

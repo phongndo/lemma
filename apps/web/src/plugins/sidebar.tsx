@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
-import type { SessionInfo } from "@lemma/contracts";
+import type { SessionInfo } from "@lemma/sessions";
 import { copyAndTell } from "../lib/clipboard.ts";
 import { stepFor, withKeys } from "../lib/keys.ts";
 import { loadJson, save } from "../lib/storage.ts";

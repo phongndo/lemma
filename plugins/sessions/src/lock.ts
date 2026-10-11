@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Option, Schema } from "effect";
-import { SessionError } from "@lemma/contracts";
+import { SessionError } from "@lemma/sessions";
 import { errorCode, isAlive, nodeFileSystem, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { io, syncAncestors } from "./file.ts";

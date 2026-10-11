@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { definePlugin, makeCore } from "@lemma/core";
-import { ToolInvocation, ToolResult, Tools } from "@lemma/contracts";
+import { ToolInvocation, ToolResult, Tools } from "@lemma/tools";
 import tools from "../../tools/src/index.ts";
 import builtin, { bash, edit, read, write } from "../src/index.ts";
 import { tempDir, textOf } from "./support.ts";

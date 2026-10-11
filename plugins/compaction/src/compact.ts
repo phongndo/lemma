@@ -1,5 +1,6 @@
-import { modelView } from "@lemma/contracts";
-import type { Message, SessionEvent } from "@lemma/contracts";
+import { modelView } from "@lemma/sessions";
+import type { Message } from "@lemma/llm";
+import type { SessionEvent } from "@lemma/sessions";
 
 /** What an image costs in the estimate, in characters (about 1,200 tokens). */
 const IMAGE_CHARS = 4_800;

@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Effect } from "effect";
-import type { Tool, ToolContext, ToolResult } from "@lemma/contracts";
+import type { Tool, ToolContext, ToolResult } from "@lemma/tools";
 
 export const context = (cwd: string, signal: AbortSignal = new AbortController().signal): ToolContext => ({ sessionId: "s", toolCallId: "c", cwd, signal });
 

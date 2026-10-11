@@ -13,6 +13,8 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/tools": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

@@ -6,7 +6,7 @@ import { defineConfig } from "vitest/config";
 // tests wait on processes they start, so twice as many workers as cores keeps the cores busy.
 export default defineConfig({
   test: {
-    projects: ["packages/*", "plugins/*", "apps/*", "examples/*"],
+    projects: ["packages/*", "domains/*/*", "plugins/*", "apps/*", "examples/*"],
     maxWorkers: 2 * availableParallelism(),
   },
 });

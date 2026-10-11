@@ -259,7 +259,7 @@ The page's address names what it shows, so links, reloads, and back and
 forward return to it. The app's own routes are known whatever plugins run (the
 boot's `appRoutes`), and the plugins that show them list them in their
 `routes` too, so a page whose plugin is off names it: a session's in
-[`@lemma/contracts`](../../packages/contracts/src/sessions.ts), shared with the
+[`@lemma/sessions`](../../domains/sessions/contract/src/sessions.ts), shared with the
 desktop app's `lemma://` links and `lemma open`, and settings' in
 [`ui/contracts.ts`](src/ui/contracts.ts):
 

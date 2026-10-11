@@ -14,6 +14,7 @@
     "@ff-labs/fff-node": "0.11.0",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/workspace": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

@@ -1,27 +1,12 @@
 import { Context, Schema } from "effect";
 import type { Accessor, Component, JSX } from "solid-js";
-import type {
-  AuthType,
-  CommandInfo,
-  ConfigField,
-  ConfigValues,
-  CustomProviderSpec,
-  ImageContent,
-  LedgerRecord,
-  ModelInfo,
-  PluginStatus,
-  PromptContent,
-  QueuedPrompt,
-  ProviderInfo,
-  SessionEvent,
-  SessionInfo,
-  SessionMarks,
-  TextContent,
-  ThinkingLevel,
-  TurnOptions,
-  WorkspaceStatus,
-} from "@lemma/contracts";
-import { NewThreadRoute, ThreadRoute } from "@lemma/contracts";
+import type { ConfigField, ConfigValues, PluginStatus } from "@lemma/contracts";
+import type { PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { CommandInfo } from "@lemma/commands";
+import type { AuthType, CustomProviderSpec, ImageContent, ModelInfo, ProviderInfo, TextContent, ThinkingLevel } from "@lemma/llm";
+import type { LedgerRecord, SessionEvent, SessionInfo, SessionMarks } from "@lemma/sessions";
+import type { WorkspaceStatus } from "@lemma/workspace";
+import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { defineRoute } from "@lemma/router";
 import type { CodeBlock } from "../lib/markdown.ts";
 import type { ToolSummary } from "../model/format.ts";

@@ -2,8 +2,9 @@ import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } fro
 import { describe, expect, it } from "vitest";
 import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Inspectors, snapshotOf, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/contracts";
-import type { Guard, Tool } from "@lemma/contracts";
+import { Inspectors, snapshotOf } from "@lemma/contracts";
+import { ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/tools";
+import type { Guard, Tool } from "@lemma/tools";
 import tools, { toolParameters } from "../src/index.ts";
 import { outputBatcher } from "../src/registry.ts";
 

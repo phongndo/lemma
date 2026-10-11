@@ -1,7 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
-import { WorkspaceChannels } from "@lemma/contracts";
-import type { GitBranch, WorkspaceStatus } from "@lemma/contracts";
+import { WorkspaceChannels } from "@lemma/workspace";
+import type { GitBranch, WorkspaceStatus } from "@lemma/workspace";
 import { folderName } from "../model/prefs.ts";
 import {
   ActionIds,

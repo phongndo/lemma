@@ -11,8 +11,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/commands": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/workspace": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

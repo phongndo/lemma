@@ -5,8 +5,9 @@ import { Cause, Deferred, Effect, Exit, Fiber, Layer, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Notice, SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/contracts";
-import type { EventData } from "@lemma/contracts";
+import { Notice } from "@lemma/contracts";
+import { SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
+import type { EventData } from "@lemma/sessions";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import sessions, { encodeCwd } from "../src/index.ts";
 

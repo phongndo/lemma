@@ -1,6 +1,6 @@
 import { Effect } from "effect";
 import type { Context } from "effect";
-import type { SessionEvent, Sessions } from "@lemma/contracts";
+import type { SessionEvent, Sessions } from "@lemma/sessions";
 import { failedAs } from "./turn.ts";
 
 /**

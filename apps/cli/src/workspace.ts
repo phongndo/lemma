@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { Effect } from "effect";
-import { FileChannels, WorkspaceChannels } from "@lemma/contracts";
+import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { call } from "./channels.ts";
 import { usage } from "./command.ts";
 import type { CliError, Command, Io, Options } from "./command.ts";

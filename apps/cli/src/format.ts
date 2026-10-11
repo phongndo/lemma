@@ -1,46 +1,13 @@
-import {
-  capabilityName,
-  contentText,
-  describeReload,
-  formatCost,
-  formatDuration,
-  formatTokens,
-  hookChain,
-  parseModelRef,
-  providerOf,
-  recordDuration,
-  recordName,
-  recordStatus,
-  RECORD_KIND_LABEL,
-  tablesOf,
-  usersOf,
-} from "@lemma/contracts";
-import type {
-  ChannelInfo,
-  CommandInfo,
-  InspectorInfo,
-  KernelView,
-  DirectoryListing,
-  FileSearchResult,
-  GitBranch,
-  HostInfo,
-  InteractionRequest,
-  LedgerRecord,
-  ModelInfo,
-  PluginStatus,
-  ProviderInfo,
-  QueuedPrompt,
-  ReloadResult,
-  SectionDiff,
-  SessionEvent,
-  SessionInfo,
-  TrajectoryRequest,
-  TrajectoryStep,
-  TrajectoryTurn,
-  UiComposition,
-  Usage,
-  WorkspaceStatus,
-} from "@lemma/contracts";
+import { capabilityName, describeReload, hookChain, providerOf, tablesOf, usersOf } from "@lemma/contracts";
+import { formatCost, formatDuration, formatTokens } from "@lemma/client/format";
+import { contentText, parseModelRef } from "@lemma/llm";
+import { recordDuration, recordName, recordStatus, RECORD_KIND_LABEL } from "@lemma/sessions";
+import type { ChannelInfo, InspectorInfo, KernelView, HostInfo, InteractionRequest, PluginStatus, ReloadResult, UiComposition } from "@lemma/contracts";
+import type { QueuedPrompt } from "@lemma/agent";
+import type { CommandInfo } from "@lemma/commands";
+import type { ModelInfo, ProviderInfo, Usage } from "@lemma/llm";
+import type { LedgerRecord, SectionDiff, SessionEvent, SessionInfo, TrajectoryRequest, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
+import type { DirectoryListing, FileSearchResult, GitBranch, WorkspaceStatus } from "@lemma/workspace";
 import type { Target } from "./command.ts";
 import type { TurnResult } from "./run.ts";
 

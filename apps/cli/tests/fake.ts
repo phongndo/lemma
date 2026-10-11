@@ -4,7 +4,7 @@ import { Rpc } from "effect/rpc";
 import { Socket } from "effect/socket";
 import { HostError } from "@lemma/contracts";
 import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
-import { RuntimeRpcs } from "@lemma/contracts/runtime";
+import { RuntimeRpcs } from "@lemma/contracts";
 import type { HostRpcClient } from "@lemma/client";
 import { openHost } from "../src/channels.ts";
 import type { Connection } from "../src/command.ts";

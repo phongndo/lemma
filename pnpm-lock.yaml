@@ -133,19 +133,37 @@ importers:
 
   apps/cli:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../domains/commands/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@lemma/host':
         specifier: workspace:*
         version: link:../../packages/host
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../domains/workspace/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
     devDependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@types/node':
         specifier: 24.19.0
         version: 24.19.0
@@ -180,9 +198,15 @@ importers:
 
   apps/web:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../domains/commands/contract
       '@lemma/composition':
         specifier: workspace:*
         version: link:../../packages/composition
@@ -192,12 +216,21 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
       '@lemma/router':
         specifier: workspace:*
         version: link:../../packages/router
       '@lemma/router-solid':
         specifier: workspace:*
         version: link:../../packages/router-solid
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../domains/workspace/contract
       dompurify:
         specifier: 3.4.16
         version: 3.4.16
@@ -242,6 +275,172 @@ importers:
         specifier: 5.0.2
         version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/agent/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../tools/contract
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/commands/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/credentials/contract:
+    dependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/llm/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/sessions/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/router':
+        specifier: workspace:*
+        version: link:../../../packages/router
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/tools/contract:
+    dependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/workspace/contract:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
   examples/approvals:
     dependencies:
       '@lemma/contracts':
@@ -253,6 +452,9 @@ importers:
       '@lemma/plugin-tools-builtin':
         specifier: workspace:*
         version: link:../../plugins/tools-builtin
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -300,6 +502,9 @@ importers:
 
   packages/client:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../contracts
@@ -350,9 +555,6 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../core
-      '@lemma/router':
-        specifier: workspace:*
-        version: link:../router
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -388,6 +590,12 @@ importers:
 
   packages/host:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../domains/commands/contract
       '@lemma/composition':
         specifier: workspace:*
         version: link:../composition
@@ -397,6 +605,12 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../core
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../domains/credentials/contract
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
       '@lemma/plugin-agent':
         specifier: workspace:*
         version: link:../../plugins/agent
@@ -436,6 +650,15 @@ importers:
       '@lemma/plugin-workspace':
         specifier: workspace:*
         version: link:../../plugins/workspace
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../domains/workspace/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -496,6 +719,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../core
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -512,12 +738,24 @@ importers:
 
   plugins/agent:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -537,6 +775,9 @@ importers:
 
   plugins/commands:
     dependencies:
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../domains/commands/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -559,12 +800,21 @@ importers:
 
   plugins/commands-builtin:
     dependencies:
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../domains/commands/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../domains/workspace/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -581,12 +831,21 @@ importers:
 
   plugins/compaction:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -609,6 +868,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../domains/credentials/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -634,6 +896,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../domains/workspace/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -659,6 +924,12 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/credentials':
+        specifier: workspace:*
+        version: link:../../domains/credentials/contract
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -681,6 +952,9 @@ importers:
 
   plugins/project-context:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -709,6 +983,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -737,6 +1014,12 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -762,6 +1045,12 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -791,6 +1080,9 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
     devDependencies:
+      '@lemma/commands':
+        specifier: workspace:*
+        version: link:../../domains/commands/contract
       '@lemma/plugin-commands':
         specifier: workspace:*
         version: link:../commands
@@ -812,6 +1104,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../domains/workspace/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1

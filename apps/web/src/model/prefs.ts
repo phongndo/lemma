@@ -1,4 +1,4 @@
-import type { ModelInfo, ThinkingLevel } from "@lemma/contracts";
+import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
 import { matchesQuery } from "./palette.ts";
 
 interface ModelGroup {

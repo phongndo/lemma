@@ -4,21 +4,14 @@ import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
-import {
-  Agent,
-  AgentContinueHook,
-  AgentError,
-  AgentRequestHook,
-  branchOf,
-  emptyUsage,
-  Paths,
-  rebuildRequest,
-  SessionError,
-  SessionRemoveHook,
-  Sessions,
-  ToolResult,
-} from "@lemma/contracts";
-import type { EventData, LlmRequest, SessionEvent, Tool } from "@lemma/contracts";
+import { Paths } from "@lemma/contracts";
+import { Agent, AgentContinueHook, AgentError, AgentRequestHook } from "@lemma/agent";
+import { emptyUsage } from "@lemma/llm";
+import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
+import { ToolResult } from "@lemma/tools";
+import type { LlmRequest } from "@lemma/llm";
+import type { EventData, SessionEvent } from "@lemma/sessions";
+import type { Tool } from "@lemma/tools";
 import sessions from "../../sessions/src/index.ts";
 import { readJournals } from "../src/state.ts";
 import { BRANCHED_CALL, unansweredCalls } from "../src/turn.ts";

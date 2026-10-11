@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
-import { Tools } from "@lemma/contracts";
+import { Tools } from "@lemma/tools";
 import { makeRegistry } from "./registry.ts";
 
 const ToolsConfig = Schema.Struct({

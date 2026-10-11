@@ -1,6 +1,6 @@
 import { Order } from "effect";
 import { createHash } from "node:crypto";
-import type { CompositionInfo } from "@lemma/contracts/runtime";
+import type { CompositionInfo } from "@lemma/contracts";
 import type { Composition, PluginIdentity } from "@lemma/core";
 
 /**

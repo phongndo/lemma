@@ -5,8 +5,9 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { Effect, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Registries } from "@lemma/core";
-import { Channels, Paths, serveFiles, serveWorkspace, Workspace, WorkspaceError } from "@lemma/contracts";
-import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/contracts";
+import { Channels, Paths } from "@lemma/contracts";
+import { serveFiles, serveWorkspace, Workspace, WorkspaceError } from "@lemma/workspace";
+import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/workspace";
 import { expandHome, kindOf } from "@lemma/contracts/fs";
 
 const READ_TIMEOUT_MS = 5_000;

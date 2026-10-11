@@ -1,24 +1,14 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Events, Hooks } from "@lemma/core";
-import {
-  Agent,
-  AgentError,
-  Channels,
-  HostControl,
-  Inspectors,
-  InteractionOrigin,
-  Llm,
-  Paths,
-  QueueChanged,
-  serveAgent,
-  SessionError,
-  SessionRemoved,
-  Sessions,
-  ToolOutput,
-  Tools,
-} from "@lemma/contracts";
-import type { AgentView, ModelInfo, PromptContent, PromptOptions, QueuedPrompt, SessionEvent, SessionInfo, TurnEndReason, TurnOptions } from "@lemma/contracts";
+import { Channels, HostControl, Inspectors, InteractionOrigin, Paths } from "@lemma/contracts";
+import { Agent, AgentError, QueueChanged, serveAgent } from "@lemma/agent";
+import { Llm } from "@lemma/llm";
+import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
+import { ToolOutput, Tools } from "@lemma/tools";
+import type { AgentView, PromptContent, PromptOptions, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { ModelInfo } from "@lemma/llm";
+import type { SessionEvent, SessionInfo, TurnEndReason } from "@lemma/sessions";
 import { LiveTurn } from "./live.ts";
 import { planResume } from "./resume.ts";
 import type { ResumePlan } from "./resume.ts";

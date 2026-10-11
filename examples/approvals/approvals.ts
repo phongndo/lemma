@@ -2,8 +2,9 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core/plain";
-import { Interaction, InteractionError, Tools } from "@lemma/contracts";
-import type { GuardDecision, ToolInvocation } from "@lemma/contracts";
+import { Interaction, InteractionError } from "@lemma/contracts";
+import { Tools } from "@lemma/tools";
+import type { GuardDecision, ToolInvocation } from "@lemma/tools";
 import { resolveToCwd } from "@lemma/plugin-tools-builtin";
 
 /**

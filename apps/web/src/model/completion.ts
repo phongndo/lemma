@@ -3,7 +3,7 @@
  * a trigger (`@src/ap|`), what picking a suggestion makes of the text, and how
  * a file becomes a mention. Pure, so the composer only wires keys and draws.
  */
-import type { FileEntry } from "@lemma/contracts";
+import type { FileEntry } from "@lemma/workspace";
 import { fuzzy } from "./palette.ts";
 
 export interface TriggerMatch {

@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { formatDuration } from "@lemma/contracts";
+import { formatDuration } from "@lemma/client/format";
 import { XIcon } from "../../ui/parts.tsx";
 import type { View, TypeFilter } from "./state.ts";
 

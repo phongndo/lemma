@@ -1,5 +1,5 @@
-import { formatCost, formatTokens } from "@lemma/contracts";
-import type { Usage } from "@lemma/contracts";
+import { formatCost, formatTokens } from "@lemma/client/format";
+import type { Usage } from "@lemma/llm";
 
 export const relativeTime = (at: number, now: number = Date.now()): string => {
   const s = Math.round((now - at) / 1_000);

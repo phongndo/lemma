@@ -4,8 +4,8 @@ import * as path from "node:path";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Hooks, makeCore } from "@lemma/core";
-import { AgentRequestHook } from "@lemma/contracts";
-import type { RequestDraft, RequestPlan } from "@lemma/contracts";
+import { AgentRequestHook } from "@lemma/agent";
+import type { RequestDraft, RequestPlan } from "@lemma/agent";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import projectContext, { makeLoader } from "../src/index.ts";
 

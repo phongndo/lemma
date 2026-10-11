@@ -14,6 +14,8 @@
     "@earendil-works/pi-codemode": "1.0.2",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/tools": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

@@ -1,5 +1,5 @@
 import { Predicate, Result, Schema, SchemaIssue } from "effect";
-import type { PluginRow } from "@lemma/contracts/runtime";
+import type { PluginRow } from "@lemma/contracts";
 import { checkComposition, Diagnostic } from "@lemma/core";
 import type { Capability, Composition, CompositionError, Plugin, PluginEntry } from "@lemma/core";
 import { reservedKeys, resolveComposition } from "./catalog.ts";
@@ -50,7 +50,7 @@ export interface Plan {
 
 const keys = (plugin: Plugin) => new Set(plugin.provides.map((tag) => tag.key));
 
-/** `lemma/api@2`: a capability naming the API version a plugin is written for (`HostApi`, `UiApi`). */
+/** `lemma/api@3`: a capability naming the API version a plugin is written for (`HostApi`, `UiApi`). */
 const API_KEY = /^(.+)\/api@(\d+)$/;
 
 /**

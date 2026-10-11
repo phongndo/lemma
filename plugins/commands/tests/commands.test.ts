@@ -1,18 +1,10 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Stream } from "effect";
 import type { Context } from "effect";
-import {
-  Channels,
-  CommandChannels,
-  Commands,
-  CommandsChanged,
-  elementsOf,
-  InteractionError,
-  InteractionOrigin,
-  resultOf,
-  withdrawnFrom,
-} from "@lemma/contracts";
-import type { Channel, ChannelCall, ChannelStream, Command, CommandError, CommandInfo } from "@lemma/contracts";
+import { Channels, elementsOf, InteractionError, InteractionOrigin, resultOf, withdrawnFrom } from "@lemma/contracts";
+import { CommandChannels, Commands, CommandsChanged } from "@lemma/commands";
+import type { Channel, ChannelCall, ChannelStream } from "@lemma/contracts";
+import type { Command, CommandError, CommandInfo } from "@lemma/commands";
 import { callServed, pathsPlugin } from "@lemma/contracts/testing";
 import { Admitted, definePlugin, Events, makeCore, makeLoader, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";

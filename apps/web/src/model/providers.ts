@@ -1,4 +1,5 @@
-import type { CustomProviderSpec, NoticePayload, ProviderInfo } from "@lemma/contracts";
+import type { NoticePayload } from "@lemma/contracts";
+import type { CustomProviderSpec, ProviderInfo } from "@lemma/llm";
 import { matchesQuery } from "./palette.ts";
 import claude from "../assets/providers/claude-ai-icon.svg?url";
 import openai from "../assets/providers/openai.svg?url";

@@ -7,8 +7,9 @@ import { CodemodeSandbox, parseCodemodeSource, renderToolSample, toCodemodeIdent
 import type { CodemodeCall, CodemodeError, CodemodeTool } from "@earendil-works/pi-codemode";
 import { Effect, Result, Schema } from "effect";
 import type { Context } from "effect";
-import { contentText, ToolInvocation, ToolResult } from "@lemma/contracts";
-import type { Tool, Tools } from "@lemma/contracts";
+import { contentText } from "@lemma/llm";
+import { ToolInvocation, ToolResult } from "@lemma/tools";
+import type { Tool, Tools } from "@lemma/tools";
 
 export const CodemodeInput = Schema.Struct({
   code: Schema.String.annotate({ description: "Raw JavaScript source." }),

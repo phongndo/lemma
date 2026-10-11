@@ -1,7 +1,7 @@
 import { Show, createEffect, createMemo, on } from "solid-js";
 import type { JSX } from "solid-js";
-import { ledger, ledgerSpans, parseLedgerFilter, trajectory as projectTrajectory } from "@lemma/contracts";
-import type { LedgerRecord } from "@lemma/contracts";
+import { ledger, ledgerSpans, parseLedgerFilter, trajectory as projectTrajectory } from "@lemma/sessions";
+import type { LedgerRecord } from "@lemma/sessions";
 import { stepFor } from "../../lib/keys.ts";
 import { timeScale } from "../../model/timeline.ts";
 import { createNow } from "../../lib/now.ts";

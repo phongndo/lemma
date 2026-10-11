@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { HostError } from "@lemma/contracts";
-import type { SessionEvent, SessionInfo } from "@lemma/contracts";
+import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import {
   appendLog,
   applySessionsChange,

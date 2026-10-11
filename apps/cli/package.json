@@ -11,12 +11,18 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/agent": "workspace:*",
     "@lemma/client": "workspace:*",
+    "@lemma/commands": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/workspace": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {
+    "@lemma/core": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"

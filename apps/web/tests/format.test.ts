@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ModelInfo } from "@lemma/contracts";
+import type { ModelInfo } from "@lemma/llm";
 import { diffStats, parseDiff, readDetails } from "../src/model/details.ts";
 import { branchSlug, contextSize, displayPath, partialStringField, summarizeToolArgs, summarizeUsage, tildePath, truncateLines } from "../src/model/format.ts";
 import { clampThinking, filterModels, folderName, knownProjects, patchProjectSettings, projectName, resolveModel, thinkingLevels } from "../src/model/prefs.ts";

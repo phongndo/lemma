@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, on } from "solid-js";
-import { WorkspaceChannels } from "@lemma/contracts";
-import type { WorkspaceStatus } from "@lemma/contracts";
+import { WorkspaceChannels } from "@lemma/workspace";
+import type { WorkspaceStatus } from "@lemma/workspace";
 import { load, loadJson, save } from "../lib/storage.ts";
 import { branchSlug } from "../model/format.ts";
 import { knownProjects, patchProjectSettings, projectName } from "../model/prefs.ts";

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { NoticePayload, ProviderInfo } from "@lemma/contracts";
+import type { NoticePayload } from "@lemma/contracts";
+import type { ProviderInfo } from "@lemma/llm";
 import { customProviderProblem, customProviderSpec, logoProblem, logoSource, endsLogin, providerGroups, signInState } from "../src/model/providers.ts";
 
 const key = { type: "api_key", name: "API key", interactive: true } as const;

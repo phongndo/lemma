@@ -1,7 +1,9 @@
 import { For, Match, Show, Switch, createMemo } from "solid-js";
 import type { JSX } from "solid-js";
-import { RECORD_KIND_LABEL, contentText, formatDuration, formatTokens, promptDiff, rebuildRequest, recordRequest } from "@lemma/contracts";
-import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/contracts";
+import { formatDuration, formatTokens } from "@lemma/client/format";
+import { contentText } from "@lemma/llm";
+import { RECORD_KIND_LABEL, promptDiff, rebuildRequest, recordRequest } from "@lemma/sessions";
+import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/sessions";
 import { inputTokens } from "../../model/timeline.ts";
 import { clockTime } from "../../model/format.ts";
 import { ToolViews, TrajectoryTabs } from "../../ui/contracts.ts";

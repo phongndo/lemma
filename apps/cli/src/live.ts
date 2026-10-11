@@ -2,19 +2,15 @@ import { randomUUID } from "node:crypto";
 import { resolve } from "node:path";
 import { Deferred, Duration, Effect, FiberMap, Queue, Stream } from "effect";
 import type { Scope } from "effect";
-import { AgentChannels, CommandChannels, HostError, LlmChannels, SessionChannels } from "@lemma/contracts";
-import type {
-  AgentActivity,
-  ChannelDeclaration,
-  InteractionAnswer,
-  InteractionRequest,
-  LlmChange,
-  NoticePayload,
-  RuntimeEvent,
-  SessionLogUpdate,
-  SessionsChange,
-  UiComposition,
-} from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { AgentChannels } from "@lemma/agent";
+import { CommandChannels } from "@lemma/commands";
+import { LlmChannels } from "@lemma/llm";
+import { SessionChannels } from "@lemma/sessions";
+import type { ChannelDeclaration, InteractionAnswer, InteractionRequest, NoticePayload, RuntimeEvent, UiComposition } from "@lemma/contracts";
+import type { AgentActivity } from "@lemma/agent";
+import type { LlmChange } from "@lemma/llm";
+import type { SessionLogUpdate, SessionsChange } from "@lemma/sessions";
 import { dropped } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { call, callOn, connectedAfter, following, ofChannel, received, reconnecting } from "./channels.ts";

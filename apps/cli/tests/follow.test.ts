@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Deferred, Duration, Effect } from "effect";
-import { emptyUsage, HostError } from "@lemma/contracts";
-import type { AgentActivity, AgentView, AssistantMessage, EventData, InteractionRequest, RuntimeEvent, SessionEvent, SessionLogUpdate } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { emptyUsage } from "@lemma/llm";
+import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
+import type { AgentActivity, AgentView } from "@lemma/agent";
+import type { AssistantMessage } from "@lemma/llm";
+import type { EventData, SessionEvent, SessionLogUpdate } from "@lemma/sessions";
 import { settled } from "../../../scripts/e2e.ts";
 import { GIVE_UP } from "../src/channels.ts";
 import { ExitCode } from "../src/command.ts";

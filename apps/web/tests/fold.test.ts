@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { answerText, entryKey, foldRunning, foldTurn } from "../src/model/fold.ts";
 import type { TurnEntry } from "../src/model/fold.ts";
-import type { EventData } from "@lemma/contracts";
+import type { EventData } from "@lemma/sessions";
 import { assistant, branch, toolResult, transcriptOf, user } from "./fixtures.ts";
 
 const call = (id: string) => ({ type: "toolCall" as const, id, name: "bash", arguments: { command: "ls" } });

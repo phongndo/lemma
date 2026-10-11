@@ -21,8 +21,8 @@ Use:
 ## Design
 
 - Build a bundled plugin so a user could have written it: it meets other
-  plugins only through the contracts in `packages/contracts` (in the web app,
-  `ui/contracts.ts`).
+  plugins only through contracts: the runtime's (`packages/contracts`) and each
+  domain's (`domains/<domain>/contract`; in the web app, `ui/contracts.ts`).
 - Keep `@lemma/core` domain-neutral: application contracts, persistence,
   transports, and UI belong to plugins.
 - Add to the runtime only what no plugin could provide, since nothing replaces

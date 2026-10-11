@@ -1,8 +1,9 @@
 import { constants } from "node:fs";
 import { access, open, readFile, stat } from "node:fs/promises";
 import { Schema } from "effect";
-import { MAX_IMAGE_BYTES, ToolResult } from "@lemma/contracts";
-import type { Tool } from "@lemma/contracts";
+import { MAX_IMAGE_BYTES } from "@lemma/llm";
+import { ToolResult } from "@lemma/tools";
+import type { Tool } from "@lemma/tools";
 import { fsMessage, resolveReadPath, text, throwIfAborted } from "./files.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "./truncate.ts";
 import type { Truncation } from "./truncate.ts";

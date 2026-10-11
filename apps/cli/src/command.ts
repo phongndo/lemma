@@ -1,7 +1,9 @@
 import { Data } from "effect";
 import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
-import type { HostError, RuntimeEvent, ThinkingLevel, WhenBusy } from "@lemma/contracts";
+import type { HostError, RuntimeEvent } from "@lemma/contracts";
+import type { WhenBusy } from "@lemma/agent";
+import type { ThinkingLevel } from "@lemma/llm";
 import type { Host, HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/contracts/discovery";
 

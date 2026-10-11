@@ -1,5 +1,6 @@
-import { addUsage, emptyUsage } from "@lemma/contracts";
-import type { AssistantMessage, EventData, SessionEvent, ThinkingLevel, ToolCall, ToolResultMessage, TurnEndReason, Usage } from "@lemma/contracts";
+import { addUsage, emptyUsage } from "@lemma/llm";
+import type { AssistantMessage, ThinkingLevel, ToolCall, ToolResultMessage, Usage } from "@lemma/llm";
+import type { EventData, SessionEvent, TurnEndReason } from "@lemma/sessions";
 
 /** The error of an `attempt` logged for a model call that a host restart cut off; a resumed turn retries it. */
 export const INTERRUPTED_CALL = "Interrupted: the host stopped during this model call";

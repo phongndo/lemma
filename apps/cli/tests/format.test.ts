@@ -1,6 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { kernelOf, ledger, promptDiff, trajectory } from "@lemma/contracts";
-import type { PluginStatus, SessionEvent, SessionInfo } from "@lemma/contracts";
+import { kernelOf } from "@lemma/contracts";
+import { ledger, promptDiff, trajectory } from "@lemma/sessions";
+import type { PluginStatus } from "@lemma/contracts";
+import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import {
   formatCapabilities,
   formatChannels,

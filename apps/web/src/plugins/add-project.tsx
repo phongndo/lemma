@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
-import { WorkspaceChannels } from "@lemma/contracts";
-import type { DirectoryEntry } from "@lemma/contracts";
+import { WorkspaceChannels } from "@lemma/workspace";
+import type { DirectoryEntry } from "@lemma/workspace";
 import { Portal } from "solid-js/web";
 import { listKey, quickKey } from "../lib/keys.ts";
 import { createQuickHold } from "../lib/quick-pick.ts";

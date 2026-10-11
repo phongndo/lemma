@@ -1,4 +1,4 @@
-import type { CustomProviderSpec } from "@lemma/contracts";
+import type { CustomProviderSpec } from "@lemma/llm";
 import { createProvider } from "@earendil-works/pi-ai";
 import type { Api, ApiKeyAuth, Model, Provider, ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";

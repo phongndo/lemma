@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
 import { definePlugin, Events } from "@lemma/core";
-import { Channels, Paths, serveSessions, Sessions } from "@lemma/contracts";
+import { Channels, Paths } from "@lemma/contracts";
+import { serveSessions, Sessions } from "@lemma/sessions";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { make } from "./sessions.ts";

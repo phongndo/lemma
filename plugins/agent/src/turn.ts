@@ -4,43 +4,15 @@ import { Cause, Clock, Effect, Exit, Random, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
 import { CoreClosed, Hook } from "@lemma/core";
 import type { Events, Hooks } from "@lemma/core";
-import {
-  addUsage,
-  AgentContinueHook,
-  AgentError,
-  AgentRequestHook,
-  AssistantDelta,
-  deriveMessages,
-  emptyUsage,
-  modelView,
-  rebuildRequest,
-  requestState,
-  ToolInvocation,
-  TurnEnded,
-  TurnStarted,
-} from "@lemma/contracts";
-import type {
-  Contribution,
-  EventData,
-  HostControl,
-  Llm,
-  LlmFailure,
-  LlmRequest,
-  ModelInfo,
-  PromptContent,
-  RequestDraft,
-  RequestPlan,
-  SessionEvent,
-  Sessions,
-  StreamEvent,
-  ThinkingLevel,
-  ToolCall,
-  ToolResultMessage,
-  Tools,
-  ToolSpec,
-  TurnEndReason,
-  Usage,
-} from "@lemma/contracts";
+import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
+import { addUsage, emptyUsage } from "@lemma/llm";
+import { deriveMessages, modelView, rebuildRequest, requestState } from "@lemma/sessions";
+import { ToolInvocation } from "@lemma/tools";
+import type { HostControl } from "@lemma/contracts";
+import type { PromptContent, RequestDraft, RequestPlan } from "@lemma/agent";
+import type { Llm, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage } from "@lemma/llm";
+import type { Contribution, EventData, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
+import type { Tools } from "@lemma/tools";
 import { partialMessage } from "./live.ts";
 import type { LiveTurn, ModelIdentity, PartialMessage } from "./live.ts";
 import { baseSection, environmentSection, titleFrom } from "./prompt.ts";

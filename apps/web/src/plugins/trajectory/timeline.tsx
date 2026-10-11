@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
-import { RECORD_KIND_LABEL, formatDuration, recordWithin } from "@lemma/contracts";
-import type { AssistantRecord, LedgerRecord, LedgerSpan, ToolRecord } from "@lemma/contracts";
+import { formatDuration } from "@lemma/client/format";
+import { RECORD_KIND_LABEL, recordWithin } from "@lemma/sessions";
+import type { AssistantRecord, LedgerRecord, LedgerSpan, ToolRecord } from "@lemma/sessions";
 import { panned, place, ticks, ttftPercent } from "../../model/timeline.ts";
 import type { Scale } from "../../model/timeline.ts";
 import { clockTime } from "../../model/format.ts";

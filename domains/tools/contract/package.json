@@ -1,0 +1,23 @@
+{
+  "name": "@lemma/tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The tools domain's contract: the tool registry, tools, guards, and their hooks and events",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

@@ -1,5 +1,6 @@
 import { Deferred, Effect, Layer } from "effect";
-import { Commands, HostControl, Interaction, InteractionError, InteractionHook, Paths, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { HostControl, Interaction, InteractionError, InteractionHook, Paths, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { Commands } from "@lemma/commands";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import type { ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, UiComposition } from "@lemma/contracts";
 import { definePlugin, Diagnostic, Events, Hooks, ReloadError } from "@lemma/core";

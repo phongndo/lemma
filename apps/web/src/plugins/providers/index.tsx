@@ -1,7 +1,8 @@
 import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 import { Schema } from "effect";
-import type { AuthType, InteractionRequest, NoticePayload, ProviderInfo } from "@lemma/contracts";
+import type { InteractionRequest, NoticePayload } from "@lemma/contracts";
+import type { AuthType, ProviderInfo } from "@lemma/llm";
 import { logoProblem, customProviderSpec, describeProvider, endsLogin, fromEnv, providerGroups, providerText, signInState } from "../../model/providers.ts";
 import type { AuthFilter, CustomProviderDraft } from "../../model/providers.ts";
 import {
