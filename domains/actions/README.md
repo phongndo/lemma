@@ -10,6 +10,8 @@ What a person does with keys and the palette. Its contract is [`@lemma/actions`]
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                     |
 | --------- | -------------------------------------------------------------------------------------------- |
 | Add       | `Actions` (an action, with its default keys), `PaletteSources` (a list the palette searches) |

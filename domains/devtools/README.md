@@ -8,6 +8,8 @@ The devtools: panels docked under the app (`mod+shift+d`) for its routes, events
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                     |
 | --------- | -------------------------------------------- |
 | Add       | `DevtoolsPanels`: a panel                    |

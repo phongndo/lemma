@@ -13,6 +13,8 @@ How everything looks: the scheme, themes, accents, fonts, and sizes, and the sha
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                                                                                                                          |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add       | `Themes`, `Accents`, `Fonts`, `CodeBlocks` (a renderer for a fenced block's language)                                                                                                             |

@@ -8,6 +8,8 @@ The session log, the source of truth every request is rebuilt from, and its stor
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                             |
 | --------- | ------------------------------------------------------------------------------------ |
 | Add       | Nothing: what a session holds is its events                                          |

@@ -13,6 +13,8 @@ What the model can call, and how calls run. Its contract is [`@lemma/tools`](con
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                                                                                              |
 | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add       | `Tools`: a tool; `Guards`: a check every call of a tool (or `*`) passes before it runs. A tool's web half adds how its calls show to the threads domain's `ToolViews` |

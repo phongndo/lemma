@@ -10,6 +10,8 @@ Actions a person runs from any client: the web app's palette, `lemma do`. Its co
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                  |
 | --------- | ----------------------------------------------------------------------------------------- |
 | Add       | `Commands`: a command, which asks for what it needs with `Interaction`                    |

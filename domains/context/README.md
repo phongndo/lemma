@@ -9,6 +9,8 @@ What the model is told beyond the conversation. The domain has no contract: its 
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                       |
 | --------- | ---------------------------------------------- |
 | Add       | The agent's `PromptSections`                   |
