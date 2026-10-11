@@ -1,0 +1,113 @@
+import { describe, expect, test } from "vitest";
+import { Effect } from "effect";
+import type { Context } from "effect";
+import { awaitable } from "@lemma/core";
+import type { HostControl, Interaction } from "@lemma/contracts";
+import type { Command } from "@lemma/commands";
+import { hostCommands } from "../src/index.ts";
+
+type Ask = Context.Service.Shape<typeof Interaction>;
+
+/** Answers every question with the scripted value, recording what was asked. */
+const scripted = (answer: string) => {
+  const asked: { title: string; options?: readonly string[] }[] = [];
+  const ask: Ask = {
+    confirm: (title) => Effect.sync(() => (asked.push({ title }), true)),
+    ask: (title) => Effect.sync(() => (asked.push({ title }), answer)),
+    select: (title, options) => Effect.sync(() => (asked.push({ title, options: options.map((option) => option.value) }), answer as never)),
+  };
+  return { ask, asked };
+};
+
+const find = (commands: readonly Command[], id: string) => commands.find((command) => command.id === id)!;
+const run = (command: Command, cwd = "/repo") => Effect.runPromise(Effect.result(awaitable(() => command.run({ cwd }))));
+
+describe("host commands", () => {
+  const restarted: unknown[] = [];
+  const configured: unknown[] = [];
+  // Plugins as the host reports them; `configure` changes `enabled`, except for "stuck", which the project file decides.
+  const initial = [
+    { id: "transport", state: "active", enabled: true, locked: "Serves the web app and the CLI" },
+    { id: "llm", state: "failed", enabled: true },
+    { id: "bash", state: "active", enabled: true },
+    { id: "project-context", enabled: false, haltedBy: "workspace" },
+    { id: "stuck", enabled: false, scope: "project" },
+    { id: "my-llm", enabled: false },
+  ];
+  let plugins = initial;
+  const control = {
+    plugins: Effect.sync(() => plugins),
+    reload: Effect.succeed({ started: ["x"], restarted: [], stopped: ["y"], unchanged: [], failed: [], interrupted: 0, faults: [] }),
+    restart: (id: string, options: unknown) =>
+      Effect.sync(() => {
+        restarted.push([id, options]);
+        return {};
+      }),
+    configure: (rows: Record<string, { enabled?: boolean }>, options: unknown) =>
+      Effect.sync(() => {
+        configured.push([rows, options]);
+        const ids = Object.keys(rows).filter((id) => id !== "stuck");
+        plugins = plugins.map((plugin) => (ids.includes(plugin.id) ? { ...plugin, enabled: rows[plugin.id]?.enabled ?? plugin.enabled } : plugin));
+        const empty = { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [] };
+        // my-llm replaces a provider the commands need: written now, applied once the command has ended.
+        if (ids.includes("my-llm")) return { ...empty, deferred: true };
+        // project-context turns on but cannot load: workspace, which it needs, is off.
+        const started = ids.filter((id) => rows[id]?.enabled === true && id !== "project-context");
+        const stopped = ids.filter((id) => rows[id]?.enabled === false);
+        return { ...empty, started, stopped: stopped.includes("bash") ? [...stopped, "edit"] : stopped };
+      }),
+  } as unknown as Context.Service.Shape<typeof HostControl>;
+
+  test("reload describes what changed", async () => {
+    const result = await run(find(hostCommands(control, scripted("").ask), "host.reload"));
+    expect(result).toMatchObject({ success: { message: "Config reloaded: started x; stopped y" } });
+  });
+
+  test("restart plugin offers failed plugins and running ones the host does not depend on, forcing only the latter", async () => {
+    restarted.length = 0;
+    const failed = scripted("llm");
+    expect(await run(find(hostCommands(control, failed.ask), "host.restart-plugin"))).toMatchObject({ success: { message: "Restarted llm" } });
+    expect(failed.asked[0]?.options).toEqual(["llm", "bash"]);
+    const running = scripted("bash");
+    expect(await run(find(hostCommands(control, running.ask), "host.restart-plugin"))).toMatchObject({ success: { message: "Restarted bash" } });
+    expect(restarted).toEqual([
+      ["llm", undefined],
+      ["bash", { force: true }],
+    ]);
+  });
+
+  test("toggle plugin offers only unlocked plugins, writes the file that decides, and reports what happened", async () => {
+    configured.length = 0;
+    const { ask, asked } = scripted("bash");
+    const result = await run(find(hostCommands(control, ask), "host.toggle-plugin"));
+    expect(asked[0]?.options).toEqual(["llm", "bash", "project-context", "stuck", "my-llm"]);
+    expect(configured).toEqual([[{ bash: { enabled: false } }, undefined]]);
+    expect(result).toMatchObject({ success: { message: "Turned bash off; stopped edit" } });
+
+    configured.length = 0;
+    const stuck = await run(find(hostCommands(control, scripted("stuck").ask), "host.toggle-plugin"));
+    expect(configured).toEqual([[{ stuck: { enabled: true } }, { scope: "project" }]]);
+    expect(stuck).toMatchObject({ failure: { reason: "Failed", message: "stuck is still off: the project config decides it" } });
+  });
+
+  test("toggle plugin reports a plugin that is on but waiting, and a change applied after the reply, as done", async () => {
+    const waiting = await run(find(hostCommands(control, scripted("project-context").ask), "host.toggle-plugin"));
+    expect(waiting).toMatchObject({ success: { message: "Turned project-context on; it starts when workspace is on" } });
+    const deferred = await run(find(hostCommands(control, scripted("my-llm").ask), "host.toggle-plugin"));
+    expect(deferred).toMatchObject({ success: { message: "Turning my-llm on once this command has ended" } });
+  });
+
+  test("reload and restart plugin say so when the change restarts what runs the command, and so applies once it has ended", async () => {
+    const later = {
+      ...control,
+      reload: Effect.succeed({ started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true }),
+      restart: () => Effect.succeed({ deferred: true }),
+    } as unknown as Context.Service.Shape<typeof HostControl>;
+    expect(await run(find(hostCommands(later, scripted("").ask), "host.reload"))).toMatchObject({
+      success: { message: "Reloading config: the host restarts the plugins it changes once this command has ended" },
+    });
+    expect(await run(find(hostCommands(later, scripted("bash").ask), "host.restart-plugin"))).toMatchObject({
+      success: { message: "Restarting bash once this command has ended" },
+    });
+  });
+});

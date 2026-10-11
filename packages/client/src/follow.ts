@@ -20,7 +20,7 @@ type StreamEnd = (error?: HostError | Error) => void;
  * served it, say), when a `channels-changed` lists it, or at once if one
  * listed it while that opening was on its way, before the stream sent
  * anything: such a listing crossed the opening's failure. Each opening starts
- * afresh, so a subsystem's stream begins with `subscribed`, from which its
+ * afresh, so a domain's stream begins with `subscribed`, from which its
  * reader resyncs. `payload` may be a function, read at each opening
  * (`sessions.log` resumes `after` the last event its reader has). `onEnd`
  * hears each ending; closing from it stops following.

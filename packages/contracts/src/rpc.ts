@@ -9,7 +9,7 @@ import { HostError, HostInfo, PluginStatus, ReloadResult } from "./status.ts";
 /**
  * What the runtime tells its clients on `Host.Events`: its notices, the
  * questions it asks for plugins, and what changed of the plugins, the channels
- * they serve, and the web app's composition. A subsystem streams its own
+ * they serve, and the web app's composition. A domain streams its own
  * changes on a channel of its own (`agent.activity`, `sessions.changes`).
  * Losable but for the questions: a slow client loses the oldest of the rest.
  */
@@ -34,7 +34,7 @@ export type RuntimeEvent = typeof RuntimeEvent.Type;
  * The runtime's remote surface, served by the transport and used by every
  * client: the host's own calls, its events, the questions it asks, the web
  * app's composition, and the channels host plugins serve (`Channel.*`),
- * through which every subsystem is reached. Errors reach clients as
+ * through which every domain is reached. Errors reach clients as
  * `HostError`.
  *
  * While the host starts, the requests that answer from what plugins

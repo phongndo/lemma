@@ -21,7 +21,7 @@ import { formatCommands, formatModels, formatProviders, formatQueue, formatQuest
 /**
  * Commands that act on the host and watch it: they hear the host's own events
  * over `@lemma/client`'s `Host`, as the web app does, to answer the questions
- * it asks and show its notices, and follow its subsystems' streams.
+ * it asks and show its notices, and follow its domains' streams.
  */
 
 // ------------------------------------------------------------------ questions
@@ -300,7 +300,7 @@ export const withdrawCommand =
 /**
  * `lemma events`: what the host publishes, as it happens. Its own events
  * (`RuntimeEvent`: notices, questions, and plugin, channel, and UI changes),
- * and the bundled subsystems' streams: `agent.activity`, `sessions.changes`,
+ * and the bundled domains' streams: `agent.activity`, `sessions.changes`,
  * `llm.changes`, and `commands.changes`. `--session <id>` keeps only that
  * session's elements of the first two, and adds its log from now
  * (`sessions.log`). A stream that is not served, or that its plugin's reload
@@ -334,7 +334,7 @@ const watch = (host: Host, events: Stream.Stream<RuntimeEvent>, io: Io, options:
     const questions =
       options.questions === undefined ? undefined : yield* questionHandler(host, io, options, session === undefined ? undefined : `session:${session}`);
     yield* hostEvents(events, (event) => {
-      // What the subsystems report, their own streams carry; the host's stream is followed for its own events.
+      // What the domains report, their own streams carry; the host's stream is followed for its own events.
       print("host", event, hostLine(event));
       return questions === undefined ? Effect.void : questions(event);
     });

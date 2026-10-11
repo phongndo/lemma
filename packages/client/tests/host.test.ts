@@ -8,7 +8,7 @@ import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Core } from "@lemma/core";
-import transport from "@lemma/plugin-transport";
+import transport from "@lemma/transport-server";
 import { settled } from "../../../scripts/e2e.ts";
 import { callChannel, connect } from "../src/host.ts";
 import type { Host } from "../src/host.ts";
@@ -64,7 +64,7 @@ const withHost = (body: (host: Host, core: Core<any>, found: { readonly url: str
           Effect.promise(() => mkdtemp(join(tmpdir(), "lemma-client-"))),
           (dir) => Effect.promise(() => rm(dir, { recursive: true, force: true })),
         );
-        const core = yield* makeCore([transport, pathsPlugin(home), control, doubler], { configs: { transport: { port: 0 } } });
+        const core = yield* makeCore([transport, pathsPlugin(home), control, doubler], { configs: { "transport.server": { port: 0 } } });
         const found = yield* readDiscovery(home);
         if (found === undefined) return yield* Effect.die(new Error("no discovery file"));
         const host = yield* Effect.acquireRelease(
@@ -182,7 +182,7 @@ describe("the channel facade", () => {
       host.channel.open("doubler.instance", undefined, first.push, ends.push);
       const instance = (await first.until(1)) as number;
       // The transport's restart closes every socket.
-      await Effect.runPromise(core.restart("transport", { force: true }));
+      await Effect.runPromise(core.restart("transport.server", { force: true }));
       const ended = await ends.until(1);
       expect(ended).toBeInstanceOf(Error);
       expect(ended).not.toBeInstanceOf(HostError);

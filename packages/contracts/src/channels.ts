@@ -22,7 +22,7 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
   /** A call answers once; a stream sends elements until it ends. */
   readonly kind: Kind;
   /**
-   * `<subsystem>.<name>`, a multiword name in kebab-case. The subsystem is the
+   * `<domain>.<name>`, a multiword name in kebab-case. The domain is the
    * capability the channel serves, whichever plugin provides it, bundled or a
    * replacement (`sessions.set-title`, `files.search`), or else the plugin
    * (`ticker.prices`). Unique by convention: of channels with one id, the
@@ -165,14 +165,14 @@ export const serveChannel = <const Kind extends ChannelKind, Payload, Success>(
 ): Extract<Channel, { readonly kind: Kind }> => ({ ...declaration, handle }) as unknown as Extract<Channel, { readonly kind: Kind }>;
 
 /**
- * What a stream that reports a subsystem's changes sends each client who opens
+ * What a stream that reports a domain's changes sends each client who opens
  * it: `first`, then what `sources` send, in order within each source but not
  * across them. Every source starts before `first` runs, so one that subscribes
  * when it starts (as `Events.stream` does) misses nothing published after
  * `first`: a client that has it acts knowing it hears the rest, and `first` may
  * carry a snapshot to resync from. Each client holds the latest `buffer`
  * elements: one that falls behind loses the oldest, never the publisher's time
- * or another client's elements, and repairs from what the subsystem keeps. A
+ * or another client's elements, and repairs from what the domain keeps. A
  * source holds its own too (`Events.stream`'s `buffer`): give it as many, since
  * a burst can fill it before its elements move on.
  */

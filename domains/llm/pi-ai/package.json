@@ -1,0 +1,28 @@
+{
+  "name": "@lemma/llm-pi-ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-ai": "1.0.2",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/credentials": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@lemma/client": "workspace:*",
+    "@lemma/transport-server": "workspace:*",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

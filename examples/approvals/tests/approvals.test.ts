@@ -8,7 +8,7 @@ import type { Plugin } from "@lemma/core";
 import { Interaction, InteractionError } from "@lemma/contracts";
 import { ToolInvocation, ToolResult, Tools } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
-import tools from "@lemma/plugin-tools";
+import tools from "@lemma/tools-registry";
 import approvals, { question } from "../approvals.ts";
 
 const defaults = { ask: ["bash"], outsideProject: ["write", "edit"] };

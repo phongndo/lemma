@@ -27,7 +27,7 @@ Use:
   transports, and UI belong to plugins.
 - Add to the runtime only what no plugin could provide, since nothing replaces
   it. It holds no domain (the agent, sessions, models, tools): no domain
-  contract, logic, or call, as a subsystem serves its own calls to clients as
+  contract, logic, or call, as a domain serves its own calls to clients as
   channels. `scripts/check-boundaries.ts` fails when the runtime's code reaches
   a domain contract, however indirectly; [Architecture](docs/architecture.md)
   says where the runtime lives.

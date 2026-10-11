@@ -1,18 +1,24 @@
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
-import agent from "@lemma/plugin-agent";
-import commands from "@lemma/plugin-commands";
-import compaction from "@lemma/plugin-compaction";
-import * as builtinCommands from "@lemma/plugin-commands-builtin";
-import credentials from "@lemma/plugin-credentials";
-import fileSearch from "@lemma/plugin-file-search-fff";
-import llm from "@lemma/plugin-llm-pi-ai";
-import projectContext from "@lemma/plugin-project-context";
-import sessions from "@lemma/plugin-sessions";
-import tools from "@lemma/plugin-tools";
-import { bash, codemode, edit, read, write } from "@lemma/plugin-tools-builtin";
-import transport from "@lemma/plugin-transport";
-import workspace from "@lemma/plugin-workspace";
+import agentLoop from "@lemma/agent-loop";
+import commandsHost from "@lemma/commands-host";
+import commandsRegistry from "@lemma/commands-registry";
+import contextCompaction from "@lemma/context-compaction";
+import contextProject from "@lemma/context-project";
+import credentialsFile from "@lemma/credentials-file";
+import llmCommands from "@lemma/llm-commands";
+import llmPiAi from "@lemma/llm-pi-ai";
+import sessionsFiles from "@lemma/sessions-files";
+import toolsBash from "@lemma/tools-bash";
+import toolsCodemode from "@lemma/tools-codemode";
+import toolsEdit from "@lemma/tools-edit";
+import toolsRead from "@lemma/tools-read";
+import toolsRegistry from "@lemma/tools-registry";
+import toolsWrite from "@lemma/tools-write";
+import transportServer from "@lemma/transport-server";
+import workspaceCommands from "@lemma/workspace-commands";
+import workspaceLocal from "@lemma/workspace-local";
+import workspaceSearchFff from "@lemma/workspace-search-fff";
 
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
@@ -25,25 +31,25 @@ export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new UR
  * `HostControl`, `Interaction`, the host API) is its runtime, not a plugin.
  */
 export const bundled: readonly Plugin[] = [
-  credentials,
-  llm,
-  tools,
-  read,
-  write,
-  edit,
-  bash,
-  codemode,
-  sessions,
-  agent,
-  compaction,
-  projectContext,
-  workspace,
-  fileSearch,
-  commands,
-  builtinCommands.host,
-  builtinCommands.llm,
-  builtinCommands.workspace,
-  transport,
+  credentialsFile,
+  llmPiAi,
+  llmCommands,
+  toolsRegistry,
+  toolsRead,
+  toolsWrite,
+  toolsEdit,
+  toolsBash,
+  toolsCodemode,
+  sessionsFiles,
+  agentLoop,
+  contextCompaction,
+  contextProject,
+  workspaceLocal,
+  workspaceSearchFff,
+  workspaceCommands,
+  commandsRegistry,
+  commandsHost,
+  transportServer,
 ];
 
 /**
@@ -52,6 +58,6 @@ export const bundled: readonly Plugin[] = [
  * transport's port does not also unset the web app.
  */
 export const appDefaults: Readonly<Record<string, Readonly<Record<string, unknown>>>> = {
-  transport: { staticDir: webDist },
-  agent: { cli: cliCommand },
+  "transport.server": { staticDir: webDist },
+  "agent.loop": { cli: cliCommand },
 };

@@ -125,7 +125,7 @@ const packagesIn = (group: string) =>
 const inside = (dir: string, path: string) => path === dir || path.startsWith(`${dir}/`);
 const domainPackages = foldersIn(domainsDir).flatMap((domain) => packagesIn(`domains/${domain}`).map((pkg) => ({ ...pkg, domain })));
 const contractPackages = new Map(domainPackages.filter((pkg) => pkg.name === "contract").map((pkg) => [pkg.manifest.name as string, pkg]));
-const pluginPackages = [...domainPackages.filter((pkg) => pkg.name !== "contract"), ...packagesIn("plugins").map((pkg) => ({ ...pkg, domain: "" }))];
+const pluginPackages = domainPackages.filter((pkg) => pkg.name !== "contract");
 const pluginNames = new Set(pluginPackages.map((pkg) => pkg.manifest.name as string));
 const dependenciesOf = (manifest: { dependencies?: object; peerDependencies?: object }) =>
   Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies });
@@ -341,7 +341,7 @@ const importsRpcClient = (names: string, module: string | undefined) =>
         .split(",")
         .some((name) => /^RpcClient(\s+as\s+\w+)?$/.test(name.trim()));
 const clientProblems: string[] = [];
-for (const dir of ["apps", "domains", "examples", "packages", "plugins", "scripts"].filter((dir) => existsSync(join(root, dir)))) {
+for (const dir of ["apps", "domains", "examples", "packages", "scripts"]) {
   for (const path of walk(join(root, dir)).filter(isCode)) {
     const file = relative(root, path);
     if (path.startsWith(`${clientSource}/`) || /(^|\/)tests\//.test(file) || /\.test\.tsx?$/.test(file)) continue;
@@ -528,24 +528,24 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "packages/core/tests/support.ts": 1,
   "packages/host/scripts/dev.ts": 2,
   "packages/host/tests/watch.test.ts": 5,
-  "plugins/agent/tests/crash.ts": 1,
-  "plugins/agent/tests/fakes.ts": 1,
-  "plugins/agent/tests/recovery.test.ts": 5,
-  "plugins/compaction/tests/compaction.test.ts": 1,
-  "plugins/credentials/tests/credentials.test.ts": 1,
-  "plugins/file-search-fff/tests/file-search.test.ts": 1,
-  "plugins/llm-pi-ai/tests/llm.test.ts": 2,
-  "plugins/sessions/tests/sessions.test.ts": 7,
-  "plugins/sessions/tests/simulation.test.ts": 1,
-  "plugins/tools-builtin/tests/bash.test.ts": 2,
-  "plugins/tools-builtin/tests/codemode.test.ts": 1,
-  "plugins/tools/tests/tools.test.ts": 3,
+  "domains/agent/loop/tests/crash.ts": 1,
+  "domains/agent/loop/tests/fakes.ts": 1,
+  "domains/agent/loop/tests/recovery.test.ts": 5,
+  "domains/context/compaction/tests/compaction.test.ts": 1,
+  "domains/credentials/file/tests/credentials.test.ts": 1,
+  "domains/workspace/search-fff/tests/file-search.test.ts": 1,
+  "domains/llm/pi-ai/tests/llm.test.ts": 2,
+  "domains/sessions/files/tests/sessions.test.ts": 7,
+  "domains/sessions/files/tests/simulation.test.ts": 1,
+  "domains/tools/bash/tests/bash.test.ts": 2,
+  "domains/tools/codemode/tests/codemode.test.ts": 1,
+  "domains/tools/registry/tests/tools.test.ts": 3,
   "scripts/e2e.ts": 1,
   "scripts/mock-openai.ts": 1,
 };
 const tempNameCeilings: Readonly<Record<string, number>> = {
   "packages/host/tests/ui.test.ts": 2,
-  "plugins/transport/tests/transport.test.ts": 2,
+  "domains/transport/server/tests/transport.test.ts": 2,
 };
 const fixedWaits = [
   // A promise its own timer resolves: `new Promise((resolve) => setTimeout(resolve, 100))`.
@@ -569,7 +569,7 @@ const ratchet = (counts: ReadonlyMap<string, number>, ceilings: Readonly<Record<
 };
 const waits = new Map<string, number>();
 const tempNames = new Map<string, number>();
-for (const dir of ["apps", "domains", "examples", "packages", "plugins", "scripts"].filter((dir) => existsSync(join(root, dir)))) {
+for (const dir of ["apps", "domains", "examples", "packages", "scripts"]) {
   for (const path of walk(join(root, dir)).filter((file) => /\.(ts|tsx|mts)$/.test(file))) {
     const file = relative(root, path);
     // This file names the patterns it looks for.
@@ -587,24 +587,24 @@ if (lower.length) console.log(`Ceilings to lower in scripts/check-boundaries.ts,
 report("Test hygiene violations (scripts/check-boundaries.ts)", testProblems, "test hygiene: ok");
 
 // Code behind a seam reaches time, randomness, and the disk only through it, so a simulation controls all three
-// (plugins/sessions/README.md#testing): Effect's `Clock` and `Random`, and the `FileSystem` it is given.
+// (domains/sessions/files/README.md#testing): Effect's `Clock` and `Random`, and the `FileSystem` it is given.
 const reach = {
   clock: [/\bDate\.now\(/g, "Date.now() (use Effect's Clock)"],
   random: [/\bMath\.random\(|\brandom(?:Bytes|UUID|Int)\(/g, "a random source other than Effect's Random"],
   disk: [/from\s+["']node:fs\/promises["']|\bpromises\b[^;]*from\s+["']node:fs["']/g, "node:fs's file operations (use the FileSystem given)"],
 } as const;
 const seamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
-  "plugins/sessions/src": ["clock", "random", "disk"],
-  "plugins/agent/src/turn.ts": ["clock"],
-  "plugins/agent/src/live.ts": ["clock", "random"],
+  "domains/sessions/files/src": ["clock", "random", "disk"],
+  "domains/agent/loop/src/turn.ts": ["clock"],
+  "domains/agent/loop/src/live.ts": ["clock", "random"],
 };
 // What a seamed file may still reach directly, and why.
 const unseamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
   // The lock's lease is wall-clock time that other processes compare with the lock file's mtime; its token only
   // has to be unique.
-  "plugins/sessions/src/lock.ts": ["clock", "random"],
+  "domains/sessions/files/src/lock.ts": ["clock", "random"],
   // Turn and step ids only have to be unique; nothing a simulation checks depends on them.
-  "plugins/agent/src/turn.ts": ["random"],
+  "domains/agent/loop/src/turn.ts": ["random"],
 };
 const seamProblems: string[] = [];
 for (const [prefix, kinds] of Object.entries(seamed)) {

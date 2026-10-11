@@ -10,13 +10,12 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "@lemma/plugin-tools-builtin": "workspace:*",
     "@lemma/tools": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {
     "@lemma/cli": "workspace:*",
-    "@lemma/plugin-tools": "workspace:*",
+    "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
