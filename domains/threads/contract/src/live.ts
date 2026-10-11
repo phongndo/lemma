@@ -118,6 +118,9 @@ const applyToDraft = (draft: StepDraft, event: StreamEvent): StepDraft => {
       return { ...draft, finished: true };
     case "error":
       return { ...draft, finished: true, ...(event.message.errorMessage === undefined ? {} : { error: event.message.errorMessage }) };
+    // The provider's answer is not model output.
+    case "provider":
+      return draft;
   }
 };
 

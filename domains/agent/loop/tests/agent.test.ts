@@ -1,7 +1,7 @@
 import { promises } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
@@ -301,6 +301,42 @@ describe("agent", () => {
         // The base opens the prompt, whatever the id of a plugin adding a section without an order.
         expect(system.startsWith("You are an expert coding assistant")).toBe(true);
         expect(system.indexOf("Mind the rules.")).toBeGreaterThan(0);
+      }),
+    );
+  });
+
+  it("logs what a request passed on and how the provider answered, and streams the answer to no client", async () => {
+    const options = definePlugin({
+      id: "warm",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) => owner.on(AgentRequestHook, (draft, next) => next({ ...draft, providerOptions: { temperature: 0.2 } }))),
+      ),
+    });
+    const answered = Stream.concat(
+      Stream.make({
+        type: "provider" as const,
+        status: 200,
+        requestId: "req-7",
+        credit: { handlers: [{ source: "tracer", ms: 0.1, changed: ["x-trace"] }] },
+      }),
+      reply("hi"),
+    );
+    await withAgent({ plugins: [options], scripts: [answered] }, ({ requests, rec }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        const events = yield* log(id);
+        const [request] = ofType(events, "request");
+        expect(request).toMatchObject({ providerOptions: { temperature: 0.2 }, handlers: [{ source: "warm", changed: ["providerOptions"] }] });
+        expect(requests[0]!.providerOptions).toEqual({ temperature: 0.2 });
+        const logged = events.find((event) => event.data.type === "request")!;
+        expect(rebuildRequest(branchOf(events, logged.id), logged.id, id)?.providerOptions).toEqual({ temperature: 0.2 });
+        const answer = ofType(events, "message").find((data) => data.message.role === "assistant");
+        expect(answer).toMatchObject({
+          response: { status: 200, requestId: "req-7" },
+          credit: { handlers: [{ source: "tracer", changed: ["x-trace"] }] },
+        });
+        expect(rec.deltas.map((event) => event.type)).toEqual(["start", "text-delta", "text-delta", "done"]);
       }),
     );
   });

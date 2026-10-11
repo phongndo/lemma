@@ -12,7 +12,7 @@ import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
 import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
 import type { Llm, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage } from "@lemma/llm";
-import type { Contribution, EventData, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
+import type { Contribution, EventData, ProviderAnswer, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
 import type { ToolRunner } from "@lemma/tools";
 import { handlerChanges } from "./credit.ts";
 import { partialMessage } from "./live.ts";
@@ -381,6 +381,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
               ...(final.thinking === undefined ? {} : { thinking: final.thinking }),
               sections: final.sections,
               tools: final.tools,
+              ...(final.providerOptions === undefined ? {} : { providerOptions: final.providerOptions }),
             }),
           { onStep: (step) => void steps.push(step) },
         )
@@ -409,6 +410,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(isDeepStrictEqual(previous.tools ?? [], specs) ? {} : { tools: specs }),
         contributions,
         ...(handlers.length === 0 ? {} : { handlers }),
+        ...(plan.providerOptions === undefined ? {} : { providerOptions: plan.providerOptions }),
       });
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
       const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
@@ -440,12 +442,22 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const startedAt = yield* Clock.currentTimeMillis;
       let firstTokenAt: number | undefined;
       let settled: Extract<StreamEvent, { type: "done" | "error" }> | undefined;
+      /** How the provider answered, before its body, and who shaped the headers: logged with what comes of the call. */
+      let answered: { readonly response: ProviderAnswer; readonly credit?: ResultCredit } | undefined;
       const partial = live.startStep(stepId, startedAt);
       state.partial = partial;
       state.partialStartedAt = startedAt;
       const streamError = yield* llm.stream(request).pipe(
         Stream.runForEach((event) =>
           Effect.gen(function* () {
+            // Not model output: kept for the log, not streamed to clients.
+            if (event.type === "provider") {
+              answered = {
+                response: { status: event.status, ...(event.requestId === undefined ? {} : { requestId: event.requestId }) },
+                ...(event.credit === undefined ? {} : { credit: event.credit }),
+              };
+              return;
+            }
             if (firstTokenAt === undefined && isFirstToken(event)) firstTokenAt = yield* Clock.currentTimeMillis;
             const seq = live.apply(event);
             if (event.type === "done" || event.type === "error") settled = event;
@@ -456,6 +468,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         Effect.catch((error) => Effect.succeed(error.message)),
       );
       const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: yield* Clock.currentTimeMillis };
+      const answer = answered === undefined ? {} : { response: answered.response, ...(answered.credit === undefined ? {} : { credit: answered.credit }) };
       // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
       if (settled === undefined || (settled.type === "error" && settled.message.stopReason !== "aborted")) yield* unlessClosing;
       return yield* Effect.uninterruptible(
@@ -480,6 +493,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
               timing,
               ...(failure === undefined ? {} : { failure }),
               ...(retry === undefined ? {} : { retry }),
+              ...answer,
             });
             if (retry !== undefined) {
               state.retries = retry.attempt;
@@ -494,7 +508,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           state.retries = 0;
           state.overflowed = false;
           state.shorten = false;
-          yield* append({ type: "message", message: settled.message, turnId, stepId, timing });
+          yield* append({ type: "message", message: settled.message, turnId, stepId, timing, ...answer });
           state.pending = settled.message.content.filter((block): block is ToolCall => block.type === "toolCall");
           return { message: settled.message };
         }),

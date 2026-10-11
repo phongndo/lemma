@@ -3,7 +3,7 @@ import type { HandlerStep } from "@lemma/core";
 import type { RequestDraft, RequestPlan } from "@lemma/agent";
 
 /** What a request is, for telling two apart. */
-type Shape = Pick<RequestPlan, "model" | "thinking" | "sections" | "tools">;
+type Shape = Pick<RequestPlan, "model" | "thinking" | "sections" | "tools" | "providerOptions">;
 
 /** What changed from `before` to `after`: the model, the thinking level, and sections and tools, by name. */
 export const requestChanges = (before: Shape, after: Shape): string[] => {
@@ -26,6 +26,7 @@ export const requestChanges = (before: Shape, after: Shape): string[] => {
     tools.delete(tool.spec.name);
   }
   for (const name of tools.keys()) changed.push(`-tool ${name}`);
+  if (!isDeepStrictEqual(before.providerOptions ?? {}, after.providerOptions ?? {})) changed.push("providerOptions");
   return changed;
 };
 
