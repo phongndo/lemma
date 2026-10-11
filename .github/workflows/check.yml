@@ -108,7 +108,7 @@ jobs:
       - uses: ./.github/actions/dev-shell
         with:
           shell: browser
-      - run: nix develop .#browser -c pnpm --filter @lemma/web ui:check --shard=${{ matrix.shard }}/2
+      - run: nix develop .#browser -c pnpm --filter @lemma/web-app ui:check --shard=${{ matrix.shard }}/2
         env:
           LEMMA_UI_ARTIFACTS: ${{ runner.temp }}/ui-check
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

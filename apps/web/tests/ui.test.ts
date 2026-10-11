@@ -13,10 +13,10 @@ import * as look from "@lemma/look";
 import * as llm from "@lemma/llm/web";
 import * as threads from "@lemma/threads";
 import { TogglePart } from "@lemma/look";
-import { Notify, Slots, UI_API, UiApi } from "@lemma/ui";
-import { defineUiPlugin, extendUiPlugin, routesOf } from "@lemma/ui";
-import { definePart, defineSlot, fallbackOf } from "@lemma/ui";
-import type { Part, SlotsService } from "@lemma/ui";
+import { Notify, Slots, WEB_API, WebApi } from "@lemma/web";
+import { defineWebPlugin, extendWebPlugin, routesOf } from "@lemma/web";
+import { definePart, defineSlot, fallbackOf } from "@lemma/web";
+import type { Part, SlotsService } from "@lemma/web";
 
 /** Resolves once `ready` holds; slot changes from a plugin starting or stopping arrive asynchronously. */
 const waitFor = async (ready: () => boolean) => {
@@ -28,7 +28,7 @@ const Items = defineSlot<{ readonly label: string }>("test.items");
 
 /** A plugin that adds `items` to `Items` (a UI plugin, as a bundled one would be). */
 const adding = (id: string, items: readonly { readonly id: string; readonly label: string; readonly order?: number }[]) =>
-  defineUiPlugin({
+  defineWebPlugin({
     id,
     requires: { slots: Slots },
     setup: ({ slots }) => {
@@ -39,7 +39,7 @@ const adding = (id: string, items: readonly { readonly id: string; readonly labe
 describe("slots", () => {
   it("orders items by order, then plugin id, then when they were added; a removal applies at once", async () => {
     let remove: (() => void) | undefined;
-    const late = defineUiPlugin({
+    const late = defineWebPlugin({
       id: "late",
       requires: { slots: Slots },
       setup: ({ slots }) => {
@@ -118,7 +118,7 @@ describe("slots", () => {
         });
         // A plugin stopping removes its items in the core: only the slot's watcher hears it.
         await Effect.runPromise(loader.apply({ plugins: { a: {}, b: { enabled: false } } }));
-        await waitFor(() => logged.mock.calls.some(([message]) => message === "lemma ui: a reader of test.items failed"));
+        await waitFor(() => logged.mock.calls.some(([message]) => message === "lemma web: a reader of test.items failed"));
         await Effect.runPromise(loader.apply({ plugins: { a: { enabled: false }, b: { enabled: false } } }));
         await waitFor(() => slots.list(Items).length === 0);
         dispose();
@@ -130,7 +130,7 @@ describe("slots", () => {
 
   it("gives every definition of a name the same slot, as a web half loaded again defines it again", async () => {
     const own = (id: string) =>
-      defineUiPlugin({
+      defineWebPlugin({
         id,
         requires: { slots: Slots },
         setup: ({ slots }) => {
@@ -188,7 +188,7 @@ describe("slots", () => {
 
   it("ignores an add from a plugin that has stopped", async () => {
     let captured: SlotsService | undefined;
-    const keeper = defineUiPlugin({
+    const keeper = defineWebPlugin({
       id: "keeper",
       requires: { slots: Slots },
       setup: ({ slots }) => {
@@ -218,7 +218,7 @@ describe("slots", () => {
 
 class Counter extends Context.Service<Counter, { readonly count: () => number; readonly add: () => void }>()("test/Counter") {}
 
-const counter = defineUiPlugin({
+const counter = defineWebPlugin({
   id: "counter",
   provides: { counter: Counter },
   setup: () => {
@@ -228,9 +228,9 @@ const counter = defineUiPlugin({
 });
 
 /** The runtime these tests need, as the boot provides it: the page's slots, and the contracts' version. */
-const runtime: ApplicationServices<readonly [typeof Slots, ReturnType<typeof UiApi>]> = {
-  provides: [Slots, UiApi(UI_API)],
-  layer: Layer.effectContext(Effect.map(makeSlots, (slots) => Context.make(Slots, slots).pipe(Context.add(UiApi(UI_API), UI_API)))),
+const runtime: ApplicationServices<readonly [typeof Slots, ReturnType<typeof WebApi>]> = {
+  provides: [Slots, WebApi(WEB_API)],
+  layer: Layer.effectContext(Effect.map(makeSlots, (slots) => Context.make(Slots, slots).pipe(Context.add(WebApi(WEB_API), WEB_API)))),
 };
 
 /** Runs `plugins` on the kernel the way the boot does, over the runtime, starting with those in `running`, and closes it. */
@@ -253,10 +253,10 @@ const run = async (plugins: readonly Plugin[], body: (loader: Loader) => Promise
   }
 };
 
-describe("defineUiPlugin", () => {
+describe("defineWebPlugin", () => {
   it("provides services by name and hands required ones to setup", async () => {
     const seen: number[] = [];
-    const reader = defineUiPlugin({
+    const reader = defineWebPlugin({
       id: "reader",
       requires: { counter: Counter, slots: Slots },
       setup: ({ counter, slots }) => {
@@ -280,7 +280,7 @@ describe("defineUiPlugin", () => {
 
   it("decodes its config and passes it to setup", async () => {
     const seen: unknown[] = [];
-    const configured = defineUiPlugin({
+    const configured = defineWebPlugin({
       id: "configured",
       config: Schema.Struct({ size: Schema.Number.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 3))) }),
       setup: (_, plugin) => void seen.push(plugin.config),
@@ -295,7 +295,7 @@ describe("defineUiPlugin", () => {
     class Model extends Context.Service<Model, { readonly ok: true }>()("test/Model") {}
     const [count, setCount] = createSignal(0);
     const seen: number[] = [];
-    const faulty = defineUiPlugin({
+    const faulty = defineWebPlugin({
       id: "faulty",
       provides: { model: Model },
       setup: () => {
@@ -305,9 +305,9 @@ describe("defineUiPlugin", () => {
         return { model: { ok: true } };
       },
     });
-    const needs = defineUiPlugin({ id: "needs", requires: { model: Model }, setup: () => {} });
+    const needs = defineWebPlugin({ id: "needs", requires: { model: Model }, setup: () => {} });
     // Activated after `faulty` (ids in order), so its effect runs after the one that throws in the same update.
-    const steady = defineUiPlugin({ id: "steady", setup: () => void createEffect(() => seen.push(count())) });
+    const steady = defineWebPlugin({ id: "steady", setup: () => void createEffect(() => seen.push(count())) });
     await run([faulty, needs, steady], async (loader) => {
       const states = async () => Object.fromEntries((await Effect.runPromise(loader.core.inspect)).plugins.map((plugin) => [plugin.id, plugin.state]));
       setCount(1);
@@ -325,10 +325,10 @@ describe("defineUiPlugin", () => {
   it("extends a definition, declares routes, and requires the API version it is written for", async () => {
     const Note = defineRoute("test.note", { path: "/notes/:id" });
     const calls: string[] = [];
-    const base = defineUiPlugin({ id: "notes", api: UI_API, routes: [Note], setup: () => void calls.push("base") });
-    expect(base.requires.map((tag) => tag.key)).toEqual([`lemma-ui/api@${UI_API}`]);
+    const base = defineWebPlugin({ id: "notes", api: WEB_API, routes: [Note], setup: () => void calls.push("base") });
+    expect(base.requires.map((tag) => tag.key)).toEqual([`lemma-web/api@${WEB_API}`]);
     expect(routesOf(base)).toEqual([Note]);
-    const extended = extendUiPlugin(base, (definition) => ({
+    const extended = extendWebPlugin(base, (definition) => ({
       ...definition,
       setup: (use, plugin) => {
         calls.push("mine");
@@ -336,18 +336,18 @@ describe("defineUiPlugin", () => {
       },
     }));
     expect([extended.id, routesOf(extended)]).toEqual(["notes", [Note]]);
-    expect(() => extendUiPlugin(definePlugin({ id: "raw", layer: Layer.empty }), (definition) => definition)).toThrow(/not made with defineUiPlugin/);
+    expect(() => extendWebPlugin(definePlugin({ id: "raw", layer: Layer.empty }), (definition) => definition)).toThrow(/not made with defineWebPlugin/);
     // `api.bundled.notify`: the runtime is not a plugin.
-    expect(() => extendUiPlugin(undefined, (definition) => definition)).toThrow(/the web app's runtime, not plugins/);
+    expect(() => extendWebPlugin(undefined, (definition) => definition)).toThrow(/the web app's runtime, not plugins/);
     await run([extended], async () => {
       expect(calls).toEqual(["mine", "base"]);
     });
   });
 
   it("refuses a plugin that provides what the runtime provides: the boot leaves it out, and the page keeps its own", () => {
-    const slots = defineUiPlugin({ id: "my-slots", provides: { slots: Slots }, setup: () => ({ slots: {} as SlotsService }) });
-    const version = defineUiPlugin({ id: "old-app", provides: { api: UiApi(UI_API) }, setup: () => ({ api: UI_API }) });
-    const notify = defineUiPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} as never }) });
+    const slots = defineWebPlugin({ id: "my-slots", provides: { slots: Slots }, setup: () => ({ slots: {} as SlotsService }) });
+    const version = defineWebPlugin({ id: "old-app", provides: { api: WebApi(WEB_API) }, setup: () => ({ api: WEB_API }) });
+    const notify = defineWebPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} as never }) });
     const keeps = adding("keeps", []);
     expect(checkComposition([slots], {}, { provided: runtime.provides }).map((error) => error.reason)).toEqual(["ReservedCapability"]);
     const plan = planComposition({
@@ -360,14 +360,14 @@ describe("defineUiPlugin", () => {
     expect(runs.map(([id]) => id)).toEqual(["keeps"]);
     expect([...plan.problems.keys()]).toEqual(["my-slots", "old-app", "my-notify"]);
     expect(plan.diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.suggestion])).toEqual([
-      ["warning", 'Stop providing "lemma-ui/Slots": the app provides it, or turn it off'],
-      ["warning", `Stop providing "lemma-ui/api@${UI_API}": the app provides it, or turn it off`],
-      ["warning", 'Stop providing "lemma-ui/Notify": the app provides it, or turn it off'],
+      ["warning", 'Stop providing "lemma-web/Slots": the app provides it, or turn it off'],
+      ["warning", `Stop providing "lemma-web/api@${WEB_API}": the app provides it, or turn it off`],
+      ["warning", 'Stop providing "lemma-web/Notify": the app provides it, or turn it off'],
     ]);
   });
 
   it("a setup that throws fails only its own plugin, releasing what it added", async () => {
-    const broken = defineUiPlugin({
+    const broken = defineWebPlugin({
       id: "broken",
       requires: { slots: Slots },
       setup: ({ slots }) => {

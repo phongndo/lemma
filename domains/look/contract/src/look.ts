@@ -1,4 +1,4 @@
-import { defineSlot } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
 import type { CodeBlock } from "./markdown.ts";
 
 /**
@@ -37,9 +37,9 @@ export const CodeBlocks = defineSlot<CodeBlockRenderer>("markdown.code");
  * The look is the `look.appearance` plugin's config (its row in
  * config.jsonc): a scheme, a theme for each scheme, an accent, fonts, text
  * size, corners, and the conversation width. It paints the look that config chooses on `<html>`
- * through `@lemma/ui/paint` (`api.look` for a web half); `look.appearance-page` edits
+ * through `@lemma/web/paint` (`api.look` for a web half); `look.appearance-page` edits
  * the config, and anything else changes the look the same way, by writing it
- * (`UiPlugins.setConfig`, `lemma plugins config look.appearance …`). What there is to
+ * (`WebPlugins.setConfig`, `lemma plugins config look.appearance …`). What there is to
  * choose from is these slots: `appearance` adds Lemma's own, and a plugin adds
  * a theme, an accent, or a font as an item, so a theme pack is a plugin and
  * its choices leave with it. Rows a plugin adds to the

@@ -95,7 +95,7 @@ export function fakeHost(options: { readonly configScope?: ConfigScope } = {}) {
         scopes.push(configure?.scope);
         return { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
       }),
-    ui: unused(),
+    web: unused(),
   } as unknown as typeof HostControl.Service;
   // A home of its own, as the host's: the llm plugin keeps the installation's device ID there.
   const home = mkdtempSync(join(tmpdir(), "lemma-llm-home-"));

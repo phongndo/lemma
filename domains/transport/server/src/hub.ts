@@ -1,6 +1,6 @@
 import { Deferred, Effect, Queue, Stream } from "effect";
 import type { Context } from "effect";
-import { changesSince, Channels, Notice, PluginsChanged, toPluginStatus, UiChanged } from "@lemma/contracts";
+import { changesSince, Channels, Notice, PluginsChanged, toPluginStatus, WebChanged } from "@lemma/contracts";
 import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
 import type { CoreClosed, Event, EventError, PluginContext, Registries } from "@lemma/core";
 import { answers, channelInfo } from "./channels.ts";
@@ -54,7 +54,7 @@ export const makeHub = (
 
     yield* forward(Notice, (notice) => ({ type: "notice", notice }));
     yield* forward(PluginsChanged, (e) => ({ type: "plugins-changed", plugins: e.plugins.map(toPluginStatus) }));
-    yield* forward(UiChanged, (ui) => ({ type: "ui-changed", ui }));
+    yield* forward(WebChanged, (web) => ({ type: "web-changed", web }));
     // The channels that answer, each time a different contribution answers for any id. Not the list at start, which
     // clients list themselves: one that changed before this stream began is in its first list, so each is told when it
     // differs from the last told, the start's first.

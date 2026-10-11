@@ -5,7 +5,7 @@
  * `.callout`, `.muted`, the `.search-box` field, the `.menu-*` rows and their
  * `[data-quick-key]` pick labels, the `.palette-*` list, and the inspectors'
  * `.dt-*`). Everything else belongs to the plugin that draws it and loads with it (`styles` in
- * `defineUiPlugin`), in the `plugins` layer; the shared parts' styles sit in
+ * `defineWebPlugin`), in the `plugins` layer; the shared parts' styles sit in
  * its `parts` sublayer, under the views. Tailwind's utilities (`tailwind.css`)
  * come last of the layers, so a class in a plugin's markup beats a rule in a
  * stylesheet. Stylesheets in `~/.lemma/plugins` are not layered, so they override

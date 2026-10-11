@@ -58,7 +58,7 @@ import { domainPlugins } from "../../../scripts/plugins.ts";
  * 11. With no provider set up, the app opens in the chat; the composer's notice
  *    opens Providers, which goes back to the chat once one connects.
  *
- * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web ui:check`.
+ * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web-app ui:check`.
  * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the
  * checks run in (below), every n-th from the i-th.
  * `LEMMA_BROWSER=firefox` or `webkit` runs it in Playwright's builds of those
@@ -88,7 +88,7 @@ const browser = await engine.launch({ headless: true, ...(executablePath ? { exe
 /** What went wrong on a lane's pages (see `lanes` below), kept apart from the other lanes'. */
 const log = () => {
   const errors: string[] = [];
-  /** The app's warnings (`lemma ui: …` problems, each also a toast). */
+  /** The app's warnings (`lemma web: …` problems, each also a toast). */
   const warnings: string[] = [];
   const expectNoErrors = (when: string) => {
     const found = errors.splice(0);
@@ -155,10 +155,10 @@ const boot = async () => {
 const checkPlugin = async (page: Page) => {
   await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
   await page.evaluate(() => {
-    const source = `export default ({ defineUiPlugin, contracts: { Slots } }) =>
-      defineUiPlugin({ id: "check", requires: { slots: Slots }, setup: ({ slots }) => { window.checkSlots = slots; } });`;
+    const source = `export default ({ defineWebPlugin, contracts: { Slots } }) =>
+      defineWebPlugin({ id: "check", requires: { slots: Slots }, setup: ({ slots }) => { window.checkSlots = slots; } });`;
     const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setUiFiles([{ name: "check.js", source: "user", kind: "script", path: "/check/check.js", url }]);
+    (window as any).lemmaMock.setWebFiles([{ name: "check.js", source: "user", kind: "script", path: "/check/check.js", url }]);
   });
   await page.waitForFunction(() => "checkSlots" in window, undefined, { timeout: 10_000 });
 };
@@ -405,10 +405,10 @@ const toggling = async () => {
 
   // A web half providing part of the runtime is left out, saying so, and the app's own goes on: its toasts still show.
   await page.evaluate(() => {
-    const source = `export default ({ defineUiPlugin, contracts: { Notify } }) =>
-      defineUiPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`;
+    const source = `export default ({ defineWebPlugin, contracts: { Notify } }) =>
+      defineWebPlugin({ id: "my-notify", provides: { notify: Notify }, setup: () => ({ notify: {} }) });`;
     const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setUiFiles([{ name: "my-notify.js", source: "user", kind: "script", path: "/check/my-notify.js", url }]);
+    (window as any).lemmaMock.setWebFiles([{ name: "my-notify.js", source: "user", kind: "script", path: "/check/my-notify.js", url }]);
   });
   await page
     .waitForFunction(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify" && plugin.problem !== undefined), undefined, {
@@ -416,7 +416,7 @@ const toggling = async () => {
     })
     .catch(() => assert.fail("a web half providing Notify was not left out"));
   assert(
-    warnings.some((warning) => warning.includes('"my-notify" is left out') && warning.includes('Stop providing "lemma-ui/Notify"')),
+    warnings.some((warning) => warning.includes('"my-notify" is left out') && warning.includes('Stop providing "lemma-web/Notify"')),
     "a web half providing Notify was left out without a warning",
   );
   await page.evaluate(async () => {
@@ -426,7 +426,7 @@ const toggling = async () => {
   await page
     .waitForSelector(".toast >> text=still the app's own", { timeout: 5_000 })
     .catch(() => assert.fail("toasts stopped with a web half providing Notify"));
-  await page.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
+  await page.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
   await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
   expectNoErrors("a web half providing part of the runtime");
   return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a web half providing Notify is left out`;
@@ -1068,7 +1068,7 @@ const parts = async () => {
   await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
   await page.evaluate((source) => {
     const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setUiFiles([{ name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url }]);
+    (window as any).lemmaMock.setWebFiles([{ name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url }]);
   }, todo);
   await page
     .click("[role=tablist][aria-label='Thread view'] [role=tab][aria-label=Todos]", { timeout: 10_000 })
@@ -1171,7 +1171,7 @@ const devtools = async () => {
   // What the runtime provides is the web app's, not missing: no capability lacks a provider.
   await page.fill("[aria-label='Filter plugins']", "threads.client");
   await page.click("[aria-label=Plugins] tr:has(td:first-child:text-is('threads.client'))");
-  await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('lemma-ui/Router')) >> text=the web app");
+  await page.waitForSelector("[aria-label='Plugin details'] tr:has(td:text-is('lemma-web/Router')) >> text=the web app");
   await page.fill("[aria-label='Filter plugins']", "");
   await page.waitForSelector(".dt-status >> text=/^0 capabilities without a provider$/");
   // The host's plugins too, and each hook's chain in run order.
@@ -1626,8 +1626,8 @@ const separate = async () => {
   await settled(styled);
   await styled.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
   await styled.evaluate(() => {
-    const source = `export default ({ defineUiPlugin, contracts: { Slots, SidebarFooter, Themes, Accents, SettingsGroups, SectionIds }, html }) =>
-      defineUiPlugin({ id: "check-look", requires: { slots: Slots }, setup: ({ slots }) => {
+    const source = `export default ({ defineWebPlugin, contracts: { Slots, SidebarFooter, Themes, Accents, SettingsGroups, SectionIds }, html }) =>
+      defineWebPlugin({ id: "check-look", requires: { slots: Slots }, setup: ({ slots }) => {
         slots.add(SidebarFooter, { id: "check-utilities", order: 1, component: () => html\`<span class="check-utilities tw:p-0.5 tw:px-4 tw:bg-accent tw:rounded">styled</span>\` });
         slots.add(Themes, { id: "check-night", title: "Check night", scheme: "dark", colors: { bg: "rgb(10, 20, 30)" } });
         slots.add(Themes, { id: "check-day", title: "Check day", scheme: "light", colors: { bg: "rgb(250, 240, 220)" } });
@@ -1635,7 +1635,7 @@ const separate = async () => {
         slots.add(SettingsGroups, { id: "check-look", section: SectionIds.appearance, title: "Check", entries: () => [{ text: "check look", view: () => html\`<p class="check-look-row">a plugin's row</p>\` }] });
       } });`;
     const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setUiFiles([{ name: "check-look.js", source: "user", kind: "script", path: "/check/check-look.js", url }]);
+    (window as any).lemmaMock.setWebFiles([{ name: "check-look.js", source: "user", kind: "script", path: "/check/check-look.js", url }]);
   });
   await styled.waitForSelector(".check-utilities", { timeout: 10_000 }).catch(() => assert.fail("a web half's plugin did not draw"));
   const look = () =>
@@ -1713,7 +1713,7 @@ const separate = async () => {
     .catch(() => assert.fail("a linked stylesheet's loading is no look change"));
   await styled.evaluate(() => (window as any).stopLooks());
 
-  await styled.evaluate(() => (window as any).lemmaMock.setUiFiles([]));
+  await styled.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
   await styled.waitForSelector(".check-utilities", { state: "detached", timeout: 10_000 });
   await styled
     .waitForFunction(() => document.querySelector("style[data-lemma-utilities]") === null, undefined, { timeout: 5_000 })

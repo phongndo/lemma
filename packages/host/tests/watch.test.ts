@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Duration, Effect, Schedule, Stream } from "effect";
 import { resolvePaths } from "../src/paths.ts";
-import { userPluginsDir } from "../src/ui.ts";
+import { userPluginsDir } from "../src/web.ts";
 import { watchConfig, watchPlugins } from "../src/watch.ts";
 
 describe("watchConfig", () => {

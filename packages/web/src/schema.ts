@@ -165,7 +165,7 @@ function optionalWith(schema: Schema.Top, options: OptionalWithOptions): Schema.
  * annotations on it: `optional(String).annotate({ title, description })`
  * (Effect 3's `.annotations(…)` and `propertySignature(…)` still work).
  */
-export const UiSchema = {
+export const WebSchema = {
   Array: Schema.Array,
   Boolean: Schema.Boolean,
   Int: Schema.Int,

@@ -1,6 +1,6 @@
 import type { PluginStatus } from "@lemma/contracts";
 import { defineRoute } from "@lemma/router";
-import { defineSlot } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
 import { Context, Schema } from "effect";
 import type { Accessor, Component, JSX } from "solid-js";
 
@@ -19,7 +19,7 @@ export interface SettingsService {
   readonly setParams: (patch: Readonly<Record<string, string | undefined>>) => void;
 }
 
-export class Settings extends Context.Service<Settings, SettingsService>()("lemma-ui/Settings") {}
+export class Settings extends Context.Service<Settings, SettingsService>()("lemma-web/Settings") {}
 
 /** A settings section (General when absent); its search is the section's own state, as strings. */
 export const SettingsRoute = defineRoute("settings", {

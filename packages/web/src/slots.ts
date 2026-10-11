@@ -108,7 +108,7 @@ export interface SlotsService {
   /** The slot's items that failed, with who added each and what it threw. Reactive. */
   readonly failures: <T>(slot: Slot<T>) => readonly SlotFailure<T>[];
   /**
-   * The same registry, adding as `contributor`'s. `defineUiPlugin` hands each plugin its own; a plugin written against
+   * The same registry, adding as `contributor`'s. `defineWebPlugin` hands each plugin its own; a plugin written against
    * the kernel directly makes its own from its `PluginContext`.
    */
   readonly as: (contributor: Contributor) => SlotsService;
@@ -193,7 +193,7 @@ export function createSlots(
       const contributor = contributors.get(item);
       failed.set(slot.name, [...list, { item, error, by: contributor, ...(contributor === undefined ? {} : { pluginId: contributor.id }) }]);
       setFailing((count) => count + 1);
-      if (contributor === undefined) console.error(`lemma ui: an item of ${slot.name} failed`, error);
+      if (contributor === undefined) console.error(`lemma web: an item of ${slot.name} failed`, error);
       else run(contributor.fault(`draw ${slot.name} "${item.id}"`, Cause.die(error)));
     },
     failures: <T>(slot: Slot<T>) => {

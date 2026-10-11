@@ -8,11 +8,11 @@ import { formatElapsed } from "./format.ts";
 import type { ToolResultView } from "@lemma/threads";
 import { ToolViews } from "@lemma/threads";
 import type { ChatToolProps, ThreadsService } from "@lemma/threads";
-import type { ClientService } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import type { ClientService } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 import { ChevronDownIcon, ChevronIcon, Icon, Spinner } from "@lemma/look";
 import { ChatTool } from "@lemma/threads";
-import { Contained } from "@lemma/ui";
+import { Contained } from "@lemma/web";
 import type { Chat } from "./config.ts";
 
 const imageSrc = (image: ImageContent) => `data:${image.mimeType};base64,${image.data}`;

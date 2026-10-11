@@ -64,33 +64,33 @@ describe("transport", () => {
         yield* Effect.promise(() => writeFile(join(dir, "panel.js"), "export default () => [];"));
         yield* Effect.promise(() => writeFile(join(dir, "ticker", "web.js"), "export default () => [];"));
         yield* Effect.promise(() => writeFile(join(dir, "secret.js"), "unlisted"));
-        host.holder.ui = {
-          ...host.holder.ui,
+        host.holder.web = {
+          ...host.holder.web,
           files: [
-            { name: "panel.js", source: "user", kind: "script", path: join(dir, "panel.js"), url: "/api/ui/user/panel.js?v=1" },
-            { name: "ticker/web.js", source: "user", kind: "script", path: join(dir, "ticker", "web.js"), url: "/api/ui/user/ticker/web.js?v=1" },
+            { name: "panel.js", source: "user", kind: "script", path: join(dir, "panel.js"), url: "/api/web/user/panel.js?v=1" },
+            { name: "ticker/web.js", source: "user", kind: "script", path: join(dir, "ticker", "web.js"), url: "/api/web/user/ticker/web.js?v=1" },
           ],
         };
         const get = (path: string) => Effect.promise(() => fetch(`${host.url}${path}`));
         const token = `token=${encodeURIComponent(host.token)}`;
-        expect((yield* get("/api/ui/user/panel.js?v=1")).status).toBe(401);
-        const served = yield* get(`/api/ui/user/panel.js?v=1&${token}`);
+        expect((yield* get("/api/web/user/panel.js?v=1")).status).toBe(401);
+        const served = yield* get(`/api/web/user/panel.js?v=1&${token}`);
         expect(served.status).toBe(200);
         expect(served.headers.get("content-type")).toMatch(/javascript/);
         expect(yield* Effect.promise(() => served.text())).toBe("export default () => [];");
-        expect((yield* get(`/api/ui/user/ticker/web.js?v=1&${token}`)).status).toBe(200);
+        expect((yield* get(`/api/web/user/ticker/web.js?v=1&${token}`)).status).toBe(200);
         // Only listed files are served, whatever else is in the directory.
-        expect((yield* get(`/api/ui/user/secret.js?${token}`)).status).toBe(404);
-        expect((yield* get(`/api/ui/user/..%2Fconfig.jsonc?${token}`)).status).toBe(404);
+        expect((yield* get(`/api/web/user/secret.js?${token}`)).status).toBe(404);
+        expect((yield* get(`/api/web/user/..%2Fconfig.jsonc?${token}`)).status).toBe(404);
 
         const client = yield* host.connect("websocket");
         const events = yield* subscribe(client);
-        expect((yield* client["Ui.Composition"]()).files.map((file) => file.name)).toEqual(["panel.js", "ticker/web.js"]);
+        expect((yield* client["Web.Composition"]()).files.map((file) => file.name)).toEqual(["panel.js", "ticker/web.js"]);
         // A row for a web half is written as any other; web apps hear it.
         yield* client["Host.Configure"]({ plugins: { composer: { enabled: false } } });
-        expect((yield* client["Ui.Composition"]()).plugins).toEqual({ composer: { enabled: false } });
-        const [changed] = (yield* waitFor(events, (event) => event.type === "ui-changed")).slice(-1);
-        expect(changed?.type === "ui-changed" && changed.ui.plugins).toEqual({ composer: { enabled: false } });
+        expect((yield* client["Web.Composition"]()).plugins).toEqual({ composer: { enabled: false } });
+        const [changed] = (yield* waitFor(events, (event) => event.type === "web-changed")).slice(-1);
+        expect(changed?.type === "web-changed" && changed.web.plugins).toEqual({ composer: { enabled: false } });
       }),
     ));
 
@@ -212,7 +212,7 @@ describe("transport", () => {
           const events = yield* subscribe(client);
           expect((yield* client["Host.Info"]()).cwd).toBe("/work");
           yield* client["Host.Configure"]({ plugins: { composer: { enabled: false } } });
-          yield* waitFor(events, (event) => event.type === "ui-changed");
+          yield* waitFor(events, (event) => event.type === "web-changed");
           expect(yield* client["Channel.Call"]({ id: "commands.list" })).toEqual([{ id: "test.greet", title: "Greet…", category: "Test", source: "greeter" }]);
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "missing" })))).toMatchObject({ code: "NotFound" });
         }),

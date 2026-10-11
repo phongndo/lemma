@@ -1,4 +1,4 @@
-import { defineSlot } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
 import type { Component } from "solid-js";
 
 /**

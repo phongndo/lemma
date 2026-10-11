@@ -1,5 +1,5 @@
 {
-  "name": "@lemma/web",
+  "name": "@lemma/web-app",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -62,7 +62,7 @@
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-read": "workspace:*",
     "@lemma/tools-write": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "@lemma/workspace": "workspace:*",
     "@lemma/workspace-add-project": "workspace:*",
     "@lemma/workspace-bar": "workspace:*",

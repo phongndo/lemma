@@ -1,5 +1,5 @@
 import type { AuthType, ProviderInfo } from "../llm.ts";
-import { definePart, partView } from "@lemma/ui";
+import { definePart, partView } from "@lemma/web";
 
 export interface ProviderLogoProps {
   readonly id: string;

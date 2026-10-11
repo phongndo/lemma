@@ -4,8 +4,8 @@ import { newRequestId } from "@lemma/agent/prompt";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/llm";
 import type { PromptContent, QueuedPrompt } from "@lemma/agent";
 import type { ImageContent } from "@lemma/llm";
-import { formatKeys, listKey, modKey, quickKey } from "@lemma/ui/keys";
-import { createQuickHold } from "@lemma/ui/quick-pick";
+import { formatKeys, listKey, modKey, quickKey } from "@lemma/web/keys";
+import { createQuickHold } from "@lemma/web/quick-pick";
 import { applySuggestion, findTrigger } from "@lemma/threads";
 import type { TriggerMatch } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
@@ -23,7 +23,7 @@ import {
   Threads,
   ThreadsActionIds,
 } from "@lemma/threads";
-import { Client, Notify, Router, Slots, UiPlugins } from "@lemma/ui";
+import { Client, Notify, Router, Slots, WebPlugins } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
 import type {
@@ -35,14 +35,14 @@ import type {
   ComposerSuggestionProps,
   ThreadsService,
 } from "@lemma/threads";
-import type { ClientService, NotifyService } from "@lemma/ui";
+import type { ClientService, NotifyService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineUiPlugin } from "@lemma/ui";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
-import type { SlotItem, SlotsService } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
+import { DEFAULT_PART_ORDER } from "@lemma/web";
+import type { SlotItem, SlotsService } from "@lemma/web";
 import { ChatIcon, ImageIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
 import { ComposerQueued, ComposerSuggestionView } from "@lemma/threads";
-import { Each, Highlighted, Isolated } from "@lemma/ui";
+import { Each, Highlighted, Isolated } from "@lemma/web";
 import styles from "./composer.css?inline";
 
 const readImage = (file: File): Promise<ImageContent> =>
@@ -715,11 +715,11 @@ function AttachImages(props: ComposerActionProps) {
 }
 
 /** Where prompts are written: text, pasted or dropped images, completions, send and stop. Its notices, controls, completions, and footer are slots. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.composer",
   styles,
   config: ComposerConfig,
-  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router, uiPlugins: UiPlugins },
+  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router, uiPlugins: WebPlugins },
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const drafts = new Map<string, Draft>();

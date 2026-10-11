@@ -15,7 +15,7 @@ import type { WorkEntry, WorkRow } from "./work.ts";
 import { createProjector, pendingToolCalls, promptMarks } from "@lemma/threads";
 import type { AssistantItem, AttemptItem, Block, Item, TurnView } from "@lemma/threads";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
-import { createNow } from "@lemma/ui/now";
+import { createNow } from "@lemma/web/now";
 import {
   ChatThinkingPart,
   ChatToolPart,
@@ -27,12 +27,12 @@ import {
   Threads,
   Views,
 } from "@lemma/threads";
-import { Client, Router, Slots } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import { Client, Router, Slots } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 import type { ChatThinkingProps, ChatTurnFooterProps, ChatUserProps, ChatWorkGroupProps, ChatWorkingProps, ChatWorkProps } from "@lemma/threads";
-import { defineUiPlugin } from "@lemma/ui";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
-import type { Part } from "@lemma/ui";
+import { defineWebPlugin } from "@lemma/web";
+import { DEFAULT_PART_ORDER } from "@lemma/web";
+import type { Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, Spinner, CopyButton } from "@lemma/look";
 import { ChatThinking, ChatTurnFooter, ChatUser, ChatWork, ChatWorkGroup, ChatWorking, ToolViews } from "@lemma/threads";
 import styles from "./chat.css?inline";
@@ -709,7 +709,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
  * The session as a conversation, projected from its log. Tool calls render
  * through the `chat.tools` slot when a plugin fills it for that tool.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.transcript",
   styles,
   config: ChatConfig,

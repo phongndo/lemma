@@ -115,9 +115,10 @@ export const HostInfo = Schema.Struct({
 export type HostInfo = typeof HostInfo.Type;
 
 /**
- * The version of what the host serves on the wire (`RuntimeRpcs`, and its encoding, which Effect's RPC owns): 4 since
- * a plugin's one row decides its host and web halves alike (`Host.Configure` writes every row), 3 since it serves the runtime's calls and events only, each domain reached through its channels, 2 since Lemma moved to
+ * The version of what the host serves on the wire (`RuntimeRpcs`, and its encoding, which Effect's RPC owns): 5 since
+ * the web app's calls and events are named for it (`Web.Composition`, `web-changed`, `/api/web`), 4 since a plugin's
+ * one row decides its host and web halves alike (`Host.Configure` writes every row), 3 since it serves the runtime's calls and events only, each domain reached through its channels, 2 since Lemma moved to
  * Effect 4, 1 before (a host whose `/api/health` names none). A client and a host speaking different versions cannot
  * talk, so a client whose calls fail asks `/api/health` to say why.
  */
-export const HOST_PROTOCOL = 4;
+export const HOST_PROTOCOL = 5;

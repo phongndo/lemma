@@ -10,12 +10,12 @@ import type { AgentActivity } from "@lemma/agent";
 import type { CommandInfo } from "@lemma/commands";
 import type { LlmChange } from "@lemma/llm";
 import type { SessionsChange } from "@lemma/sessions";
-import { clockTime } from "@lemma/ui/format";
+import { clockTime } from "@lemma/web/format";
 import { ThreadRoute } from "@lemma/sessions";
 import type { DevtoolsPanel } from "@lemma/devtools";
-import type { ClientService, RouterService } from "@lemma/ui";
+import type { ClientService, RouterService } from "@lemma/web";
 import { XIcon } from "@lemma/look";
-import type { SlotItem } from "@lemma/ui";
+import type { SlotItem } from "@lemma/web";
 
 export const EVENTS_PANEL = "devtools.events";
 /** Lines kept, newest last; older ones drop off the top. */
@@ -132,8 +132,8 @@ const describe = (line: Line): string => {
       return event.plugins.map((plugin) => `${plugin.id}=${plugin.state}`).join(" ");
     case "channels-changed":
       return event.channels.map((channel) => `${channel.id} (${channel.source})`).join(" ") || "none";
-    case "ui-changed":
-      return `${Object.keys(event.ui.plugins).length} rows · files ${event.ui.files.map((file) => file.name).join(" ") || "none"}`;
+    case "web-changed":
+      return `${Object.keys(event.web.plugins).length} rows · files ${event.web.files.map((file) => file.name).join(" ") || "none"}`;
   }
 };
 

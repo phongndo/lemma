@@ -1,26 +1,26 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
-import { copyAndTell } from "@lemma/ui/clipboard";
-import { stepFor, withKeys } from "@lemma/ui/keys";
-import { loadJson, save } from "@lemma/ui/storage";
-import { relativeTime, tildePath } from "@lemma/ui/format";
+import { copyAndTell } from "@lemma/web/clipboard";
+import { stepFor, withKeys } from "@lemma/web/keys";
+import { loadJson, save } from "@lemma/web/storage";
+import { relativeTime, tildePath } from "@lemma/web/format";
 import { shownKeys } from "@lemma/actions";
 import { fileSessions, sessionTitle } from "@lemma/threads";
-import { createNow } from "@lemma/ui/now";
+import { createNow } from "@lemma/web/now";
 import { ActionIds, Actions } from "@lemma/actions";
 import { SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { ThreadActions, Threads, SidebarRowPart } from "@lemma/threads";
-import { Client, Notify, Slots, UiPlugins } from "@lemma/ui";
+import { Client, Notify, Slots, WebPlugins } from "@lemma/web";
 import { ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { MenuAction } from "@lemma/frame";
 import type { ThreadAction, ThreadsService, SidebarRowProps } from "@lemma/threads";
-import type { ClientService } from "@lemma/ui";
+import type { ClientService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
-import type { Slot, SlotItem, SlotsService } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { DEFAULT_PART_ORDER } from "@lemma/web";
+import type { Slot, SlotItem, SlotsService } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
 import {
   ArchiveIcon,
   ChatIcon,
@@ -41,7 +41,7 @@ import {
   XIcon,
 } from "@lemma/look";
 import { SidebarRow } from "@lemma/threads";
-import { Contained, Each } from "@lemma/ui";
+import { Contained, Each } from "@lemma/web";
 import styles from "./sidebar.css?inline";
 
 interface Deps {
@@ -368,10 +368,10 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
 }
 
 /** Threads by project, pinned ones first, with search, new-chat buttons, and a menu for each session and project. Its foot is a slot (settings, connection). */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.sidebar",
   styles,
-  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots, uiPlugins: UiPlugins },
+  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots, uiPlugins: WebPlugins },
   setup: (use) => {
     // Relative times refresh once a minute.
     const now = createNow(60_000);

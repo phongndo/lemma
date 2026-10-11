@@ -2,7 +2,7 @@ import { capabilityName, describeReload, hookChain, providerOf, tablesOf, usersO
 import { formatCost, formatDuration, formatTokens } from "@lemma/client/format";
 import { contentText, parseModelRef } from "@lemma/llm";
 import { recordDuration, recordName, recordStatus, RECORD_KIND_LABEL } from "@lemma/sessions";
-import type { ChannelInfo, InspectorInfo, KernelView, HostInfo, InteractionRequest, PluginStatus, ReloadResult, UiComposition } from "@lemma/contracts";
+import type { ChannelInfo, InspectorInfo, KernelView, HostInfo, InteractionRequest, PluginStatus, ReloadResult, WebComposition } from "@lemma/contracts";
 import type { QueuedPrompt } from "@lemma/agent";
 import type { CommandInfo } from "@lemma/commands";
 import type { ModelInfo, ProviderInfo, Usage } from "@lemma/llm";
@@ -159,7 +159,7 @@ export const formatConfig = (plugin: PluginStatus): string => {
  * What the host knows of the web app's halves: rows naming plugins the host does not have (the web app's), and the web
  * halves and stylesheets in the plugin directories. Empty when there are none.
  */
-export const formatWebHalves = (ui: UiComposition, hostIds: ReadonlySet<string>): string => {
+export const formatWebHalves = (ui: WebComposition, hostIds: ReadonlySet<string>): string => {
   const rows = Object.entries(ui.plugins)
     .filter(([id]) => !hostIds.has(id))
     .map(([id, row]) => [

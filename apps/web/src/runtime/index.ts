@@ -2,8 +2,8 @@ import { Context, Effect, Layer } from "effect";
 import type { Host } from "@lemma/client";
 import type { ApplicationServices } from "@lemma/core";
 import type { AnyRoute } from "@lemma/router";
-import { Client, HostPlugins, Interactions, Notify, Router, Slots, UI_API, UiApi, UiPlugins } from "@lemma/ui";
-import type { HostPluginsService, NotifyService, UiPluginsService } from "@lemma/ui";
+import { Client, HostPlugins, Interactions, Notify, Router, Slots, WEB_API, WebApi, WebPlugins } from "@lemma/web";
+import type { HostPluginsService, NotifyService, WebPluginsService } from "@lemma/web";
 import { createClient } from "./client.ts";
 import { createHostPlugins } from "./host-plugins.ts";
 import { createInteractions } from "./interactions.ts";
@@ -21,7 +21,7 @@ import { makeSlots } from "./slots.ts";
  */
 
 /** What the runtime provides, in the order it builds them. */
-export const provides = [Client, UiPlugins, UiApi(UI_API), Notify, HostPlugins, Interactions, Slots, Router] as const;
+export const provides = [Client, WebPlugins, WebApi(WEB_API), Notify, HostPlugins, Interactions, Slots, Router] as const;
 
 export interface WebRuntime {
   /** The page's messages, for what the boot itself reports (problems, faults). */
@@ -42,7 +42,7 @@ export interface WebRuntime {
 export function createWebRuntime(options: {
   readonly host: Host;
   /** The web app's own plugins, which the boot runs. */
-  readonly plugins: UiPluginsService;
+  readonly plugins: WebPluginsService;
   /** The app's own routes, known whatever plugins run (`BootOptions.appRoutes`). */
   readonly appRoutes: readonly AnyRoute[];
 }): WebRuntime {
@@ -56,8 +56,8 @@ export function createWebRuntime(options: {
       const router = createRouterService({ slots, notify: notify.notify, plugins: options.plugins, known: options.appRoutes });
       yield* Effect.addFinalizer(() => Effect.sync(router.dispose));
       return Context.make(Client, client.client).pipe(
-        Context.add(UiPlugins, options.plugins),
-        Context.add(UiApi(UI_API), UI_API),
+        Context.add(WebPlugins, options.plugins),
+        Context.add(WebApi(WEB_API), WEB_API),
         Context.add(Notify, notify.notify),
         Context.add(HostPlugins, hostPlugins.plugins),
         Context.add(Interactions, interactions.interactions),

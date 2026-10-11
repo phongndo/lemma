@@ -15,7 +15,7 @@ import type {
   PluginStatus,
   ReloadResult,
   RuntimeEvent,
-  UiComposition,
+  WebComposition,
 } from "@lemma/contracts";
 import { makeHostRpc, raw, rpcUrl } from "./rpc.ts";
 import type { HostRpcClient, RawHostRpcClient } from "./rpc.ts";
@@ -115,9 +115,9 @@ export interface Host {
     /** Write plugin rows into the user (default) or project config file and apply them; a rejected change is undone. */
     readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { scope?: ConfigScope }) => Promise<ReloadResult>;
   };
-  readonly ui: {
+  readonly web: {
     /** What the web app plans its halves from: every plugin's row, and the web halves' files. `host.configure` writes rows. */
-    readonly composition: () => Promise<UiComposition>;
+    readonly composition: () => Promise<WebComposition>;
   };
   readonly status: () => ConnectionStatus;
   /** Called immediately with the current status, then on every change. */
@@ -452,8 +452,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       reload: () => runPromise(rpc["Host.Reload"]()),
       configure: (plugins, options) => runPromise(rpc["Host.Configure"](options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
-    ui: {
-      composition: () => runPromise(rpc["Ui.Composition"]()),
+    web: {
+      composition: () => runPromise(rpc["Web.Composition"]()),
     },
     status: () => status,
     onStatus: (listener) => {

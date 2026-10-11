@@ -2,8 +2,8 @@ import { Show, createSignal } from "solid-js";
 import { describeReload } from "@lemma/contracts";
 import { Actions } from "@lemma/actions";
 import { SidebarFooter } from "@lemma/frame";
-import { Client, Notify, Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Client, Notify, Slots } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
 import { RefreshIcon, Spinner } from "@lemma/look";
 import styles from "./reload.css?inline";
 
@@ -38,7 +38,7 @@ const takeReport = (): string | undefined => {
  * re-reads its config and plugin files), then the page. An action, so the palette lists it and keys can run it, and a
  * button in the sidebar's footer beside the connection's dot.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.reload",
   styles,
   requires: { client: Client, slots: Slots, notify: Notify },

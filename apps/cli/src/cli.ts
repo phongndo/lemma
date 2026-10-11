@@ -261,7 +261,7 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
         return (
           extra(sub === undefined ? 1 : 2) ??
           (({ rpc }) =>
-            Effect.map(Effect.all([rpc["Host.Plugins"](), rpc["Ui.Composition"]()], { concurrency: "unbounded" }), ([plugins, ui]) => ({
+            Effect.map(Effect.all([rpc["Host.Plugins"](), rpc["Web.Composition"]()], { concurrency: "unbounded" }), ([plugins, ui]) => ({
               json: plugins,
               text: [formatPlugins(plugins), formatWebHalves(ui, new Set(plugins.map((plugin) => plugin.id)))].filter(Boolean).join("\n\n"),
             })))

@@ -14,7 +14,7 @@
   "dependencies": {
     "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "mermaid": "12.0.0",
     "solid-js": "1.9.15"
   },

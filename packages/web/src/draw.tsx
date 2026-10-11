@@ -30,7 +30,7 @@ export function Contained<P extends Record<string, any>>(props: {
         // After this draw: the item leaving changes what the slot's readers draw.
         queueMicrotask(() => {
           const service = slots();
-          if (service === undefined) console.error(`lemma ui: an item of ${props.slot.name} failed`, error);
+          if (service === undefined) console.error(`lemma web: an item of ${props.slot.name} failed`, error);
           else service.fail(props.slot, props.item, error);
         });
         return null;
@@ -50,7 +50,7 @@ export function Isolated<P extends Record<string, any>>(props: { readonly compon
   return (
     <ErrorBoundary
       fallback={(error) => {
-        console.error("lemma ui: a component handed to another plugin failed", error);
+        console.error("lemma web: a component handed to another plugin failed", error);
         return null;
       }}
     >

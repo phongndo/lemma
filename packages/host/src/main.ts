@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
 import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
-import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
+import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, WebChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ChangeReport, ConfigScope, PluginChange, UiComposition } from "@lemma/contracts";
+import type { ChangeReport, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
@@ -17,7 +17,7 @@ import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
 import type { HostControlHandle } from "./runtime.ts";
-import { listUiFiles, userPluginsDir as pluginsDirOf } from "./ui.ts";
+import { listWebFiles, userPluginsDir as pluginsDirOf } from "./web.ts";
 import { watchConfig, watchPlugins } from "./watch.ts";
 
 const args = new Set(process.argv.slice(2));
@@ -67,7 +67,7 @@ interface Loaded {
   readonly configIn: Readonly<Record<string, ConfigScope>>;
   readonly trusted: boolean;
   /** The web app's rows and files, which it plans itself. */
-  readonly ui: UiComposition;
+  readonly web: WebComposition;
 }
 
 /** The last load the loader accepted; the catalog and `configure` reason about this. */
@@ -95,7 +95,7 @@ const source: PluginSource = {
   },
 };
 
-const EMPTY_UI: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+const EMPTY_WEB: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
 
 /**
  * Read config files and local plugins into the next composition (see
@@ -109,7 +109,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       const planned = planComposition({ ...input, local: [], rows: {} });
       const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
       if (errors.length) return yield* new ReloadError({ diagnostics: errors });
-      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, ui: EMPTY_UI };
+      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB };
     }
     const loaded = yield* loadComposition(paths);
     // Project plugins run only in a project the user config trusts; see `loadComposition`.
@@ -143,7 +143,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     if (errors.length) return yield* new ReloadError({ diagnostics: errors });
     // Only for a composition that will run: a rejected one's warnings describe nothing that happens.
     yield* printDiagnostics(diagnostics.filter((diagnostic) => diagnostic.severity === "warning"));
-    const files = yield* listUiFiles(paths, loaded.trusted);
+    const files = yield* listWebFiles(paths, loaded.trusted);
     return {
       known: planned.known,
       composition: planned.composition,
@@ -153,7 +153,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       enabledIn: loaded.enabledIn,
       configIn: loaded.configIn,
       trusted: loaded.trusted,
-      ui: { plugins: loaded.rows, enabledIn: loaded.enabledIn, configIn: loaded.configIn, files },
+      web: { plugins: loaded.rows, enabledIn: loaded.enabledIn, configIn: loaded.configIn, files },
     };
   });
 
@@ -257,8 +257,8 @@ const program = Effect.gen(function* () {
       pinned,
     });
   /** Web apps plan their halves from the rows and files themselves; tell them when either changed. */
-  const publishUi = (loader: Loader, previous: UiComposition, next: UiComposition) =>
-    JSON.stringify(previous) === JSON.stringify(next) ? Effect.void : publish(loader, UiChanged, next);
+  const publishWeb = (loader: Loader, previous: WebComposition, next: WebComposition) =>
+    JSON.stringify(previous) === JSON.stringify(next) ? Effect.void : publish(loader, WebChanged, next);
   // The source resolves ids against the load being applied, so the next set is visible before the loader accepts it.
   const apply = (loader: Loader, next: Loaded) =>
     Effect.gen(function* () {
@@ -271,7 +271,7 @@ const program = Effect.gen(function* () {
           }),
         ),
       );
-      yield* publishUi(loader, previous.ui, next.ui).pipe(Effect.ignore);
+      yield* publishWeb(loader, previous.web, next.web).pipe(Effect.ignore);
       return report;
     });
   /** Writes rows into a config file and applies the result; a change the host rejects is undone in the file. */
@@ -369,7 +369,7 @@ const program = Effect.gen(function* () {
   );
   const handle: HostControlHandle = {
     plugins: withLoader((loader) => Effect.map(loader.core.inspect, catalogOf)),
-    ui: Effect.sync(() => applied.ui),
+    web: Effect.sync(() => applied.web),
     composition: withLoader((loader) =>
       Effect.gen(function* () {
         const composition = yield* loader.composition;

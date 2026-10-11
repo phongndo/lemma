@@ -1,6 +1,6 @@
 import type { MenuAction } from "@lemma/frame";
-import { defineSlot } from "@lemma/ui";
-import type { Region } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
+import type { Region } from "@lemma/web";
 import type { WorkspaceStatus } from "../workspace.ts";
 import { Context } from "effect";
 import type { Accessor } from "solid-js";
@@ -52,7 +52,7 @@ export interface WorkspaceService {
   readonly newChatDir: (text: string) => Promise<string | undefined>;
 }
 
-export class Workspace extends Context.Service<Workspace, WorkspaceService>()("lemma-ui/Workspace") {}
+export class Workspace extends Context.Service<Workspace, WorkspaceService>()("lemma-web/Workspace") {}
 
 /** An item in a project's menu in the sidebar, by the project's directory. New thread and copy path are the sidebar's defaults; project settings and delete, the projects page's. */
 export type ProjectAction = MenuAction<string>;

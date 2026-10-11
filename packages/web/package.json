@@ -1,5 +1,5 @@
 {
-  "name": "@lemma/ui",
+  "name": "@lemma/web",
   "version": "0.1.0",
   "private": true,
   "description": "The web app's plugin API: the runtime every web plugin is written against, defining a plugin, slots and parts, drawing them, and helpers",

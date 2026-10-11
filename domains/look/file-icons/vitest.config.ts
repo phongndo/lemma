@@ -1,1 +1,1 @@
-export { default } from "@lemma/ui/vitest";
+export { default } from "@lemma/web/vitest";

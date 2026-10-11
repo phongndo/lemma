@@ -1,6 +1,6 @@
 {
   "extends": "../../../tsconfig.base.json",
-  "include": ["src", "tests", "../../../packages/ui/assets.d.ts"],
+  "include": ["src", "tests", "../../../packages/web/assets.d.ts"],
   "compilerOptions": {
     "jsx": "preserve",
     "jsxImportSource": "solid-js",

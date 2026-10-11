@@ -13,7 +13,7 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "solid-js": "1.9.15"
   },
   "devDependencies": {

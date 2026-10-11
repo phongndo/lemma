@@ -13,7 +13,7 @@
   "dependencies": {
     "@lemma/actions": "workspace:*",
     "@lemma/frame": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

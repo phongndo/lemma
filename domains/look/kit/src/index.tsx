@@ -23,10 +23,10 @@ import {
   SearchFieldPart,
   TogglePart,
 } from "@lemma/look";
-import { Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
-import type { Part } from "@lemma/ui";
+import { Slots } from "@lemma/web";
+import { defineWebPlugin } from "@lemma/web";
+import { DEFAULT_PART_ORDER } from "@lemma/web";
+import type { Part } from "@lemma/web";
 import styles from "./kit.css?inline";
 
 /**
@@ -36,7 +36,7 @@ import styles from "./kit.css?inline";
  * replacing one here (or adding one with a lower order from any plugin or UI
  * file) changes it everywhere.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "look.kit",
   styles,
   requires: { slots: Slots },

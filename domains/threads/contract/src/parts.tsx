@@ -1,7 +1,7 @@
 import type { QueuedPrompt } from "@lemma/agent";
 import type { ImageContent, TextContent } from "@lemma/llm";
 import type { SessionInfo } from "@lemma/sessions";
-import { definePart, partView } from "@lemma/ui";
+import { definePart, partView } from "@lemma/web";
 import type { JSX } from "solid-js";
 import type { ComposerSuggestion, ThreadAction, ToolBodyProps } from "./threads.ts";
 import type { TurnView } from "./transcript.ts";

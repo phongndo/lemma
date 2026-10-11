@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 import { describeError } from "@lemma/client";
-import type { ClientService, NotifyService, Toast } from "@lemma/ui";
+import type { ClientService, NotifyService, Toast } from "@lemma/web";
 
 /** How many messages it keeps: past these the oldest leave, so they cannot pile up while nothing draws them. */
 const KEPT = 50;

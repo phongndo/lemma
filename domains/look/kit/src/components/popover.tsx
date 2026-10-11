@@ -1,7 +1,7 @@
 import { Show, createSignal, onCleanup } from "solid-js";
 import { Portal } from "solid-js/web";
 
-import { listKey, modKey, quickKey } from "@lemma/ui/keys";
+import { listKey, modKey, quickKey } from "@lemma/web/keys";
 import type { Placement, PopoverProps } from "@lemma/look";
 
 const MARGIN = 8;

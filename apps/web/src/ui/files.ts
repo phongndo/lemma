@@ -1,4 +1,4 @@
-import type { UiFile } from "@lemma/contracts";
+import type { WebFile } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import type { LocalPlugin } from "@lemma/composition";
 import { extractCandidates } from "../model/candidates.ts";
@@ -16,7 +16,7 @@ const isPlugin = (value: unknown): value is Plugin =>
  * Loads the web halves and stylesheets the host lists into the page. A web
  * half (a script) is an ES module whose
  * default export is a plugin, an array of them, or a function that receives
- * `api` (Solid, the contracts, `defineUiPlugin`, the app's components and
+ * `api` (Solid, the contracts, `defineWebPlugin`, the app's components and
  * bundled plugins) and returns either; it runs with the page's permissions
  * and token. A stylesheet
  * is linked after the app's own, so it can override any `--` token. File URLs
@@ -36,7 +36,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
   // The latest load's sheet wins over an earlier one still compiling.
   let generation = 0;
 
-  const candidatesOf = (file: UiFile) => {
+  const candidatesOf = (file: WebFile) => {
     let found = candidates.get(file.url);
     if (found === undefined) {
       found = fetch(withToken(file.url)).then(async (response) => (response.ok ? extractCandidates(await response.text()) : []));
@@ -46,7 +46,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
   };
 
   /** Compiles the utilities the scripts use, with the app's own; a problem when that fails. */
-  const syncUtilities = async (files: readonly UiFile[]): Promise<readonly string[]> => {
+  const syncUtilities = async (files: readonly WebFile[]): Promise<readonly string[]> => {
     const current = ++generation;
     const scriptFiles = files.filter((file) => file.kind === "script");
     if (scriptFiles.length === 0) {
@@ -70,7 +70,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
     }
   };
 
-  const syncStyles = (files: readonly UiFile[]) => {
+  const syncStyles = (files: readonly WebFile[]) => {
     const wanted = new Set(files.filter((file) => file.kind === "style").map((file) => file.url));
     for (const [url, link] of links) {
       if (wanted.has(url)) continue;
@@ -88,7 +88,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
     }
   };
 
-  const importScript = async (file: UiFile): Promise<LoadedFiles> => {
+  const importScript = async (file: WebFile): Promise<LoadedFiles> => {
     const where = `${file.source === "user" ? "~/.lemma/plugins" : ".lemma/plugins"}/${file.name}`;
     try {
       const module: { default?: unknown } = await import(/* @vite-ignore */ withToken(file.url));
@@ -99,7 +99,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
       return {
         plugins: plugins.map((plugin) => ({ plugin, source: file.source })),
         problems:
-          plugins.length === 0 ? [`${where}: its default export is no plugin; export defineUiPlugin({ … }), or a function of the api returning one`] : [],
+          plugins.length === 0 ? [`${where}: its default export is no plugin; export defineWebPlugin({ … }), or a function of the api returning one`] : [],
       };
     } catch (error) {
       return { plugins: [], problems: [`${where}: cannot load: ${error instanceof Error ? error.message : String(error)}`] };
@@ -107,7 +107,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
   };
 
   return {
-    load: async (files: readonly UiFile[]): Promise<LoadedFiles> => {
+    load: async (files: readonly WebFile[]): Promise<LoadedFiles> => {
       syncStyles(files);
       const compiled = syncUtilities(files);
       const loaded = await Promise.all(

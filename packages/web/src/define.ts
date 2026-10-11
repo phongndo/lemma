@@ -3,13 +3,13 @@ import { catchError, createRoot } from "solid-js";
 import type { Capabilities, Plugin, Services } from "@lemma/core";
 import { definePlugin as definePlainPlugin } from "@lemma/core/plain";
 import type { AnyRoute } from "@lemma/router";
-import { Slots, UiApi } from "./runtime.ts";
+import { Slots, WebApi } from "./runtime.ts";
 import type { SlotsService } from "./slots.ts";
 
 /** Named capabilities (a plugin's `requires` or `provides`), and the services behind them: the kernel's. */
 export type { Capabilities, Services };
 
-export interface UiPluginContext<Config> {
+export interface WebPluginContext<Config> {
   readonly id: string;
   /** Decoded from the plugin's `config` Schema; its row in config.jsonc's `plugins` sets it. */
   readonly config: Config;
@@ -17,7 +17,7 @@ export interface UiPluginContext<Config> {
   readonly onCleanup: (fn: () => void) => void;
 }
 
-export interface UiPluginDefinition<Requires extends Capabilities, Provides extends Capabilities, Config> {
+export interface WebPluginDefinition<Requires extends Capabilities, Provides extends Capabilities, Config> {
   readonly id: string;
   readonly version?: string;
   readonly config?: Schema.Codec<Config, any>;
@@ -30,7 +30,7 @@ export interface UiPluginDefinition<Requires extends Capabilities, Provides exte
   readonly requires?: Requires;
   readonly provides?: Provides;
   /**
-   * The version of the web app's contracts it is written for (`UI_API`). An
+   * The version of the web app's contracts it is written for (`WEB_API`). An
    * app that does not provide it leaves the plugin out, saying which version
    * it needs, rather than run it against contracts it was not written for.
    */
@@ -50,13 +50,13 @@ export interface UiPluginDefinition<Requires extends Capabilities, Provides exte
    * updated, so it stops rather than run on, and the rest of the page keeps
    * updating.
    */
-  readonly setup: (use: Services<Requires>, plugin: UiPluginContext<Config>) => keyof Provides extends never ? void : Services<Provides>;
+  readonly setup: (use: Services<Requires>, plugin: WebPluginContext<Config>) => keyof Provides extends never ? void : Services<Provides>;
 }
 
-/** Each UI plugin's definition, for `extendUiPlugin` and `routesOf`. */
-const definitions = new WeakMap<Plugin, UiPluginDefinition<any, any, any>>();
+/** Each UI plugin's definition, for `extendWebPlugin` and `routesOf`. */
+const definitions = new WeakMap<Plugin, WebPluginDefinition<any, any, any>>();
 
-/** The routes `plugin` declares (`UiPluginDefinition.routes`); none for a plugin not made with `defineUiPlugin`. */
+/** The routes `plugin` declares (`WebPluginDefinition.routes`); none for a plugin not made with `defineWebPlugin`. */
 export const routesOf = (plugin: Plugin): readonly AnyRoute[] => definitions.get(plugin)?.routes ?? [];
 
 /**
@@ -65,21 +65,21 @@ export const routesOf = (plugin: Plugin): readonly AnyRoute[] => definitions.get
  * original's. A replacement made this way keeps what the original gains in
  * later versions instead of a copy of it.
  *
- *   extendUiPlugin(api.bundled["frame.toasts"], (base) => ({ ...base, setup: (use, plugin) => { const made = base.setup(use, plugin); … return made; } }))
+ *   extendWebPlugin(api.bundled["frame.toasts"], (base) => ({ ...base, setup: (use, plugin) => { const made = base.setup(use, plugin); … return made; } }))
  */
-export function extendUiPlugin(
+export function extendWebPlugin(
   plugin: Plugin | undefined,
-  change: (definition: UiPluginDefinition<Capabilities, Capabilities, any>) => UiPluginDefinition<Capabilities, Capabilities, any>,
+  change: (definition: WebPluginDefinition<Capabilities, Capabilities, any>) => WebPluginDefinition<Capabilities, Capabilities, any>,
 ): Plugin {
   // `api.bundled.toasts` (an id without its domain), or `api.bundled.notify` (the runtime's, which is no plugin).
   if (plugin === undefined) {
     throw new Error(
-      "No bundled plugin there: a bundled plugin's id names its domain (frame.toasts, not toasts), and Client, Slots, Router, Notify, HostPlugins, Interactions, and UiPlugins are the web app's runtime, not plugins",
+      "No bundled plugin there: a bundled plugin's id names its domain (frame.toasts, not toasts), and Client, Slots, Router, Notify, HostPlugins, Interactions, and WebPlugins are the web app's runtime, not plugins",
     );
   }
   const definition = definitions.get(plugin);
-  if (definition === undefined) throw new Error(`"${plugin.id}" was not made with defineUiPlugin, so it has no definition to extend`);
-  return defineUiPlugin(change(definition));
+  if (definition === undefined) throw new Error(`"${plugin.id}" was not made with defineWebPlugin, so it has no definition to extend`);
+  return defineWebPlugin(change(definition));
 }
 
 /** Where a plugin's API-version requirement sits among its named capabilities; no plugin names one so. */
@@ -95,10 +95,10 @@ const API = "~api";
  * boundary, and its stylesheet applies while it runs. The kernel still plans,
  * orders, replaces, and supervises it like any host plugin.
  */
-export function defineUiPlugin<const Requires extends Capabilities = {}, const Provides extends Capabilities = {}, Config = void>(
-  definition: UiPluginDefinition<Requires, Provides, Config>,
+export function defineWebPlugin<const Requires extends Capabilities = {}, const Provides extends Capabilities = {}, Config = void>(
+  definition: WebPluginDefinition<Requires, Provides, Config>,
 ): Plugin {
-  const requires: Capabilities = { ...definition.requires, ...(definition.api === undefined ? {} : { [API]: UiApi(definition.api) }) };
+  const requires: Capabilities = { ...definition.requires, ...(definition.api === undefined ? {} : { [API]: WebApi(definition.api) }) };
   const plugin = definePlainPlugin(
     {
       id: definition.id,

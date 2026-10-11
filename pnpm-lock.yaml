@@ -348,9 +348,9 @@ importers:
       '@lemma/tools-write':
         specifier: workspace:*
         version: link:../../domains/tools/write
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../packages/ui
+        version: link:../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../domains/workspace/contract
@@ -418,9 +418,9 @@ importers:
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -443,9 +443,9 @@ importers:
       '@lemma/frame':
         specifier: workspace:*
         version: link:../../frame/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -471,9 +471,9 @@ importers:
       '@lemma/settings':
         specifier: workspace:*
         version: link:../../settings/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -508,9 +508,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
@@ -616,9 +616,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
@@ -822,9 +822,9 @@ importers:
 
   domains/devtools/contract:
     dependencies:
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -883,9 +883,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
@@ -917,9 +917,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -936,9 +936,9 @@ importers:
 
   domains/frame/contract:
     dependencies:
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -961,9 +961,9 @@ importers:
       '@lemma/frame':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -992,9 +992,9 @@ importers:
       '@lemma/settings':
         specifier: workspace:*
         version: link:../../settings/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1020,9 +1020,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1051,9 +1051,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1079,9 +1079,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1113,9 +1113,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
@@ -1141,9 +1141,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1163,9 +1163,9 @@ importers:
       '@lemma/frame':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1188,9 +1188,9 @@ importers:
       '@lemma/llm':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1241,9 +1241,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -1278,9 +1278,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1355,9 +1355,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -1380,9 +1380,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1408,9 +1408,9 @@ importers:
       '@lemma/settings':
         specifier: workspace:*
         version: link:../../settings/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1430,9 +1430,9 @@ importers:
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       dompurify:
         specifier: 3.4.16
         version: 3.4.16
@@ -1464,9 +1464,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       mermaid:
         specifier: 12.0.0
         version: 12.0.0
@@ -1489,9 +1489,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -1514,9 +1514,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       shiki:
         specifier: 4.4.3
         version: 4.4.3
@@ -1542,9 +1542,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1629,9 +1629,9 @@ importers:
       '@lemma/router':
         specifier: workspace:*
         version: link:../../../packages/router
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -1666,9 +1666,9 @@ importers:
       '@lemma/settings':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1697,9 +1697,9 @@ importers:
       '@lemma/settings':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1731,9 +1731,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1768,9 +1768,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1805,9 +1805,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
@@ -1848,9 +1848,9 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -1885,9 +1885,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -1916,9 +1916,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -1959,9 +1959,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
@@ -1990,9 +1990,9 @@ importers:
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -2089,9 +2089,9 @@ importers:
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -2120,9 +2120,9 @@ importers:
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -2188,9 +2188,9 @@ importers:
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -2247,9 +2247,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../contract
@@ -2281,9 +2281,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../contract
@@ -2306,9 +2306,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../contract
@@ -2365,9 +2365,9 @@ importers:
       '@lemma/frame':
         specifier: workspace:*
         version: link:../../frame/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.1
         version: 4.0.1
@@ -2396,9 +2396,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../contract
@@ -2470,9 +2470,9 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
-      '@lemma/ui':
+      '@lemma/web':
         specifier: workspace:*
-        version: link:../../../packages/ui
+        version: link:../../../packages/web
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../contract
@@ -2856,7 +2856,7 @@ importers:
         specifier: 5.0.2
         version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
 
-  packages/ui:
+  packages/web:
     dependencies:
       '@lemma/client':
         specifier: workspace:*
