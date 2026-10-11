@@ -264,6 +264,9 @@ const toggling = async () => {
   await running.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("the turns running outlived threads"));
   await switchTo(page, "threads.client", true);
   await running.waitFor({ timeout: 5_000 }).catch(() => assert.fail("the turns running did not return with threads"));
+  // Domains start folded: kit's row shows once its domain is open.
+  const domainRow = (domain: string) => page.locator(`.inspector-table [role=rowgroup][aria-label='${domain}'] .inspector-domain`);
+  await domainRow("look").click();
   const kit = page.locator(".inspector-row[data-key='web:look.kit']");
   const kitState = () => page.evaluate(() => (window as any).lemma.plugins.list().find((plugin: any) => plugin.id === "look.kit").state);
   // A web half can neither change a bundled part's fallback nor give its own part one: its `definePart` takes none.
@@ -320,6 +323,42 @@ const toggling = async () => {
     .catch(() => assert.fail("the plain switch did not turn kit back on"));
   assert.equal(await kitState(), "active", "kit is not back on");
   expectNoErrors("turning threads and kit off and on with the Plugins page open");
+
+  // The table shows the plugins as they are organized: a row per domain, in order, folded until opened, which opens to
+  // its plugins, a plugin's two halves one row of them.
+  const domains = await page.evaluate(() =>
+    [...document.querySelectorAll(".inspector-table [role=rowgroup]")].map((group) => group.getAttribute("aria-label")),
+  );
+  assert.deepEqual(domains, [...domains].sort(), "the Plugins page's domains are not in order");
+  const bash = page.locator(".inspector-row[data-key='host:tools.bash']");
+  assert.equal(await bash.count(), 0, "a domain's plugins show before it is opened");
+  await domainRow("tools").click();
+  await bash.waitFor({ timeout: 5_000 }).catch(() => assert.fail("opening the tools domain does not show tools.bash, both halves"));
+  await domainRow("tools").click();
+  await bash.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("a domain does not fold again"));
+  // A narrow page scrolls once: the table with the summary under it, or a plugin's details in the table's place. Two
+  // panes each half the height cut both off.
+  const wide = page.viewportSize()!;
+  const close = page.locator("[aria-label='Close details']");
+  if (await close.isVisible()) await close.click();
+  await page.setViewportSize({ width: 1000, height: 700 });
+  await page.waitForFunction(() => getComputedStyle(document.querySelector(".inspector-split")!).display === "block", undefined, { timeout: 5_000 });
+  const stacked = await page.evaluate(() => {
+    const table = document.querySelector(".inspector-table")!.getBoundingClientRect();
+    const detail = document.querySelector(".inspector-detail")!.getBoundingClientRect();
+    return { below: detail.top >= table.bottom, tableScrolls: getComputedStyle(document.querySelector(".inspector-table")!).overflowY !== "visible" };
+  });
+  assert.deepEqual(stacked, { below: true, tableScrolls: false }, "in a narrow page, the Plugins page's summary does not follow its table");
+  if ((await domainRow("agent").getAttribute("aria-expanded")) !== "true") await domainRow("agent").click();
+  await page.click(".inspector-row[data-key='host:agent.loop']");
+  await page
+    .waitForSelector(".inspector-table", { state: "hidden", timeout: 5_000 })
+    .catch(() => assert.fail("in a narrow page, a plugin's details do not take the table's place"));
+  await page.click("[aria-label='Close details']");
+  await page
+    .waitForSelector(".inspector-row[data-key='host:agent.loop']", { timeout: 5_000 })
+    .catch(() => assert.fail("closing a plugin's details does not return to the table"));
+  await page.setViewportSize(wide);
 
   // The runtime is not a plugin: with every plugin off that can be, the router and the messages still answer.
   const unlocked = plugins.filter((plugin) => !plugin.locked).map((plugin) => plugin.id);
@@ -620,8 +659,9 @@ const parts = async () => {
     ((window as any).removals ??= []).push(remove);
     (await lemma.service(Settings)).open("plugins");
   });
-  await page.waitForSelector(".inspector-table [role=row] >> nth=1");
-  await page.click(".inspector-table [role=row] >> nth=1");
+  // A bundled plugin's, in its domain: the check plugin's own row goes with a reload (below).
+  await page.click(".inspector-table [role=rowgroup][aria-label='agent'] .inspector-domain");
+  await page.click(".inspector-row[data-key='host:agent.loop']");
   await page.waitForSelector(".inspector-tabs >> text=Checked", { timeout: 5_000 }).catch(() => assert.fail("an inspector tab does not show"));
   await page.evaluate(() => {
     for (const remove of (window as any).removals) remove();

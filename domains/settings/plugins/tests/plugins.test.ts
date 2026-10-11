@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest";
 import type { PluginStatus } from "@lemma/contracts";
-import { dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "../src/plugins.ts";
+import {
+  dependentsOf,
+  describeState,
+  domainOf,
+  groupPlugins,
+  matchPlugins,
+  pairHalves,
+  pluginText,
+  replaces,
+  summarizeDomain,
+  waitingOn,
+} from "../src/plugins.ts";
 
 const plugin = (id: string, extra: Partial<PluginStatus> = {}): PluginStatus => ({
   id,
@@ -92,5 +103,36 @@ describe("matchPlugins", () => {
 
   it("an unknown state matches nothing", () => {
     expect(ids("is:sleepy")).toEqual([]);
+  });
+});
+
+describe("groupPlugins", () => {
+  const entries = pairHalves(
+    [plugin("tools.bash"), plugin("agent.loop"), plugin("tools.read", { enabled: false, state: "disabled" }), plugin("todo", { source: "user" })],
+    [plugin("tools.bash"), plugin("threads.view"), plugin("threads.client", { state: "failed" }), plugin("threads.composer", { state: "activating" })],
+  );
+
+  it("groups the plugins by domain, by name, each domain's by id, then those in no domain", () => {
+    const groups = groupPlugins(entries);
+    expect(groups.map((group) => [group.domain, group.entries.map((entry) => entry.plugin.id)])).toEqual([
+      ["agent", ["agent.loop"]],
+      ["threads", ["threads.client", "threads.composer", "threads.view"]],
+      ["tools", ["tools.bash", "tools.read"]],
+      ["", ["todo"]],
+    ]);
+    // Both halves of a plugin are one entry in its domain.
+    expect(groups[2]!.entries[0]!.pair?.kind).toBe("web");
+  });
+
+  it("folds a domain into one line: the halves its plugins have, and what is not running, the worst first", () => {
+    const [agent, threads, tools] = groupPlugins(entries);
+    expect(summarizeDomain(agent!)).toEqual({ kinds: ["host"], state: "Running", tone: "active" });
+    expect(summarizeDomain(threads!)).toEqual({ kinds: ["web"], state: "1 failed · 1 not running", tone: "failed" });
+    expect(summarizeDomain(tools!)).toEqual({ kinds: ["host", "web"], state: "1 off", tone: "off" });
+  });
+
+  it("filters by domain", () => {
+    expect(matchPlugins(entries, "domain:tools").map((entry) => entry.plugin.id)).toEqual(["tools.bash", "tools.read"]);
+    expect([domainOf("tools.bash"), domainOf("todo"), domainOf(".hidden")]).toEqual(["tools", undefined, undefined]);
   });
 });

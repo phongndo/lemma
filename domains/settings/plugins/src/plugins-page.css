@@ -176,6 +176,34 @@
   font-size: calc(11.5px * var(--text-scale));
 }
 
+/* A domain's row: its plugins folded into one line, opened in place; its plugins indented under it. */
+.inspector-domain {
+  cursor: pointer;
+}
+
+.inspector-domain .chevron {
+  flex: none;
+  color: var(--text-3);
+  transition: transform 0.12s;
+}
+
+.inspector-domain.open .chevron {
+  transform: rotate(90deg);
+}
+
+/* A tree's levels: a plugin in no domain beside the domains (past their chevrons), a domain's own under its name. */
+.inspector-row[data-key] .inspector-name {
+  padding-left: 24px;
+}
+
+.inspector-row.nested .inspector-name {
+  padding-left: 39px;
+}
+
+.plugin-domain {
+  color: var(--text-3);
+}
+
 .inspector-name {
   display: flex;
   align-items: center;
@@ -373,17 +401,31 @@
 
 /*
  * Side by side only while both panes fit in the page's own width, whatever the window's: the table's fixed
- * columns (376px) with room for a name, and the details at their narrowest. Otherwise the details go below.
+ * columns (376px) with room for a name, and the details at their narrowest. Otherwise one pane scrolls: the
+ * table with the summary under it, or, with a plugin selected, its details in the table's place, whose close
+ * button returns to the table. Two panes each half the height would each show a sliver, cut off.
  */
 @container inspector (max-width: 860px) {
   .inspector-split {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    display: block;
+    overflow-y: auto;
+  }
+  .inspector-table,
+  .inspector-detail {
+    overflow: visible;
   }
   .inspector-detail {
     padding-left: 0;
     border-left: 0;
+    margin-top: 20px;
     border-top: 1px solid var(--border);
+  }
+  .inspector-split.has-selection .inspector-table {
+    display: none;
+  }
+  .inspector-split.has-selection .inspector-detail {
+    margin-top: 0;
+    border-top: 0;
   }
 }
 
