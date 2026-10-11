@@ -176,7 +176,8 @@ function SessionRow(props: SidebarRowProps) {
   );
 }
 
-const COLLAPSED_KEY = "lemma.sidebar.collapsed";
+/** Its own key: `frame.shell` keeps whether the whole sidebar is collapsed under `lemma.sidebar.collapsed`. */
+const FOLDED_KEY = "lemma.sidebar.folded";
 /** The pinned section's key among the folded ones, which are otherwise project directories. */
 const PINNED = ":pinned";
 
@@ -185,13 +186,14 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
   const [query, setQuery] = createSignal("");
   // Sections folded shut, by project directory (or PINNED); kept across reloads. A search shows every match regardless.
-  const [collapsed, setCollapsed] = createSignal(new Set(loadJson<string[]>(COLLAPSED_KEY, [])));
+  const stored = loadJson<unknown>(FOLDED_KEY, []);
+  const [collapsed, setCollapsed] = createSignal(new Set(Array.isArray(stored) ? stored.filter((key): key is string => typeof key === "string") : []));
   const isOpen = (key: string) => query().trim() !== "" || !collapsed().has(key);
   const toggle = (key: string) => {
     const next = new Set(collapsed());
     if (!next.delete(key)) next.add(key);
     setCollapsed(next);
-    save(COLLAPSED_KEY, next.size === 0 ? undefined : JSON.stringify([...next]));
+    save(FOLDED_KEY, next.size === 0 ? undefined : JSON.stringify([...next]));
   };
   const filed = createMemo(() => {
     const needle = query().trim().toLowerCase();

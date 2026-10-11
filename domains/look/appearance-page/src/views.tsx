@@ -55,7 +55,7 @@ export function Preview(props: { readonly deps: Deps }) {
         </div>
       </div>
       <p class="tw:m-0 tw:font-mono tw:text-xs tw:text-text-3">
-        ui.appearance in config.jsonc: <span class="tw:text-text-2">{config()}</span>
+        look.appearance in config.jsonc: <span class="tw:text-text-2">{config()}</span>
       </p>
     </div>
   );

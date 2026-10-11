@@ -4,7 +4,7 @@ import { Portal } from "solid-js/web";
 import type { InteractionRequest } from "@lemma/contracts";
 import type { CommandInfo } from "@lemma/commands";
 import { shownKeys, ActionIds, Actions, PaletteSources } from "@lemma/actions";
-import { formatKeys, listKey, quickKey, shortcut } from "@lemma/web/keys";
+import { formatKeys, listKey, matchesKeys, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
 import { load, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
@@ -22,6 +22,8 @@ import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIco
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
+/** What opens it, and closes it while it shows. */
+const CLOSE_KEYS = "mod+k";
 
 interface Deps {
   readonly interactions: InteractionsService;
@@ -284,6 +286,12 @@ function Palette(props: { deps: Deps }) {
   const onKeyDown = (event: KeyboardEvent) => {
     hold.track(event);
     if (event.isComposing) return;
+    // Its own key closes it, as its footer says, before Ctrl+K moves up a list (mod is Ctrl but on macOS).
+    if (matchesKeys(CLOSE_KEYS, event)) {
+      event.preventDefault();
+      close();
+      return;
+    }
     const list = listKey(event);
     if (list !== undefined) {
       event.preventDefault();
@@ -473,7 +481,7 @@ function Palette(props: { deps: Deps }) {
                 </For>
               </span>
               <span class="palette-foot-end">
-                <kbd>{shortcut("mod", "K")}</kbd> close
+                <kbd>{formatKeys(CLOSE_KEYS)}</kbd> close
               </span>
             </Show>
           </footer>
@@ -593,7 +601,7 @@ export default defineWebPlugin({
       title: "Command palette",
       icon: CommandIcon,
       hidden: true,
-      keys: "mod+k",
+      keys: CLOSE_KEYS,
       // Opens over any other dialog; a question the host asks keeps the screen until answered.
       global: true,
       when: () => dialogs.current() === DIALOG || interactions.open().length === 0,
