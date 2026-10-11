@@ -142,6 +142,39 @@ describe("registry", () => {
 });
 
 describe("execute", () => {
+  it("returns a cancelled call at once, though its output's listener never ends", async () => {
+    let begin!: () => void;
+    const begun = new Promise<void>((resolve) => (begin = resolve));
+    const waits: Tool<Record<string, never>> = {
+      name: "waits",
+      description: "Prints, then waits to be cancelled.",
+      input: Schema.Struct({}),
+      execute: (_, { update, signal }) =>
+        new Promise((resolve) => {
+          update?.("started");
+          signal.addEventListener("abort", () => resolve(ok("stopped")), { once: true });
+          begin();
+        }),
+    };
+    const controller = new AbortController();
+    const exit = await run(
+      [contributor("waiter", [waits])],
+      Effect.gen(function* () {
+        const registry = yield* ToolRunner;
+        const running = yield* Effect.forkChild(
+          registry.execute(new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "waits", input: {}, cwd: "/tmp" }), controller.signal, {
+            update: () => Effect.never,
+          }),
+        );
+        yield* Effect.promise(() => begun);
+        controller.abort();
+        return yield* Fiber.await(running).pipe(Effect.timeout("2 seconds"));
+      }),
+    );
+    // Done, not timed out: the listener holds no cancellation.
+    expect(Exit.isExit(exit)).toBe(true);
+  });
+
   it("returns results, validation errors, and tool failures as results; unknown tools fail", async () => {
     const throwing: Tool<unknown> = {
       name: "throws",
