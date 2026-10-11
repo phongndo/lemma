@@ -375,6 +375,37 @@ describe("sessions directory", () => {
   });
 });
 
+describe("serving only what a crash keeps", () => {
+  test("a line left by an append whose sync and cut both failed is synced by the next process before it serves it", async () => {
+    // Seeds, so a crash drops or tears the line in some (unsynced, it would be lost), and keeps it in others.
+    for (let seed = 0; seed < 20; seed++) {
+      const disk = new SimDisk(seededRandom(seed));
+      const host = <A, E>(body: (sessions: Service) => Effect.Effect<A, E>) =>
+        Effect.runPromise(
+          Effect.scoped(Effect.flatMap(makeCore([paths, makeSessionsPlugin({ fs: disk.mount() })]), (core) => Effect.flatMap(core.run(Sessions), body))).pipe(
+            Effect.provide(TestClock.layer()),
+          ),
+        );
+      const note: EventData = { type: "custom", kind: "note", data: { text: "unconfirmed" } };
+      const { id } = await host((sessions) => sessions.create({ cwd: "/work/a" }));
+      // The disk fails the append's sync, then every cut of what it wrote, to the end of the process.
+      await host((sessions) =>
+        Effect.gen(function* () {
+          yield* sessions.events(id);
+          Object.assign(disk.faults, { sync: 1, truncate: 1 });
+          expect((yield* Effect.flip(sessions.append(id, note))).reason).toBe("Io");
+        }),
+      );
+      // A clean restart reads the line back (the page cache still has it): it is served only once it is synced.
+      Object.assign(disk.faults, { sync: 0, truncate: 0 });
+      const served = await host((sessions) => sessions.events(id));
+      expect(served.map((event) => event.data)).toEqual([note]);
+      disk.crash();
+      expect(await host((sessions) => sessions.events(id)), `seed ${seed}`).toEqual(served);
+    }
+  });
+});
+
 describe("session log simulation", () => {
   test("acknowledged events survive crashes, torn and lost writes, failing disks, and other programs' writes", async () => {
     await fc.assert(

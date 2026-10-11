@@ -63,7 +63,10 @@ costs re-reading the files.
   runtime (full disk, failed sync) fails the append and truncates the file back to
   the last confirmed line, at once or, failing that, before the next write, when
   the session is unloaded, or when the plugin closes; every confirmed line was
-  synced when it was written, so retrying never relies on a failed sync. Any other
+  synced when it was written, so retrying never relies on a failed sync. A line
+  that outlives a failed cut (a failing disk) is still in the page cache, readable
+  but not durable: a process syncs a session's file before it loads it, so it
+  never serves an event a power loss could take back. Any other
   complete line that does not decode, an unknown parent, a seq gap, or a checkout
   to nowhere makes the session `Corrupt`. Skipping such a line would silently
   change what the model saw.
