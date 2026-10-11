@@ -25,6 +25,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/credentials": "workspace:*",
     "@lemma/credentials-file": "workspace:*",
+    "@lemma/devtools-trace": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/llm-commands": "workspace:*",
     "@lemma/llm-pi-ai": "workspace:*",

@@ -3,7 +3,7 @@ import type { Scope } from "effect";
 import { Event, Hook } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
-import { defineChannel, eventFeed, optionalPayload, serveChannel } from "@lemma/contracts";
+import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 
@@ -72,6 +72,8 @@ export const EventData = Schema.Union([
     system: Schema.optional(Schema.String),
     tools: Schema.optional(Schema.Array(ToolSpec)),
     contributions: Schema.Array(Contribution),
+    /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
+    handlers: Schema.optional(Schema.Array(HandlerCredit)),
   }),
   /** Model-visible history. Assistant messages carry stream timing; tool results carry execution timing and UI details. */
   Schema.Struct({
@@ -83,6 +85,8 @@ export const EventData = Schema.Union([
     details: Schema.optional(Schema.Unknown),
     /** On a user message: the submission's id (see `Agent.prompt`), so a retried submission is not placed twice. */
     requestId: Schema.optional(Schema.String),
+    /** On a tool result: who shaped it (`ToolExecuteHook`'s handlers, the guards, the registry's cut). */
+    credit: Schema.optional(ResultCredit),
   }),
   /** A failed, cancelled, or retried model call. Kept for inspection; never model-visible. */
   Schema.Struct({

@@ -1,18 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { Cause, Clock, Effect, Exit, Random, Semaphore, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Option, Random, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
-import { CoreClosed, Hook } from "@lemma/core";
-import type { Events, Hooks } from "@lemma/core";
+import { CoreClosed, Hook, PluginContext } from "@lemma/core";
+import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
 import { deriveMessages, modelView, rebuildRequest, requestState } from "@lemma/sessions";
 import { ToolInvocation } from "@lemma/tools";
-import type { HostControl } from "@lemma/contracts";
+import { creditOf, inChainOrder } from "@lemma/contracts";
+import type { HostControl, ResultCredit } from "@lemma/contracts";
 import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
 import type { Llm, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage } from "@lemma/llm";
 import type { Contribution, EventData, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
 import type { ToolRunner } from "@lemma/tools";
+import { handlerChanges } from "./credit.ts";
 import { partialMessage } from "./live.ts";
 import type { LiveTurn, ModelIdentity, PartialMessage } from "./live.ts";
 import { titleFrom } from "./prompt.ts";
@@ -327,6 +329,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! }).pipe(Effect.mapError(sessionError));
       const listed = yield* tools.list;
       const sections = yield* services.sections({ sessionId, turnId, cwd, model: asking.ref, tools: listed, branch });
+      /** The events each plugin's handler appended, by type, for its credit. */
+      const appended = new Map<string, string[]>();
       const draft: RequestDraft = {
         sessionId,
         turnId,
@@ -347,19 +351,31 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
                   if (data.type === "compaction" && data.usage !== undefined) state.usage = addUsage(state.usage, data.usage);
                 }),
               ),
+              // Credited to the handler that appended it, which runs as its plugin.
+              Effect.tap(() =>
+                Effect.map(Effect.serviceOption(PluginContext), (by) => {
+                  if (Option.isSome(by)) appended.set(by.value.id, [...(appended.get(by.value.id) ?? []), data.type]);
+                }),
+              ),
             ),
           ),
       };
+      const steps: HandlerStep<RequestDraft, RequestPlan>[] = [];
       const plan = yield* hooks
-        .invoke(AgentRequestHook, draft, (final): Effect.Effect<RequestPlan> =>
-          Effect.succeed({
-            model: final.model,
-            ...(final.thinking === undefined ? {} : { thinking: final.thinking }),
-            sections: final.sections,
-            tools: final.tools,
-          }),
+        .invoke(
+          AgentRequestHook,
+          draft,
+          (final): Effect.Effect<RequestPlan> =>
+            Effect.succeed({
+              model: final.model,
+              ...(final.thinking === undefined ? {} : { thinking: final.thinking }),
+              sections: final.sections,
+              tools: final.tools,
+            }),
+          { onStep: (step) => void steps.push(step) },
         )
         .pipe(Effect.mapError(hookError("AgentRequestHook")));
+      const handlers = inChainOrder(steps).map((step) => creditOf(step, handlerChanges(step, appended.get(step.pluginId) ?? [])));
       const model = plan.model === asking.ref ? asking : yield* llm.model(plan.model).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
       const system = plan.sections
         .map((section) => section.text)
@@ -382,6 +398,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(previous.system === system ? {} : { system }),
         ...(isDeepStrictEqual(previous.tools ?? [], specs) ? {} : { tools: specs }),
         contributions,
+        ...(handlers.length === 0 ? {} : { handlers }),
       });
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
       const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
@@ -493,9 +510,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       });
       // Run as the core shuts down, the call would fail for that alone (its tool not found, its guards closed).
       if (!interrupted.has(call.id)) yield* unlessClosing;
+      let credit: ResultCredit | undefined;
+      const heard = (shaped: ResultCredit) => {
+        if (Object.keys(shaped).length > 0) credit = shaped;
+      };
       const result = interrupted.has(call.id)
         ? { content: [{ type: "text" as const, text: interruptedText(interrupted.get(call.id)) }], isError: true, details: undefined }
-        : yield* tools.execute(invocation, signal).pipe(
+        : yield* tools.execute(invocation, signal, { credit: heard }).pipe(
+            Effect.annotateSpans({ "tool.call.id": call.id, "tool.name": call.name }),
             Effect.map((value) => ({ content: value.content, isError: value.isError ?? false, details: value.details })),
             Effect.catch((error) =>
               isCoreClosed(error)
@@ -529,6 +551,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             stepId,
             timing: { startedAt, endedAt: message.timestamp },
             ...(result.details === undefined ? {} : { details: result.details }),
+            ...(credit === undefined ? {} : { credit }),
           });
           state.pending = state.pending.filter((pending) => pending.id !== call.id);
           live.toolEnded(call.id);
@@ -652,26 +675,44 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
         yield* boundary;
         const stepId = newId();
-        yield* append({ type: "step-start", turnId, stepId });
-        state.step = { id: stepId, model: asking };
-        const { request, model, offered } = yield* prepareRequest(stepId, asking);
-        state.step = { id: stepId, model };
-        const outcome = yield* callModel(stepId, request, model);
-        if ("retry" in outcome) {
-          yield* append({ type: "step-end", turnId, stepId });
-          state.step = undefined;
-          yield* waitUntil(outcome.retry.at);
+        const next = yield* oneStep(step, stepId, asking).pipe(
+          Effect.withSpan("agent.step", { attributes: { "step.index": step } }),
+          Effect.annotateSpans({ "step.id": stepId }),
+        );
+        if (typeof next === "object" && "retryAt" in next) {
+          yield* waitUntil(next.retryAt);
           continue;
         }
-        if ("ended" in outcome) return outcome.ended;
-        const results = outcome.message.stopReason === "length" ? yield* answerTruncated(stepId) : yield* runTools(stepId, new Map(), offered);
-        const decision = yield* decide(step, { message: outcome.message, results });
-        yield* append({ type: "step-end", turnId, stepId });
-        state.step = undefined;
-        const ended = yield* afterStep(step, decision);
-        if (ended !== undefined) return ended;
+        if (next !== "next") return next;
         step++;
       }
+    });
+
+  /**
+   * One step: its request, the model's answer, and the tools it asked for. Says whether the turn goes on (`next`), asks
+   * again from `retryAt` (a failed call, in a step that keeps the number), or how it ended.
+   */
+  const oneStep = (step: number, stepId: string, asking: ModelInfo) =>
+    Effect.gen(function* () {
+      yield* append({ type: "step-start", turnId, stepId });
+      state.step = { id: stepId, model: asking };
+      const { request, model, offered } = yield* prepareRequest(stepId, asking).pipe(Effect.withSpan("agent.request"));
+      state.step = { id: stepId, model };
+      const outcome = yield* callModel(stepId, request, model).pipe(Effect.withSpan("agent.model", { attributes: { "llm.model": model.ref } }));
+      if ("retry" in outcome) {
+        yield* append({ type: "step-end", turnId, stepId });
+        state.step = undefined;
+        return { retryAt: outcome.retry.at };
+      }
+      if ("ended" in outcome) return outcome.ended;
+      const results =
+        outcome.message.stopReason === "length"
+          ? yield* answerTruncated(stepId)
+          : yield* runTools(stepId, new Map(), offered).pipe(Effect.withSpan("agent.tools"));
+      const decision = yield* decide(step, { message: outcome.message, results });
+      yield* append({ type: "step-end", turnId, stepId });
+      state.step = undefined;
+      return (yield* afterStep(step, decision)) ?? ("next" as const);
     });
 
   /**
@@ -858,5 +899,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       Effect.map((ended): TurnOutcome => ended.reason),
       Effect.catchCause((cause) => (open ? Effect.succeed("suspended" as const) : Effect.failCause(cause))),
     );
-  });
+  }).pipe(
+    // Every span of its work, the plugins' included, says whose turn it was.
+    Effect.withSpan("agent.turn", { attributes: { "turn.resumed": input.resume !== undefined } }),
+    Effect.annotateSpans({ "session.id": sessionId, "turn.id": turnId }),
+  );
 }

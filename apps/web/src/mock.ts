@@ -5,11 +5,13 @@ import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { SessionChannels } from "@lemma/sessions";
+import { matches, TraceChannels } from "@lemma/devtools";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { fuzzy } from "@lemma/web/match";
 import type {
   ChannelDeclaration,
   ChannelInfo,
+  CompositionChange,
   ConfigScope,
   InteractionAnswer,
   InteractionRequest,
@@ -17,6 +19,7 @@ import type {
   PluginChange,
   PluginStatus,
   RuntimeEvent,
+  SpanRecord,
   WebComposition,
 } from "@lemma/contracts";
 import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
@@ -273,6 +276,54 @@ const serveStream = <Payload, Success>(
   handle: (payload: Payload, send: (element: Success) => void, fail: (error: HostError) => void) => () => void,
 ): Served => ({ kind: "stream", declaration, source, handle });
 
+interface MockSpan {
+  readonly id: string;
+  readonly end: (status?: SpanRecord["status"]) => void;
+}
+
+/**
+ * The host's trace as the mock keeps it (`devtools.trace`): spans for the turns it runs, made as the agent's work
+ * makes them, and the composition's changes, from its start.
+ */
+const createMockTrace = (bundledIds: readonly string[]) => {
+  const kept: SpanRecord[] = [];
+  const listeners = new Set<(spans: readonly SpanRecord[]) => void>();
+  let made = 0;
+  let changes: CompositionChange[] = [{ at: Date.now(), cause: "start", started: [...bundledIds], stopped: [], restarted: [], failed: [] }];
+  return {
+    begin: (name: string, attributes: SpanRecord["attributes"], parentId?: string): MockSpan => {
+      const id = `mock-${++made}`;
+      const start = Date.now();
+      return {
+        id,
+        end: (status = "ok") => {
+          const span: SpanRecord = {
+            id,
+            ...(parentId === undefined ? {} : { parentId }),
+            traceId: "mock",
+            name,
+            start,
+            ms: Date.now() - start,
+            status,
+            attributes,
+          };
+          kept.push(span);
+          for (const listener of listeners) listener([span]);
+        },
+      };
+    },
+    spans: (): readonly SpanRecord[] => kept,
+    subscribe: (listener: (spans: readonly SpanRecord[]) => void) => {
+      listeners.add(listener);
+      return () => void listeners.delete(listener);
+    },
+    changed: (change: CompositionChange) => {
+      changes = [change, ...changes].slice(0, 50);
+    },
+    changes: (): readonly CompositionChange[] => changes,
+  };
+};
+
 export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
@@ -363,7 +414,7 @@ export const createMockHost = (): Host => {
     return { ...plugin, configFields: fields, config: configValues(schema, configRows[plugin.id] ?? {}, fields) };
   };
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
-  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", `lemma/api@${HOST_API}`];
+  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/Trace", `lemma/api@${HOST_API}`];
   const plugins: PluginStatus[] = [
     bundled("credentials.file", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
     bundled("llm.pi-ai", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
@@ -396,6 +447,7 @@ export const createMockHost = (): Host => {
       requires: ["lemma/Interaction", "lemma/HostControl"],
       contributes: [{ name: "lemma/commands", items: 3, keys: ["host.reload", "host.restart-plugin", "host.toggle-plugin"] }],
     }),
+    bundled("devtools.trace", { requires: ["lemma/Trace"] }),
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     bundled("transport.server", {
       requires: ["lemma/Paths", "lemma/HostControl"],
@@ -444,9 +496,20 @@ export const createMockHost = (): Host => {
     }
     composition = { ...composition, plugins: next, enabledIn, configIn };
     emit({ type: "web-changed", web: composition });
+    const turned = (on: boolean) => Object.keys(rows).filter((id) => rows[id]!.enabled === on);
+    mockTrace.changed({
+      at: Date.now(),
+      cause: "configure",
+      subjects: Object.keys(rows),
+      started: turned(true),
+      stopped: turned(false),
+      restarted: [],
+      failed: [],
+    });
   };
   /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
   let heldStarts: (() => void)[] | undefined;
+  const mockTrace = createMockTrace(plugins.map((plugin) => plugin.id));
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
     lemmaMock: {
@@ -803,6 +866,28 @@ export const createMockHost = (): Host => {
     const by = available.find((model) => model.ref === options?.model) ?? available[0] ?? MODELS[0]!;
     const turnId = id("t");
     const started = Date.now();
+    const turnSpan = mockTrace.begin("agent.turn", { "session.id": sessionId, "turn.id": turnId, "turn.resumed": false });
+    /** A step's spans as the agent makes them: the request and its handlers, then the model call while it streams. */
+    const stepSpan = (stepId: string, index: number) =>
+      mockTrace.begin("agent.step", { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "step.index": index }, turnSpan.id);
+    const asked = async (step: MockSpan, stepId: string, message: AssistantMessage) => {
+      const where = { "session.id": sessionId, "turn.id": turnId, "step.id": stepId };
+      const request = mockTrace.begin("agent.request", where, step.id);
+      for (const plugin of ["agent.loop", "context.compaction"]) {
+        mockTrace.begin("core.hook", { ...where, "plugin.id": plugin, "hook.name": "lemma/agent.request", "hook.in.model": by.ref }, request.id).end();
+      }
+      request.end();
+      const model = mockTrace.begin("agent.model", { ...where, "llm.model": by.ref }, step.id);
+      const ok = await stream(sessionId, turnId, stepId, message);
+      model.end(ok ? "ok" : "interrupted");
+      return ok;
+    };
+    const toolSpan = (step: MockSpan, stepId: string, call: { readonly id: string; readonly name: string }) =>
+      mockTrace.begin(
+        `tools.execute ${call.name}`,
+        { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "tool.call.id": call.id, "tool.name": call.name, "plugin.id": "tools.registry" },
+        step.id,
+      );
     append(sessionId, { type: "turn-start", turnId, model: by.ref });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     running.add(sessionId);
@@ -817,6 +902,7 @@ export const createMockHost = (): Host => {
     /** Steers placed in this turn, answered when it ends. */
     const steered: (() => void)[] = [];
     const end = (reason: "done" | "cancelled") => {
+      turnSpan.end(reason === "done" ? "ok" : "interrupted");
       append(sessionId, { type: "turn-end", turnId, reason });
       turns.delete(sessionId);
       activity.publish({ type: "turn-ended", sessionId, turnId, usage: total, reason });
@@ -846,10 +932,12 @@ export const createMockHost = (): Host => {
       undefined,
       by,
     );
-    if (!(await stream(sessionId, turnId, step1, m1))) return end("cancelled");
+    const span1 = stepSpan(step1, 1);
+    if (!(await asked(span1, step1, m1))) return end("cancelled");
     total = m1.usage;
     append(sessionId, { type: "message", turnId, stepId: step1, message: m1, timing: { startedAt, firstTokenAt: startedAt + 300, endedAt: Date.now() } });
     // The command prints as it runs, like the host's bash tool.
+    const listing = toolSpan(span1, step1, call);
     for (const line of ["drwxr-xr-x client\n", "drwxr-xr-x contracts\n", "drwxr-xr-x core\n"]) {
       await sleep(300);
       const printed = turn.output.get(call.id) ?? "";
@@ -872,6 +960,8 @@ export const createMockHost = (): Host => {
         content: [{ type: "text", text: "drwxr-xr-x client\ndrwxr-xr-x contracts\ndrwxr-xr-x core" }],
       },
     });
+    listing.end();
+    span1.end();
     // A second step: two more calls, which the chat gathers with the first under one line.
     const stepB = id("p");
     const sB = Date.now();
@@ -884,13 +974,16 @@ export const createMockHost = (): Host => {
       undefined,
       by,
     );
-    if (!(await stream(sessionId, turnId, stepB, mB))) return end("cancelled");
+    const spanB = stepSpan(stepB, 2);
+    if (!(await asked(spanB, stepB, mB))) return end("cancelled");
     append(sessionId, { type: "message", turnId, stepId: stepB, message: mB, timing: { startedAt: sB, firstTokenAt: sB + 200, endedAt: Date.now() } });
     for (const [done, output] of [
       [status, " M apps/web/src/plugins/chat/index.tsx"],
       [readme, "# Lemma\n\nA coding-agent harness in which every part is a plugin."],
     ] as const) {
+      const running = toolSpan(spanB, stepB, done);
       await sleep(500);
+      running.end();
       append(sessionId, {
         type: "message",
         turnId,
@@ -907,6 +1000,7 @@ export const createMockHost = (): Host => {
         },
       });
     }
+    spanB.end();
     if (cancelled.has(sessionId)) return end("cancelled");
     // Steers sent meanwhile join the turn here, between its steps.
     const steers = queueOf(sessionId).filter((queued) => queued.prompt.mode === "steer");
@@ -940,9 +1034,11 @@ export const createMockHost = (): Host => {
       undefined,
       by,
     );
-    if (!(await stream(sessionId, turnId, step2, m2))) return end("cancelled");
+    const span2 = stepSpan(step2, 3);
+    if (!(await asked(span2, step2, m2))) return end("cancelled");
     total = { ...total, input: total.input + m2.usage.input, output: total.output + m2.usage.output };
     append(sessionId, { type: "message", turnId, stepId: step2, message: m2, timing: { startedAt: s2, firstTokenAt: s2 + 250, endedAt: Date.now() } });
+    span2.end();
     end("done");
     const info = sessions.get(sessionId)!.info;
     if (info.title === undefined) append(sessionId, { type: "title", title: text.slice(0, 48) });
@@ -1380,6 +1476,19 @@ export const createMockHost = (): Host => {
       send(MOCK_COMMANDS.slice());
       return () => {};
     }),
+    serveCall("devtools.trace", TraceChannels.spans, async ({ where, limit }) =>
+      mockTrace
+        .spans()
+        .filter((span) => matches(span, where))
+        .slice(-(limit ?? 2000)),
+    ),
+    serveStream("devtools.trace", TraceChannels.follow, ({ where }, send) =>
+      mockTrace.subscribe((ended) => {
+        const found = ended.filter((span) => matches(span, where));
+        if (found.length > 0) send(found);
+      }),
+    ),
+    serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.changes()),
   ];
   const channels = new Map(served.map((channel) => [channel.declaration.id, channel]));
   const infoOf = ({ declaration: { id, title, description }, kind, source }: Served): ChannelInfo => ({

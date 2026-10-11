@@ -26,7 +26,7 @@ describe("against a running host", () => {
     const status = JSON.parse(result.out);
     expect(status.info.home).toBe(home);
     // What the host provides itself is no plugin's: it has no row.
-    expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@4"]);
+    expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/Trace", "lemma/api@4"]);
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent.loop");
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).not.toContain("interaction");
     expect(status.plugins.every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
@@ -390,7 +390,7 @@ describe("channels served by a plugin file", () => {
           join(home, "plugins", "bulk.ts"),
           `import { Effect, Layer, Schema, Stream } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
-import { Channels, serveChannel } from "@lemma/contracts";
+import { Channels, serveChannel, HostControl, PluginsChanged } from "@lemma/contracts";
 let emitted = 0;
 let active = 0;
 export default definePlugin({
@@ -498,8 +498,6 @@ describe("a change a plugin's own call asks for", () => {
    * (its version too) tells its file's versions apart, and `activation` counts its starts from one file.
    */
   const selfconf = (edition: number) => `import { Effect, Schema, Stream } from "effect";
-import { definePlugin } from "@lemma/core";
-import { Channels, HostControl, serveChannel } from "@lemma/contracts";
 let activations = 0;
 const answer = (deferred) => ({ deferred: deferred === true });
 const Answer = Schema.Struct({ deferred: Schema.Boolean });
@@ -534,8 +532,6 @@ export default definePlugin({
 `;
   /** What clients last heard of selfconf: its version in the last plugin list published. */
   const heard = `import { Effect, Schema } from "effect";
-import { definePlugin } from "@lemma/core";
-import { Channels, PluginsChanged, serveChannel } from "@lemma/contracts";
 export default definePlugin({
   id: "heard",
   setup: function* (_, owner) {

@@ -26,10 +26,14 @@ processes, because session `request` events record it.
 
 ## The host runtime
 
-The host provides `Paths`, `HostControl`, `Interaction`, and the host API
-version to its plugins itself: `hostRuntime` (`src/runtime.ts`) is the
+The host provides `Paths`, `HostControl`, `Interaction`, `Trace`, and the host
+API version to its plugins itself: `hostRuntime` (`src/runtime.ts`) is the
 loader's `provide`, so none of them is a plugin, has a row, or can be
-replaced ([configuration](../../docs/configuration.md)). Their contracts are
+replaced ([configuration](../../docs/configuration.md)). `Trace` is what the
+host keeps of its own running: main.ts runs its program under a span
+collector (`makeSpanCollector`), so every span its plugins' work ends is kept,
+in memory and bounded, and records each composition change (a reload, a
+configure, a restart) with what it did or why it was refused. Their contracts are
 documented where `@lemma/contracts` declares them. The runtime is built inside
 `makeLoader`, before the loader value exists, so the `HostControl` handle
 main.ts builds reaches the loader through a `Deferred<Loader>`, and its methods

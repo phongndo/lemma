@@ -142,7 +142,7 @@ as `api.contracts`). The bundled plugins use nothing else:
 
 - **Capabilities** are services with one provider, such as `Threads` or
   `Models`. The runtime's ([`@lemma/web`](../../packages/web/src/runtime.ts): `Client`,
-  `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`)
+  `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`, `PageTrace`)
   the app provides itself; every other comes from a plugin.
 - **Slots** are places any number of plugins add to: regions of the screen,
   where the first item by `order` shows, and lists such as `Actions` (the

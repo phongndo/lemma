@@ -163,7 +163,12 @@ export interface RequestDraft {
 export type RequestPlan = Omit<RequestDraft, "history" | "branch" | "append" | "sessionId" | "turnId" | "cwd" | "overflow">;
 
 /** Runs before every model call. Skills, project context, and prompt plugins contribute here. */
-export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request");
+export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request", {
+  summary: {
+    input: (draft) => ({ model: draft.model, sections: draft.sections.length, tools: draft.tools.length }),
+    output: (plan) => ({ model: plan.model, sections: plan.sections.length, tools: plan.tools.length }),
+  },
+});
 
 /**
  * Runs after each step. The default continues while the model asked for tools
@@ -177,7 +182,9 @@ export interface StepOutcome {
   readonly message: AssistantMessage;
   readonly results: readonly ToolResultMessage[];
 }
-export const AgentContinueHook = Hook.make<StepOutcome, "continue" | "stop", AgentError>("lemma/agent.continue");
+export const AgentContinueHook = Hook.make<StepOutcome, "continue" | "stop", AgentError>("lemma/agent.continue", {
+  summary: { input: (outcome) => ({ step: outcome.step, results: outcome.results.length }), output: (decision) => ({ decision }) },
+});
 
 export const TurnStarted = Event.make<{ readonly sessionId: string; readonly turnId: string }>("lemma/agent.turn.started");
 export const TurnEnded = Event.make<{

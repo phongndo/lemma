@@ -6,6 +6,7 @@ import commandsRegistry from "@lemma/commands-registry";
 import contextCompaction from "@lemma/context-compaction";
 import contextProject from "@lemma/context-project";
 import credentialsFile from "@lemma/credentials-file";
+import devtoolsTrace from "@lemma/devtools-trace";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
 import sessionsFiles from "@lemma/sessions-files";
@@ -28,7 +29,7 @@ export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new UR
 
 /**
  * Everything a fresh install runs. What the host provides itself (`Paths`,
- * `HostControl`, `Interaction`, the host API) is its runtime, not a plugin.
+ * `HostControl`, `Interaction`, `Trace`, the host API) is its runtime, not a plugin.
  */
 export const bundled: readonly Plugin[] = [
   credentialsFile,
@@ -49,6 +50,7 @@ export const bundled: readonly Plugin[] = [
   workspaceCommands,
   commandsRegistry,
   commandsHost,
+  devtoolsTrace,
   transportServer,
 ];
 

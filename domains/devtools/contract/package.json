@@ -2,15 +2,17 @@
   "name": "@lemma/devtools",
   "version": "0.1.0",
   "private": true,
-  "description": "The devtools domain's contract: devtools panels",
+  "description": "The devtools domain's contract: the trace's channels, and devtools panels (`./web`)",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./web": "./src/web/index.ts"
   },
   "scripts": {
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@lemma/contracts": "workspace:*",
     "@lemma/web": "workspace:*",
     "effect": "4.0.1",
     "solid-js": "1.9.15"

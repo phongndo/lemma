@@ -10,6 +10,7 @@ import connection from "@lemma/frame-connection";
 import diagrams from "@lemma/look-diagrams";
 import dialogs from "@lemma/frame-dialogs";
 import devtools from "@lemma/devtools-dock";
+import trace from "@lemma/devtools-trace/web";
 import fileIcons from "@lemma/look-file-icons";
 import fileMentions from "@lemma/workspace-file-mentions";
 import highlight from "@lemma/look-highlight";
@@ -88,6 +89,7 @@ export const bundled: readonly Plugin[] = [
   archivedPage,
   addProject,
   devtools,
+  trace,
   interactionDialog,
   tooltips,
 ];

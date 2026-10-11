@@ -2,3 +2,5 @@ export { catalog, faultHistory, resolveComposition, restartedBy, withReplacement
 export type { KnownPlugin, Resolved } from "./catalog.ts";
 export { planComposition } from "./planner.ts";
 export type { LocalPlugin, Plan, PlanInput } from "./planner.ts";
+export { compositionHistory } from "./history.ts";
+export type { CompositionHistory } from "./history.ts";

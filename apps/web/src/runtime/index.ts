@@ -2,7 +2,7 @@ import { Context, Effect, Layer } from "effect";
 import type { Host } from "@lemma/client";
 import type { ApplicationServices } from "@lemma/core";
 import type { AnyRoute } from "@lemma/router";
-import { Client, HostPlugins, Interactions, Notify, Router, Slots, WEB_API, WebApi, WebPlugins } from "@lemma/web";
+import { Client, HostPlugins, Interactions, Notify, PageTrace, Router, Slots, WEB_API, WebApi, WebPlugins } from "@lemma/web";
 import type { HostPluginsService, NotifyService, WebPluginsService } from "@lemma/web";
 import { createClient } from "./client.ts";
 import { createHostPlugins } from "./host-plugins.ts";
@@ -10,6 +10,8 @@ import { createInteractions } from "./interactions.ts";
 import { createNotify } from "./notify.ts";
 import { createRouterService } from "./router.ts";
 import { makeSlots } from "./slots.ts";
+import { createPageTrace } from "./trace.ts";
+import type { PageTraceRuntime } from "./trace.ts";
 
 /*
  * The web app's runtime (`ui/runtime.ts`): what the boot provides every
@@ -21,13 +23,15 @@ import { makeSlots } from "./slots.ts";
  */
 
 /** What the runtime provides, in the order it builds them. */
-export const provides = [Client, WebPlugins, WebApi(WEB_API), Notify, HostPlugins, Interactions, Slots, Router] as const;
+export const provides = [Client, WebPlugins, WebApi(WEB_API), Notify, HostPlugins, Interactions, PageTrace, Slots, Router] as const;
 
 export interface WebRuntime {
   /** The page's messages, for what the boot itself reports (problems, faults). */
   readonly notify: NotifyService;
   /** The host's plugins, for the boot to run a web half only while its host half runs. */
   readonly hostPlugins: HostPluginsService;
+  /** The page's trace: the tracer to run the loader with, and where its changes are recorded. */
+  readonly trace: PageTraceRuntime;
   /** For `makeLoader`'s `provide`, and `provided` when planning. */
   readonly services: ApplicationServices<typeof provides>;
 }
@@ -50,6 +54,7 @@ export function createWebRuntime(options: {
   const notify = createNotify(client.client);
   const hostPlugins = createHostPlugins(client.client, notify.notify);
   const interactions = createInteractions(options.host, client.client, notify.notify);
+  const trace = createPageTrace();
   const layer = Layer.effectContext(
     Effect.gen(function* () {
       const slots = yield* makeSlots;
@@ -61,10 +66,11 @@ export function createWebRuntime(options: {
         Context.add(Notify, notify.notify),
         Context.add(HostPlugins, hostPlugins.plugins),
         Context.add(Interactions, interactions.interactions),
+        Context.add(PageTrace, trace.trace),
         Context.add(Slots, slots),
         Context.add(Router, router.router),
       );
     }),
   );
-  return { notify: notify.notify, hostPlugins: hostPlugins.plugins, services: { provides, layer } };
+  return { notify: notify.notify, hostPlugins: hostPlugins.plugins, trace, services: { provides, layer } };
 }

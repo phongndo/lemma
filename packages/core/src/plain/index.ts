@@ -8,7 +8,7 @@ import type { CoreClosed, HookError } from "../errors.ts";
 import { Events } from "../events.ts";
 import type { Event, ObserveOptions } from "../events.ts";
 import { Hooks, PluginContext } from "../hooks.ts";
-import type { BackgroundOptions, FaultOptions, Hook, HookOptions, Next, PluginIdentity } from "../hooks.ts";
+import type { BackgroundOptions, FaultOptions, Hook, HookOptions, InvokeOptions, Next, PluginIdentity } from "../hooks.ts";
 import { definePlugin as defineSetup } from "../plugin.ts";
 import type { Capabilities, Plugin, PluginManifest, Provided } from "../plugin.ts";
 import { Registries } from "../registries.ts";
@@ -89,8 +89,13 @@ export interface PlainSetup<Config, Carried = unknown> extends PluginIdentity {
   readonly observe: <P>(event: Event<P>, observer: (payload: P, signal: AbortSignal) => Awaitable<void, unknown>, options?: ObserveOptions) => void;
   /** Publishes an event; it never fails and never waits. */
   readonly publish: <P>(event: Event<P>, payload: P) => void;
-  /** Runs a hook's operation this plugin owns: the handlers, then `terminal`. */
-  readonly invoke: <I, O, E>(hook: Hook<I, O, E>, input: I, terminal: (input: I, signal: AbortSignal) => Awaitable<O, E>) => Promise<O>;
+  /** Runs a hook's operation this plugin owns: the handlers, then `terminal`; `onStep` hears each handler's part. */
+  readonly invoke: <I, O, E>(
+    hook: Hook<I, O, E>,
+    input: I,
+    terminal: (input: I, signal: AbortSignal) => Awaitable<O, E>,
+    options?: InvokeOptions<I, O>,
+  ) => Promise<O>;
   /** A registry's items now, in order. */
   readonly items: <I>(registry: Registry<I>) => readonly Contribution<I>[];
   /** A registry's items now, then after each change, until the plugin stops; a slow reader sees the latest. */
@@ -434,10 +439,15 @@ const context = (
     },
     // A stopped plugin's news is dropped: publishing never fails.
     publish: (event, payload) => void (bridge.stopped() ? undefined : Effect.runFork(events.publish(event, payload))),
-    invoke: (hook, input, terminal) => {
+    invoke: (hook, input, terminal, options) => {
       const wantsSignal = terminal.length >= 2;
       return bridge.run(
-        hooks.invoke(hook, input, (value) => inContext((invocation) => terminal(value, (wantsSignal ? invocation.signal() : undefined) as AbortSignal))),
+        hooks.invoke(
+          hook,
+          input,
+          (value) => inContext((invocation) => terminal(value, (wantsSignal ? invocation.signal() : undefined) as AbortSignal)),
+          options,
+        ),
         `invoke ${hook.name}`,
       );
     },

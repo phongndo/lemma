@@ -1,9 +1,9 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { ChannelInfo } from "@lemma/contracts";
-import { PLUGIN_PANEL } from "@lemma/devtools";
-import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools";
 import type { ClientService, SlotItem } from "@lemma/web";
+import { PLUGIN_PANEL } from "@lemma/devtools/web";
+import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
 
 /**

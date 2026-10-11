@@ -27,9 +27,9 @@ replace it.
   (`SectionIds`, `ActionIds`), or a DOM convention (listed in `@lemma/web`'s
   index). Each lives in its domain's contract package: `@lemma/frame` (the
   regions, layers, layout, dialogs), `@lemma/look` (themes, fonts, the shared
-  parts), `@lemma/settings`, `@lemma/actions`, `@lemma/threads`,
-  `@lemma/devtools`, and the web halves of host domains (`@lemma/llm/web`,
-  `@lemma/workspace/web`, `@lemma/commands/web`). When one plugin needs
+  parts), `@lemma/settings`, `@lemma/actions`, `@lemma/threads`, and the web
+  halves of host domains (`@lemma/llm/web`, `@lemma/workspace/web`,
+  `@lemma/commands/web`, `@lemma/devtools/web`). When one plugin needs
   something from another, add it to the contract of the domain that owns it.
   What two plugins of a domain share (a projection, a model) goes in its
   contract too, as the threads contract's transcript does.

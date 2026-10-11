@@ -1,10 +1,13 @@
+import { isDeepStrictEqual } from "node:util";
 import { Cause, Effect, Exit, Fiber, Order, Queue, Result, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, Events, Hooks, PluginContext, Registries } from "@lemma/core";
-import { Inspectors } from "@lemma/contracts";
+import type { HandlerStep } from "@lemma/core";
+import { creditOf, inChainOrder, Inspectors } from "@lemma/contracts";
+import type { CheckCredit, ResultCredit } from "@lemma/contracts";
 import { Guards, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult, Tools } from "@lemma/tools";
 import type { ExecuteOptions, Tool, ToolContext, ToolContribution, ToolInvocation, ToolRunner } from "@lemma/tools";
-import { capResult } from "./content.ts";
+import { capResult, textLength } from "./content.ts";
 import { toolParameters } from "./schema.ts";
 
 type Service = Context.Service.Shape<typeof ToolRunner>;
@@ -126,6 +129,22 @@ const aborted = (tool: string, signal: AbortSignal) =>
     return Effect.sync(() => signal.removeEventListener("abort", cancel));
   });
 
+/** What a handler of `ToolExecuteHook` changed: the call it passed on, and the result it returned. */
+const toolChanges = (step: HandlerStep<ToolInvocation, ToolResult>): string[] => {
+  const changed: string[] = [];
+  const passed = step.next?.input;
+  if (passed !== undefined && passed !== step.input) {
+    if (passed.name !== step.input.name) changed.push(`tool ${step.input.name} → ${passed.name}`);
+    if (!isDeepStrictEqual(passed.input, step.input.input)) changed.push("input");
+  }
+  const received = step.next?.output;
+  if (step.output !== undefined && received !== undefined && step.output !== received) {
+    if ((step.output.isError === true) !== (received.isError === true)) changed.push(step.output.isError === true ? "made it an error" : "cleared its error");
+    if (!isDeepStrictEqual(step.output.content, received.content)) changed.push("result");
+  }
+  return changed;
+};
+
 /**
  * The `ToolRunner` over what `Tools` and `Guards` hold. The core's registries keep what plugins add: each item belongs
  * to the plugin that added it and leaves with it, and a plugin's replacement takes over its names at the swap (so
@@ -164,9 +183,9 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
         message: `Tool "${name}" not found. Available tools: ${names.sort().join(", ") || "(none)"}`,
       });
 
-    /** Guards, then the tool. Runs as the hook's terminal so no handler can route around a guard. */
+    /** Guards, then the tool. Runs as the hook's terminal so no handler can route around a guard. `checks` hears the guards' decisions. */
     const terminal =
-      (original: ToolInvocation, decoded: unknown, signal: AbortSignal, update: ExecuteOptions["update"]) =>
+      (original: ToolInvocation, decoded: unknown, signal: AbortSignal, update: ExecuteOptions["update"], checks: CheckCredit[]) =>
       (call: ToolInvocation): Effect.Effect<ToolResult, ToolError> =>
         Effect.gen(function* () {
           const entry = yield* find(call.name);
@@ -175,7 +194,15 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           const input = call === original ? decoded : yield* entry.decode(call.input);
           for (const candidate of yield* registries.items(Guards)) {
             if (candidate.item.tool !== "*" && candidate.item.tool !== call.name) continue;
+            const began = performance.now();
             const decision = yield* awaitable(() => candidate.item.guard(call));
+            const ms = Math.round((performance.now() - began) * 100) / 100;
+            checks.push({
+              source: candidate.pluginId,
+              allowed: decision._tag === "allow",
+              ms,
+              ...(decision._tag === "deny" ? { reason: decision.reason } : {}),
+            });
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
           // The tool's output goes out through one fiber the call owns, in order: published as `ToolOutput`, batched, or
@@ -222,15 +249,35 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           }
           if (signal.aborted) return yield* new ToolError({ tool: invocation.name, reason: "Cancelled", message: `Tool "${invocation.name}" was cancelled` });
           const started = Date.now();
+          // Who shaped the result, for a caller that keeps it (`ExecuteOptions.credit`).
+          const steps: HandlerStep<ToolInvocation, ToolResult>[] = [];
+          const checks: CheckCredit[] = [];
+          let cut: ResultCredit["cut"];
+          const credited =
+            executeOptions?.credit === undefined ? undefined : { onStep: (step: HandlerStep<ToolInvocation, ToolResult>) => void steps.push(step) };
           const settled = yield* entry.decode(invocation.input).pipe(
-            Effect.flatMap((decoded) => hooks.invoke(ToolExecuteHook, invocation, terminal(invocation, decoded, signal, executeOptions?.update))),
-            Effect.map((result) => capResult(result, options.maxResultChars)),
+            Effect.flatMap((decoded) =>
+              hooks.invoke(ToolExecuteHook, invocation, terminal(invocation, decoded, signal, executeOptions?.update, checks), credited),
+            ),
+            Effect.map((result) => {
+              const capped = capResult(result, options.maxResultChars);
+              if (capped !== result) cut = { from: textLength(result), to: options.maxResultChars };
+              return capped;
+            }),
             // Handler failures, invalid input, and denials are results the model reads and can act on. A core shutting
             // down is not one: a defect, which the caller (the agent leaves its turn to resume) can tell apart.
             Effect.catch((error) => (error._tag === "CoreClosed" ? Effect.die(error) : Effect.succeed(errorResult(error.message)))),
             Effect.raceFirst(aborted(invocation.name, signal)),
           );
           yield* events.publish(ToolExecuted, { invocation, result: settled, durationMs: Date.now() - started });
+          if (executeOptions?.credit !== undefined) {
+            const handlers = inChainOrder(steps).map((step) => creditOf(step, toolChanges(step)));
+            executeOptions.credit({
+              ...(handlers.length === 0 ? {} : { handlers }),
+              ...(checks.length === 0 ? {} : { checks }),
+              ...(cut === undefined ? {} : { cut }),
+            });
+          }
           return settled;
         }),
       );
