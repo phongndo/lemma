@@ -19,7 +19,10 @@ cannot hold a turn forever.
 ## Rationale
 
 - **Replaceable alone.** A sandboxed `bash` is a plugin that registers a tool
-  named `bash`, with this plugin turned off; nothing else changes.
+  named `bash`, with this plugin turned off. Its web half goes with it, and
+  with it how the chat shows bash calls (the terminal icon, the command as the
+  summary): a replacement shows its calls with a `ToolViews` item of its own,
+  or keeps this one by taking the id `tools.bash` and wrapping this plugin.
 - **Process groups.** It spawns the shell as a group leader; abort and timeout
   kill the whole group. After the shell exits, output is read until the pipes go
   idle for 100ms, so a background child holding them cannot hang the call.

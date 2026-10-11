@@ -1,6 +1,7 @@
 /** The value of string field `key` in possibly incomplete JSON (streamed tool arguments). */
 export const partialStringField = (json: string, key: string): string | undefined => {
-  const match = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(json);
+  // The key comes from any plugin's `ToolView.streaming`: matched as text, not as a pattern.
+  const match = new RegExp(`"${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)`).exec(json);
   if (match === null) return undefined;
   const raw = match[1]!.replace(/\\$/, "");
   try {

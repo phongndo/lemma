@@ -193,10 +193,30 @@ for (const file of walk(join(root, "packages/contracts/src")).filter((path) => /
 // Plugin files resolve bare imports through the host's packages (packages/host/src/local.ts), so a domain's contract
 // the host's own plugins are written against, but the host does not list, is one a plugin file cannot import.
 const hostDependencies = dependenciesOf(JSON.parse(readFileSync(join(root, "packages/host/package.json"), "utf8")));
+/** Whether a contract's main entry draws (imports Solid, or the web's plugin API): one only a web half could import. */
+const draws = (pkg: { readonly dir: string; readonly manifest: { readonly exports?: unknown } }) => {
+  const exports = pkg.manifest.exports as string | Readonly<Record<string, string>> | undefined;
+  const main = typeof exports === "string" ? exports : exports?.["."];
+  if (main === undefined) return false;
+  const seen = new Set<string>();
+  const visit = (file: string): boolean => {
+    if (seen.has(file) || !existsSync(file)) return false;
+    seen.add(file);
+    for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
+      const specifier = match[1]!;
+      if (/^solid-js(\/|$)/.test(specifier) || /^@lemma\/(ui|web)(\/|$)/.test(specifier)) return true;
+      if (specifier.startsWith(".") && visit(resolve(dirname(file), specifier))) return true;
+    }
+    return false;
+  };
+  return visit(join(pkg.dir, main));
+};
+// A package holds a plugin's both halves, so its web half's contracts are among its dependencies too: only those a
+// host half could import count.
 const hostContracts = new Set(
   pluginPackages
     .filter((pkg) => hostDependencies.includes(pkg.manifest.name))
-    .flatMap((pkg) => dependenciesOf(pkg.manifest).filter((name) => contractPackages.has(name))),
+    .flatMap((pkg) => dependenciesOf(pkg.manifest).filter((name) => contractPackages.has(name) && !draws(contractPackages.get(name)!))),
 );
 for (const name of hostContracts) {
   if (!hostDependencies.includes(name))

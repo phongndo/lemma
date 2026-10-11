@@ -160,7 +160,13 @@ export async function boot(options: BootOptions): Promise<void> {
     const known = list.length > 0;
     const ids = new Set(list.map((plugin) => plugin.id));
     const stopped = new Map(list.filter((plugin) => plugin.state !== "active").map((plugin) => [plugin.id, `its host half is ${plugin.state}`] as const));
-    return { known, ids, stopped, key: JSON.stringify(list.map((plugin) => [plugin.id, plugin.state])) };
+    // What re-planning follows: the ids, and the states of those with a web half here, so a host-only plugin's restart
+    // or fault re-plans nothing.
+    // (Before the first plan, the bundled ones.)
+    const planned = (plan as Plan | undefined)?.known ?? [];
+    const halved = new Set([...options.bundled.map((plugin) => plugin.id), ...planned.map(({ plugin }) => plugin.id)]);
+    const key = JSON.stringify(list.map((plugin) => (halved.has(plugin.id) ? [plugin.id, plugin.state] : [plugin.id])));
+    return { known, ids, stopped, key };
   };
   /**
    * The composition for these rows and files (`planComposition`): what cannot
@@ -170,10 +176,15 @@ export async function boot(options: BootOptions): Promise<void> {
   const planFor = async (next: UiComposition) => {
     const loaded = safe ? { plugins: [], problems: [] } : await fileLoader.load(next.files);
     const halves = hostHalves();
+    // Whether a required plugin runs is the host's to decide for its half: here, a web half waiting on its host half is
+    // left out with a word rather than an error that would keep every later change from applying.
+    const rows = Object.fromEntries(
+      Object.entries(next.plugins).map(([id, row]) => [id, row.required === true && halves.stopped.has(id) ? { ...row, required: false } : row]),
+    );
     const planned = planComposition({
       bundled: options.bundled,
       local: loaded.plugins,
-      rows: safe ? {} : next.plugins,
+      rows: safe ? {} : rows,
       pinned: Object.keys(PINNED),
       provided: runtime.services.provides,
       elsewhere: halves.known ? (id) => halves.ids.has(id) : () => true,
@@ -183,10 +194,14 @@ export async function boot(options: BootOptions): Promise<void> {
     return {
       plan: planned,
       errors: planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error").map(said),
-      // A plugin waiting on one that is off is what turning that one off means: the Plugins page shows it, unannounced.
+      // A plugin waiting on one that is off, or a web half on its host half, is what turning that one off means (and a
+      // host half that failed is announced as its fault): the Plugins page shows it, unannounced.
       problems: [
         ...loaded.problems,
-        ...planned.diagnostics.filter((diagnostic) => diagnostic.severity === "warning" && !planned.resolved.haltedBy.has(diagnostic.pluginId ?? "")).map(said),
+        ...planned.diagnostics
+          .filter((diagnostic) => diagnostic.severity === "warning")
+          .filter((diagnostic) => !planned.resolved.haltedBy.has(diagnostic.pluginId ?? "") && !halves.stopped.has(diagnostic.pluginId ?? ""))
+          .map(said),
       ],
     };
   };
@@ -258,8 +273,10 @@ export async function boot(options: BootOptions): Promise<void> {
       });
   // And for the host's plugins, so a web half whose host half is not running never starts only to stop.
   const firstHalves = safe ? undefined : runtime.hostPlugins.refresh();
-  const initial = firstRows === undefined ? EMPTY : ((await timeout(firstRows, FIRST_ROWS_MS).catch(() => undefined)) ?? EMPTY);
-  if (firstHalves !== undefined) await timeout(firstHalves, FIRST_ROWS_MS).catch(() => undefined);
+  // Both under one bound, so a slow host holds the first paint back FIRST_ROWS_MS at most, keeping the rows if they came.
+  let rowsFound: UiComposition | undefined;
+  await timeout(Promise.allSettled([firstRows?.then((rows) => (rowsFound = rows)), firstHalves]), FIRST_ROWS_MS);
+  const initial = rowsFound ?? EMPTY;
   const scope = await runPromise(Scope.make());
   /**
    * Starts `planned` with what can start: a plugin that fails is left failed, unless it is pinned or a pinned plugin

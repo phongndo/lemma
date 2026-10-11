@@ -29,13 +29,20 @@ export interface Manifest {
  */
 export type Entry =
   | { readonly kind: "host" | "web" | "style"; readonly path: string; readonly name: string }
-  | { readonly kind: "package"; readonly path: string; readonly name: string; readonly manifest: Manifest };
+  | {
+      readonly kind: "package";
+      readonly path: string;
+      readonly name: string;
+      readonly manifest: Manifest;
+      /** What its manifest names that is left out, and why: a path outside it, a file missing, a web half not JavaScript. */
+      readonly problems: readonly string[];
+    };
 
 const isWeb = (name: string) => /\.web\.(js|mjs)$/.test(name);
 const isHost = (name: string) => /\.(ts|js|mjs)$/.test(name) && !name.endsWith(".d.ts") && !isWeb(name);
 
-/** A package's manifest, its paths absolute; undefined when its package.json has no `lemma` object. */
-const manifestOf = async (dir: string): Promise<Manifest | undefined> => {
+/** A package's manifest, its paths absolute, and what it names that is left out; undefined with no `lemma` object. */
+const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; readonly problems: readonly string[] } | undefined> => {
   const text = await readFile(join(dir, "package.json"), "utf8").catch(() => undefined);
   if (text === undefined) return undefined;
   const lemma: unknown = (() => {
@@ -47,17 +54,34 @@ const manifestOf = async (dir: string): Promise<Manifest | undefined> => {
   })();
   if (!Predicate.isObject(lemma)) return undefined;
   const { host, web, styles } = lemma as Record<string, unknown>;
-  const inside = (file: unknown): string[] => {
-    if (typeof file !== "string") return [];
+  const problems: string[] = [];
+  /** `file` as an absolute path when it is one of the package's own (a string, inside it, there). */
+  const inside = async (field: string, file: unknown): Promise<string[]> => {
+    if (file === undefined) return [];
+    if (typeof file !== "string") return (problems.push(`"lemma.${field}" is not a path`), []);
     const path = join(dir, file);
-    return relative(dir, path).startsWith("..") ? [] : [path];
+    if (relative(dir, path).startsWith("..")) return (problems.push(`"lemma.${field}" names ${file}, outside the package`), []);
+    // A host half that is missing is the loader's to report: that plugin cannot run.
+    if (field !== "host" && !(await stat(path).catch(() => undefined))?.isFile())
+      return (problems.push(`"lemma.${field}" names ${file}, which is missing`), []);
+    return [path];
   };
-  const [hostPath] = inside(host);
-  const [webPath] = inside(web);
+  const [hostPath] = await inside("host", host);
+  let [webPath] = await inside("web", web);
+  // The web app imports a web half as it is: a module in JavaScript.
+  if (webPath !== undefined && !/\.m?js$/.test(webPath)) {
+    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript (.js or .mjs), which the web app imports as it is`);
+    webPath = undefined;
+  }
+  if (styles !== undefined && !Array.isArray(styles)) problems.push(`"lemma.styles" is not a list of paths`);
+  const stylePaths = Array.isArray(styles) ? (await Promise.all(styles.map((style) => inside("styles", style)))).flat() : undefined;
   return {
-    ...(hostPath === undefined ? {} : { host: hostPath }),
-    ...(webPath === undefined ? {} : { web: webPath }),
-    ...(Array.isArray(styles) ? { styles: styles.flatMap(inside) } : {}),
+    manifest: {
+      ...(hostPath === undefined ? {} : { host: hostPath }),
+      ...(webPath === undefined ? {} : { web: webPath }),
+      ...(stylePaths === undefined ? {} : { styles: stylePaths }),
+    },
+    problems,
   };
 };
 
@@ -69,8 +93,8 @@ export async function entriesOf(dir: string): Promise<Entry[]> {
     const path = join(dir, name);
     const info = await stat(path).catch(() => undefined);
     if (info?.isDirectory()) {
-      const manifest = await manifestOf(path);
-      if (manifest !== undefined) entries.push({ kind: "package", path, name, manifest });
+      const found = await manifestOf(path);
+      if (found !== undefined) entries.push({ kind: "package", path, name, ...found });
     } else if (info?.isFile()) {
       if (isWeb(name)) entries.push({ kind: "web", path, name });
       else if (isHost(name)) entries.push({ kind: "host", path, name });
