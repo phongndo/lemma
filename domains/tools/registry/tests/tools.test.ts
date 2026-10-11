@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Inspectors, snapshotOf } from "@lemma/contracts";
+import type { ResultCredit } from "@lemma/contracts";
 import { Guards, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import type { Guard, Tool } from "@lemma/tools";
 import tools, { toolParameters } from "../src/index.ts";
@@ -248,11 +249,23 @@ describe("execute", () => {
     await run(
       [contributor("p", [echo], guards), rewriter],
       Effect.gen(function* () {
-        const result = yield* call("echo", { text: "original" });
+        let credit: ResultCredit | undefined;
+        const invocation = new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "echo", input: { text: "original" }, cwd: "/tmp" });
+        const result = yield* Effect.flatMap(ToolRunner, (registry) =>
+          registry.execute(invocation, new AbortController().signal, { credit: (heard) => void (credit = heard) }),
+        );
         expect(result.isError).toBe(true);
         expect(textOf(result)).toBe("Tool call denied: no rewrites");
         expect(result.details).toEqual({ deniedBy: "p" });
         expect(seen).toEqual(['hook:{"text":"original"}', 'guard:{"text":"rewritten"}']);
+        // Who shaped the result: the handler that rewrote the call, and each guard's decision.
+        expect(credit).toEqual({
+          handlers: [{ source: "rewriter", ms: expect.any(Number), changed: ["input"] }],
+          checks: [
+            { source: "p", allowed: true, ms: expect.any(Number) },
+            { source: "p", allowed: false, ms: expect.any(Number), reason: "no rewrites" },
+          ],
+        });
       }),
     );
   });

@@ -1,10 +1,10 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { RouterEvent, RouteVerdict } from "@lemma/router";
 import { clockTime } from "@lemma/web/format";
-import { PLUGIN_PANEL } from "@lemma/devtools";
+import { PLUGIN_PANEL } from "@lemma/devtools/web";
 import { Pages } from "@lemma/web";
-import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools";
 import type { RouterService, SlotItem, SlotsService } from "@lemma/web";
+import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
 
 const VERDICT_CLASS: Readonly<Record<RouteVerdict["outcome"], string>> = {
   shown: "dt-ok",

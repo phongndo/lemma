@@ -11,8 +11,8 @@ import type { CommandInfo } from "@lemma/commands";
 import type { LlmChange } from "@lemma/llm";
 import type { SessionsChange } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
-import type { DevtoolsPanel } from "@lemma/devtools";
 import type { ClientService, RouterService, SlotItem } from "@lemma/web";
+import type { DevtoolsPanel } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
 
 export const EVENTS_PANEL = "devtools.events";

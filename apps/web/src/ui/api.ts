@@ -14,7 +14,7 @@ import { copyText } from "@lemma/web/clipboard";
 import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/web/paint";
 import * as actions from "@lemma/actions";
 import * as commands from "@lemma/commands/web";
-import * as devtools from "@lemma/devtools";
+import * as devtools from "@lemma/devtools/web";
 import * as frame from "@lemma/frame";
 import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
@@ -82,7 +82,7 @@ export const api = {
   extendWebPlugin,
   /**
    * The bundled plugins by id: what a replacement with the same id wraps (`extendWebPlugin`) rather than copies. The
-   * runtime (`Client`, `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`) is not among them:
+   * runtime (`Client`, `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`, `PageTrace`) is not among them:
    * the app provides it, and no plugin replaces or provides it. Requiring it is as before, by its tag in `contracts`.
    */
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),

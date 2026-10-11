@@ -209,7 +209,7 @@ export class HostControl extends Context.Service<
   HostControl,
   {
     /**
-     * What the host provides itself, by capability key: `Paths`, `HostControl`, `Interaction`, and
+     * What the host provides itself, by capability key: `Paths`, `HostControl`, `Interaction`, `Trace`, and
      * `HostApi(HOST_API)`. Any plugin may require them; none provides them, and none has a row. Fixed for the host's life.
      */
     readonly runtime: readonly string[];

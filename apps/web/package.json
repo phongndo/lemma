@@ -24,6 +24,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/devtools": "workspace:*",
     "@lemma/devtools-dock": "workspace:*",
+    "@lemma/devtools-trace": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/frame-connection": "workspace:*",
     "@lemma/frame-dialogs": "workspace:*",

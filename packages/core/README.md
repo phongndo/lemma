@@ -448,6 +448,10 @@ Rollback releases acquired resources and registrations. It cannot undo arbitrary
 
 Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable; building the application's services emits `core.provide`. With tracing turned off (`Effect.withTracerEnabled(false)`) a handler gets no span at all, which makes dispatch several times cheaper (`bench/budgets.ts`). `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
 
+`makeSpanCollector({ limit })` is one: it keeps the spans a program ends as plain data (`SpanRecord`: name, parent, start, duration, status, a failure's line, attributes), in memory and bounded to the last `limit`, and hears them in batches (`subscribe`). Install its `tracer` around the program (`Effect.withTracer`). Work marks every span inside it with `Effect.annotateSpans` (what it is for: a request, a job), so a reader can filter by it. Keeping a span as data costs about 0.8us over Effect's native span (`bench/budgets.ts`).
+
+A hook may say what a trace shows of each handler: `Hook.make(name, { summary: { input, output } })` returns a few plain values (counts, names, never the payload) for its span's `hook.in.*`, `hook.next.*` (what it passed on), and `hook.out.*`, asked only while tracing. And the caller of an operation may hear each handler's part as it ends, `hooks.invoke(hook, input, terminal, { onStep })`: what it was handed, what it passed on and got back, what it returned, and how long it took in all and on its own. That is what an application credits a result to, kept beside it.
+
 These spans and composition snapshots describe runtime provenance. Applications
 own durable audit history, persistence, domain events, and payload redaction.
 Runtime-generated spans do not include hook arguments/results or plugin configuration.

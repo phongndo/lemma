@@ -3,6 +3,7 @@ import type { Effect } from "effect";
 import { Event, Hook, Registry } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "@lemma/llm";
+import type { ResultCredit } from "@lemma/contracts";
 
 export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
   content: Schema.Array(Schema.Union([TextContent, ImageContent])),
@@ -92,7 +93,12 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
  * Around every execution: timeouts, rewrites, logging. A handler that does not
  * call `next` skips the tool and supplies the result itself.
  */
-export const ToolExecuteHook = Hook.make<ToolInvocation, ToolResult, ToolError>("lemma/tool.execute");
+export const ToolExecuteHook = Hook.make<ToolInvocation, ToolResult, ToolError>("lemma/tool.execute", {
+  summary: {
+    input: (call) => ({ tool: call.name, call: call.toolCallId }),
+    output: (result) => ({ error: result.isError === true, parts: result.content.length }),
+  },
+});
 
 /**
  * A guard decides whether a call may run. Guards run inside the terminal of
@@ -175,6 +181,12 @@ export interface ExecuteOptions {
    * slow listener slows the call, and one that never ends holds it. A call cut off (cancelled, interrupted) waits on none.
    */
   readonly update?: (chunk: string) => Awaitable<void, unknown>;
+  /**
+   * Hears who shaped the result, once it is settled: `ToolExecuteHook`'s handlers (each one's own time, and whether it
+   * changed the call or the result, or answered itself), the guards' decisions, and the registry's cut. The agent logs it
+   * with the result.
+   */
+  readonly credit?: (credit: ResultCredit) => void;
 }
 
 /** Lists and runs what `Tools` holds: the agent, and a tool that runs others, call it. */

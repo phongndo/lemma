@@ -19,7 +19,7 @@ export {
 export { Event, Events } from "./events.ts";
 export type { Observer, ObserveOptions } from "./events.ts";
 export { Hook, Hooks, PluginContext } from "./hooks.ts";
-export type { BackgroundOptions, FaultOptions, Handler, HookOptions, Next, PluginIdentity } from "./hooks.ts";
+export type { BackgroundOptions, FaultOptions, HandlerStep, Handler, HookOptions, HookSummary, InvokeOptions, Next, PluginIdentity, Summary } from "./hooks.ts";
 export { makeLoader } from "./loader.ts";
 export { Admitted, Registries, Registry } from "./registries.ts";
 export type { AdmittedWork, ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";
@@ -27,6 +27,8 @@ export type { RegistrySnapshot } from "./internal/registries.ts";
 export type { Composition, Loader, LoaderOptions, PluginEntry, PluginSource, ReloadReport } from "./loader.ts";
 export { awaitable, fail, isExpectedFailure } from "./awaitable.ts";
 export { reportUnhandled } from "./unhandled.ts";
+export { makeSpanCollector } from "./trace.ts";
+export type { SpanCollector, SpanRecord } from "./trace.ts";
 export type { Unhandled } from "./unhandled.ts";
 export type { Awaitable } from "./awaitable.ts";
 export { configSchema } from "./config.ts";

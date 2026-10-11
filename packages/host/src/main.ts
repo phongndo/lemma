@@ -2,11 +2,11 @@
 import { spawn } from "node:child_process";
 import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
 import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, WebChanged } from "@lemma/contracts";
-import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
+import { Diagnostic, Events, makeLoader, makeSpanCollector, ReloadError } from "@lemma/core";
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
+import { catalog, compositionHistory, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ChangeReport, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
+import type { ChangeReport, CompositionChange, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
@@ -39,6 +39,9 @@ const pinned: Readonly<Record<string, string>> = {
 };
 /** What the host provides itself (see `hostRuntime`): planned as present, and refused from a plugin. */
 const provided = runtimeCapabilities;
+/** What `Trace` reads: every span the host's work ends, kept in memory, and the composition's changes. */
+const spans = makeSpanCollector();
+const changes = compositionHistory();
 
 const log = (message: string) =>
   Effect.sync(() => {
@@ -285,8 +288,32 @@ const program = Effect.gen(function* () {
         Effect.tapError(() => update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))))),
       );
     });
+  /**
+   * Keeps `change`'s outcome for the devtools' timeline (`Trace.changes`): what it did, or why it was refused. One that
+   * applies later is kept when it does.
+   */
+  const recorded =
+    (cause: CompositionChange["cause"], subjects?: readonly string[]) =>
+    <A extends Partial<ReloadReport> & { readonly deferred?: boolean }, E extends ReloadError | CoreClosed>(change: Effect.Effect<A, E>): Effect.Effect<A, E> =>
+      change.pipe(
+        Effect.tap((report) =>
+          Effect.sync(() => {
+            if (report.deferred !== true) changes.applied(cause, report, subjects);
+          }),
+        ),
+        Effect.tapError((error) =>
+          Effect.sync(() =>
+            changes.refused(
+              cause,
+              error._tag === "ReloadError" ? error.diagnostics.map((diagnostic) => diagnostic.message).join("; ") : "the host is closing",
+              subjects,
+            ),
+          ),
+        ),
+      );
   /** Re-reads the config files and applies them, one change at a time. */
-  const reloadNow = (loader: Loader) => reloading.withPermits(1)(Effect.flatMap(load(), (loaded) => apply(loader, loaded)));
+  const reloadNow = (loader: Loader, cause: CompositionChange["cause"], subjects?: readonly string[]) =>
+    recorded(cause, subjects)(reloading.withPermits(1)(Effect.flatMap(load(), (loaded) => apply(loader, loaded))));
   /**
    * A change that restarts a plugin whose work is making it would wait on that
    * work or cut it off (`deferral`), so it is checked at once and `change`
@@ -329,7 +356,7 @@ const program = Effect.gen(function* () {
       const restore = update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))));
       const next = yield* load().pipe(Effect.tapError(() => restore));
       yield* checkConfigs(next, Object.keys(rows)).pipe(Effect.tapError(() => restore));
-      const change = Effect.flatMap(reloadNow(loader), (report) => log(`applied a config change: ${describe(report)}`));
+      const change = Effect.flatMap(reloadNow(loader, "configure", Object.keys(rows)), (report) => log(`applied a config change: ${describe(report)}`));
       yield* applyLater(loader, after, change, "The config change could not be applied and was undone", restore);
       return deferred;
     });
@@ -361,10 +388,10 @@ const program = Effect.gen(function* () {
         const after = yield* deferral(touched, Object.keys(pinned));
         if (after === undefined) return yield* apply(loader, next);
         yield* checkConfigs(next, [...touched]);
-        const change = Effect.flatMap(reloadNow(loader), (report) => log(`reloaded: ${describe(report)}`));
+        const change = Effect.flatMap(reloadNow(loader, "reload"), (report) => log(`reloaded: ${describe(report)}`));
         yield* applyLater(loader, after, change, "The reload could not be applied; the running composition is unchanged");
         return deferred;
-      }),
+      }).pipe(recorded("reload")),
     ),
   );
   const handle: HostControlHandle = {
@@ -404,8 +431,9 @@ const program = Effect.gen(function* () {
             state === undefined || (state === "active" && !options?.force)
               ? undefined
               : yield* deferral(restartedBy(applied.known, [pluginId], { provided }), Object.keys(pinned));
-          if (after === undefined) return yield* Effect.as(loader.core.restart(pluginId, options), {});
-          const change = Effect.andThen(loader.core.restart(pluginId, options), log(`restarted ${pluginId}`));
+          const restart = recorded("restart", [pluginId])(Effect.as(loader.core.restart(pluginId, options), { restarted: [pluginId] }));
+          if (after === undefined) return yield* Effect.as(restart, {});
+          const change = Effect.andThen(restart, log(`restarted ${pluginId}`));
           yield* applyLater(loader, after, change, `"${pluginId}" could not be restarted`);
           return { deferred: true };
         }),
@@ -446,7 +474,7 @@ const program = Effect.gen(function* () {
             const after = yield* deferral(restartedBy(applied.known, Object.keys(rows), { provided }), Object.keys(pinned));
             if (after !== undefined) return yield* writeDeferred(loader, rows, scope, after);
             return yield* write(loader, rows, scope);
-          }),
+          }).pipe(recorded("configure", Object.keys(requested))),
         ),
       ),
   };
@@ -457,7 +485,7 @@ const program = Effect.gen(function* () {
   const loader = yield* makeLoader({
     source,
     composition: applied.resolved.composition,
-    provide: hostRuntime({ paths, control: handle }),
+    provide: hostRuntime({ paths, control: handle, trace: { spans, changes } }),
     shutdownTimeout: SHUTDOWN_TIMEOUT,
     partialStart: { required: applied.required },
   }).pipe(
@@ -506,6 +534,10 @@ const program = Effect.gen(function* () {
           : [],
     ),
   );
+  changes.applied("start", {
+    started: plugins.filter((plugin) => plugin.state === "active").map((plugin) => plugin.id),
+    failed: plugins.filter((plugin) => plugin.state === "failed" || plugin.haltedBy !== undefined).map((plugin) => plugin.id),
+  });
   yield* log(
     `running ${plugins
       .filter((plugin) => plugin.state === "active")
@@ -527,7 +559,7 @@ const program = Effect.gen(function* () {
         for (const [path, text] of current) seenConfig.set(path, text);
         yield* log(`${changed.length === 1 ? changed[0] : changed.join(" and ")} changed; reloading`).pipe(
           // The host's own change, no request: it applies at once, and clients hear of it as of one made through `HostControl`.
-          Effect.andThen(reloadNow(loader)),
+          Effect.andThen(reloadNow(loader, "reload")),
           Effect.matchEffect({
             onFailure: (error) => printDiagnostics(error.diagnostics).pipe(Effect.andThen(log("reload rejected; the running composition is unchanged"))),
             onSuccess: (report) =>
@@ -557,7 +589,7 @@ const program = Effect.gen(function* () {
   yield* Effect.forkScoped(
     Stream.runForEach(safe ? Stream.empty : watchPlugins(paths), () =>
       log("a plugin file changed; reloading").pipe(
-        Effect.andThen(reloadNow(loader)),
+        Effect.andThen(reloadNow(loader, "reload")),
         Effect.matchEffect({
           onFailure: (error) =>
             printDiagnostics(error.diagnostics).pipe(
@@ -586,7 +618,7 @@ const program = Effect.gen(function* () {
 });
 
 catchUnhandled();
-const exit = await Effect.runPromiseExit(Effect.scoped(program));
+const exit = await Effect.runPromiseExit(Effect.scoped(program).pipe(Effect.withTracer(spans.tracer)));
 if (Exit.isFailure(exit)) {
   const failure = Cause.findErrorOption(exit.cause);
   if (Option.isSome(failure) && failure.value instanceof ReloadError) {

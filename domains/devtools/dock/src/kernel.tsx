@@ -4,7 +4,7 @@ import { kernelOf, tablesOf } from "@lemma/contracts";
 import type { InspectorInfo, KernelView, PluginStatus, Table } from "@lemma/contracts";
 import * as actions from "@lemma/actions";
 import * as commands from "@lemma/commands/web";
-import * as devtools from "@lemma/devtools";
+import * as devtools from "@lemma/devtools/web";
 import * as frame from "@lemma/frame";
 import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
@@ -12,10 +12,10 @@ import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
 import * as webRuntime from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
-import { PLUGIN_PANEL } from "@lemma/devtools";
+import { PLUGIN_PANEL } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
-import type { DevtoolsService } from "@lemma/devtools";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
+import type { DevtoolsService } from "@lemma/devtools/web";
 import { DEFAULT_PART_ORDER, definedSlots, usePlugin } from "@lemma/web";
 
 type Kind = "web" | "host";
@@ -140,7 +140,7 @@ const contracts: Readonly<Record<string, object>> = {
   "@lemma/look": look,
   "@lemma/settings": settings,
   "@lemma/actions": actions,
-  "@lemma/devtools": devtools,
+  "@lemma/devtools/web": devtools,
   "@lemma/threads": threads,
   "@lemma/llm/web": llm,
   "@lemma/workspace/web": workspace,

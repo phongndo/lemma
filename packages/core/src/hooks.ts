@@ -15,6 +15,7 @@ const HookTypeId: unique symbol = Symbol("@lemma/core/Hook");
  */
 export interface Hook<Input, Output, Error = never> {
   readonly name: string;
+  readonly summary?: HookSummary<Input, Output>;
   readonly [HookTypeId]: {
     readonly input: (_: Input) => Input;
     readonly output: (_: Output) => Output;
@@ -22,11 +23,51 @@ export interface Hook<Input, Output, Error = never> {
   };
 }
 
+/** A few plain values describing a hook's input or output (counts, names), for a trace: never the payload. */
+export type Summary = Readonly<Record<string, string | number | boolean>>;
+
+/**
+ * What a trace shows of each handler of a hook: its input (`hook.in.*` on its span), what it passed on (`hook.next.*`),
+ * and its output (`hook.out.*`). Asked only while tracing is on.
+ */
+export interface HookSummary<Input, Output> {
+  readonly input?: (input: Input) => Summary;
+  readonly output?: (output: Output) => Summary;
+}
+
 export const Hook = {
-  make<Input, Output, Error = never>(name: string): Hook<Input, Output, Error> {
-    return token(Object.freeze({ name })) as Hook<Input, Output, Error>;
+  make<Input, Output, Error = never>(name: string, options?: { readonly summary?: HookSummary<Input, Output> }): Hook<Input, Output, Error> {
+    return token(Object.freeze({ name, ...(options?.summary === undefined ? {} : { summary: options.summary }) })) as Hook<Input, Output, Error>;
   },
 };
+
+/** One handler's part in an invocation, as it ended (`InvokeOptions.onStep`). */
+export interface HandlerStep<Input, Output> {
+  readonly pluginId: string;
+  readonly order: number;
+  /** Its place in the chain, from 0. */
+  readonly index: number;
+  /** What it was handed. */
+  readonly input: Input;
+  /** What it handed `next`, and what that returned to it; absent when it never called `next`. */
+  readonly next?: { readonly input: Input; readonly output?: Output };
+  /** What it returned; absent when it failed or was interrupted. */
+  readonly output?: Output;
+  readonly exit: "success" | "failure" | "interrupted";
+  /** Epoch milliseconds it started at. */
+  readonly startedAt: number;
+  /** How long it took, and how much of that was its own: without the rest of the chain it called. */
+  readonly ms: number;
+  readonly selfMs: number;
+}
+
+export interface InvokeOptions<Input, Output> {
+  /**
+   * Hears each handler's step as it ends, the innermost first: who changed what, and how long each took. What an
+   * application credits a result to, kept beside it. Costs nothing when absent.
+   */
+  readonly onStep?: (step: HandlerStep<Input, Output>) => void;
+}
 
 export type Next<Input, Output, Error> = (input: Input) => Effect.Effect<Output, Error | HookError | CoreClosed>;
 
@@ -121,6 +162,7 @@ export class Hooks extends Context.Service<
       hook: Hook<I, O, E>,
       input: I,
       terminal: (input: I) => Effect.Effect<O, E, R>,
+      options?: InvokeOptions<I, O>,
     ) => Effect.Effect<O, E | HookError | CoreClosed, R>;
   }
 >()("@lemma/core/Hooks") {}
