@@ -1,11 +1,10 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import { definePlugin, makeCore } from "@lemma/core";
 import { ToolInvocation, ToolResult, Tools } from "@lemma/tools";
-import { textOf } from "@lemma/tools/testing";
+import { tempDir, textOf } from "@lemma/tools/testing";
 import bash from "@lemma/tools-bash";
 import edit from "@lemma/tools-edit";
 import read from "@lemma/tools-read";
@@ -39,7 +38,7 @@ describe("the bundled tools", () => {
   });
 
   it("lets a composition replace bash alone and routes the legacy edit shape through the registry", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "lemma-tools-"));
+    const dir = await tempDir();
     const myBash = definePlugin({
       id: "my-bash",
       requires: [Tools],

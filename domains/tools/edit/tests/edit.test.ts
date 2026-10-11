@@ -1,14 +1,13 @@
 import * as fs from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { editTool } from "../src/index.ts";
 import type { EditDetails } from "../src/index.ts";
-import { attempt, call, context, textOf } from "@lemma/tools/testing";
+import { attempt, call, context, tempDir, textOf } from "@lemma/tools/testing";
 
 let dir: string;
 beforeEach(async () => {
-  dir = await fs.mkdtemp(path.join(os.tmpdir(), "lemma-tools-"));
+  dir = await tempDir();
 });
 afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });

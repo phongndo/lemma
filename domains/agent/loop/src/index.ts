@@ -287,7 +287,7 @@ export default definePlugin({
           return yield* new AgentError({
             sessionId,
             reason: "NoModel",
-            message: "No model is available. Log in to a provider or configure agent.defaultModel.",
+            message: "No model is available. Log in to a provider or set agent.loop's defaultModel.",
           });
         }
         return first;
