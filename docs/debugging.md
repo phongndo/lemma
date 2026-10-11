@@ -6,13 +6,18 @@ README has the rest.
 
 ## Does it run?
 
+- **`lemma plugins check <folder>`** starts a host of its own with a plugin
+  folder and says what the plugin provides, requires, handles, and adds, or
+  why it does not run: a setup that threw, a web half missing or not
+  compiling ([Writing plugins](plugins.md#testing)).
 - **`lemma plugins`**, and Settings › Plugins, list every plugin with its
   state and, for one that failed, its fault; the plugins that require a
   failed one stop with it, halted by it. `lemma plugins restart <id>` starts
   it and them again once it is fixed.
 - **The host's output** warns of what it left out, naming the plugin
   (`lemma: warning [notes]: …`): a row naming no plugin (with the id meant,
-  when one is close), or a plugin that cannot run.
+  when one is close), a plugin that cannot run, a web half that does not
+  compile, with its file, line, and column.
 - **`--safe`** starts the host as shipped, reading no config or plugin file,
   and **`?safe`** does the same for the web app: the way back from a
   customization that breaks either ([Configuration](configuration.md)).
@@ -46,6 +51,9 @@ README has the rest.
   counts and names, never the payload). A trajectory record's **Show in trace** opens
   the spans of its turn or call
   ([devtools.trace](../domains/devtools/trace/README.md)).
+- **`lemma trace export`** writes the host's trace to a file, as JSON or, with
+  `--format chrome`, for [Perfetto](https://ui.perfetto.dev): to keep it past
+  the host, which holds only the last few thousand spans, or to send it.
 
 ## Why did it fail?
 
@@ -59,10 +67,13 @@ README has the rest.
 - **A web half's item fails alone.** A slot item or part that throws while it
   draws is its plugin's fault, and the region draws the next item
   ([the web app](../apps/web/README.md)).
+- **A web half in TypeScript has source maps**, so the browser's devtools
+  show its own files and lines.
 - **A failed turn says why in its log**: the trajectory shows the error, the
   attempts a request took, and what decided where each step ended.
 
 ## Making it happen again
 
-A plugin's tests run it in a core of its own, beside the plugins it needs or
-fakes of them ([Writing plugins](plugins.md#testing)).
+A plugin's tests run it in real turns against a scripted model
+(`@lemma/test-host`), and `lemma dev` runs it in your host as you edit it
+([Writing plugins](plugins.md#testing)).
