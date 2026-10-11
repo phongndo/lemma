@@ -71,6 +71,7 @@ import {
 import { findTarget, noLocalHost, remoteCommand, toCliError, tokenCommand } from "./remote.ts";
 import { checkPlugin, devPlugin, newPlugin, testPlugin } from "./develop.ts";
 import { readSession, runCommand } from "./run.ts";
+import { traceCommand } from "./trace.ts";
 import { workspaceCommand } from "./workspace.ts";
 
 export { ExitCode } from "./command.ts";
@@ -209,6 +210,10 @@ Inspect (the web app's Trajectory view)
     --diff                       ...how its system prompt differs from the request before
     --rebuilt                    ...the exact request sent to the model, as JSON
   inspect <id> --step <step>     Same as --request
+  trace export [file]            What the host's trace kept (the devtools' Trace panel): its spans and
+                                 composition changes, as JSON, to the file or stdout
+    --session <id>               ...only that session's spans
+    --format chrome              ...in Chrome's trace event format, which ui.perfetto.dev opens
 
 Options
   --json      Print results as JSON (errors as {"error": {...}} on stderr)
@@ -454,6 +459,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
             Effect.map((snapshot) => ({ json: snapshot, text: formatSnapshot(snapshot) })),
           ))
       );
+    case "trace":
+      return traceCommand(sub, positionals.slice(2), io, options);
     case "inspect":
       if (sub === undefined) return usage("inspect needs a session id");
       return extra(2) ?? inspectCommand(sub, options);
@@ -775,6 +782,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         project: { type: "boolean", default: false },
         unset: { type: "boolean", default: false },
         isolated: { type: "boolean", default: false },
+        format: { type: "string" },
         token: { type: "string" },
         "request-id": { type: "string" },
         "when-busy": { type: "string" },
@@ -833,6 +841,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     project: values.project,
     unset: values.unset,
     isolated: values.isolated,
+    format: values.format,
     token: values.token,
     requestId: values["request-id"],
     whenBusy,

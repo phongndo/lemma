@@ -60,3 +60,5 @@ export const selectSpans = (spans: readonly SpanRecord[], { where, since, limit 
 /** Whether `span` has every attribute `where` names, with its value (a span without one has no value, not `"undefined"`). */
 export const matches = (span: SpanRecord, where: Readonly<Record<string, string>> | undefined): boolean =>
   where === undefined || Object.entries(where).every(([key, value]) => Object.hasOwn(span.attributes, key) && String(span.attributes[key]) === value);
+
+export * from "./chrome.ts";

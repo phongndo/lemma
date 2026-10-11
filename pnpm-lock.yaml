@@ -145,6 +145,9 @@ importers:
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@lemma/devtools':
+        specifier: workspace:*
+        version: link:../../domains/devtools/contract
       '@lemma/host':
         specifier: workspace:*
         version: link:../../packages/host

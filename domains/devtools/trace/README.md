@@ -10,6 +10,10 @@ web half (`./web`) shows it as the devtools' Trace panel.
 | `devtools.trace.changes` | call   | The composition's recent changes: what each started, stopped, and restarted, or why not     |
 
 Their declarations are `TraceChannels` in [`@lemma/devtools`](../contract/src/index.ts).
+`lemma trace export [file]` writes what they answer to a file: the spans
+(`--session` for a session's) and the changes as JSON, or the spans with
+`--format chrome` in Chrome's trace event format (`chromeTrace` in the
+contract), which [Perfetto](https://ui.perfetto.dev) opens.
 
 ## The Trace panel
 
@@ -52,5 +56,6 @@ this plugin adds to `TrajectoryActions`.
   against what is served, so it cannot confirm a guessed secret.
 - **In memory, bounded.** The host keeps the last few thousand spans: enough
   to see what a turn or a reload did while it is fresh, and nothing to clean
-  up. What has to outlast it is credited in the session's log instead
+  up. `lemma trace export` keeps one that has to outlast the host, or leave
+  the machine. What has to outlast it is credited in the session's log instead
   ([sessions](../../sessions/README.md)).

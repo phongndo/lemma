@@ -79,6 +79,8 @@ export interface Options {
   readonly unset: boolean;
   /** `dev --isolated`: a host of its own. */
   readonly isolated: boolean;
+  /** `trace export`: json, or chrome. */
+  readonly format?: string | undefined;
   readonly token?: string | undefined;
   /** `run`: the submission's id, for exactly-once delivery. */
   readonly requestId?: string | undefined;

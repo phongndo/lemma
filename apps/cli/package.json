@@ -15,6 +15,7 @@
     "@lemma/client": "workspace:*",
     "@lemma/commands": "workspace:*",
     "@lemma/contracts": "workspace:*",
+    "@lemma/devtools": "workspace:*",
     "@lemma/host": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
