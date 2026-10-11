@@ -56,6 +56,22 @@ type Prompt = typeof AgentChannels.prompt extends ChannelDeclaration<"call", inf
  */
 const prompt = (host: Host, payload: Prompt) =>
   callOn(host, AgentChannels.prompt, payload).pipe(
+    // A plugin answered it instead of placing it (`AgentInputHook`): there is no turn to wait for. Refused, it fails;
+    // handled, the command ends with what the plugin said, as a success.
+    Effect.flatMap((outcome) =>
+      outcome.kind === "placed"
+        ? Effect.void
+        : Effect.fail(
+            outcome.kind === "refused"
+              ? new CliError({ code: "Refused", message: `${outcome.by} refused the prompt: ${outcome.reason}`, subject: outcome.by, exit: ExitCode.failed })
+              : new CliError({
+                  code: "Handled",
+                  message: `${outcome.by} handled the prompt${outcome.message === undefined || outcome.message === "" ? "" : `: ${outcome.message}`}`,
+                  subject: outcome.by,
+                  exit: ExitCode.ok,
+                }),
+          ),
+    ),
     Effect.mapError((error) =>
       ofChannel(error, AgentChannels.prompt.id, "Withdrawn")
         ? new CliError({

@@ -62,6 +62,8 @@ const retryDelay = (settings: Pick<TurnSettings, "retryDelay" | "maxRetryDelay">
 interface Placed {
   readonly requestId: string;
   readonly content: PromptContent;
+  /** Who shaped it (`AgentInputHook`'s handlers), logged with it. */
+  readonly credit?: ResultCredit;
 }
 
 /** The session's queue as the turn sees it: steers join the turn between steps. */
@@ -286,7 +288,13 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
 
   const userMessage = (placed: Placed) =>
     Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
-      append({ type: "message", message: { role: "user", content: placed.content, timestamp }, turnId, requestId: placed.requestId }),
+      append({
+        type: "message",
+        message: { role: "user", content: placed.content, timestamp },
+        turnId,
+        requestId: placed.requestId,
+        ...(placed.credit === undefined ? {} : { credit: placed.credit }),
+      }),
     ).pipe(Effect.tap(() => Effect.sync(() => input.logged(placed.requestId))));
 
   const toolResult = (call: ToolCall, text: string, timestamp: number): ToolResultMessage => ({

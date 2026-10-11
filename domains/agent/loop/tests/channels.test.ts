@@ -40,7 +40,7 @@ describe("the agent channels, through the transport", () => {
         const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
         const followed = yield* open(client, "sessions.log", { sessionId: id });
         expect(yield* followed.next).toEqual({ type: "subscribed", events: [] });
-        expect(yield* call(client, "agent.prompt", { sessionId: id, content: text("hi"), requestId: "r1" })).toBeNull();
+        expect(yield* call(client, "agent.prompt", { sessionId: id, content: text("hi"), requestId: "r1" })).toEqual({ kind: "placed" });
         // The session's log, as it is appended: its message carries the request id, which tells a client the prompt was taken.
         const appended = (yield* collect(followed, (seen) => seen.at(-1)?.event.data.type === "turn-end")).map((element) => element.event);
         expect(appended.map((event) => event.seq)).toEqual(appended.map((_, index) => index + 1));
@@ -61,7 +61,7 @@ describe("the agent channels, through the transport", () => {
         expect(yield* call(client, "agent.running")).toEqual([]);
         expect((yield* call(client, "agent.view", { sessionId: id })) as AgentView).toMatchObject({ output: [], queue: [] });
         // Exactly once: the turn that placed it has ended, so the call answers at once and places nothing.
-        expect(yield* call(client, "agent.prompt", { sessionId: id, content: text("hi"), requestId: "r1" })).toBeNull();
+        expect(yield* call(client, "agent.prompt", { sessionId: id, content: text("hi"), requestId: "r1" })).toEqual({ kind: "placed" });
         const log = (yield* call(client, "sessions.events", { sessionId: id })) as SessionEvent[];
         expect(log.filter((event) => event.data.type === "message" && event.data.message.role === "user").length).toBe(1);
       }),
@@ -107,7 +107,7 @@ describe("the agent channels, through the transport", () => {
         expect(Exit.isFailure(removed) && Exit.findErrorOption(removed)).toMatchObject({ _tag: "Some", value: { reason: "Busy", sessionId: id } });
 
         expect(yield* call(client, "agent.cancel", { sessionId: id })).toBeNull();
-        expect(yield* Fiber.join(first)).toBeNull();
+        expect(yield* Fiber.join(first)).toEqual({ kind: "placed" });
         expect(yield* collect(activity, (seen) => count(seen, "turn-ended") === 1).pipe(Effect.map((seen) => seen.at(-1)))).toMatchObject({
           type: "turn-ended",
           sessionId: id,
@@ -172,7 +172,7 @@ describe("the agent leaving", () => {
 
           // The prompt stayed taken: the replacement resumes its turn, and the call, made again, waits for it, placing
           // nothing twice.
-          expect(yield* Fiber.join(waiting)).toBeNull();
+          expect(yield* Fiber.join(waiting)).toEqual({ kind: "placed" });
           expect(llm.requests).toHaveLength(2);
           const log = (yield* call(client, "sessions.events", { sessionId: id })) as SessionEvent[];
           expect(log.filter((event) => event.data.type === "message" && event.data.message.role === "user")).toHaveLength(1);

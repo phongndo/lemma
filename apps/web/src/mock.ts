@@ -22,7 +22,7 @@ import type {
   SpanRecord,
   WebComposition,
 } from "@lemma/contracts";
-import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { AgentActivity, AgentView, PromptContent, PromptOutcome, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { AssistantMessage, LlmChange, ModelInfo, ProviderInfo, StreamEvent, Usage } from "@lemma/llm";
 import type { EventData, SessionEvent, SessionInfo, SessionsChange } from "@lemma/sessions";
 
@@ -519,6 +519,8 @@ export const createMockHost = (): Host => {
   };
   /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
   let heldStarts: (() => void)[] | undefined;
+  /** Prompts a plugin answers instead of placing them, by their text (`lemmaMock.answerPrompts`). */
+  let answers = new Map<string, PromptOutcome>();
   const mockTrace = createMockTrace(plugins.map((plugin) => plugin.id));
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
@@ -536,6 +538,10 @@ export const createMockHost = (): Host => {
         const held = heldStarts ?? [];
         heldStarts = undefined;
         for (const start of held) start();
+      },
+      /** Answers a prompt whose text is a key as a plugin's `AgentInputHook` handler would, instead of placing it. */
+      answerPrompts: (outcomes: Readonly<Record<string, PromptOutcome>>) => {
+        answers = new Map(Object.entries(outcomes));
       },
     },
   });
@@ -1268,7 +1274,12 @@ export const createMockHost = (): Host => {
     serveCall(
       "agent.loop",
       AgentChannels.prompt,
-      async ({ sessionId, content, options, requestId, whenBusy }) => prompt(sessionId, content, options, requestId, whenBusy ?? "follow-up"),
+      async ({ sessionId, content, options, requestId, whenBusy }): Promise<PromptOutcome> => {
+        const answered = answers.get(content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join(""));
+        if (answered !== undefined) return answered;
+        await prompt(sessionId, content, options, requestId, whenBusy ?? "follow-up");
+        return { kind: "placed" };
+      },
       { waits: true },
     ),
     serveCall("agent.loop", AgentChannels.cancel, async ({ sessionId }) => {

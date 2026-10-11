@@ -20,7 +20,7 @@ describe("serveAgent", () => {
           return value;
         });
     const agent: Context.Service.Shape<typeof Agent> = {
-      prompt: answer("prompt", undefined),
+      prompt: answer("prompt", { kind: "placed" } as const),
       cancel: answer("cancel", undefined),
       busy: answer("busy", true),
       running: Effect.succeed(["s1"]),

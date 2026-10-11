@@ -134,7 +134,8 @@ const scripted = (script: {
   const calls: Readonly<Record<string, (payload: any) => Effect.Effect<unknown, HostError>>> = {
     "agent.prompt": (payload) => {
       prompts.push(payload);
-      return script.prompt(host, prompts.length);
+      // Placed: a script's prompt is the agent's turn, which answers when it ends.
+      return Effect.as(script.prompt(host, prompts.length), { kind: "placed" });
     },
     "agent.view": () => (typeof view === "function" ? view(host) : Effect.succeed(view)),
     "sessions.events": () => Effect.sync(() => [...logged]),

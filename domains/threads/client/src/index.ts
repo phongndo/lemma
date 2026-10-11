@@ -1,5 +1,5 @@
 import { batch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
-import { startPrompt } from "@lemma/agent/prompt";
+import { PromptRefused, startPrompt } from "@lemma/agent/prompt";
 import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
 import { branchOf, SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
@@ -23,7 +23,7 @@ import {
   upsertSession,
   Threads,
 } from "@lemma/threads";
-import type { LiveState, KnownQueue, LogState } from "@lemma/threads";
+import type { LiveState, KnownQueue, LogState, PromptAnswer } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 
@@ -56,6 +56,8 @@ export default defineWebPlugin({
     const [list, setList] = createSignal<readonly SessionInfo[]>([]);
     const [loaded, setLoaded] = createSignal(false);
     const [running, setRunning] = createSignal<readonly string[]>([]);
+    /** The last prompt a plugin answered instead of placing it, in whichever thread. */
+    const [answered, setAnswered] = createSignal<PromptAnswer>();
     const [pendingCwd, setPendingCwd] = createSignal<string>();
     // Event arrays and streaming drafts change often and are replaced wholesale.
     const [events, setEvents] = createSignal<readonly SessionEvent[]>([], { equals: false });
@@ -369,6 +371,7 @@ export default defineWebPlugin({
         }
       }
       const id = sessionId;
+      setAnswered(undefined);
       if (!running().includes(id)) setRunning((current) => [...current, id]);
       const prompt = startPrompt(client, id, content, options.turn, {
         whenBusy: options.whenBusy ?? "steer",
@@ -389,10 +392,18 @@ export default defineWebPlugin({
       const accepted = await prompt.accepted.then(
         () => true,
         (error: unknown) => {
-          notify.report(error, "Prompt was not sent");
+          // A plugin's refusal is its answer, shown by the composer; the agent's is a failure.
+          if (error instanceof PromptRefused) setAnswered({ sessionId: id, kind: "refused", by: error.by, message: error.reason });
+          else notify.report(error, "Prompt was not sent");
           return false;
         },
       );
+      if (accepted)
+        void prompt.done.then(
+          (outcome) =>
+            outcome.kind === "handled" ? setAnswered({ sessionId: id, kind: "handled", by: outcome.by, message: outcome.message ?? "" }) : undefined,
+          () => {},
+        );
       // Accepted, the turn is the host's. A dropped connection holds this wait until the page is back, where the host
       // `channel.call` makes `agent.prompt` again (it is repeatable) and the page catches up. What the host reports is
       // shown.
@@ -446,6 +457,11 @@ export default defineWebPlugin({
         },
         send,
         queue: activeQueue,
+        answer: () => {
+          const last = answered();
+          return last !== undefined && last.sessionId === activeId() ? last : undefined;
+        },
+        dismissAnswer: () => setAnswered(undefined),
         withdraw: async (requestId: string) => {
           const sessionId = activeId();
           if (sessionId === undefined) return;
