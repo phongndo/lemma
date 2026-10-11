@@ -11,6 +11,11 @@ describe("summary", () => {
   it("reads string fields from partial JSON", () => {
     expect(partialStringField('{"command":"echo \\"hi', "command")).toBe('echo "hi');
     expect(partialStringField('{"command":"a\\', "command")).toBe("a");
+    // A key is text, whatever it holds: no pattern, and nothing that throws.
+    expect(partialStringField('{"file.path":"a.ts', "file.path")).toBe("a.ts");
+    expect(partialStringField('{"filexpath":"a.ts', "file.path")).toBeUndefined();
+    expect(partialStringField('{"$schema":"x', "$schema")).toBe("x");
+    expect(partialStringField('{"a(":"y', "a(")).toBe("y");
     expect(partialStringField('{"com', "command")).toBeUndefined();
   });
 

@@ -541,6 +541,17 @@ const program = Effect.gen(function* () {
     ),
   );
 
+  /**
+   * The web files as they are now, told to web apps when they changed, though the host's own load was refused: a web
+   * half or a stylesheet is no part of that, and waits on no host half's file being fixed.
+   */
+  const refreshWebFiles = Effect.gen(function* () {
+    const files = yield* listUiFiles(paths, applied.trusted);
+    const previous = applied.ui;
+    applied = { ...applied, ui: { ...previous, files } };
+    yield* publishUi(loader, previous, applied.ui).pipe(Effect.ignore);
+  });
+
   // A plugin's file added, edited, or removed: its host half reloads (an unchanged file keeps its definition, so only
   // what changed restarts), and web apps hear of its web half and stylesheets.
   yield* Effect.forkScoped(
@@ -548,7 +559,11 @@ const program = Effect.gen(function* () {
       log("a plugin file changed; reloading").pipe(
         Effect.andThen(reloadNow(loader)),
         Effect.matchEffect({
-          onFailure: (error) => printDiagnostics(error.diagnostics).pipe(Effect.andThen(log("reload rejected; the running composition is unchanged"))),
+          onFailure: (error) =>
+            printDiagnostics(error.diagnostics).pipe(
+              Effect.andThen(log("reload rejected; the running composition is unchanged")),
+              Effect.andThen(refreshWebFiles),
+            ),
           onSuccess: (report) =>
             log(`reloaded: ${describe(report)}`).pipe(
               Effect.andThen(Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins }))),

@@ -19,8 +19,14 @@ export interface DomainPlugin {
  */
 export function domainPlugins(): ReadonlyMap<string, DomainPlugin> {
   const plugins = new Map<string, DomainPlugin>();
-  for (const domain of readdirSync(domains).sort()) {
-    for (const name of readdirSync(join(domains, domain)).sort()) {
+  // Folders only: a stray file in domains/ (a README, `.DS_Store`) is no domain, nor one in a domain's folder a plugin.
+  const folders = (dir: string) =>
+    readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+  for (const domain of folders(domains)) {
+    for (const name of folders(join(domains, domain))) {
       const dir = join(domains, domain, name);
       if (name === "contract" || !existsSync(join(dir, "package.json"))) continue;
       const { lemma } = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { lemma?: { host?: string; web?: string } };

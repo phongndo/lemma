@@ -89,6 +89,17 @@ describe("loadComposition", () => {
       expect(loaded.configIn).toEqual({ llm: "project", tools: "user", mcp: "project" });
     }));
 
+  test("says what it no longer reads: a ui section, and the ui directory", () =>
+    withPaths(async (paths) => {
+      await writeFile(paths.userConfig, `{ "ui": { "look.appearance": { "config": {} } }, "plugins": {} }`);
+      await mkdir(join(paths.home, "ui"));
+      const messages = (await Effect.runPromise(loadComposition(paths))).diagnostics.map((diagnostic) => [diagnostic.severity, diagnostic.message]);
+      expect(messages).toEqual([
+        ["warning", `${paths.userConfig}: its "ui" section is no longer read`],
+        ["warning", `${join(paths.home, "ui")}: no longer read`],
+      ]);
+    }));
+
   test("reports malformed and invalid files by path", () =>
     withPaths(async (paths) => {
       await writeFile(paths.userConfig, `{ "plugins": { "llm": { "config": {} } `);

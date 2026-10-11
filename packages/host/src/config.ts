@@ -79,6 +79,16 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
         }),
       );
     }
+    // The web halves' old directory: its files are no longer loaded.
+    if (yield* exists(join(dirname(paths.userConfig), "ui"))) {
+      diagnostics.push(
+        new Diagnostic({
+          severity: "warning",
+          message: `${join(dirname(paths.userConfig), "ui")}: no longer read`,
+          suggestion: `Move its files into ${join(dirname(paths.userConfig), "plugins")}, a web half named <id>.web.js`,
+        }),
+      );
+    }
     if (project.trustedProjects.length > 0) {
       diagnostics.push(
         new Diagnostic({
@@ -286,12 +296,23 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
     }
     const parsed = parseConfig(path, text.success);
     if (Result.isFailure(parsed)) return empty(true, [parsed.failure]);
+    // The `ui` section is gone, not ignored without a word: a plugin's one row in `plugins` decides both its halves.
+    const raw: unknown = parseJsonc(text.success, [], { allowTrailingComma: true, disallowComments: false });
+    const leftover = Predicate.isObject(raw) && "ui" in raw;
     return {
       path,
       found: true,
       plugins: parsed.success.plugins ?? {},
       trustedProjects: parsed.success.trustedProjects ?? [],
-      diagnostics: [],
+      diagnostics: leftover
+        ? [
+            new Diagnostic({
+              severity: "warning",
+              message: `${path}: its "ui" section is no longer read`,
+              suggestion: `Move its rows into "plugins": one row decides both halves of a plugin`,
+            }),
+          ]
+        : [],
     };
   });
 
