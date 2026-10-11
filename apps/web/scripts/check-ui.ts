@@ -450,6 +450,14 @@ const toggling = async () => {
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
 const parts = async () => {
   const { page, errors, expectNoErrors } = await boot();
+  // A sidebar collapsed is remembered apart from the sections folded in it: it opens again after a reload, and draws.
+  await page.evaluate(() => localStorage.setItem("lemma.sidebar.collapsed", "1"));
+  await page.reload();
+  await settled(page);
+  await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
+  await page.keyboard.press("ControlOrMeta+b");
+  await page.waitForSelector(".sidebar input", { timeout: 5_000 }).catch(() => assert.fail("the sidebar did not draw after a reload with it collapsed"));
+  expectNoErrors("a reload with the sidebar collapsed");
   await checkPlugin(page);
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
@@ -564,6 +572,11 @@ const parts = async () => {
   await page.keyboard.press("Escape");
   await page.keyboard.press("Escape");
   await page.waitForSelector(".palette", { state: "detached" });
+  // Its key closes it too, as its footer says, though Ctrl+K moves up a list where Ctrl is the modifier.
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.waitForSelector(".palette");
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.waitForSelector(".palette", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("the palette's key did not close it"));
   // Completions: the bundled `@` finds the project's files, and Enter writes the pick in place of the word.
   await page.click("textarea");
   await page.keyboard.type("see @compo");
@@ -947,6 +960,16 @@ const parts = async () => {
   await page.waitForSelector(".attachment", { timeout: 5_000 }).catch(() => assert.fail("closing settings lost the attached image"));
   assert.equal(await page.inputValue("textarea"), "half a thought", "closing settings lost the unsent text");
   await page.click(".attachment-remove");
+  // A file dropped that is no image is not attached, and the composer says so.
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(["notes"], "notes.txt", { type: "text/plain" }));
+    document.querySelector("form.composer")!.dispatchEvent(new DragEvent("drop", { dataTransfer: data, bubbles: true, cancelable: true }));
+  });
+  await page
+    .waitForSelector(".toast >> text=A file was not attached: only images can be.", { timeout: 5_000 })
+    .catch(() => assert.fail("a dropped file that is no image was not said to be left out"));
+  assert.equal(await page.locator(".attachment").count(), 0, "a dropped file that is no image was attached");
   await page.fill("textarea", "");
   assert.equal(await unloadAsks(), false, "an empty composer made leaving the page ask");
   await page.goto(`${url}/nowhere?mock`);

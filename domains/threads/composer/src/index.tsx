@@ -382,11 +382,14 @@ function Composer(props: { deps: Deps }) {
     });
   };
   const addFiles = async (files: Iterable<File>) => {
-    const images = [...files].filter((file) => file.type.startsWith("image/"));
+    const given = [...files];
+    const images = given.filter((file) => file.type.startsWith("image/"));
     const supported = images.filter((file) => IMAGE_TYPES.has(file.type));
     const accepted = supported.filter((file) => file.size <= MAX_IMAGE_BYTES);
+    const others = given.length - images.length;
     const unsupported = images.length - supported.length;
     const tooLarge = supported.length - accepted.length;
+    if (others > 0) notify.toast({ level: "warning", message: `${others === 1 ? "A file was" : `${others} files were`} not attached: only images can be.` });
     if (unsupported > 0)
       notify.toast({
         level: "warning",

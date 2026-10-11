@@ -141,6 +141,7 @@ export default defineWebPlugin({
         cancelLogin: async (provider: ProviderInfo) => {
           return client.channel.call(LlmChannels.cancelLogin, { provider: provider.id }).catch((error) => {
             notify.report(error, `Could not cancel the ${provider.name} login`);
+            // It may still run: say so, so the caller does not forget it.
             return true;
           });
         },
