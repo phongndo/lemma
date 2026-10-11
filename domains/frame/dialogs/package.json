@@ -1,0 +1,23 @@
+{
+  "name": "@lemma/frame-dialogs",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Which dialog is open, by id; each dialog plugin shows itself when it is its turn",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/frame": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

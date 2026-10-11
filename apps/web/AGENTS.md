@@ -3,7 +3,7 @@
 Everything the web app shows is a plugin, and every plugin is
 **replaceable**: a user can turn it off, turn it on, configure it, or swap it
 for their own, without editing this repository. The plugins are written
-against the runtime (`src/runtime/`), which the boot provides and nothing
+against the runtime, which the boot provides (`src/runtime/`) and nothing
 replaces: the connection, slots, the router, messages, the plugins, and
 questions. The bundled plugins are defaults that sit on the same footing as a
 user's UI file. Build every default so a user could have written it and could
@@ -11,42 +11,61 @@ replace it.
 
 ## Where each kind of code goes
 
-- **A plugin** (`src/plugins/`) owns one part of the app. It declares what it
-  `requires` and `provides`, adds to slots, draws, and brings its own
-  stylesheet (`src/plugins/<id>.css`, passed as `styles`). One too large for a
-  file is a directory, `src/plugins/<id>/`, with the plugin in `index.tsx`:
-  its files import each other, and nothing outside it imports them. It imports
-  only `ui/contracts`, `ui/define`, `ui/slots`, `ui/parts`, `model/`, `lib/`,
-  and its own files.
-- **A contract** (`src/ui/contracts.ts`) is how plugins meet: a capability (a
-  service with one provider), a slot (a list or region many fill), a part, a
-  shared id (`ActionIds`, `SectionIds`), or a DOM convention listed at the top
-  of the file. When one plugin needs something from another, add it here.
-- **The runtime** (`src/runtime/`, its contracts in `src/ui/runtime.ts`) is
-  what every plugin is written against, the app's own: no plugin provides
-  it, replaces it, or turns it off. It imports no plugin, component, or
-  contract plugins provide, adds to no slot, and needs nothing a plugin
-  contributes but reactively (the router with no pages matches nothing). It
-  never throws into the page: a bad item from a plugin is that plugin's fault
-  (`slots.fail`), and its own failures are logged and reported. Add to it
-  only what no plugin could provide, since nothing can replace it.
+- **A plugin** is a package in its domain's folder, `domains/<domain>/<name>`,
+  with the id `<domain>.<name>` (`frame.shell`, `threads.transcript`). It
+  declares what it `requires` and `provides`, adds to slots, draws, and brings
+  its own stylesheet (`src/<name>.css?inline`, passed as `styles`). Its files
+  import each other, and nothing outside it imports them. It imports only
+  `@lemma/ui` (the plugin API), contracts (`@lemma/<domain>`, and a host
+  domain's web contract, `@lemma/<domain>/web`), and npm packages: never
+  another plugin (`check-boundaries` fails it). `apps/web/src/bundled.ts`
+  lists the bundled ones.
+- **A contract** is how plugins meet: a capability (a service with one
+  provider), a slot (a list or region many fill), a part, a shared id
+  (`SectionIds`, `ActionIds`), or a DOM convention (listed in `@lemma/ui`'s
+  index). Each lives in its domain's contract package: `@lemma/frame` (the
+  regions, layers, layout, dialogs), `@lemma/look` (themes, fonts, the shared
+  parts), `@lemma/settings`, `@lemma/actions`, `@lemma/threads`,
+  `@lemma/devtools`, and the web halves of host domains (`@lemma/llm/web`,
+  `@lemma/workspace/web`, `@lemma/commands/web`). When one plugin needs
+  something from another, add it to the contract of the domain that owns it.
+  What two plugins of a domain share (a projection, a model) goes in its
+  contract too, as the threads contract's transcript does.
+- **The runtime** (`src/runtime/`, its contracts in `@lemma/ui`) is what
+  every plugin is written against, the app's own: no plugin provides it,
+  replaces it, or turns it off. It imports no plugin or domain contract, adds
+  to no slot, and needs nothing a plugin contributes but reactively (the
+  router with no pages matches nothing). It never throws into the page: a bad
+  item from a plugin is that plugin's fault (`slots.fail`), and its own
+  failures are logged and reported. Add to it only what no plugin could
+  provide, since nothing can replace it.
+- **`@lemma/ui`** (`packages/ui`) is the plugin API: the runtime's contracts,
+  `defineUiPlugin`, slots and parts (`defineSlot`, `definePart`, `partView`),
+  drawing what slots hold (`Contained`, `Each`, `First`, `Isolated`), and
+  helpers any plugin may use (`/keys`, `/storage`, `/now`, `/clipboard`,
+  `/quick-pick`, `/paint`, `/match`, `/format`). It is part of the runtime:
+  it reaches no domain.
 - **A slot** is a core registry (`defineSlot`): an item belongs to the plugin
   that added it, leaves when that plugin stops, and shows on the Plugins page.
-- **A part** is a replaceable piece plugins draw with (`definePart`): the first
-  item by order in its slot renders wherever the part is used. Draw shared
-  pieces through `ui/parts.tsx`; `kit` supplies the shared parts' defaults and
-  is the only plugin that imports `components/`. A view that has pieces users
-  would change on their own (a tool call, a row) defines parts for them and
-  adds its own defaults at `DEFAULT_PART_ORDER`, as `chat` does. A part may
-  declare a plain fallback (`definePart(name, fallback)`): native markup with
-  no styling of its own, used while nothing provides the part. The parts the
-  always-on plugins draw (`shell`, `pages`, `settings`, `plugins-page`) have
-  one, in `ui/fallbacks.tsx`, so with `kit` off the Plugins page still works;
-  give one to any part they start to draw (`tests/ui.test.ts` fails until
-  you do).
-- **A component** (`src/components/`) is a default implementation of a part.
-  It draws other parts through `ui/parts.tsx`.
-- **A model** (`src/model/`) is pure data and functions, tested in `tests/`.
+  Items of equal `order` sort by plugin id: give an item whose place matters
+  an `order` of its own (the views of a thread, the layers).
+- **A part** is a replaceable piece plugins draw with (`definePart`), declared
+  in a contract beside its view (`partView(part)`, which plugins draw): the
+  first item by order in its slot renders wherever the part is used.
+  `look.kit` supplies the shared parts' defaults (`@lemma/look`), and is the
+  only plugin with rendering components of that kind. A view that has pieces
+  users would change on their own (a tool call, a row) defines parts for them
+  in its domain's contract and adds its own defaults at `DEFAULT_PART_ORDER`,
+  as `threads.transcript` does. A part may declare a plain fallback
+  (`definePart(name, fallback)`): native markup with no styling of its own,
+  used while nothing provides the part. The parts the always-on plugins draw
+  (`frame.shell`, `frame.pages`, `settings.page`, `settings.plugins`) have
+  one, in `@lemma/look`'s `fallbacks.tsx`, so with `look.kit` off the Plugins
+  page still works; give one to any part they start to draw
+  (`tests/ui.test.ts` fails until you do).
+- **A model** is pure data and functions: in the plugin that uses it, or in
+  its domain's contract when two plugins share it. Test it in its package's
+  `tests/` (`vitest.config.ts` default-exports `@lemma/ui/vitest`).
 - **The foundation** (`src/styles.css`) holds the tokens, base styles, and
   the class vocabulary several plugins share (`.button`, `.field`,
   `.menu-*`). A rule one plugin's markup needs goes in that plugin's
@@ -61,10 +80,11 @@ replace it.
 - **Utilities** (`src/tailwind.css`) are Tailwind's, prefixed `tw:` and named
   for the tokens: the token `--x` is the value `x`, as in `tw:bg-bg-raised`
   and `tw:text-text-2`. Use them for a plugin's own layout and spacing, as
-  `appearance-page` does. A piece other plugins draw, or a user would restyle
-  across the app, keeps a semantic class and a part, so one rule in a
+  `look.appearance-page` does. A piece other plugins draw, or a user would
+  restyle across the app, keeps a semantic class and a part, so one rule in a
   stylesheet restyles it everywhere. Write a class whole (`tw:bg-accent`,
-  never `tw:bg-${name}`): the build finds classes by reading the source.
+  never `tw:bg-${name}`): the build finds classes by reading the source
+  (`src/`, `domains/`, and `packages/ui`).
 
 ## Adding or changing UI
 
@@ -76,22 +96,23 @@ replace it.
    would use, as the sidebar's buttons and the palette's sources do.
 3. Keep the plugin's effects inside what it owns: its slot items, its parts,
    its own DOM (through refs), its stylesheet. Draw what a slot holds with
-   `Contained`, `Each`, or `First` from `ui/parts.tsx`, never a bare
+   `Contained`, `Each`, or `First` from `@lemma/ui`, never a bare
    `Dynamic`: an item that throws then fails alone, named for its plugin, and
    a region shows its next item. A component handed over as data (a
    completion's icon) draws with `Isolated`. Overlays are `Layers` items drawn
    with the `dialog` part; app-wide keys are `Actions`, and an overlay handles
    its own keys on its own element; the page's theme goes through
-   `lib/paint.ts`; what covers the page stacks by the `--z-*` tokens.
+   `@lemma/ui/paint`; what covers the page stacks by the `--z-*` tokens.
 4. Make it a plugin of its own only when someone would turn it off or replace
-   it on its own (`highlight`, `palette`); when it is a model other plugins
-   need beside a view a user might drop, which is then two plugins (`models`
-   and `model-picker`); or when what it requires can be missing while the rest
+   it on its own (`look.highlight`, `actions.palette`); when it is a model other
+   plugins need beside a view a user might drop, which is then two plugins
+   (`llm.client` and `llm.model-picker`); or when what it requires can be missing while the rest
    still works. Size, tidiness, or being one more panel, tab, or section is no
-   reason: those are files in a plugin's directory and items one plugin adds to
-   a slot, as the devtools add their panels.
-5. Document new contracts where they are declared: `ui/contracts.ts` is the
-   list of slots and parts that users and the devtools read.
+   reason: those are files in a plugin's package and items one plugin adds to
+   a slot, as the devtools add their panels. A new plugin is a package in the
+   domain it serves (`domains/<domain>/<name>`), added to `src/bundled.ts`.
+5. Document new contracts where they are declared: the contracts are the list
+   of slots and parts that users and the devtools read.
 
 Done means these pass:
 

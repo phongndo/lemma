@@ -1,0 +1,25 @@
+{
+  "name": "@lemma/settings",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The settings domain's contract: settings sections and groups, and the Plugins page's tabs and facts",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/router": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

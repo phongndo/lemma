@@ -1,0 +1,30 @@
+{
+  "name": "@lemma/threads",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The threads domain's contract: a session as the web app shows it, its views, the composer, the transcript's parts, and the projections they share",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/frame": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

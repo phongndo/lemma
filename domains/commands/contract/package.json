@@ -6,7 +6,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./web": "./src/web.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -15,7 +16,8 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "effect": "4.0.1"
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
   },
   "devDependencies": {
     "@types/node": "24.19.0",

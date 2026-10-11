@@ -7,18 +7,18 @@ import type { Host } from "@lemma/client";
 import { faultMessage, toPluginStatus } from "@lemma/contracts";
 import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
-import { settlePaint } from "../lib/paint.ts";
+import { settlePaint } from "@lemma/ui/paint";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, withReplacements } from "@lemma/composition";
 import type { Plan } from "@lemma/composition";
 import type { AnyRoute } from "@lemma/router";
 import { createWebRuntime, provides } from "../runtime/index.ts";
-import { routesOf } from "./define.ts";
-import { First, SlotsContext } from "./draw.tsx";
+import { routesOf } from "@lemma/ui";
+import { First, SlotsContext } from "@lemma/ui";
 import { createFileLoader } from "./files.ts";
-import { Root, Slots } from "./runtime.ts";
-import type { UiPluginsService } from "./runtime.ts";
-import type { SlotsService } from "./slots.ts";
+import { Root, Slots } from "@lemma/ui";
+import type { UiPluginsService } from "@lemma/ui";
+import type { SlotsService } from "@lemma/ui";
 
 /**
  * Always on, with everything they need ("Needed by …"): the switches that turn
@@ -27,9 +27,9 @@ import type { SlotsService } from "./slots.ts";
  * from a UI file that breaks them.
  */
 const PINNED: Readonly<Record<string, string>> = {
-  "plugins-page": "Where plugins are turned back on; replace it with a UI file instead of turning it off",
-  shell: "Draws the frame every other view shows in, settings included; replace it with a UI file instead of turning it off",
-  pages: "Shows the page the address names, settings included; replace it with a UI file instead of turning it off",
+  "settings.plugins": "Where plugins are turned back on; replace it with a UI file instead of turning it off",
+  "frame.shell": "Draws the frame every other view shows in, settings included; replace it with a UI file instead of turning it off",
+  "frame.pages": "Shows the page the address names, settings included; replace it with a UI file instead of turning it off",
 };
 /** The keys of what the runtime provides (`UiPlugins.runtime`). */
 const RUNTIME = provides.map((tag) => tag.key);

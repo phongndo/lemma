@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
 import type { PluginChange, PluginStatus } from "@lemma/contracts";
-import type { ClientService, HostPluginsService, NotifyService } from "../ui/runtime.ts";
+import type { ClientService, HostPluginsService, NotifyService } from "@lemma/ui";
 
 const NONE: readonly string[] = [];
 

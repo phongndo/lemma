@@ -2,9 +2,9 @@ import { createEffect, createRoot, createSignal } from "solid-js";
 import { createBrowserHistory, createEntryStore, createRouter, interceptLinks } from "@lemma/router";
 import type { AnyRoute, KeyValueStorage } from "@lemma/router";
 import { createRouteSignals } from "@lemma/router-solid";
-import { Pages } from "../ui/runtime.ts";
-import type { NotifyService, Page, RouterService, UiPluginsService } from "../ui/runtime.ts";
-import type { SlotItem, SlotsService } from "../ui/slots.ts";
+import { Pages } from "@lemma/ui";
+import type { NotifyService, Page, RouterService, UiPluginsService } from "@lemma/ui";
+import type { SlotItem, SlotsService } from "@lemma/ui";
 
 /** Search keys every navigation keeps: they say how the page runs, not what it shows. */
 const RETAIN = ["safe", "mock"];
