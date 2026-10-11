@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Effect } from "effect";
 import { projectPluginsDir } from "../src/config.ts";
 import { resolvePaths } from "../src/paths.ts";
-import { listWebFiles, userPluginsDir } from "../src/web.ts";
+import { listWebFiles, userPluginsDir, webIdsOf } from "../src/web.ts";
 
 describe("listWebFiles", () => {
   test("lists web halves and stylesheets, a package's too, user files first, and a project's only when trusted", async () => {
@@ -48,6 +48,17 @@ describe("listWebFiles", () => {
     } finally {
       await rm(root, { recursive: true, force: true });
     }
+  });
+
+  test("names each web half's plugin by its file, or its package's folder", () => {
+    const file = (name: string, kind: "script" | "style" = "script") => ({
+      name,
+      kind,
+      source: "user" as const,
+      path: `/p/${name}`,
+      url: `/api/web/user/${name}`,
+    });
+    expect(webIdsOf([file("notes.web.js"), file("chart.web.mjs"), file("ticker/web.js"), file("theme.css", "style")])).toEqual(["notes", "chart", "ticker"]);
   });
 
   test("a missing directory lists nothing", async () => {

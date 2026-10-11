@@ -1,3 +1,5 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
 import agentLoop from "@lemma/agent-loop";
@@ -53,6 +55,36 @@ export const bundled: readonly Plugin[] = [
   devtoolsTrace,
   transportServer,
 ];
+
+/**
+ * The bundled web halves' ids, read from the domains' manifests: a package in `domains/<domain>/<name>` whose
+ * package.json names a web half (`lemma.web`) is the plugin `<domain>.<name>`. The host plans no web half, but a row
+ * naming one is a plugin's, not a typo (see `elsewhere` in main.ts).
+ */
+export const bundledWebIds: readonly string[] = (() => {
+  const domains = fileURLToPath(new URL("../../../domains", import.meta.url));
+  const ids: string[] = [];
+  const list = (dir: string) => {
+    try {
+      return readdirSync(dir, { withFileTypes: true }).filter((entry) => entry.isDirectory());
+    } catch {
+      return [];
+    }
+  };
+  for (const domain of list(domains)) {
+    for (const name of list(join(domains, domain.name))) {
+      try {
+        const manifest = JSON.parse(readFileSync(join(domains, domain.name, name.name, "package.json"), "utf8")) as {
+          readonly lemma?: { readonly web?: unknown };
+        };
+        if (typeof manifest.lemma?.web === "string") ids.push(`${domain.name}.${name.name}`);
+      } catch {
+        // Not a package.
+      }
+    }
+  }
+  return ids.sort();
+})();
 
 /**
  * Config the app supplies for bundled plugins (the planner's `defaults`): it

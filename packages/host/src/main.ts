@@ -8,7 +8,7 @@ import { catalog, compositionHistory, faultHistory, planComposition, restartedBy
 import type { KnownPlugin, Resolved } from "@lemma/composition";
 import type { ChangeReport, CompositionChange, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { appDefaults, bundled } from "./bundled.ts";
+import { appDefaults, bundled, bundledWebIds } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
@@ -17,7 +17,7 @@ import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { catchUnhandled, hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
 import type { HostControlHandle } from "./runtime.ts";
-import { listWebFiles, userPluginsDir as pluginsDirOf } from "./web.ts";
+import { listWebFiles, userPluginsDir as pluginsDirOf, webIdsOf } from "./web.ts";
 import { watchConfig, watchPlugins } from "./watch.ts";
 
 const args = new Set(process.argv.slice(2));
@@ -120,13 +120,16 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
     });
     const localPlugins = local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) }));
-    const hostIds = new Set([...input.bundled, ...localPlugins.map(({ plugin }) => plugin)].map((plugin) => plugin.id));
+    const files = yield* listWebFiles(paths, loaded.trusted);
+    // A row naming a web half is the web app's, which plans its halves from the same rows. One naming no plugin either
+    // app has is a mistake (renamed, removed, or mistyped), and said so here, with the id meant when one is close.
+    const webIds = [...new Set([...bundledWebIds, ...webIdsOf(files)])];
     const planned = planComposition({
       ...input,
       local: localPlugins,
       rows: loaded.rows,
-      // A row naming no host plugin is the web app's: it plans its halves from the same rows, and says what it does not know.
-      elsewhere: (id) => !hostIds.has(id),
+      elsewhere: (id) => webIds.includes(id),
+      elsewhereIds: webIds,
     });
     // A change that would leave out a plugin not left out already is refused (the file is put back, the running
     // composition kept), whichever plugin it touched; one already left out stays so, and blocks nothing.
@@ -146,7 +149,6 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     if (errors.length) return yield* new ReloadError({ diagnostics: errors });
     // Only for a composition that will run: a rejected one's warnings describe nothing that happens.
     yield* printDiagnostics(diagnostics.filter((diagnostic) => diagnostic.severity === "warning"));
-    const files = yield* listWebFiles(paths, loaded.trusted);
     return {
       known: planned.known,
       composition: planned.composition,

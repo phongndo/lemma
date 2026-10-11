@@ -163,13 +163,14 @@ export async function boot(options: BootOptions): Promise<void> {
     const known = list.length > 0;
     const ids = new Set(list.map((plugin) => plugin.id));
     const stopped = new Map(list.filter((plugin) => plugin.state !== "active").map((plugin) => [plugin.id, `its host half is ${plugin.state}`] as const));
+    // The config keys each host half reads: a row's config goes to both halves, and this page warns of a key neither reads.
+    const keys = new Map(list.map((plugin) => [plugin.id, (plugin.configFields ?? []).map((field) => field.key)] as const));
     // What re-planning follows: the ids, and the states of those with a web half here, so a host-only plugin's restart
-    // or fault re-plans nothing.
-    // (Before the first plan, the bundled ones.)
+    // or fault re-plans nothing. (Before the first plan, the bundled ones.)
     const planned = (plan as Plan | undefined)?.known ?? [];
     const halved = new Set([...options.bundled.map((plugin) => plugin.id), ...planned.map(({ plugin }) => plugin.id)]);
     const key = JSON.stringify(list.map((plugin) => (halved.has(plugin.id) ? [plugin.id, plugin.state] : [plugin.id])));
-    return { known, ids, stopped, key };
+    return { known, ids, stopped, keys, key };
   };
   /**
    * The composition for these rows and files (`planComposition`): what cannot
@@ -191,6 +192,8 @@ export async function boot(options: BootOptions): Promise<void> {
       pinned: Object.keys(PINNED),
       provided: runtime.services.provides,
       elsewhere: halves.known ? (id) => halves.ids.has(id) : () => true,
+      elsewhereIds: [...halves.ids],
+      otherKeys: (id) => halves.keys.get(id),
       blocked: halves.stopped,
     });
     const said = (diagnostic: Diagnostic) => `${diagnostic.message}${diagnostic.suggestion === undefined ? "" : `. ${diagnostic.suggestion}`}`;
