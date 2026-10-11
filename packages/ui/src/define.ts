@@ -11,7 +11,7 @@ export type { Capabilities, Services };
 
 export interface UiPluginContext<Config> {
   readonly id: string;
-  /** Decoded from the plugin's `config` Schema; the `ui` row in config.jsonc sets it. */
+  /** Decoded from the plugin's `config` Schema; its row in config.jsonc's `plugins` sets it. */
   readonly config: Config;
   /** Runs when the plugin stops: turned off, replaced, or restarted with a dependency. */
   readonly onCleanup: (fn: () => void) => void;
@@ -23,7 +23,7 @@ export interface UiPluginDefinition<Requires extends Capabilities, Provides exte
   readonly config?: Schema.Codec<Config, any>;
   /**
    * Its stylesheet: applied while it runs (in the `plugins` cascade layer,
-   * above the foundation and under stylesheets from `~/.lemma/ui`) and removed
+   * above the foundation and under stylesheets from `~/.lemma/plugins`) and removed
    * when it stops, so a replacement never inherits it.
    */
   readonly styles?: string;

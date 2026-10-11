@@ -139,7 +139,6 @@ export const host = (compositionId = "comp-1") =>
       reload: Effect.die("unused"),
       configure: () => Effect.die("unused"),
       ui: Effect.succeed({ plugins: {}, enabledIn: {}, configIn: {}, files: [] }),
-      configureUi: () => Effect.die("unused"),
     }),
   });
 

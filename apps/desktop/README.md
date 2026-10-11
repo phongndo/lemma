@@ -1,8 +1,8 @@
 # @lemma/desktop
 
 The web app in a desktop window. The window shows what the host's `transport`
-plugin serves, so it is the same app as in the browser, with the same plugins,
-UI files, and `"ui"` rows.
+plugin serves, so it is the same app as in the browser, with the same plugins
+and rows.
 
 ```sh
 nix develop -c pnpm desktop   # build the core and the web app, then open the window

@@ -336,6 +336,18 @@ importers:
       '@lemma/threads-view':
         specifier: workspace:*
         version: link:../../domains/threads/view
+      '@lemma/tools-bash':
+        specifier: workspace:*
+        version: link:../../domains/tools/bash
+      '@lemma/tools-edit':
+        specifier: workspace:*
+        version: link:../../domains/tools/edit
+      '@lemma/tools-read':
+        specifier: workspace:*
+        version: link:../../domains/tools/read
+      '@lemma/tools-write':
+        specifier: workspace:*
+        version: link:../../domains/tools/write
       '@lemma/ui':
         specifier: workspace:*
         version: link:../../packages/ui
@@ -1830,6 +1842,9 @@ importers:
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
@@ -1969,12 +1984,21 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
       effect:
         specifier: 4.0.1
         version: 4.0.1
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2062,12 +2086,21 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
       effect:
         specifier: 4.0.1
         version: 4.0.1
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2087,12 +2120,21 @@ importers:
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
       effect:
         specifier: 4.0.1
         version: 4.0.1
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0
@@ -2149,12 +2191,21 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/ui':
+        specifier: workspace:*
+        version: link:../../../packages/ui
       effect:
         specifier: 4.0.1
         version: 4.0.1
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
     devDependencies:
       '@types/node':
         specifier: 24.19.0

@@ -33,37 +33,33 @@ export type WorkEntry =
       readonly rows: readonly WorkRow[];
     };
 
-/** What a kind of call did, past tense, for one and for many. */
-const ACTIONS: ReadonlyMap<string, readonly [verb: string, one: string, many: string]> = new Map([
-  ["bash", ["ran", "command", "commands"]],
-  ["read", ["read", "file", "files"]],
-  ["edit", ["changed", "file", "files"]],
-  ["grep", ["searched", "time", "times"]],
-  ["ls", ["listed", "directory", "directories"]],
-]);
-/** Tools that read as another's action: a search by name is a search, writing a file changes it. Maps, as a tool may be named anything (`constructor`). */
-const KIND: ReadonlyMap<string, string> = new Map([
-  ["find", "grep"],
-  ["write", "edit"],
-]);
+/** What calls to a tool did, past tense, for one and for many (its view's `action`), when its view says. */
+export type ActionOf = (name: string) => readonly [verb: string, one: string, many: string] | undefined;
 
 /** At most this many kinds are named; the rest are counted. */
 const NAMED = 2;
 
-/** What a run of tool calls did, in a sentence: "Ran 3 commands and changed 1 file", "Read 3 files, ran 2 commands, and 1 other action". */
-export const summarizeTools = (names: readonly string[]): string => {
-  const counts = new Map<string, number>();
+/**
+ * What a run of tool calls did, in a sentence: "Ran 3 commands and changed 1 file", "Read 3 files, ran 2 commands, and
+ * 1 other action". Calls whose tools say the same words are one kind; a call whose tool says none is counted.
+ */
+export const summarizeTools = (names: readonly string[], actionOf: ActionOf): string => {
+  const kinds = new Map<string, { readonly words: readonly [string, string, string]; count: number }>();
+  let rest = 0;
   for (const name of names) {
-    const alias = KIND.get(name) ?? name;
-    const kind = ACTIONS.has(alias) ? alias : "";
-    counts.set(kind, (counts.get(kind) ?? 0) + 1);
+    const words = actionOf(name);
+    if (words === undefined) {
+      rest++;
+      continue;
+    }
+    const key = words.join("\n");
+    const kind = kinds.get(key) ?? { words, count: 0 };
+    kind.count++;
+    kinds.set(key, kind);
   }
-  const known = [...counts].filter(([kind]) => kind !== "");
-  const named = known.slice(0, NAMED).map(([kind, count]) => {
-    const [verb, one, many] = ACTIONS.get(kind)!;
-    return `${verb} ${count} ${count === 1 ? one : many}`;
-  });
-  const rest = names.length - known.slice(0, NAMED).reduce((sum, [, count]) => sum + count, 0);
+  const shown = [...kinds.values()].slice(0, NAMED);
+  rest += [...kinds.values()].slice(NAMED).reduce((sum, kind) => sum + kind.count, 0);
+  const named = shown.map(({ words: [verb, one, many], count }) => `${verb} ${count} ${count === 1 ? one : many}`);
   const parts =
     named.length === 0
       ? [`used ${rest} ${rest === 1 ? "tool" : "tools"}`]
@@ -93,7 +89,7 @@ const isTool = (row: WorkRow): row is Extract<WorkRow, { kind: "block" }> & { bl
  * another, with only thoughts between them, gather under one line once there
  * are at least `least` of them. A remark, an attempt, or the like ends a run.
  */
-export const workEntries = (items: readonly Item[], least = 2): WorkEntry[] => {
+export const workEntries = (items: readonly Item[], actionOf: ActionOf, least = 2): WorkEntry[] => {
   const entries: WorkEntry[] = [];
   let run: WorkRow[] = [];
   const close = () => {
@@ -106,7 +102,10 @@ export const workEntries = (items: readonly Item[], least = 2): WorkEntry[] => {
         kind: "group",
         key: `group:${run[0]!.key}`,
         at: run[0]!.at,
-        summary: summarizeTools(tools.map((row) => row.block.call.name)),
+        summary: summarizeTools(
+          tools.map((row) => row.block.call.name),
+          actionOf,
+        ),
         tools: tools.map((row) => row.block.call.name),
         failed: tools.filter((row) => row.block.result?.isError === true).length,
         rows: run.slice(0, last + 1),

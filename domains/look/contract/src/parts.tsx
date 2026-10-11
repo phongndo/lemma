@@ -1,12 +1,12 @@
 import type { ConfigField, ConfigValues } from "@lemma/contracts";
 import { definePart, partView } from "@lemma/ui";
 import type { JSX } from "solid-js";
-import { ConfigFormFallback, IconFallback, SearchFieldFallback, ToggleFallback } from "./fallbacks.tsx";
+import { ConfigFormFallback, IconFallback, SearchFieldFallback, SegmentedFallback, ToggleFallback } from "./fallbacks.tsx";
 
 /*
  * Parts: the pieces plugins draw with, and the pieces of the big views. Each
  * is a region slot (see `definePart`): wherever a plugin uses one, the first
- * item by order renders, so any plugin or UI file replaces a part everywhere
+ * item by order renders, so any plugin, a user's web half too, replaces a part everywhere
  * by adding an item with a lower order than the default (`DEFAULT_PART_ORDER`).
  * The `kit` plugin supplies the shared parts; a view supplies its own.
  * Plugins draw these through `ui/parts.tsx`, never by importing a component.
@@ -117,7 +117,7 @@ export interface SegmentedProps {
 }
 
 /** One of a few options, side by side. */
-export const SegmentedPart = definePart<SegmentedProps>("segmented");
+export const SegmentedPart = definePart<SegmentedProps>("segmented", SegmentedFallback);
 
 export interface ConfigFormProps {
   readonly fields: readonly ConfigField[];

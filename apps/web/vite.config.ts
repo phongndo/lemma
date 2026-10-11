@@ -40,8 +40,8 @@ const CANDIDATES = "virtual:lemma/utility-candidates";
 /**
  * `virtual:lemma/utility-candidates`: the Tailwind classes the bundled
  * plugins' source uses, as the build finds them (`@source` in `src/tailwind.css`). The
- * page compiles them with UI files' classes into one sheet (`ui/utilities.ts`),
- * so a utility from a UI file sorts among the app's own as one build would.
+ * page compiles them with web halves' classes into one sheet (`ui/utilities.ts`),
+ * so a utility from a web half sorts among the app's own as one build would.
  */
 function utilityCandidates(): Plugin {
   const id = `\0${CANDIDATES}`;

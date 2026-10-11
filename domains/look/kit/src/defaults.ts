@@ -1,4 +1,4 @@
-/** The shared parts' bundled implementations, which the web app hands UI files as `api.defaults`, to wrap or fall back to. */
+/** The shared parts' bundled implementations, which the web app hands web halves as `api.defaults`, to wrap or fall back to. */
 export { ConfigForm } from "./components/config-form.tsx";
 export { CopyButton } from "./components/copy-button.tsx";
 export { Dialog } from "./components/dialog.tsx";

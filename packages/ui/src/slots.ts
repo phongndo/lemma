@@ -22,7 +22,7 @@ export interface SlotOptions {
 const named = new Map<string, { readonly slot: Slot<any>; shows: "first" | "all"; fallback?: Component<any> }>();
 
 /**
- * The slot with this name: the same token each time, so a UI file loaded
+ * The slot with this name: the same token each time, so a web half loaded
  * again after an edit, or two files naming one slot, share it.
  */
 export const defineSlot = <T>(name: string, options: SlotOptions = {}): Slot<T> => {
@@ -51,7 +51,7 @@ export interface Region<P extends Record<string, any> = {}> {
  * `fallback` renders wherever the part is drawn while no plugin provides it:
  * plain native markup, belonging to no plugin. Without one, a part nothing
  * provides renders nothing. The declaration that gives a fallback fixes it:
- * defining the part again keeps it, and refuses another. A UI file's
+ * defining the part again keeps it, and refuses another. A web half's
  * `definePart` (`api.definePart`) takes none, since a part of its own is its
  * plugin's to provide.
  */

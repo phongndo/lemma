@@ -10,9 +10,11 @@ import { fuzzy } from "@lemma/ui/match";
 import type {
   ChannelDeclaration,
   ChannelInfo,
+  ConfigScope,
   InteractionAnswer,
   InteractionRequest,
   NoticePayload,
+  PluginChange,
   PluginStatus,
   RuntimeEvent,
   UiComposition,
@@ -397,7 +399,37 @@ export const createMockHost = (): Host => {
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
   let ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
-  // For the UI check: UI files as the host would list them from `~/.lemma/ui` (a `blob:` URL stands in for the served file).
+  /** Writes rows as the host does into its config file, and tells the page, which plans its web halves from them. */
+  const writeRows = (rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) => {
+    const next = { ...ui.plugins };
+    const enabledIn = { ...ui.enabledIn };
+    const configIn = { ...ui.configIn };
+    for (const [id, row] of Object.entries(rows)) {
+      const entry: { enabled?: boolean; config?: Record<string, unknown> } = { ...(next[id] as { enabled?: boolean; config?: Record<string, unknown> }) };
+      if (row.enabled !== undefined) {
+        if (row.enabled) delete entry.enabled;
+        else entry.enabled = false;
+        if (row.enabled) delete enabledIn[id];
+        else enabledIn[id] = scope;
+      }
+      if (row.values !== undefined) {
+        const config = { ...entry.config };
+        for (const [key, value] of Object.entries(row.values)) {
+          if (value === null) delete config[key];
+          else config[key] = value;
+        }
+        if (Object.keys(config).length === 0) delete entry.config;
+        else entry.config = config;
+        if (entry.config === undefined) delete configIn[id];
+        else configIn[id] = scope;
+      }
+      if (Object.keys(entry).length === 0) delete next[id];
+      else next[id] = entry;
+    }
+    ui = { ...ui, plugins: next, enabledIn, configIn };
+    emit({ type: "ui-changed", ui });
+  };
+  // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
     lemmaMock: {
       setUiFiles: (files: UiComposition["files"]) => {
@@ -1480,10 +1512,18 @@ export const createMockHost = (): Host => {
       },
       configure: async (rows, options) => {
         await sleep(500);
+        for (const [id, row] of Object.entries(rows)) {
+          const locked = plugins.find((p) => p.id === id)?.locked;
+          if (locked !== undefined && row.enabled === false) {
+            throw new HostError({ code: "ReloadError", message: `error [${id}]: "${id}" cannot be turned off: ${locked}`, subject: id });
+          }
+        }
+        // Every row is written, a web half's too: the page plans its halves from the same rows.
+        writeRows(rows, options?.scope ?? "user");
         const before = plugins.filter((plugin) => plugin.state !== "disabled").map((plugin) => plugin.id);
         for (const [id, row] of Object.entries(rows)) {
           const i = plugins.findIndex((p) => p.id === id);
-          if (i < 0) throw new HostError({ code: "ReloadError", message: `error [${id}]: No plugin "${id}"`, subject: id });
+          if (i < 0) continue;
           if (plugins[i]!.locked !== undefined && row.enabled === false) {
             throw new HostError({ code: "ReloadError", message: `error [${id}]: "${id}" cannot be turned off: ${plugins[i]!.locked}`, subject: id });
           }
@@ -1531,38 +1571,6 @@ export const createMockHost = (): Host => {
     },
     ui: {
       composition: async () => ui,
-      configure: async (rows, options) => {
-        await sleep(200);
-        const plugins = { ...ui.plugins };
-        const enabledIn = { ...ui.enabledIn };
-        const configIn = { ...ui.configIn };
-        const scope = options?.scope ?? "user";
-        for (const [id, row] of Object.entries(rows)) {
-          const next: { enabled?: boolean; config?: Record<string, unknown> } = { ...(plugins[id] as { enabled?: boolean; config?: Record<string, unknown> }) };
-          if (row.enabled !== undefined) {
-            if (row.enabled) delete next.enabled;
-            else next.enabled = false;
-            if (row.enabled) delete enabledIn[id];
-            else enabledIn[id] = scope;
-          }
-          if (row.values !== undefined) {
-            const config = { ...next.config };
-            for (const [key, value] of Object.entries(row.values)) {
-              if (value === null) delete config[key];
-              else config[key] = value;
-            }
-            if (Object.keys(config).length === 0) delete next.config;
-            else next.config = config;
-            if (next.config === undefined) delete configIn[id];
-            else configIn[id] = scope;
-          }
-          if (Object.keys(next).length === 0) delete plugins[id];
-          else plugins[id] = next;
-        }
-        ui = { ...ui, plugins, enabledIn, configIn };
-        emit({ type: "ui-changed", ui });
-        return ui;
-      },
     },
     status: () => status,
     onStatus: (listener) => {

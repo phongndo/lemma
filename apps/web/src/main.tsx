@@ -24,8 +24,8 @@ const start = async () => {
   } else {
     host = await connect({ url: location.href, token });
   }
-  // `?safe` runs the app as shipped, ignoring `ui` rows and UI files: the way back from a broken customization.
-  // The api for UI files loads only when one needs it, keeping it out of the app's own bundle.
+  // `?safe` runs the app as shipped, ignoring the rows and the plugin directories: the way back from a broken customization.
+  // The api for web halves loads only when one needs it, keeping it out of the app's own bundle.
   const api = () => import("./ui/api.ts").then((module) => module.api);
   // The addresses links from outside the page name: the thread routes `lemma open` and deep links use, and settings.
   const appRoutes = [NewThreadRoute, ThreadRoute, SettingsRoute];

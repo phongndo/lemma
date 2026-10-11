@@ -63,7 +63,6 @@ describe("loadComposition", () => {
         "tools": { "enabled": true, "config": { "shell": "bash" } },
         "sessions": {},
       },
-      "ui": { "composer": { "enabled": false }, "theme": { "config": { "accent": "red" } } },
     }`,
       );
       await writeFile(
@@ -74,7 +73,6 @@ describe("loadComposition", () => {
         "tools": { "enabled": false },
         "mcp": { "config": { "servers": [] } },
       },
-      "ui": { "composer": { "enabled": true } },
     }`,
       );
       const loaded = await Effect.runPromise(loadComposition(paths));
@@ -89,11 +87,6 @@ describe("loadComposition", () => {
       });
       expect(loaded.enabledIn).toEqual({ tools: "project" });
       expect(loaded.configIn).toEqual({ llm: "project", tools: "user", mcp: "project" });
-      expect(loaded.ui).toEqual({
-        plugins: { composer: { enabled: true }, theme: { config: { accent: "red" } } },
-        enabledIn: { composer: "project" },
-        configIn: { theme: "user" },
-      });
     }));
 
   test("reports malformed and invalid files by path", () =>
@@ -249,19 +242,6 @@ describe("patchConfig", () => {
     expect(parseJsonc(removed, [], { allowTrailingComma: true }).plugins.llm.config.providers).toEqual([{ id: "ollama", api: "openai-completions" }]);
     // A list that does not exist yet is created.
     expect(parseJsonc(patchConfig("", { llm: { add: { providers: [{ id: "a" }] } } }))).toEqual({ plugins: { llm: { config: { providers: [{ id: "a" }] } } } });
-  });
-
-  test("the ui section takes the same rows, apart from the host's", () => {
-    const patched = patchConfig(
-      `{ "plugins": { "bash": { "enabled": false } } }`,
-      { composer: { enabled: false }, theme: { values: { accent: "red" } } },
-      "user",
-      "ui",
-    );
-    expect(parseJsonc(patched)).toEqual({
-      plugins: { bash: { enabled: false } },
-      ui: { composer: { enabled: false }, theme: { config: { accent: "red" } } },
-    });
   });
 });
 

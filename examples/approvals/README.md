@@ -16,8 +16,7 @@ question it asks still belongs to the turn that caused it. A path
 counts as outside when it leads there through a link, too. To use it:
 
 ```sh
-ln -s "$PWD/examples/approvals/approvals.ts" ~/.lemma/plugins/approvals.ts   # or copy it
-lemma reload                                                                 # plugin files load on reload
+ln -s "$PWD/examples/approvals/approvals.ts" ~/.lemma/plugins/approvals.ts   # or copy it: the host loads it
 ```
 
 As a plugin file it is required: if it cannot load or start, the host does

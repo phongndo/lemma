@@ -5,7 +5,8 @@
   "description": "The `edit` tool: exact replacements in a file, with a unified diff",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./web": "./src/web.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -13,12 +14,19 @@
   },
   "dependencies": {
     "@lemma/core": "workspace:*",
+    "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.1"
+    "@lemma/ui": "workspace:*",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
   },
   "devDependencies": {
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.ts"
   }
 }

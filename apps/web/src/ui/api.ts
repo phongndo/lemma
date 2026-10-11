@@ -66,7 +66,7 @@ const contracts = {
 };
 
 /**
- * What a UI file's default export receives when it is a function: the page's
+ * What a web half's default export receives when it is a function: the page's
  * own module instances, so a plugin shares Solid's reactivity and the
  * contracts' tags with the app, and needs no build step (`html` is Solid's
  * tagged template, JSX without a compiler).
@@ -88,7 +88,7 @@ export const api = {
   /**
    * The bundled domains' channels, as each domain's contract declares them: what
    * the bundled plugins reach the host's sessions, agent, models, workspace,
-   * files, and commands through, with `Client`. A UI file passes one to
+   * files, and commands through, with `Client`. A web half passes one to
    * `client.channel.call` or `client.follow` to have its payload and results
    * go through its schemas (`client.channel.call(channels.SessionChannels.list, {})`);
    * by id, they are plain JSON.

@@ -3,7 +3,7 @@ import type { JSX } from "solid-js";
 import { capabilityName, describeReload, hookChain, providerOf, recoverable, usersOf } from "@lemma/contracts";
 import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "@lemma/ui/format";
-import { PLUGIN_FILTERS, dependentsOf, describeState, matchPlugins, pluginText, replaces, waitingOn } from "./plugins.ts";
+import { PLUGIN_FILTERS, dependentsOf, describeState, halvesOf, matchPlugins, pairHalves, pluginText, replaces, waitingOn } from "./plugins.ts";
 import type { KindedPlugin, PluginKind } from "./plugins.ts";
 import { stepFor } from "@lemma/ui/keys";
 import { Actions } from "@lemma/actions";
@@ -13,7 +13,7 @@ import type { PluginTab, PluginsFact } from "@lemma/settings";
 import type { ClientService, PluginsService, UiPluginsService } from "@lemma/ui";
 import { defineUiPlugin } from "@lemma/ui";
 import type { SlotsService } from "@lemma/ui";
-import { ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Spinner, Toggle, XIcon } from "@lemma/look";
+import { ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
 import { Contained } from "@lemma/ui";
 import styles from "./plugins-page.css?inline";
 
@@ -40,7 +40,7 @@ interface Confirmation extends Selection {
 const sourceLabel = (plugin: PluginStatus): string | undefined => (plugin.source === "user" ? "yours" : plugin.source === "project" ? "project" : undefined);
 
 const describeSource = (plugin: PluginStatus, kind: PluginKind, home: string | undefined): string => {
-  const dir = kind === "host" ? "plugins" : "ui";
+  const dir = "plugins";
   switch (plugin.source) {
     case "bundled":
       return kind === "host" ? "Bundled with Lemma" : "Bundled with the web app";
@@ -147,12 +147,17 @@ function Confirm(props: { inspector: Inspector; plugin: PluginStatus; pending: C
 function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
   const { inspector } = props;
   const plugin = () => props.entry.plugin;
+  /** The half whose state the row shows: the first half, unless it runs and its other half does not. */
+  const shownState = () => {
+    const pair = props.entry.pair?.plugin;
+    return pair !== undefined && plugin().state === "active" && pair.state !== "active" ? pair : plugin();
+  };
   const kind = () => props.entry.kind;
   const key = () => `${kind()}:${plugin().id}`;
-  const selected = () => inspector.selected()?.kind === kind() && inspector.selected()?.id === plugin().id;
+  const selected = () => inspector.selected()?.id === plugin().id;
   const pending = () => {
     const confirming = inspector.confirming();
-    return confirming?.kind === kind() && confirming.id === plugin().id ? confirming : undefined;
+    return confirming?.id === plugin().id ? confirming : undefined;
   };
   return (
     <>
@@ -170,10 +175,10 @@ function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
           <Show when={sourceLabel(plugin())}>{(label) => <span class="tag">{label()}</span>}</Show>
         </span>
         <span class="inspector-kind muted" role="cell">
-          {KIND_LABEL[kind()]}
+          {props.entry.pair === undefined ? KIND_LABEL[kind()] : "host + web"}
         </span>
-        <span class={`inspector-state state-text-${plugin().state}`} role="cell">
-          {describeState(plugin())}
+        <span class={`inspector-state state-text-${shownState().state}`} role="cell">
+          {describeState(shownState())}
         </span>
         <span class="inspector-controls" role="cell" onClick={(event) => event.stopPropagation()}>
           <Show when={inspector.busy() === key()}>
@@ -395,8 +400,7 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
 }
 
 function SettingsTab(props: { inspector: Inspector; kind: PluginKind; plugin: PluginStatus }) {
-  const file = () =>
-    `${props.plugin.configScope === "project" ? ".lemma/config.jsonc" : "config.jsonc"}, "${props.kind === "host" ? "plugins" : "ui"}" › "${props.plugin.id}"`;
+  const file = () => `${props.plugin.configScope === "project" ? ".lemma/config.jsonc" : "config.jsonc"}, "plugins" › "${props.plugin.id}"`;
   return (
     <Show when={props.plugin.configFields?.length} fallback={<p class="muted small">It takes no config.</p>}>
       <ConfigForm
@@ -468,14 +472,14 @@ function HostFacts(props: { client: ClientService; slots: SlotsService; ui: UiPl
           <dd>{tildePath(info().cwd, info().home)}</dd>
           <dt>Config</dt>
           <dd data-tip="Switches here write the user file; a plugin the project file sets is written there instead">
-            config.jsonc in Home · .lemma/config.jsonc in Project; "plugins" rows for the host, "ui" rows for the web app
+            config.jsonc in Home · .lemma/config.jsonc in Project; one "plugins" row per plugin, for both its halves
           </dd>
           <dt>Web app files</dt>
-          <dd data-tip="Scripts load as web app plugins and stylesheets apply over the app's; a project's load only when it is trusted">
+          <dd data-tip="Web halves load as web app plugins and stylesheets apply over the app's; a project's load only when it is trusted">
             {files().length === 0
-              ? "none in ui/ in Home"
+              ? "none in plugins/ in Home"
               : files()
-                  .map((file) => `${file.source === "user" ? "~" : "."}/${file.name}`)
+                  .map((file) => `${file.source === "user" ? "~" : "."}/plugins/${file.name}`)
                   .join(", ")}
           </dd>
           <dt>Composition</dt>
@@ -555,8 +559,10 @@ function Summary(props: { inspector: Inspector; entries: readonly KindedPlugin[]
 
 function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
   const { inspector } = props;
-  const plugin = () => props.entry.plugin;
-  const kind = () => props.entry.kind;
+  /** The half shown: the one the selection names, when the plugin has it. */
+  const half = () => halvesOf(props.entry).find((candidate) => candidate.kind === inspector.selected()?.kind) ?? props.entry;
+  const plugin = () => half().plugin;
+  const kind = () => half().kind;
   const tabs = () =>
     inspector.slots.list(PluginTabs).flatMap((tab) => {
       const label = tab.label(plugin(), kind());
@@ -571,10 +577,22 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
       <header class="inspector-detail-head">
         <span class={`state-dot state-${plugin().state}`} />
         <h2>{plugin().id}</h2>
-        <span class="muted small">
-          {KIND_LABEL[kind()]}
-          {plugin().version === undefined ? "" : ` · ${plugin().version}`}
-        </span>
+        <Show
+          when={props.entry.pair !== undefined}
+          fallback={
+            <span class="muted small">
+              {KIND_LABEL[kind()]}
+              {plugin().version === undefined ? "" : ` · ${plugin().version}`}
+            </span>
+          }
+        >
+          <Segmented
+            label="Half"
+            value={kind()}
+            options={halvesOf(props.entry).map((candidate) => ({ value: candidate.kind, label: KIND_LABEL[candidate.kind] }))}
+            onChange={(next) => inspector.select({ kind: next, id: plugin().id })}
+          />
+        </Show>
         <span class="spacer" />
         <span class={`status-pill state-${plugin().state}`}>{describeState(plugin())}</span>
         <button class="icon-button" aria-label="Close details" onClick={() => inspector.select(undefined)}>
@@ -613,30 +631,28 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
  */
 function PluginsInspector(props: { inspector: Inspector; filter: () => string; setFilter: (value: string) => void }) {
   const { inspector } = props;
-  const entries = createMemo((): KindedPlugin[] => [
-    ...inspector.services.host.list().map((plugin) => ({ kind: "host" as const, plugin })),
-    ...inspector.services.web.list().map((plugin) => ({ kind: "web" as const, plugin })),
-  ]);
+  // One row per plugin: a host half and a web half with one id are one plugin, with one row and one switch.
+  const entries = createMemo((): KindedPlugin[] => pairHalves(inspector.services.host.list(), inspector.services.web.list()));
   const shown = createMemo(() => matchPlugins(entries(), props.filter()));
   const current = () => {
     const selection = inspector.selected();
-    return selection === undefined ? undefined : entries().find((entry) => entry.kind === selection.kind && entry.plugin.id === selection.id);
+    return selection === undefined ? undefined : entries().find((entry) => entry.plugin.id === selection.id);
   };
   const selected = createMemo(() => {
     const entry = current();
-    return entry === undefined ? undefined : `${entry.kind}:${entry.plugin.id}`;
+    return entry === undefined ? undefined : entry.plugin.id;
   });
   let table!: HTMLDivElement;
   // Keep the selected row in view as the selection moves by keys or links.
   createEffect(
     on(inspector.selected, (selection) => {
-      if (selection !== undefined)
-        table?.querySelector(`[data-key="${CSS.escape(`${selection.kind}:${selection.id}`)}"]`)?.scrollIntoView({ block: "nearest" });
+      const entry = selection === undefined ? undefined : entries().find((candidate) => candidate.plugin.id === selection.id);
+      if (entry !== undefined) table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" });
     }),
   );
   const onKey = (event: KeyboardEvent) => {
     const rows = shown();
-    const at = rows.findIndex((entry) => entry.kind === inspector.selected()?.kind && entry.plugin.id === inspector.selected()?.id);
+    const at = rows.findIndex((entry) => entry.plugin.id === inspector.selected()?.id);
     const step = stepFor(event.key, at, rows.length);
     if (step === undefined) return;
     event.preventDefault();
@@ -646,7 +662,7 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
   return (
     <div class="inspector">
       <Show when={inspector.ui.safe}>
-        <p class="callout callout-warn">Safe mode: your "ui" rows and web app files are ignored. Open the app without ?safe to use them.</p>
+        <p class="callout callout-warn">Safe mode: your rows and web halves are ignored here. Open the app without ?safe to use them.</p>
       </Show>
       <Show when={inspector.ui.problems().length > 0}>
         <div class="callout callout-warn">

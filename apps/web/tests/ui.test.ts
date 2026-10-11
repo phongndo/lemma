@@ -128,7 +128,7 @@ describe("slots", () => {
     }
   });
 
-  it("gives every definition of a name the same slot, as a UI file loaded again defines it again", async () => {
+  it("gives every definition of a name the same slot, as a web half loaded again defines it again", async () => {
     const own = (id: string) =>
       defineUiPlugin({
         id,
@@ -143,7 +143,7 @@ describe("slots", () => {
     });
   });
 
-  it("fixes a bundled part's fallback by its declaration: a UI file defining the part again cannot change it", () => {
+  it("fixes a bundled part's fallback by its declaration: a web half defining the part again cannot change it", () => {
     const declared = fallbackOf(TogglePart);
     expect(declared).toBeDefined();
     // `api.definePart` passes no fallback, and one passed anyway is refused.

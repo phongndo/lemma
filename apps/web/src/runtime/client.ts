@@ -54,7 +54,6 @@ export function createClient(host: Host): { readonly client: ClientService; read
       inspect: (id) => host.host.inspect(id),
       ui: {
         composition: () => host.ui.composition(),
-        configure: (plugins, options) => host.ui.configure(plugins, options?.scope === undefined ? undefined : { scope: options.scope }),
       },
     },
     dispose,

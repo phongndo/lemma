@@ -84,13 +84,35 @@ export const replaces = (plugins: readonly PluginStatus[], id: string): string[]
   return plugins.filter((plugin) => plugin.id !== id && plugin.enabled && plugin.provides.some((key) => provides.includes(key))).map((plugin) => plugin.id);
 };
 
-/** Which composition a plugin belongs to: the host's, or the web app's. */
+/** Which composition a plugin's half belongs to: the host's, or the web app's. */
 export type PluginKind = "host" | "web";
 
+/**
+ * A plugin as the table lists it: one id, with a host half, a web half, or both. `kind` and `plugin` are the half it
+ * shows first (the host's, when it has one); `pair` is its other half, which the same row turns on and off.
+ */
 export interface KindedPlugin {
   readonly kind: PluginKind;
   readonly plugin: PluginStatus;
+  readonly pair?: { readonly kind: PluginKind; readonly plugin: PluginStatus };
 }
+
+/** One entry per plugin id: a host half and a web half with the same id are one plugin. */
+export const pairHalves = (host: readonly PluginStatus[], web: readonly PluginStatus[]): KindedPlugin[] => {
+  const webById = new Map(web.map((plugin) => [plugin.id, plugin]));
+  const hostIds = new Set(host.map((plugin) => plugin.id));
+  return [
+    ...host.map((plugin): KindedPlugin => {
+      const half = webById.get(plugin.id);
+      return half === undefined ? { kind: "host", plugin } : { kind: "host", plugin, pair: { kind: "web", plugin: half } };
+    }),
+    ...web.filter((plugin) => !hostIds.has(plugin.id)).map((plugin): KindedPlugin => ({ kind: "web", plugin })),
+  ];
+};
+
+/** The halves of an entry, the one it shows first first. */
+export const halvesOf = (entry: KindedPlugin): readonly { readonly kind: PluginKind; readonly plugin: PluginStatus }[] =>
+  entry.pair === undefined ? [entry] : [entry, entry.pair];
 
 const STATES: Readonly<Record<string, (plugin: PluginStatus) => boolean>> = {
   running: (plugin) => plugin.state === "active",
@@ -122,12 +144,14 @@ export const PLUGIN_FILTERS = [
  */
 export const matchPlugins = (entries: readonly KindedPlugin[], query: string): KindedPlugin[] => {
   const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  const test = (term: string, { kind, plugin }: KindedPlugin): boolean => {
-    const [key, value] = term.includes(":") ? [term.slice(0, term.indexOf(":")), term.slice(term.indexOf(":") + 1)] : [undefined, term];
-    if (key === "is") return STATES[value]?.(plugin) ?? false;
-    if (key === "kind") return kind === value;
-    if (key === "source") return plugin.source === value;
-    return `${pluginText(plugin)} ${kind}`.toLowerCase().includes(term);
-  };
+  // A term holds for a plugin when it holds for either of its halves.
+  const test = (term: string, entry: KindedPlugin): boolean =>
+    halvesOf(entry).some(({ kind, plugin }) => {
+      const [key, value] = term.includes(":") ? [term.slice(0, term.indexOf(":")), term.slice(term.indexOf(":") + 1)] : [undefined, term];
+      if (key === "is") return STATES[value]?.(plugin) ?? false;
+      if (key === "kind") return kind === value;
+      if (key === "source") return plugin.source === value;
+      return `${pluginText(plugin)} ${kind}`.toLowerCase().includes(term);
+    });
   return entries.filter((entry) => terms.every((term) => (term.startsWith("-") && term.length > 1 ? !test(term.slice(1), entry) : test(term, entry))));
 };

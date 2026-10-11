@@ -103,7 +103,7 @@ export const currentToken = (name: string): string => getComputedStyle(root()).g
 /**
  * Calls `listener` whenever the page's look may have changed: its theme or a
  * token a look sets on `<html>`, or a stylesheet coming, going, or changing
- * (a UI file's, a plugin's), once a linked one has loaded. Returns the
+ * (a plugin's, one from the plugin directories), once a linked one has loaded. Returns the
  * unsubscribe.
  */
 export const onLookChange = (listener: () => void): (() => void) => {
@@ -127,7 +127,7 @@ export const onLookChange = (listener: () => void): (() => void) => {
     listener();
   });
   sheets.observe(document.head, { childList: true, subtree: true, characterData: true });
-  // Stylesheets linked before this subscribed and still loading (a UI file's, at boot) count too, once they load.
+  // Stylesheets linked before this subscribed and still loading (from the plugin directories, at boot) count too, once they load.
   for (const link of document.head.querySelectorAll<HTMLLinkElement>("link[rel=stylesheet]")) {
     if (link.sheet !== null) continue;
     link.addEventListener("load", loaded, { once: true });

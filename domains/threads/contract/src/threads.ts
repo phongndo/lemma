@@ -1,5 +1,6 @@
 import type { PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { MenuAction } from "@lemma/frame";
+import type { IconName } from "@lemma/look";
 import type { LedgerRecord, SessionEvent, SessionInfo, SessionMarks } from "@lemma/sessions";
 import { defineSlot } from "@lemma/ui";
 import type { Region } from "@lemma/ui";
@@ -184,9 +185,24 @@ export interface ToolBodyProps {
   readonly output?: string | undefined;
 }
 
-/** How the chat shows calls to one tool; the item's id is the tool's name. Either part falls back to the chat's own. */
+/**
+ * How the chat and the trajectory show calls to one tool; the item's id is the tool's name. A tool's plugin adds its
+ * own from its web half, as the bundled tools do. What a view leaves out is the chat's own: the call named, with a
+ * generic icon, its first short string argument, and when opened its arguments and output.
+ */
 export interface ToolView {
+  /** The kind of thing a call does, beside its line. A call with an icon and a summary is not also named. */
+  readonly icon?: IconName;
+  /** A call's arguments in a line. */
   readonly summary?: (args: Record<string, unknown> | undefined, context: { readonly cwd?: string; readonly home?: string }) => ToolSummary;
+  /** The string argument shown while a call's arguments stream in, before they parse (`command`, `path`). */
+  readonly streaming?: string;
+  /**
+   * What calls to it did, past tense, for one and for many (`["ran", "command", "commands"]`), when the chat sums up a
+   * run of calls ("Ran 3 commands and changed 1 file"). Calls whose words are the same are counted together.
+   */
+  readonly action?: readonly [verb: string, one: string, many: string];
+  /** A call opened, in the chat and the trajectory. */
   readonly body?: Component<ToolBodyProps>;
 }
 
