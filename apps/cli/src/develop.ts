@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { lstat, mkdir, mkdtemp, readdir, readlink, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
+import { compileWebHalf, isCompiled } from "@lemma/host/compile";
 import { resolvePaths } from "@lemma/host/paths";
 import { CliError, ExitCode, usage } from "./command.ts";
 import type { Io, Options, Output, Unattached } from "./command.ts";
@@ -76,11 +77,24 @@ const effectModules = (): Record<string, string[]> => {
   );
 };
 
+/** Solid's entries a web half imports, each as its declarations, from where `@lemma/web` has it. */
+const solidModules = (): Record<string, string[]> => {
+  const dir = realpathSync(join(checkout, "packages", "web", "node_modules", "solid-js"));
+  const { exports = {} } = JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) as { readonly exports?: Record<string, unknown> };
+  return Object.fromEntries(
+    ["", "/jsx-runtime", "/web", "/store", "/html"].flatMap((subpath) => {
+      const target = exports[`.${subpath}`];
+      const types = typeof target === "object" && target !== null ? (target as { readonly types?: unknown }).types : undefined;
+      return typeof types === "string" ? [[`solid-js${subpath}`, [join(dir, types)]]] : [];
+    }),
+  );
+};
+
 const scaffold = (id: string): Record<string, string> => {
   const tool = id.replace(/[^a-z0-9]+/g, "_");
   const modules = checkoutModules();
   return {
-    "package.json": `${JSON.stringify({ name: id, version: "0.1.0", private: true, type: "module", lemma: { host: "./plugin.ts", web: "./web.js" } }, null, 2)}\n`,
+    "package.json": `${JSON.stringify({ name: id, version: "0.1.0", private: true, type: "module", lemma: { host: "./plugin.ts", web: "./web.tsx" } }, null, 2)}\n`,
     "plugin.ts": `import { Schema } from "effect";
 import { definePlugin } from "@lemma/core/plain";
 import { ToolResult, Tools } from "@lemma/tools";
@@ -101,16 +115,18 @@ export default definePlugin({
   },
 });
 `,
-    "web.js": `// The web half of ${id}: it runs in the web app while the host half does, and its default export receives the app's
-// api: defineWebPlugin, the contracts, Solid, and html (Solid's JSX without a build step).
-export default ({ defineWebPlugin, contracts: { Slots, SidebarFooter }, html }) =>
-  defineWebPlugin({
-    id: "${id}",
-    requires: { slots: Slots },
-    setup: ({ slots }) => {
-      slots.add(SidebarFooter, { id: "${id}", order: 90, component: () => html\`<span class="muted small">${id}</span>\` });
-    },
-  });
+    "web.tsx": `// The web half of ${id}: it runs in the web app while the host half does. The host compiles it (TypeScript, and
+// Solid's JSX); its imports of solid-js and @lemma/* are the page's own, and anything else it imports is bundled in.
+import { SidebarFooter } from "@lemma/frame";
+import { defineWebPlugin, Slots } from "@lemma/web";
+
+export default defineWebPlugin({
+  id: "${id}",
+  requires: { slots: Slots },
+  setup: ({ slots }) => {
+    slots.add(SidebarFooter, { id: "${id}", order: 90, component: () => <span class="muted small">${id}</span> });
+  },
+});
 `,
     "tests/plugin.test.ts": `import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -134,13 +150,16 @@ test("the model can call its tool, and reads what it says", async () => {
         // for ${checkout}. The settings are the checkout's, as its sources are type-checked through \`paths\` with them.
         extends: join(checkout, "tsconfig.base.json"),
         compilerOptions: {
+          jsx: "preserve",
+          jsxImportSource: "solid-js",
           typeRoots: [join(checkout, "node_modules/@types")],
           paths: {
             ...Object.fromEntries(Object.entries(modules).map(([specifier, file]) => [specifier, [file]])),
             ...effectModules(),
+            ...solidModules(),
           },
         },
-        include: ["*.ts", "tests"],
+        include: ["*.ts", "*.tsx", "tests"],
       },
       null,
       2,
@@ -150,11 +169,11 @@ test("the model can call its tool, and reads what it says", async () => {
 What it does, for whoever turns it on: here, a \`${tool}\` tool the model can call, and a line in the web app's
 sidebar while it runs.
 
-| File                   | What it is                                                        |
-| ---------------------- | ----------------------------------------------------------------- |
+| File                   | What it is                                                         |
+| ---------------------- | ------------------------------------------------------------------ |
 | \`plugin.ts\`            | The host half: what the host runs (tools, hooks, a prompt section) |
-| \`web.js\`               | The web half: what the web app runs (views, slots, parts)         |
-| \`tests/plugin.test.ts\` | Its tests: real turns against a scripted model                    |
+| \`web.tsx\`              | The web half: what the web app runs (views, slots, parts)          |
+| \`tests/plugin.test.ts\` | Its tests: real turns against a scripted model                     |
 
 - \`lemma dev\` (in this folder): runs it in your host, and again on every change (\`--isolated\`: in a host of its own).
 - \`lemma plugins test\`: runs its tests.
@@ -374,15 +393,20 @@ export const checkPlugin = (dir: string | undefined, io: Io, run: Runner): Unatt
         requires: plugin.requires,
         hooks: (plugin.hooks ?? []).map((hook) => hook.name),
         adds: (plugin.contributes ?? []).map((contribution) => `${contribution.name}: ${contribution.keys.join(", ")}`),
+        // What the host said of it, but that its web half does not compile, which the problems say in full.
         warnings: host.lines
           .filter((line) => line.includes(`[${plugin.id}]`) || line.includes(`"${plugin.id}"`))
-          .filter((line) => /warning|error|fail/.test(line)),
+          .filter((line) => /warning|error|fail/.test(line) && !line.includes("does not compile")),
       }));
       const manifest = JSON.parse(readFileSync(join(folder, "package.json"), "utf8")) as { readonly lemma?: { readonly web?: string } };
       const web = manifest.lemma?.web;
+      // Compiled as the host compiles it for the page, which is where it would fail otherwise.
+      const compiled =
+        web !== undefined && isCompiled(web) && existsSync(join(folder, web)) ? yield* Effect.promise(() => compileWebHalf(join(folder, web))) : undefined;
       const problems = [
         ...(own.length === 0 ? [`No host half loaded from ${folder}: see the host's output below`] : []),
         ...(web !== undefined && !existsSync(join(folder, web)) ? [`Its web half ${web} does not exist`] : []),
+        ...(compiled?.ok === false ? [`Its web half ${web} does not compile:\n${compiled.error.replace(/^/gm, "    ")}`] : []),
         ...(web !== undefined && own.length > 0 && !own.some((plugin) => plugin.id === basename(folder))
           ? [
               `Its folder is named ${basename(folder)}, its plugin ${own.map((plugin) => plugin.id).join(", ")}: name the folder for its plugin, so the host knows its web half's id`,

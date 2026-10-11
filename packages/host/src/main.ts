@@ -122,7 +122,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
     });
     const localPlugins = local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) }));
-    const files = yield* listWebFiles(paths, loaded.trusted);
+    const { files, problems: uncompiled } = yield* listWebFiles(paths, loaded.trusted);
     // A row naming a web half is the web app's, which plans its halves from the same rows; one naming no plugin either
     // app has is a mistake (renamed, removed, mistyped), said so here with the id meant, and refused when required.
     const webIds = [...new Set([...bundledWeb, ...files.flatMap((file) => (file.kind === "script" && file.plugin !== undefined ? [file.plugin] : []))])];
@@ -140,6 +140,14 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     const diagnostics = [
       ...local.diagnostics,
       ...loaded.diagnostics,
+      ...uncompiled.map(
+        ({ file, error }) =>
+          new Diagnostic({
+            severity: "warning",
+            ...(file.plugin === undefined ? {} : { pluginId: file.plugin }),
+            message: `The web half ${file.name} does not compile:\n${error}`,
+          }),
+      ),
       ...planned.diagnostics.filter(
         (diagnostic) => !refused.some(([id]) => diagnostic.pluginId === id && diagnostic.message.startsWith(`"${id}" is left out`)),
       ),
@@ -593,7 +601,7 @@ const program = Effect.gen(function* () {
    * half or a stylesheet is no part of that, and waits on no host half's file being fixed.
    */
   const refreshWebFiles = Effect.gen(function* () {
-    const files = yield* listWebFiles(paths, applied.trusted);
+    const { files } = yield* listWebFiles(paths, applied.trusted);
     const previous = applied.web;
     applied = { ...applied, web: { ...previous, files } };
     yield* publishWeb(loader, previous, applied.web).pipe(Effect.ignore);

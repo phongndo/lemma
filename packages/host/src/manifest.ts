@@ -7,7 +7,8 @@ import { Predicate } from "effect";
  * name, or as a package:
  *
  *   approvals.ts        a host half (`.ts`, `.js`, `.mjs`): the host loads it
- *   notes.web.js        a web half (`.web.js`, `.web.mjs`): the web app loads it
+ *   notes.web.js        a web half (`.web.js`, `.web.mjs`): the web app loads it; in TypeScript (`.web.ts`, or
+ *                       `.web.tsx` with Solid's JSX), the host compiles it first (`compile.ts`)
  *   theme.css           a stylesheet the web app applies after its own
  *   ticker/             a package, whose package.json says where its halves are:
  *     package.json        "lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }
@@ -38,9 +39,9 @@ export type Entry =
       readonly problems: readonly string[];
     };
 
-const WEB_FILE = /\.web\.(js|mjs)$/;
+const WEB_FILE = /\.web\.(js|mjs|ts|tsx)$/;
 const isWeb = (name: string) => WEB_FILE.test(name);
-/** The plugin a web half's file is named for: `notes.web.js` defines `notes`. */
+/** The plugin a web half's file is named for: `notes.web.js` (or `.web.tsx`) defines `notes`. */
 export const webPluginOf = (name: string): string => name.replace(WEB_FILE, "");
 const isHost = (name: string) => /\.(ts|js|mjs)$/.test(name) && !name.endsWith(".d.ts") && !isWeb(name);
 

@@ -1,0 +1,42 @@
+.ticker {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 32px 24px;
+}
+.ticker-body {
+  max-width: var(--content);
+  margin: 0 auto;
+}
+.ticker h1 {
+  font-size: calc(20px * var(--text-scale));
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-bottom: 4px;
+}
+.ticker table {
+  width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.ticker th,
+.ticker td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+}
+.ticker th {
+  font-weight: 500;
+  color: var(--text-2);
+}
+.ticker th:first-child,
+.ticker td:first-child {
+  text-align: left;
+}
+.ticker .up {
+  color: var(--ok);
+}
+.ticker .down {
+  color: var(--err);
+}

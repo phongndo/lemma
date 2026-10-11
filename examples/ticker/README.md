@@ -3,8 +3,12 @@
 Made-up prices for a few symbols, moving by a random walk, and a page in the
 web app that shows them live. It is the smallest example of a plugin with a
 host half and a web half: [`ticker.ts`](ticker.ts) adds two
-[channels](../../packages/contracts/src/channels.ts), and [`web.js`](web.js)
-reads them through the `Client` capability. Both define the id `ticker`, so
+[channels](../../packages/contracts/src/channels.ts), and [`web.tsx`](web.tsx)
+reads them through the `Client` capability. The host compiles `web.tsx`
+(TypeScript, Solid's JSX, and [`ticker.css`](ticker.css) as its `styles`), and
+its imports of `solid-js` and `@lemma/*` are the page's own; it takes the
+`Quote` type from `ticker.ts` with `import type`, which brings none of the host
+half's code into the page. Both define the id `ticker`, so
 one row in `config.jsonc` turns both on or off, and the web app runs its half
 only while the host's runs. [`package.json`](package.json)'s `lemma` manifest
 says where each half is. Neither needs a change to Lemma's contracts, its

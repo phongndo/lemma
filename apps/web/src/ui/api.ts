@@ -2,16 +2,28 @@ import * as solid from "solid-js";
 import html from "solid-js/html";
 import * as store from "solid-js/store";
 import * as web from "solid-js/web";
-import { AgentChannels } from "@lemma/agent";
-import { CommandChannels } from "@lemma/commands";
-import { LlmChannels } from "@lemma/llm";
-import { NewThreadRoute, SessionChannels, ThreadRoute } from "@lemma/sessions";
-import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
-import { definePlugin, Event, Hook } from "@lemma/core";
-import { defineRoute, isRoute } from "@lemma/router";
+import * as agent from "@lemma/agent";
+import * as agentPrompt from "@lemma/agent/prompt";
+import * as clientFormat from "@lemma/client/format";
+import * as commandsContract from "@lemma/commands";
+import * as runtimeContracts from "@lemma/contracts";
+import * as core from "@lemma/core";
+import * as devtoolsContract from "@lemma/devtools";
+import * as llmContract from "@lemma/llm";
+import * as router from "@lemma/router";
+import * as routerSolid from "@lemma/router-solid";
+import * as sessions from "@lemma/sessions";
+import * as tools from "@lemma/tools";
+import * as workspaceContract from "@lemma/workspace";
 import * as defaults from "@lemma/look-kit/defaults";
-import { copyText } from "@lemma/web/clipboard";
-import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/web/paint";
+import * as clipboard from "@lemma/web/clipboard";
+import * as format from "@lemma/web/format";
+import * as keys from "@lemma/web/keys";
+import * as match from "@lemma/web/match";
+import * as now from "@lemma/web/now";
+import * as paint from "@lemma/web/paint";
+import * as quickPick from "@lemma/web/quick-pick";
+import * as storage from "@lemma/web/storage";
 import * as actions from "@lemma/actions";
 import * as commands from "@lemma/commands/web";
 import * as devtools from "@lemma/devtools/web";
@@ -47,7 +59,7 @@ export const contractModules = {
   "@lemma/llm/web": llm,
   "@lemma/workspace/web": workspace,
   "@lemma/commands/web": commands,
-  "@lemma/sessions": { NewThreadRoute, ThreadRoute },
+  "@lemma/sessions": { NewThreadRoute: sessions.NewThreadRoute, ThreadRoute: sessions.ThreadRoute },
 };
 // One namespace of them all: a name two of them export would be one's, silently (tests/api.test.ts fails that).
 const contracts = {
@@ -61,8 +73,8 @@ const contracts = {
   ...llm,
   ...workspace,
   ...commands,
-  NewThreadRoute,
-  ThreadRoute,
+  NewThreadRoute: sessions.NewThreadRoute,
+  ThreadRoute: sessions.ThreadRoute,
 };
 
 /**
@@ -95,11 +107,18 @@ export const api = {
    * go through its schemas (`client.channel.call(channels.SessionChannels.list, {})`);
    * by id, they are plain JSON.
    */
-  channels: { SessionChannels, AgentChannels, LlmChannels, WorkspaceChannels, FileChannels, CommandChannels },
+  channels: {
+    SessionChannels: sessions.SessionChannels,
+    AgentChannels: agent.AgentChannels,
+    LlmChannels: llmContract.LlmChannels,
+    WorkspaceChannels: workspaceContract.WorkspaceChannels,
+    FileChannels: workspaceContract.FileChannels,
+    CommandChannels: commandsContract.CommandChannels,
+  },
   /** A route of the plugin's own (`/notes/:id`), for a `Pages` item; links to it are `router.href(route, params)`. */
-  defineRoute,
+  defineRoute: router.defineRoute,
   /** Narrows `router.match()` to a route, with its typed params and search. */
-  isRoute,
+  isRoute: router.isRoute,
   /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. It has no fallback: the plugin provides it. */
   definePart: <P extends Record<string, any>>(name: string): Part<P> => definePart<P>(name),
   /** The order bundled parts are added at: add with a lower one to replace a part. */
@@ -111,7 +130,15 @@ export const api = {
    * replacement for `appearance` uses these to take its place. The rest read the look for a renderer that does
    * not draw with CSS: `tokenColor` gives a token as a plain color, and `onLookChange` says when to draw again.
    */
-  look: { paint, unpaint, currentTheme, onThemeChange, currentToken, tokenColor, onLookChange },
+  look: {
+    paint: paint.paint,
+    unpaint: paint.unpaint,
+    currentTheme: paint.currentTheme,
+    onThemeChange: paint.onThemeChange,
+    currentToken: paint.currentToken,
+    tokenColor: paint.tokenColor,
+    onLookChange: paint.onLookChange,
+  },
   solid,
   web,
   store,
@@ -138,15 +165,59 @@ export const api = {
     Toggle: defaults.Toggle,
     SearchField: defaults.SearchField,
   },
-  copyText,
+  copyText: clipboard.copyText,
   /**
    * For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's
    * context. Its items have no `usePlugin`, so they draw the kit's parts through `partView`, not `defaults`.
    */
-  core: { definePlugin, Event, Hook },
+  core: { definePlugin: core.definePlugin, Event: core.Event, Hook: core.Hook },
   /** Enough of Effect Schema to declare a config and a route's params and search (see `WebSchema`). */
   Schema: WebSchema,
 };
 
 /** What a web half's default export receives (not `WebApi`, the version key a plugin requires). */
 export type WebHalfApi = typeof api;
+
+/**
+ * The page's modules by import specifier, each as CommonJS would export it (a module with only a default export, that
+ * export): what a web half in TypeScript imports. The host compiles its imports of these to reads of this map
+ * (`SHARED_MODULES` in `@lemma/contracts`), so it has the page's Solid and contracts, as a `.web.js` has them through
+ * `api`: the runtime's packages and the domains' contracts the bundled web plugins import, never a plugin's own.
+ */
+export const modules: Readonly<Record<string, unknown>> = {
+  "solid-js": solid,
+  "solid-js/web": web,
+  "solid-js/store": store,
+  "solid-js/html": html,
+  "@lemma/core": core,
+  "@lemma/contracts": runtimeContracts,
+  "@lemma/router": router,
+  "@lemma/router-solid": routerSolid,
+  "@lemma/client/format": clientFormat,
+  "@lemma/web": webRuntime,
+  "@lemma/web/clipboard": clipboard,
+  "@lemma/web/format": format,
+  "@lemma/web/keys": keys,
+  "@lemma/web/match": match,
+  "@lemma/web/now": now,
+  "@lemma/web/paint": paint,
+  "@lemma/web/quick-pick": quickPick,
+  "@lemma/web/storage": storage,
+  "@lemma/actions": actions,
+  "@lemma/agent": agent,
+  "@lemma/agent/prompt": agentPrompt,
+  "@lemma/commands": commandsContract,
+  "@lemma/commands/web": commands,
+  "@lemma/devtools": devtoolsContract,
+  "@lemma/devtools/web": devtools,
+  "@lemma/frame": frame,
+  "@lemma/llm": llmContract,
+  "@lemma/llm/web": llm,
+  "@lemma/look": look,
+  "@lemma/sessions": sessions,
+  "@lemma/settings": settings,
+  "@lemma/threads": threads,
+  "@lemma/tools": tools,
+  "@lemma/workspace": workspaceContract,
+  "@lemma/workspace/web": workspace,
+};

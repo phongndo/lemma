@@ -1,4 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["ticker.ts", "tests"]
+  "compilerOptions": {
+    "jsx": "preserve",
+    "jsxImportSource": "solid-js"
+  },
+  "include": ["ticker.ts", "web.tsx", "*.d.ts", "tests"]
 }

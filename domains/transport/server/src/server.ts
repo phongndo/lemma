@@ -127,8 +127,9 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
         if (under(path, "/api/web") && options.web !== undefined && (request.method === "GET" || request.method === "HEAD")) {
           const listed = (yield* options.web).files.find((file) => file.url.slice(0, file.url.indexOf("?")) === path);
           if (listed === undefined) return HttpServerResponse.jsonUnsafe({ error: "Not found" }, { status: 404 });
-          // The version in the URL makes an edited file a new URL, so nothing needs revalidating by date.
-          return yield* HttpServerResponse.file(listed.path, { headers: { "cache-control": "no-cache" } }).pipe(
+          // The version in the URL makes an edited file a new URL, so nothing needs revalidating by date. A web half
+          // in TypeScript is served as the module the host compiled it to.
+          return yield* HttpServerResponse.file(listed.compiled ?? listed.path, { headers: { "cache-control": "no-cache" } }).pipe(
             Effect.provide(platform),
             Effect.catch(() => Effect.succeed(HttpServerResponse.text("Cannot read file", { status: 500 }))),
           );

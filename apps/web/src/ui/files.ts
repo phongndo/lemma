@@ -1,3 +1,4 @@
+import { SHARED_MODULES } from "@lemma/contracts";
 import type { WebFile } from "@lemma/contracts";
 import type { Plugin } from "@lemma/core";
 import type { LocalPlugin } from "@lemma/composition";
@@ -19,7 +20,9 @@ const isPlugin = (value: unknown): value is Plugin =>
  * `api` (Solid, the contracts, `defineWebPlugin`, the app's components and
  * bundled plugins) and returns one; it runs with the page's permissions
  * and token. It must be the plugin its file is named for (`WebFile.plugin`):
- * the host knows a web half's id by that, without running it. A stylesheet
+ * the host knows a web half's id by that, without running it. One in
+ * TypeScript, which the host compiled, imports the page's modules (`modules`
+ * in `api.ts`), which it reads where `SHARED_MODULES` says. A stylesheet
  * is linked after the app's own, so it can override any `--` token. File URLs
  * change when a file does, so an edited file is imported again.
  *
@@ -27,7 +30,13 @@ const isPlugin = (value: unknown): value is Plugin =>
  * loaded, the page compiles the app's classes and the scripts' into one sheet
  * of utilities (`ui/utilities.ts`), and drops it when none is.
  */
-export function createFileLoader(token: string | undefined, api: () => Promise<unknown>) {
+/** What web halves are given: the `api` a half's default export receives, and the page's `modules` a compiled one imports. */
+export interface HalfApi {
+  readonly api: unknown;
+  readonly modules: Readonly<Record<string, unknown>>;
+}
+
+export function createFileLoader(token: string | undefined, halves: () => Promise<HalfApi>) {
   const withToken = (url: string) => (token === undefined ? url : `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`);
   const links = new Map<string, HTMLLinkElement>();
   // By URL: an unchanged file keeps the same plugin definitions, which the kernel leaves running on reload.
@@ -92,9 +101,10 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
   const importScript = async (file: WebFile): Promise<LoadedFiles> => {
     const where = `${file.source === "user" ? "~/.lemma/plugins" : ".lemma/plugins"}/${file.name}`;
     try {
+      const { api, modules } = await halves();
+      (globalThis as Record<symbol, unknown>)[Symbol.for(SHARED_MODULES)] ??= modules;
       const module: { default?: unknown } = await import(/* @vite-ignore */ withToken(file.url));
-      const made =
-        typeof module.default === "function" && !isPlugin(module.default) ? (module.default as (api: unknown) => unknown)(await api()) : module.default;
+      const made = typeof module.default === "function" && !isPlugin(module.default) ? (module.default as (api: unknown) => unknown)(api) : module.default;
       if (!isPlugin(made)) {
         return { plugins: [], problems: [`${where}: its default export is no plugin; export defineWebPlugin({ … }), or a function of the api returning one`] };
       }

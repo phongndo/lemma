@@ -7,7 +7,8 @@
     ".": "./src/main.ts",
     "./paths": "./src/paths.ts",
     "./bundled": "./src/bundled.ts",
-    "./runtime": "./src/runtime.ts"
+    "./runtime": "./src/runtime.ts",
+    "./compile": "./src/compile.ts"
   },
   "scripts": {
     "start": "node --conditions=lemma-source src/main.ts",
@@ -15,6 +16,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@babel/core": "7.29.7",
     "@lemma/agent": "workspace:*",
     "@lemma/agent-loop": "workspace:*",
     "@lemma/commands": "workspace:*",
@@ -47,10 +49,13 @@
     "@lemma/workspace-commands": "workspace:*",
     "@lemma/workspace-local": "workspace:*",
     "@lemma/workspace-search-fff": "workspace:*",
+    "babel-preset-solid": "1.9.15",
     "effect": "4.0.1",
+    "esbuild": "0.28.2",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
+    "@types/babel__core": "7.20.5",
     "@types/node": "24.19.0",
     "typescript": "7.0.2",
     "vitest": "5.0.2"

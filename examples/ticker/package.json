@@ -13,13 +13,17 @@
     "effect": "4.0.1"
   },
   "devDependencies": {
+    "@lemma/actions": "workspace:*",
     "@lemma/cli": "workspace:*",
+    "@lemma/router": "workspace:*",
+    "@lemma/web": "workspace:*",
     "@types/node": "24.19.0",
+    "solid-js": "1.9.15",
     "typescript": "7.0.2",
     "vitest": "5.0.2"
   },
   "lemma": {
     "host": "./ticker.ts",
-    "web": "./web.js"
+    "web": "./web.tsx"
   }
 }

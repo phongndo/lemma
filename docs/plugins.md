@@ -50,6 +50,33 @@ export default ({ defineWebPlugin, contracts: { Slots, ToolViews } }) =>
   });
 ```
 
+A web half in TypeScript (`.web.ts`, or `.web.tsx` with Solid's JSX) imports
+what that one takes from its argument, as a host half imports from the host:
+
+```ts
+// ~/.lemma/plugins/greet.web.ts
+import { ToolViews } from "@lemma/threads";
+import { defineWebPlugin, Slots } from "@lemma/web";
+
+export default defineWebPlugin({
+  id: "greet",
+  requires: { slots: Slots },
+  setup: ({ slots }) => {
+    slots.add(ToolViews, { id: "greet", icon: "chat", summary: (args) => ({ primary: String(args?.name ?? "") }) });
+  },
+});
+```
+
+The host compiles it to one module, again on every change. Its imports of
+`solid-js` and Lemma's packages (`@lemma/web`, a domain's contract) are the
+page's own instances, and its own files, npm packages, and stylesheets (as
+text, for `styles`) are bundled in. `effect` is not the page's to share: a web
+half declares its config with `WebSchema` from `@lemma/web` and calls channels
+by id. A half that does not compile is reported with its file, line, and
+column: by the host as it loads it, by `lemma plugins check`, and by the web
+app as a half that failed to load. [ticker](../examples/ticker/README.md)'s
+web half is written this way.
+
 Both halves define the id `greet`, so they are one plugin: one row in
 `config.jsonc` turns both on or off, and the web app runs the web half only
 while the host half runs. A plugin with several files is a folder whose
@@ -172,8 +199,8 @@ this checkout, as the host runs them. Then, in its folder:
   tools did, and what the session logged.
 - `lemma plugins check` starts a host of its own with the plugin and says
   what the plugin does (what it provides, requires, handles, and adds), or why
-  it does not run: a setup that threw, a missing web half, a folder named
-  otherwise than its plugin.
+  it does not run: a setup that threw, a web half missing or not compiling, a
+  folder named otherwise than its plugin.
 - `lemma dev` links it into your plugins directory, so the host you have
   running loads it, and again on every change; Ctrl-C unlinks it. With no host
   running, or `--isolated`, it runs one of its own, without your sessions,

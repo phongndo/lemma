@@ -8,6 +8,7 @@ import { Effect, Exit, Option, Stream } from "effect";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
 import { makeCore, Registries } from "@lemma/core";
 import { Channels, elementsOf, resultOf } from "@lemma/contracts";
+import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Channel, ChannelCall, ChannelStream } from "@lemma/contracts";
 import ticker, { opening, step } from "../ticker.ts";
 import type { Quote } from "../ticker.ts";
@@ -105,7 +106,7 @@ describe("as a plugin file in a real host", () => {
       plugins: { ticker: { config: { intervalMs: 100 } } },
       prepare: async (home) => {
         await mkdir(join(home, "plugins", "ticker"), { recursive: true });
-        for (const name of ["package.json", "ticker.ts", "web.js"]) await copyFile(join(folder, name), join(home, "plugins", "ticker", name));
+        for (const name of ["package.json", "ticker.ts", "web.tsx", "ticker.css"]) await copyFile(join(folder, name), join(home, "plugins", "ticker", name));
       },
     });
     home = started.home;
@@ -120,7 +121,15 @@ describe("as a plugin file in a real host", () => {
     expect((JSON.parse(await lemma("plugins", "--json")) as { id: string; state: string }[]).find((plugin) => plugin.id === "ticker")).toMatchObject({
       state: "active",
     });
-    expect(await lemma("plugins")).toMatch(/user\/ticker\/web\.js\s+script/);
+    expect(await lemma("plugins")).toMatch(/user\/ticker\/web\.tsx\s+script/);
+    // Served as the host compiled it: one module, its JSX calls into the page's Solid, its stylesheet within.
+    const discovery = await Effect.runPromise(readDiscovery(home));
+    const served = await fetch(new URL("/api/web/user/ticker/web.tsx", discovery!.url), { headers: { authorization: `Bearer ${discovery!.token}` } });
+    expect(served.headers.get("content-type")).toMatch(/javascript/);
+    const code = await served.text();
+    expect(code).toContain('shared["solid-js/web"]');
+    expect(code).toContain(".ticker table {");
+    expect(code).not.toMatch(/^import /m);
   }, 30_000);
 
   test("lists its channels, quotes a symbol, and streams prices", async () => {

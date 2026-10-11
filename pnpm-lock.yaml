@@ -342,6 +342,9 @@ importers:
       '@lemma/threads-view':
         specifier: workspace:*
         version: link:../../domains/threads/view
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       '@lemma/tools-bash':
         specifier: workspace:*
         version: link:../../domains/tools/bash
@@ -2635,12 +2638,24 @@ importers:
         specifier: 4.0.1
         version: 4.0.1
     devDependencies:
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../domains/actions/contract
       '@lemma/cli':
         specifier: workspace:*
         version: link:../../apps/cli
+      '@lemma/router':
+        specifier: workspace:*
+        version: link:../../packages/router
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../packages/web
       '@types/node':
         specifier: 24.19.0
         version: 24.19.0
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -2766,6 +2781,9 @@ importers:
 
   packages/host:
     dependencies:
+      '@babel/core':
+        specifier: 7.29.7
+        version: 7.29.7
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../domains/agent/contract
@@ -2862,13 +2880,22 @@ importers:
       '@lemma/workspace-search-fff':
         specifier: workspace:*
         version: link:../../domains/workspace/search-fff
+      babel-preset-solid:
+        specifier: 1.9.15
+        version: 1.9.15(@babel/core@7.29.7)(solid-js@1.9.15)
       effect:
         specifier: 4.0.1
         version: 4.0.1
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
     devDependencies:
+      '@types/babel__core':
+        specifier: 7.20.5
+        version: 7.20.5
       '@types/node':
         specifier: 24.19.0
         version: 24.19.0

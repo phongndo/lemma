@@ -26,7 +26,7 @@ const start = async () => {
   }
   // `?safe` runs the app as shipped, ignoring the rows and the plugin directories: the way back from a broken customization.
   // The api for web halves loads only when one needs it, keeping it out of the app's own bundle.
-  const api = () => import("./ui/api.ts").then((module) => module.api);
+  const api = () => import("./ui/api.ts");
   // The addresses links from outside the page name: the thread routes `lemma open` and deep links use, and settings.
   const appRoutes = [NewThreadRoute, ThreadRoute, SettingsRoute];
   await boot({ host, token, bundled, appRoutes, api, element: document.getElementById("root")!, safe: params.has("safe") });

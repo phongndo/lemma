@@ -8,6 +8,7 @@ import { chromium, firefox, webkit } from "playwright";
 import type { Page } from "playwright";
 import { createServer } from "vite";
 import { domainPlugins } from "../../../scripts/plugins.ts";
+import { compileWebHalf } from "../../../packages/host/src/compile.ts";
 
 /**
  * The web app's replaceability, checked on the real composition: the dev
@@ -1143,7 +1144,28 @@ const parts = async () => {
     "examples/todo added no view of its tool's calls",
   );
   expectNoErrors("an example's web half");
-  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
+
+  // A web half in TypeScript and Solid's JSX, as the host compiles it: examples/ticker imports solid-js and the
+  // contracts, which are the page's own, and adds a page and an action.
+  const ticker = await compileWebHalf(resolve(dirname(fileURLToPath(import.meta.url)), "../../../examples/ticker/web.tsx"));
+  assert.ok(ticker.ok, `examples/ticker does not compile: ${ticker.ok ? "" : ticker.error}`);
+  await page.evaluate((source) => {
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setWebFiles([{ name: "ticker/web.tsx", source: "user", kind: "script", path: "/plugins/ticker/web.tsx", url }]);
+  }, ticker.code);
+  await page.waitForFunction(async () => {
+    const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    return (window as any).lemma.slots().get(Actions, "ticker.show") !== undefined;
+  });
+  await page.evaluate(async () => {
+    const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    (window as any).lemma.slots().get(Actions, "ticker.show").run();
+  });
+  await page.waitForSelector(".ticker h1 >> text=Ticker").catch(() => assert.fail("examples/ticker's page did not show"));
+  // The mock host serves no ticker: the page says why it has no prices, drawn by its <Show>.
+  await page.waitForSelector(".ticker p.muted:not(.small)").catch(() => assert.fail("examples/ticker's page did not say why it has no prices"));
+  expectNoErrors("a web half in TypeScript");
+  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's; one in TypeScript and JSX, compiled by the host, adds a page";
 };
 
 // 8–9: the devtools, and a turn while it runs.

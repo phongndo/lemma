@@ -25,7 +25,7 @@ and Alt with the send key queues the prompt for after the turn.
 2. Web halves and stylesheets in `~/.lemma/plugins/` and, for a trusted
    project, `<project>/.lemma/plugins/` (laid out as
    [Configuration](../../docs/configuration.md#your-plugins) says): a web half
-   (`notes.web.js`, a folder plugin's `lemma.web`) loads as a plugin, and a
+   (`notes.web.js`, `notes.web.tsx`, a folder plugin's `lemma.web`) loads as a plugin, and a
    stylesheet applies over the app's styles. Every color, radius, width, and
    stacking level is a `--` token in [`styles.css`](src/styles.css), and a
    stylesheet's rules win over the app's own.
@@ -160,7 +160,11 @@ it.
 
 A web half needs no build step: its default export may be a function that
 receives [the api](src/ui/api.ts), including Solid, the contracts,
-`defineWebPlugin`, and `html` (Solid's JSX without a compiler).
+`defineWebPlugin`, and `html` (Solid's JSX without a compiler). One in
+TypeScript (`.web.ts`, or `.web.tsx` with Solid's JSX), which the host
+compiles, imports them instead: `solid-js` and the page's `@lemma/*` modules
+(`modules` in [the api](src/ui/api.ts)) are the page's own instances
+([Writing plugins](../../docs/plugins.md#a-plugin-in-a-file)).
 
 ```js
 // ~/.lemma/plugins/tool-count.web.js
@@ -223,9 +227,9 @@ the contracts it is written for (`contracts.WEB_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while
 it is off. Draw what a slot holds with `api.parts.Contained`, `Each`, or
-`First`, so an item that throws fails alone. A file is one ES module: bundle
-anything it imports, and take from the api what it offers, so it shares the
-page's module instances. Web halves run with the page's permissions and token,
+`First`, so an item that throws fails alone. A `.web.js` is one ES module as
+it is: bundle anything it imports, and take from the api what it offers, so it
+shares the page's module instances; the host bundles one in TypeScript. Web halves run with the page's permissions and token,
 as host halves run with the host's.
 
 `Client` is the page's connection to the host: its status, the host's own

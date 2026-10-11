@@ -50,12 +50,12 @@ needs of it), and by the web app for a web-only one.
 `~/.lemma/plugins/` and a trusted project's `<project>/.lemma/plugins/` hold
 your plugins. What is there loads by itself, and again when it changes:
 
-| Entry                          | What it is                                                                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `approvals.ts` (`.js`, `.mjs`) | A host half, which the host runs                                                                                                           |
-| `notes.web.js` (`.web.mjs`)    | A web half, which open web apps run                                                                                                        |
-| `theme.css`                    | A stylesheet the web app applies after its own                                                                                             |
-| `ticker/`                      | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
+| Entry                          | What it is                                                                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `approvals.ts` (`.js`, `.mjs`) | A host half, which the host runs                                                                                                            |
+| `notes.web.js` (`.web.mjs`)    | A web half, which open web apps run; in TypeScript (`.web.ts`, `.web.tsx`), the host compiles it first ([Writing plugins](plugins.md))      |
+| `theme.css`                    | A stylesheet the web app applies after its own                                                                                              |
+| `ticker/`                      | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.tsx", "styles": ["./ticker.css"] }` |
 
 A plugin is one id, with a host half, a web half, or both. Both halves of one
 plugin define its id, so its one row decides both, and the web app runs the

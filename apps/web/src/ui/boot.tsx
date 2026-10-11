@@ -15,6 +15,7 @@ import type { AnyRoute } from "@lemma/router";
 import { createWebRuntime, provides } from "../runtime/index.ts";
 import { routesOf, First, SlotsContext, Root, Slots } from "@lemma/web";
 import { createFileLoader } from "./files.ts";
+import type { HalfApi } from "./files.ts";
 import type { WebPluginsService, SlotsService } from "@lemma/web";
 
 /**
@@ -45,8 +46,8 @@ export interface BootOptions {
    * whose page's plugin is off says so rather than that nothing lives there.
    */
   readonly appRoutes: readonly AnyRoute[];
-  /** Loads the object web halves receive (see `createFileLoader`). */
-  readonly api: () => Promise<unknown>;
+  /** Loads what web halves are given: the `api` and the page's modules (see `createFileLoader`). */
+  readonly api: () => Promise<HalfApi>;
   readonly element: HTMLElement;
   /** `?safe`: ignore the rows and the plugin directories' files, running the app as shipped. */
   readonly safe: boolean;

@@ -246,7 +246,8 @@ export class HostControl extends Context.Service<
  * web app loads: a script is a web half (`notes.web.js`, or a plugin
  * package's `lemma.web`), an ES module whose default export makes web
  * plugins; a style is a stylesheet applied after the app's own (`theme.css`,
- * or a package's `lemma.styles`).
+ * or a package's `lemma.styles`). A web half in TypeScript (`notes.web.ts`,
+ * `notes.web.tsx` with Solid's JSX) is compiled by the host to one module.
  */
 export const WebFile = Schema.Struct({
   /** Its path in the plugins directory, with `/` on every platform: `notes.web.js`, `ticker/web.js`. */
@@ -261,10 +262,20 @@ export const WebFile = Schema.Struct({
   kind: Schema.Literals(["script", "style"]),
   /** Where it is on the host. */
   path: Schema.String,
+  /** For a web half in TypeScript, the module the host compiled it to, which the transport serves in its place. */
+  compiled: Schema.optional(Schema.String),
   /** Served by the transport under `/api` (it needs the token); changes when the file does. */
   url: Schema.String,
 });
 export type WebFile = typeof WebFile.Type;
+
+/**
+ * Where a compiled web half finds the page's modules: `globalThis[Symbol.for(SHARED_MODULES)]`, by import specifier
+ * (`solid-js`, `@lemma/web`, a domain's contract), each as CommonJS would export it. The host compiles the half's
+ * imports of them to reads of it, so the half shares Solid's reactivity and the contracts' tags with the page; what
+ * else it imports, its own files and npm packages, is bundled into it.
+ */
+export const SHARED_MODULES = "lemma.modules";
 
 /**
  * What the web app needs to plan its halves: the rows of both config files

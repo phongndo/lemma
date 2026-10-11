@@ -1,6 +1,9 @@
+import { execFile } from "node:child_process";
 import { readFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { ExitCode } from "../src/cli.ts";
 import { invoke } from "./invoke.ts";
@@ -14,13 +17,16 @@ describe("writing a plugin", () => {
   });
   afterAll(() => rm(dir, { recursive: true, force: true }));
 
-  test("plugins new makes a folder plugin to start from: both halves, a test, and types against this checkout", async () => {
+  test("plugins new makes a folder plugin to start from: both halves, a test, and types against this checkout", { timeout: 60_000 }, async () => {
     const made = await invoke(["plugins", "new", "acme.greet", "--path", folder, "--json"], dir, dir);
     expect(made.code).toBe(ExitCode.ok);
-    expect(JSON.parse(made.out).files).toEqual(["package.json", "plugin.ts", "web.js", "tests/plugin.test.ts", "tsconfig.json", "README.md"]);
-    expect(JSON.parse(await readFile(join(folder, "package.json"), "utf8")).lemma).toEqual({ host: "./plugin.ts", web: "./web.js" });
+    expect(JSON.parse(made.out).files).toEqual(["package.json", "plugin.ts", "web.tsx", "tests/plugin.test.ts", "tsconfig.json", "README.md"]);
+    expect(JSON.parse(await readFile(join(folder, "package.json"), "utf8")).lemma).toEqual({ host: "./plugin.ts", web: "./web.tsx" });
     const tsconfig = JSON.parse(await readFile(join(folder, "tsconfig.json"), "utf8"));
     expect(tsconfig.compilerOptions.paths["@lemma/core/plain"][0]).toMatch(/packages\/core\/src\/plain\/index\.ts$/);
+    // What it wrote type-checks against this checkout, both halves and its test, as an editor would check it.
+    const tsc = fileURLToPath(new URL("../node_modules/.bin/tsc", import.meta.url));
+    await expect(promisify(execFile)(tsc, ["-p", folder])).resolves.toMatchObject({ stdout: "", stderr: "" });
     // Not over what is there, and not with an id that is none.
     expect((await invoke(["plugins", "new", "acme.greet", "--path", folder], dir, dir)).err).toMatch(/is not empty/);
     expect((await invoke(["plugins", "new", "Acme Greet"], dir, dir)).code).toBe(ExitCode.usage);
@@ -36,9 +42,17 @@ describe("writing a plugin", () => {
     expect(checked.code).toBe(ExitCode.ok);
     expect(JSON.parse(checked.out)).toMatchObject({
       plugins: [{ id: "acme.greet", state: "active", adds: ["lemma/tools: acme_greet"] }],
-      web: "./web.js",
+      web: "./web.tsx",
       problems: [],
     });
+    // Its web half, compiled as the host compiles it for the page.
+    const web = join(folder, "web.tsx");
+    const written = await readFile(web, "utf8");
+    await writeFile(web, written.replace("</span>", "</div>"));
+    const uncompiled = await invoke(["plugins", "check", folder, "--json"], dir, dir);
+    expect(uncompiled.code).toBe(ExitCode.failed);
+    expect(JSON.parse(uncompiled.out).problems).toEqual([expect.stringMatching(/^Its web half \.\/web\.tsx does not compile:\n {4}web\.tsx:\d+:\d+: /)]);
+    await writeFile(web, written);
     const plugin = join(folder, "plugin.ts");
     await writeFile(
       plugin,

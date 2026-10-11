@@ -32,7 +32,7 @@ describe("listWebFiles", () => {
       await writeFile(join(user, "scratch", "web.js"), "");
       await writeFile(join(projectPluginsDir(paths), "panel.web.mjs"), "");
 
-      const untrusted = await Effect.runPromise(listWebFiles(paths, false));
+      const { files: untrusted } = await Effect.runPromise(listWebFiles(paths, false));
       expect(untrusted.map((file) => [file.source, file.name, file.kind])).toEqual([
         ["user", "composer.web.js", "script"],
         ["user", "theme.css", "style"],
@@ -43,7 +43,7 @@ describe("listWebFiles", () => {
       expect(untrusted[0]!.url).toMatch(/^\/api\/web\/user\/composer\.web\.js\?v=\d+$/);
       expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user\/ticker\/web\.js\?v=\d+$/);
 
-      const trusted = await Effect.runPromise(listWebFiles(paths, true));
+      const { files: trusted } = await Effect.runPromise(listWebFiles(paths, true));
       expect(trusted.map((file) => `${file.source}/${file.name}`).slice(-1)).toEqual(["project/panel.web.mjs"]);
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -52,6 +52,6 @@ describe("listWebFiles", () => {
 
   test("a missing directory lists nothing", async () => {
     const paths = resolvePaths({ env: { LEMMA_HOME: join(tmpdir(), "lemma-absent-home") }, cwd: join(tmpdir(), "lemma-absent-project") });
-    expect(await Effect.runPromise(listWebFiles(paths, true))).toEqual([]);
+    expect(await Effect.runPromise(listWebFiles(paths, true))).toEqual({ files: [], problems: [] });
   });
 });

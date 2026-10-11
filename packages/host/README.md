@@ -24,6 +24,13 @@ edit rows in place, keeping comments, and write the file whole (through a
 link, to the file it points to); `compositionInfo`'s id is stable across
 processes, because session `request` events record it.
 
+The host lists the web halves and stylesheets in the plugin directories for
+the web app (`listWebFiles`), and compiles a web half in TypeScript or JSX
+(`compileWebHalf`, `@lemma/host/compile`) into `<home>/cache/web`, with
+esbuild and Solid's Babel preset loaded only when there is one to compile.
+[Writing plugins](../../docs/plugins.md#a-plugin-in-a-file) says what such a
+half may import.
+
 ## The host runtime
 
 The host provides `Paths`, `HostControl`, `Interaction`, `Trace`, and the host
