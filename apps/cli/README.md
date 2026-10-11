@@ -127,7 +127,7 @@ so the two show the same records and accept the same queries.
   a step's deltas that its answer in the log overtook are left out, since the
   answer has them.
 - **Events.** `lemma events` follows the host's own events (notices,
-  questions, plugin, channel, and UI changes) and the bundled domains'
+  questions, plugin, channel, and web changes) and the bundled domains'
   streams: `agent.activity`, `sessions.changes`, `llm.changes`, and
   `commands.changes`. `--session <id>` keeps that session's turns and changes
   and adds its `sessions.log` from now on. A stream that its plugin's reload

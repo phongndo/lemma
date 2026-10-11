@@ -1,14 +1,12 @@
 import type { SessionInfo } from "@lemma/sessions";
 import { relativeTime, tildePath } from "@lemma/web/format";
-import { sessionTitle } from "@lemma/threads";
+import { sessionTitle, Threads } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Threads } from "@lemma/threads";
-import { Client, Slots } from "@lemma/web";
+import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import type { SettingsService } from "@lemma/settings";
 import type { ThreadsService } from "@lemma/threads";
 import type { ClientService } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
 import { ArchiveIcon } from "@lemma/look";
 import styles from "./archived-page.css?inline";
 

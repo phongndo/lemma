@@ -4,18 +4,16 @@ import type { ConnectionStatus } from "@lemma/client";
 import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels } from "@lemma/llm";
-import { SessionChannels } from "@lemma/sessions";
+import { SessionChannels, ThreadRoute } from "@lemma/sessions";
 import type { RuntimeEvent } from "@lemma/contracts";
 import type { AgentActivity } from "@lemma/agent";
 import type { CommandInfo } from "@lemma/commands";
 import type { LlmChange } from "@lemma/llm";
 import type { SessionsChange } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
-import { ThreadRoute } from "@lemma/sessions";
 import type { DevtoolsPanel } from "@lemma/devtools";
-import type { ClientService, RouterService } from "@lemma/web";
+import type { ClientService, RouterService, SlotItem } from "@lemma/web";
 import { XIcon } from "@lemma/look";
-import type { SlotItem } from "@lemma/web";
 
 export const EVENTS_PANEL = "devtools.events";
 /** Lines kept, newest last; older ones drop off the top. */

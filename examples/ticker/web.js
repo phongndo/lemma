@@ -23,7 +23,7 @@ export default ({
 
   return defineWebPlugin({
     id: "ticker",
-    api: 3,
+    api: 4,
     routes: [TickerRoute],
     styles,
     requires: { slots: Slots, client: Client, router: Router },

@@ -1,15 +1,11 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import { bindingOf, formatKeys } from "@lemma/web/keys";
-import { KEYMAP_PLUGIN, bindingRows, conflicts, defaultKeys, formatBindings, keysFor, labelOf, overridesFrom, withOverride } from "@lemma/actions";
-import type { KeyOverrides } from "@lemma/actions";
+import { KEYMAP_PLUGIN, bindingRows, conflicts, defaultKeys, formatBindings, keysFor, labelOf, overridesFrom, withOverride, Actions } from "@lemma/actions";
+import type { KeyOverrides, Action } from "@lemma/actions";
 import { matchesQuery } from "@lemma/web/match";
-import { Actions } from "@lemma/actions";
 import { SectionIds, Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Notify, Slots, WebPlugins } from "@lemma/web";
-import type { Action } from "@lemma/actions";
-import type { WebPluginsService } from "@lemma/web";
-import type { SlotItem, SlotsService } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
+import type { WebPluginsService, SlotItem, SlotsService } from "@lemma/web";
 import { CommandIcon, PlusIcon, Popover, RefreshIcon, SearchField, SearchIcon, XIcon } from "@lemma/look";
 import styles from "./keys-page.css?inline";
 
@@ -19,7 +15,7 @@ type Item = SlotItem<Action>;
 
 interface Deps {
   readonly slots: SlotsService;
-  readonly uiPlugins: WebPluginsService;
+  readonly webPlugins: WebPluginsService;
   readonly overrides: () => KeyOverrides;
   readonly save: (next: KeyOverrides) => Promise<void>;
   /** Every action's keys now, for finding conflicts. */
@@ -266,7 +262,7 @@ function KeysBody(props: { deps: Deps }) {
   const { deps } = props;
   const [query, setQuery] = createSignal("");
   const [adding, setAdding] = createSignal<Item>();
-  const keymapOn = () => deps.uiPlugins.list().some((plugin) => plugin.id === KEYMAP_PLUGIN && plugin.state === "active");
+  const keymapOn = () => deps.webPlugins.list().some((plugin) => plugin.id === KEYMAP_PLUGIN && plugin.state === "active");
   const actions = createMemo(() => new Map(deps.slots.list(Actions).map((action) => [action.id, action])));
   const rows = createMemo(() => bindingRows([...actions().values()], deps.overrides(), query(), formatKeys));
   // A line per row by its action and key, so one being re-recorded survives the list updating.
@@ -329,20 +325,20 @@ function KeysBody(props: { deps: Deps }) {
 export default defineWebPlugin({
   id: "actions.keys-page",
   styles,
-  requires: { slots: Slots, settings: Settings, uiPlugins: WebPlugins, notify: Notify },
-  setup: ({ slots, settings, uiPlugins, notify }) => {
+  requires: { slots: Slots, settings: Settings, webPlugins: WebPlugins, notify: Notify },
+  setup: ({ slots, settings, webPlugins, notify }) => {
     // What was just saved, shown until the plugin list catches up with it.
     const [pending, setPending] = createSignal<KeyOverrides>();
-    const overrides = () => pending() ?? overridesFrom(uiPlugins.list());
+    const overrides = () => pending() ?? overridesFrom(webPlugins.list());
     const save = async (next: KeyOverrides) => {
-      const keymap = uiPlugins.list().find((candidate) => candidate.id === KEYMAP_PLUGIN);
+      const keymap = webPlugins.list().find((candidate) => candidate.id === KEYMAP_PLUGIN);
       if (keymap === undefined) {
         notify.toast({ level: "error", message: "The keymap plugin is not installed" });
         return;
       }
       setPending(next);
       try {
-        await uiPlugins.setConfig(keymap, { bindings: Object.keys(next).length === 0 ? null : formatBindings(next) });
+        await webPlugins.setConfig(keymap, { bindings: Object.keys(next).length === 0 ? null : formatBindings(next) });
       } catch (error) {
         notify.report(error, "Could not save the shortcut");
       } finally {
@@ -350,7 +346,7 @@ export default defineWebPlugin({
       }
     };
     const bound = () => slots.list(Actions).map((action) => ({ id: action.id, keys: keysFor(action.id, action.keys, overrides()) }));
-    const deps: Deps = { slots, uiPlugins, overrides, save, bound };
+    const deps: Deps = { slots, webPlugins, overrides, save, bound };
 
     slots.add(SettingsSections, {
       id: SECTION,

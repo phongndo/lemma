@@ -3,13 +3,10 @@ import { WorkspaceChannels } from "@lemma/workspace";
 import type { WorkspaceStatus } from "@lemma/workspace";
 import { load, loadJson, save } from "@lemma/web/storage";
 import { branchSlug } from "./slug.ts";
-import { knownProjects, patchProjectSettings, projectName } from "@lemma/workspace/web";
-import type { ProjectSettings } from "@lemma/workspace/web";
+import { knownProjects, patchProjectSettings, projectName, Workspace } from "@lemma/workspace/web";
+import type { ProjectSettings, WorktreeDraft } from "@lemma/workspace/web";
 import { Threads } from "@lemma/threads";
-import { Client, Notify } from "@lemma/web";
-import { Workspace } from "@lemma/workspace/web";
-import type { WorktreeDraft } from "@lemma/workspace/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
 const PROJECTS_KEY = "lemma.projects";
 const WORKTREE_KEY = "lemma.newWorktree";

@@ -212,7 +212,7 @@ release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
 `Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
 `propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps
 working) becomes the plugin's settings form. `styles` apply while it runs.
-`api: 3` says which version of
+`api: 4` says which version of
 the contracts it is written for (`contracts.WEB_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while

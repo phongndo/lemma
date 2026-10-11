@@ -13,9 +13,7 @@ import * as look from "@lemma/look";
 import * as llm from "@lemma/llm/web";
 import * as threads from "@lemma/threads";
 import { TogglePart } from "@lemma/look";
-import { Notify, Slots, WEB_API, WebApi } from "@lemma/web";
-import { defineWebPlugin, extendWebPlugin, routesOf } from "@lemma/web";
-import { definePart, defineSlot, fallbackOf } from "@lemma/web";
+import { Notify, Slots, WEB_API, WebApi, defineWebPlugin, extendWebPlugin, routesOf, definePart, defineSlot, fallbackOf } from "@lemma/web";
 import type { Part, SlotsService } from "@lemma/web";
 
 /** Resolves once `ready` holds; slot changes from a plugin starting or stopping arrive asynchronously. */

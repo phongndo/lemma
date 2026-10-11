@@ -546,10 +546,10 @@ const program = Effect.gen(function* () {
    * half or a stylesheet is no part of that, and waits on no host half's file being fixed.
    */
   const refreshWebFiles = Effect.gen(function* () {
-    const files = yield* listUiFiles(paths, applied.trusted);
-    const previous = applied.ui;
-    applied = { ...applied, ui: { ...previous, files } };
-    yield* publishUi(loader, previous, applied.ui).pipe(Effect.ignore);
+    const files = yield* listWebFiles(paths, applied.trusted);
+    const previous = applied.web;
+    applied = { ...applied, web: { ...previous, files } };
+    yield* publishWeb(loader, previous, applied.web).pipe(Effect.ignore);
   });
 
   // A plugin's file added, edited, or removed: its host half reloads (an unchanged file keeps its definition, so only

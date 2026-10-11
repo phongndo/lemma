@@ -414,12 +414,12 @@ export const createMockHost = (): Host => {
     },
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
-  let ui: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+  let composition: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
   /** Writes rows as the host does into its config file, and tells the page, which plans its web halves from them. */
   const writeRows = (rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) => {
-    const next = { ...ui.plugins };
-    const enabledIn = { ...ui.enabledIn };
-    const configIn = { ...ui.configIn };
+    const next = { ...composition.plugins };
+    const enabledIn = { ...composition.enabledIn };
+    const configIn = { ...composition.configIn };
     for (const [id, row] of Object.entries(rows)) {
       const entry: { enabled?: boolean; config?: Record<string, unknown> } = { ...(next[id] as { enabled?: boolean; config?: Record<string, unknown> }) };
       if (row.enabled !== undefined) {
@@ -442,8 +442,8 @@ export const createMockHost = (): Host => {
       if (Object.keys(entry).length === 0) delete next[id];
       else next[id] = entry;
     }
-    ui = { ...ui, plugins: next, enabledIn, configIn };
-    emit({ type: "web-changed", web: ui });
+    composition = { ...composition, plugins: next, enabledIn, configIn };
+    emit({ type: "web-changed", web: composition });
   };
   /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
   let heldStarts: (() => void)[] | undefined;
@@ -451,8 +451,8 @@ export const createMockHost = (): Host => {
   Object.assign(window, {
     lemmaMock: {
       setWebFiles: (files: WebComposition["files"]) => {
-        ui = { ...ui, files };
-        emit({ type: "web-changed", web: ui });
+        composition = { ...composition, files };
+        emit({ type: "web-changed", web: composition });
       },
       /** Holds each `turn-started` back until released: what a slow connection does to a prompt's acceptance. */
       holdTurnStarted: () => {
@@ -1601,7 +1601,7 @@ export const createMockHost = (): Host => {
       },
     },
     web: {
-      composition: async () => ui,
+      composition: async () => composition,
     },
     status: () => status,
     onStatus: (listener) => {

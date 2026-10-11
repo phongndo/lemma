@@ -159,16 +159,16 @@ export const formatConfig = (plugin: PluginStatus): string => {
  * What the host knows of the web app's halves: rows naming plugins the host does not have (the web app's), and the web
  * halves and stylesheets in the plugin directories. Empty when there are none.
  */
-export const formatWebHalves = (ui: WebComposition, hostIds: ReadonlySet<string>): string => {
-  const rows = Object.entries(ui.plugins)
+export const formatWebHalves = (composition: WebComposition, hostIds: ReadonlySet<string>): string => {
+  const rows = Object.entries(composition.plugins)
     .filter(([id]) => !hostIds.has(id))
     .map(([id, row]) => [
       id,
       row.enabled === false ? "off" : row.enabled === true ? "on" : "",
       row.config === undefined ? "" : JSON.stringify(row.config),
-      ui.enabledIn[id] ?? ui.configIn[id] ?? "",
+      composition.enabledIn[id] ?? composition.configIn[id] ?? "",
     ]);
-  const files = ui.files.map((file) => [`${file.source}/${file.name}`, file.kind, file.path]);
+  const files = composition.files.map((file) => [`${file.source}/${file.name}`, file.kind, file.path]);
   return [
     rows.length ? `Rows for the web app's plugins (its Plugins page lists them all)\n${pad(rows)}` : "",
     files.length ? `Web halves and stylesheets\n${pad(files)}` : "",

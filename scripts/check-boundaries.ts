@@ -142,7 +142,7 @@ for (const [name, pkg] of contractPackages) {
   }
   for (const file of walk(join(pkg.dir, "src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
     const text = readFileSync(file, "utf8");
-    if (/\bdefinePlugin\s*\(/.test(text)) contractProblems.push(`${relative(root, file)}: defines a plugin (a contract declares; its plugins implement)`);
+    if (/\bdefine(Web)?Plugin\s*\(/.test(text)) contractProblems.push(`${relative(root, file)}: defines a plugin (a contract declares; its plugins implement)`);
     for (const match of text.matchAll(importPattern)) {
       const specifier = match[1]!;
       const escapes = specifier.startsWith(".") && !inside(pkg.dir, resolve(dirname(file), specifier));
@@ -249,7 +249,7 @@ for (const domain of readdirSync(domainsDir).filter((entry) => statSync(join(dom
 // one a contract exports, so a rename or removal there cannot leave the guide pointing at nothing.
 const guide = readFileSync(join(root, "docs/plugins.md"), "utf8");
 const exported = new Set(
-  [...domainPackages.map((pkg) => join(pkg.dir, "src")), join(root, "packages/contracts/src"), join(root, "packages/ui/src")]
+  [...domainPackages.map((pkg) => join(pkg.dir, "src")), join(root, "packages/contracts/src"), join(root, "packages/web/src")]
     .flatMap((dir) => walk(dir).filter((path) => /\.(ts|tsx)$/.test(path)))
     .flatMap((file) => [...readFileSync(file, "utf8").matchAll(/^export (?:const|class|interface|type|function) (\w+)/gm)].map((match) => match[1]!)),
 );

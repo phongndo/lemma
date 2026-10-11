@@ -2,17 +2,14 @@ import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 import { WorkspaceChannels } from "@lemma/workspace";
 import type { GitBranch, WorkspaceStatus } from "@lemma/workspace";
-import { folderName } from "@lemma/workspace/web";
+import { folderName, Workspace, WorkspaceBarItems, WorkspaceActionIds } from "@lemma/workspace/web";
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerFooter, Threads } from "@lemma/threads";
-import { Client, Notify, Slots } from "@lemma/web";
-import { Workspace, WorkspaceBarItems, WorkspaceActionIds } from "@lemma/workspace/web";
+import { Client, Notify, Slots, defineWebPlugin, Each } from "@lemma/web";
 import type { ThreadsService } from "@lemma/threads";
-import type { ClientService, NotifyService } from "@lemma/web";
+import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineWebPlugin } from "@lemma/web";
-import type { SlotsService } from "@lemma/web";
 import {
   ChatIcon,
   CheckIcon,
@@ -27,7 +24,6 @@ import {
   Toggle,
   WorktreeIcon,
 } from "@lemma/look";
-import { Each } from "@lemma/web";
 import styles from "./workspace-bar.css?inline";
 
 interface Deps {

@@ -3,18 +3,27 @@ import type { JSX } from "solid-js";
 import { Schema } from "effect";
 import type { InteractionRequest, NoticePayload } from "@lemma/contracts";
 import type { AuthType, ProviderInfo } from "@lemma/llm";
-import { logoProblem, customProviderSpec, describeProvider, endsLogin, fromEnv, providerGroups, providerText, signInState } from "@lemma/llm/web";
-import type { AuthFilter, CustomProviderDraft } from "@lemma/llm/web";
+import {
+  logoProblem,
+  customProviderSpec,
+  describeProvider,
+  endsLogin,
+  fromEnv,
+  providerGroups,
+  providerText,
+  signInState,
+  Models,
+  ProviderRowPart,
+  LlmActionIds,
+  ProviderLogo,
+  ProviderRowView,
+} from "@lemma/llm/web";
+import type { AuthFilter, CustomProviderDraft, ModelsService, ProviderRowProps } from "@lemma/llm/web";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
-import { Models, ProviderRowPart, LlmActionIds } from "@lemma/llm/web";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { ComposerNotices } from "@lemma/threads";
-import { Client, Interactions, Notify, Slots, WebPlugins } from "@lemma/web";
-import type { ModelsService, ProviderRowProps } from "@lemma/llm/web";
-import { defineWebPlugin } from "@lemma/web";
-import { DEFAULT_PART_ORDER } from "@lemma/web";
-import { ProviderLogo, ProviderRowView } from "@lemma/llm/web";
+import { Client, Interactions, Notify, Slots, WebPlugins, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
 import { CheckIcon, FilterIcon, KeyIcon, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
 import { CustomProviderDialog, pickSvg } from "./custom.tsx";
@@ -208,9 +217,9 @@ export default defineWebPlugin({
     slots: Slots,
     interactions: Interactions,
     notify: Notify,
-    uiPlugins: WebPlugins,
+    webPlugins: WebPlugins,
   },
-  setup: ({ client, dialogs, models, settings, slots, interactions, notify, uiPlugins }, plugin) => {
+  setup: ({ client, dialogs, models, settings, slots, interactions, notify, webPlugins }, plugin) => {
     const moving = Object.entries(plugin.config.logos ?? {});
     let moved = moving.length === 0;
     createEffect(() => {
@@ -222,8 +231,8 @@ export default defineWebPlugin({
           if (provider !== undefined && provider.logo === undefined) await models.setLogo(provider, svg);
         }
         // Clearing this plugin's own config restarts it, so it comes last.
-        const self = uiPlugins.list().find((candidate) => candidate.id === plugin.id);
-        if (self !== undefined) await uiPlugins.setConfig(self, { logos: null });
+        const self = webPlugins.list().find((candidate) => candidate.id === plugin.id);
+        if (self !== undefined) await webPlugins.setConfig(self, { logos: null });
       })().catch((error) => notify.report(error, "Could not move custom provider logos"));
     });
     const [welcome, setWelcome] = createSignal(false);

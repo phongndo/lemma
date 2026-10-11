@@ -20,7 +20,7 @@ export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews,
 
   return defineWebPlugin({
     id: "todo",
-    api: 3,
+    api: 4,
     styles,
     requires: { slots: Slots, threads: Threads },
     setup: ({ slots, threads }) => {

@@ -13,12 +13,9 @@ import { catalog, faultHistory, planComposition, withReplacements } from "@lemma
 import type { Plan } from "@lemma/composition";
 import type { AnyRoute } from "@lemma/router";
 import { createWebRuntime, provides } from "../runtime/index.ts";
-import { routesOf } from "@lemma/web";
-import { First, SlotsContext } from "@lemma/web";
+import { routesOf, First, SlotsContext, Root, Slots } from "@lemma/web";
 import { createFileLoader } from "./files.ts";
-import { Root, Slots } from "@lemma/web";
-import type { WebPluginsService } from "@lemma/web";
-import type { SlotsService } from "@lemma/web";
+import type { WebPluginsService, SlotsService } from "@lemma/web";
 
 /**
  * Always on, with everything they need ("Needed by …"): the switches that turn
@@ -82,7 +79,7 @@ export async function boot(options: BootOptions): Promise<void> {
   const [problems, setProblems] = createSignal<readonly string[]>([]);
   const [routes, setRoutes] = createSignal<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>([]);
   const fileLoader = createFileLoader(options.token, options.api);
-  let ui: WebComposition = EMPTY;
+  let composition: WebComposition = EMPTY;
   /** What the running plan was made from: the rows and files, and which host halves ran (see `planFor`). */
   let planned: string | undefined;
   let plan!: Plan;
@@ -108,8 +105,8 @@ export async function boot(options: BootOptions): Promise<void> {
       registries: snapshot.registries,
       faults: faults.get(),
       problems: plan.problems,
-      enabledIn: safe ? {} : ui.enabledIn,
-      configIn: safe ? {} : ui.configIn,
+      enabledIn: safe ? {} : composition.enabledIn,
+      configIn: safe ? {} : composition.configIn,
       pinned: PINNED,
     });
     setStatuses(infos.map(toPluginStatus));
@@ -131,11 +128,11 @@ export async function boot(options: BootOptions): Promise<void> {
     setEnabled: async (plugin, enabled) => {
       // Turning on a plugin that provides what another does turns that one off, as on the host.
       const rows = withReplacements(plan.known, plan.composition, { [plugin.id]: { enabled } });
-      await host.host.configure(rows, ui.enabledIn[plugin.id] === "project" ? { scope: "project" } : undefined);
+      await host.host.configure(rows, composition.enabledIn[plugin.id] === "project" ? { scope: "project" } : undefined);
       return toResult(await apply());
     },
     setConfig: async (plugin, values) => {
-      await host.host.configure({ [plugin.id]: { values } }, ui.configIn[plugin.id] === "project" ? { scope: "project" } : undefined);
+      await host.host.configure({ [plugin.id]: { values } }, composition.configIn[plugin.id] === "project" ? { scope: "project" } : undefined);
       return toResult(await apply());
     },
   };
@@ -147,7 +144,7 @@ export async function boot(options: BootOptions): Promise<void> {
     for (const problem of found) toasted.add(problem);
     for (const problem of fresh) {
       console.warn(`lemma web: ${problem}`);
-      runtime.notify.toast({ level: "warning", source: "ui", message: problem });
+      runtime.notify.toast({ level: "warning", source: "web", message: problem });
     }
   };
 
@@ -250,7 +247,7 @@ export async function boot(options: BootOptions): Promise<void> {
       const exit = await Effect.runPromiseExit(loader.apply(made.plan.resolved.composition));
       if (Exit.isSuccess(exit)) {
         adopt(made.plan);
-        ui = next;
+        composition = next;
         planned = key;
         setFiles(next.files);
       } else plan = previous;
@@ -274,7 +271,7 @@ export async function boot(options: BootOptions): Promise<void> {
   // And for the host's plugins, so a web half whose host half is not running never starts only to stop.
   const firstHalves = safe ? undefined : runtime.hostPlugins.refresh();
   // Both under one bound, so a slow host holds the first paint back FIRST_ROWS_MS at most, keeping the rows if they came.
-  let rowsFound: UiComposition | undefined;
+  let rowsFound: WebComposition | undefined;
   await timeout(Promise.allSettled([firstRows?.then((rows) => (rowsFound = rows)), firstHalves]), FIRST_ROWS_MS);
   const initial = rowsFound ?? EMPTY;
   const scope = await runPromise(Scope.make());
@@ -294,7 +291,7 @@ export async function boot(options: BootOptions): Promise<void> {
   let made = first.errors.length > 0 ? undefined : await start(first.plan);
   let bootProblems = [...first.problems, ...first.errors];
   if (made !== undefined && Exit.isSuccess(made)) {
-    ui = initial;
+    composition = initial;
     planned = JSON.stringify([initial, hostHalves().key]);
   } else {
     // Rows or files that keep the app's own frame from starting still leave the app as shipped.
@@ -314,7 +311,7 @@ export async function boot(options: BootOptions): Promise<void> {
     faults.record(plugin.fault as ReportedFault);
     bootProblems = [...bootProblems, `"${plugin.id}" failed to start: ${faultMessage(plugin.fault)}`];
   }
-  setFiles(ui.files);
+  setFiles(composition.files);
   await refresh();
   // A host half starting or stopping starts or stops its web half: planned again with the same rows. For the page's life.
   createRoot(() =>

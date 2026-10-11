@@ -6,12 +6,9 @@ import type { PromptContent, QueuedPrompt } from "@lemma/agent";
 import type { ImageContent } from "@lemma/llm";
 import { formatKeys, listKey, modKey, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
-import { applySuggestion, findTrigger } from "@lemma/threads";
-import type { TriggerMatch } from "@lemma/threads";
-import { Actions } from "@lemma/actions";
-import { Models } from "@lemma/llm/web";
-import { SectionIds, SettingsGroups } from "@lemma/settings";
 import {
+  applySuggestion,
+  findTrigger,
   ComposerActions,
   ComposerCompletions,
   ComposerControls,
@@ -22,11 +19,11 @@ import {
   ComposerSuggestionPart,
   Threads,
   ThreadsActionIds,
+  ComposerQueued,
+  ComposerSuggestionView,
 } from "@lemma/threads";
-import { Client, Notify, Router, Slots, WebPlugins } from "@lemma/web";
-import { Workspace } from "@lemma/workspace/web";
-import type { ModelsService } from "@lemma/llm/web";
 import type {
+  TriggerMatch,
   ComposerActionProps,
   ComposerCompletion,
   ComposerCompletionAnswer,
@@ -35,14 +32,15 @@ import type {
   ComposerSuggestionProps,
   ThreadsService,
 } from "@lemma/threads";
-import type { ClientService, NotifyService } from "@lemma/web";
+import { Actions } from "@lemma/actions";
+import { Models } from "@lemma/llm/web";
+import { SectionIds, SettingsGroups } from "@lemma/settings";
+import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, DEFAULT_PART_ORDER, Each, Highlighted, Isolated } from "@lemma/web";
+import { Workspace } from "@lemma/workspace/web";
+import type { ModelsService } from "@lemma/llm/web";
+import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineWebPlugin } from "@lemma/web";
-import { DEFAULT_PART_ORDER } from "@lemma/web";
-import type { SlotItem, SlotsService } from "@lemma/web";
 import { ChatIcon, ImageIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
-import { ComposerQueued, ComposerSuggestionView } from "@lemma/threads";
-import { Each, Highlighted, Isolated } from "@lemma/web";
 import styles from "./composer.css?inline";
 
 const readImage = (file: File): Promise<ImageContent> =>
@@ -719,7 +717,7 @@ export default defineWebPlugin({
   id: "threads.composer",
   styles,
   config: ComposerConfig,
-  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router, uiPlugins: WebPlugins },
+  requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router, webPlugins: WebPlugins },
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const drafts = new Map<string, Draft>();
@@ -739,9 +737,9 @@ export default defineWebPlugin({
     use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow });
     // How it sends belongs with the keys, so it offers the setting on the Keyboard page.
     const setSend = (send: Send) => {
-      const self = use.uiPlugins.list().find((candidate) => candidate.id === plugin.id);
+      const self = use.webPlugins.list().find((candidate) => candidate.id === plugin.id);
       if (self === undefined) return;
-      void use.uiPlugins.setConfig(self, { send: send === "enter" ? null : send }).catch((error) => use.notify.report(error, "Could not change the send key"));
+      void use.webPlugins.setConfig(self, { send: send === "enter" ? null : send }).catch((error) => use.notify.report(error, "Could not change the send key"));
     };
     use.slots.add(SettingsGroups, {
       id: "composer.send",

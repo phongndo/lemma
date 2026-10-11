@@ -4,8 +4,7 @@ import type { ConnectionStatus } from "@lemma/client";
 import { createNow } from "@lemma/web/now";
 import { SidebarFooter } from "@lemma/frame";
 import { ComposerNotices } from "@lemma/threads";
-import { Client, Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { AlertIcon, CopyButton } from "@lemma/look";
 import styles from "./connection.css?inline";
 

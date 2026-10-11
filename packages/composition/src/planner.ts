@@ -61,7 +61,7 @@ export interface Plan {
 
 const keys = (plugin: Plugin) => new Set(plugin.provides.map((tag) => tag.key));
 
-/** `lemma/api@3`: a capability naming the API version a plugin is written for (`HostApi`, `WebApi`). */
+/** `lemma/api@4`: a capability naming the API version a plugin is written for (`HostApi`, `WebApi`). */
 const API_KEY = /^(.+)\/api@(\d+)$/;
 
 /**

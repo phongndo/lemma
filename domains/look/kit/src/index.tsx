@@ -23,9 +23,7 @@ import {
   SearchFieldPart,
   TogglePart,
 } from "@lemma/look";
-import { Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
-import { DEFAULT_PART_ORDER } from "@lemma/web";
+import { Slots, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
 import type { Part } from "@lemma/web";
 import styles from "./kit.css?inline";
 

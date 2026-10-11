@@ -1,13 +1,22 @@
 import { Show, createEffect, createMemo, createSignal } from "solid-js";
 import { load, save } from "@lemma/web/storage";
-import { APPEARANCE_PLUGIN, LEGACY_KEYS, decodeSettings, legacySettings, resolveLook, schemeTokens, settingValue } from "@lemma/look";
+import {
+  APPEARANCE_PLUGIN,
+  LEGACY_KEYS,
+  decodeSettings,
+  legacySettings,
+  resolveLook,
+  schemeTokens,
+  settingValue,
+  Accents,
+  Fonts,
+  Themes,
+  PaletteIcon,
+} from "@lemma/look";
 import type { AppearanceSettings, Field, Scheme, SchemeChoice } from "@lemma/look";
 import { Actions } from "@lemma/actions";
-import { Accents, Fonts, Themes } from "@lemma/look";
 import { SectionIds, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Notify, Slots, WebPlugins } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
-import { PaletteIcon } from "@lemma/look";
+import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import styles from "./appearance-page.css?inline";
 import { AccentPicker, CornersSetting, FontSetting, Preview, SchemePicker, TextSizeSetting, ThemeChoice, WidthSetting } from "./views.tsx";
 import type { Choices, Deps } from "./views.tsx";
@@ -36,9 +45,9 @@ const same = (a: AppearanceSettings, b: AppearanceSettings) => {
 export default defineWebPlugin({
   id: "look.appearance-page",
   styles,
-  requires: { slots: Slots, uiPlugins: WebPlugins, notify: Notify },
-  setup: ({ slots, uiPlugins, notify }, plugin) => {
-    const row = () => uiPlugins.list().find((candidate) => candidate.id === APPEARANCE_PLUGIN);
+  requires: { slots: Slots, webPlugins: WebPlugins, notify: Notify },
+  setup: ({ slots, webPlugins, notify }, plugin) => {
+    const row = () => webPlugins.list().find((candidate) => candidate.id === APPEARANCE_PLUGIN);
     const saved = createMemo(() => decodeSettings(row()?.config?.values), undefined, { equals: same });
     // What was just set shows until the plugin list catches up with it.
     const [pending, setPending] = createSignal<AppearanceSettings>();
@@ -49,7 +58,7 @@ export default defineWebPlugin({
     const settings = () => pending() ?? saved();
     // Once: carry the scheme and width an older app kept in this browser into config, then forget them. A field
     // config sets already wins. `?safe` ignores the config, so it would look empty: the keys wait for a normal start.
-    let carried = uiPlugins.safe;
+    let carried = webPlugins.safe;
     createEffect(() => {
       const appearance = row();
       if (carried || appearance === undefined) return;
@@ -59,7 +68,7 @@ export default defineWebPlugin({
         for (const key of Object.values(LEGACY_KEYS)) save(key, undefined);
       };
       if (Object.keys(legacy).length === 0) return forget();
-      uiPlugins.setConfig(appearance, legacy).then(forget, (error) => notify.report(error, "Could not carry over the appearance"));
+      webPlugins.setConfig(appearance, legacy).then(forget, (error) => notify.report(error, "Could not carry over the appearance"));
     });
     const set = (field: Field, value: string | undefined) => {
       const next = settingValue(field, value);
@@ -70,7 +79,7 @@ export default defineWebPlugin({
         return;
       }
       setPending({ ...settings(), [field]: next });
-      uiPlugins.setConfig(appearance, { [field]: next ?? null }).catch((error) => {
+      webPlugins.setConfig(appearance, { [field]: next ?? null }).catch((error) => {
         setPending(undefined);
         notify.report(error, "Could not change the appearance");
       });

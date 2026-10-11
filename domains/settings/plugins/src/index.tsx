@@ -21,13 +21,10 @@ import type { KindedPlugin, PluginGroup, PluginKind } from "./plugins.ts";
 import { stepFor } from "@lemma/web/keys";
 import { Actions } from "@lemma/actions";
 import { PluginTabs, PluginsFacts, SectionIds, Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Client, HostPlugins, Notify, Slots, WebPlugins } from "@lemma/web";
+import { Client, HostPlugins, Notify, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
 import type { PluginTab, PluginsFact } from "@lemma/settings";
-import type { ClientService, PluginsService, WebPluginsService } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
-import type { SlotsService } from "@lemma/web";
+import type { ClientService, PluginsService, WebPluginsService, SlotsService } from "@lemma/web";
 import { ChevronIcon, ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/web";
 import styles from "./plugins-page.css?inline";
 
 const SECTION = SectionIds.plugins;
@@ -69,7 +66,7 @@ const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-dig
 /** Everything the inspector's parts share. */
 interface Inspector {
   readonly client: ClientService;
-  readonly ui: WebPluginsService;
+  readonly webPlugins: WebPluginsService;
   readonly slots: SlotsService;
   readonly services: Readonly<Record<PluginKind, PluginsService>>;
   readonly selected: () => Selection | undefined;
@@ -555,8 +552,8 @@ function Fact(props: { fact: PluginsFact }) {
   );
 }
 
-function HostFacts(props: { client: ClientService; slots: SlotsService; ui: WebPluginsService }) {
-  const files = () => props.ui.files();
+function HostFacts(props: { client: ClientService; slots: SlotsService; webPlugins: WebPluginsService }) {
+  const files = () => props.webPlugins.files();
   return (
     <Show when={props.client.info()}>
       {(info) => (
@@ -628,7 +625,7 @@ function Runtime(props: { inspector: Inspector }) {
           </>
         )}
       </For>
-      <HostFacts client={inspector.client} slots={inspector.slots} ui={inspector.ui} />
+      <HostFacts client={inspector.client} slots={inspector.slots} webPlugins={inspector.webPlugins} />
     </section>
   );
 }
@@ -803,13 +800,13 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
   };
   return (
     <div class="inspector">
-      <Show when={inspector.ui.safe}>
+      <Show when={inspector.webPlugins.safe}>
         <p class="callout callout-warn">Safe mode: your rows and web halves are ignored here. Open the app without ?safe to use them.</p>
       </Show>
-      <Show when={inspector.ui.problems().length > 0}>
+      <Show when={inspector.webPlugins.problems().length > 0}>
         <div class="callout callout-warn">
           <ul class="problems">
-            <For each={inspector.ui.problems()}>{(problem) => <li>{problem}</li>}</For>
+            <For each={inspector.webPlugins.problems()}>{(problem) => <li>{problem}</li>}</For>
           </ul>
         </div>
       </Show>
@@ -855,8 +852,8 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
 export default defineWebPlugin({
   id: "settings.plugins",
   styles,
-  requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, ui: WebPlugins },
-  setup: ({ client, notify, settings, slots, host, ui }) => {
+  requires: { client: Client, notify: Notify, settings: Settings, slots: Slots, host: HostPlugins, webPlugins: WebPlugins },
+  setup: ({ client, notify, settings, slots, host, webPlugins }) => {
     // In the address (`?plugin=agent&kind=host&tab=…&filter=…`): a link, a reload, and back and forward return to them, and
     // settings reopen the section as it was left.
     const params = () => (settings.section() === SECTION ? settings.params() : {});
@@ -875,7 +872,7 @@ export default defineWebPlugin({
     const setFilter = (next: string) => settings.setParams({ filter: next });
     const [confirming, setConfirming] = createSignal<Confirmation>();
     const [busy, setBusy] = createSignal<string>();
-    const services: Readonly<Record<PluginKind, PluginsService>> = { host, web: ui };
+    const services: Readonly<Record<PluginKind, PluginsService>> = { host, web: webPlugins };
     const run = async (key: string, action: () => Promise<void>) => {
       setBusy(key);
       try {
@@ -890,7 +887,7 @@ export default defineWebPlugin({
 
     const inspector: Inspector = {
       client,
-      ui,
+      webPlugins,
       slots,
       services,
       selected,
@@ -996,7 +993,7 @@ export default defineWebPlugin({
         }
       });
 
-    const failed = () => [...host.list(), ...ui.list()].filter((candidate) => candidate.state === "failed").length;
+    const failed = () => [...host.list(), ...webPlugins.list()].filter((candidate) => candidate.state === "failed").length;
     slots.add(SettingsSections, {
       id: SECTION,
       order: 30,

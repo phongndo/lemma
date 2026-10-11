@@ -221,7 +221,7 @@ export class Interactions extends Context.Service<Interactions, InteractionsServ
  * provides the version it implements, this one, so a plugin written for
  * another is left out, saying so, rather than failing at some later call.
  */
-export const WEB_API = 3;
+export const WEB_API = 4;
 /** Required by a plugin written for version `version` of these contracts (see `WEB_API`). */
 export const WebApi = (version: number): Context.Key<`lemma-web/api@${number}`, number> => Context.Service(`lemma-web/api@${version}`);
 
