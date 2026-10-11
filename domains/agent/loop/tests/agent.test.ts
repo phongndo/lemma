@@ -5,7 +5,7 @@ import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
-import { Agent, AgentContinueHook, AgentError, AgentRequestHook, PromptSections } from "@lemma/agent";
+import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
@@ -202,6 +202,59 @@ describe("agent", () => {
         expect(results.map((message) => message.isError)).toEqual([true, true]);
         expect(JSON.stringify(results[0]!.content)).toContain('Tool \\"nope\\" not found');
         expect(JSON.stringify(results[1]!.content)).toContain("Validation failed");
+      }),
+    );
+  });
+
+  it("lets a plugin rewrite a prompt (credited in the log), handle it, or refuse it, before it is placed", async () => {
+    const seen: string[] = [];
+    const input = (id: string, order: number, decide: (text: string) => "rewrite" | "handle" | "refuse" | "pass") =>
+      definePlugin({
+        id,
+        layer: Layer.effectDiscard(
+          Effect.flatMap(PluginContext, (owner) =>
+            owner.on(
+              AgentInputHook,
+              (prompt, next) => {
+                const said = prompt.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+                seen.push(`${id}:${said}`);
+                switch (decide(said)) {
+                  case "rewrite":
+                    return next({ ...prompt, content: text(said.replace("/hello", "Say hello")) });
+                  case "handle":
+                    return Effect.succeed({ kind: "handle", message: "pong" } as const);
+                  case "refuse":
+                    return Effect.succeed({ kind: "refuse", reason: "it names a secret" } as const);
+                  default:
+                    return next(prompt);
+                }
+              },
+              { order },
+            ),
+          ),
+        ),
+      });
+    const expand = input("expand", 0, (said) => (said.startsWith("/hello") ? "rewrite" : said === "/ping" ? "handle" : "pass"));
+    const guard = input("guard", 1, (said) => (said.includes("secret") ? "refuse" : "pass"));
+    await withAgent({ plugins: [expand, guard], scripts: [reply("hello!")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const agent = yield* Agent;
+        expect(yield* agent.prompt(id, text("/ping"))).toEqual({ kind: "handled", by: "expand", message: "pong" });
+        expect(yield* agent.prompt(id, text("my secret"))).toEqual({ kind: "refused", by: "guard", reason: "it names a secret" });
+        // Neither reached the model, or the log.
+        expect(requests).toHaveLength(0);
+        expect(yield* log(id)).toEqual([]);
+        expect(yield* agent.prompt(id, text("/hello world"), { requestId: "r1" })).toEqual({ kind: "placed" });
+        const [prompt] = (yield* log(id)).filter((event) => event.data.type === "message");
+        expect(prompt!.data).toMatchObject({
+          message: { content: text("Say hello world") },
+          credit: { handlers: [{ source: "expand", changed: ["content"] }, { source: "guard" }] },
+        });
+        // Sent again, an exactly-once retry: answered as placed, without asking the plugins again.
+        seen.length = 0;
+        expect(yield* agent.prompt(id, text("/hello world"), { requestId: "r1" })).toEqual({ kind: "placed" });
+        expect(seen).toEqual([]);
       }),
     );
   });

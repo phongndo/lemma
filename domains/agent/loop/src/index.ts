@@ -1,12 +1,26 @@
+import { isDeepStrictEqual } from "node:util";
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, Hooks, Registries } from "@lemma/core";
-import { Channels, HostControl, Inspectors, InteractionOrigin, Paths, withContribution } from "@lemma/contracts";
-import { Agent, AgentError, PromptSections, QueueChanged, SectionOrder, serveAgent } from "@lemma/agent";
+import type { HandlerStep } from "@lemma/core";
+import { Channels, creditOf, HostControl, inChainOrder, Inspectors, InteractionOrigin, Paths, withContribution } from "@lemma/contracts";
+import type { ResultCredit } from "@lemma/contracts";
+import { Agent, AgentError, AgentInputHook, PromptSections, QueueChanged, SectionOrder, serveAgent } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
 import { ToolOutput, ToolRunner } from "@lemma/tools";
-import type { AgentView, PromptContent, PromptOptions, QueuedPrompt, SectionRequest, SystemSection, TurnOptions } from "@lemma/agent";
+import type {
+  AgentView,
+  PromptContent,
+  PromptDecision,
+  PromptInput,
+  PromptOptions,
+  PromptOutcome,
+  QueuedPrompt,
+  SectionRequest,
+  SystemSection,
+  TurnOptions,
+} from "@lemma/agent";
 import type { ModelInfo } from "@lemma/llm";
 import type { SessionEvent, SessionInfo, TurnEndReason } from "@lemma/sessions";
 import { LiveTurn } from "./live.ts";
@@ -215,7 +229,7 @@ export default definePlugin({
       sections,
       trace: owner.trace,
     };
-    const { events } = services;
+    const { events, hooks } = services;
     const settings = {
       maxSteps: config.maxSteps,
       retries: config.retries,
@@ -343,7 +357,7 @@ export default definePlugin({
         return first;
       });
 
-    const makeItem = (content: PromptContent, options: PromptOptions, mode: QueuedPrompt["mode"]) =>
+    const makeItem = (content: PromptContent, options: PromptOptions, mode: QueuedPrompt["mode"], credit?: ResultCredit) =>
       Effect.map(Deferred.make<void, AgentError>(), (done): Item => {
         const turnOptions = {
           ...(options.model === undefined ? {} : { model: options.model }),
@@ -356,6 +370,7 @@ export default definePlugin({
             mode,
             ...(Object.keys(turnOptions).length === 0 ? {} : { options: turnOptions }),
             at: Date.now(),
+            ...(credit === undefined ? {} : { credit }),
           },
           done,
           placing: false,
@@ -371,7 +386,11 @@ export default definePlugin({
             .queue.filter((item) => item.prompt.mode === "steer")
             .map((item) => {
               item.placing = true;
-              return { requestId: item.prompt.requestId, content: item.prompt.content };
+              return {
+                requestId: item.prompt.requestId,
+                content: item.prompt.content,
+                ...(item.prompt.credit === undefined ? {} : { credit: item.prompt.credit }),
+              };
             }),
         ),
       ),
@@ -448,7 +467,7 @@ export default definePlugin({
       return runTurn(services, settings, {
         ...turnInput(sessionId, entry, info),
         model,
-        prompts: entry.prompts.map(({ requestId, content }) => ({ requestId, content })),
+        prompts: entry.prompts.map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
         ...(thinking === undefined ? {} : { thinking }),
       });
     };
@@ -482,7 +501,9 @@ export default definePlugin({
         return yield* runTurn(services, settings, {
           ...turnInput(sessionId, entry, info),
           ...(model === undefined ? {} : { model }),
-          prompts: entry.prompts.filter((prompt) => !plan.placed.has(prompt.requestId)).map(({ requestId, content }) => ({ requestId, content })),
+          prompts: entry.prompts
+            .filter((prompt) => !plan.placed.has(prompt.requestId))
+            .map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
           resume: turnResume,
           ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
         });
@@ -594,11 +615,67 @@ export default definePlugin({
         }),
       );
 
+    /**
+     * `AgentInputHook` over a new prompt: what to place, with the handlers that shaped it, or how a handler answered it
+     * instead (`by` the one that did).
+     */
+    const decideInput = (sessionId: string, content: PromptContent, options: PromptOptions) =>
+      Effect.gen(function* () {
+        const steps: HandlerStep<PromptInput, PromptDecision>[] = [];
+        const decision = yield* hooks
+          .invoke(
+            AgentInputHook,
+            { sessionId, content, options },
+            (input): Effect.Effect<PromptDecision> => Effect.succeed({ kind: "place", content: input.content }),
+            {
+              onStep: (step) => void steps.push(step),
+            },
+          )
+          .pipe(
+            Effect.mapError((error) =>
+              error._tag === "AgentError" ? error : new AgentError({ sessionId, reason: "Hook", message: `AgentInputHook: ${error.message}`, cause: error }),
+            ),
+          );
+        const ordered = inChainOrder(steps);
+        if (decision.kind !== "place") {
+          // The handler that answered it: the first that returned an answer it did not get from the rest of the chain.
+          const by =
+            ordered.find(
+              (step) => step.output !== undefined && step.output.kind !== "place" && (step.next?.output === undefined || step.next.output.kind === "place"),
+            )?.pluginId ?? "unknown";
+          return decision.kind === "handle"
+            ? ({ kind: "handled", by, ...(decision.message === undefined ? {} : { message: decision.message }) } satisfies PromptOutcome)
+            : ({ kind: "refused", by, reason: decision.reason } satisfies PromptOutcome);
+        }
+        const rewrote = (step: HandlerStep<PromptInput, PromptDecision>) => {
+          const handed = step.next?.input.content;
+          const made = step.output?.kind === "place" ? step.output.content : undefined;
+          const from = step.next?.output?.kind === "place" ? step.next.output.content : step.input.content;
+          return (handed !== undefined && !isDeepStrictEqual(handed, step.input.content)) || (made !== undefined && !isDeepStrictEqual(made, from))
+            ? ["content"]
+            : [];
+        };
+        const handlers = ordered.map((step) => creditOf(step, rewrote(step)));
+        return { kind: "place" as const, content: decision.content, ...(handlers.length === 0 ? {} : { credit: { handlers } satisfies ResultCredit }) };
+      });
+
     const prompt = (sessionId: string, content: PromptContent, options: PromptOptions = {}) =>
       Effect.gen(function* () {
         const { requestId } = options;
         // Outside the lock: the first exactly-once check of a session reads its log.
         if (requestId !== undefined) yield* requests.load(sessionId);
+        // A new prompt goes through `AgentInputHook` first, outside the lock (a handler may take its time). One placed
+        // already, an exactly-once retry, answers as it did; two retries racing may both ask, and the lock places one.
+        const state = states.get(sessionId);
+        const known =
+          requestId !== undefined &&
+          (requests.of(sessionId).has(requestId) ||
+            state?.queue.some((item) => item.prompt.requestId === requestId) === true ||
+            state?.turn?.items.has(requestId) === true);
+        const decided = known ? { kind: "place" as const, content } : yield* decideInput(sessionId, content, options);
+        if (decided.kind !== "place") return decided;
+        const placing = decided.content;
+        const credit = "credit" in decided ? decided.credit : undefined;
         // Admission cannot be split by the caller's interruption, or a prompt could be queued and forgotten.
         const admitted = (prepared: Prepared | undefined) =>
           admit.withPermits(1)(
@@ -635,7 +712,7 @@ export default definePlugin({
                   if (whenBusy === "reject") {
                     return yield* new AgentError({ sessionId, reason: "Busy", message: `Session ${sessionId} already has a turn in progress` });
                   }
-                  const item = yield* makeItem(content, options, whenBusy);
+                  const item = yield* makeItem(placing, options, whenBusy, credit);
                   setQueue(state, [...state.queue, item]);
                   yield* persist(sessionId);
                   yield* queueChanged(sessionId);
@@ -643,7 +720,7 @@ export default definePlugin({
                 }
                 const lease = yield* holdFor(sessionId);
                 // Prompts held after a failed or cancelled turn go first, then this one.
-                const item = yield* makeItem(content, options, "follow-up");
+                const item = yield* makeItem(placing, options, "follow-up", credit);
                 const prompts = [...state.queue, item];
                 if (state.queue.length > 0) setQueue(state, []);
                 yield* start(sessionId, newId(), prompts, lease);
@@ -655,6 +732,7 @@ export default definePlugin({
         const waitOn = yield* Effect.scoped(Effect.flatMap(ready(sessionId), admitted));
         // Awaiting, not joining: a caller that goes away leaves the turn running. A cancelled turn resolves normally.
         if (waitOn !== undefined) yield* Deferred.await(waitOn);
+        return { kind: "placed" } satisfies PromptOutcome;
       });
 
     const cancel = (sessionId: string) =>

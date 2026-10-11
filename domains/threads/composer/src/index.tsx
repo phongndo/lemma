@@ -714,6 +714,32 @@ function AttachImages(props: ComposerActionProps) {
   );
 }
 
+/** A prompt a plugin answered instead of placing it: who, and what it did or why it refused. */
+function PromptAnswerNotice(props: { threads: ThreadsService }) {
+  return (
+    <Show when={props.threads.answer()}>
+      {(answer) => (
+        <div
+          class="callout composer-callout"
+          classList={{ "callout-warn": answer().kind === "refused" }}
+          role="status"
+          aria-label="Prompt answered by a plugin"
+        >
+          <div class="callout-text">
+            <span>
+              <code>{answer().by}</code> {answer().kind === "handled" ? "handled the prompt" : "refused the prompt"}
+              {answer().message === "" ? "." : `: ${answer().message}`}
+            </span>
+          </div>
+          <button class="icon-button" aria-label="Dismiss" data-tip="Dismiss" onClick={() => props.threads.dismissAnswer()}>
+            <XIcon />
+          </button>
+        </div>
+      )}
+    </Show>
+  );
+}
+
 /** Where prompts are written: text, pasted or dropped images, completions, send and stop. Its notices, controls, completions, and footer are slots. */
 export default defineWebPlugin({
   id: "threads.composer",
@@ -733,6 +759,7 @@ export default defineWebPlugin({
       }),
     );
     use.slots.add(ComposerRegion, { id: "composer", component: () => <Composer deps={deps} /> });
+    use.slots.add(ComposerNotices, { id: "composer.answer", order: 50, component: () => <PromptAnswerNotice threads={use.threads} /> });
     // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
     use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
     use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow });

@@ -4,7 +4,7 @@ import type { ChannelInfo, RuntimeEvent } from "@lemma/contracts";
 import type { AgentActivity } from "@lemma/agent";
 import { follow } from "@lemma/client";
 import type { Followable } from "@lemma/client";
-import { startPrompt } from "../src/prompt.ts";
+import { PromptRefused, startPrompt } from "../src/prompt.ts";
 import type { PromptConnection } from "../src/prompt.ts";
 
 interface Call {
@@ -133,12 +133,29 @@ describe("startPrompt", () => {
     expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
   });
 
+  test("a prompt a plugin handled is accepted with what it said; one it refused is refused, naming it", async () => {
+    const fake = fakeConnection();
+    const handled = startPrompt(fake.connection, "s1", [{ type: "text", text: "/ping" }]);
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    fake.calls[0]!.resolve({ kind: "handled", by: "slash", message: "pong" });
+    expect(await state(handled.accepted)).toBe("resolved");
+    expect(await handled.done).toEqual({ kind: "handled", by: "slash", message: "pong" });
+    const refused = startPrompt(fake.connection, "s1", [{ type: "text", text: "secret" }]);
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    fake.calls[1]!.resolve({ kind: "refused", by: "guard", reason: "it names a secret" });
+    const why = await refused.accepted.catch((error: unknown) => error);
+    expect(why).toBeInstanceOf(PromptRefused);
+    expect(why).toMatchObject({ by: "guard", reason: "it names a secret" });
+  });
+
   test("a turn that ends with no activity seen still counts as accepted, and a withdrawn prompt ends quietly", async () => {
     const fake = fakeConnection();
     const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
     fake.send({ type: "subscribed", running: [] });
     await tick();
-    fake.calls[0]!.resolve();
+    fake.calls[0]!.resolve({ kind: "placed" });
     expect(await state(started.accepted)).toBe("resolved");
     const retracted = startPrompt(fake.connection, "s1", [{ type: "text", text: "later" }]);
     fake.send({ type: "subscribed", running: ["s1"] });

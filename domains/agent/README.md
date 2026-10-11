@@ -10,10 +10,10 @@ The agent: the turn loop that asks a model, runs the tools it calls, and logs ea
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                                                                                        |
-| --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Add       | `PromptSections`: a section of the system prompt, written for each request, between the agent's base (`SectionOrder.base`) and environment      |
-| Intercept | `AgentRequestHook`: a request before it is logged and sent (its sections, tools, model); `AgentContinueHook`: whether a turn takes another step |
-| Observe   | `TurnStarted`, `TurnEnded`, `QueueChanged`, `AssistantDelta`                                                                                    |
-| Call      | `Agent`: prompt, cancel, the queue, a session's live view; clients call `AgentChannels`                                                         |
-| Serve     | `Agent`, with `serveAgent` for its channels: a plugin providing it replaces `agent.loop`                                                        |
+| Shape     | What the contract offers                                                                                                                                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add       | `PromptSections`: a section of the system prompt, written for each request, between the agent's base (`SectionOrder.base`) and environment                                                                                            |
+| Intercept | `AgentInputHook`: a prompt before it is placed (rewrite it, handle it, or refuse it); `AgentRequestHook`: a request before it is logged and sent (its sections, tools, model); `AgentContinueHook`: whether a turn takes another step |
+| Observe   | `TurnStarted`, `TurnEnded`, `QueueChanged`, `AssistantDelta`                                                                                                                                                                          |
+| Call      | `Agent`: prompt (answering with its `PromptOutcome`), cancel, the queue, a session's live view; clients call `AgentChannels`                                                                                                          |
+| Serve     | `Agent`, with `serveAgent` for its channels: a plugin providing it replaces `agent.loop`                                                                                                                                              |

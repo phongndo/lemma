@@ -65,6 +65,12 @@ export interface ThreadsService {
   ) => Promise<boolean>;
   /** The active thread's queue: prompts sent while a turn ran, waiting to steer it or to follow it. */
   readonly queue: Accessor<readonly QueuedPrompt[]>;
+  /**
+   * The active thread's last prompt that a plugin answered instead of placing it (`AgentInputHook`): handled (and
+   * what it said it did) or refused (and why), and by which plugin. Until the next is sent, or it is dismissed.
+   */
+  readonly answer: Accessor<PromptAnswer | undefined>;
+  readonly dismissAnswer: () => void;
   /** Takes a prompt out of the active thread's queue. */
   readonly withdraw: (requestId: string) => Promise<void>;
   readonly cancel: () => void;
@@ -73,6 +79,16 @@ export interface ThreadsService {
 }
 
 export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-web/Threads") {}
+
+/** A prompt a plugin answered instead of placing it (see `ThreadsService.answer`). */
+export interface PromptAnswer {
+  readonly sessionId: string;
+  readonly kind: "handled" | "refused";
+  /** The plugin. */
+  readonly by: string;
+  /** What it did, or why it refused; may be empty for one it handled. */
+  readonly message: string;
+}
 
 /** What a session's menu item can do to its row. */
 export interface ThreadRowControl {

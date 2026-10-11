@@ -174,6 +174,7 @@ do (as of Pi's docs at `c30840c`, 2026-10-05), in Lemma's shapes:
 | `pi.on("before_agent_start")`, the system prompt | `add(PromptSections, section)`; intercept `AgentRequestHook`          |
 | `pi.on("context")`                               | Intercept `AgentRequestHook`, appending events (a `compaction`)       |
 | `pi.on("turn_end")`, continuing a turn           | Intercept `AgentContinueHook`; observe `TurnEnded`                    |
+| `pi.on("input")`, rewriting or handling a prompt | Intercept `AgentInputHook`: place, rewrite, handle, or refuse it      |
 | `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma do`                  |
 | `pi.registerShortcut()`                          | A web half's `Actions` item                                           |
 | `pi.registerProvider()`                          | `add(Providers, provider)`                                            |
