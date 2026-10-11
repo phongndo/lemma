@@ -133,35 +133,41 @@ export const groupPlugins = (entries: readonly KindedPlugin[]): PluginGroup[] =>
   const groups = new Map<string, KindedPlugin[]>();
   for (const entry of entries) {
     const domain = domainOf(entry.plugin.id) ?? "";
-    groups.set(domain, [...(groups.get(domain) ?? []), entry]);
+    const members = groups.get(domain);
+    if (members === undefined) groups.set(domain, [entry]);
+    else members.push(entry);
   }
   return [...groups]
     .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)))
-    .map(([domain, members]) => ({ domain, entries: [...members].sort(byId) }));
+    .map(([domain, members]) => ({ domain, entries: members.sort(byId) }));
 };
 
 /** A domain's row while it is folded: the halves its plugins have, and how they are doing, the worst first. */
 export interface DomainSummary {
-  readonly kinds: readonly PluginKind[];
+  /** Which halves its plugins have, as a list (`host, web`): a plugin's own row says `host + web` for both of one. */
+  readonly kinds: string;
   /** `Running`, or what is not: `1 failed · 2 off`. */
   readonly state: string;
-  /** Its state dot's: failed when one is, off when one is off or not running, else active. */
-  readonly tone: "active" | "failed" | "off";
+  /** Its state, as the state classes name it: failed when one is, disabled when one is off or not running, else active. */
+  readonly tone: "active" | "failed" | "disabled";
+  /** How many of its plugins are the user's (a replacement of a bundled one, or their own), which the row says. */
+  readonly yours: number;
 }
 
 export const summarizeDomain = (group: PluginGroup): DomainSummary => {
   const halves = group.entries.flatMap(halvesOf);
   const failing = (entry: KindedPlugin) => halvesOf(entry).some(({ plugin }) => plugin.state === "failed" || plugin.problem !== undefined);
   const failed = group.entries.filter(failing).length;
-  const off = group.entries.filter((entry) => !entry.plugin.enabled).length;
-  const stopped = group.entries.filter(
-    (entry) => entry.plugin.enabled && !failing(entry) && halvesOf(entry).some(({ plugin }) => plugin.state !== "active"),
-  ).length;
+  // Off when either half is, as its own row shows it.
+  const isOff = (entry: KindedPlugin) => halvesOf(entry).some(({ plugin }) => !plugin.enabled);
+  const off = group.entries.filter((entry) => !failing(entry) && isOff(entry)).length;
+  const stopped = group.entries.filter((entry) => !isOff(entry) && !failing(entry) && halvesOf(entry).some(({ plugin }) => plugin.state !== "active")).length;
   const said = [...(failed === 0 ? [] : [`${failed} failed`]), ...(off === 0 ? [] : [`${off} off`]), ...(stopped === 0 ? [] : [`${stopped} not running`])];
   return {
-    kinds: (["host", "web"] as const).filter((kind) => halves.some((half) => half.kind === kind)),
+    kinds: (["host", "web"] as const).filter((kind) => halves.some((half) => half.kind === kind)).join(", "),
     state: said.length === 0 ? "Running" : said.join(" · "),
-    tone: failed > 0 ? "failed" : off + stopped > 0 ? "off" : "active",
+    tone: failed > 0 ? "failed" : off + stopped > 0 ? "disabled" : "active",
+    yours: group.entries.filter((entry) => halvesOf(entry).some(({ plugin }) => plugin.source !== "bundled")).length,
   };
 };
 

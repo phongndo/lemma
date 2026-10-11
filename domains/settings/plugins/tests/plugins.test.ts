@@ -126,9 +126,14 @@ describe("groupPlugins", () => {
 
   it("folds a domain into one line: the halves its plugins have, and what is not running, the worst first", () => {
     const [agent, threads, tools] = groupPlugins(entries);
-    expect(summarizeDomain(agent!)).toEqual({ kinds: ["host"], state: "Running", tone: "active" });
-    expect(summarizeDomain(threads!)).toEqual({ kinds: ["web"], state: "1 failed · 1 not running", tone: "failed" });
-    expect(summarizeDomain(tools!)).toEqual({ kinds: ["host", "web"], state: "1 off", tone: "off" });
+    expect(summarizeDomain(agent!)).toEqual({ kinds: "host", state: "Running", tone: "active", yours: 0 });
+    expect(summarizeDomain(threads!)).toEqual({ kinds: "web", state: "1 failed · 1 not running", tone: "failed", yours: 0 });
+    expect(summarizeDomain(tools!)).toEqual({ kinds: "host, web", state: "1 off", tone: "disabled", yours: 0 });
+    // A plugin whose web half is off counts as off, as its row shows it, and the user's own are counted.
+    const [mixed] = groupPlugins(
+      pairHalves([plugin("notes.board", { source: "user" })], [plugin("notes.board", { enabled: false, state: "disabled", source: "user" })]),
+    );
+    expect(summarizeDomain(mixed!)).toEqual({ kinds: "host, web", state: "1 off", tone: "disabled", yours: 1 });
   });
 
   it("filters by domain", () => {

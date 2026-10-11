@@ -216,6 +216,10 @@ const MOCK_COMMANDS = [
     source: "workspace.commands",
   },
   { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands.host" },
+  // What the mock's plugins say they add (`contributes`), so the palette and the Plugins page agree.
+  { id: "host.restart-plugin", title: "Restart plugin…", category: "Host", description: "Restart a failed or halted plugin", source: "commands.host" },
+  { id: "host.toggle-plugin", title: "Turn plugin on or off…", category: "Host", description: "Turn a plugin on or off", source: "commands.host" },
+  { id: "llm.logout", title: "Log out of a provider…", category: "Providers", description: "Forget a provider's credentials", source: "llm.commands" },
 ];
 
 const noChannel = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
