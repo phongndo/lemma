@@ -335,6 +335,13 @@ const unanswered = (id: string): HostError =>
   });
 
 /**
+ * What `changes` brings that differs from the one before it, `start` the first: a stream of a registry's lists, told
+ * when one changed. One that changed before `changes` was subscribed differs from `start`, so it is told, not skipped.
+ */
+export const changesSince = <A, E, R>(start: A, changes: Stream.Stream<A, E, R>, same: (before: A, after: A) => boolean): Stream.Stream<A, E, R> =>
+  Stream.concat(Stream.make(start), changes).pipe(Stream.changesWith(same), Stream.drop(1));
+
+/**
  * Runs `work` with the contribution `find` finds, as part of its
  * contributor's lifetime (`Registries.run`) from the moment it is found, as a
  * plugin serves a request with what another plugin contributed (a channel, a

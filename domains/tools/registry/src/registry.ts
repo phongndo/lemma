@@ -1,4 +1,4 @@
-import { Cause, Effect, Fiber, Order, Queue, Result, Schema, Stream } from "effect";
+import { Cause, Effect, Exit, Fiber, Order, Queue, Result, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import { Inspectors } from "@lemma/contracts";
@@ -178,8 +178,9 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             const decision = yield* awaitable(() => candidate.item.guard(call));
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
-          // The tool's output goes out through one fiber the call owns: in order, and finished before the call returns.
-          // Published as `ToolOutput`, batched, or handed to the caller's listener, whose failure is logged, never the tool's.
+          // The tool's output goes out through one fiber the call owns, in order: published as `ToolOutput`, batched, or
+          // handed to the caller's listener, whose failure is logged, never the tool's. A call that finishes waits for it
+          // before it returns; one cut off (cancelled, interrupted) stops it, so no listener holds a cancellation.
           const outbox = yield* Queue.unbounded<{ readonly chunk: string; readonly offset: number }, Cause.Done>();
           const send = ({ chunk, offset }: { readonly chunk: string; readonly offset: number }) =>
             update === undefined
@@ -187,17 +188,8 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
               : deliver(update, chunk).pipe(Effect.catchCause((cause) => Effect.logWarning("A tool output listener failed", cause)));
           const sender = yield* Effect.forkChild(Stream.runForEach(Stream.fromQueue(outbox), send));
           const offer = (chunk: string, offset: number) => void Queue.offerUnsafe(outbox, { chunk, offset });
-          let printed = 0;
-          const output =
-            update === undefined
-              ? outputBatcher(offer)
-              : {
-                  update: (chunk: string) => {
-                    offer(chunk, printed);
-                    printed += chunk.length;
-                  },
-                  flush: () => {},
-                };
+          // A listener takes chunks as they come; only the published output is batched and counted.
+          const output = update === undefined ? outputBatcher(offer) : { update: (chunk: string) => offer(chunk, 0), flush: () => {} };
           const context = {
             sessionId: call.sessionId,
             toolCallId: call.toolCallId,
@@ -208,11 +200,11 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             ...(call.leafId === undefined ? {} : { leafId: call.leafId }),
           };
           return yield* runTool(entry.tool, input, context, signal).pipe(
-            Effect.ensuring(
+            Effect.onExit((exit) =>
               Effect.suspend(() => {
                 output.flush();
                 Queue.endUnsafe(outbox);
-                return Fiber.join(sender);
+                return Exit.isSuccess(exit) ? Fiber.join(sender) : Fiber.interrupt(sender);
               }),
             ),
           );

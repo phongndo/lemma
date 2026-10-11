@@ -100,6 +100,8 @@ interface Deps {
    * page, as it does while settings show.
    */
   readonly drafts: Map<string, Draft>;
+  /** Prompts on their way to the host, not yet taken: the composer has cleared, so they are in no draft. */
+  readonly outgoing: Set<Draft>;
   readonly setFocus: (focus: (() => void) | undefined) => void;
 }
 
@@ -228,7 +230,7 @@ function createCompletion(slots: SlotsService, text: () => string, cursor: () =>
 }
 
 function Composer(props: { deps: Deps }) {
-  const { client, threads, models, workspace, notify, slots, drafts } = props.deps;
+  const { client, threads, models, workspace, notify, slots, drafts, outgoing } = props.deps;
   const draftKey = () => threads.activeId() ?? "";
   const saved = drafts.get(draftKey());
   const [text, setText] = createSignal(saved?.text ?? "");
@@ -297,11 +299,14 @@ function Composer(props: { deps: Deps }) {
   const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
   const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
 
-  /** A send asked for while another was still going out: it goes once that one is accepted. */
-  let next: "steer" | "follow-up" | undefined;
+  /**
+   * A send asked for while another was still going out, with what the composer held then: it goes once that one is
+   * accepted, if the composer holds the same still. What was typed after the Enter waits for one of its own.
+   */
+  let next: { readonly whenBusy: "steer" | "follow-up"; readonly text: string; readonly images: readonly ImageContent[] } | undefined;
   const submit = async (whenBusy: "steer" | "follow-up" = "steer") => {
     if (sending()) {
-      if (text().trim() !== "" || images().length > 0) next = whenBusy;
+      if (unsent({ text: text(), images: images() })) next = { whenBusy, text: text(), images: images() };
       return;
     }
     if (!canSend()) return;
@@ -309,6 +314,12 @@ function Composer(props: { deps: Deps }) {
     // Sending a new chat creates a session and switches to it, so remember which draft this was.
     const key = draftKey();
     const sent: Draft = { text: text(), images: images(), requestId: drafts.get(key)?.requestId ?? newRequestId() };
+    // The composer clears as the prompt goes out: what is typed meanwhile is the next prompt, never this one. Until the
+    // host takes it, it is outgoing (closing the tab asks first), and if refused it comes back.
+    outgoing.add(sent);
+    drafts.delete(key);
+    setText("");
+    setImages([]);
     setSending(true);
     let ok = false;
     try {
@@ -319,25 +330,26 @@ function Composer(props: { deps: Deps }) {
       notify.report(error, "Could not create a session");
     }
     setSending(false);
-    drafts.delete(key);
-    // What the person typed while this went out is theirs: only what was sent leaves the composer, or returns to it.
-    const unchanged = text() === sent.text && images() === sent.images;
-    const empty = text() === "" && images().length === 0;
-    if (ok) {
-      if (unchanged) {
-        setText("");
-        setImages([]);
+    outgoing.delete(sent);
+    if (!ok) {
+      // Refused: back to the thread it was written in (a new chat's, to the session `send` created, which the composer
+      // shows now), before whatever was typed there since, so nothing is lost. Unchanged, it keeps its request id.
+      const home = key === "" ? draftKey() : key;
+      const since = drafts.get(home);
+      const back: Draft =
+        since === undefined || !unsent(since)
+          ? sent
+          : { text: [sent.text, since.text].filter((part) => part.trim() !== "").join("\n\n"), images: [...sent.images, ...since.images] };
+      drafts.set(home, back);
+      if (home === draftKey()) {
+        setText(back.text);
+        setImages(back.images);
       }
-    } else if (unchanged || empty) {
-      // Refused: the prompt returns to the composer, which may now show the session `send` created.
-      drafts.set(draftKey(), sent);
-      setText(sent.text);
-      setImages(sent.images);
     }
     queueMicrotask(resize);
     const queued = next;
     next = undefined;
-    if (ok && queued !== undefined) void submit(queued);
+    if (ok && queued !== undefined && text() === queued.text && images() === queued.images) void submit(queued.whenBusy);
   };
 
   const insert = (value: string) => {
@@ -711,10 +723,12 @@ export default defineUiPlugin({
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const drafts = new Map<string, Draft>();
-    const deps: Deps = { ...use, config: plugin.config, drafts, setFocus: (next) => setFocus(() => next) };
-    // An unsent prompt in any thread, shown or not: closing or reloading the tab asks first. Switching threads keeps drafts, so only an unload does.
+    const outgoing = new Set<Draft>();
+    const deps: Deps = { ...use, config: plugin.config, drafts, outgoing, setFocus: (next) => setFocus(() => next) };
+    // An unsent prompt in any thread, shown or not, or one still going out: closing or reloading the tab asks first.
+    // Switching threads keeps drafts, so only an unload does.
     plugin.onCleanup(
-      use.router.block((transition) => transition.action !== "unload" || ![...drafts.values()].some(unsent), {
+      use.router.block((transition) => transition.action !== "unload" || (outgoing.size === 0 && ![...drafts.values()].some(unsent)), {
         label: "composer: an unsent prompt asks before the tab closes",
       }),
     );

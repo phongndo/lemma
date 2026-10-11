@@ -170,7 +170,9 @@ export interface ExecuteOptions {
   /**
    * Where the call's live output goes instead of its own `ToolOutput`: a tool that runs others passes its
    * `ToolContext.update`, so their output shows as its own and ends with it. A listener: an Effect it returns
-   * runs, and its failure (thrown, rejected, or failed) is logged, never the tool's.
+   * runs, and its failure (thrown, rejected, or failed) is logged, never the tool's. Its chunks reach it one at a time,
+   * in order, each once the last one's Effect has ended, and a call that finishes returns only after they all have: a
+   * slow listener slows the call, and one that never ends holds it. A call cut off (cancelled, interrupted) waits on none.
    */
   readonly update?: (chunk: string) => Awaitable<void, unknown>;
 }

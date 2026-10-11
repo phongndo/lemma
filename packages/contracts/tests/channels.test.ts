@@ -5,6 +5,7 @@ import { TestClock } from "effect/testing";
 import { definePlugin, Event, Events, makeCore, makeLoader, PluginContext, Registries } from "@lemma/core";
 import type { PluginSource } from "@lemma/core";
 import {
+  changesSince,
   channelProblem,
   Channels,
   defineChannel,
@@ -444,4 +445,13 @@ describe("a request while what answers changes", () => {
         }),
       ),
     ));
+});
+
+describe("changesSince", () => {
+  test("tells what differs from the one before, the start first, so a change made before the stream began is told", async () => {
+    // The registry had changed to [1, 2] before its stream was subscribed: its first list already holds the change.
+    const lists: Stream.Stream<readonly number[]> = Stream.make([1, 2], [1, 2], [2]);
+    const told = await Effect.runPromise(Stream.runCollect(changesSince<readonly number[], never, never>([1], lists, (a, b) => a.join() === b.join())));
+    expect([...told]).toEqual([[1, 2], [2]]);
+  });
 });

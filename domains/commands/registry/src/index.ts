@@ -1,7 +1,7 @@
 import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries } from "@lemma/core";
-import { Channels, Inspectors, InteractionError, Paths, withContribution } from "@lemma/contracts";
+import { changesSince, Channels, Inspectors, InteractionError, Paths, withContribution } from "@lemma/contracts";
 import { CommandError, CommandRunner, Commands, CommandsChanged, serveCommands } from "@lemma/commands";
 import type { Command, CommandInfo } from "@lemma/commands";
 
@@ -12,8 +12,18 @@ const byCategoryThenTitle = (a: CommandInfo, b: CommandInfo): number =>
 
 const message = (cause: unknown): string => (cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause));
 
+/** What clients see of each command: its `CommandInfo` fields, never whatever else a plugin put on it. */
 const infoOf = (items: readonly { readonly item: Command; readonly pluginId: string }[]): CommandInfo[] =>
-  items.map(({ item: { run: _run, ...fields }, pluginId }) => ({ ...fields, source: pluginId })).sort(byCategoryThenTitle);
+  items
+    .map(({ item: { id, title, category, description, keywords }, pluginId }) => ({
+      id,
+      title,
+      ...(category === undefined ? {} : { category }),
+      ...(description === undefined ? {} : { description }),
+      ...(keywords === undefined ? {} : { keywords }),
+      source: pluginId,
+    }))
+    .sort(byCategoryThenTitle);
 
 /** A run of `id` stopped because its command was removed while it ran. */
 const withdrawn = (id: string, pluginId: string, cause?: unknown) =>
@@ -31,19 +41,14 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
   const snapshot = Effect.map(registries.items(Commands), infoOf);
 
   // Clients hear of every change once it is live, after a contributor is published and after it leaves: `commands.changes`
-  // follows this. Each list is told when it differs from the last told, the list at start the first: one changed before
+  // follows this. Each list is told when it differs from the one before, the list at start the first: one changed before
   // this stream began is in its first list, so none is skipped.
-  let told = JSON.stringify(yield* snapshot);
   yield* owner
     .background(
       "commands.changed",
-      Stream.runForEach(registries.changes(Commands), (items) => {
-        const commands = infoOf(items);
-        const key = JSON.stringify(commands);
-        if (key === told) return Effect.void;
-        told = key;
-        return events.publish(CommandsChanged, { commands });
-      }),
+      changesSince(yield* snapshot, Stream.map(registries.changes(Commands), infoOf), (before, after) => JSON.stringify(before) === JSON.stringify(after)).pipe(
+        Stream.runForEach((commands) => events.publish(CommandsChanged, { commands })),
+      ),
     )
     .pipe(Effect.orDie);
 
