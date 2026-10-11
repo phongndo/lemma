@@ -169,6 +169,47 @@ describe("trajectory", () => {
     expect(turns[0]!.usage).toMatchObject({ input: 20, output: 10 });
   });
 
+  it("keeps who shaped each step: the request's handlers, its compactions, each tool's credit, and the decision", () => {
+    const [turn] = trajectory(
+      log(
+        { type: "turn-start", turnId: "t1" },
+        { type: "message", turnId: "t1", message: { role: "user", content: [{ type: "text", text: "go" }], timestamp: 0 } },
+        { type: "step-start", turnId: "t1", stepId: "s1" },
+        { type: "compaction", summary: "Earlier, they said go.", firstKeptId: "e2", tokensBefore: 900, source: "context.compaction", turnId: "t1" },
+        {
+          type: "request",
+          turnId: "t1",
+          stepId: "s1",
+          model: "p/m",
+          composition: "c1",
+          system: "base",
+          tools: [bash],
+          contributions: [section("base", "base"), tool(bash)],
+          handlers: [{ source: "context.compaction", ms: 3.5, changed: ["+compaction"] }],
+        },
+        {
+          type: "message",
+          turnId: "t1",
+          stepId: "s1",
+          message: assistant([{ type: "toolCall", id: "call1", name: "bash", arguments: { command: "ls" } }], "toolUse"),
+        },
+        {
+          type: "message",
+          turnId: "t1",
+          stepId: "s1",
+          message: { role: "toolResult", toolCallId: "call1", toolName: "bash", content: [], isError: true, timestamp: 0 },
+          credit: { checks: [{ source: "plan-mode", allowed: false, ms: 0.2, reason: "read only" }] },
+        },
+        { type: "step-end", turnId: "t1", stepId: "s1", decision: { result: "continue", why: "tool results to read" } },
+      ),
+    );
+    const [step] = turn!.steps;
+    expect(step!.request?.handlers).toEqual([{ source: "context.compaction", ms: 3.5, changed: ["+compaction"] }]);
+    expect(step!.compactions).toEqual([{ eventId: "e4", at: 1003, source: "context.compaction", tokensBefore: 900, summary: "Earlier, they said go." }]);
+    expect(step!.tools[0]!.credit).toEqual({ checks: [{ source: "plan-mode", allowed: false, ms: 0.2, reason: "read only" }] });
+    expect(step!.decision).toEqual({ result: "continue", why: "tool results to read" });
+  });
+
   it("resolves the omitted header and marks what changed", () => {
     const unchanged = turns[0]!.steps[1]!.request!;
     expect(unchanged.system).toBe("BASE\n\nENV 1");

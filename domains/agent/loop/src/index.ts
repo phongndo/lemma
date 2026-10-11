@@ -213,6 +213,7 @@ export default definePlugin({
       hooks: yield* Hooks,
       events: yield* Events,
       sections,
+      trace: owner.trace,
     };
     const { events } = services;
     const settings = {

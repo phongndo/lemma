@@ -44,8 +44,9 @@ import { domainPlugins } from "../../../scripts/plugins.ts";
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
  * 8. The devtools dock under the app, and each panel shows it as it runs (the
- *    host's events and its domains' streams, the channels it serves): a
- *    capability the runtime provides is the web app's, not a missing one.
+ *    host's events and its domains' streams, the channels it serves, the
+ *    host's and the page's traces): a capability the runtime provides is the
+ *    web app's, not a missing one.
  * 9. While a turn runs, the composer steers it or queues a prompt for after
  *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
  *    a steer shows in its turn. A running turn's thread left and opened again,
@@ -756,6 +757,16 @@ const parts = async () => {
   await page.click(".dt-chip >> text=Follow");
   await atNewest("Follow did not bring the trajectory back to its newest row");
   await page.setViewportSize({ width: 1200, height: 900 });
+  // A model call's pipeline, from the log: the compaction its request made, its handlers, and why the turn stopped.
+  await page.click(".trj tr[data-kind=assistant] >> nth=-1");
+  await page.click("[aria-label='Event details'] [role=tab] >> text=Pipeline");
+  await page.waitForSelector("[aria-label=Handlers] tr:has(td:text-is('context.compaction')) >> text=+compaction");
+  await page.waitForSelector(".dt-section h4 >> text=Compaction");
+  await page.waitForSelector(".dt-section h4 >> text=Then it stopped");
+  // A tool call's: who checked it.
+  await page.click(".trj tr[data-kind=tool] >> nth=0");
+  await page.click("[aria-label='Event details'] [role=tab] >> text=Pipeline");
+  await page.waitForSelector("[aria-label=Guards] tr:has(td:text-is('plan-mode')) >> text=allowed");
   await page.goBack();
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread);
   await page.waitForSelector(".turn");
@@ -1083,7 +1094,7 @@ const parts = async () => {
     "examples/todo added no view of its tool's calls",
   );
   expectNoErrors("an example's web half");
-  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; an example's web half adds a view and its tool's";
+  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
 };
 
 // 8–9: the devtools, and a turn while it runs.
@@ -1190,6 +1201,31 @@ const devtools = async () => {
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Inspectors");
   await page.click("[aria-label=Inspectors] tr:has-text('Tools')");
   await page.waitForSelector("[aria-label='Inspector snapshot'] td:text-is('bash')");
+  // Trace: the page's spans as traces, each opening to its waterfall; a filter narrows them; each plugin's time; and
+  // the composition's changes, the host's from its start.
+  await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Trace");
+  await page.click("[aria-label='Which trace'] button:text-is('Page')");
+  await page.fill("[aria-label='Filter spans']", "plugin:frame name:core.activate");
+  await page.waitForSelector("[aria-label=Spans] tr[data-row]:has(button:text-is('frame.shell')) .trc-name >> text=core.activate");
+  assert(!(await page.locator("[aria-label=Spans] button:text-is('look.kit')").count()), "the trace's filter lets another plugin's spans through");
+  await page.click("[aria-label='Which trace'] button:text-is('Plugins')");
+  await page.waitForSelector("[aria-label='Plugins by time'] tr:has(button:text-is('frame.shell'))");
+  assert(!(await page.locator("[aria-label='Plugins by time'] button:text-is('look.kit')").count()), "the trace's plugin profile ignores its filter");
+  await page.click("[aria-label='Which trace'] button:text-is('Host')");
+  await page.click("[aria-label='Which trace'] button:text-is('Changes')");
+  await page.waitForSelector("[aria-label='Composition changes'] td:text-is('start')");
+  await page.click("[aria-label='Which trace'] button:text-is('Spans')");
+  await page.fill("[aria-label='Filter spans']", "");
+  // A plugin's details lead to its spans.
+  await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Plugins");
+  await page.click("[aria-label='Plugins toolbar'] button:text-is('Host')");
+  await page.fill("[aria-label='Filter plugins']", "agent.loop");
+  await page.click("[aria-label=Plugins] tr:has(td:first-child:text-is('agent.loop'))");
+  await page.click("[aria-label='Plugin details'] button:text-is('Spans')");
+  await page.waitForFunction(() => (document.querySelector("[aria-label='Filter spans']") as HTMLInputElement | null)?.value === "plugin:agent.loop");
+  await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Plugins");
+  await page.fill("[aria-label='Filter plugins']", "");
+  await page.click("[aria-label='Plugins toolbar'] button:text-is('Web app')");
   const snapshot = await page.evaluate(async () => {
     const { Devtools } = (await import("/src/ui/api.ts" as string)).api.contracts;
     return JSON.parse(JSON.stringify((await (window as any).lemma.service(Devtools)).snapshot()));
@@ -1351,7 +1387,7 @@ const devtools = async () => {
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
-  return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, and inspectors; a running turn takes steers and queued prompts, and outlives its thread being left and the agent restarting; a failed send is retried with its request id";
+  return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, inspectors, and the traces, filtered, by plugin, and their changes; a running turn takes steers and queued prompts, and outlives its thread being left and the agent restarting; a failed send is retried with its request id";
 };
 
 // 10: the prompt rail.
