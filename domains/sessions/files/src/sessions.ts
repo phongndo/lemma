@@ -4,7 +4,16 @@ import type { Context, Scope } from "effect";
 import { Events, Hooks, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
 import { Notice, Paths } from "@lemma/contracts";
-import { SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, SessionRemoveHook } from "@lemma/sessions";
+import {
+  SessionAppended,
+  SessionChanged,
+  SessionCheckedOut,
+  SessionCheckoutHook,
+  SessionError,
+  SessionEvent,
+  SessionRemoved,
+  SessionRemoveHook,
+} from "@lemma/sessions";
 import type { SessionInfo, Sessions } from "@lemma/sessions";
 import { errorCode } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
@@ -379,21 +388,40 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         );
       });
 
-    const checkout: Service["checkout"] = (sessionId, target) =>
+    /** What `checkout` does once every `SessionCheckoutHook` handler let it. */
+    const checkoutNow = (sessionId: string, target: string) =>
       Effect.gen(function* () {
         const entry = yield* locate(sessionId);
         return yield* entry.lock.withPermits(1)(
           Effect.gen(function* () {
             const open = yield* openLocked(entry);
             if (!open.byId.has(target)) return yield* notFound(sessionId, `Event ${target} does not exist in session ${sessionId}`);
+            const from = open.leaf;
             const at = yield* Clock.currentTimeMillis;
-            yield* commit(entry, open, { type: "checkout", leaf: target, at }, () => {
-              open.leaf = target;
-              open.updatedAt = Math.max(open.updatedAt, at);
-            });
+            yield* commit(
+              entry,
+              open,
+              { type: "checkout", leaf: target, at },
+              () => {
+                open.leaf = target;
+                open.updatedAt = Math.max(open.updatedAt, at);
+              },
+              events.publish(SessionCheckedOut, { sessionId, from, to: target }),
+            );
             return entry.info;
           }),
         );
+      });
+
+    const checkout: Service["checkout"] = (sessionId, target) =>
+      Effect.gen(function* () {
+        const from = (yield* locate(sessionId)).info.leaf;
+        return yield* hooks
+          .invoke(SessionCheckoutHook, { sessionId, eventId: target, from }, (input) => checkoutNow(input.sessionId, input.eventId))
+          .pipe(
+            // Hook misuse and a closing core are defects here: the contract's error channel is SessionError.
+            Effect.catch((error) => (error._tag === "SessionError" ? Effect.fail(error) : Effect.die(error))),
+          );
       });
 
     const mark: Service["mark"] = (sessionId, marks) =>

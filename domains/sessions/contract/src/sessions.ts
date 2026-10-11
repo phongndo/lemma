@@ -194,6 +194,30 @@ export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/
  */
 export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
 
+/** A checkout asked for: the session, the event its leaf moves to, and the leaf it moves from (when it was asked). */
+export interface CheckoutRequest {
+  readonly sessionId: string;
+  readonly eventId: string;
+  readonly from: string | undefined;
+}
+
+/**
+ * Around every `Sessions.checkout`, whoever calls it; the terminal moves the leaf. A handler refuses a checkout by
+ * failing instead of calling `next` (a plugin keeping a session on its branch while it works there), or acts on one
+ * after `next` succeeded. A provider of `Sessions` runs each checkout through it.
+ */
+export const SessionCheckoutHook = Hook.make<CheckoutRequest, SessionInfo, SessionError>("lemma/session.checkout", {
+  summary: { input: (request) => ({ session: request.sessionId, to: request.eventId }) },
+});
+
+/**
+ * A session's leaf moved (`Sessions.checkout`): later appends branch from `to`. Published by a provider of `Sessions`
+ * after the move is durable, before `SessionChanged` for it.
+ */
+export const SessionCheckedOut = Event.make<{ readonly sessionId: string; readonly from: string | undefined; readonly to: string }>(
+  "lemma/session.checked-out",
+);
+
 /** A change to how a session is filed; an absent field keeps its value. */
 export interface SessionMarks {
   readonly pinned?: boolean;
@@ -218,7 +242,10 @@ export class Sessions extends Context.Service<
     readonly events: (sessionId: string, options?: { readonly after?: number }) => Effect.Effect<readonly SessionEvent[], SessionError>;
     /** Root-to-leaf events of the current branch, or of the branch ending at `leaf`. */
     readonly branch: (sessionId: string, options?: { readonly leaf?: string }) => Effect.Effect<readonly SessionEvent[], SessionError>;
-    /** Point the leaf at an existing event; later appends branch from there. */
+    /**
+     * Point the leaf at an existing event; later appends branch from there. Runs through `SessionCheckoutHook`, and
+     * publishes `SessionCheckedOut` once the leaf has moved.
+     */
     readonly checkout: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /** Pins or archives it. Neither moves the leaf nor `updatedAt`: filing a session is not activity in it. */
     readonly mark: (sessionId: string, marks: SessionMarks) => Effect.Effect<SessionInfo, SessionError>;
