@@ -13,6 +13,8 @@ A session as the web app shows it: the thread page, its views (the transcript, t
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                                                                                                                                                                                     |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Add       | `Views` (a view of a thread), `ToolViews` (how a tool's calls show), `ThreadHeader`, `ThreadActions`, `ComposerControls`, `ComposerCompletions`, `ComposerActions`, `ComposerNotices`, `ComposerFooter`, `TrajectoryTabs`, `TrajectoryActions`               |

@@ -8,6 +8,8 @@ The agent: the turn loop that asks a model, runs the tools it calls, and logs ea
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                                                                        |
 | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add       | `PromptSections`: a section of the system prompt, written for each request, between the agent's base (`SectionOrder.base`) and environment      |

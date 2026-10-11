@@ -8,6 +8,8 @@ Stored API keys and OAuth tokens. Its contract is [`@lemma/credentials`](contrac
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                           |
 | --------- | ---------------------------------------------------------------------------------- |
 | Add       | Nothing                                                                            |

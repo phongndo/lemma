@@ -12,6 +12,8 @@ Models and their providers: what the agent asks, and how a person connects one. 
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                                                                   |
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
 | Add       | `Providers`: a provider (an endpoint speaking a protocol the llm plugin knows, and its models). In the web app, the Providers page's parts |

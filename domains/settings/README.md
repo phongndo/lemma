@@ -9,6 +9,8 @@ Settings: the page, its sections and groups, and the Plugins page. Its contract 
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                                         |
 | --------- | ------------------------------------------------------------------------------------------------ |
 | Add       | `SettingsSections`, `SettingsGroups`, `PluginTabs` (a tab of a plugin's details), `PluginsFacts` |

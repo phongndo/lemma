@@ -224,6 +224,29 @@ for (const name of hostContracts) {
 }
 report("Domain contract violations", contractProblems, "domain contracts: ok");
 
+// Each domain's README says what its contract offers in each of the five shapes (docs/plugins.md): an extension point
+// a contract declares (a registry, hook, event, slot, part, or capability) that its README does not name is one a
+// plugin author cannot find. Every domain has a README, one with no contract too (`context`, `transport`).
+const extensionPoint =
+  /^export (?:const|class) ([A-Z]\w*)\b[^\n]*?(?:Registry\.make|Hook\.make|Event\.make|defineSlot|definePart|extends Context\.Service)\b/gm;
+const docProblems: string[] = [];
+for (const domain of readdirSync(domainsDir).filter((entry) => statSync(join(domainsDir, entry)).isDirectory())) {
+  const readme = join(domainsDir, domain, "README.md");
+  if (!existsSync(readme)) {
+    docProblems.push(`domains/${domain}: no README.md (its plugins, and what its contract offers in each shape)`);
+    continue;
+  }
+  const text = readFileSync(readme, "utf8");
+  const contract = join(domainsDir, domain, "contract", "src");
+  if (!existsSync(contract)) continue;
+  for (const file of walk(contract).filter((path) => /\.(ts|tsx)$/.test(path))) {
+    for (const [, name] of readFileSync(file, "utf8").matchAll(extensionPoint)) {
+      if (!text.includes(`\`${name}\``)) docProblems.push(`domains/${domain}/README.md: does not name \`${name}\` (${relative(root, file)})`);
+    }
+  }
+}
+report("Domain READMEs missing what their contracts offer", docProblems, "domain docs: ok");
+
 const pluginProblems: string[] = [];
 for (const pkg of pluginPackages) {
   const home = relative(root, pkg.dir);

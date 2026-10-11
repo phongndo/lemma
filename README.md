@@ -12,7 +12,8 @@ Lemma runs from a checkout and is under active development.
 - [Usage](docs/usage.md): run the host, the web app, the desktop app, and the CLI
 - [Configuration](docs/configuration.md): config files, plugins, project trust, and providers
 - [Remote access](docs/remote.md): run the host on one machine and use it from another
-- [Web app](apps/web/README.md): UI plugins and files, addresses, and devtools
+- [Writing plugins](docs/plugins.md): the five shapes, where to plug in, and coming from Pi
+- [Web app](apps/web/README.md): its plugins and web halves, addresses, and devtools
 - [CLI](apps/cli/README.md): `lemma`, for people and agents
 - [Architecture](docs/architecture.md): packages, plugins, the runtime, and the session log
 - [Kernel design](packages/core/DESIGN.md): the plugin kernel's rationale and limits

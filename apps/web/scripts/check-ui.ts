@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1015,7 +1015,31 @@ const parts = async () => {
     (window as any).removeMalformed();
   });
   errors.splice(0);
-  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page";
+
+  // An example's web half runs as a user's would, from the plugin directory: examples/todo adds a view of the thread
+  // and how its tool's calls show.
+  const todo = readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../../../examples/todo/web.js"), "utf8");
+  await page.goto(`${url}/threads/s1?mock`);
+  await settled(page);
+  await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
+  await page.evaluate((source) => {
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setUiFiles([{ name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url }]);
+  }, todo);
+  await page
+    .click("[role=tablist][aria-label='Thread view'] [role=tab][aria-label=Todos]", { timeout: 10_000 })
+    .catch(() => assert.fail("examples/todo added no Todos view"));
+  await page.waitForSelector(".todo-view >> text=No todos in this thread.");
+  assert.equal(
+    await page.evaluate(async () => {
+      const { ToolViews } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      return (window as any).lemma.slots().get(ToolViews, "todo")?.icon;
+    }),
+    "check",
+    "examples/todo added no view of its tool's calls",
+  );
+  expectNoErrors("an example's web half");
+  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a plugin adds a page; an example's web half adds a view and its tool's";
 };
 
 // 8–9: the devtools, and a turn while it runs.

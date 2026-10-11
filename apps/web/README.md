@@ -133,7 +133,9 @@ tokens do.
 
 ## Writing a plugin
 
-A plugin requires and provides capabilities, and adds items to slots.
+[Writing plugins](../../docs/plugins.md) covers a plugin's two halves and the
+shapes they meet the others in; this is the web half. A plugin requires and
+provides capabilities, and adds items to slots.
 The contracts declare them all: the runtime's in [`@lemma/ui`](../../packages/ui/src/index.ts), and each
 domain's in its own package (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …; a web half gets them all
 as `api.contracts`). The bundled plugins use nothing else:

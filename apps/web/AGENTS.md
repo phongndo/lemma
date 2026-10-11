@@ -19,7 +19,9 @@ replace it.
   `@lemma/ui` (the plugin API), contracts (`@lemma/<domain>`, and a host
   domain's web contract, `@lemma/<domain>/web`), and npm packages: never
   another plugin (`check-boundaries` fails it). `apps/web/src/bundled.ts`
-  lists the bundled ones.
+  lists the bundled ones, and `ui:check` fails unless it lists every web half
+  the domains' `lemma` manifests name. A host plugin's web half lives in its
+  package (`src/web.ts`, exported as `./web`), with its id, as the tools' do.
 - **A contract** is how plugins meet: a capability (a service with one
   provider), a slot (a list or region many fill), a part, a shared id
   (`SectionIds`, `ActionIds`), or a DOM convention (listed in `@lemma/ui`'s

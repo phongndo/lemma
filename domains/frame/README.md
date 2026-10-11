@@ -16,6 +16,8 @@ The page's frame: its regions, layers, docks, dialogs, and what shows in them be
 
 ## Extending it
 
+What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
+
 | Shape     | What the contract offers                                                    |
 | --------- | --------------------------------------------------------------------------- |
 | Add       | `Layers` (what covers the page), `Docks`, `SidebarActions`, `SidebarFooter` |

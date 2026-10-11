@@ -12,6 +12,9 @@ for Lemma's own plugins.
 Use:
 
 - [Architecture](docs/architecture.md) for which package owns what;
+- [Writing plugins](docs/plugins.md) for the five shapes plugins meet in, and a
+  domain's README (`domains/<domain>/README.md`) for its plugins and what its
+  contract offers in each;
 - [Kernel design](packages/core/DESIGN.md) and the [core README](packages/core/README.md) when changing `packages/core`;
 - a plugin's README for its contract and rationale when changing that plugin;
 - [the web app's AGENTS.md](apps/web/AGENTS.md) when changing the web app;
@@ -21,8 +24,14 @@ Use:
 ## Design
 
 - Build a bundled plugin so a user could have written it: it meets other
-  plugins only through contracts: the runtime's (`packages/contracts`) and each
-  domain's (`domains/<domain>/contract`; in the web app, `ui/contracts.ts`).
+  plugins only through contracts, the runtime's (`@lemma/contracts`, and in the
+  web app `@lemma/ui`) and each domain's (`domains/<domain>/contract`). Its
+  package names its halves in its `lemma` manifest, as a user's folder plugin
+  does, and a host plugin's web half shares its package and id.
+- Offer an extension point in one of the five shapes ([Writing
+  plugins](docs/plugins.md#the-five-shapes)): what plugins add is a registry or a
+  slot in the domain's contract, not a service method. Name it in the domain's
+  README; `scripts/check-boundaries.ts` fails one it does not name.
 - Keep `@lemma/core` domain-neutral: application contracts, persistence,
   transports, and UI belong to plugins.
 - Add to the runtime only what no plugin could provide, since nothing replaces
