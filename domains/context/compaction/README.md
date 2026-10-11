@@ -23,6 +23,11 @@ divider. Requires `Llm`.
 - **The cut.** The kept part starts at a prompt or a response, never between a
   tool call and its result, and at least one message is summarized. It may fall
   inside the running turn, so a long turn with many tool calls stays in bounds.
+- **Other plugins' say.** Each compaction runs through `CompactionHook`
+  ([`@lemma/context`](../contract/src/index.ts)), whose terminal is this
+  plugin's model writing the summary: a handler writes its own (no model call;
+  the event's `source` is that plugin), moves the cut, reworks the summary, or
+  skips the compaction.
 - **The summary.** A later compaction summarizes the previous summary with the
   messages after it. Tool output and long text are cut in what is sent, and the
   oldest messages go first so the request, with its answer of up to 8,192

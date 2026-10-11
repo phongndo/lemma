@@ -1,7 +1,10 @@
 import * as fs from "node:fs/promises";
-import { Effect, Stream } from "effect";
+import { Effect, Layer, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Events, makeCore } from "@lemma/core";
+import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
+import { CompactionHook } from "@lemma/context";
+import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Notice } from "@lemma/contracts";
 import { Agent } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
@@ -97,13 +100,13 @@ const long = (letter: string) => [{ type: "text" as const, text: letter.repeat(4
  * Two turns in one session, the second summarizing the first once 50 tokens (of a 100,000 window) are in use; the
  * second turn's model calls play `second` (a tool call makes a turn of two steps).
  */
-const twoTurns = (summary: Script, second: readonly Script[] = [reply("b")]) => {
+const twoTurns = (summary: Script, second: readonly Script[] = [reply("b")], others: readonly Plugin[] = []) => {
   const llm = fakeLlm([reply("a"), summary, ...second]);
   const toolset = testTools();
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, compaction], {
+        const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, compaction, ...others], {
           configs: { "context.compaction": { at: 0.0005, keepRecent: 10 } },
         });
         return yield* core.run(
@@ -145,7 +148,27 @@ const cutOff: Script = Stream.fromIterable<StreamEvent>([
   },
 ]);
 
+/** A plugin whose `CompactionHook` handler answers every compaction with `result` (given the request). */
+const answering = (id: string, result: (request: CompactionRequest) => CompactionResult) =>
+  definePlugin({
+    id,
+    layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(CompactionHook, (request) => Effect.succeed(result(request))))),
+  });
+
 describe("in a session", () => {
+  it("lets a plugin write the summary itself through CompactionHook: no model writes one, and it is credited", async () => {
+    const mine = answering("my-summary", (request) => ({ kind: "summary", summary: "Mine.", firstKeptId: request.branch[request.firstKept]!.id }));
+    const { events, requests } = await twoTurns(reply("b"), [], [mine]);
+    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, false]);
+    expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ summary: "Mine.", source: "my-summary" }]);
+  });
+
+  it("lets a plugin skip a compaction, which leaves the history as it is", async () => {
+    const { events, requests } = await twoTurns(reply("b"), [], [answering("keeps-all", () => ({ kind: "skip", reason: "keeps everything" }))]);
+    expect(requests).toHaveLength(2);
+    expect(events.some((event) => event.data.type === "compaction")).toBe(false);
+  });
+
   it("summarizes the earlier conversation before a call that would fill too much of the window", async () => {
     const { id, events, notices, requests, turns } = await twoTurns(reply("They asked about x; it was answered."));
     // The first turn's request, the summary, the second turn's request.
