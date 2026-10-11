@@ -18,6 +18,7 @@
     "@lemma/host": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
+    "@lemma/test-host": "workspace:*",
     "@lemma/workspace": "workspace:*",
     "effect": "4.0.1"
   },

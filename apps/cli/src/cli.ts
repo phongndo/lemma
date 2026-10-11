@@ -69,6 +69,7 @@ import {
   withdrawCommand,
 } from "./live.ts";
 import { findTarget, noLocalHost, remoteCommand, toCliError, tokenCommand } from "./remote.ts";
+import { checkPlugin, devPlugin, newPlugin, testPlugin } from "./develop.ts";
 import { readSession, runCommand } from "./run.ts";
 import { workspaceCommand } from "./workspace.ts";
 
@@ -99,6 +100,16 @@ Host
                                  web half's value is JSON when it parses and text otherwise
     --unset                      ...remove the field instead, back to its default
   reload                         Re-read config files and apply them
+
+Writing plugins (against this checkout; docs/plugins.md)
+  plugins new <id>               Make a folder plugin to start from in ./<id> (or --path): both halves, a
+                                 README, a test, and a tsconfig.json that types it against this checkout
+  plugins test [folder]          Run its tests (*.test.ts) on Node's test runner, importing what the host
+                                 supplies; @lemma/test-host runs it in real turns against a scripted model
+  plugins check [folder]         Start a host of its own with it, and say what it does and what went wrong
+  dev [folder]                   Run it in your host until Ctrl-C, reloaded on every change: linked into
+                                 your plugins directory, with a host running here when none is
+    --isolated                   ...in a host of its own instead: no sessions, providers, or config of yours
 
 A host on another machine (docs/remote.md)
   remote                         Which host commands go to (LEMMA_URL, remote.json, or local) and its URL
@@ -256,7 +267,12 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
       return remoteCommand(sub, arg, rest, io, options);
     case "token":
       return extra(1) ?? tokenCommand(io);
+    case "dev":
+      return positionals.length > 2 ? usage(`Unexpected argument "${positionals[2]}"`) : devPlugin(sub, io, { isolated: options.isolated }, run);
     case "plugins":
+      if (sub === "new") return extra(3) ?? newPlugin(arg, io, options);
+      if (sub === "test") return extra(3) ?? testPlugin(arg, io);
+      if (sub === "check") return extra(3) ?? checkPlugin(arg, io, run);
       if (sub === undefined || sub === "list") {
         return (
           extra(sub === undefined ? 1 : 2) ??
@@ -758,6 +774,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
         force: { type: "boolean", default: false },
         project: { type: "boolean", default: false },
         unset: { type: "boolean", default: false },
+        isolated: { type: "boolean", default: false },
         token: { type: "string" },
         "request-id": { type: "string" },
         "when-busy": { type: "string" },
@@ -815,6 +832,7 @@ export async function run(argv: readonly string[], io: Io): Promise<number> {
     force: values.force,
     project: values.project,
     unset: values.unset,
+    isolated: values.isolated,
     token: values.token,
     requestId: values["request-id"],
     whenBusy,

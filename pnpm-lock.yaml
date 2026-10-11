@@ -154,6 +154,9 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../domains/sessions/contract
+      '@lemma/test-host':
+        specifier: workspace:*
+        version: link:../../packages/test-host
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../domains/workspace/contract
@@ -2904,6 +2907,43 @@ importers:
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  packages/test-host:
+    dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../domains/agent/contract
+      '@lemma/composition':
+        specifier: workspace:*
+        version: link:../composition
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../core
+      '@lemma/host':
+        specifier: workspace:*
+        version: link:../host
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../domains/sessions/contract
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
+    devDependencies:
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
       typescript:
         specifier: 7.0.2
         version: 7.0.2

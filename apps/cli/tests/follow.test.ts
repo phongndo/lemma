@@ -183,6 +183,7 @@ const options: Options = {
   force: false,
   project: false,
   unset: false,
+  isolated: false,
   requestId,
 };
 

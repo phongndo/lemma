@@ -77,6 +77,8 @@ export interface Options {
   readonly force: boolean;
   readonly project: boolean;
   readonly unset: boolean;
+  /** `dev --isolated`: a host of its own. */
+  readonly isolated: boolean;
   readonly token?: string | undefined;
   /** `run`: the submission's id, for exactly-once delivery. */
   readonly requestId?: string | undefined;

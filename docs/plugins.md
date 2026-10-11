@@ -161,11 +161,29 @@ default export is a function receives `{ bundled }`, and a web half receives
 
 ## Testing
 
-A host half runs in a core of its own (`makeCore` from `@lemma/core`) beside
-the plugins it needs, or fakes of them; [todo's tests](../examples/todo/tests/todo.test.ts)
+`lemma plugins new <id>` makes a folder plugin to start from: both halves, a
+test, a README, and a `tsconfig.json` that type-checks its imports against
+this checkout, as the host runs them. Then, in its folder:
+
+- `lemma plugins test` runs its tests (`*.test.ts`) on Node's test runner. A
+  test runs the plugin in real turns with [`@lemma/test-host`](../packages/test-host/README.md):
+  the host's agent, sessions, and tool registry with it, and a model that
+  answers from a script. It asserts on what the model was sent, what the
+  tools did, and what the session logged.
+- `lemma plugins check` starts a host of its own with the plugin and says
+  what the plugin does (what it provides, requires, handles, and adds), or why
+  it does not run: a setup that threw, a missing web half, a folder named
+  otherwise than its plugin.
+- `lemma dev` links it into your plugins directory, so the host you have
+  running loads it, and again on every change; Ctrl-C unlinks it. With no host
+  running, or `--isolated`, it runs one of its own, without your sessions,
+  providers, or config.
+
+Unit tests need no host. A host half runs in a core of its own (`makeCore`
+from `@lemma/core`) beside the plugins it needs, or fakes of them; [todo's tests](../examples/todo/tests/todo.test.ts)
 run its tool through `tools.registry` against a fake `Sessions`. A tool alone
-runs with `@lemma/tools/testing`. A folder plugin is a workspace package of
-its own when it lives in this repository, as the examples are.
+runs with `@lemma/tools/testing`. A folder plugin in this repository is a
+workspace package of its own, as the examples are.
 
 When one misbehaves, [Debugging plugins](debugging.md) says where to look.
 

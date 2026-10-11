@@ -5,7 +5,9 @@
   "type": "module",
   "exports": {
     ".": "./src/main.ts",
-    "./paths": "./src/paths.ts"
+    "./paths": "./src/paths.ts",
+    "./bundled": "./src/bundled.ts",
+    "./runtime": "./src/runtime.ts"
   },
   "scripts": {
     "start": "node --conditions=lemma-source src/main.ts",

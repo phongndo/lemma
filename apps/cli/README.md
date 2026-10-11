@@ -1,8 +1,9 @@
 # @lemma/cli
 
 The `lemma` command: everything the web app can do, from a shell, for people
-and for agents. `lemma serve` runs the host in the terminal; every other
-command is a client of a running host. `lemma --help` lists the commands,
+and for agents, and the tools for writing plugins. `lemma serve` runs the host
+in the terminal; every other command is a client of a running host, but for
+those [writing plugins](#writing-plugins). `lemma --help` lists the commands,
 flags, and exit codes.
 
 ```sh
@@ -157,3 +158,19 @@ so the two show the same records and accept the same queries.
   `workspace` default to the directory the command runs in (`--all` lists
   every session). With a remote host that directory is this machine's: give
   the host's path with `--cwd` (`--path` for `workspace`).
+
+## Writing plugins
+
+`lemma plugins new`, `plugins test`, `plugins check`, and `dev` work on a
+plugin folder against the checkout the CLI runs from:
+[Writing plugins](../../docs/plugins.md#testing) says what each does.
+
+- **Their own hosts.** `plugins check`, and `dev` with no host running or
+  `--isolated`, start a host with `lemma serve` in a home of their own (a
+  temporary one, serving on a free port) and remove it when they end. `dev`
+  with a host running links the folder into that host's plugins directory
+  instead, and unlinks it on Ctrl-C; it refuses to replace a plugin of the
+  same name there.
+- **Imports.** `plugins test` runs Node with the `lemma-source` condition and a
+  resolve hook ([register.ts](src/register.ts)), so a test imports `@lemma/*`
+  and `effect` as the host supplies them, with no install step in the folder.

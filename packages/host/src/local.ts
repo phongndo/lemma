@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
-import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { Effect } from "effect";
 import { Diagnostic } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { entriesOf } from "./manifest.ts";
+import { shareHostPackages, VERSION } from "./resolve.ts";
 
 /**
  * Local plugins' host halves are `.ts`, `.js`, or `.mjs` files in `<home>/plugins`
@@ -15,42 +15,9 @@ import { entriesOf } from "./manifest.ts";
  * export is a plugin, an array of plugins, or a function of `{ bundled }` (the
  * bundled plugins by id) returning either, so a replacement can wrap the
  * bundled plugin it replaces and keep its updates. They run with the host's
- * permissions, like every plugin.
- *
- * Bare imports that the file's own location cannot resolve (`effect`,
- * `@lemma/core`, `@lemma/contracts`, a domain's contract such as
- * `@lemma/tools`) fall back to the host's packages, so a plugin file needs no
- * install step and shares the host's module instances. That is why the host's
- * package.json lists every host domain's contract, though it imports none.
- *
- * A plugin's own modules are versioned with it: its entry is imported as
- * `<file>?lemma-v=<version>`, and its relative imports carry the same version,
- * so an edit to any file of a folder plugin loads them all again rather than
- * the module cache's.
+ * permissions, like every plugin. Their bare imports fall back to the host's
+ * packages, and a plugin's own modules are versioned with it (`shareHostPackages`).
  */
-const VERSION = "lemma-v";
-let hooked = false;
-function shareHostPackages(): void {
-  if (hooked) return;
-  hooked = true;
-  registerHooks({
-    resolve(specifier, context, nextResolve) {
-      const resolved = (() => {
-        try {
-          return nextResolve(specifier, context);
-        } catch (error) {
-          if (specifier.startsWith(".") || specifier.startsWith("/") || specifier.includes(":")) throw error;
-          return nextResolve(specifier, { ...context, parentURL: import.meta.url });
-        }
-      })();
-      const version = context.parentURL?.startsWith("file:") ? new URL(context.parentURL).searchParams.get(VERSION) : null;
-      if (version === null || !specifier.startsWith(".") || !resolved.url.startsWith("file:")) return resolved;
-      const url = new URL(resolved.url);
-      url.searchParams.set(VERSION, version);
-      return { ...resolved, url: url.href };
-    },
-  });
-}
 
 /** Every source file of a folder plugin, but its dependencies' and hidden ones: what its version is made from. */
 const sourcesOf = async (dir: string): Promise<string[]> => {

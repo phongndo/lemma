@@ -1,0 +1,29 @@
+{
+  "name": "@lemma/test-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A plugin tested in real turns: the host's agent, sessions, and tool registry with it, and a model that answers from a script",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/composition": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/host": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@lemma/tools": "workspace:*",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}
