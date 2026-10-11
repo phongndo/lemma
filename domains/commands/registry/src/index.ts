@@ -30,11 +30,20 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
   const registries = yield* Registries;
   const snapshot = Effect.map(registries.items(Commands), infoOf);
 
-  // Clients hear of every change once it is live, after a contributor is published and after it leaves: `commands.changes` follows this.
+  // Clients hear of every change once it is live, after a contributor is published and after it leaves: `commands.changes`
+  // follows this. Each list is told when it differs from the last told, the list at start the first: one changed before
+  // this stream began is in its first list, so none is skipped.
+  let told = JSON.stringify(yield* snapshot);
   yield* owner
     .background(
       "commands.changed",
-      Stream.runForEach(Stream.drop(registries.changes(Commands), 1), (items) => events.publish(CommandsChanged, { commands: infoOf(items) })),
+      Stream.runForEach(registries.changes(Commands), (items) => {
+        const commands = infoOf(items);
+        const key = JSON.stringify(commands);
+        if (key === told) return Effect.void;
+        told = key;
+        return events.publish(CommandsChanged, { commands });
+      }),
     )
     .pipe(Effect.orDie);
 

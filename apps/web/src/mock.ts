@@ -445,12 +445,18 @@ export const createMockHost = (): Host => {
     ui = { ...ui, plugins: next, enabledIn, configIn };
     emit({ type: "ui-changed", ui });
   };
+  /** How late `turn-started` is published, for the UI check (`lemmaMock.delayTurnStarted`). */
+  let turnStartedDelay = 0;
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
     lemmaMock: {
       setUiFiles: (files: UiComposition["files"]) => {
         ui = { ...ui, files };
         emit({ type: "ui-changed", ui });
+      },
+      /** Publishes each `turn-started` this many milliseconds late: what a slow connection does to a prompt's acceptance. */
+      delayTurnStarted: (ms: number) => {
+        turnStartedDelay = ms;
       },
     },
   });
@@ -796,7 +802,9 @@ export const createMockHost = (): Host => {
     running.add(sessionId);
     const turn = { turnId, output: new Map<string, string>() };
     turns.set(sessionId, turn);
-    activity.publish({ type: "turn-started", sessionId, turnId });
+    // Late when asked (`lemmaMock.delayTurnStarted`): the page has shown the turn running, but not yet seen it start.
+    if (turnStartedDelay > 0) setTimeout(() => activity.publish({ type: "turn-started", sessionId, turnId }), turnStartedDelay);
+    else activity.publish({ type: "turn-started", sessionId, turnId });
     const text = content.find((part) => part.type === "text")?.text ?? "(image)";
     let total = emptyUsage;
     /** Steers placed in this turn, answered when it ends. */

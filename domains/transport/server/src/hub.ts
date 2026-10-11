@@ -55,13 +55,21 @@ export const makeHub = (
     yield* forward(Notice, (notice) => ({ type: "notice", notice }));
     yield* forward(PluginsChanged, (e) => ({ type: "plugins-changed", plugins: e.plugins.map(toPluginStatus) }));
     yield* forward(UiChanged, (ui) => ({ type: "ui-changed", ui }));
-    // The channels that answer, each time a different contribution answers for any id (not at start: clients list them).
+    // The channels that answer, each time a different contribution answers for any id. Not the list at start, which
+    // clients list themselves: one that changed before this stream began is in its first list, so each is told when it
+    // differs from the last told, the start's first.
+    const same = (before: readonly unknown[], after: readonly unknown[]) =>
+      before.length === after.length && before.every((contribution, index) => contribution === after[index]);
+    let told = answers(yield* registries.items(Channels));
     yield* owner.background(
       "channels-changed",
       registries.changes(Channels).pipe(
         Stream.map(answers),
-        Stream.changesWith((before, after) => before.length === after.length && before.every((contribution, index) => contribution === after[index])),
-        Stream.drop(1),
+        Stream.filter((current) => {
+          if (same(told, current)) return false;
+          told = current;
+          return true;
+        }),
         Stream.runForEach((current) => feed({ type: "channels-changed", channels: current.map(channelInfo) })),
       ),
     );

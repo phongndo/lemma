@@ -410,6 +410,37 @@ describe("execute", () => {
     );
   });
 
+  it("hands a slow listener every chunk, in order, before the call returns", async () => {
+    const chatty: Tool<unknown> = {
+      name: "chatty",
+      description: "",
+      input: Schema.Unknown,
+      execute: async (_input, { update }) => {
+        for (const chunk of ["a", "b", "c", "d"]) update?.(chunk);
+        return ok("done");
+      },
+    };
+    const received = await run(
+      [contributor("p", [chatty])],
+      Effect.gen(function* () {
+        const received: string[] = [];
+        const registry = yield* ToolRunner;
+        // The first chunk is the slowest, yielding to every other fiber many times: one fiber per chunk would let the later
+        // ones overtake it.
+        const slow = (chunk: string) => (chunk === "a" ? Effect.repeat(Effect.yieldNow, { times: 50 }) : Effect.void);
+        yield* registry.execute(
+          new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
+          new AbortController().signal,
+          {
+            update: (chunk) => slow(chunk).pipe(Effect.andThen(Effect.sync(() => void received.push(chunk)))),
+          },
+        );
+        return received;
+      }),
+    );
+    expect(received).toEqual(["a", "b", "c", "d"]);
+  });
+
   it("runs a caller's update as a listener: an Effect it returns runs, and its failures never reach the tool", async () => {
     const chatty: Tool<unknown> = {
       name: "chatty",

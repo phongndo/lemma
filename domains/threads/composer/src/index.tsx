@@ -297,7 +297,13 @@ function Composer(props: { deps: Deps }) {
   const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
   const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
 
+  /** A send asked for while another was still going out: it goes once that one is accepted. */
+  let next: "steer" | "follow-up" | undefined;
   const submit = async (whenBusy: "steer" | "follow-up" = "steer") => {
+    if (sending()) {
+      if (text().trim() !== "" || images().length > 0) next = whenBusy;
+      return;
+    }
     if (!canSend()) return;
     const content: PromptContent = [...(text().trim() === "" ? [] : [{ type: "text" as const, text: text() }]), ...images()];
     // Sending a new chat creates a session and switches to it, so remember which draft this was.
@@ -314,16 +320,24 @@ function Composer(props: { deps: Deps }) {
     }
     setSending(false);
     drafts.delete(key);
+    // What the person typed while this went out is theirs: only what was sent leaves the composer, or returns to it.
+    const unchanged = text() === sent.text && images() === sent.images;
+    const empty = text() === "" && images().length === 0;
     if (ok) {
-      setText("");
-      setImages([]);
-    } else {
+      if (unchanged) {
+        setText("");
+        setImages([]);
+      }
+    } else if (unchanged || empty) {
       // Refused: the prompt returns to the composer, which may now show the session `send` created.
       drafts.set(draftKey(), sent);
       setText(sent.text);
       setImages(sent.images);
     }
     queueMicrotask(resize);
+    const queued = next;
+    next = undefined;
+    if (ok && queued !== undefined) void submit(queued);
   };
 
   const insert = (value: string) => {
