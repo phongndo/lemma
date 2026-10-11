@@ -3,8 +3,7 @@ import { createBrowserHistory, createEntryStore, createRouter, interceptLinks } 
 import type { AnyRoute, KeyValueStorage } from "@lemma/router";
 import { createRouteSignals } from "@lemma/router-solid";
 import { Pages } from "@lemma/web";
-import type { NotifyService, Page, RouterService, WebPluginsService } from "@lemma/web";
-import type { SlotItem, SlotsService } from "@lemma/web";
+import type { NotifyService, Page, RouterService, WebPluginsService, SlotItem, SlotsService } from "@lemma/web";
 
 /** Search keys every navigation keeps: they say how the page runs, not what it shows. */
 const RETAIN = ["safe", "mock"];

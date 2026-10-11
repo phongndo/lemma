@@ -1,8 +1,7 @@
 import { Index, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import { cardTop, tickAt, tickNear, tickScale } from "./prompt-rail.ts";
 import type { PromptMark } from "@lemma/threads";
-import { ChevronIcon } from "@lemma/look";
-import { markdownText } from "@lemma/look";
+import { ChevronIcon, markdownText } from "@lemma/look";
 
 /** With less space than this beside the transcript's text, the prompt rail shows only while pointed at or focused. */
 const RAIL_ROOM = 48;

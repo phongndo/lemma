@@ -1,10 +1,8 @@
 import { Schema } from "effect";
 import { bindsTyping, matchesKeys, typing } from "@lemma/web/keys";
-import { KEYMAP_PLUGIN, keysFor, parseBindings } from "@lemma/actions";
-import { ActionIds, Actions } from "@lemma/actions";
+import { KEYMAP_PLUGIN, keysFor, parseBindings, ActionIds, Actions } from "@lemma/actions";
 import { Dialogs } from "@lemma/frame";
-import { Interactions, Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
 
 const KeymapConfig = Schema.Struct({
   bindings: Schema.optional(Schema.Array(Schema.String)).annotate({

@@ -181,7 +181,7 @@ export interface RestartReport {
  * one, so a plugin written for another is left out with a message naming the
  * version rather than failing at some later call.
  */
-export const HOST_API = 3;
+export const HOST_API = 4;
 /** What a plugin written for host API `version` requires; the host provides `HostApi(HOST_API)`. */
 export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, number> => Context.Service<`lemma/api@${number}`, number>(`lemma/api@${version}`);
 

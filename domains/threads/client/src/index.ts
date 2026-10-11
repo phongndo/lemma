@@ -2,20 +2,30 @@ import { batch, createEffect, createMemo, createSignal, on, untrack } from "soli
 import { startPrompt } from "@lemma/agent/prompt";
 import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
-import { branchOf, SessionChannels } from "@lemma/sessions";
+import { branchOf, SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { isRoute } from "@lemma/router";
 import type { AgentActivity, AgentView, PromptContent, TurnOptions } from "@lemma/agent";
 import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
-import { appendOutput, applyDelta, beginJoin, emptyLive, endTurn, joinLive, reconcileLive } from "@lemma/threads";
-import type { LiveState } from "@lemma/threads";
-import { appendLog, applySessionsChange, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "@lemma/threads";
-import type { KnownQueue } from "@lemma/threads";
-import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
+import {
+  appendOutput,
+  applyDelta,
+  beginJoin,
+  emptyLive,
+  endTurn,
+  joinLive,
+  reconcileLive,
+  appendLog,
+  applySessionsChange,
+  logFailure,
+  newerQueue,
+  resolveLeaf,
+  trackTurn,
+  upsertSession,
+  Threads,
+} from "@lemma/threads";
+import type { LiveState, KnownQueue, LogState } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
-import { Threads } from "@lemma/threads";
-import { Client, Notify, Router, Slots } from "@lemma/web";
-import type { LogState } from "@lemma/threads";
-import { defineWebPlugin } from "@lemma/web";
+import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 
 /** How long a preloaded log stays fresh enough to open with (ms). */
 const PRELOAD_MS = 15_000;

@@ -2,10 +2,8 @@ import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
 import { fontAvailable } from "./fonts.ts";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
-import { CORNERS, SCHEMES, TEXT_SIZES, WIDTHS, defaultTheme, themeFor, themeTokens } from "@lemma/look";
-import type { AppearanceSettings, Field, Look, Scheme } from "@lemma/look";
-import type { Accent, Font, Theme } from "@lemma/look";
-import { Markdown, Segmented, SendIcon, SettingRow } from "@lemma/look";
+import { CORNERS, SCHEMES, TEXT_SIZES, WIDTHS, defaultTheme, themeFor, themeTokens, Markdown, Segmented, SendIcon, SettingRow } from "@lemma/look";
+import type { AppearanceSettings, Field, Look, Scheme, Accent, Font, Theme } from "@lemma/look";
 import type { SlotItem } from "@lemma/web";
 
 /** What the plugins offer, by slot, in order. */

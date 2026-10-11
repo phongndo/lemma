@@ -20,7 +20,7 @@ import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
 import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
-import * as ui from "@lemma/web";
+import * as webRuntime from "@lemma/web";
 import { DEFAULT_PART_ORDER, defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema } from "@lemma/web";
 import type { Part } from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
@@ -37,7 +37,7 @@ const omit = <T extends object, K extends keyof T>(value: T, keys: readonly K[])
  * `api.definePart`, which gives a part no fallback, since a fallback belongs to no plugin and outlives the half.
  */
 export const contractModules = {
-  "@lemma/web": omit(ui, ["definePart", "createSlots"]),
+  "@lemma/web": omit(webRuntime, ["definePart", "createSlots"]),
   "@lemma/frame": frame,
   "@lemma/look": look,
   "@lemma/settings": settings,
@@ -143,4 +143,5 @@ export const api = {
   Schema: WebSchema,
 };
 
-export type WebApi = typeof api;
+/** What a web half's default export receives (not `WebApi`, the version key a plugin requires). */
+export type WebHalfApi = typeof api;

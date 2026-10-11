@@ -3,9 +3,8 @@ import type { Accessor } from "solid-js";
 import type { ChannelInfo } from "@lemma/contracts";
 import { PLUGIN_PANEL } from "@lemma/devtools";
 import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools";
-import type { ClientService } from "@lemma/web";
+import type { ClientService, SlotItem } from "@lemma/web";
 import { XIcon } from "@lemma/look";
-import type { SlotItem } from "@lemma/web";
 
 /**
  * What host plugins serve (`Channels`): each call and stream, and the plugin

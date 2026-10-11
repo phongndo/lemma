@@ -1,9 +1,7 @@
 import { Show, createSignal } from "solid-js";
 import { Layers } from "@lemma/frame";
-import { CodeBlocks } from "@lemma/look";
-import { Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
-import { Dialog } from "@lemma/look";
+import { CodeBlocks, Dialog } from "@lemma/look";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import { currentTheme, currentToken, onLookChange, tokenColor } from "@lemma/web/paint";
 import type { DiagramLook } from "./mermaid.ts";
 import { viewerScale } from "./viewer.ts";

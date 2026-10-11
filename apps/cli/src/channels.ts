@@ -12,7 +12,7 @@ import type { Failure, Io } from "./command.ts";
  * How commands reach the host's domains: through the channels their
  * plugins serve, typed by the declarations in @lemma/contracts
  * (`SessionChannels`, `AgentChannels`, `LlmChannels`, ...). The host's own
- * calls (`Host.*`, `Ui.*`, `Interaction.*`) and its event stream are the
+ * calls (`Host.*`, `Web.*`, `Interaction.*`) and its event stream are the
  * runtime's, reached as RPCs. A one-shot command calls over HTTP (`call`); a
  * command that watches the host does so over `@lemma/client`'s `Host`
  * (`openHost`), the reconnecting WebSocket the web app has, and reads its

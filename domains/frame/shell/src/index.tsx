@@ -2,10 +2,8 @@ import { Show, createSignal, onCleanup, onMount } from "solid-js";
 import { load, save } from "@lemma/web/storage";
 import { Actions } from "@lemma/actions";
 import { Docks, Layers, Layout, MainRegion, SidebarRegion } from "@lemma/frame";
-import { Root, Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
-import { Contained, Each } from "@lemma/web";
 import styles from "./shell.css?inline";
 
 const WIDTH_KEY = "lemma.sidebar.width";

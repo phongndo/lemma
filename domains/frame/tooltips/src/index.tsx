@@ -1,8 +1,7 @@
 import { Show, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import { Layers } from "@lemma/frame";
-import { Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import styles from "./tooltips.css?inline";
 
 const DELAY = 450;

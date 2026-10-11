@@ -1,8 +1,7 @@
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { Layers } from "@lemma/frame";
-import { Notify, Slots } from "@lemma/web";
+import { Notify, Slots, defineWebPlugin } from "@lemma/web";
 import type { Toast } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
 import { AlertIcon, CopyButton, ExternalIcon, XIcon } from "@lemma/look";
 import styles from "./toasts.css?inline";
 

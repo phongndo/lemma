@@ -4,10 +4,9 @@ import { HostError } from "@lemma/contracts";
 import { FILE_SEARCH_LIMIT, FileChannels } from "@lemma/workspace";
 import { fileView, mentionPath } from "./mentions.ts";
 import { ComposerCompletions } from "@lemma/threads";
-import { Client, Slots } from "@lemma/web";
+import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ComposerSuggestion } from "@lemma/threads";
-import { defineWebPlugin } from "@lemma/web";
 import { FileTypeIcon } from "@lemma/look";
 
 const FileMentionsConfig = Schema.Struct({

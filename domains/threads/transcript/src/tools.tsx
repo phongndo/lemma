@@ -3,15 +3,11 @@ import { formatDuration } from "@lemma/client/format";
 import { contentText } from "@lemma/llm";
 import type { ImageContent, TextContent } from "@lemma/llm";
 import { diffStats, parseDiff, readDetails } from "./details.ts";
-import { partialStringField, summarizeArgs, truncateLines } from "@lemma/threads";
+import { partialStringField, summarizeArgs, truncateLines, ToolViews, ChatTool } from "@lemma/threads";
 import { formatElapsed } from "./format.ts";
-import type { ToolResultView } from "@lemma/threads";
-import { ToolViews } from "@lemma/threads";
-import type { ChatToolProps, ThreadsService } from "@lemma/threads";
-import type { ClientService } from "@lemma/web";
-import type { SlotsService } from "@lemma/web";
+import type { ToolResultView, ChatToolProps, ThreadsService } from "@lemma/threads";
+import type { ClientService, SlotsService } from "@lemma/web";
 import { ChevronDownIcon, ChevronIcon, Icon, Spinner } from "@lemma/look";
-import { ChatTool } from "@lemma/threads";
 import { Contained } from "@lemma/web";
 import type { Chat } from "./config.ts";
 

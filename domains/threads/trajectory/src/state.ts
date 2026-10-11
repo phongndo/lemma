@@ -4,8 +4,7 @@ import type { AssistantRecord, LedgerRecord, LedgerSort } from "@lemma/sessions"
 import { wheeled } from "./scale.ts";
 import { copyText } from "@lemma/web/clipboard";
 import type { ThreadsService } from "@lemma/threads";
-import type { NotifyService } from "@lemma/web";
-import type { SlotsService } from "@lemma/web";
+import type { NotifyService, SlotsService } from "@lemma/web";
 
 export interface TrajectoryDeps {
   readonly threads: ThreadsService;

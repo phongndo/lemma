@@ -2,8 +2,7 @@ import { Show, createSignal } from "solid-js";
 import { describeReload } from "@lemma/contracts";
 import { Actions } from "@lemma/actions";
 import { SidebarFooter } from "@lemma/frame";
-import { Client, Notify, Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Client, Notify, Slots, defineWebPlugin } from "@lemma/web";
 import { RefreshIcon, Spinner } from "@lemma/look";
 import styles from "./reload.css?inline";
 

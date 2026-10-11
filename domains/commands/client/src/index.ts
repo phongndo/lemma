@@ -4,9 +4,8 @@ import { CommandChannels } from "@lemma/commands";
 import type { CommandInfo } from "@lemma/commands";
 import { Commands } from "@lemma/commands/web";
 import { Threads } from "@lemma/threads";
-import { Client, Notify } from "@lemma/web";
+import { Client, Notify, defineWebPlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
-import { defineWebPlugin } from "@lemma/web";
 
 /** What host plugins offer to run: the palette's host commands, `lemma do`. */
 export default defineWebPlugin({

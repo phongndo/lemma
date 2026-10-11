@@ -299,7 +299,7 @@ export const withdrawCommand =
 
 /**
  * `lemma events`: what the host publishes, as it happens. Its own events
- * (`RuntimeEvent`: notices, questions, and plugin, channel, and UI changes),
+ * (`RuntimeEvent`: notices, questions, and plugin, channel, and web changes),
  * and the bundled domains' streams: `agent.activity`, `sessions.changes`,
  * `llm.changes`, and `commands.changes`. `--session <id>` keeps only that
  * session's elements of the first two, and adds its log from now

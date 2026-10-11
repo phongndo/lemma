@@ -3,10 +3,8 @@ import type { RouteFailure } from "@lemma/router-solid";
 import { MainRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
-import { Notify, Pages, Router, Slots, WebPlugins } from "@lemma/web";
-import type { Page } from "@lemma/web";
-import type { SlotItem } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
+import type { Page, SlotItem } from "@lemma/web";
 import styles from "./pages.css?inline";
 
 /**

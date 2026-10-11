@@ -7,14 +7,12 @@ import { createQuickHold } from "@lemma/web/quick-pick";
 import { tildePath } from "@lemma/web/format";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
-import { Client, Notify, Slots } from "@lemma/web";
+import { Client, Notify, Slots, defineWebPlugin, Highlighted } from "@lemma/web";
 import { Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { DialogsService } from "@lemma/frame";
 import type { ClientService, NotifyService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { defineWebPlugin } from "@lemma/web";
 import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, Spinner } from "@lemma/look";
-import { Highlighted } from "@lemma/web";
 import styles from "./add-project.css?inline";
 
 const DIALOG = "add-project";

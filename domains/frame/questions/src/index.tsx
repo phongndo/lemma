@@ -2,9 +2,8 @@ import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { InteractionRequest } from "@lemma/contracts";
 import { stepFor } from "@lemma/web/keys";
 import { Layers } from "@lemma/frame";
-import { Interactions, Slots } from "@lemma/web";
+import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
 import type { InteractionsService } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
 import { Dialog } from "@lemma/look";
 import styles from "./interaction-dialog.css?inline";
 

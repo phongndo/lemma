@@ -1,6 +1,5 @@
 import { CodeBlocks } from "@lemma/look";
-import { Slots } from "@lemma/web";
-import { defineWebPlugin } from "@lemma/web";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import styles from "./highlight.css?inline";
 
 type Highlighter = typeof import("./highlight.ts");

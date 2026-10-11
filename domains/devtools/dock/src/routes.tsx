@@ -4,8 +4,7 @@ import { clockTime } from "@lemma/web/format";
 import { PLUGIN_PANEL } from "@lemma/devtools";
 import { Pages } from "@lemma/web";
 import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools";
-import type { RouterService } from "@lemma/web";
-import type { SlotItem, SlotsService } from "@lemma/web";
+import type { RouterService, SlotItem, SlotsService } from "@lemma/web";
 
 const VERDICT_CLASS: Readonly<Record<RouteVerdict["outcome"], string>> = {
   shown: "dt-ok",

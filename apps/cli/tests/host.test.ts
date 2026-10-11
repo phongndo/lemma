@@ -26,7 +26,7 @@ describe("against a running host", () => {
     const status = JSON.parse(result.out);
     expect(status.info.home).toBe(home);
     // What the host provides itself is no plugin's: it has no row.
-    expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@3"]);
+    expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@4"]);
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent.loop");
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).not.toContain("interaction");
     expect(status.plugins.every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
