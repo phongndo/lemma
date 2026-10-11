@@ -5,7 +5,7 @@ import * as web from "solid-js/web";
 import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels } from "@lemma/llm";
-import { SessionChannels } from "@lemma/sessions";
+import { NewThreadRoute, SessionChannels, ThreadRoute } from "@lemma/sessions";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
@@ -26,11 +26,44 @@ import type { Part } from "@lemma/ui";
 import * as workspace from "@lemma/workspace/web";
 import { bundled } from "../bundled.ts";
 
+/** `value` without `keys`, typed so. */
+const omit = <T extends object, K extends keyof T>(value: T, keys: readonly K[]): Omit<T, K> =>
+  Object.fromEntries(Object.entries(value).filter(([key]) => !(keys as readonly PropertyKey[]).includes(key))) as Omit<T, K>;
+
 /**
  * Every bundled contract as one namespace: the web runtime's (`@lemma/ui`: `Client`, `Slots`, `Router`, …) and each
- * domain's (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …), with the views that draw each part.
+ * domain's (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …), with the views that draw each part, and the thread
+ * routes (`@lemma/sessions`). Not what makes slots and parts: a web half makes those with `api.defineSlot` and
+ * `api.definePart`, which gives a part no fallback, since a fallback belongs to no plugin and outlives the half.
  */
-const contracts = { ...ui, ...frame, ...look, ...settings, ...actions, ...devtools, ...threads, ...llm, ...workspace, ...commands };
+export const contractModules = {
+  "@lemma/ui": omit(ui, ["definePart", "createSlots"]),
+  "@lemma/frame": frame,
+  "@lemma/look": look,
+  "@lemma/settings": settings,
+  "@lemma/actions": actions,
+  "@lemma/devtools": devtools,
+  "@lemma/threads": threads,
+  "@lemma/llm/web": llm,
+  "@lemma/workspace/web": workspace,
+  "@lemma/commands/web": commands,
+  "@lemma/sessions": { NewThreadRoute, ThreadRoute },
+};
+// One namespace of them all: a name two of them export would be one's, silently (tests/api.test.ts fails that).
+const contracts = {
+  ...contractModules["@lemma/ui"],
+  ...frame,
+  ...look,
+  ...settings,
+  ...actions,
+  ...devtools,
+  ...threads,
+  ...llm,
+  ...workspace,
+  ...commands,
+  NewThreadRoute,
+  ThreadRoute,
+};
 
 /**
  * What a UI file's default export receives when it is a function: the page's

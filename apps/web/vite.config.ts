@@ -1,7 +1,8 @@
 /// <reference types="vitest/config" />
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Scanner } from "@tailwindcss/oxide";
 import tailwindcss from "@tailwindcss/vite";
 import { compile } from "tailwindcss";
@@ -18,8 +19,22 @@ const token = process.env.LEMMA_HOST_TOKEN;
 const auth = token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } };
 
 const src = resolve(import.meta.dirname, "src");
-/** Where the bundled plugins' source is: the app's own, each domain's plugins and contracts, and the plugin API. */
-const sources = [src, resolve(import.meta.dirname, "../../domains"), resolve(import.meta.dirname, "../../packages/ui/src")];
+const domains = resolve(import.meta.dirname, "../../domains");
+const folders = (dir: string) =>
+  readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(dir, entry.name));
+/** The page's packages under domains/: those that draw, so depend on Solid (web plugins, web contracts), not the host's. */
+const webPackages = folders(domains)
+  .flatMap(folders)
+  .filter((dir) => {
+    if (!existsSync(join(dir, "package.json"))) return false;
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    return "solid-js" in { ...manifest.dependencies, ...manifest.peerDependencies };
+  })
+  .map((dir) => join(dir, "src"));
+/** Where the bundled plugins' source is: the app's own, the page's packages under domains/, and the plugin API. */
+const sources = [src, ...webPackages, resolve(import.meta.dirname, "../../packages/ui/src")];
 const CANDIDATES = "virtual:lemma/utility-candidates";
 
 /**

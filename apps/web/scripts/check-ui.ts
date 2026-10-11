@@ -1271,6 +1271,25 @@ const devtools = async () => {
 const rail = async () => {
   const { page, expectNoErrors } = await boot();
 
+  // The api a web half receives: its contracts merge with no name exported by two of them (one would hide the other),
+  // with no maker of slots and parts but the api's own, and with the thread routes.
+  const contracts = await page.evaluate(async () => {
+    const { api, contractModules } = await import("/src/ui/api.ts" as string);
+    const owners: Record<string, string[]> = {};
+    for (const [module, exports] of Object.entries(contractModules as Record<string, object>)) {
+      for (const name of Object.keys(exports)) (owners[name] ??= []).push(module);
+    }
+    const all = api.contracts as Record<string, unknown>;
+    return {
+      shadowed: Object.entries(owners).filter(([, modules]) => modules.length > 1),
+      makers: ["definePart", "createSlots"].filter((name) => all[name] !== undefined),
+      routes: ["ThreadRoute", "NewThreadRoute"].filter((name) => all[name] !== undefined),
+    };
+  });
+  assert.deepEqual(contracts.shadowed, [], "two contracts export one name, so api.contracts hides one");
+  assert.deepEqual(contracts.makers, [], "api.contracts hands out a maker of slots or parts");
+  assert.deepEqual(contracts.routes, ["ThreadRoute", "NewThreadRoute"], "api.contracts lacks the thread routes");
+
   // 10. The prompt rail: a tick per prompt; the card for the one pointed at is level with it, and a click goes there.
   await page.goto(`${url}/?mock`);
   await settled(page);
