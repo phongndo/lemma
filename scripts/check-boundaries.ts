@@ -373,7 +373,15 @@ for (const file of walk(web).filter((path) => /\.(ts|tsx)$/.test(path))) {
   const inRuntime = name.startsWith("runtime/");
   for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
     const specifier = match[1]!;
-    if (!specifier.startsWith(".")) continue;
+    if (!specifier.startsWith(".")) {
+      // The app knows plugins only as the bundled list: what runs is up to the composition. The api hands web halves
+      // look.kit's components as `api.defaults`, to wrap or fall back to, the one other way in.
+      const [first = "", second = ""] = specifier.split("/");
+      const allowed = name === "bundled.ts" || (name === "ui/api.ts" && specifier === "@lemma/look-kit/defaults");
+      if (pluginNames.has(`${first}/${second}`) && !allowed)
+        uiProblems.push(`apps/web/src/${name}: imports the plugin "${specifier}" (the app knows plugins only through bundled.ts)`);
+      continue;
+    }
     const to = relative(web, resolve(dirname(file), specifier));
     if (to.startsWith("runtime/") && !inRuntime && name !== "ui/boot.tsx") {
       uiProblems.push(`apps/web/src/${name}: imports the runtime "${specifier}" (require its capability from @lemma/ui)`);

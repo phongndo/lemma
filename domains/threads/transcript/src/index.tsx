@@ -746,9 +746,10 @@ export default defineUiPlugin({
     part(ChatWorkGroupPart, WorkGroupView);
     part(ChatWorkingPart, WorkingView);
     part(ChatTurnFooterPart, TurnFooter);
+    // Before a view added without an order (0), whatever its plugin's id: a thread opens on its transcript.
     slots.add(Views, {
       id: "transcript",
-      order: 0,
+      order: -10,
       title: "Transcript",
       icon: ChatIcon,
       composer: true,

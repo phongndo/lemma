@@ -170,7 +170,8 @@ const slotViews = (slots: SlotsService): SlotView[] =>
 
 const snippet = (view: SlotView): string => {
   const target = view.contract === undefined ? `defineSlot(${JSON.stringify(view.name)})` : view.contract.name;
-  const from = view.contract === undefined ? "" : `import { ${view.contract.name} } from "${view.contract.from}";\n`;
+  // A web half takes the contracts from its api (no build step resolves an import); the name says which contract.
+  const from = view.contract === undefined ? "" : `const { ${view.contract.name} } = api.contracts; // ${view.contract.from}\n`;
   if (view.shows === "first") {
     const first = view.items[0]?.order ?? DEFAULT_PART_ORDER;
     return `${from}// One item shows: the first by order. To replace "${view.items[0]?.id ?? "it"}", add with a lower order.\nslots.add(${target}, { id: "my-plugin.${view.name}", order: ${first - 1}, component: Mine });`;

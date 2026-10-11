@@ -65,15 +65,17 @@ export const routesOf = (plugin: Plugin): readonly AnyRoute[] => definitions.get
  * original's. A replacement made this way keeps what the original gains in
  * later versions instead of a copy of it.
  *
- *   extendUiPlugin(api.bundled.toasts, (base) => ({ ...base, setup: (use, plugin) => { const made = base.setup(use, plugin); … return made; } }))
+ *   extendUiPlugin(api.bundled["frame.toasts"], (base) => ({ ...base, setup: (use, plugin) => { const made = base.setup(use, plugin); … return made; } }))
  */
 export function extendUiPlugin(
   plugin: Plugin | undefined,
   change: (definition: UiPluginDefinition<Capabilities, Capabilities, any>) => UiPluginDefinition<Capabilities, Capabilities, any>,
 ): Plugin {
-  // `api.bundled.notify`, say: the runtime's services are the app's own, not plugins to extend.
+  // `api.bundled.toasts` (an id without its domain), or `api.bundled.notify` (the runtime's, which is no plugin).
   if (plugin === undefined) {
-    throw new Error("No bundled plugin there: Client, Slots, Router, Notify, HostPlugins, Interactions, and UiPlugins are the web app's runtime, not plugins");
+    throw new Error(
+      "No bundled plugin there: a bundled plugin's id names its domain (frame.toasts, not toasts), and Client, Slots, Router, Notify, HostPlugins, Interactions, and UiPlugins are the web app's runtime, not plugins",
+    );
   }
   const definition = definitions.get(plugin);
   if (definition === undefined) throw new Error(`"${plugin.id}" was not made with defineUiPlugin, so it has no definition to extend`);

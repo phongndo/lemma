@@ -1,13 +1,13 @@
 /*
- * Sending a prompt over the agent's channels: `@lemma/client/prompt`. An entry
- * of its own, since the main one is the connection the web app's runtime
- * imports, which reaches no domain contract (scripts/check-boundaries.ts).
+ * Sending a prompt over the agent's channels: `@lemma/agent/prompt`, a client's
+ * helper. An entry of its own, so the contract's main entry, which host
+ * plugins import, does not bring a client's connection with it.
  */
 
 import { HostError } from "@lemma/contracts";
-import { AgentChannels } from "@lemma/agent";
+import { AgentChannels } from "./index.ts";
 import type { ChannelDeclaration } from "@lemma/contracts";
-import type { PromptContent, TurnOptions, WhenBusy } from "@lemma/agent";
+import type { PromptContent, TurnOptions, WhenBusy } from "./index.ts";
 import type { Host } from "@lemma/client";
 
 /** A random request id. `crypto.getRandomValues`, unlike `crypto.randomUUID`, exists outside secure contexts too (a page over plain HTTP). */
