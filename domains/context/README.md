@@ -1,6 +1,6 @@
 # context
 
-What the model is told beyond the conversation. The domain has no contract: its plugins add to the agent's ([`@lemma/agent`](../agent/contract/src/agent.ts)), as a plugin of your own would.
+What the model is told beyond the conversation, and how a conversation is kept within its model's window. Its contract is [`@lemma/context`](contract/src/index.ts): the hook around a compaction. Its plugins otherwise add to the agent's ([`@lemma/agent`](../agent/contract/src/agent.ts)), as a plugin of your own would.
 
 | Plugin                                       | Halves | What it does                                                                                                                    |
 | -------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -11,10 +11,10 @@ What the model is told beyond the conversation. The domain has no contract: its 
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                       |
-| --------- | ---------------------------------------------- |
-| Add       | The agent's `PromptSections`                   |
-| Intercept | The agent's `AgentRequestHook`                 |
-| Observe   | The agent's and the sessions' events           |
-| Call      | `Sessions`, `Llm`, and the rest, as any plugin |
-| Serve     | Nothing of its own                             |
+| Shape     | What the contract offers                                                                                                      |
+| --------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Add       | The agent's `PromptSections`                                                                                                  |
+| Intercept | `CompactionHook`: a compaction about to be made (write its summary, move its cut, or skip it); the agent's `AgentRequestHook` |
+| Observe   | The agent's and the sessions' events                                                                                          |
+| Call      | `Sessions`, `Llm`, and the rest, as any plugin                                                                                |
+| Serve     | Nothing of its own                                                                                                            |

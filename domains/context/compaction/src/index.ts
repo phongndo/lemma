@@ -1,11 +1,14 @@
 import { Data, Effect, Schema, Stream } from "effect";
 import { Notice } from "@lemma/contracts";
 import { AgentRequestHook } from "@lemma/agent";
+import { CompactionError, CompactionHook } from "@lemma/context";
+import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Llm, LlmRequest } from "@lemma/llm";
 import { modelView } from "@lemma/sessions";
 import type { RequestDraft } from "@lemma/agent";
 import type { ModelInfo, StreamEvent } from "@lemma/llm";
-import { definePlugin, Events } from "@lemma/core";
+import { definePlugin, Events, Hooks } from "@lemma/core";
+import type { HandlerStep } from "@lemma/core";
 import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript } from "./compact.ts";
 
 export { chooseCut, estimateTokens, transcript } from "./compact.ts";
@@ -54,6 +57,7 @@ export default definePlugin({
   setup: function* ({ llm }, owner) {
     const config = owner.config;
     const events = yield* Events;
+    const hooks = yield* Hooks;
     /** Per session, the turn in which writing a summary failed: not tried again until the next turn. */
     const failedIn = new Map<string, string>();
 
@@ -87,6 +91,22 @@ export default definePlugin({
           }),
         );
 
+    /** `CompactionHook`'s terminal: a model (the config's, else the request's) summarizes what comes before the cut. */
+    const write = (asked: CompactionRequest): Effect.Effect<CompactionResult, CompactionError> =>
+      Effect.gen(function* () {
+        const kept = asked.branch[asked.firstKept];
+        if (kept === undefined) return { kind: "skip", reason: `no event at ${asked.firstKept} to keep from` } as const;
+        const { start } = modelView(asked.branch);
+        const older = asked.branch.slice(start, asked.firstKept).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
+        const writer = yield* llm.model(config.model ?? asked.model);
+        // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
+        const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));
+        const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN);
+        const text = transcript(older, asked.previous, budget);
+        const written = yield* summarize(writer, text, output, asked.sessionId);
+        return { kind: "summary", summary: written.summary, firstKeptId: kept.id, usage: written.usage } as const;
+      }).pipe(Effect.mapError((error) => new CompactionError({ message: error.message, cause: error })));
+
     const compact = (draft: RequestDraft) =>
       Effect.gen(function* () {
         const model = yield* llm.model(draft.model);
@@ -99,23 +119,32 @@ export default definePlugin({
         if (tokens < config.at * model.contextWindow && draft.overflow !== true) return;
         const first = chooseCut(branch, Math.min(config.keepRecent, Math.floor(model.contextWindow * 0.3)));
         if (first === undefined) return;
-        const { start, compaction } = modelView(branch);
+        const { compaction } = modelView(branch);
         const previous = compaction === undefined ? undefined : branch[compaction]!.data;
-        const older = branch.slice(start, first).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
-        const writer = config.model === undefined ? model : yield* llm.model(config.model);
-        // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
-        const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));
-        const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN);
-        const text = transcript(older, previous?.type === "compaction" ? previous.summary : undefined, budget);
-        const written = yield* summarize(writer, text, output, draft.sessionId);
+        const request: CompactionRequest = {
+          sessionId: draft.sessionId,
+          turnId: draft.turnId,
+          model: draft.model,
+          contextWindow: model.contextWindow,
+          tokens,
+          reason: draft.overflow === true ? "overflow" : "threshold",
+          branch,
+          firstKept: first,
+          ...(previous?.type === "compaction" ? { previous: previous.summary } : {}),
+        };
+        const steps: HandlerStep<CompactionRequest, CompactionResult>[] = [];
+        const made = yield* hooks.invoke(CompactionHook, request, write, { onStep: (step) => void steps.push(step) });
+        if (made.kind === "skip") return;
+        // Written by the innermost handler that answered itself, or by this plugin's model (the terminal).
+        const writtenBy = steps.find((step) => step.next === undefined && step.output?.kind === "summary")?.pluginId ?? owner.id;
         yield* draft.append({
           type: "compaction",
-          summary: written.summary,
-          firstKeptId: branch[first]!.id,
+          summary: made.summary,
+          firstKeptId: made.firstKeptId,
           tokensBefore: tokens,
-          source: owner.id,
+          source: writtenBy,
           turnId: draft.turnId,
-          usage: written.usage,
+          ...(made.usage === undefined ? {} : { usage: made.usage }),
         });
         yield* events.publish(Notice, {
           level: "info",
