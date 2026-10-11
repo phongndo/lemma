@@ -182,6 +182,7 @@
 }
 
 .inspector-domain .chevron {
+  display: inline-flex;
   flex: none;
   color: var(--text-3);
   transition: transform 0.12s;
@@ -406,7 +407,9 @@
  * button returns to the table. Two panes each half the height would each show a sliver, cut off.
  */
 @container inspector (max-width: 860px) {
+  /* What the page's script reads to know the details stand in the table's place. */
   .inspector-split {
+    --inspector-narrow: 1;
     display: block;
     overflow-y: auto;
   }

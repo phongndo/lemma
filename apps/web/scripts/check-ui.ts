@@ -327,9 +327,13 @@ const toggling = async () => {
   // The table shows the plugins as they are organized: a row per domain, in order, folded until opened, which opens to
   // its plugins, a plugin's two halves one row of them.
   const domains = await page.evaluate(() =>
-    [...document.querySelectorAll(".inspector-table [role=rowgroup]")].map((group) => group.getAttribute("aria-label")),
+    [...document.querySelectorAll(".inspector-table [role=rowgroup]")].map((group) => group.getAttribute("aria-label") ?? ""),
   );
-  assert.deepEqual(domains, [...domains].sort(), "the Plugins page's domains are not in order");
+  assert.deepEqual(
+    domains,
+    [...domains].sort((a, b) => a.localeCompare(b)),
+    "the Plugins page's domains are not in order",
+  );
   const bash = page.locator(".inspector-row[data-key='host:tools.bash']");
   assert.equal(await bash.count(), 0, "a domain's plugins show before it is opened");
   await domainRow("tools").click();
