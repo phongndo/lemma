@@ -58,7 +58,7 @@ describe("project context", () => {
   it("adds a section between the agent's base prompt and its environment, written for the request's directory", async () => {
     await put("repo/AGENTS.md", "Use tabs.");
     const paths = pathsPlugin(path.join(dir, "home"), { cwd: dir });
-    const request: SectionRequest = { sessionId: "s", turnId: "t", cwd: path.join(dir, "repo"), model: "p/m", tools: [] };
+    const request: SectionRequest = { sessionId: "s", turnId: "t", cwd: path.join(dir, "repo"), model: "p/m", tools: [], branch: [] };
     const [added, text, empty] = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {

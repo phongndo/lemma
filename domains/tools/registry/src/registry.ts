@@ -168,6 +168,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           spec: entryOf(tool).spec,
           ...(tool.replay === undefined ? {} : { replay: tool.replay }),
           ...(tool.parallel === undefined ? {} : { parallel: tool.parallel }),
+          ...(tool.direct === undefined ? {} : { direct: tool.direct }),
         }))
         .sort((a, b) => Order.String(a.spec.name, b.spec.name)),
     );
@@ -207,6 +208,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             update: output.update,
             maxResultChars: options.maxResultChars,
             ...(call.offered === undefined ? {} : { offered: call.offered }),
+            ...(call.leafId === undefined ? {} : { leafId: call.leafId }),
           };
           return yield* runTool(entry.tool, input, context, signal).pipe(Effect.ensuring(Effect.sync(output.flush)));
         });

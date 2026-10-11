@@ -377,7 +377,7 @@ export const createMockHost = (): Host => {
     bundled("agent.loop", {
       provides: ["lemma/Agent"],
       requires: ["lemma/Sessions", "lemma/Llm", "lemma/ToolRunner", "lemma/HostControl"],
-      contributes: [{ name: "lemma/agent.sections", items: 2, keys: ["base", "environment"] }],
+      contributes: [{ name: "lemma/agent.sections", items: 2, keys: ["agent.base", "agent.environment"] }],
     }),
     bundled("context.compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
     bundled("context.project", { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] }),

@@ -318,7 +318,10 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
     const index = chain.findIndex((entry) => entry.plugin === plugin().id && entry.order === order);
     return chain.length > 1 ? `${index + 1} of ${chain.length}` : "only handler";
   };
-  const added = () => (plugin().contributes ?? []).filter((registry) => registry.name !== CHANNELS);
+  // A part's slot (`part.*`) is how a web half takes over drawing a piece: an intercept, in the guide's shapes.
+  const isPart = (name: string) => name.startsWith("part.");
+  const added = () => (plugin().contributes ?? []).filter((registry) => registry.name !== CHANNELS && !isPart(registry.name));
+  const parts = () => (plugin().contributes ?? []).filter((registry) => isPart(registry.name));
   const channels = () => (plugin().contributes ?? []).find((registry) => registry.name === CHANNELS)?.keys ?? [];
   return (
     <div class="inspector-wiring">
@@ -339,8 +342,16 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
       </section>
       <section>
         <h3>Intercepts</h3>
-        <Show when={plugin().hooks?.length} fallback={<p class="muted small">No hook.</p>}>
+        <Show when={plugin().hooks?.length || parts().length > 0} fallback={<p class="muted small">No hook or part.</p>}>
           <ul>
+            <For each={parts()}>
+              {(part) => (
+                <li>
+                  <span class="capability">{part.name}</span>
+                  <span class="muted"> draws it: {part.keys?.join(", ") ?? `${part.items} ${part.items === 1 ? "item" : "items"}`}</span>
+                </li>
+              )}
+            </For>
             <For each={plugin().hooks}>
               {(hook) => (
                 <li>

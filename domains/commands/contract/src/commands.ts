@@ -99,7 +99,7 @@ export class CommandRunner extends Context.Service<
 >()("lemma/CommandRunner") {}
 
 /**
- * What clients call on `Commands`, served by its provider (`serveCommands`).
+ * What clients call on `CommandRunner`, served by its provider (`serveCommands`).
  * A refused run fails with its `CommandError`'s reason as the code
  * (`NotFound`, `Cancelled`, `Failed`) and the command's id as the subject.
  */

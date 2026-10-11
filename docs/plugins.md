@@ -111,7 +111,10 @@ Keep state where it belongs. State about a session goes in the session's log:
 a tool's result carries it in `details`, and both halves read it back from
 the branch, so it follows the branch when the session is checked out
 elsewhere and survives a restart with nothing stored
-([todo](../examples/todo/README.md)). Live state the host half owns reaches its
+([todo](../examples/todo/README.md)). Such a tool is `direct`, so a tool that
+runs others (`codemode`) does not call it and keep its result as its own, and
+it reads the branch its call is on (`ToolContext.leafId`; a prompt section
+gets the turn's `branch`), which a checkout during the turn leaves in place. Live state the host half owns reaches its
 web half through a channel the host half serves
 ([ticker](../examples/ticker/README.md)).
 

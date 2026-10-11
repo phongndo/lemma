@@ -71,17 +71,19 @@ export default definePlugin({
   version: "0.1.0",
   requires: { sessions: Sessions },
   setup: ({ sessions }, { add }) => {
-    const current = async (sessionId: string) => todosOf(await sessions.branch(sessionId));
     add(Tools, {
       name: "todo",
       description: "Keeps your todo list for this session: add an item, mark one done, or list them. Use it for work with several steps.",
       input: TodoInput,
-      execute: async (input, { sessionId }) => {
-        const next = apply(await current(sessionId), input);
+      // Its list lives in its results, so each must be logged as its own: no tool that runs others calls it.
+      direct: true,
+      // The branch the call is on, which a checkout during the turn leaves where it was.
+      execute: async (input, { sessionId, leafId }) => {
+        const next = apply(todosOf(await sessions.branch(sessionId, leafId === undefined ? undefined : { leaf: leafId })), input);
         return new ToolResult({ content: [{ type: "text", text: next.text }], details: { todos: next.todos } });
       },
     });
-    // After the agent's base prompt and the project's instructions, before the environment.
-    add(PromptSections, { id: "todo", text: async ({ sessionId }) => reminder(await current(sessionId)) }, { order: 600 });
+    // After the agent's base prompt and the project's instructions, before the environment; from the turn's branch.
+    add(PromptSections, { id: "todo", text: ({ branch }) => reminder(todosOf(branch)) }, { order: 600 });
   },
 });

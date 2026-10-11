@@ -63,7 +63,14 @@ interface Options {
 }
 
 /** `custom`: the user's entry for a provider they added; `from`: the plugin that added it to `Providers`. */
-function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom: CustomProvider | undefined, from: string | undefined): ProviderInfo {
+function toProviderInfo(
+  provider: Provider,
+  check: AuthCheck | undefined,
+  custom: CustomProvider | undefined,
+  from: Contribution<ProviderSpec> | undefined,
+): ProviderInfo {
+  // The user's logo for their own provider; a plugin's provider brings its own.
+  const logo = custom?.logo ?? from?.item.logo;
   const { apiKey, oauth } = provider.auth;
   return {
     id: provider.id,
@@ -75,8 +82,8 @@ function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom
     configured: check !== undefined,
     ...(check?.source === undefined ? {} : { source: check.source }),
     ...(custom === undefined ? {} : { custom: true }),
-    ...(custom?.logo === undefined ? {} : { logo: custom.logo }),
-    ...(from === undefined ? {} : { from }),
+    ...(logo === undefined ? {} : { logo }),
+    ...(from === undefined ? {} : { from: from.pluginId }),
   };
 }
 
@@ -196,16 +203,24 @@ export function makeLlmPlugin(options: Options = {}) {
       const authChanged = (providerId: string) => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore, Effect.andThen(announce));
       /** The providers plugins added (`Providers`) that it serves, by id. */
       let added = new Map<string, Contribution<ProviderSpec>>();
+      /** The providers left out, and said so: each is warned of once, not again on every later change. */
+      const warned = new Set<ProviderSpec>();
       /** Serves what `Providers` holds now: each added, changed, or gone, and clients told when any is. */
       const syncAdded = (items: readonly Contribution<ProviderSpec>[]) =>
         Effect.gen(function* () {
           const next = new Map<string, Contribution<ProviderSpec>>();
           for (const contribution of items) {
             const { id, api } = contribution.item;
-            if (!knownApi(api)) yield* Effect.logWarning(`llm: ${contribution.pluginId}'s provider "${id}" speaks "${api}", which this plugin does not`);
-            else if (builtins.some((provider) => provider.id === id) || custom.has(id))
-              yield* Effect.logWarning(`llm: ${contribution.pluginId}'s provider "${id}" is left out: a built-in or the user's provider has its id`);
-            else next.set(id, contribution);
+            const leftOut = !knownApi(api)
+              ? `speaks "${api}", which this plugin does not`
+              : builtins.some((provider) => provider.id === id) || custom.has(id)
+                ? "is left out: a built-in or the user's provider has its id"
+                : undefined;
+            if (leftOut === undefined) next.set(id, contribution);
+            else if (!warned.has(contribution.item)) {
+              warned.add(contribution.item);
+              yield* Effect.logWarning(`llm: ${contribution.pluginId}'s provider "${id}" ${leftOut}`);
+            }
           }
           const changed = [...added.keys()].some((id) => !next.has(id)) || [...next].some(([id, contribution]) => added.get(id)?.item !== contribution.item);
           for (const id of added.keys()) if (!next.has(id)) models.deleteProvider(id);
@@ -324,7 +339,7 @@ export function makeLlmPlugin(options: Options = {}) {
             (provider) =>
               Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
                 Effect.orElseSucceed(() => undefined),
-                Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id), added.get(provider.id)?.pluginId)),
+                Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id), added.get(provider.id))),
               ),
             { concurrency: "unbounded" },
           ),
