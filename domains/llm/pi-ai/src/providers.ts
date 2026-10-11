@@ -1,4 +1,5 @@
-import type { CustomProviderSpec } from "@lemma/llm";
+import { ProviderSpec } from "@lemma/llm";
+import type { CustomProviderSpec, ProviderModelSpec } from "@lemma/llm";
 import { createProvider } from "@earendil-works/pi-ai";
 import type { Api, ApiKeyAuth, Model, Provider, ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
@@ -30,39 +31,11 @@ const apis = {
 const ApiId = Schema.Literals(Object.keys(apis) as (keyof typeof apis)[]);
 type ApiId = typeof ApiId.Type;
 
-const Cost = Schema.Struct({ input: Schema.Number, output: Schema.Number, cacheRead: Schema.Number, cacheWrite: Schema.Number });
-/** pi-ai's per-API `compat` flags (e.g. `supportsDeveloperRole: false` for Ollama); passed through unchecked. */
-const Compat = Schema.Record(Schema.String, Schema.Unknown);
+/** A provider in this plugin's config, or one a plugin adds to `Providers`: its protocol one this plugin knows. */
+export const CustomProvider = Schema.Struct({ ...ProviderSpec.fields, api: ApiId });
 
-const CustomModel = Schema.Struct({
-  id: Schema.String,
-  name: Schema.optional(Schema.String),
-  reasoning: Schema.optional(Schema.Boolean),
-  input: Schema.optional(Schema.Array(Schema.Literals(["text", "image"]))),
-  contextWindow: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
-  maxTokens: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
-  /** USD per million tokens. */
-  cost: Schema.optional(Cost),
-  /** pi thinking level → provider value; `null` marks a level unsupported. */
-  thinkingLevelMap: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
-  compat: Schema.optional(Compat),
-});
-type CustomModel = typeof CustomModel.Type;
-
-export const CustomProvider = Schema.Struct({
-  id: Schema.String.check(Schema.isPattern(/^[^/]+$/)),
-  name: Schema.optional(Schema.String),
-  api: ApiId,
-  baseUrl: Schema.String,
-  /** A literal key or an environment variable. Omit both for keyless local servers. */
-  apiKey: Schema.optional(Schema.Struct({ env: Schema.optional(Schema.String), value: Schema.optional(Schema.String) })),
-  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
-  /** Applied to every model; a model's own `compat` wins per field. */
-  compat: Schema.optional(Compat),
-  models: Schema.Array(CustomModel),
-  /** Its logo, as SVG markup, for clients to show (`Llm.setLogo`). */
-  logo: Schema.optional(Schema.String),
-});
+/** Whether this plugin speaks `api`. */
+export const knownApi = (api: string): api is ApiId => Object.hasOwn(apis, api);
 
 /**
  * The config entry for a provider the user adds: its id from its name, unique
@@ -70,7 +43,7 @@ export const CustomProvider = Schema.Struct({
  * `<ID>_API_KEY`. Undefined for an unknown wire API.
  */
 export function customEntry(spec: CustomProviderSpec, taken: ReadonlySet<string>): CustomProvider | undefined {
-  if (!Object.hasOwn(apis, spec.api)) return undefined;
+  if (!knownApi(spec.api)) return undefined;
   const base =
     spec.name
       .toLowerCase()
@@ -81,7 +54,7 @@ export function customEntry(spec: CustomProviderSpec, taken: ReadonlySet<string>
   return {
     id,
     name: spec.name.trim(),
-    api: spec.api as ApiId,
+    api: spec.api,
     baseUrl: spec.baseUrl.trim().replace(/\/+$/, ""),
     models: [...new Set(spec.models)].map((model) => ({ id: model })),
     ...(spec.key === true ? { apiKey: { env: `${id.toUpperCase().replace(/-/g, "_")}_API_KEY` } } : {}),
@@ -137,7 +110,7 @@ function customAuth(config: CustomProvider, name: string): ApiKeyAuth {
 }
 
 /** Defaults follow pi's models.json: 128k context, 16k output, text only, free. */
-function customModel(config: CustomProvider, model: CustomModel): Model<Api> {
+function customModel(config: CustomProvider, model: ProviderModelSpec): Model<Api> {
   const compat = config.compat === undefined && model.compat === undefined ? undefined : { ...config.compat, ...model.compat };
   return {
     id: model.id,

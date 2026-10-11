@@ -1,40 +1,51 @@
 import { Cause, Effect, Order, Result, Schema } from "effect";
 import type { Context } from "effect";
-import { awaitable, Events, Hooks, PluginContext, Registries, Registry } from "@lemma/core";
+import { awaitable, Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import { Inspectors } from "@lemma/contracts";
-import { ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult } from "@lemma/tools";
-import type { ExecuteOptions, Guard, Tool, ToolContext, ToolContribution, ToolInvocation, Tools } from "@lemma/tools";
+import { Guards, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult, Tools } from "@lemma/tools";
+import type { ExecuteOptions, Tool, ToolContext, ToolContribution, ToolInvocation, ToolRunner } from "@lemma/tools";
 import { capResult } from "./content.ts";
 import { toolParameters } from "./schema.ts";
 
-type Service = Context.Service.Shape<typeof Tools>;
+type Service = Context.Service.Shape<typeof ToolRunner>;
 
 interface RegistryOptions {
   /** Total text characters a result may carry to the model before it is truncated. */
   readonly maxResultChars: number;
 }
 
-/** A registered tool: schema converted and decoder built once. */
+/** A tool as this registry uses it: its schema converted and its decoder built once, on first use. */
 interface Entry {
   readonly tool: Tool<any>;
   readonly spec: ToolContribution["spec"];
   readonly decode: (input: unknown) => Effect.Effect<unknown, ToolError>;
 }
 
-interface GuardEntry {
-  /** A tool name, or `*` for every tool. */
-  readonly name: string;
-  readonly guard: Guard;
-}
-
-/*
- * The core's registries hold what plugins register: each item belongs to the
- * plugin that registered it and leaves with it, and a plugin's replacement
- * takes over its names at the swap (so contributors need not be exclusive).
- * Private to this plugin: contributors go through `Tools.register` and `guard`.
- */
-const ToolEntries = Registry.make<Entry>("lemma/tools", { key: (entry) => entry.tool.name, unique: true });
-const Guards = Registry.make<GuardEntry>("lemma/tools.guards");
+/** Each tool's entry, by the tool: made once, and gone with the tool. */
+const entries = new WeakMap<Tool<any>, Entry>();
+const entryOf = (tool: Tool<any>): Entry => {
+  const known = entries.get(tool);
+  if (known !== undefined) return known;
+  const decodeInput = Schema.decodeUnknownEffect(tool.input);
+  const entry: Entry = {
+    tool,
+    spec: { name: tool.name, description: tool.description, parameters: toolParameters(tool.input) },
+    decode: (input) =>
+      decodeInput(input, { errors: "all", onExcessProperty: "ignore" }).pipe(
+        Effect.mapError(
+          (error) =>
+            new ToolError({
+              tool: tool.name,
+              reason: "InvalidInput",
+              message: `Validation failed for tool "${tool.name}":\n${error.message}`,
+              cause: error,
+            }),
+        ),
+      ),
+  };
+  entries.set(tool, entry);
+  return entry;
+};
 
 const message = (cause: unknown): string => (cause instanceof Error ? cause.message : typeof cause === "string" ? cause : String(cause));
 
@@ -131,69 +142,32 @@ const aborted = (tool: string, signal: AbortSignal) =>
     return Effect.sync(() => signal.removeEventListener("abort", cancel));
   });
 
+/**
+ * The `ToolRunner` over what `Tools` and `Guards` hold. The core's registries keep what plugins add: each item belongs
+ * to the plugin that added it and leaves with it, and a plugin's replacement takes over its names at the swap (so
+ * contributors need not be exclusive).
+ */
 export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, never, Hooks | Events | PluginContext | Registries> =>
   Effect.gen(function* () {
     const hooks = yield* Hooks;
     const events = yield* Events;
     const owner = yield* PluginContext;
     const registries = yield* Registries;
-    const entries = registries.items(ToolEntries);
-    const names = Effect.map(entries, (items) => items.map((contribution) => contribution.item.tool.name));
-    const find = (name: string) => Effect.map(entries, (items) => items.find((contribution) => contribution.item.tool.name === name));
-
-    const register: Service["register"] = (tool) =>
-      Effect.gen(function* () {
-        const contributor = yield* PluginContext;
-        const decodeInput = Schema.decodeUnknownEffect(tool.input);
-        const entry: Entry = {
-          tool,
-          spec: { name: tool.name, description: tool.description, parameters: toolParameters(tool.input) },
-          decode: (input) =>
-            decodeInput(input, { errors: "all", onExcessProperty: "ignore" }).pipe(
-              Effect.mapError(
-                (error) =>
-                  new ToolError({
-                    tool: tool.name,
-                    reason: "InvalidInput",
-                    message: `Validation failed for tool "${tool.name}":\n${error.message}`,
-                    cause: error,
-                  }),
-              ),
-            ),
-        };
-        const remove = yield* contributor.add(ToolEntries, entry).pipe(
-          Effect.catchTag("RegistryError", (error) =>
-            Effect.fail(
-              new ToolError({
-                tool: tool.name,
-                reason: "InvalidInput",
-                message: error.reason === "Conflict" ? `Tool "${tool.name}" is already registered by ${error.holder}` : error.message,
-                cause: error,
-              }),
-            ),
-          ),
-          Effect.catchTag("CoreClosed", (error) =>
-            Effect.fail(new ToolError({ tool: tool.name, reason: "Failed", message: "The core has closed", cause: error })),
-          ),
-        );
-        // Gone when the registering scope closes, or with the plugin, whichever is first.
-        yield* Effect.addFinalizer(() => remove);
+    const added = registries.items(Tools);
+    const names = Effect.map(added, (items) => items.map((contribution) => contribution.item.name));
+    const find = (name: string) =>
+      Effect.map(added, (items) => {
+        const found = items.find((contribution) => contribution.item.name === name);
+        return found === undefined ? undefined : entryOf(found.item);
       });
 
-    // Lifted when the installing scope closes, or with the plugin, whichever is first.
-    const guard: Service["guard"] = (name, check) =>
-      Effect.flatMap(PluginContext, (contributor) => contributor.add(Guards, { name, guard: check })).pipe(
-        Effect.orDie,
-        Effect.flatMap((remove) => Effect.addFinalizer(() => remove)),
-      );
-
-    const list: Service["list"] = Effect.map(entries, (items) =>
+    const list: Service["list"] = Effect.map(added, (items) =>
       items
-        .map((contribution) => ({
-          source: contribution.pluginId,
-          spec: contribution.item.spec,
-          ...(contribution.item.tool.replay === undefined ? {} : { replay: contribution.item.tool.replay }),
-          ...(contribution.item.tool.parallel === undefined ? {} : { parallel: contribution.item.tool.parallel }),
+        .map(({ item: tool, pluginId }) => ({
+          source: pluginId,
+          spec: entryOf(tool).spec,
+          ...(tool.replay === undefined ? {} : { replay: tool.replay }),
+          ...(tool.parallel === undefined ? {} : { parallel: tool.parallel }),
         }))
         .sort((a, b) => Order.String(a.spec.name, b.spec.name)),
     );
@@ -210,13 +184,12 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
       (original: ToolInvocation, decoded: unknown, signal: AbortSignal, update: ExecuteOptions["update"]) =>
       (call: ToolInvocation): Effect.Effect<ToolResult, ToolError> =>
         Effect.gen(function* () {
-          const found = yield* find(call.name);
-          if (found === undefined) return yield* unknown(call.name, yield* names);
-          const entry = found.item;
+          const entry = yield* find(call.name);
+          if (entry === undefined) return yield* unknown(call.name, yield* names);
           // A handler that rewrote the call gets its input validated again.
           const input = call === original ? decoded : yield* entry.decode(call.input);
           for (const candidate of yield* registries.items(Guards)) {
-            if (candidate.item.name !== "*" && candidate.item.name !== call.name) continue;
+            if (candidate.item.tool !== "*" && candidate.item.tool !== call.name) continue;
             const decision = yield* awaitable(() => candidate.item.guard(call));
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
@@ -242,13 +215,12 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
       owner.trace(
         `tools.execute ${invocation.name}`,
         Effect.gen(function* () {
-          const found = yield* find(invocation.name);
-          if (found === undefined) return yield* unknown(invocation.name, yield* names);
+          const entry = yield* find(invocation.name);
+          if (entry === undefined) return yield* unknown(invocation.name, yield* names);
           // A tool the request did not offer is not there for this call, whoever makes it (a model, or a tool running others).
           if (invocation.offered !== undefined && !invocation.offered.includes(invocation.name)) {
             return yield* unknown(invocation.name, [...invocation.offered]);
           }
-          const entry = found.item;
           if (signal.aborted) return yield* new ToolError({ tool: invocation.name, reason: "Cancelled", message: `Tool "${invocation.name}" was cancelled` });
           const started = Date.now();
           const settled = yield* entry.decode(invocation.input).pipe(
@@ -270,12 +242,12 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
         id: "tools.registered",
         title: "Tools",
         description: "Every tool the model can call, the plugin that registered it, and the guards that check calls",
-        snapshot: Effect.map(Effect.all([entries, registries.items(Guards)]), ([tools, guards]) => ({
-          tools: tools.map(({ item, pluginId }) => ({ name: item.tool.name, plugin: pluginId, description: item.spec.description })),
-          guards: guards.map(({ item, pluginId }) => ({ tool: item.name, plugin: pluginId })),
+        snapshot: Effect.map(Effect.all([added, registries.items(Guards)]), ([tools, guards]) => ({
+          tools: tools.map(({ item, pluginId }) => ({ name: item.name, plugin: pluginId, description: item.description })),
+          guards: guards.map(({ item, pluginId }) => ({ tool: item.tool, plugin: pluginId })),
         })),
       })
       .pipe(Effect.ignore);
 
-    return { register, guard, list, execute } satisfies Service;
+    return { list, execute } satisfies Service;
   });

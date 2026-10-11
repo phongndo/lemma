@@ -1,6 +1,7 @@
 # tools.bash
 
-The `bash` tool: a shell command in the session's directory. Requires `Tools`.
+The `bash` tool: a shell command in the session's directory. Adds it to `Tools`.
+Its web half (`./web`) shows a call as its command, as a shell line.
 
 | Input                           | Behavior                                                                                                                                                                                                                                                                                          |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

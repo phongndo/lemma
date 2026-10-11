@@ -1,7 +1,6 @@
 import { Context, Data, Effect, Schema, Stream } from "effect";
-import type { Scope } from "effect";
-import { Event } from "@lemma/core";
-import type { Awaitable, Events, PluginContext } from "@lemma/core";
+import { Event, Registry } from "@lemma/core";
+import type { Awaitable, Events } from "@lemma/core";
 import { defineChannel, eventFeed, serveChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { InteractionOrigin } from "@lemma/contracts";
@@ -13,7 +12,7 @@ export const CommandContext = Schema.Struct({
 });
 export type CommandContext = typeof CommandContext.Type;
 
-/** A registered command as clients list it. */
+/** A command as clients list it. */
 export const CommandInfo = Schema.Struct({
   /** Namespaced by area: `host.reload`, `workspace.checkout`. */
   id: Schema.String,
@@ -24,7 +23,7 @@ export const CommandInfo = Schema.Struct({
   description: Schema.optional(Schema.String),
   /** Extra words a search should match. */
   keywords: Schema.optional(Schema.Array(Schema.String)),
-  /** The plugin that registered it. */
+  /** The plugin that added it. */
   source: Schema.String,
 });
 export type CommandInfo = typeof CommandInfo.Type;
@@ -38,7 +37,7 @@ export type CommandResult = typeof CommandResult.Type;
 /**
  * `NotFound`: no command has the id. `Cancelled`: the person dismissed one of
  * its questions. `Withdrawn`: the command was removed while it ran, as when
- * the plugin that registered it stopped or was replaced, which stopped it;
+ * the plugin that added it stopped or was replaced, which stopped it;
  * running it again reaches a replacement, if there is one. `Failed`: anything
  * else the command failed with.
  */
@@ -55,32 +54,41 @@ export class CommandError extends Data.TaggedError("CommandError")<{
  * that can answer questions can run it.
  */
 export interface Command extends Omit<CommandInfo, "source"> {
-  /** Returns its result, a promise of it, or an Effect (`Awaitable`), so a plugin written with promises registers one too. */
+  /** Returns its result, a promise of it, or an Effect (`Awaitable`), so a plugin written with promises adds one too. */
   readonly run: (context: CommandContext) => Awaitable<CommandResult | void, unknown>;
 }
 
-/** Every command (`Commands.list`), published by its provider whenever one is registered or removed, once that is live. */
+/**
+ * The commands clients list and run: `PluginContext.add(Commands, command)`. A command belongs to the plugin that added
+ * it and leaves with it; an id is one plugin's at a time (another adding it fails `Conflict`), and a plugin's
+ * replacement takes over its ids. `CommandRunner` lists and runs them.
+ */
+export const Commands = Registry.make<Command>("lemma/commands", {
+  key: (command) => command.id,
+  unique: true,
+  check: (value) => {
+    const command = value as Partial<Command> | null;
+    if (typeof command !== "object" || command === null || typeof command.id !== "string" || command.id === "") return "A command needs an id";
+    if (typeof command.title !== "string") return `Command "${command.id}" needs a title`;
+    return typeof command.run === "function" ? undefined : `Command "${command.id}" needs a run function`;
+  },
+});
+
+/** Every command (`CommandRunner.list`), published by its provider whenever one is added or removed, once that is live. */
 export const CommandsChanged = Event.make<{ readonly commands: readonly CommandInfo[] }>("lemma/commands.changed");
 
 /**
- * The commands plugins register and clients list and run. Its provider
- * publishes `CommandsChanged`, and serves it to clients as `CommandChannels`
- * (`serveCommands`).
+ * Lists and runs what `Commands` holds. Its provider publishes `CommandsChanged`, and serves it to clients as
+ * `CommandChannels` (`serveCommands`).
  */
-export class Commands extends Context.Service<
-  Commands,
+export class CommandRunner extends Context.Service<
+  CommandRunner,
   {
-    /**
-     * Call during activation: the registering plugin's `PluginContext` supplies
-     * `source`. Removed when the scope it was registered in closes, or with
-     * that plugin, whichever is first. A duplicate id fails with `Failed`.
-     */
-    readonly register: (command: Command) => Effect.Effect<void, CommandError, Scope.Scope | PluginContext>;
     /** Sorted by category, then title. */
     readonly list: Effect.Effect<readonly CommandInfo[]>;
     /**
-     * Runs the command as part of the lifetime of the plugin that registered
-     * it (`Registries.run`), where what it does finds that plugin in
+     * Runs the command as part of the lifetime of the plugin that added it
+     * (`Registries.run`), where what it does finds that plugin in
      * `Admitted` (what that defers: `ChangeReport`). When the command is
      * removed while it runs, as when that plugin stops or is replaced, it
      * stops at once and fails `Withdrawn`. Interruption stays interruption;
@@ -88,7 +96,7 @@ export class Commands extends Context.Service<
      */
     readonly run: (id: string, context: CommandContext) => Effect.Effect<CommandResult, CommandError>;
   }
->()("lemma/Commands") {}
+>()("lemma/CommandRunner") {}
 
 /**
  * What clients call on `Commands`, served by its provider (`serveCommands`).
@@ -144,7 +152,7 @@ export const CommandChannels = {
     kind: "stream",
     id: "commands.changes",
     title: "Command changes",
-    description: "Every command now, then the whole list again whenever one is registered or removed",
+    description: "Every command now, then the whole list again whenever one is added or removed",
     payload: Schema.Void,
     success: Schema.Array(CommandInfo),
   }),
@@ -154,12 +162,12 @@ export const CommandChannels = {
 const FEED = { buffer: 1 };
 
 /**
- * `CommandChannels` served from `commands`: what a provider of `Commands` adds
+ * `CommandChannels` served from `commands`: what a provider of `CommandRunner` adds
  * to `Channels`, each with `PluginContext.add`. A run naming no `cwd` runs in
  * `defaults.cwd`, the host's (`Paths`).
  */
 export const serveCommands = (
-  commands: Context.Service.Shape<typeof Commands>,
+  commands: Context.Service.Shape<typeof CommandRunner>,
   events: Context.Service.Shape<typeof Events>,
   defaults: { readonly cwd: string },
 ): readonly Channel[] => [

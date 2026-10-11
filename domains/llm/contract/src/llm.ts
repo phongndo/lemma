@@ -1,6 +1,6 @@
-import { Cause, Context, Data, Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
+import { Cause, Context, Data, Deferred, Effect, Exit, Fiber, Result, Schema, Stream } from "effect";
 import type { Scope } from "effect";
-import { Event, Hook } from "@lemma/core";
+import { Event, Hook, Registry } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineChannel, eventFeed, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
@@ -192,8 +192,67 @@ export const ProviderInfo = Schema.Struct({
   custom: Schema.optional(Schema.Boolean),
   /** A custom provider's own logo, as SVG markup (`Llm.setLogo`). */
   logo: Schema.optional(Schema.String),
+  /** The plugin that added it to `Providers`; it leaves with that plugin. */
+  from: Schema.optional(Schema.String),
 });
 export type ProviderInfo = typeof ProviderInfo.Type;
+
+/** A model a provider in `Providers` serves; what it leaves out has pi's defaults (128k context, 16k output, text only, free). */
+export const ProviderModelSpec = Schema.Struct({
+  id: Schema.String,
+  name: Schema.optional(Schema.String),
+  reasoning: Schema.optional(Schema.Boolean),
+  input: Schema.optional(Schema.Array(Schema.Literals(["text", "image"]))),
+  contextWindow: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
+  maxTokens: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
+  /** USD per million tokens. */
+  cost: Schema.optional(Schema.Struct({ input: Schema.Number, output: Schema.Number, cacheRead: Schema.Number, cacheWrite: Schema.Number })),
+  /** pi thinking level → provider value; `null` marks a level unsupported. */
+  thinkingLevelMap: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
+  /** pi-ai's per-API `compat` flags (`supportsDeveloperRole: false` for Ollama, say); passed through unchecked. */
+  compat: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+});
+export type ProviderModelSpec = typeof ProviderModelSpec.Type;
+
+/**
+ * A provider an endpoint makes: one of the wire protocols the llm plugin knows (`openai-completions`, say), at
+ * `baseUrl`, with the models it serves. A user adds one on the Providers page (`Llm.addCustom`), and a plugin adds one
+ * to `Providers`.
+ */
+export const ProviderSpec = Schema.Struct({
+  /** Unique among providers, and with no `/`: models are named `<provider>/<model>`. */
+  id: Schema.String.check(Schema.isPattern(/^[^/]+$/)),
+  name: Schema.optional(Schema.String),
+  /** The wire protocol, by its id. */
+  api: Schema.String,
+  baseUrl: Schema.String,
+  /** A literal key or an environment variable. Omit both for keyless local servers; a stored login wins. */
+  apiKey: Schema.optional(Schema.Struct({ env: Schema.optional(Schema.String), value: Schema.optional(Schema.String) })),
+  headers: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  /** Applied to every model; a model's own `compat` wins per field. */
+  compat: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  models: Schema.Array(ProviderModelSpec),
+  /** Its logo, as SVG markup, for clients to show. */
+  logo: Schema.optional(Schema.String),
+});
+export type ProviderSpec = typeof ProviderSpec.Type;
+
+const decodeProvider = Schema.decodeUnknownResult(ProviderSpec);
+
+/**
+ * The providers plugins add (`PluginContext.add(Providers, spec)`), beside the built-in ones and those the user adds:
+ * a company gateway, a local server. A provider belongs to the plugin that added it and leaves with it; an id is one
+ * plugin's at a time, and one a built-in or the user's provider has is left out, with a warning, as is one speaking a
+ * protocol the llm plugin does not know.
+ */
+export const Providers = Registry.make<ProviderSpec>("lemma/llm.providers", {
+  key: (provider) => provider.id,
+  unique: true,
+  check: (value) => {
+    const decoded = decodeProvider(value);
+    return Result.isSuccess(decoded) ? undefined : `Not a provider: ${decoded.failure.message}`;
+  },
+});
 
 /**
  * A provider the user adds: an endpoint that speaks one of the wire protocols

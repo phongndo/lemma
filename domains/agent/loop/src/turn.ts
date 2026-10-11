@@ -9,13 +9,13 @@ import { addUsage, emptyUsage } from "@lemma/llm";
 import { deriveMessages, modelView, rebuildRequest, requestState } from "@lemma/sessions";
 import { ToolInvocation } from "@lemma/tools";
 import type { HostControl } from "@lemma/contracts";
-import type { PromptContent, RequestDraft, RequestPlan } from "@lemma/agent";
+import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
 import type { Llm, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage } from "@lemma/llm";
 import type { Contribution, EventData, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
-import type { Tools } from "@lemma/tools";
+import type { ToolRunner } from "@lemma/tools";
 import { partialMessage } from "./live.ts";
 import type { LiveTurn, ModelIdentity, PartialMessage } from "./live.ts";
-import { baseSection, environmentSection, titleFrom } from "./prompt.ts";
+import { titleFrom } from "./prompt.ts";
 import { INTERRUPTED_CALL, RESUMED, TOOLS_STARTED } from "./resume.ts";
 import type { ResumePlan, StepOutcome } from "./resume.ts";
 import type { LiveFile } from "./state.ts";
@@ -23,18 +23,15 @@ import type { LiveFile } from "./state.ts";
 interface TurnServices {
   readonly sessions: Context.Service.Shape<typeof Sessions>;
   readonly llm: Context.Service.Shape<typeof Llm>;
-  readonly tools: Context.Service.Shape<typeof Tools>;
+  readonly tools: Context.Service.Shape<typeof ToolRunner>;
   readonly host: Context.Service.Shape<typeof HostControl>;
   readonly hooks: Context.Service.Shape<typeof Hooks>;
   readonly events: Context.Service.Shape<typeof Events>;
-  /** The agent plugin's id, recorded as the source of the sections it contributes. */
-  readonly source: string;
+  /** The system prompt's sections for a request, in order (`PromptSections`), each attributed to the plugin that added it. */
+  readonly sections: (request: SectionRequest) => Effect.Effect<readonly SystemSection[], AgentError>;
 }
 
 interface TurnSettings {
-  readonly systemPrompt?: string;
-  /** Shell command for the `lemma` CLI, named in the environment section. */
-  readonly cli?: string;
   readonly maxSteps: number;
   /** Failed model calls asked again in a row before the turn ends in error (an overflow is asked again once even at 0). */
   readonly retries: number;
@@ -194,7 +191,7 @@ const Probe = Hook.make<void, void>("agent/core-closing");
  * during the turn cannot splice the turn into another branch.
  */
 export function runTurn(services: TurnServices, settings: TurnSettings, input: TurnInput): Effect.Effect<TurnOutcome, AgentError> {
-  const { sessions, llm, tools, host, hooks, events, source } = services;
+  const { sessions, llm, tools, host, hooks, events } = services;
   const { sessionId, turnId, cwd, signal, live } = input;
 
   const state: {
@@ -329,16 +326,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     Effect.gen(function* () {
       const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! }).pipe(Effect.mapError(sessionError));
       const listed = yield* tools.list;
+      const sections = yield* services.sections({ sessionId, turnId, cwd, model: asking.ref, tools: listed });
       const draft: RequestDraft = {
         sessionId,
         turnId,
         cwd,
         model: asking.ref,
         ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
-        sections: [
-          baseSection(source, new Set(listed.map((tool) => tool.spec.name)), settings.systemPrompt),
-          environmentSection(source, { cwd, sessionId, ...(settings.cli === undefined ? {} : { cli: settings.cli }) }),
-        ],
+        sections,
         tools: listed,
         ...(state.shorten ? { overflow: true } : {}),
         branch,

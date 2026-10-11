@@ -4,14 +4,13 @@ import type { Context } from "effect";
 import type { Events } from "@lemma/core";
 import { channelProblem } from "@lemma/contracts";
 import { CommandChannels, serveCommands } from "../src/commands.ts";
-import type { Commands } from "../src/commands.ts";
+import type { CommandRunner } from "../src/commands.ts";
 
 describe("serveCommands", () => {
   const commands = {
-    register: () => Effect.void,
     list: Effect.succeed([]),
     run: () => Effect.succeed({}),
-  } satisfies Context.Service.Shape<typeof Commands>;
+  } satisfies Context.Service.Shape<typeof CommandRunner>;
   const events: Context.Service.Shape<typeof Events> = { publish: () => Effect.void, stream: () => Stream.empty };
 
   // How a run's options reach the command, and what `commands.changes` sends, is tested where the plugin serves them (domains/commands/registry, and over the wire in domains/transport/server).

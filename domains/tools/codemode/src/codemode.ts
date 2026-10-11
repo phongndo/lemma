@@ -9,7 +9,7 @@ import { Effect, Result, Schema } from "effect";
 import type { Context } from "effect";
 import { contentText } from "@lemma/llm";
 import { ToolInvocation, ToolResult } from "@lemma/tools";
-import type { Tool, Tools } from "@lemma/tools";
+import type { Tool, ToolRunner } from "@lemma/tools";
 
 export const CodemodeInput = Schema.Struct({
   code: Schema.String.annotate({ description: "Raw JavaScript source." }),
@@ -136,7 +136,7 @@ async function truncateOutput(items: readonly Content[], budget: number): Promis
  * A script reaches only the tools the request offered, read per script, and never codemode. Their
  * live output is this call's own.
  */
-export const codemodeTool = (registry: Context.Service.Shape<typeof Tools>): Tool<CodemodeInput> => ({
+export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>): Tool<CodemodeInput> => ({
   name: "codemode",
   description: DESCRIPTION,
   input: CodemodeInput,

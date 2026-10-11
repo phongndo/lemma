@@ -3,7 +3,7 @@ import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core/plain";
 import { Interaction, InteractionError } from "@lemma/contracts";
-import { Tools } from "@lemma/tools";
+import { Guards } from "@lemma/tools";
 import type { GuardDecision, ToolInvocation } from "@lemma/tools";
 import { resolveToCwd } from "@lemma/tools/files";
 
@@ -13,7 +13,8 @@ import { resolveToCwd } from "@lemma/tools/files";
  * told you declined). With nobody to ask, the call is denied.
  *
  * A plugin file, written the way a user writes one: copy or link it into
- * `~/.lemma/plugins/` and run `lemma reload`. It imports only packages the
+ * `~/.lemma/plugins/`, and the host loads it. It adds a guard to the tools
+ * domain's `Guards`, which every call passes before its tool runs. It imports only packages the
  * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, and the tools
  * domain's contract (`@lemma/tools`), whose `/files` resolves paths as the file
  * tools do, so it judges the file a tool will touch. It is
@@ -86,32 +87,35 @@ export default definePlugin({
   id: "approvals",
   version: "0.1.0",
   config: Config,
-  requires: { tools: Tools, interaction: Interaction },
-  setup: async ({ tools, interaction }, { config }) => {
+  requires: { interaction: Interaction },
+  setup: ({ interaction }, { config, add }) => {
     /** Tools allowed for the rest of a session, by session id; forgotten when the plugin reloads. */
     const allowed = new Map<string, Set<string>>();
 
-    await tools.guard("*", async (call): Promise<GuardDecision> => {
-      const asked = question(call, config);
-      if (asked === undefined || allowed.get(call.sessionId)?.has(call.name)) return { _tag: "allow" };
-      let choice: string;
-      try {
-        choice = await interaction.select(
-          asked.title,
-          [
-            { value: "once", label: "Allow once" },
-            { value: "session", label: `Allow ${call.name} for this session`, description: "Until the host restarts" },
-            { value: "deny", label: "Deny", description: "The agent is told you declined" },
-          ],
-          asked.detail,
-        );
-      } catch (error) {
-        if (!(error instanceof InteractionError)) throw error;
-        return { _tag: "deny", reason: error.reason === "Dismissed" ? "the user dismissed the approval" : `nobody could approve it (${error.message})` };
-      }
-      if (choice === "deny") return { _tag: "deny", reason: "the user declined" };
-      if (choice === "session") allowed.set(call.sessionId, new Set([...(allowed.get(call.sessionId) ?? []), call.name]));
-      return { _tag: "allow" };
+    add(Guards, {
+      tool: "*",
+      guard: async (call): Promise<GuardDecision> => {
+        const asked = question(call, config);
+        if (asked === undefined || allowed.get(call.sessionId)?.has(call.name)) return { _tag: "allow" };
+        let choice: string;
+        try {
+          choice = await interaction.select(
+            asked.title,
+            [
+              { value: "once", label: "Allow once" },
+              { value: "session", label: `Allow ${call.name} for this session`, description: "Until the host restarts" },
+              { value: "deny", label: "Deny", description: "The agent is told you declined" },
+            ],
+            asked.detail,
+          );
+        } catch (error) {
+          if (!(error instanceof InteractionError)) throw error;
+          return { _tag: "deny", reason: error.reason === "Dismissed" ? "the user dismissed the approval" : `nobody could approve it (${error.message})` };
+        }
+        if (choice === "deny") return { _tag: "deny", reason: "the user declined" };
+        if (choice === "session") allowed.set(call.sessionId, new Set([...(allowed.get(call.sessionId) ?? []), call.name]));
+        return { _tag: "allow" };
+      },
     });
   },
 });

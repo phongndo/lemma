@@ -1,10 +1,8 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { Effect } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
-import { AgentRequestHook } from "@lemma/agent";
-import type { SystemSection } from "@lemma/agent";
+import { PromptSections } from "@lemma/agent";
 
 /** Per directory, the first of these that is a file wins (pi's order: AGENTS first, CLAUDE as the fallback). */
 const CANDIDATES = ["AGENTS.override.md", "AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"] as const;
@@ -76,31 +74,27 @@ const renderSection = (files: readonly ContextFile[]): string =>
     ...files.map(({ path: file, content }) => `<project_instructions path="${file}">\n${content}\n</project_instructions>`),
   ].join("\n\n");
 
-/** Places the section before the agent's `environment` section, whose date changes daily, to keep the stable prefix long. */
-const insert = (sections: readonly SystemSection[], section: SystemSection): SystemSection[] => {
-  const at = sections.findIndex((candidate) => candidate.id === "environment");
-  return at === -1 ? [...sections, section] : [...sections.slice(0, at), section, ...sections.slice(at)];
-};
-
+/**
+ * The project's instructions as a prompt section: the AGENTS.md (or CLAUDE.md) files from the user's home and from the
+ * filesystem root down to the session's directory, between the agent's base prompt and its environment.
+ */
 export default definePlugin({
   id: "context.project",
   version: "0.1.0",
   requires: { paths: Paths },
   setup: function* ({ paths }, owner) {
     const load = makeLoader(paths.home);
-    yield* owner.on(AgentRequestHook, (draft, next) =>
-      Effect.flatMap(
-        Effect.promise(() => load(draft.cwd)),
-        (files) =>
-          next(
-            files.length === 0
-              ? draft
-              : {
-                  ...draft,
-                  sections: insert(draft.sections, { id: "project-context", source: owner.id, text: renderSection(files) }),
-                },
-          ),
-      ),
+    yield* owner.add(
+      PromptSections,
+      {
+        id: "project-context",
+        text: async ({ cwd }) => {
+          const files = await load(cwd);
+          return files.length === 0 ? undefined : renderSection(files);
+        },
+      },
+      // Between the agent's base (`SectionOrder.base`) and its environment, whose date changes daily.
+      { order: 500 },
     );
   },
 });

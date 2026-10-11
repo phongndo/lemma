@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { PromptContent, SystemSection } from "@lemma/agent";
+import type { PromptContent, PromptSection } from "@lemma/agent";
 
 /**
  * The default base prompt, after pi's: an identity line and guidelines for the
@@ -59,13 +59,17 @@ function environment(facts: EnvironmentFacts): string {
   ].join("\n");
 }
 
-export const baseSection = (source: string, toolNames: ReadonlySet<string>, override?: string): SystemSection => ({
+/** The agent's base prompt, for the tools on offer; `override` (its `systemPrompt` setting) replaces it. */
+export const baseSection = (override?: string): PromptSection => ({
   id: "base",
-  source,
-  text: override ?? basePrompt(toolNames),
+  text: ({ tools }) => override ?? basePrompt(new Set(tools.map((tool) => tool.spec.name))),
 });
 
-export const environmentSection = (source: string, facts: EnvironmentFacts): SystemSection => ({ id: "environment", source, text: environment(facts) });
+/** Where and when the agent runs; `cli` (its setting) names the `lemma` CLI. */
+export const environmentSection = (cli?: string): PromptSection => ({
+  id: "environment",
+  text: ({ cwd, sessionId }) => environment({ cwd, sessionId, ...(cli === undefined ? {} : { cli }) }),
+});
 
 const TITLE_CHARS = 60;
 

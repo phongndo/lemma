@@ -1,7 +1,8 @@
 # tools.edit
 
-The `edit` tool: exact replacements in a file. Requires `Tools`. No config.
-Paths resolve as `read`'s do.
+The `edit` tool: exact replacements in a file. Adds it to `Tools`. No config.
+Paths resolve as `read`'s do. Its web half (`./web`) shows a call as the file
+changed, with its diff.
 
 | Input                                   | Behavior                                                                                                                                                                                                                                                    |
 | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

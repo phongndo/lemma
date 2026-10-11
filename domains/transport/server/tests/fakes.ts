@@ -3,7 +3,7 @@ import { HostControl, Interaction, InteractionError, InteractionHook, Paths, Plu
 import { Commands } from "@lemma/commands";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import type { ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, UiComposition } from "@lemma/contracts";
-import { definePlugin, Diagnostic, Events, Hooks, ReloadError } from "@lemma/core";
+import { definePlugin, Diagnostic, Events, Hooks, PluginContext, ReloadError } from "@lemma/core";
 import type { Core } from "@lemma/core";
 
 /** Runs `InteractionHook` the way the host's `Interaction` does: with no handler answering, `Unavailable`. */
@@ -32,11 +32,11 @@ export const fakeInteraction = definePlugin({
 /** Contributes one command that asks a question, as any plugin adding to the palette would. */
 export const fakeGreeter = definePlugin({
   id: "greeter",
-  requires: [Commands, Interaction],
+  requires: [Interaction],
   layer: Layer.effectDiscard(
     Effect.gen(function* () {
-      const [commands, interaction] = yield* Effect.all([Commands, Interaction]);
-      yield* commands.register({
+      const [owner, interaction] = yield* Effect.all([PluginContext, Interaction]);
+      yield* owner.add(Commands, {
         id: "test.greet",
         title: "Greet…",
         category: "Test",

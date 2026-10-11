@@ -51,6 +51,6 @@ export const workspaceCommands = (workspace: Context.Service.Shape<typeof Worksp
 export default definePlugin({
   id: "workspace.commands",
   version: "0.1.0",
-  requires: { registry: Commands, ask: Interaction, dependency: Workspace },
-  setup: ({ registry, ask, dependency }) => Effect.forEach(workspaceCommands(dependency, ask), registry.register, { discard: true }),
+  requires: { ask: Interaction, dependency: Workspace },
+  setup: ({ ask, dependency }, owner) => Effect.forEach(workspaceCommands(dependency, ask), (command) => owner.add(Commands, command), { discard: true }),
 });

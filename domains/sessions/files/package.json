@@ -2,6 +2,7 @@
   "name": "@lemma/sessions-files",
   "version": "0.1.0",
   "private": true,
+  "description": "Sessions as JSONL files",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

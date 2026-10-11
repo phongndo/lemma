@@ -128,6 +128,7 @@ export const describeProvider = (provider: ProviderInfo): string => {
   }
   const blurb = providerBrand(provider.id).blurb;
   if (blurb !== undefined) return blurb;
+  if (provider.from !== undefined) return `Added by the ${provider.from} plugin`;
   const oauth = hasOAuth(provider);
   const key = provider.auth.some((method) => method.type === "api_key");
   return oauth && key ? "Subscription or API key" : oauth ? "Sign in with your subscription" : "API key";

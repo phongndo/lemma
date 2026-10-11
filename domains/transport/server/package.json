@@ -2,6 +2,7 @@
   "name": "@lemma/transport-server",
   "version": "0.1.0",
   "private": true,
+  "description": "Serves the host to the web app, the desktop shell, and the CLI",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

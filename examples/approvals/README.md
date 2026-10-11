@@ -10,9 +10,10 @@ imports only packages the host supplies (`effect`, `@lemma/core`,
 `@lemma/contracts`, and the tools domain's contract, `@lemma/tools`, whose
 `/files` resolves paths as the file tools do, so `~/x` and `@x` mean what they
 mean to `write`), so it needs no install step. It is
-written with promises (`@lemma/core/plain`): `tools.guard` and
-`interaction.select` are the contracts' Effect methods, seen as promises, and a
-question it asks still belongs to the turn that caused it. A path
+written with promises (`@lemma/core/plain`): it adds its guard to the tools
+domain's `Guards` registry, `interaction.select` is the contract's Effect
+method seen as a promise, and a question it asks still belongs to the turn
+that caused it. A path
 counts as outside when it leads there through a link, too. To use it:
 
 ```sh

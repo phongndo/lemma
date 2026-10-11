@@ -160,11 +160,10 @@ export function testTools(extra: readonly Tool<any>[] = []) {
   };
   const plugin: Plugin = definePlugin({
     id: "test-tools",
-    requires: [Tools],
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
-        const registry = yield* Tools;
-        for (const tool of [echo, ...extra]) yield* registry.register(tool);
+        const owner = yield* PluginContext;
+        for (const tool of [echo, ...extra]) yield* owner.add(Tools, tool);
       }),
     ),
   });

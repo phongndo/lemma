@@ -1,7 +1,8 @@
 # agent.loop
 
 Provides `Agent` (`@lemma/agent`): the turn loop. Requires `Sessions`, `Llm`,
-`Tools`, `HostControl`, and `Paths`. Exclusive: a reload stops it, suspending
+`ToolRunner`, `HostControl`, and `Paths`. Adds its `base` and `environment`
+sections to `PromptSections` (at `SectionOrder`). Exclusive: a reload stops it, suspending
 its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and
 `agent.activity`, its live output and each turn's and queue's change.
@@ -45,9 +46,10 @@ Effect.gen(function* () {
    meanwhile. Then appends `turn-start` (with the model and thinking level), a
    user `message` per prompt it starts with (each with its `requestId`), and a
    `title` from the first if the session has none.
-3. Each step: `step-start`; a `RequestDraft` with the base section and an
-   environment section (cwd, date, platform, session id, and the `cli` command
-   when configured; source `agent.loop`), `Tools.list`, the turn's branch and
+3. Each step: `step-start`; a `RequestDraft` with the sections `PromptSections`
+   holds, in order, each written for the request and attributed to the plugin
+   that added it (its own: the base prompt, and the environment: cwd, date,
+   platform, session id, and the `cli` command when configured), `ToolRunner.list`, the turn's branch and
    `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
    change what the model sees by appending events with `append` (a
    `compaction`, whose `usage` the turn's then includes); the `request` event with

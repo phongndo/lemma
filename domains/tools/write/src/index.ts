@@ -8,6 +8,7 @@ export { writeTool, WriteInput } from "./write.ts";
 export default definePlugin({
   id: "tools.write",
   version: "0.1.0",
-  requires: { tools: Tools },
-  setup: ({ tools }) => tools.register(writeTool),
+  setup: function* (_, owner) {
+    yield* owner.add(Tools, writeTool);
+  },
 });

@@ -3,10 +3,10 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Layer, Schema } from "effect";
 import { describe, expect, test } from "vitest";
-import { definePlugin, makeCore } from "@lemma/core";
+import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Interaction, InteractionError } from "@lemma/contracts";
-import { ToolInvocation, ToolResult, Tools } from "@lemma/tools";
+import { ToolInvocation, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
 import tools from "@lemma/tools-registry";
 import approvals, { question } from "../approvals.ts";
@@ -77,7 +77,7 @@ const shell: Tool<{ readonly command: string }> = {
   input: Schema.Struct({ command: Schema.String }),
   execute: async ({ command }) => new ToolResult({ content: [{ type: "text", text: `ran ${command}` }] }),
 };
-const shellPlugin = definePlugin({ id: "shell", requires: [Tools], layer: Layer.effectDiscard(Effect.flatMap(Tools, (registry) => registry.register(shell))) });
+const shellPlugin = definePlugin({ id: "shell", layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.add(Tools, shell))) });
 
 const run = (plugins: readonly Plugin[], calls: readonly ToolInvocation[]) =>
   Effect.runPromise(
@@ -85,7 +85,7 @@ const run = (plugins: readonly Plugin[], calls: readonly ToolInvocation[]) =>
       Effect.gen(function* () {
         const core = yield* makeCore([tools, shellPlugin, approvals, ...plugins]);
         return yield* core.run(
-          Effect.flatMap(Tools, (registry) =>
+          Effect.flatMap(ToolRunner, (registry) =>
             Effect.forEach(calls, (invocation) =>
               Effect.map(registry.execute(invocation, new AbortController().signal), (result) =>
                 result.content.map((part) => (part.type === "text" ? part.text : "")).join(""),
