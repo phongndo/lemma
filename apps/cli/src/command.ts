@@ -94,7 +94,7 @@ export interface Connection {
   /**
    * `@lemma/client`'s `Host`, the reconnecting WebSocket the web app has, for
    * a command that watches the host (its events and questions, its
-   * subsystems' streams) and the calls it makes meanwhile: opened once
+   * domains' streams) and the calls it makes meanwhile: opened once
    * connected (`openHost`), and closed with the command; a command opens one.
    * `answers` says whether the command answers the host's questions: the host
    * holds a question only for clients that do (`ConnectOptions.answers`).

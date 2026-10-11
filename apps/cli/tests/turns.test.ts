@@ -100,7 +100,7 @@ describe("turns against a running host", () => {
     expect((await invoke(["run", session, "x", "--steer", "--when-busy", "reject"], home)).code).toBe(ExitCode.usage);
   }, 30_000);
 
-  test("events follows the host's own events and its subsystems' streams; --session keeps one session's, with its log", async () => {
+  test("events follows the host's own events and its domains' streams; --session keeps one session's, with its log", async () => {
     const session = (await invoke(["session", "new", "--cwd", home], home)).out;
     const other = (await invoke(["session", "new", "--cwd", home], home)).out;
     const lines: { from: string; element: any }[] = [];
@@ -145,7 +145,7 @@ describe("turns against a running host", () => {
     );
     expect(seqs[0]).toBe(1);
     expect(seqs).toEqual(seqs.map((_, index) => index + 1));
-    // The host's own events: what the subsystems report comes on their streams.
+    // The host's own events: what the domains report comes on their streams.
     const runtime = ["notice", "interaction", "interaction-closed", "plugins-changed", "channels-changed", "ui-changed"];
     expect(of("host").every((element) => runtime.includes(element.type))).toBe(true);
   }, 30_000);

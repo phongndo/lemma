@@ -43,7 +43,7 @@ import { createServer } from "vite";
  *    thread link preloads; a deleted thread's address leaves for a new
  *    thread; an unsent prompt outlives settings and makes leaving the page ask.
  * 8. The devtools dock under the app, and each panel shows it as it runs (the
- *    host's events and its subsystems' streams, the channels it serves): a
+ *    host's events and its domains' streams, the channels it serves): a
  *    capability the runtime provides is the web app's, not a missing one.
  * 9. While a turn runs, the composer steers it or queues a prompt for after
  *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
@@ -275,8 +275,8 @@ const toggling = async () => {
   // refuses what is not of a field's type and saves what is, and its icons still mark their buttons.
   const filter = page.locator("input[type=search][aria-label='Filter plugins']");
   await filter.waitFor({ timeout: 5_000 }).catch(() => assert.fail("with kit off, the Plugins page has no search field"));
-  await filter.fill("agent");
-  const agent = page.locator(".inspector-row[data-key='host:agent']");
+  await filter.fill("agent.loop");
+  const agent = page.locator(".inspector-row[data-key='host:agent.loop']");
   await kit.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("with kit off, the Plugins page's search does not filter"));
   await agent.click();
   await page.click(".inspector-tabs [role=tab] >> text=Settings");
@@ -294,9 +294,13 @@ const toggling = async () => {
   await maxSteps.press("Tab");
   await expose(page, "HostPlugins");
   await page
-    .waitForFunction(() => (window as any).services.HostPlugins.list().find((plugin: any) => plugin.id === "agent").config.values.maxSteps === 150, undefined, {
-      timeout: 5_000,
-    })
+    .waitForFunction(
+      () => (window as any).services.HostPlugins.list().find((plugin: any) => plugin.id === "agent.loop").config.values.maxSteps === 150,
+      undefined,
+      {
+        timeout: 5_000,
+      },
+    )
     .catch(() => assert.fail("with kit off, a plugin's settings form does not save"));
   await filter.fill("");
   await kit.locator("input[type=checkbox]").click();
@@ -1054,7 +1058,7 @@ const devtools = async () => {
   // Navigation: the journal has what the router did.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Navigation");
   await page.waitForSelector("[aria-label='Router journal'] >> text=matched");
-  // Host events: the host's own stream and its subsystems' streams, and a session's id goes to its thread's trajectory.
+  // Host events: the host's own stream and its domains' streams, and a session's id goes to its thread's trajectory.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Host events");
   await page.waitForSelector("[aria-label=Events] tbody tr[data-row]");
   await page
@@ -1076,7 +1080,7 @@ const devtools = async () => {
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Channels");
   await page.click("[aria-label=Channels] td:text-is('sessions.log')");
   await page.waitForSelector("[aria-label='Channel details'] >> text=Session log");
-  await page.waitForSelector("[aria-label=Channels] tr:has(td:text-is('agent.prompt')) button:text-is('agent')");
+  await page.waitForSelector("[aria-label=Channels] tr:has(td:text-is('agent.prompt')) button:text-is('agent.loop')");
   // A plugin's name anywhere opens it in the Plugins panel: everything it does, and what depends on it.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Routes");
   await page.click("[aria-label=Routes] tr:has(td:text-is('/threads/:id/:view?')) button:text-is('thread-view')");
@@ -1091,8 +1095,8 @@ const devtools = async () => {
   // The host's plugins too, and each hook's chain in run order.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Hooks");
   await page.click("[aria-label=Hooks] tr:has(td:text-is('lemma/agent.request'))");
-  // Equal orders run by plugin id: agent, then compaction, then project-context at order 10.
-  for (const [position, id] of ["agent", "compaction", "project-context"].entries()) {
+  // Equal orders run by plugin id: agent.loop, then context.compaction, then context.project at order 10.
+  for (const [position, id] of ["agent.loop", "context.compaction", "context.project"].entries()) {
     await page.waitForSelector(`[aria-label='Hook details'] tr:has(td:text-is('${position + 1}')) >> button:text-is('${id}')`);
   }
   // Registries: the web app's slots, live, with who fills each and how to add to it.
@@ -1192,7 +1196,7 @@ const devtools = async () => {
   await page.waitForFunction((path) => location.pathname === path, turnPath);
   await page.evaluate(async () => {
     const { Client } = await import("/src/ui/contracts.ts" as string);
-    await (await (window as any).lemma.service(Client)).restartPlugin("agent", { force: true });
+    await (await (window as any).lemma.service(Client)).restartPlugin("agent.loop", { force: true });
   });
   await page
     .waitForFunction(() => document.querySelectorAll(".turn-footer").length === 2, undefined, { timeout: 20_000 })

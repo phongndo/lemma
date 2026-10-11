@@ -6,8 +6,8 @@ import type { ChangeReport } from "@lemma/contracts";
 import { callServed, pathsPlugin } from "@lemma/contracts/testing";
 import { definePlugin, makeCore, PluginContext, Registries, Registry } from "@lemma/core";
 import type { Core, Plugin } from "@lemma/core";
-import commands from "@lemma/plugin-commands";
-import { host } from "@lemma/plugin-commands-builtin";
+import commands from "@lemma/commands-registry";
+import commandsHost from "@lemma/commands-host";
 import { changedBetween, deferral } from "../src/deferral.ts";
 
 const Items = Registry.make<string>("test/items");
@@ -66,24 +66,27 @@ describe("deferral", () => {
       ),
     ));
 
-  test("a command that restarts the plugin that registered it, as host.reload may restart commands-host, answers, and the plugin restarts once it has ended", () =>
+  test("a command that restarts the plugin that registered it, as host.reload may restart commands.host, answers, and the plugin restarts once it has ended", () =>
     Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const scope = yield* Effect.scope;
           let activations = 0;
-          // commands-host as bundled, counting its instances.
-          const counted: Plugin = { ...host, layer: (config) => Layer.merge(host.layer(config), Layer.effectDiscard(Effect.sync(() => void activations++))) };
+          // commands.host as bundled, counting its instances.
+          const counted: Plugin = {
+            ...commandsHost,
+            layer: (config) => Layer.merge(commandsHost.layer(config), Layer.effectDiscard(Effect.sync(() => void activations++))),
+          };
           const running = yield* Deferred.make<Core>();
           const restarted = yield* Deferred.make<void>();
           const restart = Effect.flatMap(Deferred.await(running), (core) =>
-            Effect.andThen(Effect.orDie(core.restart("commands-host", { force: true })), Deferred.succeed(restarted, undefined)),
+            Effect.andThen(Effect.orDie(core.restart("commands.host", { force: true })), Deferred.succeed(restarted, undefined)),
           );
-          const report: ChangeReport = { started: [], restarted: ["commands-host"], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [] };
-          // As the host's: this reload restarts commands-host, and asks whether that plugin's work is making it.
+          const report: ChangeReport = { started: [], restarted: ["commands.host"], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [] };
+          // As the host's: this reload restarts commands.host, and asks whether that plugin's work is making it.
           const control = {
             reload: Effect.gen(function* () {
-              const after = yield* deferral(new Set(["commands-host"]), []);
+              const after = yield* deferral(new Set(["commands.host"]), []);
               if (after === undefined) return yield* Effect.as(restart, report);
               yield* Effect.forkIn(Effect.andThen(after, restart), scope);
               return { ...report, restarted: [], deferred: true };

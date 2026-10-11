@@ -111,7 +111,7 @@ Web app (plugins the web app loads: bundled, and files in ~/.lemma/ui)
   ui disable <id>                Turn one off; open web apps apply it at once
   ui config <id> <key> <value>   Set one field of its config (JSON or text; --unset removes it)
   events                         Follow what the host publishes: its own events (notices, questions, plugin
-                                 changes) and its subsystems' streams (agent.activity, sessions.changes,
+                                 changes) and its domains' streams (agent.activity, sessions.changes,
                                  llm.changes, commands.changes); NDJSON of {from, element} with --json
     --session <id>               ...only that session's turns and changes, and its log from now on
 

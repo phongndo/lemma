@@ -22,10 +22,10 @@
     "browser:check": "node packages/core/scripts/check-package.ts --browser && node packages/router/scripts/check-package.ts --browser",
     "core:check": "pnpm --filter @lemma/core check",
     "core:test": "pnpm --filter @lemma/core test",
-    "test:random": "pnpm build && pnpm core:test && pnpm --filter @lemma/plugin-sessions exec vitest run simulation && pnpm --filter @lemma/plugin-agent exec vitest run conversation",
+    "test:random": "pnpm build && pnpm core:test && pnpm --filter @lemma/sessions-files exec vitest run simulation && pnpm --filter @lemma/agent-loop exec vitest run conversation",
     "core:bench": "pnpm --filter @lemma/core bench",
     "core:stress": "node --expose-gc packages/core/bench/workload.ts",
-    "sessions:bench": "pnpm --filter @lemma/plugin-sessions bench",
+    "sessions:bench": "pnpm --filter @lemma/sessions-files bench",
     "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress && pnpm router:bench && pnpm sessions:bench",
     "router:bench": "pnpm --filter @lemma/router bench"
   },

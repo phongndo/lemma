@@ -9,7 +9,7 @@ import { CliError, ExitCode } from "./command.ts";
 import type { Failure, Io } from "./command.ts";
 
 /*
- * How commands reach the host's subsystems: through the channels their
+ * How commands reach the host's domains: through the channels their
  * plugins serve, typed by the declarations in @lemma/contracts
  * (`SessionChannels`, `AgentChannels`, `LlmChannels`, ...). The host's own
  * calls (`Host.*`, `Ui.*`, `Interaction.*`) and its event stream are the
@@ -27,7 +27,7 @@ import type { Failure, Io } from "./command.ts";
  */
 export const RUN_AGAIN = "; run the command again";
 
-/** Whether `error` is channel `id`'s own `code`: the transport's, naming the channel, rather than what the channel's subsystem refused. */
+/** Whether `error` is channel `id`'s own `code`: the transport's, naming the channel, rather than what the channel's domain refused. */
 export const ofChannel = (error: unknown, id: string, code: string): boolean =>
   (error instanceof HostError || error instanceof CliError) && error.code === code && error.subject === id;
 
@@ -35,7 +35,7 @@ export const ofChannel = (error: unknown, id: string, code: string): boolean =>
  * `Unavailable` naming what a request named (a channel, an inspector) is the
  * host still starting: its plugins were not up at the transport's startup
  * timeout. It exits 3, as for a host that cannot be reached, where a
- * subsystem's own `Unavailable` names what it concerns (a path) and exits 1.
+ * domain's own `Unavailable` names what it concerns (a path) and exits 1.
  */
 export const starting =
   (id: string) =>
@@ -44,7 +44,7 @@ export const starting =
 
 /**
  * What a failure of channel `id` means here. The transport names the channel
- * as the subject of what it says about it, where a subsystem names what it
+ * as the subject of what it says about it, where a domain names what it
  * refused (a session, a path): so `Unavailable` naming the channel is the
  * host still starting (`starting`). `NotFound` naming it is nothing serving
  * it when the transport says `No channel "<id>"`; otherwise a channel of the

@@ -10,7 +10,7 @@ describe("serveFiles", () => {
   /** Registries holding nothing: no plugin searches files. */
   const empty = { items: () => Effect.succeed([]) } as unknown as Context.Service.Shape<typeof Registries>;
 
-  test("serves each declaration once, well formed, named for the subsystem and described for clients to discover", () => {
+  test("serves each declaration once, well formed, named for the domain and described for clients to discover", () => {
     const channels = serveFiles(empty);
     expect(channels.map(({ id, kind }) => `${kind} ${id}`)).toEqual(Object.values(FileChannels).map(({ id, kind }) => `${kind} ${id}`));
     for (const channel of channels) {

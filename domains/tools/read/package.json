@@ -1,0 +1,25 @@
+{
+  "name": "@lemma/tools-read",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `read` tool: a file's text, a page at a time, or an image",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

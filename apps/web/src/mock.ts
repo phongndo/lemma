@@ -23,7 +23,7 @@ import type { EventData, SessionEvent, SessionInfo, SessionsChange } from "@lemm
 
 /**
  * Dev-only in-browser fake of the host (`?mock`, or `?mock=fresh` for a first
- * run with no sessions). It serves the bundled subsystems' channels as their
+ * run with no sessions). It serves the bundled domains' channels as their
  * plugins do, streams included, and the runtime's own calls and events. Every
  * provider starts logged out, so the fake never looks like real credentials;
  * its login flow only pretends. Not shipped: `main.tsx` imports it only in dev.
@@ -37,9 +37,9 @@ const MOCK_INSPECTORS = [
     id: "tools.registered",
     title: "Tools",
     description: "Every tool the model can call, the plugin that registered it, and the guards that check calls",
-    source: "tools",
+    source: "tools.registry",
     snapshot: () => ({
-      tools: ["read", "write", "edit", "bash", "codemode"].map((name) => ({ name, plugin: name, description: `The ${name} tool` })),
+      tools: ["read", "write", "edit", "bash", "codemode"].map((name) => ({ name, plugin: `tools.${name}`, description: `The ${name} tool` })),
       guards: [],
     }),
   },
@@ -47,7 +47,7 @@ const MOCK_INSPECTORS = [
     id: "agent.turns",
     title: "Running turns",
     description: "Each session with a turn running now, and how long it has run",
-    source: "agent",
+    source: "agent.loop",
     snapshot: () => [],
   },
 ];
@@ -204,16 +204,16 @@ const MOCK_COMMANDS = [
     title: "Create branch…",
     category: "Git",
     description: "Create a branch from HEAD and switch to it",
-    source: "commands-workspace",
+    source: "workspace.commands",
   },
   {
     id: "workspace.checkout",
     title: "Switch branch…",
     category: "Git",
     description: "Check out another branch in the working directory",
-    source: "commands-workspace",
+    source: "workspace.commands",
   },
-  { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands-host" },
+  { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands.host" },
 ];
 
 const noChannel = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
@@ -319,7 +319,7 @@ export const createMockHost = (): Host => {
   });
   // Mirrors of real config Schemas, so the Plugins page shows settings forms.
   const configs: Record<string, Schema.Codec<any, any>> = {
-    agent: Schema.Struct({
+    "agent.loop": Schema.Struct({
       defaultModel: Schema.optional(Schema.String).annotate({
         description: "<provider>/<model> for turns that name none. Absent: the first available model.",
       }),
@@ -328,18 +328,18 @@ export const createMockHost = (): Host => {
         description: "Model calls allowed in one turn before it ends with max-steps.",
       }),
     }),
-    tools: Schema.Struct({
+    "tools.registry": Schema.Struct({
       maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 100_000))).annotate({
         description: "Total text characters one result may carry to the model.",
       }),
     }),
-    "file-search": Schema.Struct({
+    "workspace.search-fff": Schema.Struct({
       idleMinutes: Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 15))).annotate({
         title: "Keep an index for",
         description: "Minutes a directory's index stays in memory after its last search; the next search opens it again.",
       }),
     }),
-    transport: Schema.Struct({
+    "transport.server": Schema.Struct({
       port: Schema.Number.pipe(
         Schema.check(Schema.isInt(), Schema.isBetween({ minimum: 0, maximum: 65535 })),
         Schema.withDecodingDefaultType(Effect.sync(() => 7433)),
@@ -349,7 +349,7 @@ export const createMockHost = (): Host => {
       token: Schema.optional(Schema.NonEmptyString).annotate({ ...secret, description: "When absent, read from <home>/token, created at the first start." }),
     }),
   };
-  const configRows: Record<string, Record<string, unknown>> = { transport: { token: "mock-token" } };
+  const configRows: Record<string, Record<string, unknown>> = { "transport.server": { token: "mock-token" } };
   const withConfig = (plugin: PluginStatus): PluginStatus => {
     const schema = configs[plugin.id];
     if (schema === undefined) return plugin;
@@ -359,37 +359,38 @@ export const createMockHost = (): Host => {
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
   const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", `lemma/api@${HOST_API}`];
   const plugins: PluginStatus[] = [
-    bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
-    bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
-    bundled("tools", { provides: ["lemma/Tools"] }),
-    bundled("read", { requires: ["lemma/Tools"] }),
-    bundled("write", { requires: ["lemma/Tools"] }),
-    bundled("edit", { requires: ["lemma/Tools"] }),
-    bundled("bash", { requires: ["lemma/Tools"] }),
-    bundled("codemode", { requires: ["lemma/Tools"] }),
-    bundled("sessions", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] }),
-    bundled("agent", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"] }),
-    bundled("compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
-    bundled("project-context", { requires: ["lemma/Paths"] }),
-    bundled("workspace", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] }),
-    bundled("file-search", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["file-search"] }] }),
-    bundled("commands", { provides: ["lemma/Commands"] }),
-    bundled("commands-host", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/HostControl"] }),
-    bundled("commands-llm", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
-    bundled("commands-workspace", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Workspace"] }),
+    bundled("credentials.file", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
+    bundled("llm.pi-ai", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
+    bundled("llm.commands", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
+    bundled("tools.registry", { provides: ["lemma/Tools"] }),
+    bundled("tools.read", { requires: ["lemma/Tools"] }),
+    bundled("tools.write", { requires: ["lemma/Tools"] }),
+    bundled("tools.edit", { requires: ["lemma/Tools"] }),
+    bundled("tools.bash", { requires: ["lemma/Tools"] }),
+    bundled("tools.codemode", { requires: ["lemma/Tools"] }),
+    bundled("sessions.files", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] }),
+    bundled("agent.loop", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"] }),
+    bundled("context.compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
+    bundled("context.project", { requires: ["lemma/Paths"] }),
+    bundled("workspace.local", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] }),
+    bundled("workspace.search-fff", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] }),
+    bundled("workspace.commands", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Workspace"] }),
+    bundled("commands.registry", { provides: ["lemma/Commands"] }),
+    bundled("commands.host", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/HostControl"] }),
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
-    bundled("transport", {
+    bundled("transport.server", {
       requires: ["lemma/Paths", "lemma/HostControl"],
       locked: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
     }),
   ];
+
   // Wiring as the kernel reports it, so the inspector has hooks and observers to show.
   const wiring: Record<string, Partial<PluginStatus>> = {
-    compaction: { hooks: [{ name: "lemma/agent.request", order: 0 }] },
-    "project-context": { hooks: [{ name: "lemma/agent.request", order: 10 }] },
-    bash: { hooks: [{ name: "lemma/tool.execute", order: 0 }] },
-    agent: { hooks: [{ name: "lemma/agent.request", order: 0 }] },
-    transport: {
+    "context.compaction": { hooks: [{ name: "lemma/agent.request", order: 0 }] },
+    "context.project": { hooks: [{ name: "lemma/agent.request", order: 10 }] },
+    "tools.bash": { hooks: [{ name: "lemma/tool.execute", order: 0 }] },
+    "agent.loop": { hooks: [{ name: "lemma/agent.request", order: 0 }] },
+    "transport.server": {
       hooks: [{ name: "lemma/interaction.request", order: 0 }],
       observes: ["lemma/notice", "lemma/plugins.changed", "lemma/ui.changed"],
     },
@@ -414,7 +415,7 @@ export const createMockHost = (): Host => {
     }
   };
   const sessions = new Map<string, { info: SessionInfo; events: SessionEvent[] }>();
-  /** The host's own events: the runtime's. Each subsystem's go to its streams, through the feeds below. */
+  /** The host's own events: the runtime's. Each domain's go to its streams, through the feeds below. */
   const listeners = new Set<(event: RuntimeEvent) => void>();
   const emit = (event: RuntimeEvent) => {
     for (const listener of listeners) listener(event);
@@ -971,29 +972,29 @@ export const createMockHost = (): Host => {
     };
   };
   /** As the llm plugin does after saving a change to its providers: it restarts, once the call asking for it has answered. */
-  const reloadLlm = () => setTimeout(() => restart("llm"), 50);
+  const reloadLlm = () => setTimeout(() => restart("llm.pi-ai"), 50);
   const noCustom = (provider: string) =>
     new HostError({ code: "UnknownProvider", message: `No provider "${provider}" was added by the user`, subject: provider });
 
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const served: Served[] = [
-    serveCall("sessions", SessionChannels.list, async ({ cwd }) =>
+    serveCall("sessions.files", SessionChannels.list, async ({ cwd }) =>
       [...sessions.values()]
         .map((session) => session.info)
         .filter((info) => cwd === undefined || info.cwd === cwd)
         .sort((a, b) => b.updatedAt - a.updatedAt),
     ),
-    serveCall("sessions", SessionChannels.get, async ({ sessionId }) => sessionOf(sessionId).info),
-    serveCall("sessions", SessionChannels.create, async ({ cwd }) => {
+    serveCall("sessions.files", SessionChannels.get, async ({ sessionId }) => sessionOf(sessionId).info),
+    serveCall("sessions.files", SessionChannels.create, async ({ cwd }) => {
       const info = create(cwd);
       sessionChanges.publish({ type: "session-changed", info });
       return info;
     }),
-    serveCall("sessions", SessionChannels.events, async ({ sessionId, after }) => {
+    serveCall("sessions.files", SessionChannels.events, async ({ sessionId, after }) => {
       await sleep(120);
       return sessionOf(sessionId).events.filter((event) => event.seq > (after ?? 0));
     }),
-    serveStream("sessions", SessionChannels.log, ({ sessionId, after }, send, fail) => {
+    serveStream("sessions.files", SessionChannels.log, ({ sessionId, after }, send, fail) => {
       const session = sessions.get(sessionId);
       if (session === undefined) {
         fail(notFound(sessionId));
@@ -1007,18 +1008,18 @@ export const createMockHost = (): Host => {
       });
     }),
     // Points the leaf at the event, as the host does: the next append branches from there.
-    serveCall("sessions", SessionChannels.checkout, async ({ sessionId, eventId }) => {
+    serveCall("sessions.files", SessionChannels.checkout, async ({ sessionId, eventId }) => {
       const session = sessionOf(sessionId);
       session.info = { ...session.info, leaf: eventId };
       sessionChanges.publish({ type: "session-changed", info: session.info });
       return session.info;
     }),
-    serveCall("sessions", SessionChannels.setTitle, async ({ sessionId, title }) => {
+    serveCall("sessions.files", SessionChannels.setTitle, async ({ sessionId, title }) => {
       sessionOf(sessionId);
       append(sessionId, { type: "title", title });
       return sessionOf(sessionId).info;
     }),
-    serveCall("sessions", SessionChannels.mark, async ({ sessionId, pinned: pin, archived: archive }) => {
+    serveCall("sessions.files", SessionChannels.mark, async ({ sessionId, pinned: pin, archived: archive }) => {
       const session = sessionOf(sessionId);
       const { pinned: _pinned, archived: _archived, ...rest } = session.info;
       const pinned = pin ?? session.info.pinned === true;
@@ -1027,7 +1028,7 @@ export const createMockHost = (): Host => {
       sessionChanges.publish({ type: "session-changed", info: session.info });
       return session.info;
     }),
-    serveCall("sessions", SessionChannels.delete, async ({ sessionId }) => {
+    serveCall("sessions.files", SessionChannels.delete, async ({ sessionId }) => {
       sessionOf(sessionId);
       if (running.has(sessionId))
         throw new HostError({ code: "Busy", subject: sessionId, message: "This session is in use, by a running turn or other work; stop it before deleting" });
@@ -1035,23 +1036,23 @@ export const createMockHost = (): Host => {
       logs.publish({ sessionId });
       sessionChanges.publish({ type: "session-removed", sessionId });
     }),
-    serveStream("sessions", SessionChannels.changes, (_, send) => {
+    serveStream("sessions.files", SessionChannels.changes, (_, send) => {
       send({ type: "subscribed" });
       return sessionChanges.subscribe(send);
     }),
 
     serveCall(
-      "agent",
+      "agent.loop",
       AgentChannels.prompt,
       async ({ sessionId, content, options, requestId, whenBusy }) => prompt(sessionId, content, options, requestId, whenBusy ?? "follow-up"),
       { waits: true },
     ),
-    serveCall("agent", AgentChannels.cancel, async ({ sessionId }) => {
+    serveCall("agent.loop", AgentChannels.cancel, async ({ sessionId }) => {
       if (running.has(sessionId)) cancelled.add(sessionId);
     }),
-    serveCall("agent", AgentChannels.running, async () => [...running]),
-    serveCall("agent", AgentChannels.queue, async ({ sessionId }) => queueOf(sessionId).map((queued) => queued.prompt)),
-    serveCall("agent", AgentChannels.withdraw, async ({ sessionId, requestId }) => {
+    serveCall("agent.loop", AgentChannels.running, async () => [...running]),
+    serveCall("agent.loop", AgentChannels.queue, async ({ sessionId }) => queueOf(sessionId).map((queued) => queued.prompt)),
+    serveCall("agent.loop", AgentChannels.withdraw, async ({ sessionId, requestId }) => {
       const found = queueOf(sessionId).find((queued) => queued.prompt.requestId === requestId);
       if (found === undefined) return false;
       queues.set(
@@ -1062,18 +1063,18 @@ export const createMockHost = (): Host => {
       queueChanged(sessionId);
       return true;
     }),
-    serveCall("agent", AgentChannels.view, async ({ sessionId }) => view(sessionId)),
-    serveStream("agent", AgentChannels.activity, (_, send) => {
+    serveCall("agent.loop", AgentChannels.view, async ({ sessionId }) => view(sessionId)),
+    serveStream("agent.loop", AgentChannels.activity, (_, send) => {
       send({ type: "subscribed", running: [...running] });
       return activity.subscribe(send);
     }),
 
-    serveCall("llm", LlmChannels.providers, async () => providers.slice()),
-    serveCall("llm", LlmChannels.models, async ({ available }) =>
+    serveCall("llm.pi-ai", LlmChannels.providers, async () => providers.slice()),
+    serveCall("llm.pi-ai", LlmChannels.models, async ({ available }) =>
       available === true ? MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured) : MODELS.slice(),
     ),
     serveCall(
-      "llm",
+      "llm.pi-ai",
       LlmChannels.login,
       async ({ provider, type }) => {
         const p = providers.find((x) => x.id === provider);
@@ -1089,7 +1090,7 @@ export const createMockHost = (): Host => {
           return ask({ type: "interaction", request }).finally(() => cancel.signal.removeEventListener("abort", withdraw));
         };
         const notice = (notice: Omit<NoticePayload, "level" | "source" | "origin">) =>
-          emit({ type: "notice", notice: { level: "info", source: "llm", origin, ...notice } });
+          emit({ type: "notice", notice: { level: "info", source: "llm.pi-ai", origin, ...notice } });
         /** Resolves after `ms`, or rejects once the login is cancelled. */
         const wait = (ms: number) =>
           new Promise<void>((resolve, reject) => {
@@ -1162,12 +1163,12 @@ export const createMockHost = (): Host => {
       },
       { waits: true },
     ),
-    serveCall("llm", LlmChannels.cancelLogin, async ({ provider }) => {
+    serveCall("llm.pi-ai", LlmChannels.cancelLogin, async ({ provider }) => {
       const running = logins.get(provider);
       running?.abort();
       return running !== undefined;
     }),
-    serveCall("llm", LlmChannels.logout, async ({ provider }) => {
+    serveCall("llm.pi-ai", LlmChannels.logout, async ({ provider }) => {
       const i = providers.findIndex((x) => x.id === provider);
       if (i === -1) throw new HostError({ code: "UnknownProvider", subject: provider, message: `No provider "${provider}"` });
       const { source: _source, ...rest } = providers[i]!;
@@ -1175,7 +1176,7 @@ export const createMockHost = (): Host => {
       modelChanges.publish({ type: "models-changed" });
     }),
     // Like the llm plugin: an id from the name, free among the providers; listed once its config has reloaded.
-    serveCall("llm", LlmChannels.addCustom, async ({ spec }) => {
+    serveCall("llm.pi-ai", LlmChannels.addCustom, async ({ spec }) => {
       await sleep(300);
       const base =
         spec.name
@@ -1195,14 +1196,14 @@ export const createMockHost = (): Host => {
       reloadLlm();
       return id;
     }),
-    serveCall("llm", LlmChannels.removeCustom, async ({ provider }) => {
+    serveCall("llm.pi-ai", LlmChannels.removeCustom, async ({ provider }) => {
       await sleep(300);
       const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
       if (at === -1) throw noCustom(provider);
       providers.splice(at, 1);
       reloadLlm();
     }),
-    serveCall("llm", LlmChannels.setLogo, async ({ provider, svg }) => {
+    serveCall("llm.pi-ai", LlmChannels.setLogo, async ({ provider, svg }) => {
       await sleep(200);
       const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
       if (at === -1) throw noCustom(provider);
@@ -1210,13 +1211,13 @@ export const createMockHost = (): Host => {
       providers[at] = svg === undefined ? rest : { ...rest, logo: svg };
       reloadLlm();
     }),
-    serveStream("llm", LlmChannels.changes, (_, send) => {
+    serveStream("llm.pi-ai", LlmChannels.changes, (_, send) => {
       send({ type: "subscribed" });
       return modelChanges.subscribe(send);
     }),
 
-    serveCall("workspace", WorkspaceChannels.status, async ({ path }) => workspaceStatus(path)),
-    serveCall("workspace", WorkspaceChannels.browse, async ({ partialPath }) => {
+    serveCall("workspace.local", WorkspaceChannels.status, async ({ path }) => workspaceStatus(path)),
+    serveCall("workspace.local", WorkspaceChannels.browse, async ({ partialPath }) => {
       const parent = partialPath.endsWith("/") ? partialPath.replace(/\/+$/, "") || "/" : partialPath.slice(0, partialPath.lastIndexOf("/")) || "/";
       const needle = partialPath.endsWith("/") ? "" : partialPath.slice(partialPath.lastIndexOf("/") + 1).toLowerCase();
       const names = ["lemma", "dotfiles", "nix-config", "notes", "pi-extensions", "tau"];
@@ -1230,13 +1231,13 @@ export const createMockHost = (): Host => {
         }));
       return { parent, entries, truncated: false };
     }),
-    serveCall("workspace", WorkspaceChannels.createDirectory, async ({ path }) => ({ path, exists: true })),
-    serveCall("workspace", WorkspaceChannels.createWorktree, async ({ path, branch }) => {
+    serveCall("workspace.local", WorkspaceChannels.createDirectory, async ({ path }) => ({ path, exists: true })),
+    serveCall("workspace.local", WorkspaceChannels.createWorktree, async ({ path, branch }) => {
       await sleep(300);
       const tree = `${HOME}/worktrees/${path.split("/").pop()}/${branch.replace(/\//g, "-")}`;
       return { path: tree, exists: true, git: { root: tree, branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: path } };
     }),
-    serveCall("workspace", WorkspaceChannels.branches, async () =>
+    serveCall("workspace.local", WorkspaceChannels.branches, async () =>
       mockBranches.map((name, index) => ({
         name,
         current: name === currentBranch,
@@ -1244,14 +1245,14 @@ export const createMockHost = (): Host => {
         updatedAt: Date.now() - index * 3_600_000,
       })),
     ),
-    serveCall("workspace", WorkspaceChannels.checkout, async ({ path, branch, create }) => {
+    serveCall("workspace.local", WorkspaceChannels.checkout, async ({ path, branch, create }) => {
       await sleep(250);
       const name = branch.replace(/^origin\//, "");
       if (create === true || !mockBranches.includes(name)) mockBranches.unshift(name);
       currentBranch = name;
       return workspaceStatus(path);
     }),
-    serveCall("workspace", FileChannels.search, async ({ cwd, query, limit = 50, kind, within: folder }) => {
+    serveCall("workspace.local", FileChannels.search, async ({ cwd, query, limit = 50, kind, within: folder }) => {
       await sleep(40);
       const within = folder?.replace(/\/+$/, "");
       if (within !== undefined && !mockEntries.some((entry) => entry.kind === "directory" && entry.path === within)) {
@@ -1274,9 +1275,9 @@ export const createMockHost = (): Host => {
       return { root: cwd, entries: ranked.slice(0, limit).map((item) => item.entry), truncated: ranked.length > limit };
     }),
 
-    serveCall("commands", CommandChannels.list, async () => MOCK_COMMANDS.slice()),
+    serveCall("commands.registry", CommandChannels.list, async () => MOCK_COMMANDS.slice()),
     serveCall(
-      "commands",
+      "commands.registry",
       CommandChannels.run,
       async ({ id: commandId }) => {
         const cancelled = () => new HostError({ code: "Cancelled", message: "Cancelled", subject: commandId });
@@ -1312,7 +1313,7 @@ export const createMockHost = (): Host => {
       },
       { waits: true },
     ),
-    serveStream("commands", CommandChannels.changes, (_, send) => {
+    serveStream("commands.registry", CommandChannels.changes, (_, send) => {
       send(MOCK_COMMANDS.slice());
       return () => {};
     }),
@@ -1474,8 +1475,8 @@ export const createMockHost = (): Host => {
       },
       reload: async () => {
         await sleep(400);
-        setTimeout(() => restart("agent"), 0);
-        return { started: [], restarted: ["agent"], stopped: [] };
+        setTimeout(() => restart("agent.loop"), 0);
+        return { started: [], restarted: ["agent.loop"], stopped: [] };
       },
       configure: async (rows, options) => {
         await sleep(500);
@@ -1499,7 +1500,7 @@ export const createMockHost = (): Host => {
             configRows[id] = next;
             plugins[i] = withConfig(plugins[i]!);
             // Like the host: a change that restarts the transport serving this call applies after the reply; any other at once.
-            if (id === "transport") {
+            if (id === "transport.server") {
               setTimeout(() => emit({ type: "plugins-changed", plugins: plugins.slice() }), 300);
               return { started: [], restarted: [], stopped: [], deferred: true };
             }

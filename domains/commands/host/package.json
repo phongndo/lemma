@@ -1,0 +1,25 @@
+{
+  "name": "@lemma/commands-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The host's own commands: reload the config, restart a plugin, turn one on or off",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/commands": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

@@ -27,7 +27,7 @@ describe("against a running host", () => {
     expect(status.info.home).toBe(home);
     // What the host provides itself is no plugin's: it has no row.
     expect(status.info.runtime).toEqual(["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@3"]);
-    expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent");
+    expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent.loop");
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).not.toContain("interaction");
     expect(status.plugins.every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
     expect(status.running).toEqual([]);
@@ -67,8 +67,8 @@ describe("against a running host", () => {
   });
 
   test("restart and reload go through the host", async () => {
-    expect(JSON.parse((await invoke(["plugins", "restart", "project-context", "--json"], home)).out)).toEqual({ restarted: "project-context" });
-    expect(JSON.parse((await invoke(["plugins", "restart", "project-context", "--force", "--json"], home)).out)).toEqual({ restarted: "project-context" });
+    expect(JSON.parse((await invoke(["plugins", "restart", "context.project", "--json"], home)).out)).toEqual({ restarted: "context.project" });
+    expect(JSON.parse((await invoke(["plugins", "restart", "context.project", "--force", "--json"], home)).out)).toEqual({ restarted: "context.project" });
     expect(await invoke(["reload"], home)).toMatchObject({ code: ExitCode.ok, out: "nothing changed" });
   });
 
@@ -79,40 +79,40 @@ describe("against a running host", () => {
     const rows = async (path: string) => JSON.parse(await readFile(path, "utf8")).plugins;
     const find = async (id: string) => JSON.parse((await invoke(["plugins", "--json"], home)).out).find((plugin: { id: string }) => plugin.id === id);
     try {
-      const off = await invoke(["plugins", "disable", "project-context", "--json"], home);
+      const off = await invoke(["plugins", "disable", "context.project", "--json"], home);
       expect(off.code).toBe(ExitCode.ok);
-      expect(JSON.parse(off.out)).toMatchObject({ disabled: "project-context", stopped: ["project-context"] });
-      expect((await rows(userConfig))["project-context"]).toEqual({ enabled: false });
-      expect(await find("project-context")).toMatchObject({ enabled: false, state: "disabled", scope: "user", source: "bundled" });
+      expect(JSON.parse(off.out)).toMatchObject({ disabled: "context.project", stopped: ["context.project"] });
+      expect((await rows(userConfig))["context.project"]).toEqual({ enabled: false });
+      expect(await find("context.project")).toMatchObject({ enabled: false, state: "disabled", scope: "user", source: "bundled" });
       // Only what the host pins is locked: the transport needs nothing but the runtime, which no plugin provides.
-      expect((await find("llm")).locked).toBeUndefined();
+      expect((await find("llm.pi-ai")).locked).toBeUndefined();
       expect((await invoke(["plugins"], home)).out).toContain("off in the user config");
 
       // The pinned plugin refuses, and the file is left as it was; nor can it be restarted by force while it runs.
-      const pinned = await invoke(["plugins", "disable", "transport", "--json"], home);
+      const pinned = await invoke(["plugins", "disable", "transport.server", "--json"], home);
       expect(pinned.code).toBe(ExitCode.failed);
-      expect(JSON.parse(pinned.err).error).toMatchObject({ code: "ReloadError", subject: "transport" });
-      expect((await rows(userConfig)).transport).toEqual({ config: { port: 0 } });
-      const forced = await invoke(["plugins", "restart", "transport", "--force", "--json"], home);
+      expect(JSON.parse(pinned.err).error).toMatchObject({ code: "ReloadError", subject: "transport.server" });
+      expect((await rows(userConfig))["transport.server"]).toEqual({ config: { port: 0 } });
+      const forced = await invoke(["plugins", "restart", "transport.server", "--force", "--json"], home);
       expect(forced.code).toBe(ExitCode.failed);
-      expect(JSON.parse(forced.err).error).toMatchObject({ code: "ReloadError", subject: "transport" });
+      expect(JSON.parse(forced.err).error).toMatchObject({ code: "ReloadError", subject: "transport.server" });
       expect(JSON.parse(forced.err).error.message).toContain("cannot be restarted while running");
 
       // Any other plugin restarts by force and turns off, what needs it with it, while the transport serves on.
-      expect(JSON.parse((await invoke(["plugins", "restart", "llm", "--force", "--json"], home)).out)).toEqual({ restarted: "llm" });
-      const llmOff = await invoke(["plugins", "disable", "llm", "--json"], home);
+      expect(JSON.parse((await invoke(["plugins", "restart", "llm.pi-ai", "--force", "--json"], home)).out)).toEqual({ restarted: "llm.pi-ai" });
+      const llmOff = await invoke(["plugins", "disable", "llm.pi-ai", "--json"], home);
       expect(llmOff.code).toBe(ExitCode.ok);
-      expect(JSON.parse(llmOff.out)).toMatchObject({ disabled: "llm", stopped: expect.arrayContaining(["llm", "agent"]) });
-      expect((await rows(userConfig)).llm.enabled).toBe(false);
-      expect(await find("agent")).toMatchObject({ enabled: true, state: "disabled", haltedBy: "llm" });
+      expect(JSON.parse(llmOff.out)).toMatchObject({ disabled: "llm.pi-ai", stopped: expect.arrayContaining(["llm.pi-ai", "agent.loop"]) });
+      expect((await rows(userConfig))["llm.pi-ai"].enabled).toBe(false);
+      expect(await find("agent.loop")).toMatchObject({ enabled: true, state: "disabled", haltedBy: "llm.pi-ai" });
       // With no agent, nothing serves `agent.running`: the host still answers, unsure what runs.
       expect(await invoke(["status"], home)).toMatchObject({ code: ExitCode.ok, out: expect.stringMatching(/\nrunning +unknown: no agent runs/) });
-      const llmOn = await invoke(["plugins", "enable", "llm", "--json"], home);
-      expect(JSON.parse(llmOn.out)).toMatchObject({ enabled: "llm", started: expect.arrayContaining(["llm", "agent"]) });
-      expect((await rows(userConfig)).llm.enabled).toBeUndefined();
+      const llmOn = await invoke(["plugins", "enable", "llm.pi-ai", "--json"], home);
+      expect(JSON.parse(llmOn.out)).toMatchObject({ enabled: "llm.pi-ai", started: expect.arrayContaining(["llm.pi-ai", "agent.loop"]) });
+      expect((await rows(userConfig))["llm.pi-ai"].enabled).toBeUndefined();
 
       // The project file is only written for a trusted project.
-      const untrusted = await invoke(["plugins", "disable", "bash", "--project", "--json"], home);
+      const untrusted = await invoke(["plugins", "disable", "tools.bash", "--project", "--json"], home);
       expect(untrusted.code).toBe(ExitCode.failed);
       expect(JSON.parse(untrusted.err).error.message).toContain("not a trusted project");
       expect(existsSync(projectConfig)).toBe(false);
@@ -120,15 +120,15 @@ describe("against a running host", () => {
       // Trusted: a project row overrides the user row, so enabling there writes an explicit true.
       await writeFile(userConfig, JSON.stringify({ ...JSON.parse(await readFile(userConfig, "utf8")), trustedProjects: [home] }));
       expect(await invoke(["reload"], home)).toMatchObject({ code: ExitCode.ok });
-      expect(JSON.parse((await invoke(["plugins", "disable", "bash", "--json"], home)).out)).toMatchObject({ stopped: ["bash"] });
-      const overridden = await invoke(["plugins", "enable", "bash", "--project", "--json"], home);
-      expect(JSON.parse(overridden.out)).toMatchObject({ enabled: "bash", started: ["bash"] });
-      expect((await rows(projectConfig)).bash).toEqual({ enabled: true });
-      expect(await find("bash")).toMatchObject({ enabled: true, state: "active", scope: "project" });
+      expect(JSON.parse((await invoke(["plugins", "disable", "tools.bash", "--json"], home)).out)).toMatchObject({ stopped: ["tools.bash"] });
+      const overridden = await invoke(["plugins", "enable", "tools.bash", "--project", "--json"], home);
+      expect(JSON.parse(overridden.out)).toMatchObject({ enabled: "tools.bash", started: ["tools.bash"] });
+      expect((await rows(projectConfig))["tools.bash"]).toEqual({ enabled: true });
+      expect(await find("tools.bash")).toMatchObject({ enabled: true, state: "active", scope: "project" });
 
-      const on = await invoke(["plugins", "enable", "project-context", "--json"], home);
-      expect(JSON.parse(on.out)).toMatchObject({ enabled: "project-context", started: ["project-context"] });
-      expect((await rows(userConfig))["project-context"]).toBeUndefined();
+      const on = await invoke(["plugins", "enable", "context.project", "--json"], home);
+      expect(JSON.parse(on.out)).toMatchObject({ enabled: "context.project", started: ["context.project"] });
+      expect((await rows(userConfig))["context.project"]).toBeUndefined();
     } finally {
       await rm(join(home, ".lemma"), { recursive: true, force: true });
       await writeFile(userConfig, original);
@@ -137,16 +137,16 @@ describe("against a running host", () => {
   });
 
   test("plugins show prints a plugin's wiring: who provides, who uses, and the hooks and events it takes part in", async () => {
-    const shown = await invoke(["plugins", "show", "agent"], home);
+    const shown = await invoke(["plugins", "show", "agent.loop"], home);
     expect(shown.code).toBe(ExitCode.ok);
     // Clients reach it through its channels: no plugin needs it.
     expect(shown.out).toContain("Agent  used by no plugin");
-    expect(shown.out).toContain("Llm  from llm");
+    expect(shown.out).toContain("Llm  from llm.pi-ai");
     expect(shown.out).toContain("HostControl  from the host");
     // What a plugin adds to other plugins' registries: bash its tool.
-    expect((await invoke(["plugins", "show", "bash"], home)).out).toContain("Contributes\n  lemma/tools  bash");
-    const transport = JSON.parse((await invoke(["plugins", "show", "transport", "--json"], home)).out);
-    // It observes the runtime's events only: each subsystem streams its own.
+    expect((await invoke(["plugins", "show", "tools.bash"], home)).out).toContain("Contributes\n  lemma/tools  bash");
+    const transport = JSON.parse((await invoke(["plugins", "show", "transport.server", "--json"], home)).out);
+    // It observes the runtime's events only: each domain streams its own.
     expect([...transport.observes].sort()).toEqual(["lemma/notice", "lemma/plugins.changed", "lemma/ui.changed"]);
     expect(transport.hooks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "lemma/interaction.request" })]));
     expect(JSON.parse((await invoke(["plugins", "show", "nope", "--json"], home)).err).error.code).toBe("NotFound");
@@ -155,7 +155,7 @@ describe("against a running host", () => {
   test("kernel shows the host as its core runs it: capabilities, hook chains, registries, and events", async () => {
     const capabilities = await invoke(["kernel"], home);
     expect(capabilities.code).toBe(ExitCode.ok);
-    expect(capabilities.out).toMatch(/lemma\/Agent\s+agent \(active\)/);
+    expect(capabilities.out).toMatch(/lemma\/Agent\s+agent\.loop \(active\)/);
     expect(capabilities.out).toMatch(/lemma\/HostControl\s+the host\s+.*transport/);
     expect(capabilities.out).toMatch(/lemma\/Interaction\s+the host\s+\S/);
     expect(capabilities.out).not.toContain("NOTHING");
@@ -163,7 +163,7 @@ describe("against a running host", () => {
     expect(hooks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "lemma/interaction.request" })]));
     const registries = (await invoke(["kernel", "registries"], home)).out;
     expect(registries).toMatch(/lemma\/tools {2}\(\d+ items\)/);
-    expect(registries).toMatch(/\n {2}bash +1 +bash/);
+    expect(registries).toMatch(/\n {2}tools\.bash +1 +bash/);
     expect((await invoke(["kernel", "events"], home)).out).toMatch(/lemma\/notice\s+transport/);
     expect((await invoke(["kernel", "nope"], home)).code).toBe(ExitCode.usage);
     expect((await invoke(["kernel", "toString"], home)).code).toBe(ExitCode.usage);
@@ -171,25 +171,25 @@ describe("against a running host", () => {
 
   test("inspectors lists what host plugins let you look into, and prints one as tables", async () => {
     const listed = await invoke(["inspectors"], home);
-    expect(listed.out).toMatch(/tools\.registered\s+Tools\s+tools/);
-    expect(listed.out).toMatch(/agent\.turns\s+Running turns\s+agent/);
+    expect(listed.out).toMatch(/tools\.registered\s+Tools\s+tools\.registry/);
+    expect(listed.out).toMatch(/agent\.turns\s+Running turns\s+agent\.loop/);
     const tools = await invoke(["inspectors", "tools.registered"], home);
     expect(tools.out).toMatch(/^tools\nname\s+plugin\s+description\n/);
-    expect(tools.out).toMatch(/\nbash\s+bash\s+/);
+    expect(tools.out).toMatch(/\nbash\s+tools\.bash\s+/);
     expect(JSON.parse((await invoke(["inspectors", "agent.turns", "--json"], home)).out)).toEqual([]);
     expect(JSON.parse((await invoke(["inspectors", "nope", "--json"], home)).err).error.code).toBe("NotFound");
   });
 
   test("channels lists what host plugins serve; an unknown one is NotFound, for a call and a stream alike", async () => {
-    // The bundled subsystems serve theirs; a plugin file's are below, and examples/ticker uses one in a real host.
+    // The bundled domains serve theirs; a plugin file's are below, and examples/ticker uses one in a real host.
     const text = (await invoke(["channels"], home)).out;
-    expect(text).toMatch(/^sessions\.list +call +List sessions +sessions /m);
-    expect(text).toMatch(/\nllm\.login\s+call\s+Log in\s+llm\s+Runs a provider's login flow/);
-    expect(text).toMatch(/\ncommands\.run\s+call\s+Run command\s+commands\s+Runs a command/);
+    expect(text).toMatch(/^sessions\.list +call +List sessions +sessions\.files /m);
+    expect(text).toMatch(/\nllm\.login\s+call\s+Log in\s+llm\.pi-ai\s+Runs a provider's login flow/);
+    expect(text).toMatch(/\ncommands\.run\s+call\s+Run command\s+commands\.registry\s+Runs a command/);
     const listed = JSON.parse((await invoke(["channels", "--json"], home)).out) as { id: string; source: string }[];
     const servedBy = (source: string) => listed.filter((channel) => channel.source === source).map((channel) => channel.id);
-    expect(servedBy("sessions")).toContain("sessions.list");
-    expect(servedBy("llm")).toEqual([
+    expect(servedBy("sessions.files")).toContain("sessions.list");
+    expect(servedBy("llm.pi-ai")).toEqual([
       "llm.providers",
       "llm.models",
       "llm.login",
@@ -200,8 +200,8 @@ describe("against a running host", () => {
       "llm.set-logo",
       "llm.changes",
     ]);
-    expect(servedBy("commands")).toEqual(["commands.list", "commands.run", "commands.changes"]);
-    expect(servedBy("workspace")).toEqual([
+    expect(servedBy("commands.registry")).toEqual(["commands.list", "commands.run", "commands.changes"]);
+    expect(servedBy("workspace.local")).toEqual([
       "workspace.status",
       "workspace.browse",
       "workspace.create-directory",
@@ -226,46 +226,52 @@ describe("against a running host", () => {
     const restarted = (before: number) =>
       settled(async () => ((await startedAt()) !== before && (await invoke(["status"], home)).code === ExitCode.ok) || undefined);
     try {
-      const agent = await config("agent");
+      const agent = await config("agent.loop");
       expect(agent.fields.find((field: { key: string }) => field.key === "maxSteps")).toMatchObject({ type: "integer", default: 200 });
       expect(agent.values.maxSteps).toBe(200);
-      expect((await invoke(["plugins", "config", "agent"], home)).out).toContain("Model calls allowed in one turn");
+      expect((await invoke(["plugins", "config", "agent.loop"], home)).out).toContain("Model calls allowed in one turn");
 
       // Applied at once: the transport needs nothing the agent provides, so it serves on.
       const before = await startedAt();
-      const set = await invoke(["plugins", "config", "agent", "maxSteps", "80", "--json"], home);
+      const set = await invoke(["plugins", "config", "agent.loop", "maxSteps", "80", "--json"], home);
       expect(set.code).toBe(ExitCode.ok);
-      expect(JSON.parse(set.out)).toMatchObject({ id: "agent", key: "maxSteps", value: 80, scope: "user", restarted: expect.arrayContaining(["agent"]) });
+      expect(JSON.parse(set.out)).toMatchObject({
+        id: "agent.loop",
+        key: "maxSteps",
+        value: 80,
+        scope: "user",
+        restarted: expect.arrayContaining(["agent.loop"]),
+      });
       expect(JSON.parse(set.out).deferred).toBeUndefined();
-      expect(JSON.parse(await readFile(userConfig, "utf8")).plugins.agent).toEqual({ config: { maxSteps: 80 } });
-      const maxSteps = async () => (await config("agent")).values.maxSteps as number;
+      expect(JSON.parse(await readFile(userConfig, "utf8")).plugins["agent.loop"]).toEqual({ config: { maxSteps: 80 } });
+      const maxSteps = async () => (await config("agent.loop")).values.maxSteps as number;
       expect(await maxSteps()).toBe(80);
       expect(await startedAt()).toBe(before);
 
-      const wrong = await invoke(["plugins", "config", "agent", "maxSteps", "1.5", "--json"], home);
+      const wrong = await invoke(["plugins", "config", "agent.loop", "maxSteps", "1.5", "--json"], home);
       expect(wrong.code).toBe(ExitCode.failed);
       expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Usage", message: "maxSteps must be a whole number" });
-      const unknown = await invoke(["plugins", "config", "agent", "speed", "9", "--json"], home);
+      const unknown = await invoke(["plugins", "config", "agent.loop", "speed", "9", "--json"], home);
       expect(JSON.parse(unknown.err).error.message).toContain("its fields are defaultModel, systemPrompt, cli, maxSteps");
 
-      await invoke(["plugins", "config", "agent", "maxSteps", "--unset"], home);
-      expect(JSON.parse(await readFile(userConfig, "utf8")).plugins.agent).toBeUndefined();
+      await invoke(["plugins", "config", "agent.loop", "maxSteps", "--unset"], home);
+      expect(JSON.parse(await readFile(userConfig, "utf8")).plugins["agent.loop"]).toBeUndefined();
       expect(await maxSteps()).toBe(200);
 
       // A change to the transport itself is written and answered, then applied, restarting the transport serving it.
       const beforeTransport = await startedAt();
-      const grace = await invoke(["plugins", "config", "transport", "interactionGraceMs", "20000"], home);
+      const grace = await invoke(["plugins", "config", "transport.server", "interactionGraceMs", "20000"], home);
       expect(grace).toMatchObject({
         code: ExitCode.ok,
-        out: "set transport.interactionGraceMs = 20000 in the user config: applying: the host restarts the transport, so clients reconnect",
+        out: "set transport.server.interactionGraceMs = 20000 in the user config: applying: the host restarts the transport, so clients reconnect",
       });
       expect(await restarted(beforeTransport)).toBe(true);
-      expect((await config("transport")).values.interactionGraceMs).toBe(20000);
+      expect((await config("transport.server")).values.interactionGraceMs).toBe(20000);
       const beforeUnset = await startedAt();
-      await invoke(["plugins", "config", "transport", "interactionGraceMs", "--unset"], home);
+      await invoke(["plugins", "config", "transport.server", "interactionGraceMs", "--unset"], home);
       expect(await restarted(beforeUnset)).toBe(true);
       // The transport's token is secret: clients learn only whether it is set.
-      const transport = await config("transport");
+      const transport = await config("transport.server");
       expect(transport.fields.find((field: { key: string }) => field.key === "token")).toMatchObject({ secret: true });
       expect(transport.values.token).toBeUndefined();
       expect(transport.values.port).toBe(0);

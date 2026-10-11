@@ -23,7 +23,7 @@ const refused = (code: string, subject: string) => () => Effect.fail(new HostErr
 const failure = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.flip(effect));
 
 describe("a channel's failure", () => {
-  test("Unavailable naming the channel is the host still starting, and exits 3; a subsystem's own names what it concerns", async () => {
+  test("Unavailable naming the channel is the host still starting, and exits 3; a domain's own names what it concerns", async () => {
     const host = fakeHost({ calls: { "sessions.list": refused("Unavailable", "sessions.list"), "files.search": refused("Unavailable", "/work") } });
     expect(await failure(call(host.rpc, SessionChannels.list, {}))).toMatchObject({
       code: "Unavailable",
