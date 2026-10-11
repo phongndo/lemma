@@ -262,6 +262,26 @@ describe("planComposition", () => {
     expect(off.problems.has("agent")).toBe(false);
   });
 
+  test("names the plugin a row most likely meant, here or in the other app, when its id is a typo or two off", () => {
+    expect(plan({ rows: { agnet: { enabled: false } } }).diagnostics.map((diagnostic) => diagnostic.suggestion)).toEqual([
+      `Did you mean "agent"? Rename the row, or remove it`,
+    ]);
+    expect(plan({ rows: { "frame.shel": { enabled: false } }, elsewhereIds: ["frame.shell"] }).diagnostics.map((diagnostic) => diagnostic.suggestion)).toEqual([
+      `Did you mean "frame.shell"? Rename the row, or remove it`,
+    ]);
+    // Nothing close: no guess.
+    expect(plan({ rows: { unrelated: {} } }).diagnostics.map((diagnostic) => diagnostic.suggestion)).toEqual([`Remove the "unrelated" row, or add the plugin`]);
+  });
+
+  test("checks a plugin's keys against both its halves' where it knows the other's, and leaves them to the other app where not", () => {
+    const rows = { agent: { config: { maxSteps: 3, shown: true, steps: 5 } } };
+    // The web app knows the host half's keys: `shown` is the other half's, `steps` neither's.
+    const known = plan({ rows, elsewhere: (id) => id === "agent", otherKeys: (id) => (id === "agent" ? ["shown"] : undefined) });
+    expect(messages(known, "warning")).toEqual([`The config for "agent" sets steps, which it does not use (renamed or removed?)`]);
+    // The host does not know the web half's: the web app warns.
+    expect(plan({ rows, elsewhere: (id) => id === "agent" }).diagnostics).toEqual([]);
+  });
+
   test("warns about config keys a plugin does not use, such as a setting renamed in an update", () => {
     const planned = plan({ rows: { agent: { config: { steps: 5, maxSteps: 3 } } } });
     expect(messages(planned, "warning")).toEqual([`The config for "agent" sets steps, which it does not use (renamed or removed?)`]);

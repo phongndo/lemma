@@ -37,6 +37,13 @@ export interface PlanInput {
    * of; nor are its config's keys, which the other half may read. Absent, every row names a plugin here.
    */
   readonly elsewhere?: (id: string) => boolean;
+  /** The other app's plugin ids, for a row naming no plugin anywhere: the one meant, when one is close (a typo). */
+  readonly elsewhereIds?: readonly string[];
+  /**
+   * The config keys the other half of a plugin reads (its row's `config` goes to both), when this app knows them.
+   * A key neither half reads is warned of; for a plugin whose other half's keys are unknown, the other app warns.
+   */
+  readonly otherKeys?: (id: string) => readonly string[] | undefined;
   /**
    * Plugins left out before anything is planned, each with why, as one that cannot run is: a web half whose host
    * half is not running waits for it. What needs one waits too.
@@ -117,12 +124,13 @@ export function planComposition(input: PlanInput): Plan {
     if (plugins[id] === undefined) {
       // A plugin renamed or removed in an update leaves its row behind: nothing to run, so nothing to refuse.
       const required = row.required === true && row.enabled !== false;
+      const meant = closest(id, [...known.map(({ plugin }) => plugin.id), ...(input.elsewhereIds ?? [])]);
       diagnostics.push(
         new Diagnostic({
           severity: required ? "error" : "warning",
           pluginId: id,
           message: required ? `"${id}" is required, but no plugin has that id` : `The row for "${id}" names no plugin; it is ignored`,
-          suggestion: `Remove the "${id}" row, or add the plugin`,
+          suggestion: meant === undefined ? `Remove the "${id}" row, or add the plugin` : `Did you mean "${meant}"? Rename the row, or remove it`,
         }),
       );
       continue;
@@ -240,8 +248,11 @@ export function planComposition(input: PlanInput): Plan {
     );
   }
   for (const { plugin } of known) {
-    if (!isRunning(resolved.composition, plugin.id) || plugin.config === undefined || input.elsewhere?.(plugin.id) === true) continue;
-    const unused = unusedKeys(plugin.config, resolved.composition.plugins[plugin.id]?.config);
+    if (!isRunning(resolved.composition, plugin.id) || plugin.config === undefined) continue;
+    // A plugin with a half in the other app: its keys may be that half's. Checked against them when known, else there.
+    const others = input.otherKeys?.(plugin.id);
+    if (others === undefined && input.elsewhere?.(plugin.id) === true) continue;
+    const unused = unusedKeys(plugin.config, resolved.composition.plugins[plugin.id]?.config).filter((key) => !others?.includes(key));
     if (unused.length === 0) continue;
     diagnostics.push(
       new Diagnostic({
@@ -377,6 +388,27 @@ function rootOf(resolved: Resolved, id: string): string {
 }
 
 /** Keys `config` sets that `schema` does not read: a setting renamed or removed since the row was written. */
+/** The id in `ids` closest to `id`, when it is close enough to be the one meant: a typo or two. */
+function closest(id: string, ids: readonly string[]): string | undefined {
+  let best: { readonly id: string; readonly distance: number } | undefined;
+  for (const candidate of new Set(ids)) {
+    const distance = editDistance(id, candidate);
+    if (distance <= Math.max(2, Math.floor(candidate.length / 5)) && (best === undefined || distance < best.distance)) best = { id: candidate, distance };
+  }
+  return best?.id;
+}
+
+/** How many insertions, deletions, and substitutions turn `a` into `b`. */
+function editDistance(a: string, b: string): number {
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) row[j] = Math.min(previous[j]! + 1, row[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    previous = row;
+  }
+  return previous[b.length]!;
+}
+
 function unusedKeys(schema: Schema.Decoder<unknown>, config: unknown): string[] {
   if (!Predicate.isObject(config) || Result.isFailure(Schema.decodeUnknownResult(schema)(config))) return [];
   const strict = Schema.decodeUnknownResult(schema, { onExcessProperty: "error", errors: "all" })(config);

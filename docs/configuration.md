@@ -28,11 +28,12 @@ change to the transport itself is answered first and applied after, and
 clients reconnect. Each plugin's README lists its settings.
 
 The host itself is not a plugin. It provides `Paths`, `HostControl` (managing
-the plugins), `Interaction` (questions to the user), `Trace` (the spans its
-work ends, and its composition's changes), and `HostApi` (its API version) to
-every plugin, so they have no row and nothing turns them off. A
-`host` or `interaction` row left from when they were plugins names no plugin,
-and is ignored with a warning. A plugin that provides one of them is left out,
+the plugins), `Interaction` (questions to the user), `Trace` (what it keeps of
+its own running), and `HostApi` (its API version) to every plugin, so they have
+no row and nothing turns them off. A row naming no plugin either app has (a
+`host` or `interaction` row left from when they were plugins, a plugin renamed
+or removed, a typo) is ignored with a warning, which names the plugin meant
+when one is close. So is a config key neither half of its plugin reads. A plugin that provides one of them is left out,
 and one from your own files stops the start (they are required, below): to
 change how questions are answered, handle `InteractionHook` instead.
 
@@ -51,7 +52,9 @@ your plugins. What is there loads by itself, and again when it changes:
 A plugin is one id, with a host half, a web half, or both. Both halves of one
 plugin define its id, so its one row decides both, and the web app runs the
 web half only while the host half runs; [ticker](../examples/ticker/README.md)
-is an example. The bundled plugins are laid out the same way, a package each
+is an example. Name a web half's file for its plugin (`notes.web.js` defines
+`notes`), and a folder plugin's folder for its own: the host knows a web
+half's id by its name, so a row naming it is not taken for a typo. The bundled plugins are laid out the same way, a package each
 in its domain's folder (`domains/tools/bash` is `tools.bash`), whose
 `package.json` names its halves.
 

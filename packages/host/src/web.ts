@@ -17,6 +17,14 @@ export const userPluginsDir = (paths: PathsService): string => join(paths.home, 
  * the page's token. The URL carries the file's mtime, so an edited file is
  * fetched again rather than served from the module cache.
  */
+/**
+ * The ids of the web halves in the plugin directories, by their names: a file is named for its plugin
+ * (`notes.web.js` is `notes`), and a package's folder for its own (`ticker/`). What a row names is a plugin's when
+ * it is one of these.
+ */
+export const webIdsOf = (files: readonly WebFile[]): string[] =>
+  files.filter((file) => file.kind === "script").map((file) => (file.name.includes("/") ? file.name.split("/")[0]! : file.name.replace(/\.web\.m?js$/, "")));
+
 export function listWebFiles(paths: PathsService, trusted: boolean): Effect.Effect<WebFile[]> {
   const dirs = [{ dir: userPluginsDir(paths), source: "user" as const }, ...(trusted ? [{ dir: projectPluginsDir(paths), source: "project" as const }] : [])];
   return Effect.promise(async () => {
