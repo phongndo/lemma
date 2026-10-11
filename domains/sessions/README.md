@@ -10,10 +10,10 @@ The session log, the source of truth every request is rebuilt from, and its stor
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                             |
-| --------- | ------------------------------------------------------------------------------------ |
-| Add       | Nothing: what a session holds is its events                                          |
-| Intercept | `SessionRemoveHook`: a session about to be deleted                                   |
-| Observe   | `SessionAppended`, `SessionChanged`, `SessionRemoved`                                |
-| Call      | `Sessions`: create, append, read a branch, check out; clients call `SessionChannels` |
-| Serve     | `Sessions`, with `serveSessions`: a plugin providing it replaces `sessions.files`    |
+| Shape     | What the contract offers                                                                                  |
+| --------- | --------------------------------------------------------------------------------------------------------- |
+| Add       | Nothing: what a session holds is its events                                                               |
+| Intercept | `SessionRemoveHook`: a session about to be deleted; `SessionCheckoutHook`: a session's leaf about to move |
+| Observe   | `SessionAppended`, `SessionChanged`, `SessionCheckedOut`, `SessionRemoved`                                |
+| Call      | `Sessions`: create, append, read a branch, check out; clients call `SessionChannels`                      |
+| Serve     | `Sessions`, with `serveSessions`: a plugin providing it replaces `sessions.files`                         |
