@@ -1,0 +1,37 @@
+{
+  "name": "@lemma/ui",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The web app's plugin API: the runtime every web plugin is written against, defining a plugin, slots and parts, drawing them, and helpers",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./keys": "./src/keys.ts",
+    "./storage": "./src/storage.ts",
+    "./now": "./src/now.ts",
+    "./clipboard": "./src/clipboard.ts",
+    "./quick-pick": "./src/quick-pick.ts",
+    "./paint": "./src/paint.ts",
+    "./match": "./src/match.ts",
+    "./format": "./src/format.ts",
+    "./vitest": "./vitest.web.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/client": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/router": "workspace:*",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vite-plugin-solid": "2.11.14",
+    "vitest": "5.0.2"
+  }
+}

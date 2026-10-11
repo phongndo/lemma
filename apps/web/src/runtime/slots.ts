@@ -2,8 +2,8 @@ import { Effect, Stream } from "effect";
 import type { Scope } from "effect";
 import { Registries } from "@lemma/core";
 import type { Contribution } from "@lemma/core";
-import { createSlots } from "../ui/slots.ts";
-import type { SlotsService } from "../ui/slots.ts";
+import { createSlots } from "@lemma/ui";
+import type { SlotsService } from "@lemma/ui";
 
 /**
  * The runtime's `Slots` over this core's registries (`createSlots`), the

@@ -18,11 +18,13 @@ const token = process.env.LEMMA_HOST_TOKEN;
 const auth = token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } };
 
 const src = resolve(import.meta.dirname, "src");
+/** Where the bundled plugins' source is: the app's own, each domain's plugins and contracts, and the plugin API. */
+const sources = [src, resolve(import.meta.dirname, "../../domains"), resolve(import.meta.dirname, "../../packages/ui/src")];
 const CANDIDATES = "virtual:lemma/utility-candidates";
 
 /**
- * `virtual:lemma/utility-candidates`: the Tailwind classes the app's own
- * source uses, as the build finds them (`@source` in `src/tailwind.css`). The
+ * `virtual:lemma/utility-candidates`: the Tailwind classes the bundled
+ * plugins' source uses, as the build finds them (`@source` in `src/tailwind.css`). The
  * page compiles them with UI files' classes into one sheet (`ui/utilities.ts`),
  * so a utility from a UI file sorts among the app's own as one build would.
  */
@@ -34,7 +36,7 @@ function utilityCandidates(): Plugin {
     resolveId: (source) => (source === CANDIDATES ? id : undefined),
     async load(source) {
       if (source !== id) return undefined;
-      const scanned = new Scanner({ sources: [{ base: src, pattern: "**/*", negated: false }] }).scan();
+      const scanned = new Scanner({ sources: sources.map((base) => ({ base, pattern: "**/*", negated: false })) }).scan();
       const compiler = await compile(await readFile(resolve(src, "tailwind.css"), "utf8"), {
         base: src,
         loadStylesheet: async (sheet, base) => {
@@ -53,7 +55,7 @@ function utilityCandidates(): Plugin {
       return `export default ${JSON.stringify(used.sort())};`;
     },
     hotUpdate({ file }) {
-      if (!file.startsWith(src)) return;
+      if (!sources.some((dir) => file.startsWith(dir)) || file.includes("/node_modules/")) return;
       const module = this.environment.moduleGraph.getModuleById(id);
       if (module !== undefined) this.environment.moduleGraph.invalidateModule(module);
     },

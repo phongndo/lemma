@@ -2,11 +2,12 @@
 import "./lib/immediate.ts";
 import { connect, describeError } from "@lemma/client";
 import type { Host } from "@lemma/client";
-import { preloadPaint } from "./lib/paint.ts";
+import { preloadPaint } from "@lemma/ui/paint";
 import { takeToken } from "./lib/token.ts";
-import { bundled } from "./plugins/index.ts";
+import { bundled } from "./bundled.ts";
 import { boot } from "./ui/boot.tsx";
-import { NewThreadRoute, SettingsRoute, ThreadRoute } from "./ui/contracts.ts";
+import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
+import { SettingsRoute } from "@lemma/settings";
 import "./styles.css";
 
 const start = async () => {

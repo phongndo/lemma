@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { follow } from "@lemma/client";
 import type { ConnectionStatus, Host } from "@lemma/client";
 import type { HostError, HostInfo } from "@lemma/contracts";
-import type { ClientService } from "../ui/runtime.ts";
+import type { ClientService } from "@lemma/ui";
 
 /**
  * The page's one connection as the runtime's `Client`, for as long as the

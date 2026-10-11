@@ -1,0 +1,24 @@
+{
+  "name": "@lemma/llm-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Providers and models as the host reports them, and this browser's choices",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}
