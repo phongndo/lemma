@@ -31,20 +31,19 @@ export const partView =
   (props) => {
     if (!("children" in props)) return <First slot={part} props={props as never} />;
     const caller = useContext(PluginOwner);
-    // Children the part calls (a popover's, given its close) draw what they return as the caller's; others are read
-    // lazily, inside the caller's context, as the provider draws them.
-    const given = Object.getOwnPropertyDescriptor(props, "children");
-    const children =
-      given !== undefined && "value" in given && typeof given.value === "function"
-        ? {
-            children: (...args: unknown[]) => (
-              <PluginOwner.Provider value={caller}>{(given.value as (...args: unknown[]) => JSX.Element)(...args)}</PluginOwner.Provider>
-            ),
-          }
-        : {
-            get children() {
-              return <PluginOwner.Provider value={caller}>{props.children}</PluginOwner.Provider>;
-            },
-          };
+    /** `read`, run inside the caller's context: what it draws is the caller's, wherever the provider draws it. */
+    const asCaller = <T,>(read: () => T): T => {
+      let value!: T;
+      <PluginOwner.Provider value={caller}>{(() => void (value = read()))()}</PluginOwner.Provider>;
+      return value;
+    };
+    // Read lazily, as the provider reads them, however they were handed (a value, or a getter from a spread): children
+    // the part calls (a popover's, given its close) stay a function, and draw what they return as the caller's.
+    const children = {
+      get children() {
+        const given = asCaller(() => props.children as unknown);
+        return typeof given === "function" ? (...args: unknown[]) => asCaller(() => (given as (...args: unknown[]) => JSX.Element)(...args)) : given;
+      },
+    };
     return <First slot={part} props={mergeProps(props, children) as never} />;
   };

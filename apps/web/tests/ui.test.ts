@@ -14,7 +14,23 @@ import * as look from "@lemma/look";
 import * as llm from "@lemma/llm/web";
 import * as threads from "@lemma/threads";
 import { TogglePart } from "@lemma/look";
-import { Notify, Slots, WEB_API, WebApi, defineWebPlugin, extendWebPlugin, routesOf, definePart, defineSlot, fallbackOf, Client, usePlugin, Contained, partView, SlotsContext } from "@lemma/web";
+import {
+  Notify,
+  Slots,
+  WEB_API,
+  WebApi,
+  defineWebPlugin,
+  extendWebPlugin,
+  routesOf,
+  definePart,
+  defineSlot,
+  fallbackOf,
+  Client,
+  usePlugin,
+  Contained,
+  partView,
+  SlotsContext,
+} from "@lemma/web";
 import type { Part, SlotsService, ClientService } from "@lemma/web";
 import { PluginStopped } from "@lemma/core/plain";
 
@@ -416,12 +432,79 @@ describe("defineWebPlugin", () => {
       const ticks = seen.length;
       // Its handlers do nothing once it has stopped, and its timer has ended with it.
       click!();
-      await new Promise((resolve) => setImmediate(resolve));
+      // Long enough for a timer of its period that outlived it to run: a witness of that period fires a few times.
+      let fired = 0;
+      const witness = setInterval(() => fired++, 1);
+      await waitFor(() => fired >= 5);
+      clearInterval(witness);
       expect(seen.length).toBe(ticks);
       dispose();
     });
     // Outside any plugin's slot item, there is no plugin to find.
     expect(() => createRoot(() => usePlugin())).toThrow(/outside any plugin's slot item/);
+  });
+
+  it("keeps a running plugin's helpers for what it draws when its replacement fails to start", async () => {
+    const Views = defineSlot<{ readonly component: Component }>("test.views");
+    const found: string[] = [];
+    const View: Component = () => {
+      found.push(usePlugin().id);
+      return null;
+    };
+    const replaced = defineWebPlugin({
+      id: "replaced",
+      config: Schema.Struct({ broken: Schema.optional(Schema.Boolean) }),
+      requires: { slots: Slots },
+      setup: ({ slots }, plugin) => {
+        if (plugin.config.broken === true) throw new Error("cannot start");
+        slots.add(Views, { id: "view", component: View });
+      },
+    });
+    await run([replaced], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      expect(Exit.isFailure(await Effect.runPromiseExit(loader.apply({ plugins: { replaced: { config: { broken: true } } } })))).toBe(true);
+      // The instance it was to replace goes on, and what it draws still finds it.
+      const item = slots.first(Views)!;
+      createRoot((dispose) => {
+        createComponent(SlotsContext.Provider, {
+          value: () => slots,
+          get children() {
+            return createComponent(Contained, { slot: Views, item, component: item.component });
+          },
+        });
+        dispose();
+      });
+      expect(found).toEqual(["replaced"]);
+    });
+  });
+
+  it("names a plugin written against the kernel when what it draws asks for usePlugin, which it has none of", async () => {
+    const Views = defineSlot<{ readonly component: Component }>("test.views");
+    const View: Component = () => {
+      usePlugin();
+      return null;
+    };
+    const kernel = definePlugin({
+      id: "kernel",
+      requires: { slots: Slots },
+      setup: ({ slots }, plugin) => Effect.sync(() => void slots.as(plugin).add(Views, { id: "view", component: View })),
+    });
+    await run([kernel], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      const item = slots.first(Views)!;
+      const dispose = createRoot((dispose) => {
+        createComponent(SlotsContext.Provider, {
+          value: () => slots,
+          get children() {
+            return createComponent(Contained, { slot: Views, item, component: item.component });
+          },
+        });
+        return dispose;
+      });
+      await waitFor(() => slots.failures(Views).length === 1);
+      expect(String(slots.failures(Views)[0]!.error)).toMatch(/an item of "kernel", written against the kernel directly/);
+      dispose();
+    });
   });
 
   it("draws what a plugin hands a part (its children) as that plugin's, though another plugin provides the part", async () => {
@@ -456,6 +539,12 @@ describe("defineWebPlugin", () => {
                 },
               }),
               createComponent(PopupView, { children: () => createComponent(Probe, { name: "popup content" }) }),
+              // The same handed on through a getter, as a spread or `splitProps` hands it: still a function to call.
+              createComponent(PopupView, {
+                get children() {
+                  return (close: unknown) => createComponent(Probe, { name: `popup content, by a getter, given ${typeof close}` });
+                },
+              }),
             ] as unknown as JSX.Element,
         }),
     });
@@ -471,7 +560,7 @@ describe("defineWebPlugin", () => {
         });
         dispose();
       });
-      expect(seen).toEqual(["the box as boxer", "box content as caller", "popup content as caller"]);
+      expect(seen).toEqual(["the box as boxer", "box content as caller", "popup content as caller", "popup content, by a getter, given function as caller"]);
     });
   });
 

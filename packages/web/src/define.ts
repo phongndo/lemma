@@ -18,10 +18,10 @@ export type { Capabilities, Services };
  * it is the plugin's: it ends when the plugin stops, and what fails in it is the plugin's fault, named for it.
  * Components drawn for the plugin's slot items reach it with `usePlugin`.
  */
-export interface WebPluginContext<Config> extends Pick<
-  PlainSetup<Config>,
-  "id" | "signal" | "onCleanup" | "background" | "task" | "after" | "every" | "listen" | "action" | "fault" | "previous" | "handoff" | "run"
-> {
+/** What of the promise-based handle a web plugin's context is (its `config` typed apart): one list, for the type and the value. */
+const CONTEXT_KEYS = ["id", "signal", "onCleanup", "background", "task", "after", "every", "listen", "action", "fault", "previous", "handoff", "run"] as const;
+
+export interface WebPluginContext<Config> extends Pick<PlainSetup<Config>, (typeof CONTEXT_KEYS)[number]> {
   /** Decoded from the plugin's `config` Schema; its row in config.jsonc's `plugins` sets it. */
   readonly config: Config;
 }
@@ -93,12 +93,16 @@ export function extendWebPlugin(
 
 /** A web plugin's context from the promise-based handle, listed in `owners` while it runs, for `usePlugin`. */
 const contextOf = (plugin: PlainSetup<unknown>): WebPluginContext<unknown> => {
-  const { id, config, signal, onCleanup, background, task, after, every, listen, action, fault, previous, handoff, run } = plugin;
-  const context: WebPluginContext<unknown> = { id, config, signal, onCleanup, background, task, after, every, listen, action, fault, previous, handoff, run };
+  const context = { config: plugin.config, ...Object.fromEntries(CONTEXT_KEYS.map((key) => [key, plugin[key]])) } as WebPluginContext<unknown>;
+  const { id } = plugin;
+  // A replacement starts before this one stops, and is listed by then: only its own entry is removed. One that fails to
+  // start gives the entry back to the instance it was to replace, which goes on running.
+  const before = owners.get(id);
   owners.set(id, context);
-  // A replacement starts before this one stops, and is listed by then: only its own entry is removed.
-  onCleanup(() => {
-    if (owners.get(id) === context) owners.delete(id);
+  plugin.onCleanup(() => {
+    if (owners.get(id) !== context) return;
+    if (before !== undefined && !before.signal.aborted) owners.set(id, before);
+    else owners.delete(id);
   });
   return context;
 };

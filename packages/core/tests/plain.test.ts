@@ -18,6 +18,17 @@ import type { PlainSetup } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
 import { run } from "./support.ts";
 
+/**
+ * Resolves once a witness timer of `ms` has fired `times` times: by then a timer of that period that outlived its plugin
+ * would have run too, however loaded the machine is.
+ */
+const outlast = async (ms: number, times = 3) => {
+  let fired = 0;
+  const witness = setInterval(() => fired++, ms);
+  await expect.poll(() => fired).toBeGreaterThanOrEqual(times);
+  clearInterval(witness);
+};
+
 class NotFound extends Error {
   readonly _tag = "NotFound";
 }
@@ -425,7 +436,7 @@ describe("a plugin written with promises", () => {
     await tested.close();
     const stopped = ticks;
     api!.after(1, () => void seen.push("late"));
-    await new Promise((resolve) => setImmediate(resolve));
+    await outlast(5);
     expect([ticks, seen]).toEqual([stopped, ["after"]]);
   });
 
@@ -541,6 +552,47 @@ describe("a plugin written with promises", () => {
     await tested.close();
     save("after stop");
     expect(calls).toEqual(["first"]);
+  });
+
+  test("action runs as its own plugin's work wherever it is called, and a call refused as a plugin stopped is no fault", async () => {
+    const heard: Unhandled[] = [];
+    let api: PlainSetup<unknown> | undefined;
+    const tested = await testPlugin(definePlugin({ id: "handling", setup: (_, plugin) => void (api = plugin) }));
+    const handle = api!.action("handle", () => void heard.push(reportUnhandled(new Error("in the handler"))));
+    // Called from another plugin's work (its emit, say), the handler is still this plugin's.
+    const caller = await testPlugin(definePlugin({ id: "caller", setup: () => handle() }));
+    expect(heard).toEqual([{ kind: "fault", pluginId: "handling" }]);
+    api!.action("refused", () => Promise.reject(new PluginStopped({ pluginId: "elsewhere", operation: "invoke" })))();
+    api!.action("broken", () => Promise.reject(new Error("broken")))();
+    await tested.waitForFault((candidate) => candidate.operation === "broken");
+    expect(tested.faults.map((fault) => fault.operation)).not.toContain("refused");
+    await caller.close();
+    await tested.close();
+  });
+
+  test("asked as its plugin stops (a cleanup's flush), task runs then; listen, after, and action do nothing", async () => {
+    const listeners = new Set<() => void>();
+    const emitter = { on: (_: string, listener: () => void) => listeners.add(listener), off: (_: string, listener: () => void) => listeners.delete(listener) };
+    const late: string[] = [];
+    let flushed: unknown;
+    const tested = await testPlugin(
+      definePlugin({
+        id: "flusher",
+        setup: (_, { onCleanup, task, listen, after, action }) => {
+          onCleanup(async () => {
+            flushed = await task("flush", async () => "saved");
+            // Its cleanups are running: nothing would end these.
+            listen(emitter, "late", () => void late.push("listened"));
+            after(1, () => void late.push("timer"));
+            action("late", () => void late.push("action"))();
+          });
+        },
+      }),
+    );
+    await tested.close();
+    expect(flushed).toBe("saved");
+    await outlast(1);
+    expect([late, listeners.size]).toEqual([[], 0]);
   });
 
   test("owns an operation others intercept, and reads registries", async () => {

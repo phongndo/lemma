@@ -101,7 +101,8 @@ export interface SlotsService {
   /** The slot's items in order, each with the plugin that added it and its order. Reactive. */
   readonly contributions: <T>(slot: Slot<T>) => readonly { readonly item: SlotItem<T>; readonly pluginId: string; readonly order: number }[];
   /**
-   * An item that threw while drawing (`Contained` calls this): reported as a
+   * An item that threw while drawing (`Contained` calls this) or as another
+   * plugin used it (the keymap running an action): reported as a
    * fault of the plugin that added it, and left out of `list`, `first`, and
    * `get` from then on, so a region shows its next item and a part its default.
    * The item returns when its plugin adds it again (a restart).

@@ -94,14 +94,21 @@ export const reportFaults = (loader: Loader, history: { readonly record: (fault:
   ).pipe(Effect.catchCause(logFailure("stopped reporting plugin faults")));
 
 /**
- * Keeps an error nothing handled from ending the host. One raised by a plugin's work (a stray timer or promise) is that
- * plugin's fault (`reportUnhandled`), reported as its others are, and it and every session keep running; one from no
- * plugin's work that can be told is logged; a call a stopped plugin made, refused, is expected and dropped. Returns
- * the removal.
+ * Keeps a plugin's error nothing handled from ending the host. One raised by a plugin's work (a stray timer or promise)
+ * is that plugin's fault (`reportUnhandled`), reported as its others are, and it and every session keep running; a call
+ * a stopped plugin made, refused, is expected and dropped; one from no plugin's work that can be told ends the host, as
+ * Node.js would. Returns the removal.
  */
 export const catchUnhandled = (): (() => void) => {
   const unhandled = (error: unknown) => {
-    if (reportUnhandled(error).kind === "unknown") console.error(`lemma: an error nothing handled\n${Cause.pretty(Cause.die(error))}`);
+    const whose = reportUnhandled(error);
+    if (whose.kind === "stopped") return;
+    // Logged even as a plugin's fault: one whose plugin has stopped records no fault, and would be lost.
+    console.error(
+      `lemma: ${whose.kind === "fault" ? `[${whose.pluginId}] an error its work did not handle` : "an error nothing handled"}\n${Cause.pretty(Cause.die(error))}`,
+    );
+    // No plugin's: the host's own state may be broken, so it ends as Node would end it.
+    if (whose.kind === "unknown") process.exit(1);
   };
   process.on("unhandledRejection", unhandled);
   process.on("uncaughtException", unhandled);
