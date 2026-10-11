@@ -2,6 +2,7 @@
   "name": "@lemma/workspace-local",
   "version": "0.1.0",
   "private": true,
+  "description": "The filesystem and git, and file search, served to clients",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

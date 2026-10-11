@@ -1,7 +1,8 @@
 # tools.read
 
-The `read` tool: a file's text, a page at a time, or an image. Requires `Tools`.
-No config. Its behavior, description, and limits follow pi's.
+The `read` tool: a file's text, a page at a time, or an image. Adds it to `Tools`.
+No config. Its behavior, description, and limits follow pi's. Its web half
+(`./web`) shows a call as the file and the lines read.
 
 | Input                                 | Behavior                                                                                                                                                                               |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

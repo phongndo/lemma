@@ -300,6 +300,14 @@ function Overview(props: { inspector: Inspector; kind: PluginKind; plugin: Plugi
   );
 }
 
+/** The channels registry: what a plugin adds there it serves to clients, so it shows under Serves. */
+const CHANNELS = "lemma/channels";
+
+/**
+ * How a plugin meets the others, in the five shapes every domain's contract offers: what it adds to registries and
+ * slots, the hooks it intercepts, the events it observes, the capabilities it calls, and what it serves (capabilities,
+ * and channels to clients).
+ */
 function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginStatus }) {
   const { inspector } = props;
   const all = () => inspector.services[props.kind].list();
@@ -310,21 +318,19 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
     const index = chain.findIndex((entry) => entry.plugin === plugin().id && entry.order === order);
     return chain.length > 1 ? `${index + 1} of ${chain.length}` : "only handler";
   };
-  const contributions = () => plugin().contributes ?? [];
+  const added = () => (plugin().contributes ?? []).filter((registry) => registry.name !== CHANNELS);
+  const channels = () => (plugin().contributes ?? []).find((registry) => registry.name === CHANNELS)?.keys ?? [];
   return (
     <div class="inspector-wiring">
       <section>
-        <h3>Provides</h3>
-        <Show when={plugin().provides.length > 0} fallback={<p class="muted small">Nothing; it contributes through hooks, events, or slots.</p>}>
+        <h3>Adds</h3>
+        <Show when={added().length > 0} fallback={<p class="muted small">Nothing to a registry or slot.</p>}>
           <ul>
-            <For each={plugin().provides}>
-              {(key) => (
+            <For each={added()}>
+              {(registry) => (
                 <li>
-                  <span class="capability" data-tip={key}>
-                    {capabilityName(key)}
-                  </span>
-                  <span class="muted"> used by </span>
-                  <Links inspector={inspector} kind={props.kind} ids={usersOf(all(), key)} none="no plugin" />
+                  <span class="capability">{registry.name}</span>
+                  <span class="muted"> {registry.keys?.join(", ") ?? `${registry.items} ${registry.items === 1 ? "item" : "items"}`}</span>
                 </li>
               )}
             </For>
@@ -332,8 +338,34 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
         </Show>
       </section>
       <section>
-        <h3>Requires</h3>
-        <Show when={plugin().requires.length > 0} fallback={<p class="muted small">Nothing.</p>}>
+        <h3>Intercepts</h3>
+        <Show when={plugin().hooks?.length} fallback={<p class="muted small">No hook.</p>}>
+          <ul>
+            <For each={plugin().hooks}>
+              {(hook) => (
+                <li>
+                  <span class="capability">{hook.name}</span>
+                  <span class="muted">
+                    {" "}
+                    order {hook.order} · {position(hook.name, hook.order)}
+                  </span>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </section>
+      <section>
+        <h3>Observes</h3>
+        <Show when={plugin().observes?.length} fallback={<p class="muted small">No event.</p>}>
+          <ul>
+            <For each={plugin().observes}>{(event) => <li class="capability">{event}</li>}</For>
+          </ul>
+        </Show>
+      </section>
+      <section>
+        <h3>Calls</h3>
+        <Show when={plugin().requires.length > 0} fallback={<p class="muted small">No capability.</p>}>
           <ul>
             <For each={plugin().requires}>
               {(key) => (
@@ -355,43 +387,26 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
         </Show>
       </section>
       <section>
-        <h3>Hooks</h3>
-        <Show when={plugin().hooks?.length} fallback={<p class="muted small">It intercepts no hooks.</p>}>
+        <h3>Serves</h3>
+        <Show when={plugin().provides.length > 0 || channels().length > 0} fallback={<p class="muted small">Nothing; other plugins do not call it.</p>}>
           <ul>
-            <For each={plugin().hooks}>
-              {(hook) => (
+            <For each={plugin().provides}>
+              {(key) => (
                 <li>
-                  <span class="capability">{hook.name}</span>
-                  <span class="muted">
-                    {" "}
-                    order {hook.order} · {position(hook.name, hook.order)}
+                  <span class="capability" data-tip={key}>
+                    {capabilityName(key)}
                   </span>
+                  <span class="muted"> used by </span>
+                  <Links inspector={inspector} kind={props.kind} ids={usersOf(all(), key)} none="no plugin" />
                 </li>
               )}
             </For>
-          </ul>
-        </Show>
-      </section>
-      <section>
-        <h3>Observes</h3>
-        <Show when={plugin().observes?.length} fallback={<p class="muted small">It observes no events.</p>}>
-          <ul>
-            <For each={plugin().observes}>{(event) => <li class="capability">{event}</li>}</For>
-          </ul>
-        </Show>
-      </section>
-      <section>
-        <h3>Contributes</h3>
-        <Show when={contributions().length > 0} fallback={<p class="muted small">It contributes to no registry.</p>}>
-          <ul>
-            <For each={contributions()}>
-              {(registry) => (
-                <li>
-                  <span class="capability">{registry.name}</span>
-                  <span class="muted"> {registry.keys?.join(", ") ?? `${registry.items} ${registry.items === 1 ? "item" : "items"}`}</span>
-                </li>
-              )}
-            </For>
+            <Show when={channels().length > 0}>
+              <li>
+                <span class="capability">channels</span>
+                <span class="muted"> {channels().join(", ")}</span>
+              </li>
+            </Show>
           </ul>
         </Show>
       </section>
@@ -625,8 +640,8 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
 /**
  * Every plugin of the host and of this web app in one table, filtered like
  * the trajectory (`is:failed kind:web`), and the selected one in detail:
- * why it is in its state, what it provides and requires and who uses it,
- * the hooks, events, and slots it takes part in, its settings, and its
+ * why it is in its state, how it meets the others (what it adds, intercepts,
+ * observes, calls, and serves, and who uses that), its settings, and its
  * recent faults. Names in the details select that plugin.
  */
 function PluginsInspector(props: { inspector: Inspector; filter: () => string; setFilter: (value: string) => void }) {

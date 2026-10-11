@@ -10,6 +10,7 @@ export { unifiedPatch } from "./diff.ts";
 export default definePlugin({
   id: "tools.edit",
   version: "0.1.0",
-  requires: { tools: Tools },
-  setup: ({ tools }) => tools.register(editTool),
+  setup: function* (_, owner) {
+    yield* owner.add(Tools, editTool);
+  },
 });

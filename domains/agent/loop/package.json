@@ -2,6 +2,7 @@
   "name": "@lemma/agent-loop",
   "version": "0.1.0",
   "private": true,
+  "description": "The turn loop: asks a model, runs the tools it calls, and logs each step",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

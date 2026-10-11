@@ -2,7 +2,7 @@
   "name": "@lemma/commands",
   "version": "0.1.0",
   "private": true,
-  "description": "The commands domain's contract: commands a user runs, and their registry and channels",
+  "description": "The commands domain's contract: the commands plugins add, the runner clients call, and their channels",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

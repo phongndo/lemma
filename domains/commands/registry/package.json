@@ -2,6 +2,7 @@
   "name": "@lemma/commands-registry",
   "version": "0.1.0",
   "private": true,
+  "description": "Lists and runs the commands plugins add, and serves them to clients",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

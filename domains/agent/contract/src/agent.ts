@@ -1,6 +1,6 @@
 import { Context, Data, Effect, Schema, Stream } from "effect";
-import { Event, Hook } from "@lemma/core";
-import type { Events } from "@lemma/core";
+import { Event, Hook, Registry } from "@lemma/core";
+import type { Awaitable, Events } from "@lemma/core";
 import { defineChannel, eventFeed, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, ImageContent, Message, ModelRef, StreamEvent, TextContent, ThinkingLevel, Usage } from "@lemma/llm";
@@ -81,6 +81,44 @@ export interface SystemSection {
   readonly source: string;
   readonly text: string;
 }
+
+/** The request a prompt section is written for. */
+export interface SectionRequest {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly cwd: string;
+  readonly model: ModelRef;
+  /** The tools on offer, before `AgentRequestHook` changes them. */
+  readonly tools: readonly ToolContribution[];
+}
+
+/**
+ * A part of the system prompt, written for each request. Its source is the plugin that added it, and an empty text
+ * (`undefined` or "") leaves it out of that request. A section that fails fails the request, as a hook's failure does.
+ */
+export interface PromptSection {
+  /** Unique among the sections: `project-context`, `skills`. */
+  readonly id: string;
+  /** Its text for this request: a value, a promise of one, or an Effect (`Awaitable`). */
+  readonly text: (request: SectionRequest) => Awaitable<string | undefined, unknown>;
+}
+
+/**
+ * The system prompt's sections, in order (`PluginContext.add(PromptSections, section, { order })`): the agent asks each
+ * for its text, then runs `AgentRequestHook`, whose handlers change or drop sections. The agent's own are at
+ * `SectionOrder`: a section between them keeps the prompt's stable prefix long, as `environment`'s date changes daily.
+ */
+export const PromptSections = Registry.make<PromptSection>("lemma/agent.sections", {
+  key: (section) => section.id,
+  unique: true,
+  check: (value) =>
+    typeof value === "object" && value !== null && typeof (value as PromptSection).id === "string" && typeof (value as PromptSection).text === "function"
+      ? undefined
+      : "A prompt section is { id: string, text: (request) => string | undefined }",
+});
+
+/** Where the agent's own sections sit among `PromptSections`: the base prompt first, the environment last. */
+export const SectionOrder = { base: 0, environment: 1000 } as const;
 
 /**
  * The model-facing request before it is logged and sent. Handlers of

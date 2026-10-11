@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
-import { Tools } from "@lemma/tools";
+import { ToolRunner } from "@lemma/tools";
 import { makeRegistry } from "./registry.ts";
 
 const ToolsConfig = Schema.Struct({
@@ -18,6 +18,6 @@ export default definePlugin({
   id: "tools.registry",
   version: "0.1.0",
   config: ToolsConfig,
-  provides: { tools: Tools },
+  provides: { tools: ToolRunner },
   setup: (_, { config }) => Effect.map(makeRegistry(config), (tools) => ({ tools })),
 });

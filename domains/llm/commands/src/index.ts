@@ -39,6 +39,6 @@ export const llmCommands = (llm: Context.Service.Shape<typeof Llm>, ask: Ask): r
 export default definePlugin({
   id: "llm.commands",
   version: "0.1.0",
-  requires: { registry: Commands, ask: Interaction, dependency: Llm },
-  setup: ({ registry, ask, dependency }) => Effect.forEach(llmCommands(dependency, ask), registry.register, { discard: true }),
+  requires: { ask: Interaction, dependency: Llm },
+  setup: ({ ask, dependency }, owner) => Effect.forEach(llmCommands(dependency, ask), (command) => owner.add(Commands, command), { discard: true }),
 });

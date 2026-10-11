@@ -3,9 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { Hooks, makeCore } from "@lemma/core";
-import { AgentRequestHook } from "@lemma/agent";
-import type { RequestDraft, RequestPlan } from "@lemma/agent";
+import { makeCore, Registries } from "@lemma/core";
+import { PromptSections, SectionOrder } from "@lemma/agent";
+import type { SectionRequest } from "@lemma/agent";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import projectContext, { makeLoader } from "../src/index.ts";
 
@@ -55,42 +55,28 @@ describe("project context", () => {
     expect(ours(await load(path.join(dir, "repo")))).toEqual([]);
   });
 
-  it("adds a section attributed to its plugin id, before the environment section", async () => {
+  it("adds a section between the agent's base prompt and its environment, written for the request's directory", async () => {
     await put("repo/AGENTS.md", "Use tabs.");
     const paths = pathsPlugin(path.join(dir, "home"), { cwd: dir });
-    const draft: RequestDraft = {
-      sessionId: "s",
-      turnId: "t",
-      cwd: path.join(dir, "repo"),
-      model: "p/m",
-      tools: [],
-      branch: [],
-      history: [],
-      append: () => Effect.die("not used"),
-      sections: [
-        { id: "base", source: "agent", text: "Base." },
-        { id: "environment", source: "agent", text: "Env." },
-      ],
-    };
-    const plan = await Effect.runPromise(
+    const request: SectionRequest = { sessionId: "s", turnId: "t", cwd: path.join(dir, "repo"), model: "p/m", tools: [] };
+    const [added, text, empty] = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const core = yield* makeCore([paths, projectContext]);
           return yield* core.run(
-            Effect.flatMap(Hooks, (hooks) =>
-              hooks.invoke(AgentRequestHook, draft, (final) =>
-                Effect.succeed<RequestPlan>({ model: final.model, sections: final.sections, tools: final.tools }),
-              ),
-            ),
+            Effect.gen(function* () {
+              const [section] = yield* Effect.flatMap(Registries, (registries) => registries.items(PromptSections));
+              const write = (cwd: string) => Effect.promise(async () => section!.item.text({ ...request, cwd }) as Promise<string | undefined>);
+              return [section!, yield* write(request.cwd), yield* write(path.join(dir, "elsewhere"))] as const;
+            }),
           );
         }),
       ),
     );
-    expect(plan.sections.map((section) => [section.id, section.source])).toEqual([
-      ["base", "agent"],
-      ["project-context", "context.project"],
-      ["environment", "agent"],
-    ]);
-    expect(plan.sections[1]!.text).toContain(`<project_instructions path="${path.join(dir, "repo/AGENTS.md")}">\nUse tabs.\n</project_instructions>`);
+    expect([added.item.id, added.pluginId, added.order]).toEqual(["project-context", "context.project", 500]);
+    expect(SectionOrder.base < added.order && added.order < SectionOrder.environment).toBe(true);
+    expect(text).toContain(`<project_instructions path="${path.join(dir, "repo/AGENTS.md")}">\nUse tabs.\n</project_instructions>`);
+    // No instructions where it is asked: no section.
+    expect(empty).toBeUndefined();
   });
 });

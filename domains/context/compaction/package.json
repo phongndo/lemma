@@ -2,6 +2,7 @@
   "name": "@lemma/context-compaction",
   "version": "0.1.0",
   "private": true,
+  "description": "Keeps a conversation within its model's context window",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

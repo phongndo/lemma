@@ -2,19 +2,18 @@ import { describe, expect, test } from "vitest";
 import { Cause, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Stream } from "effect";
 import type { Context } from "effect";
 import { Channels, elementsOf, InteractionError, InteractionOrigin, resultOf, withdrawnFrom } from "@lemma/contracts";
-import { CommandChannels, Commands, CommandsChanged } from "@lemma/commands";
+import { CommandChannels, CommandRunner, Commands, CommandsChanged } from "@lemma/commands";
 import type { Channel, ChannelCall, ChannelStream } from "@lemma/contracts";
 import type { Command, CommandError, CommandInfo } from "@lemma/commands";
 import { callServed, pathsPlugin } from "@lemma/contracts/testing";
-import { Admitted, definePlugin, Events, makeCore, makeLoader, Registries } from "@lemma/core";
+import { Admitted, definePlugin, Events, makeCore, makeLoader, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import commands from "../src/index.ts";
 
 const contributor = (id: string, contributed: readonly Command[]) =>
   definePlugin({
     id,
-    requires: [Commands],
-    layer: Layer.effectDiscard(Effect.flatMap(Commands, (registry) => Effect.forEach(contributed, registry.register, { discard: true }))),
+    layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => Effect.forEach(contributed, (added) => owner.add(Commands, added), { discard: true }))),
   });
 
 const command = (id: string, run: Command["run"] = () => Effect.void, fields: Partial<Command> = {}): Command => ({ id, title: id, ...fields, run });
@@ -22,18 +21,18 @@ const command = (id: string, run: Command["run"] = () => Effect.void, fields: Pa
 /** The host's paths: its working directory is `/project`. */
 const paths = pathsPlugin("/lemma", { cwd: "/project" });
 
-const run = <A, E>(plugins: Parameters<typeof makeCore>[0], body: Effect.Effect<A, E, Commands | Registries>) =>
+const run = <A, E>(plugins: Parameters<typeof makeCore>[0], body: Effect.Effect<A, E, CommandRunner | Registries>) =>
   Effect.runPromise(Effect.scoped(Effect.flatMap(makeCore([paths, ...plugins]), (core) => core.run(body))));
 
 describe("commands", () => {
-  test("lists what each plugin registered, with its source, by category then title", async () => {
+  test("lists what each plugin added, with its source, by category then title", async () => {
     const listed = await run(
       [
         commands,
         contributor("git", [command("git.b", undefined, { title: "Branch", category: "Git" }), command("git.a", undefined, { title: "Add", category: "Git" })]),
         contributor("host", [command("host.reload", undefined, { title: "Reload", category: "Host", keywords: ["config"] })]),
       ],
-      Effect.flatMap(Commands, (registry) => registry.list),
+      Effect.flatMap(CommandRunner, (registry) => registry.list),
     );
     expect(listed).toEqual([
       { id: "git.a", title: "Add", category: "Git", source: "git" },
@@ -42,12 +41,12 @@ describe("commands", () => {
     ]);
   });
 
-  test("rejects a duplicate id, naming who registered it first", async () => {
+  test("rejects a duplicate id, naming who added it first", async () => {
     const exit = await Effect.runPromiseExit(
       Effect.scoped(makeCore([paths, commands, contributor("first", [command("x")]), contributor("second", [command("x")])])),
     );
     expect(Exit.isFailure(exit)).toBe(true);
-    expect(JSON.stringify(exit)).toContain("is already registered by first");
+    expect(JSON.stringify(exit)).toContain('\\"x\\" is already contributed to lemma/commands by \\"first\\"');
   });
 
   test("runs a command written with promises, or returning its result at once", async () => {
@@ -60,7 +59,7 @@ describe("commands", () => {
           command("rejects", async () => Promise.reject(new Error("broke"))),
         ]),
       ],
-      Effect.flatMap(Commands, (registry) =>
+      Effect.flatMap(CommandRunner, (registry) =>
         Effect.all([registry.run("async", { cwd: "/w" }), registry.run("sync", { cwd: "/w" }), Effect.flip(registry.run("rejects", { cwd: "/w" }))]),
       ),
     );
@@ -76,7 +75,7 @@ describe("commands", () => {
         commands,
         contributor("p", [command("greet", (context) => Effect.sync(() => (seen.push(context), { message: "hi" }))), command("quiet", () => Effect.void)]),
       ],
-      Effect.flatMap(Commands, (registry) => Effect.all([registry.run("greet", { cwd: "/w", sessionId: "s1" }), registry.run("quiet", { cwd: "/w" })])),
+      Effect.flatMap(CommandRunner, (registry) => Effect.all([registry.run("greet", { cwd: "/w", sessionId: "s1" }), registry.run("quiet", { cwd: "/w" })])),
     );
     expect(results).toEqual([{ message: "hi" }, {}]);
     expect(seen).toEqual([{ cwd: "/w", sessionId: "s1" }]);
@@ -93,7 +92,7 @@ describe("commands", () => {
           command("unanswered", () => Effect.fail(new InteractionError({ reason: "Unavailable", message: "No client is attached" }))),
         ]),
       ],
-      Effect.flatMap(Commands, (registry) =>
+      Effect.flatMap(CommandRunner, (registry) =>
         Effect.all(["missing", "fails", "dies", "asks", "unanswered"].map((id) => Effect.flip(registry.run(id, { cwd: "/" })))),
       ),
     );
@@ -111,7 +110,7 @@ describe("commands", () => {
     await run(
       [commands, contributor("p", [command("forever", () => Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => (interrupted = true)))))])],
       Effect.gen(function* () {
-        const registry = yield* Commands;
+        const registry = yield* CommandRunner;
         const fiber = yield* Effect.forkChild(registry.run("forever", { cwd: "/" }));
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(fiber);
@@ -128,7 +127,7 @@ describe("commands", () => {
         Effect.gen(function* () {
           const core = yield* makeCore([paths, commands, contributor("p", [whose])]);
           const registries = yield* core.run(Registries);
-          const direct = yield* core.run(Effect.flatMap(Commands, (registry) => registry.run("p.whose", { cwd: "/" })));
+          const direct = yield* core.run(Effect.flatMap(CommandRunner, (registry) => registry.run("p.whose", { cwd: "/" })));
           return [direct, yield* callServed(registries, "commands.run", { id: "p.whose" })];
         }),
       ),
@@ -141,11 +140,13 @@ describe("commands", () => {
     let instances = 0;
     const counted = definePlugin({
       id: "p",
-      requires: [Commands],
       layer: Layer.effectDiscard(
-        Effect.flatMap(Commands, (registry) => {
+        Effect.flatMap(PluginContext, (owner) => {
           const instance = ++instances;
-          return registry.register(command("p.which", () => ({ message: `instance ${instance}` })));
+          return owner.add(
+            Commands,
+            command("p.which", () => ({ message: `instance ${instance}` })),
+          );
         }),
       ),
     });
@@ -174,7 +175,7 @@ describe("commands", () => {
             source: { resolve: (id) => Effect.succeed(plugins.get(id)!) },
             composition: { plugins: { paths: {}, "commands.registry": {}, p: {} } },
           });
-          const which = loader.core.run(Effect.flatMap(Commands, (registry) => registry.run("p.which", { cwd: "/" })));
+          const which = loader.core.run(Effect.flatMap(CommandRunner, (registry) => registry.run("p.which", { cwd: "/" })));
           expect(yield* which).toEqual({ message: "instance 1" });
           yield* loader.core.restart("p", { force: true });
           stale = true;
@@ -316,7 +317,6 @@ describe("channels", () => {
     const started = Effect.runSync(Queue.unbounded<number>());
     const waiting = definePlugin({
       id: "p",
-      requires: [Commands],
       layer: Layer.effectDiscard(
         Effect.gen(function* () {
           const instance = ++instances;
@@ -325,7 +325,10 @@ describe("channels", () => {
           const waits = Effect.andThen(Queue.offer(started, instance), Effect.never).pipe(
             Effect.onInterrupt(() => Effect.sync(() => void log.push(`p ${instance} stopped`))),
           );
-          yield* (yield* Commands).register(command("p.waits", () => waits));
+          yield* (yield* PluginContext).add(
+            Commands,
+            command("p.waits", () => waits),
+          );
         }),
       ),
     });
@@ -367,7 +370,7 @@ describe("channels", () => {
         Effect.gen(function* () {
           const core = yield* makeCore([paths, commands, contributor("p", [stuck])], { deadlines: { dispose: Duration.millis(20) } });
           const registries = yield* core.run(Registries);
-          const registry = yield* core.run(Commands);
+          const registry = yield* core.run(CommandRunner);
           // Both outside `core.run`, as the transport calls: a restart drains `core.run` work too.
           const served = yield* Effect.forkChild(Effect.flip(callServed(registries, "commands.run", { id: "p.stuck" })));
           const direct = yield* Effect.forkChild(Effect.flip(registry.run("p.stuck", { cwd: "/" })));

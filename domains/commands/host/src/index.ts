@@ -82,6 +82,6 @@ export const hostCommands = (control: Context.Service.Shape<typeof HostControl>,
 export default definePlugin({
   id: "commands.host",
   version: "0.1.0",
-  requires: { registry: Commands, ask: Interaction, dependency: HostControl },
-  setup: ({ registry, ask, dependency }) => Effect.forEach(hostCommands(dependency, ask), registry.register, { discard: true }),
+  requires: { ask: Interaction, dependency: HostControl },
+  setup: ({ ask, dependency }, owner) => Effect.forEach(hostCommands(dependency, ask), (command) => owner.add(Commands, command), { discard: true }),
 });
