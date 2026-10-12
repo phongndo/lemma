@@ -29,6 +29,7 @@ import type { HostRpcClient } from "@lemma/client";
 import { resolvePaths } from "@lemma/host/paths";
 import { call, ofChannel, openHost, over, received, refined, starting } from "./channels.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
+import { checkPlugin } from "./check.ts";
 import type { Command, Connection, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
 import {
   formatConfig,
@@ -93,6 +94,9 @@ Host
                                  the other end, the hooks and events it takes part in, its recent faults
   plugins restart <id>           Restart a failed plugin and the plugins it halted
     --force                      ...also when it is running, unless the host depends on it
+  plugins check [path]           Start a host of its own with the plugin file or folder (default: here) and
+                                 say what it made of it: its state or fault, what it provides, requires,
+                                 handles, and adds, and the host's warnings; fails on a problem
   plugins config <id>            Its settings: each field, its value or default, and what it does
   plugins config <id> <key> <value>
                                  Set one field in the config file that sets its config (user by default); a
@@ -267,6 +271,8 @@ const route = (positionals: readonly string[], options: Options, io: Io): Comman
             })))
         );
       }
+      // Runs a host of its own: it goes to no host the others would.
+      if (sub === "check") return extra(3) ?? checkPlugin(arg, io, run);
       if (sub === "restart") {
         if (arg === undefined) return usage("plugins restart needs a plugin id");
         return (
