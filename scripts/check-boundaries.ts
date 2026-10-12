@@ -173,6 +173,7 @@ const RUNTIME_CONTRACTS = [
   "addresses.ts",
   "channels.ts",
   "config.ts",
+  "credit.ts",
   "discovery.ts",
   "fs.ts",
   "host.ts",
@@ -183,6 +184,7 @@ const RUNTIME_CONTRACTS = [
   "rpc.ts",
   "status.ts",
   "testing.ts",
+  "trace.ts",
 ];
 for (const file of walk(join(root, "packages/contracts/src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
   if (!RUNTIME_CONTRACTS.includes(relative(join(root, "packages/contracts/src"), file)))

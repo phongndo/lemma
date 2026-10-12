@@ -1,39 +1,62 @@
-import { defineSlot } from "@lemma/web";
-import { Context } from "effect";
-import type { Accessor, Component } from "solid-js";
+import { Schema } from "effect";
+import { CompositionChange, defineChannel, SpanRecord } from "@lemma/contracts";
 
-/**
- * A panel in the devtools (`mod+shift+d`): the router, slots, and
- * capabilities are the bundled ones, and any plugin adds its own.
+/*
+ * The devtools domain's host contract: the channels `devtools.trace` serves the host's trace on. The dock and its panels
+ * are the web contract, `@lemma/devtools/web`.
  */
-export interface DevtoolsPanel {
-  readonly title: string;
-  readonly component: Component;
-  /** What the panel shows, as plain JSON: for reading the app without a screen (a log, a test, an agent). */
-  readonly snapshot?: () => unknown;
-}
 
-export const DevtoolsPanels = defineSlot<DevtoolsPanel>("devtools.panels");
+/** Which spans: those whose attributes have these values (`{ "session.id": … }`), ended after `since` (epoch ms). */
+export const SpanQuery = Schema.Struct({
+  where: Schema.optional(Schema.Record(Schema.String, Schema.String)),
+  since: Schema.optional(Schema.Number),
+  /** At most this many, the newest (2000 when absent); a count, so a fraction rounds down and below zero is none. */
+  limit: Schema.optional(Schema.Number),
+});
+export type SpanQuery = typeof SpanQuery.Type;
 
-/** The devtools panel showing one plugin: everything it does, and what depends on it. */
-export const PLUGIN_PANEL = "devtools.plugins";
+export const TraceChannels = {
+  /** The spans the host kept that match, in the order they ended. */
+  spans: defineChannel({
+    kind: "call",
+    id: "devtools.trace.spans",
+    title: "Spans",
+    description: "The spans the host kept: what ran, for which plugin, and how long it took",
+    payload: SpanQuery,
+    success: Schema.Array(SpanRecord),
+    repeatable: true,
+  }),
+  /** The spans that match as they end, in batches (a few a second at most). */
+  follow: defineChannel({
+    kind: "stream",
+    id: "devtools.trace.follow",
+    title: "Follow spans",
+    description: "Spans as they end, in batches",
+    payload: Schema.Struct({ where: Schema.optional(Schema.Record(Schema.String, Schema.String)) }),
+    success: Schema.Array(SpanRecord),
+  }),
+  /** The host composition's recent changes, newest first. */
+  changes: defineChannel({
+    kind: "call",
+    id: "devtools.trace.changes",
+    title: "Composition changes",
+    description: "What each recent reload, configure, and restart started, stopped, and restarted, or why it was refused",
+    payload: Schema.Void,
+    success: Schema.Array(CompositionChange),
+    repeatable: true,
+  }),
+} as const;
 
-export interface DevtoolsService {
-  readonly open: Accessor<boolean>;
-  /** Opens or closes them; without `open`, toggles. */
-  readonly toggle: (open?: boolean) => void;
-  /**
-   * Opens them at a panel, by its `DevtoolsPanels` item id, and at `subject` in it when given: what the panel selects
-   * (`devtools.plugins` takes `web:<id>` or `host:<id>`). Any panel naming a plugin links to it this way.
-   */
-  readonly show: (panel: string, subject?: string) => void;
-  /** The subject last asked of `panel` (see `show`), for it to select. Reactive. */
-  readonly subject: (panel: string) => string | undefined;
-  /** Every panel's `snapshot`, by panel id. */
-  readonly snapshot: () => Readonly<Record<string, unknown>>;
-}
+/** How many spans a query answers with when it names no limit. */
+export const SPANS_ANSWERED = 2000;
 
-export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemma-web/Devtools") {}
+/** The spans of `spans` that `query` asks for, in their order: those that match, ended after `since`, the newest `limit`. */
+export const selectSpans = (spans: readonly SpanRecord[], { where, since, limit }: SpanQuery): readonly SpanRecord[] => {
+  const found = spans.filter((span) => (since === undefined || span.start + span.ms > since) && matches(span, where));
+  const count = limit === undefined || Number.isNaN(limit) ? SPANS_ANSWERED : Math.max(0, Math.floor(limit));
+  return found.slice(Math.max(0, found.length - count));
+};
 
-/** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
-export const DevtoolsActionIds = { eventLog: "event-log.open" } as const;
+/** Whether `span` has every attribute `where` names, with its value (a span without one has no value, not `"undefined"`). */
+export const matches = (span: SpanRecord, where: Readonly<Record<string, string>> | undefined): boolean =>
+  where === undefined || Object.entries(where).every(([key, value]) => Object.hasOwn(span.attributes, key) && String(span.attributes[key]) === value);

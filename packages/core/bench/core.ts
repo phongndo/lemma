@@ -1,7 +1,7 @@
 import { cpus } from "node:os";
 import { Context, Effect, Layer } from "effect";
 import { finish, record } from "./budgets.ts";
-import { definePlugin, Event, Events, Hook, Hooks, makeCore, makeLoader, PluginContext, Registries, Registry } from "../src/index.ts";
+import { definePlugin, Event, Events, Hook, Hooks, makeCore, makeLoader, makeSpanCollector, PluginContext, Registries, Registry } from "../src/index.ts";
 import type { Plugin } from "../src/index.ts";
 import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
 
@@ -98,6 +98,17 @@ for (const count of [0, 1, 8, 32]) {
         const batch = core.run(repeat(hooks.invoke(point, 1, terminal), iterations));
         yield* Effect.promise(() => measure(`Hook / ${count} handlers / spans on`, iterations, batch));
         yield* Effect.promise(() => measure(`Hook / ${count} handlers / spans off`, iterations, batch.pipe(Effect.withTracerEnabled(false))));
+        // As the host traces: every span kept, as data, by a collector (`makeSpanCollector`), and each step heard.
+        if (count === 32) {
+          const collected = repeat(hooks.invoke(point, 1, terminal, { onStep: () => {} }), iterations);
+          yield* Effect.promise(() =>
+            measure(
+              `Hook / ${count} handlers / spans collected, steps heard`,
+              iterations,
+              core.run(collected).pipe(Effect.withTracer(makeSpanCollector().tracer)),
+            ),
+          );
+        }
       }),
     ),
   );

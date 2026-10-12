@@ -19,6 +19,9 @@ export const budgets = {
   // `.then` chains. A call through a promise-based view 0.46us against 0.16 for Effect.runPromise, its plugin's own
   // services overlaid on the caller's context.
   "Hook / 32 plain handlers, in place / spans off": 34,
+  // As the host traces (2026-10-11, same machine): a collector keeps each span as data, 89us against 65 for Effect's
+  // native spans; hearing each handler's step (`onStep`, which the agent asks for once per request) adds about 30.
+  "Hook / 32 handlers / spans collected, steps heard": 180,
   "Plain service call": 0.6,
   "core.run entry": 6,
   "Mount + dispose / 32 plugins": 2000,

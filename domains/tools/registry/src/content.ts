@@ -6,8 +6,11 @@ import { ToolResult } from "@lemma/tools";
  * marked, later text parts are dropped. Images are kept: they are not text and
  * providers bound them separately.
  */
+/** How many characters of text `result` carries. */
+export const textLength = (result: ToolResult): number => result.content.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : 0), 0);
+
 export function capResult(result: ToolResult, maxChars: number): ToolResult {
-  const total = result.content.reduce((sum, part) => sum + (part.type === "text" ? part.text.length : 0), 0);
+  const total = textLength(result);
   if (total <= maxChars) return result;
   const marker = `\n\n[Output truncated: showing ${maxChars} of ${total} characters]`;
   const content: ToolResult["content"][number][] = [];

@@ -1,8 +1,10 @@
-import { Cause, Effect, Fiber, Layer, Stream } from "effect";
+import { Cause, Effect, Fiber, Layer, Queue, Stream } from "effect";
 import type { Context } from "effect";
-import { HOST_API, HostApi, HostControl, Interaction, Notice, Paths, PluginsChanged } from "@lemma/contracts";
+import { HOST_API, HostApi, HostControl, Interaction, Notice, Paths, PluginsChanged, Trace } from "@lemma/contracts";
 import { Events, reportUnhandled } from "@lemma/core";
-import type { ApplicationServices, Loader, ReportedFault } from "@lemma/core";
+import type { ApplicationServices, Loader, ReportedFault, SpanCollector } from "@lemma/core";
+import type { CompositionHistory } from "@lemma/composition";
+import type { SpanRecord } from "@lemma/contracts";
 import { interactionLayer } from "./interaction.ts";
 import type { PathsService } from "./paths.ts";
 
@@ -12,6 +14,9 @@ import type { PathsService } from "./paths.ts";
  * failures are no plugin's faults: what it starts catches and logs its own.
  */
 
+/** How many batches of ended spans a trace's reader may fall behind by before the oldest are dropped. */
+const ENDED_BATCHES = 1024;
+
 export type HostControlService = Context.Service.Shape<typeof HostControl>;
 /** The loader handle main.ts builds; the runtime adds `runtime` and the `PluginsChanged` its changes publish. */
 export type HostControlHandle = Omit<HostControlService, "runtime">;
@@ -20,7 +25,7 @@ export type HostControlHandle = Omit<HostControlService, "runtime">;
 const Api = HostApi(HOST_API);
 
 /** What the host provides itself. No plugin may provide one; any may require one. */
-export const runtimeCapabilities = [Paths, HostControl, Interaction, Api] as const;
+export const runtimeCapabilities = [Paths, HostControl, Interaction, Trace, Api] as const;
 
 /** Logs what failed, keeping an interruption one. */
 const logFailure =
@@ -43,7 +48,12 @@ const logFailure =
  * caller that stops waiting, as a stream does when the change restarts its
  * plugin, neither stops it nor keeps clients from hearing it.
  */
-export function hostRuntime(options: { readonly paths: PathsService; readonly control: HostControlHandle }): ApplicationServices<typeof runtimeCapabilities> {
+export function hostRuntime(options: {
+  readonly paths: PathsService;
+  readonly control: HostControlHandle;
+  /** What `Trace` reads: the spans the host's program ends, and its composition's changes. */
+  readonly trace: { readonly spans: SpanCollector; readonly changes: CompositionHistory };
+}): ApplicationServices<typeof runtimeCapabilities> {
   const { control } = options;
   const runtime = runtimeCapabilities.map((tag) => tag.key);
   const hostControl = Layer.effect(
@@ -68,9 +78,23 @@ export function hostRuntime(options: { readonly paths: PathsService; readonly co
       } satisfies HostControlService;
     }),
   );
+  const { spans, changes } = options.trace;
+  const trace = Layer.succeed(Trace, {
+    spans: Effect.sync(spans.spans),
+    // A reader that stops pulling (a stalled socket) holds the newest batches only, not every span the host ends.
+    ended: Stream.callback<readonly SpanRecord[]>(
+      (queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() => spans.subscribe((batch) => void Queue.offerUnsafe(queue, batch))),
+          (stop) => Effect.sync(stop),
+        ),
+      { bufferSize: ENDED_BATCHES, strategy: "sliding" },
+    ),
+    changes: Effect.sync(changes.get),
+  });
   return {
     provides: runtimeCapabilities,
-    layer: Layer.mergeAll(Layer.succeed(Paths, options.paths), Layer.succeed(Api, HOST_API), hostControl, interactionLayer),
+    layer: Layer.mergeAll(Layer.succeed(Paths, options.paths), Layer.succeed(Api, HOST_API), hostControl, interactionLayer, trace),
   };
 }
 

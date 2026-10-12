@@ -1,10 +1,10 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Fiber, Layer, Schedule } from "effect";
-import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
+import { Deferred, Duration, Effect, Fiber, Layer, Schedule, Stream } from "effect";
+import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged, Trace } from "@lemma/contracts";
 import type { CompositionInfo, NoticePayload, PluginInfo, WebComposition } from "@lemma/contracts";
-import { definePlugin, Diagnostic, makeLoader, PluginContext } from "@lemma/core";
+import { definePlugin, Diagnostic, makeLoader, makeSpanCollector, PluginContext } from "@lemma/core";
 import type { Composition, Loader, Plugin, PluginSource } from "@lemma/core";
-import { faultHistory } from "@lemma/composition";
+import { compositionHistory, faultHistory } from "@lemma/composition";
 import { compositionInfo } from "../src/composition.ts";
 import { resolvePaths } from "../src/paths.ts";
 import { hostRuntime, reportFaults } from "../src/runtime.ts";
@@ -42,7 +42,12 @@ const until = (condition: () => boolean) =>
  * Mirrors main.ts: the runtime is built inside makeLoader, so the handle binds to the loader through a Deferred. A
  * reload runs `reloading` before it applies.
  */
-const start = (plugins: readonly Plugin[], composition: Composition, reloading: Effect.Effect<void> = Effect.void) =>
+const start = (
+  plugins: readonly Plugin[],
+  composition: Composition,
+  reloading: Effect.Effect<void> = Effect.void,
+  trace = { spans: makeSpanCollector(), changes: compositionHistory() },
+) =>
   Effect.gen(function* () {
     const ready = yield* Deferred.make<Loader>();
     const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
@@ -75,7 +80,7 @@ const start = (plugins: readonly Plugin[], composition: Composition, reloading: 
         return plugin ? Effect.succeed(plugin) : Effect.fail(new Diagnostic({ severity: "error", message: `No plugin "${id}"` }));
       },
     };
-    const loader = yield* makeLoader({ source, composition, provide: hostRuntime({ paths, control: handle }) });
+    const loader = yield* makeLoader({ source, composition, provide: hostRuntime({ paths, control: handle, trace }) });
     yield* Deferred.succeed(ready, loader);
     // A change drains in-flight core.run work before swapping, so the handle is used outside core.run, as the app does.
     const control = yield* loader.core.run(HostControl);
@@ -91,12 +96,34 @@ describe("host runtime", () => {
           const { loader, control } = yield* start([quiet], { plugins: { quiet: {} } });
           expect(yield* loader.core.run(Paths)).toEqual(paths);
           expect(yield* loader.core.run(HostApi(HOST_API))).toBe(HOST_API);
-          const keys = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", `lemma/api@${HOST_API}`];
+          const keys = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/Trace", `lemma/api@${HOST_API}`];
           expect(control.runtime).toEqual(keys);
           expect((yield* loader.core.inspect).provided).toEqual(keys);
           expect((yield* control.composition).plugins).toEqual([{ id: "quiet" }]);
         }),
       ),
+    );
+  });
+
+  test("traces the host's work for a plugin to read: the spans kept, those that end from now on, and the changes", async () => {
+    const trace = { spans: makeSpanCollector(), changes: compositionHistory() };
+    trace.changes.applied("start", { started: ["quiet"] }, undefined, 1);
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const quiet = definePlugin({ id: "quiet", layer: Layer.empty });
+          const { loader } = yield* start([quiet], { plugins: { quiet: {} } }, Effect.void, trace);
+          const reader = yield* loader.core.run(Trace);
+          // Activation ran under the collector: the host's program is traced with it.
+          expect((yield* reader.spans).some((span) => span.name === "core.activate" && span.attributes["plugin.id"] === "quiet")).toBe(true);
+          // Spans end until the reader, once subscribed, hears one.
+          const heard = yield* Stream.runHead(Stream.flatMap(reader.ended, Stream.fromIterable)).pipe(
+            Effect.raceFirst(Effect.forever(Effect.andThen(Effect.void.pipe(Effect.withSpan("later")), Effect.yieldNow))),
+          );
+          expect(heard).toMatchObject({ value: { name: "later" } });
+          expect(yield* reader.changes).toEqual([{ at: 1, cause: "start", started: ["quiet"], stopped: [], restarted: [], failed: [] }]);
+        }),
+      ).pipe(Effect.withTracer(trace.spans.tracer)),
     );
   });
 

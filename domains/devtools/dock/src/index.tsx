@@ -1,10 +1,10 @@
 import { For, Show, createEffect, createSignal } from "solid-js";
 import { withKeys } from "@lemma/web/keys";
 import { shownKeys, Actions } from "@lemma/actions";
-import { Devtools, DevtoolsPanels, DevtoolsActionIds } from "@lemma/devtools";
 import { Docks } from "@lemma/frame";
 import { Client, HostPlugins, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
-import type { DevtoolsService } from "@lemma/devtools";
+import { Devtools, DevtoolsPanels, DevtoolsActionIds } from "@lemma/devtools/web";
+import type { DevtoolsService } from "@lemma/devtools/web";
 import { CodeIcon, LogIcon, XIcon } from "@lemma/look";
 import styles from "./devtools.css?inline";
 import { channelsPanel } from "./channels.tsx";

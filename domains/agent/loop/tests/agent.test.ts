@@ -289,6 +289,8 @@ describe("agent", () => {
             { source: "test-tools", kind: "tool", label: "echo", chars: expect.any(Number) },
           ]);
           expect(logged[0]!.composition).toBe("comp-1");
+          // Who changed the request, and how long it took on its own, is logged with it.
+          expect(logged[0]!.handlers).toEqual([{ source: "project-notes", ms: expect.any(Number), changed: ["+section notes"] }]);
           expect(logged[0]!.system).toContain("You are an expert coding assistant");
           expect(logged[0]!.system).toContain(`Current working directory: ${dir}`);
           expect(logged[0]!.system!.endsWith("Notes v1")).toBe(true);
@@ -343,6 +345,8 @@ describe("agent", () => {
         expect(JSON.stringify(requests[1]!.messages[0])).toContain("They said first.");
         const events = yield* log(id);
         expect(types(events).slice(-6)).toEqual(["step-start", "compaction", "request", "message", "step-end", "turn-end"]);
+        // The compaction is credited to the handler that appended it.
+        expect(ofType(events, "request").at(-1)!.handlers).toEqual([{ source: "compactor", ms: expect.any(Number), changed: ["+compaction"] }]);
         expectLogInvariant(events, id, requests);
         // Writing the summary is part of what the turn cost.
         expect(rec.ended.at(-1)!.usage.input).toBe(10 + 7);

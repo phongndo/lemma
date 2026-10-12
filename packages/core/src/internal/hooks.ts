@@ -1,8 +1,9 @@
-import { Context, Effect, Order, References, Scope } from "effect";
+import { Cause, Context, Effect, Exit, Order, References, Scope } from "effect";
+import type { Tracer } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
 import type { OwnServices } from "./own.ts";
 import { servicesOf } from "./settings.ts";
-import type { Handler, Hook, HookOptions, Hooks, Next, PluginContext, PluginIdentity } from "../hooks.ts";
+import type { HandlerStep, Handler, Hook, HookOptions, Hooks, InvokeOptions, Next, PluginContext, PluginIdentity, Summary } from "../hooks.ts";
 
 interface Entry {
   readonly token: object;
@@ -150,6 +151,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
     hook: Hook<I, O, E>,
     input: I,
     terminal: (input: I) => Effect.Effect<O, E, R>,
+    options?: InvokeOptions<I, O>,
   ): Effect.Effect<O, E | HookError | CoreClosed, R> => {
     return Effect.gen({ self: this }, function* () {
       if (this.closed) return yield* new CoreClosed();
@@ -157,6 +159,8 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
       const handlers = entry.handlers;
       if (handlers.length === 0) return yield* Effect.suspend(() => terminal(input));
       const caller = servicesOf(yield* Effect.context<R>());
+      const onStep = options?.onStep;
+      const summary = hook.summary;
       const dispatch = (index: number, value: I): Effect.Effect<O, E | HookError | CoreClosed> =>
         Effect.suspend(() => {
           if (this.closed) return Effect.fail(new CoreClosed());
@@ -169,6 +173,9 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
           if (!registration.active) return Effect.fail(ownerClosed(hook.name, registration.owner.identity.id));
           let called = false;
           let alive = true;
+          // Its span, when recorded (set as it starts), and, while someone hears the steps, what it handed on.
+          let span: Tracer.Span | undefined;
+          const step: { next?: { input: I; output?: O }; nextMs: number } | undefined = onStep === undefined ? undefined : { nextMs: 0 };
           const next = (nextInput: I): Effect.Effect<O, E | HookError | CoreClosed> =>
             Effect.suspend(() => {
               if (!alive || called) {
@@ -182,30 +189,95 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
                 );
               }
               called = true;
-              return dispatch(index + 1, nextInput);
+              let rest = dispatch(index + 1, nextInput);
+              // On the handler's span, not whichever is current: a handler may call next inside a span of its own.
+              const traced = span;
+              if (traced !== undefined && summary?.input !== undefined) {
+                const handed = summarize("hook.next.", summary.input, nextInput);
+                rest = Effect.andThen(
+                  Effect.sync(() => {
+                    for (const [key, entry] of Object.entries(handed)) traced.attribute(key, entry);
+                  }),
+                  rest,
+                );
+              }
+              if (step === undefined) return rest;
+              const passed: { input: I; output?: O } = { input: nextInput };
+              step.next = passed;
+              const began = performance.now();
+              return rest.pipe(
+                Effect.tap((output) =>
+                  Effect.sync(() => {
+                    passed.output = output;
+                  }),
+                ),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    step.nextMs += performance.now() - began;
+                  }),
+                ),
+              );
             });
           const handle = registration.handle as Handler<I, O, E>;
-          const run = Effect.suspend(() => handle(value, next)).pipe(
+          let run = Effect.suspend(() => handle(value, next)).pipe(
             Effect.ensuring(
               Effect.sync(() => {
                 alive = false;
               }),
             ),
           );
+          if (onStep !== undefined && step !== undefined) {
+            const startedAt = Date.now();
+            const began = performance.now();
+            run = run.pipe(
+              Effect.onExit((exit) =>
+                Effect.sync(() => {
+                  const ms = performance.now() - began;
+                  const heard: HandlerStep<I, O> = {
+                    pluginId: registration.owner.identity.id,
+                    order: registration.order,
+                    index,
+                    input: value,
+                    ...(step.next === undefined ? {} : { next: step.next }),
+                    ...(Exit.isSuccess(exit) ? { output: exit.value } : {}),
+                    exit: Exit.isSuccess(exit) ? "success" : Cause.hasInterruptsOnly(exit.cause) ? "interrupted" : "failure",
+                    startedAt,
+                    ms,
+                    selfMs: Math.max(0, ms - step.nextMs),
+                  };
+                  try {
+                    onStep(heard);
+                  } catch {
+                    // Hearing a step never fails the operation.
+                  }
+                }),
+              ),
+            );
+          }
           // With tracing off, no span at all: not even a no-op span's context change.
-          return Effect.withFiber((fiber) =>
-            fiber.getRef(References.TracerEnabled)
-              ? run.pipe(
-                  Effect.withSpan(
-                    "core.hook",
-                    { attributes: registration.attributes },
-                    // This frame is always the dispatcher, not plugin code. Keep attribution
-                    // and failure stacks without capturing a redundant stack on every call.
-                    { captureStackTrace: false },
-                  ),
-                )
-              : run,
-          );
+          return Effect.withFiber((fiber) => {
+            if (!fiber.getRef(References.TracerEnabled)) return run;
+            const attributes =
+              summary?.input === undefined ? registration.attributes : { ...registration.attributes, ...summarize("hook.in.", summary.input, value) };
+            const own = Effect.currentSpan.pipe(
+              Effect.tap((current) => Effect.sync(() => void (span = current))),
+              Effect.catch(() => Effect.void),
+            );
+            const traced = Effect.andThen(own, run);
+            const body =
+              summary?.output === undefined
+                ? traced
+                : traced.pipe(Effect.tap((output) => Effect.annotateCurrentSpan(summarize("hook.out.", summary.output!, output))));
+            return body.pipe(
+              Effect.withSpan(
+                "core.hook",
+                { attributes },
+                // This frame is always the dispatcher, not plugin code. Keep attribution
+                // and failure stacks without capturing a redundant stack on every call.
+                { captureStackTrace: false },
+              ),
+            );
+          });
         });
       return yield* dispatch(0, input);
     });
@@ -267,4 +339,13 @@ export function attributes(identity: PluginIdentity): Record<string, string> {
 
 function ownerClosed(hook: string, pluginId: string): HookError {
   return new HookError({ reason: "OwnerClosed", hook, pluginId, message: `Plugin "${pluginId}" has closed` });
+}
+
+/** `describe(value)`'s entries, each key prefixed; nothing when it throws, as a summary never fails the hook. */
+function summarize<A>(prefix: string, describe: (value: A) => Summary, value: A): Record<string, string | number | boolean> {
+  try {
+    return Object.fromEntries(Object.entries(describe(value)).map(([key, entry]) => [prefix + key, entry]));
+  } catch {
+    return {};
+  }
 }

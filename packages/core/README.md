@@ -376,7 +376,7 @@ Effect.gen(function* () {
 
 `PluginContext.fault(operation, cause, { fatal })` reports a failure of a plugin's own work that the core does not run, such as a callback another library calls or a view it draws: a `PluginFault` (phase `service`) attributed to the plugin, which with `fatal` fails as a required task's failure fails it, as soon as it is published when it is still starting. A stopped or retired plugin's reports are dropped: its replacement owns the faults.
 
-Recovery is explicit: `core.restart(id)` reactivates the failed plugin and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). A plugin with a `restart` schedule is retried automatically; the schedule persists across failures, so one that keeps failing exhausts it rather than restarting forever. An explicit restart resets it.
+Recovery is explicit: `core.restart(id)` reactivates the failed plugin and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). It returns a `ReloadReport`: what it restarted (nothing, for an active plugin left alone) and which dependents it left failed. A plugin with a `restart` schedule is retried automatically; the schedule persists across failures, so one that keeps failing exhausts it rather than restarting forever. An explicit restart resets it.
 
 `core.faults` streams `ReportedFault` values (`PluginFault` plus a core-wide,
 monotonically increasing `sequence`). Delivery retains at most 256 queued entries
@@ -448,9 +448,14 @@ Rollback releases acquired resources and registrations. It cannot undo arbitrary
 
 Activation, disposal, and each middleware execution emit native Effect spans with `plugin.id`, optional `plugin.version`, and hook name/order where applicable; building the application's services emits `core.provide`. With tracing turned off (`Effect.withTracerEnabled(false)`) a handler gets no span at all, which makes dispatch several times cheaper (`bench/budgets.ts`). `PluginContext.trace(name, effect)` attributes custom capability operations without proxying their implementations. Direct arbitrary function calls are not automatically intercepted. Install an Effect tracer around the host program to export spans; no telemetry destination is configured by the core.
 
+`makeSpanCollector({ limit })` is one: it keeps the spans a program ends as plain data (`SpanRecord`: name, parent, start, duration, status, a failure's line, attributes), in memory and bounded to the last `limit`, and hears them in batches (`subscribe`). Install its `tracer` around the program (`Effect.withTracer`). Work marks every span inside it with `Effect.annotateSpans` (what it is for: a request, a job), so a reader can filter by it. Keeping a span as data costs about 0.8us over Effect's native span (`bench/budgets.ts`).
+
+A hook may say what a trace shows of each handler: `Hook.make(name, { summary: { input, output } })` returns a few plain values (counts, names, never the payload) for its span's `hook.in.*`, `hook.next.*` (what it passed on), and `hook.out.*`, asked only while tracing. And the caller of an operation may hear each handler's part as it ends, `hooks.invoke(hook, input, terminal, { onStep })`: what it was handed, what it passed on and got back, what it returned, and how long it took in all and on its own. That is what an application credits a result to, kept beside it.
+
 These spans and composition snapshots describe runtime provenance. Applications
 own durable audit history, persistence, domain events, and payload redaction.
-Runtime-generated spans do not include hook arguments/results or plugin configuration.
+Runtime-generated spans do not include hook arguments or results, only what a
+hook's summary says of them, nor plugin configuration.
 
 ## Develop
 

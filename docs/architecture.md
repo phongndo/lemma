@@ -25,7 +25,7 @@ offers, and it reaches clients through channels of its own, below.
 | [`domains/*/contract`](../domains)                            | Each domain's contract, `@lemma/<domain>`: its capabilities, hooks, events, channels, and projections                                                                                            |
 | [`packages/web`](../packages/web/src/index.ts)                | The web app's plugin API: its runtime's contracts, `defineWebPlugin`, slots and parts, and helpers any web plugin may use                                                                        |
 | [`packages/client`](../packages/client/src/index.ts)          | The host RPC client the web app and CLI share, the only reader of the host's streams: reconnecting, typed channel calls, one reopen policy for streams (`follow`), prompts sent once (`/prompt`) |
-| [`packages/host`](../packages/host/README.md)                 | The host and its runtime (paths, plugin control, questions): reads config, loads and hot-reloads plugins                                                                                         |
+| [`packages/host`](../packages/host/README.md)                 | The host and its runtime (paths, plugin control, questions, its trace): reads config, loads and hot-reloads plugins                                                                              |
 | [`packages/composition`](../packages/composition/README.md)   | The runtime's planner: what runs from the known plugins and config rows, for the host and web app alike                                                                                          |
 | [`domains/*/*`](../domains)                                   | The bundled plugins, host and web halves, each a package in its domain (`domains/<domain>/<name>`, id `<domain>.<name>`) naming its halves in its `lemma` manifest                               |
 | [`apps/web`](../apps/web/README.md)                           | The web client: plugins on the same kernel, written against its boot's runtime, served by `transport.server`                                                                                     |
@@ -43,4 +43,8 @@ change to the contracts or the transport.
 
 The [session log](../domains/sessions/files/README.md) is the source of truth: every
 model request can be rebuilt from it (`rebuildRequest` in the contracts), along
-with which plugins contributed each part.
+with which plugins contributed each part, which handlers changed it, and who
+shaped each tool result (the `credit` vocabulary in `@lemma/contracts`). The
+host's trace, in memory, shows the same work as it ran: every span its plugins'
+work ends, by session, turn, step, and plugin
+([devtools.trace](../domains/devtools/trace/README.md)).

@@ -3,6 +3,7 @@ import type { Accessor, Component } from "solid-js";
 import type { ConnectionStatus, Host } from "@lemma/client";
 import type {
   ChannelDeclaration,
+  CompositionChange,
   ConfigScope,
   HostError,
   HostInfo,
@@ -14,6 +15,7 @@ import type {
   PluginStatus,
   ReloadResult,
   RuntimeEvent,
+  SpanRecord,
   WebComposition,
   WebFile,
 } from "@lemma/contracts";
@@ -211,6 +213,21 @@ export interface InteractionsService {
   readonly claimed: (request: InteractionRequest) => boolean;
 }
 export class Interactions extends Context.Service<Interactions, InteractionsService>()("lemma-web/Interactions") {}
+
+/**
+ * What the page keeps of its own running, for a devtools to read, as the host's `Trace` does of its own: the spans its
+ * web plugins' work ends (activation, disposal, observers, background work; the last few thousand, in memory), and its
+ * composition's recent changes.
+ */
+export interface PageTraceService {
+  /** The spans kept, in the order they ended. */
+  readonly spans: () => readonly SpanRecord[];
+  /** Hears the spans that end, in batches. Returns the removal. */
+  readonly subscribe: (listener: (spans: readonly SpanRecord[]) => void) => () => void;
+  /** The composition's changes, newest first. Reactive. */
+  readonly changes: Accessor<readonly CompositionChange[]>;
+}
+export class PageTrace extends Context.Service<PageTrace, PageTraceService>()("lemma-web/PageTrace") {}
 
 // ------------------------------------------------------------------ version
 

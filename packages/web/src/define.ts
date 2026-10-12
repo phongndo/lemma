@@ -83,7 +83,7 @@ export function extendWebPlugin(
   // `api.bundled.toasts` (an id without its domain), or `api.bundled.notify` (the runtime's, which is no plugin).
   if (plugin === undefined) {
     throw new Error(
-      "No bundled plugin there: a bundled plugin's id names its domain (frame.toasts, not toasts), and Client, Slots, Router, Notify, HostPlugins, Interactions, and WebPlugins are the web app's runtime, not plugins",
+      "No bundled plugin there: a bundled plugin's id names its domain (frame.toasts, not toasts), and Client, Slots, Router, Notify, HostPlugins, Interactions, WebPlugins, and PageTrace are the web app's runtime, not plugins",
     );
   }
   const definition = definitions.get(plugin);

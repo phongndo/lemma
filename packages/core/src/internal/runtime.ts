@@ -798,17 +798,17 @@ function assemble<E>(
       })),
       faults: Stream.fromPubSub(faults),
       restart: (id, options) =>
-        Effect.suspend((): Effect.Effect<void, ReloadError | CoreClosed> => {
+        Effect.suspend((): Effect.Effect<ReloadReport, ReloadError | CoreClosed> => {
           if (state !== "active") return Effect.fail(new CoreClosed());
           const instance = instances.get(id);
           if (!instance) {
             return Effect.fail(new ReloadError({ diagnostics: [new Diagnostic({ severity: "error", pluginId: id, message: `No plugin "${id}" is loaded` })] }));
           }
-          if (instance.state === "active" && !options?.force) return Effect.void;
+          if (instance.state === "active" && !options?.force)
+            return Effect.succeed({ started: [], stopped: [], restarted: [], unchanged: [...instances.keys()], failed: [], interrupted: 0, faults: [] });
           drivers.delete(id);
           return supervised((operation) => applyLocked(currentMembers(), new Set([id]), { required: new Set([id]) }, operation)).pipe(
             Effect.mapError(toReloadError),
-            Effect.asVoid,
           );
         }),
     };

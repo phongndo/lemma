@@ -53,8 +53,10 @@ Effect.gen(function* () {
    `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
    change what the model sees by appending events with `append` (a
    `compaction`, whose `usage` the turn's then includes); the `request` event with
-   per-section and per-tool `contributions`, the `HostControl.composition` id, and
-   `system`/`tools` only when they differ from `requestState(branch)`. The request
+   per-section and per-tool `contributions`, the hook's `handlers` (each one's own
+   time, and what it changed: `+section skills`, `-tool bash`, `model a → b`,
+   `+compaction`), the `HostControl.composition` id, and `system`/`tools` only
+   when they differ from `requestState(branch)`. The request
    actually sent is `rebuildRequest` over the branch ending at that event, so the
    log invariant holds by construction.
 4. `Llm.stream`: every event is published as `AssistantDelta`. `done` appends the
@@ -66,7 +68,9 @@ Effect.gen(function* () {
    except that a run of consecutive calls whose tools are `parallel: "safe"`
    (`read` is) runs at once, eight at a time. Before calls run, a `custom`
    event (`agent.started`) names them; each result is appended as it arrives, with
-   timing and `details`, and the model reads the results in call order. Unknown
+   timing, `details`, and its `credit` (who shaped it: `ToolExecuteHook`'s
+   handlers, the guards' decisions, the registry's cut), and the model reads the
+   results in call order. Unknown
    tools and tool failures are error results the model reads. A response that
    stopped at its output limit (`length`) runs none of its calls, whose
    arguments may be cut off: each is answered with an error asking the model to
@@ -76,6 +80,12 @@ Effect.gen(function* () {
    queued meanwhile are placed here as user messages, and the turn goes on to
    another step to answer them even if the model had stopped, unless it is out
    of steps.
+
+A turn runs in an `agent.turn` span, each step in an `agent.step` span (with
+`agent.request`, `agent.model`, and `agent.tools` inside), and every span of
+their work, the plugins' hooks included, carries `session.id`, `turn.id`,
+`step.id`, and for a tool call `tool.call.id`: the host's trace
+([devtools.trace](../../devtools/trace/README.md)) shows a turn's work by them.
 
 `turn-end` closes every turn the agent finishes. On cancellation or failure the
 closing sequence logs the partial model output as an `attempt`, answers every

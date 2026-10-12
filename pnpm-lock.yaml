@@ -234,6 +234,9 @@ importers:
       '@lemma/devtools-dock':
         specifier: workspace:*
         version: link:../../domains/devtools/dock
+      '@lemma/devtools-trace':
+        specifier: workspace:*
+        version: link:../../domains/devtools/trace
       '@lemma/frame':
         specifier: workspace:*
         version: link:../../domains/frame/contract
@@ -822,6 +825,9 @@ importers:
 
   domains/devtools/contract:
     dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
@@ -889,6 +895,37 @@ importers:
       '@lemma/workspace':
         specifier: workspace:*
         version: link:../../workspace/contract
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.0
+        version: 24.19.0
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.2
+        version: 5.0.2(@types/node@24.19.0)(vite@8.3.1(@types/node@24.19.0)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/devtools/trace:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/devtools':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.1
+        version: 4.0.1
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
@@ -2728,6 +2765,12 @@ importers:
       '@lemma/credentials-file':
         specifier: workspace:*
         version: link:../../domains/credentials/file
+      '@lemma/devtools':
+        specifier: workspace:*
+        version: link:../../domains/devtools/contract
+      '@lemma/devtools-trace':
+        specifier: workspace:*
+        version: link:../../domains/devtools/trace
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../domains/llm/contract
