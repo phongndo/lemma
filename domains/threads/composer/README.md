@@ -31,10 +31,12 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
 - **Drafts.** An unsent prompt is kept per thread, and one for a new thread,
   across switching threads and the composer leaving the page (settings), in
   memory: closing or reloading the tab while any thread has one asks first.
-- **Sending again.** A prompt that was not sent returns to the composer with
-  its request id, so sending it again unchanged cannot place it twice; an edit
-  makes it a new prompt. What was typed while a prompt went out stays, and a
-  send asked for meanwhile goes once the first is accepted.
+- **Sending again.** The composer clears as a prompt goes out. One that was
+  not sent returns to the thread it was written in, with its request id, ahead
+  of whatever was typed there since, so sending it again unchanged cannot place
+  it twice; an edit makes it a new prompt. A send asked for while one goes out
+  waits, and goes once the first is accepted, if the composer still holds what
+  it held when it was asked.
 - **Images** are PNG, JPEG, GIF, or WebP up to 3.75 MB each (`IMAGE_TYPES`,
   `MAX_IMAGE_BYTES` in `@lemma/llm`); other images, and files that are no
   images, are left out with a warning. They attach even when the selected model takes no images, with a

@@ -12,17 +12,10 @@ the `ProjectActions`
 `Threads`, `Workspace`, `Client`, `Notify`, `Slots`, and `WebPlugins`. No
 config.
 
-Its own items go through the slots a user's plugin adds to, so another
-plugin's sit among them by `order`:
-
-| Slot             | Its items, by `order`                                                                                                                    |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `SidebarRegion`  | `sidebar` 0                                                                                                                              |
-| `SidebarActions` | `sidebar.palette` 0, `sidebar.projects` 10, `sidebar.add-project` 20, `sidebar.new-chat` 30                                              |
-| `ThreadActions`  | `sidebar.rename` 10, `sidebar.pin` 20, `sidebar.archive` 30, `sidebar.delete` 40                                                         |
-| `ProjectActions` | `sidebar.new-chat` 10, `sidebar.copy-path` 20                                                                                            |
-| `SidebarRowPart` | `sidebar.row` at `DEFAULT_PART_ORDER`                                                                                                    |
-| `Actions`        | `sidebar.next-thread` 20, `sidebar.previous-thread` 21, `sidebar.pin-thread` 23, `sidebar.archive-thread` 24, `sidebar.delete-thread` 25 |
+Its own items go through the slots a user's plugin adds to (`SidebarRegion`,
+`SidebarActions`, `ThreadActions`, `ProjectActions`, `SidebarRowPart`, and
+`Actions`), so another plugin's sit among them by `order`; their ids and orders
+are in [its source](src/index.tsx).
 
 ## Behavior
 

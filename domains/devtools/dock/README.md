@@ -10,19 +10,20 @@ with a dialog open) and `event-log.open` (`DevtoolsActionIds.eventLog`: Show
 host events) to `Actions`. Requires `Slots`, `Router`, `Client`, `WebPlugins`,
 and `HostPlugins`. No config.
 
-| Panel                 | Order | What it shows                                                                                                                                                                                                                |
-| --------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `devtools.routes`     | 0     | Every route and its verdict on an address (the page's, or one typed): the `Pages` item that shows it, its plugin, and why the other routes do not                                                                            |
-| `devtools.navigation` | 10    | The router's journal, newest first, and what is kept with the current history entry                                                                                                                                          |
-| `devtools.events`     | 15    | What the page hears from the host, its last 1000 lines: `Host.Events`, the connection's changes, and, while the dock is open, the domains' streams (`sessions.changes`, `agent.activity`, `llm.changes`, `commands.changes`) |
-| `devtools.channels`   | 16    | The channels host plugins serve, each with the plugin answering for it                                                                                                                                                       |
-| `devtools.plugins`    | 20    | Either app's plugins, and all one does: what it provides and requires, its place in each hook's chain, what it observes, adds, and inspects, its settings, and its faults                                                    |
-| `devtools.hooks`      | 30    | Either app's hooks, each chain in run order, or its events and their observers                                                                                                                                               |
-| `devtools.registries` | 40    | The web app's slots (their items, which one shows, and the code that adds to one), or the host's registries                                                                                                                  |
-| `devtools.inspectors` | 50    | What host plugins add to `Inspectors`, read again every 2s while shown, as tables when a snapshot has their shape                                                                                                            |
+| Panel                 | What it shows                                                                                                                                                                                                                |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `devtools.routes`     | Every route and its verdict on an address (the page's, or one typed): the `Pages` item that shows it, its plugin, and why the other routes do not                                                                            |
+| `devtools.navigation` | The router's journal, newest first, and what is kept with the current history entry                                                                                                                                          |
+| `devtools.events`     | What the page hears from the host, its last 1000 lines: `Host.Events`, the connection's changes, and, while the dock is open, the domains' streams (`sessions.changes`, `agent.activity`, `llm.changes`, `commands.changes`) |
+| `devtools.channels`   | The channels host plugins serve, each with the plugin answering for it                                                                                                                                                       |
+| `devtools.plugins`    | Either app's plugins, and all one does: what it provides and requires, its place in each hook's chain, what it observes, adds, and inspects, its settings, and its faults                                                    |
+| `devtools.hooks`      | Either app's hooks, each chain in run order, or its events and their observers                                                                                                                                               |
+| `devtools.registries` | The web app's slots (their items, which one shows, and the code that adds to one), or the host's registries                                                                                                                  |
+| `devtools.inspectors` | What host plugins add to `Inspectors`, read again every 2s while shown, as tables when a snapshot has their shape                                                                                                            |
 
-`devtools.trace` adds the Trace panel
-([its README](../trace/README.md#the-trace-panel)).
+Its tabs show in that order; a panel of yours sits among them by `order`,
+whose values are in [its source](src/index.tsx). `devtools.trace` adds the
+Trace panel ([its README](../trace/README.md#the-trace-panel)).
 
 ## Behavior
 

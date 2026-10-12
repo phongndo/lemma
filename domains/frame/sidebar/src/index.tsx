@@ -3,7 +3,7 @@ import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { stepFor, withKeys } from "@lemma/web/keys";
-import { loadJson, save } from "@lemma/web/storage";
+import { loadStrings, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
 import { shownKeys, ActionIds, Actions } from "@lemma/actions";
 import { fileSessions, sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
@@ -186,8 +186,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
   const [query, setQuery] = createSignal("");
   // Sections folded shut, by project directory (or PINNED); kept across reloads. A search shows every match regardless.
-  const stored = loadJson<unknown>(FOLDED_KEY, []);
-  const [collapsed, setCollapsed] = createSignal(new Set(Array.isArray(stored) ? stored.filter((key): key is string => typeof key === "string") : []));
+  const [collapsed, setCollapsed] = createSignal(new Set(loadStrings(FOLDED_KEY)));
   const isOpen = (key: string) => query().trim() !== "" || !collapsed().has(key);
   const toggle = (key: string) => {
     const next = new Set(collapsed());

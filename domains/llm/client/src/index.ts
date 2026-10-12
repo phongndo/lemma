@@ -1,8 +1,8 @@
 import { batch, createMemo, createSignal } from "solid-js";
 import { HostError } from "@lemma/contracts";
-import { LlmChannels } from "@lemma/llm";
-import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, ThinkingLevel } from "@lemma/llm";
-import { load, loadJson, save } from "@lemma/web/storage";
+import { LlmChannels, ThinkingLevel } from "@lemma/llm";
+import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo } from "@lemma/llm";
+import { load, loadJson, loadStrings, recordOf, save } from "@lemma/web/storage";
 import { DEFAULT_THINKING, clampThinking, resolveModel, Models } from "@lemma/llm/web";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
@@ -25,8 +25,14 @@ export default defineWebPlugin({
     const [models, setModels] = createSignal<readonly ModelInfo[]>([]);
     const [loadedAt, setLoadedAt] = createSignal(false);
     const [preferred, setPreferred] = createSignal(load(MODEL_KEY));
-    const [thinkingByModel, setThinkingByModel] = createSignal<Readonly<Record<string, ThinkingLevel>>>(loadJson(THINKING_KEY, {}));
-    const [favorites, setFavorites] = createSignal<readonly string[]>(loadJson(FAVORITES_KEY, []));
+    const [thinkingByModel, setThinkingByModel] = createSignal<Readonly<Record<string, ThinkingLevel>>>(
+      loadJson(
+        THINKING_KEY,
+        {},
+        recordOf((value): value is ThinkingLevel => (ThinkingLevel.literals as readonly unknown[]).includes(value)),
+      ),
+    );
+    const [favorites, setFavorites] = createSignal<readonly string[]>(loadStrings(FAVORITES_KEY));
     const [loggingIn, setLoggingIn] = createSignal<string>();
 
     const selected = createMemo(() => resolveModel(models(), preferred()));
