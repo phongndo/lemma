@@ -105,7 +105,9 @@ in each.
 
 Give both halves the plugin's id. The web half waits for the host half: while
 the host half is off or failed, the web half does not run, and the Plugins page
-says why. Its row's `config` goes to both halves.
+says why. Its row's `config` goes to both halves: declare all of it in the host
+half's `config` Schema, which the host checks a row against and the Plugins
+page edits, and decode in the web half what it reads.
 
 Keep state where it belongs. A plugin runs once for the whole host, not once
 per session or agent: what it does for one session, it keys by the session

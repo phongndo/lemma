@@ -15,10 +15,11 @@ const isPlugin = (value: unknown): value is Plugin =>
 /**
  * Loads the web halves and stylesheets the host lists into the page. A web
  * half (a script) is an ES module whose
- * default export is a plugin, an array of them, or a function that receives
+ * default export is a plugin, or a function that receives
  * `api` (Solid, the contracts, `defineWebPlugin`, the app's components and
- * bundled plugins) and returns either; it runs with the page's permissions
- * and token. A stylesheet
+ * bundled plugins) and returns one; it runs with the page's permissions
+ * and token. It must be the plugin its file is named for (`WebFile.plugin`):
+ * the host knows a web half's id by that, without running it. A stylesheet
  * is linked after the app's own, so it can override any `--` token. File URLs
  * change when a file does, so an edited file is imported again.
  *
@@ -94,13 +95,17 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
       const module: { default?: unknown } = await import(/* @vite-ignore */ withToken(file.url));
       const made =
         typeof module.default === "function" && !isPlugin(module.default) ? (module.default as (api: unknown) => unknown)(await api()) : module.default;
-      const exported = Array.isArray(made) ? made : [made];
-      const plugins = exported.filter(isPlugin);
-      return {
-        plugins: plugins.map((plugin) => ({ plugin, source: file.source })),
-        problems:
-          plugins.length === 0 ? [`${where}: its default export is no plugin; export defineWebPlugin({ … }), or a function of the api returning one`] : [],
-      };
+      if (!isPlugin(made)) {
+        return { plugins: [], problems: [`${where}: its default export is no plugin; export defineWebPlugin({ … }), or a function of the api returning one`] };
+      }
+      // Named for another plugin, the host would take its row for this file's, and this plugin's for a typo.
+      if (file.plugin !== undefined && made.id !== file.plugin) {
+        return {
+          plugins: [],
+          problems: [`${where}: defines "${made.id}", but a web half is the plugin its file is named for: give it the id "${file.plugin}", or rename the file`],
+        };
+      }
+      return { plugins: [{ plugin: made, source: file.source }], problems: [] };
     } catch (error) {
       return { plugins: [], problems: [`${where}: cannot load: ${error instanceof Error ? error.message : String(error)}`] };
     }

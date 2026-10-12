@@ -38,7 +38,10 @@ export type Entry =
       readonly problems: readonly string[];
     };
 
-const isWeb = (name: string) => /\.web\.(js|mjs)$/.test(name);
+const WEB_FILE = /\.web\.(js|mjs)$/;
+const isWeb = (name: string) => WEB_FILE.test(name);
+/** The plugin a web half's file is named for: `notes.web.js` defines `notes`. */
+export const webPluginOf = (name: string): string => name.replace(WEB_FILE, "");
 const isHost = (name: string) => /\.(ts|js|mjs)$/.test(name) && !name.endsWith(".d.ts") && !isWeb(name);
 
 /** A package's manifest, its paths absolute, and what it names that is left out; undefined with no `lemma` object. */

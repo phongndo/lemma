@@ -4,11 +4,11 @@ import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, Schema
 import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, WebChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, makeSpanCollector, ReloadError } from "@lemma/core";
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
-import { catalog, compositionHistory, faultHistory, planComposition, restartedBy, withReplacements } from "@lemma/composition";
+import { catalog, compositionHistory, faultHistory, planComposition, restartedBy, withReplacements, closestId } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
 import type { ChangeReport, CompositionChange, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { appDefaults, bundled, bundledWebIds } from "./bundled.ts";
+import { appDefaults, bundled, bundledWeb } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
@@ -17,7 +17,7 @@ import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { catchUnhandled, hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
 import type { HostControlHandle } from "./runtime.ts";
-import { listWebFiles, userPluginsDir as pluginsDirOf, webIdsOf } from "./web.ts";
+import { listWebFiles, userPluginsDir as pluginsDirOf } from "./web.ts";
 import { watchConfig, watchPlugins } from "./watch.ts";
 
 const args = new Set(process.argv.slice(2));
@@ -71,6 +71,8 @@ interface Loaded {
   readonly trusted: boolean;
   /** The web app's rows and files, which it plans itself. */
   readonly web: WebComposition;
+  /** The web halves' ids, known without running them: the bundled ones, and each web file's plugin (it is named for it). */
+  readonly webIds: readonly string[];
 }
 
 /** The last load the loader accepted; the catalog and `configure` reason about this. */
@@ -112,7 +114,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       const planned = planComposition({ ...input, local: [], rows: {} });
       const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
       if (errors.length) return yield* new ReloadError({ diagnostics: errors });
-      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB };
+      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB, webIds: bundledWeb };
     }
     const loaded = yield* loadComposition(paths);
     // Project plugins run only in a project the user config trusts; see `loadComposition`.
@@ -121,9 +123,9 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     });
     const localPlugins = local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) }));
     const files = yield* listWebFiles(paths, loaded.trusted);
-    // A row naming a web half is the web app's, which plans its halves from the same rows. One naming no plugin either
-    // app has is a mistake (renamed, removed, or mistyped), and said so here, with the id meant when one is close.
-    const webIds = [...new Set([...bundledWebIds, ...webIdsOf(files)])];
+    // A row naming a web half is the web app's, which plans its halves from the same rows; one naming no plugin either
+    // app has is a mistake (renamed, removed, mistyped), said so here with the id meant, and refused when required.
+    const webIds = [...new Set([...bundledWeb, ...files.flatMap((file) => (file.kind === "script" && file.plugin !== undefined ? [file.plugin] : []))])];
     const planned = planComposition({
       ...input,
       local: localPlugins,
@@ -159,6 +161,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       configIn: loaded.configIn,
       trusted: loaded.trusted,
       web: { plugins: loaded.rows, enabledIn: loaded.enabledIn, configIn: loaded.configIn, files },
+      webIds,
     };
   });
 
@@ -450,8 +453,20 @@ const program = Effect.gen(function* () {
             if (scope === "project" && !applied.trusted) return yield* untrustedProject();
             // Checked here so the answer is immediate and the file is never touched: the load would refuse these too.
             const entries = catalogOf(yield* loader.core.inspect);
+            const known = [...applied.known.map(({ plugin }) => plugin.id), ...applied.webIds];
             for (const [id, row] of Object.entries(requested)) {
-              // An id the host does not know is a web half's: written for the web app, which plans it from the same row.
+              // An id the host does not know is a web half's, written for the web app; one neither app has is a mistake.
+              if (!known.includes(id)) {
+                const meant = closestId(id, known);
+                return yield* rejected(
+                  new Diagnostic({
+                    severity: "error",
+                    pluginId: id,
+                    message: `No plugin "${id}"`,
+                    suggestion: meant === undefined ? "`lemma plugins` lists them" : `Did you mean "${meant}"?`,
+                  }),
+                );
+              }
               const entry = entries.find((candidate) => candidate.id === id);
               if (row.enabled === false && entry?.locked !== undefined) {
                 return yield* rejected(new Diagnostic({ severity: "error", pluginId: id, message: `"${id}" cannot be turned off: ${entry.locked}` }));
