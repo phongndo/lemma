@@ -26,6 +26,10 @@ import projectsPage from "@lemma/workspace-projects";
 import providers from "@lemma/llm-providers";
 import reload from "@lemma/frame-reload";
 import threadView from "@lemma/threads-view";
+import bash from "@lemma/tools-bash/web";
+import edit from "@lemma/tools-edit/web";
+import read from "@lemma/tools-read/web";
+import write from "@lemma/tools-write/web";
 import threads from "@lemma/threads-client";
 import settings from "@lemma/settings-page";
 import shell from "@lemma/frame-shell";
@@ -38,10 +42,11 @@ import workspace from "@lemma/workspace-client";
 
 /**
  * The web app as shipped, every part a plugin: models of host state first,
- * then the frame and what fills it. Each can be turned off (`ui` rows, the
- * Plugins page, `lemma ui disable`) or replaced by a plugin from a UI file.
- * The boot provides the runtime they are written against (`src/runtime/`:
- * the connection, slots, the router, messages, the plugins, questions); it is
+ * then the frame and what fills it, and the web halves of host plugins (the
+ * tools' views). Each can be turned off (its row, the Plugins page, `lemma
+ * plugins disable`) or replaced by a web half in the plugin directories. The
+ * boot provides the runtime they are written against (`src/runtime/`: the
+ * connection, slots, the router, messages, the plugins, questions); it is
  * not in this list and cannot be turned off.
  */
 export const bundled: readonly Plugin[] = [
@@ -63,6 +68,10 @@ export const bundled: readonly Plugin[] = [
   highlight,
   diagrams,
   trajectory,
+  read,
+  write,
+  edit,
+  bash,
   composer,
   fileMentions,
   modelPicker,

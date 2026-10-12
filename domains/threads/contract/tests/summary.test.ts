@@ -1,23 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { partialStringField, summarizeToolArgs, truncateLines } from "../src/summary.ts";
+import { partialStringField, summarizeArgs, truncateLines } from "../src/summary.ts";
 
 describe("summary", () => {
-  it("summarizes built-in tool arguments", () => {
-    expect(summarizeToolArgs("bash", { command: "ls -la" })).toEqual({ primary: "ls -la", shell: true });
-    expect(summarizeToolArgs("read", { path: "/w/a.ts", offset: 10, limit: 5 }, { cwd: "/w" })).toEqual({
-      primary: "a.ts",
-      secondary: "lines 10–14",
-      file: { path: "a.ts", kind: "file" },
-    });
-    expect(summarizeToolArgs("ls", { path: "/w/src" }, { cwd: "/w" })).toEqual({ primary: "src", file: { path: "src", kind: "directory" } });
-    expect(summarizeToolArgs("grep", { pattern: "TODO", path: "/w/src" }, { cwd: "/w" })).toEqual({ primary: "TODO", secondary: "in src" });
-    expect(summarizeToolArgs("custom", { n: 1, q: "hello" })).toEqual({ primary: "hello" });
-    expect(summarizeToolArgs("custom", undefined)).toEqual({});
+  it("summarizes a call by its first short string argument", () => {
+    expect(summarizeArgs({ n: 1, q: "hello" })).toEqual({ primary: "hello" });
+    expect(summarizeArgs({ body: "two\nlines", q: "x".repeat(201) })).toEqual({});
+    expect(summarizeArgs(undefined)).toEqual({});
   });
 
   it("reads string fields from partial JSON", () => {
     expect(partialStringField('{"command":"echo \\"hi', "command")).toBe('echo "hi');
     expect(partialStringField('{"command":"a\\', "command")).toBe("a");
+    // A key is text, whatever it holds: no pattern, and nothing that throws.
+    expect(partialStringField('{"file.path":"a.ts', "file.path")).toBe("a.ts");
+    expect(partialStringField('{"filexpath":"a.ts', "file.path")).toBeUndefined();
+    expect(partialStringField('{"$schema":"x', "$schema")).toBe("x");
+    expect(partialStringField('{"a(":"y', "a(")).toBe("y");
     expect(partialStringField('{"com', "command")).toBeUndefined();
   });
 

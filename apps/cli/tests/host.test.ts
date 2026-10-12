@@ -281,32 +281,42 @@ describe("against a running host", () => {
     }
   });
 
-  test("ui lists and writes the web app's rows, and finds UI files as they appear", async () => {
+  test("plugins writes a web half's row as any other, and lists web halves as they appear", async () => {
     const userConfig = join(home, "config.jsonc");
     const original = await readFile(userConfig, "utf8");
-    const ui = async () => JSON.parse((await invoke(["ui", "--json"], home)).out);
+    const ui = async () => JSON.parse((await invoke(["plugins", "--json"], home)).out) as unknown;
     try {
-      expect(await ui()).toEqual({ plugins: {}, enabledIn: {}, configIn: {}, files: [] });
-      expect((await invoke(["ui", "disable", "composer"], home)).out).toBe("disabled composer in the user config; open web apps apply it");
-      await invoke(["ui", "config", "theme", "accent", "red"], home);
-      await invoke(["ui", "config", "theme", "scale", "1.2"], home);
-      expect(JSON.parse(await readFile(userConfig, "utf8")).ui).toEqual({ composer: { enabled: false }, theme: { config: { accent: "red", scale: 1.2 } } });
-      expect(await ui()).toMatchObject({ enabledIn: { composer: "user" }, configIn: { theme: "user" } });
-      await invoke(["ui", "enable", "composer"], home);
-      await invoke(["ui", "config", "theme", "accent", "--unset"], home);
-      expect(JSON.parse(await readFile(userConfig, "utf8")).ui).toEqual({ theme: { config: { scale: 1.2 } } });
+      // One row decides both halves of a plugin, so a web half's goes where a host half's does.
+      expect((await invoke(["plugins", "disable", "threads.composer"], home)).out).toBe(
+        "disabled threads.composer: not a host plugin, so open web apps apply it",
+      );
+      await invoke(["plugins", "config", "look.appearance", "accent", "red"], home);
+      await invoke(["plugins", "config", "look.appearance", "scale", "1.2"], home);
+      expect(JSON.parse(await readFile(userConfig, "utf8")).plugins).toMatchObject({
+        "threads.composer": { enabled: false },
+        "look.appearance": { config: { accent: "red", scale: 1.2 } },
+      });
+      expect((await invoke(["plugins"], home)).out).toMatch(/Rows for the web app's plugins[\s\S]*threads\.composer\s+off/);
+      await invoke(["plugins", "enable", "threads.composer"], home);
+      await invoke(["plugins", "config", "look.appearance", "accent", "--unset"], home);
+      const rows = JSON.parse(await readFile(userConfig, "utf8")).plugins;
+      expect(rows["threads.composer"]).toBeUndefined();
+      expect(rows["look.appearance"]).toEqual({ config: { scale: 1.2 } });
+      // The host's own list stays its plugins.
+      expect(await ui()).not.toContainEqual(expect.objectContaining({ id: "threads.composer" }));
 
-      await mkdir(join(home, "ui"), { recursive: true });
-      await writeFile(join(home, "ui", "theme.css"), ":root { --accent: red; }");
-      const files = await settled(
-        async () => (await ui()).files as { name: string; kind: string; url: string }[],
-        (found) => found.length > 0,
+      await mkdir(join(home, "plugins", "ticker"), { recursive: true });
+      await writeFile(join(home, "plugins", "theme.css"), ":root { --accent: red; }");
+      await writeFile(join(home, "plugins", "ticker", "package.json"), JSON.stringify({ lemma: { web: "./web.js" } }));
+      await writeFile(join(home, "plugins", "ticker", "web.js"), "export default () => [];");
+      const listed = await settled(
+        async () => (await invoke(["plugins"], home)).out,
+        (out) => out.includes("user/ticker/web.js"),
         5_000,
       );
-      expect(files).toMatchObject([{ name: "theme.css", kind: "style" }]);
-      expect((await invoke(["ui"], home)).out).toContain("user/theme.css");
+      expect(listed).toContain("user/theme.css");
     } finally {
-      await rm(join(home, "ui"), { recursive: true, force: true });
+      await rm(join(home, "plugins"), { recursive: true, force: true });
       await writeFile(userConfig, original);
       await invoke(["reload"], home);
     }

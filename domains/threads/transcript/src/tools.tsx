@@ -3,11 +3,10 @@ import { formatDuration } from "@lemma/client/format";
 import { contentText } from "@lemma/llm";
 import type { ImageContent, TextContent } from "@lemma/llm";
 import { diffStats, parseDiff, readDetails } from "./details.ts";
-import { summarizeToolArgs, summarizePartialArgs, truncateLines } from "@lemma/threads";
+import { partialStringField, summarizeArgs, truncateLines } from "@lemma/threads";
 import { formatElapsed } from "./format.ts";
 import type { ToolResultView } from "@lemma/threads";
 import { ToolViews } from "@lemma/threads";
-import type { IconName } from "@lemma/look";
 import type { ChatToolProps, ThreadsService } from "@lemma/threads";
 import type { ClientService } from "@lemma/ui";
 import type { SlotsService } from "@lemma/ui";
@@ -67,17 +66,6 @@ function Diff(props: { diff: string }) {
 
 export type ToolState = "running" | "queued" | "ok" | "error" | "interrupted";
 
-/** What a call shows beside its line, by tool: what kind of thing it did. */
-const TOOL_ICONS: ReadonlyMap<string, IconName> = new Map([
-  ["bash", "terminal"],
-  ["read", "file"],
-  ["edit", "pencil"],
-  ["write", "pencil"],
-  ["grep", "search"],
-  ["find", "search"],
-  ["ls", "folder"],
-]);
-
 /** A tool call, through the `chat.tool` part, with the chat's open state, its live output, and how long it has run. */
 export function ToolCard(props: {
   chat: Chat;
@@ -131,8 +119,11 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
     /** A plugin's view of this tool, when one fills the slot for it. */
     const custom = () => slots.get(ToolViews, props.name);
     const details = createMemo(() => readDetails(props.result?.details));
-    const summary = createMemo(() => custom()?.summary?.(props.args, context()) ?? summarizeToolArgs(props.name, props.args, context()));
-    const primary = () => summary().primary ?? (props.partial === undefined ? undefined : summarizePartialArgs(props.name, props.partial));
+    const summary = createMemo(() => custom()?.summary?.(props.args, context()) ?? summarizeArgs(props.args));
+    const primary = () => {
+      const streaming = custom()?.streaming;
+      return summary().primary ?? (props.partial === undefined || streaming === undefined ? undefined : partialStringField(props.partial, streaming));
+    };
     const outputText = () => (props.result === undefined ? "" : contentText(props.result.content));
     const diff = () => details().diff;
     const stats = createMemo(() => {
@@ -145,18 +136,18 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
       const t = props.result?.timing;
       return t === undefined ? undefined : t.endedAt - t.startedAt;
     };
-    /** A built-in tool says what it did by its icon; any other is named. */
-    const named = () => !TOOL_ICONS.has(props.name) || primary() === undefined;
+    /** A tool whose view gives an icon says what it did by it; any other is named. */
+    const named = () => custom()?.icon === undefined || primary() === undefined;
     return (
       <div class={`tool tool-${props.state}`} classList={{ open: open() }}>
         <button class="row-head tool-head" aria-expanded={open()} onClick={() => props.onToggle()}>
           <span class="row-icon tool-status">
-            <Show when={props.state === "running" || props.state === "queued"} fallback={<Icon name={TOOL_ICONS.get(props.name) ?? "puzzle"} />}>
+            <Show when={props.state === "running" || props.state === "queued"} fallback={<Icon name={custom()?.icon ?? "puzzle"} />}>
               <Spinner />
             </Show>
           </span>
           <span class="row-label">
-            {/* The icon is not read out: a built-in tool's name still is. */}
+            {/* The icon is not read out: the tool's name still is. */}
             <span class="tool-name" classList={{ "sr-only": !named() }}>
               {props.name || "tool"}
             </span>

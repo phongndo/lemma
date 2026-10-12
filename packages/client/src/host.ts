@@ -116,10 +116,8 @@ export interface Host {
     readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { scope?: ConfigScope }) => Promise<ReloadResult>;
   };
   readonly ui: {
-    /** The web app's `ui` rows and UI files, which it plans and runs itself. */
+    /** What the web app plans its halves from: every plugin's row, and the web halves' files. `host.configure` writes rows. */
     readonly composition: () => Promise<UiComposition>;
-    /** Write `ui` rows; every client hears `ui-changed`. */
-    readonly configure: (plugins: Readonly<Record<string, PluginChange>>, options?: { scope?: ConfigScope }) => Promise<UiComposition>;
   };
   readonly status: () => ConnectionStatus;
   /** Called immediately with the current status, then on every change. */
@@ -456,7 +454,6 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
     },
     ui: {
       composition: () => runPromise(rpc["Ui.Composition"]()),
-      configure: (plugins, options) => runPromise(rpc["Ui.Configure"](options?.scope === undefined ? { plugins } : { plugins, scope: options.scope })),
     },
     status: () => status,
     onStatus: (listener) => {

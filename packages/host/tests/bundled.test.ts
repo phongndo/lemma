@@ -5,6 +5,7 @@ import type { PluginRow } from "@lemma/contracts";
 import { planComposition } from "@lemma/composition";
 import { appDefaults, bundled as shipped, cliCommand, webDist } from "../src/bundled.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
+import { domainPlugins } from "../../../scripts/plugins.ts";
 
 const plugin = (id: string) => definePlugin({ id, config: Schema.Record(Schema.String, Schema.Unknown), layer: Layer.empty });
 const bundled = [plugin("agent.loop"), plugin("transport.server"), plugin("tools.registry")];
@@ -24,6 +25,11 @@ describe("bundled", () => {
     expect(Object.keys(planned.resolved.composition.plugins)).toEqual(shipped.map((plugin) => plugin.id));
     const runtime = new Set(runtimeCapabilities.map((tag) => tag.key));
     expect(shipped.flatMap((plugin) => plugin.provides.map((tag) => tag.key)).filter((key) => runtime.has(key))).toEqual([]);
+  });
+
+  test("holds the host half of every plugin in domains/, under the id its folder names", () => {
+    const halves = [...domainPlugins()].filter(([, plugin]) => plugin.host !== undefined).map(([id]) => id);
+    expect(shipped.map((plugin) => plugin.id).sort()).toEqual(halves.sort());
   });
 });
 

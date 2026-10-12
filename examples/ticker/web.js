@@ -1,5 +1,5 @@
-// The ticker plugin's prices, live, at /ticker in the web app (see README.md).
-// A UI file: link or copy it into ~/.lemma/ui/; it needs no build step.
+// The ticker plugin's web half: its prices, live, at /ticker in the web app (see README.md).
+// It needs no build step; package.json's `lemma` manifest names it beside the host half, ticker.ts.
 export default ({ defineUiPlugin, defineRoute, contracts: { Actions, Client, Pages, Router, Slots }, solid: { createSignal, For, onCleanup, Show }, html }) => {
   const TickerRoute = defineRoute("ticker", { path: "/ticker" });
 

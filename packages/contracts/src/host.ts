@@ -64,14 +64,14 @@ export type ConfigScope = typeof ConfigScope.Type;
  * Composition file (JSONC). User and project files merge: project rows override
  * user rows by plugin id; `config` objects are replaced, not deep-merged.
  * A project's file and plugins load only when the user file trusts the project.
- * `ui` rows configure the web app's plugins the same way; the web app plans
- * that composition itself, because only it can load those plugins.
+ * A plugin is one id with a host half, a web half, or both, and its one row
+ * decides both: the host plans its halves and the web app its own, from the
+ * same rows.
  */
 export const ConfigFile = Schema.Struct({
   /** User file only: absolute directories whose projects (and their subdirectories) may configure the host and load plugins. */
   trustedProjects: Schema.optional(Schema.Array(Schema.String)),
   plugins: Schema.optional(Schema.Record(Schema.String, PluginRow)),
-  ui: Schema.optional(Schema.Record(Schema.String, PluginRow)),
 });
 export type ConfigFile = typeof ConfigFile.Type;
 
@@ -226,28 +226,28 @@ export class HostControl extends Context.Service<
     /**
      * Write plugin rows into a config file (the user's by default) and apply the
      * result. A change the host rejects is undone in the file, so a bad row never
-     * outlives the call; the diagnostics say why.
+     * outlives the call; the diagnostics say why. A row naming no host plugin is
+     * written for the web app, which plans its halves from the same rows
+     * (`UiChanged`) and says what it does not know.
      */
     readonly configure: (
       plugins: Readonly<Record<string, PluginChange>>,
       options?: { readonly scope?: ConfigScope },
     ) => Effect.Effect<ChangeReport, ReloadError>;
-    /** The web app's rows and files. */
+    /** What the web app plans its halves from: the rows, and the web halves and stylesheets in the plugins directories. */
     readonly ui: Effect.Effect<UiComposition>;
-    /** Write `ui` rows into a config file; web apps apply them when `UiChanged` arrives. */
-    readonly configureUi: (
-      plugins: Readonly<Record<string, PluginChange>>,
-      options?: { readonly scope?: ConfigScope },
-    ) => Effect.Effect<UiComposition, ReloadError>;
   }
 >()("lemma/HostControl") {}
 
 /**
- * A file in `<home>/ui` or a trusted project's `.lemma/ui` that the web app
- * loads: a script is an ES module whose default export makes UI plugins, a
- * style is a stylesheet applied after the app's own.
+ * A file in `<home>/plugins` or a trusted project's `.lemma/plugins` that the
+ * web app loads: a script is a web half (`notes.web.js`, or a plugin
+ * package's `lemma.web`), an ES module whose default export makes web
+ * plugins; a style is a stylesheet applied after the app's own (`theme.css`,
+ * or a package's `lemma.styles`).
  */
 export const UiFile = Schema.Struct({
+  /** Its path in the plugins directory: `notes.web.js`, `ticker/web.js`. */
   name: Schema.String,
   source: Schema.Literals(["user", "project"]),
   kind: Schema.Literals(["script", "style"]),
@@ -258,7 +258,11 @@ export const UiFile = Schema.Struct({
 });
 export type UiFile = typeof UiFile.Type;
 
-/** What the web app needs to plan its own composition: the `ui` rows of both config files, and the files to load. */
+/**
+ * What the web app needs to plan its halves: the rows of both config files
+ * (every plugin's, host halves' too: a plugin's one row decides both its
+ * halves), and the files to load.
+ */
 export const UiComposition = Schema.Struct({
   plugins: Schema.Record(Schema.String, PluginRow),
   /** Per plugin id, the file whose row sets `enabled` (the project's wins). */
@@ -269,7 +273,7 @@ export const UiComposition = Schema.Struct({
 });
 export type UiComposition = typeof UiComposition.Type;
 
-/** Emitted when the `ui` rows or UI files change, so web apps apply them. */
+/** Emitted when the rows or the web halves' files change, so web apps apply them. */
 export const UiChanged = Event.make<UiComposition>("lemma/ui.changed");
 
 /** Emitted after any composition change or plugin fault so clients can refresh plugin views. */

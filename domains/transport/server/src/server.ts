@@ -29,7 +29,7 @@ interface ServerOptions {
   readonly token: string;
   readonly version: string;
   readonly staticDir?: string | undefined;
-  /** The web app's UI files; `/api/ui/<source>/<name>` serves only a file listed here. */
+  /** The files the web app loads from the plugin directories; `/api/ui/<source>/<path>` serves only a file listed here. */
   readonly ui?: Effect.Effect<UiComposition>;
 }
 
@@ -71,7 +71,7 @@ const serveStatic = (root: string, pathname: string) =>
 /**
  * Binds the address and serves until the scope closes. `/rpc` (WebSocket,
  * JSON) and `/rpc/http` (streaming HTTP, NDJSON) share one handler set;
- * `/rpc*` and `/api*` require the token, static assets do not. UI files are
+ * `/rpc*` and `/api*` require the token, static assets do not. Web halves are
  * served under `/api` because they run in the page with its token.
  */
 export const startServer = (options: ServerOptions, handlers: HostHandlers): Effect.Effect<TcpAddress, HttpServerError.ServeError, Scope.Scope> =>

@@ -8,7 +8,7 @@ const decode = (schema: Schema.Codec<any, any>, input: unknown) => Schema.decode
 
 describe("api.Schema keeps the forms Effect 3 gave its members", () => {
   it("a config declared as for Effect 3, with .annotations and propertySignature, still makes its form", () => {
-    // How a UI file (plain JavaScript) written for Effect 3 calls it: the method is not in Effect 4's types.
+    // How a web half (plain JavaScript) written for Effect 3 calls it: the method is not in Effect 4's types.
     const v3 = <T extends Schema.Top>(schema: T) => schema as T & { annotations(annotations: Schema.Annotations.Annotations): T };
     const config = S.Struct({
       greeting: v3(S.optional(S.String)).annotations({ title: "Greeting", description: "What to say" }),

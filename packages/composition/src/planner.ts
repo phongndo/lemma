@@ -31,6 +31,17 @@ export interface PlanInput {
   readonly localRequired?: boolean;
   /** What the app provides itself (its `provide.provides`): every plugin has it, and a plugin providing it cannot run. */
   readonly provided?: readonly Capability[];
+  /**
+   * Whether `id` is a plugin the other app runs: a plugin is one id with a host half, a web half, or both, and the
+   * config's rows name either. A row naming no plugin here is the other app's when this says so, and nothing to warn
+   * of; nor are its config's keys, which the other half may read. Absent, every row names a plugin here.
+   */
+  readonly elsewhere?: (id: string) => boolean;
+  /**
+   * Plugins left out before anything is planned, each with why, as one that cannot run is: a web half whose host
+   * half is not running waits for it. What needs one waits too.
+   */
+  readonly blocked?: ReadonlyMap<string, string>;
 }
 
 export interface Plan {
@@ -102,6 +113,7 @@ export function planComposition(input: PlanInput): Plan {
     }
   }
   for (const [id, row] of Object.entries(rows)) {
+    if (plugins[id] === undefined && input.elsewhere?.(id) === true) continue;
     if (plugins[id] === undefined) {
       // A plugin renamed or removed in an update leaves its row behind: nothing to run, so nothing to refuse.
       const required = row.required === true && row.enabled !== false;
@@ -130,6 +142,11 @@ export function planComposition(input: PlanInput): Plan {
   // Leave out what cannot run until the rest plans, as the kernel would plan it.
   const problems = new Map<string, string>();
   const suggestions = new Map<string, string>();
+  for (const [id, why] of input.blocked ?? []) {
+    if (plugins[id] === undefined || plugins[id]?.enabled === false) continue;
+    problems.set(id, why);
+    suggestions.set(id, `It starts when that does`);
+  }
   // Per plugin that must run and cannot: the problem, and what to do about it.
   const fatal = new Map<string, { readonly problem: string; readonly fix: string }>();
   /** Errors naming no plugin: the app's own list of what it provides is wrong (a reserved key, or one listed twice). */
@@ -223,7 +240,7 @@ export function planComposition(input: PlanInput): Plan {
     );
   }
   for (const { plugin } of known) {
-    if (!isRunning(resolved.composition, plugin.id) || plugin.config === undefined) continue;
+    if (!isRunning(resolved.composition, plugin.id) || plugin.config === undefined || input.elsewhere?.(plugin.id) === true) continue;
     const unused = unusedKeys(plugin.config, resolved.composition.plugins[plugin.id]?.config);
     if (unused.length === 0) continue;
     diagnostics.push(

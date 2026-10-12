@@ -49,8 +49,9 @@ so the two show the same records and accept the same queries.
 - **Channels.** Sessions, turns, models, the workspace, and commands are
   reached through the channels their plugins serve (`sessions.*`, `agent.*`,
   `llm.*`, `workspace.*`, `files.search`, `commands.*`), typed by their
-  declarations in their domains' contracts (`@lemma/sessions`, …); the host's own calls (plugins, config,
-  the web app's rows, questions) and its event stream are the runtime's. A
+  declarations in their domains' contracts (`@lemma/sessions`, …); the host's
+  own calls (plugins, config, what the web app plans from, questions) and its
+  event stream are the runtime's. A
   channel whose plugin is off fails `NotFound`, naming the channel. While the
   host is still starting, a command fails `Unavailable` naming what it called
   (exit 3, as for a host it cannot reach); a domain's own `Unavailable`

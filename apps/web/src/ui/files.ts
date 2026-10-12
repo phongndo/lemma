@@ -13,7 +13,8 @@ const isPlugin = (value: unknown): value is Plugin =>
   typeof value === "object" && value !== null && typeof (value as Plugin).id === "string" && typeof (value as Plugin).layer === "function";
 
 /**
- * Loads the host's UI files into the page. A script is an ES module whose
+ * Loads the web halves and stylesheets the host lists into the page. A web
+ * half (a script) is an ES module whose
  * default export is a plugin, an array of them, or a function that receives
  * `api` (Solid, the contracts, `defineUiPlugin`, the app's components and
  * bundled plugins) and returns either; it runs with the page's permissions
@@ -65,7 +66,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
       utilities.textContent = css;
       return [];
     } catch (error) {
-      return [`UI files' Tailwind classes: cannot compile: ${error instanceof Error ? error.message : String(error)}`];
+      return [`Web halves' Tailwind classes: cannot compile: ${error instanceof Error ? error.message : String(error)}`];
     }
   };
 
@@ -88,7 +89,7 @@ export function createFileLoader(token: string | undefined, api: () => Promise<u
   };
 
   const importScript = async (file: UiFile): Promise<LoadedFiles> => {
-    const where = `${file.source === "user" ? "~/.lemma/ui" : ".lemma/ui"}/${file.name}`;
+    const where = `${file.source === "user" ? "~/.lemma/plugins" : ".lemma/plugins"}/${file.name}`;
     try {
       const module: { default?: unknown } = await import(/* @vite-ignore */ withToken(file.url));
       const made =

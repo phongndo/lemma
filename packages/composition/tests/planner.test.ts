@@ -241,6 +241,27 @@ describe("planComposition", () => {
     expect(planned.known.find((entry) => entry.plugin.id === "llm")?.plugin).toBe(shadow);
   });
 
+  test("a row naming the other app's plugin is that app's: no warning, and its config keys are the other half's too", () => {
+    const web = new Set(["notes", "agent"]);
+    const planned = plan({ elsewhere: (id) => web.has(id), rows: { notes: { enabled: false }, agent: { config: { maxSteps: 3, shown: true } } } });
+    expect(planned.diagnostics).toEqual([]);
+    // Without it, a row naming no plugin is a warning.
+    expect(messages(plan({ rows: { notes: { enabled: false } } }), "warning")).toEqual([`The row for "notes" names no plugin; it is ignored`]);
+  });
+
+  test("leaves a blocked plugin out with its reason, and what needs it waits; one its row turned off is just off", () => {
+    const blocked = new Map([["agent", "its host half is not running"]]);
+    const planned = plan({ blocked });
+    expect(running(planned)).toEqual(["llm", "transport"]);
+    expect(planned.problems.get("agent")).toBe("its host half is not running");
+    expect(messages(planned, "warning")).toEqual([
+      `"agent" is left out: its host half is not running`,
+      `"compaction" is not loaded: it needs "agent", and "agent" is left out`,
+    ]);
+    const off = plan({ blocked, rows: { agent: { enabled: false } } });
+    expect(off.problems.has("agent")).toBe(false);
+  });
+
   test("warns about config keys a plugin does not use, such as a setting renamed in an update", () => {
     const planned = plan({ rows: { agent: { config: { steps: 5, maxSteps: 3 } } } });
     expect(messages(planned, "warning")).toEqual([`The config for "agent" sets steps, which it does not use (renamed or removed?)`]);

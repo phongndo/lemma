@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 import { spawn } from "node:child_process";
-import { join } from "node:path";
 import { Cause, Deferred, Duration, Effect, Exit, Option, Result, Schema, SchemaIssue, Semaphore, Stream } from "effect";
 import { appUrl, describeReload, faultMessage, Notice, PluginsChanged, UiChanged } from "@lemma/contracts";
 import { Diagnostic, Events, makeLoader, ReloadError } from "@lemma/core";
@@ -14,13 +13,12 @@ import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
-import type { ConfigSection } from "./config.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
 import type { HostControlHandle } from "./runtime.ts";
-import { listUiFiles } from "./ui.ts";
-import { watchConfig, watchUi } from "./watch.ts";
+import { listUiFiles, userPluginsDir as pluginsDirOf } from "./ui.ts";
+import { watchConfig, watchPlugins } from "./watch.ts";
 
 const args = new Set(process.argv.slice(2));
 /**
@@ -33,7 +31,7 @@ const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
 const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
 delete process.env.INIT_CWD;
-const userPluginsDir = join(paths.home, "plugins");
+const userPluginsDir = pluginsDirOf(paths);
 
 /** Plugins no config change may turn off, with the reason clients show. Everything they need is locked with them. */
 const pinned: Readonly<Record<string, string>> = {
@@ -118,10 +116,14 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir], {
       bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
     });
+    const localPlugins = local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) }));
+    const hostIds = new Set([...input.bundled, ...localPlugins.map(({ plugin }) => plugin)].map((plugin) => plugin.id));
     const planned = planComposition({
       ...input,
-      local: local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) })),
+      local: localPlugins,
       rows: loaded.rows,
+      // A row naming no host plugin is the web app's: it plans its halves from the same rows, and says what it does not know.
+      elsewhere: (id) => !hostIds.has(id),
     });
     // A change that would leave out a plugin not left out already is refused (the file is put back, the running
     // composition kept), whichever plugin it touched; one already left out stays so, and blocks nothing.
@@ -151,7 +153,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       enabledIn: loaded.enabledIn,
       configIn: loaded.configIn,
       trusted: loaded.trusted,
-      ui: { ...loaded.ui, files },
+      ui: { plugins: loaded.rows, enabledIn: loaded.enabledIn, configIn: loaded.configIn, files },
     };
   });
 
@@ -254,7 +256,7 @@ const program = Effect.gen(function* () {
       problems: applied.problems,
       pinned,
     });
-  /** Web apps apply `ui` rows and files themselves; tell them when either changed. */
+  /** Web apps plan their halves from the rows and files themselves; tell them when either changed. */
   const publishUi = (loader: Loader, previous: UiComposition, next: UiComposition) =>
     JSON.stringify(previous) === JSON.stringify(next) ? Effect.void : publish(loader, UiChanged, next);
   // The source resolves ids against the load being applied, so the next set is visible before the loader accepts it.
@@ -273,10 +275,10 @@ const program = Effect.gen(function* () {
       return report;
     });
   /** Writes rows into a config file and applies the result; a change the host rejects is undone in the file. */
-  const write = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, section: ConfigSection) =>
+  const write = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) =>
     Effect.gen(function* () {
       const path = scope === "user" ? paths.userConfig : paths.projectConfig;
-      const update = yield* updateConfig(path, rows, scope, section).pipe(Effect.mapError(rejected));
+      const update = yield* updateConfig(path, rows, scope).pipe(Effect.mapError(rejected));
       seenConfig.set(path, update.text);
       // The written rows are read back like any other change; if the host rejects them, the file is put back.
       return yield* Effect.flatMap(load(), (next) => apply(loader, next)).pipe(
@@ -322,7 +324,7 @@ const program = Effect.gen(function* () {
   const writeDeferred = (loader: Loader, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope, after: Effect.Effect<void>) =>
     Effect.gen(function* () {
       const path = scope === "user" ? paths.userConfig : paths.projectConfig;
-      const update = yield* updateConfig(path, rows, scope, "plugins").pipe(Effect.mapError(rejected));
+      const update = yield* updateConfig(path, rows, scope).pipe(Effect.mapError(rejected));
       seenConfig.set(path, update.text);
       const restore = update.restore.pipe(Effect.tap(() => Effect.sync(() => seenConfig.set(path, update.previous))));
       const next = yield* load().pipe(Effect.tapError(() => restore));
@@ -368,18 +370,6 @@ const program = Effect.gen(function* () {
   const handle: HostControlHandle = {
     plugins: withLoader((loader) => Effect.map(loader.core.inspect, catalogOf)),
     ui: Effect.sync(() => applied.ui),
-    configureUi: (rows, options) =>
-      withLoader((loader) =>
-        reloading.withPermits(1)(
-          Effect.gen(function* () {
-            if (safe) return yield* safeMode();
-            const scope = options?.scope ?? "user";
-            if (scope === "project" && !applied.trusted) return yield* untrustedProject();
-            yield* write(loader, rows, scope, "ui");
-            return applied.ui;
-          }),
-        ),
-      ),
     composition: withLoader((loader) =>
       Effect.gen(function* () {
         const composition = yield* loader.composition;
@@ -431,8 +421,8 @@ const program = Effect.gen(function* () {
             // Checked here so the answer is immediate and the file is never touched: the load would refuse these too.
             const entries = catalogOf(yield* loader.core.inspect);
             for (const [id, row] of Object.entries(requested)) {
-              // Resolving an unknown id yields the source's diagnostic, which lists the known plugins.
-              const entry = entries.find((candidate) => candidate.id === id) ?? (yield* Effect.mapError(source.resolve(id), rejected), undefined);
+              // An id the host does not know is a web half's: written for the web app, which plans it from the same row.
+              const entry = entries.find((candidate) => candidate.id === id);
               if (row.enabled === false && entry?.locked !== undefined) {
                 return yield* rejected(new Diagnostic({ severity: "error", pluginId: id, message: `"${id}" cannot be turned off: ${entry.locked}` }));
               }
@@ -455,7 +445,7 @@ const program = Effect.gen(function* () {
             // or command asks) applies once that work is over.
             const after = yield* deferral(restartedBy(applied.known, Object.keys(rows), { provided }), Object.keys(pinned));
             if (after !== undefined) return yield* writeDeferred(loader, rows, scope, after);
-            return yield* write(loader, rows, scope, "plugins");
+            return yield* write(loader, rows, scope);
           }),
         ),
       ),
@@ -551,15 +541,34 @@ const program = Effect.gen(function* () {
     ),
   );
 
-  // A UI file added, edited, or removed changes only what web apps load.
+  /**
+   * The web files as they are now, told to web apps when they changed, though the host's own load was refused: a web
+   * half or a stylesheet is no part of that, and waits on no host half's file being fixed.
+   */
+  const refreshWebFiles = Effect.gen(function* () {
+    const files = yield* listUiFiles(paths, applied.trusted);
+    const previous = applied.ui;
+    applied = { ...applied, ui: { ...previous, files } };
+    yield* publishUi(loader, previous, applied.ui).pipe(Effect.ignore);
+  });
+
+  // A plugin's file added, edited, or removed: its host half reloads (an unchanged file keeps its definition, so only
+  // what changed restarts), and web apps hear of its web half and stylesheets.
   yield* Effect.forkScoped(
-    Stream.runForEach(safe ? Stream.empty : watchUi(paths), () =>
-      reloading.withPermits(1)(
-        Effect.gen(function* () {
-          const previous = applied;
-          const files = yield* listUiFiles(paths, previous.trusted);
-          applied = { ...previous, ui: { ...previous.ui, files } };
-          yield* publishUi(loader, previous.ui, applied.ui).pipe(Effect.ignore);
+    Stream.runForEach(safe ? Stream.empty : watchPlugins(paths), () =>
+      log("a plugin file changed; reloading").pipe(
+        Effect.andThen(reloadNow(loader)),
+        Effect.matchEffect({
+          onFailure: (error) =>
+            printDiagnostics(error.diagnostics).pipe(
+              Effect.andThen(log("reload rejected; the running composition is unchanged")),
+              Effect.andThen(refreshWebFiles),
+            ),
+          onSuccess: (report) =>
+            log(`reloaded: ${describe(report)}`).pipe(
+              Effect.andThen(Effect.flatMap(handle.plugins, (plugins) => publish(loader, PluginsChanged, { plugins }))),
+              Effect.ignore,
+            ),
         }),
       ),
     ),

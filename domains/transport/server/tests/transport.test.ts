@@ -56,16 +56,20 @@ describe("transport", () => {
       }),
     ));
 
-  test("serves listed UI files with the token, and tells clients when the UI composition changes", () =>
+  test("serves listed web halves with the token, a package's too, and tells clients when a row changes", () =>
     withHost((host) =>
       Effect.gen(function* () {
-        const dir = join(host.home, "ui");
-        yield* Effect.promise(() => mkdir(dir, { recursive: true }));
+        const dir = join(host.home, "plugins");
+        yield* Effect.promise(() => mkdir(join(dir, "ticker"), { recursive: true }));
         yield* Effect.promise(() => writeFile(join(dir, "panel.js"), "export default () => [];"));
+        yield* Effect.promise(() => writeFile(join(dir, "ticker", "web.js"), "export default () => [];"));
         yield* Effect.promise(() => writeFile(join(dir, "secret.js"), "unlisted"));
         host.holder.ui = {
           ...host.holder.ui,
-          files: [{ name: "panel.js", source: "user", kind: "script", path: join(dir, "panel.js"), url: "/api/ui/user/panel.js?v=1" }],
+          files: [
+            { name: "panel.js", source: "user", kind: "script", path: join(dir, "panel.js"), url: "/api/ui/user/panel.js?v=1" },
+            { name: "ticker/web.js", source: "user", kind: "script", path: join(dir, "ticker", "web.js"), url: "/api/ui/user/ticker/web.js?v=1" },
+          ],
         };
         const get = (path: string) => Effect.promise(() => fetch(`${host.url}${path}`));
         const token = `token=${encodeURIComponent(host.token)}`;
@@ -74,15 +78,17 @@ describe("transport", () => {
         expect(served.status).toBe(200);
         expect(served.headers.get("content-type")).toMatch(/javascript/);
         expect(yield* Effect.promise(() => served.text())).toBe("export default () => [];");
+        expect((yield* get(`/api/ui/user/ticker/web.js?v=1&${token}`)).status).toBe(200);
         // Only listed files are served, whatever else is in the directory.
         expect((yield* get(`/api/ui/user/secret.js?${token}`)).status).toBe(404);
         expect((yield* get(`/api/ui/user/..%2Fconfig.jsonc?${token}`)).status).toBe(404);
 
         const client = yield* host.connect("websocket");
         const events = yield* subscribe(client);
-        expect((yield* client["Ui.Composition"]()).files.map((file) => file.name)).toEqual(["panel.js"]);
-        const written = yield* client["Ui.Configure"]({ plugins: { composer: { enabled: false } } });
-        expect(written.plugins).toEqual({ composer: { enabled: false } });
+        expect((yield* client["Ui.Composition"]()).files.map((file) => file.name)).toEqual(["panel.js", "ticker/web.js"]);
+        // A row for a web half is written as any other; web apps hear it.
+        yield* client["Host.Configure"]({ plugins: { composer: { enabled: false } } });
+        expect((yield* client["Ui.Composition"]()).plugins).toEqual({ composer: { enabled: false } });
         const [changed] = (yield* waitFor(events, (event) => event.type === "ui-changed")).slice(-1);
         expect(changed?.type === "ui-changed" && changed.ui.plugins).toEqual({ composer: { enabled: false } });
       }),
@@ -205,7 +211,7 @@ describe("transport", () => {
           const client = yield* host.connect("http");
           const events = yield* subscribe(client);
           expect((yield* client["Host.Info"]()).cwd).toBe("/work");
-          yield* client["Ui.Configure"]({ plugins: { composer: { enabled: false } } });
+          yield* client["Host.Configure"]({ plugins: { composer: { enabled: false } } });
           yield* waitFor(events, (event) => event.type === "ui-changed");
           expect(yield* client["Channel.Call"]({ id: "commands.list" })).toEqual([{ id: "test.greet", title: "Greet…", category: "Test", source: "greeter" }]);
           expect(hostError(yield* Effect.exit(client["Host.Inspect"]({ id: "missing" })))).toMatchObject({ code: "NotFound" });

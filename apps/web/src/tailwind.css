@@ -8,7 +8,7 @@
  * `tw:text-base` (14px), each scaled by `--text-scale`. Tailwind's own
  * palette, fonts, sizes, radii, and shadows are dropped, so a utility can only name a token,
  * and `inline` makes it read the token itself: whatever restyles a token (the
- * look a theme paints, a stylesheet in `~/.lemma/ui`) restyles the utility.
+ * look a theme paints, a stylesheet in `~/.lemma/plugins`) restyles the utility.
  * Spacing, sizing, and layout keep Tailwind's scale (`tw:p-2` is 8px), and a
  * token with no utility is one bracket away (`tw:z-(--z-menu)`,
  * `tw:max-w-(--content)`).

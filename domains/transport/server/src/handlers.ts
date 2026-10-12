@@ -67,7 +67,6 @@ export const makeHandlers = ({ version, hub, interactions, paths, control, regis
       control.configure(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.map(toReloadResult), Effect.mapError(toHostError)),
 
     "Ui.Composition": () => control.ui,
-    "Ui.Configure": ({ plugins, scope }) => control.configureUi(plugins, scope === undefined ? undefined : { scope }).pipe(Effect.mapError(toHostError)),
 
     "Interaction.List": () => Effect.sync(() => [...interactions.open()]),
     "Interaction.Answer": ({ id, answer }) => interactions.answer(id, answer),

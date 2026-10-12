@@ -1,7 +1,7 @@
 import { For } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
 import { configEdit, configText } from "./config.ts";
-import type { ConfigFormProps, IconName, IconProps, SearchFieldProps, ToggleProps } from "./parts.tsx";
+import type { ConfigFormProps, IconName, IconProps, SearchFieldProps, SegmentedProps, ToggleProps } from "./parts.tsx";
 
 /*
  * The fallbacks `ui/contracts.ts` declares with its parts (which parts have
@@ -51,6 +51,23 @@ export function SearchFieldFallback(props: SearchFieldProps) {
       />
       {props.children}
     </div>
+  );
+}
+
+/** A select of the options. Like the toggle, it shows the value it is given, not the choice. */
+export function SegmentedFallback(props: SegmentedProps) {
+  return (
+    <select
+      aria-label={props.label}
+      value={props.value}
+      on:change={(event) => {
+        const value = event.currentTarget.value;
+        event.currentTarget.value = props.value;
+        props.onChange(value);
+      }}
+    >
+      <For each={props.options}>{(option) => <option value={option.value}>{option.label}</option>}</For>
+    </select>
   );
 }
 

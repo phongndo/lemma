@@ -22,8 +22,6 @@ interface LoadedComposition {
   readonly enabledIn: Readonly<Record<string, ConfigScope>>;
   /** Per plugin id, the file whose row sets `config`. */
   readonly configIn: Readonly<Record<string, ConfigScope>>;
-  /** The `ui` section, merged the same way: rows for the web app's plugins. */
-  readonly ui: MergedRows;
 }
 
 interface MergedRows {
@@ -31,9 +29,6 @@ interface MergedRows {
   readonly enabledIn: Readonly<Record<string, ConfigScope>>;
   readonly configIn: Readonly<Record<string, ConfigScope>>;
 }
-
-/** Which part of a config file rows live in: the host's plugins, or the web app's. */
-export type ConfigSection = "plugins" | "ui";
 
 /** Project rows override user rows by plugin id: `enabled` and `config` are each taken from the project row when present. */
 function mergeRows(files: readonly { readonly scope: ConfigScope; readonly rows: Readonly<Record<string, PluginRow>> }[]): MergedRows {
@@ -84,6 +79,16 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
         }),
       );
     }
+    // The web halves' old directory: its files are no longer loaded.
+    if (yield* exists(join(dirname(paths.userConfig), "ui"))) {
+      diagnostics.push(
+        new Diagnostic({
+          severity: "warning",
+          message: `${join(dirname(paths.userConfig), "ui")}: no longer read`,
+          suggestion: `Move its files into ${join(dirname(paths.userConfig), "plugins")}, a web half named <id>.web.js`,
+        }),
+      );
+    }
     if (project.trustedProjects.length > 0) {
       diagnostics.push(
         new Diagnostic({
@@ -107,10 +112,6 @@ export function loadComposition(paths: PathsService): Effect.Effect<LoadedCompos
       trusted,
       enabledIn: merged.enabledIn,
       configIn: merged.configIn,
-      ui: mergeRows([
-        { scope: "user", rows: user.ui },
-        { scope: "project", rows: project.ui },
-      ]),
     };
   });
 }
@@ -127,15 +128,10 @@ const FORMAT = { formattingOptions: { insertSpaces: true, tabSize: 2, eol: "\n" 
  * and `remove` edit list keys by their items' `id`. The text must be valid
  * JSONC (or empty); check with `parseConfig` first.
  */
-export function patchConfig(
-  text: string,
-  rows: Readonly<Record<string, PluginChange>>,
-  scope: ConfigScope = "user",
-  section: ConfigSection = "plugins",
-): string {
+export function patchConfig(text: string, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope = "user"): string {
   let next = text;
   const rowOf = (id: string): Record<string, unknown> => {
-    const current: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.[section]?.[id];
+    const current: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.plugins?.[id];
     return Predicate.isObject(current) ? { ...current } : {};
   };
   for (const [id, row] of Object.entries(rows)) {
@@ -145,17 +141,17 @@ export function patchConfig(
     const before = rowOf(id);
     for (const [key, value] of Object.entries(edits)) {
       if (value === undefined && !(key in before)) continue;
-      next = applyEdits(next, modify(next, [section, id, key], value, FORMAT));
+      next = applyEdits(next, modify(next, ["plugins", id, key], value, FORMAT));
     }
     if (row.values !== undefined) {
-      if (!Predicate.isObject(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
+      if (!Predicate.isObject(rowOf(id).config)) next = applyEdits(next, modify(next, ["plugins", id, "config"], {}, FORMAT));
       for (const [key, value] of Object.entries(row.values)) {
         const config = rowOf(id).config;
         if (value === null && !(Predicate.isObject(config) && key in config)) continue;
-        next = applyEdits(next, modify(next, [section, id, "config", key], value === null ? undefined : value, FORMAT));
+        next = applyEdits(next, modify(next, ["plugins", id, "config", key], value === null ? undefined : value, FORMAT));
       }
       const config = rowOf(id).config;
-      if (Predicate.isObject(config) && Object.keys(config).length === 0) next = applyEdits(next, modify(next, [section, id, "config"], undefined, FORMAT));
+      if (Predicate.isObject(config) && Object.keys(config).length === 0) next = applyEdits(next, modify(next, ["plugins", id, "config"], undefined, FORMAT));
     }
     const list = (key: string): unknown[] => {
       const config = rowOf(id).config;
@@ -164,25 +160,25 @@ export function patchConfig(
     };
     const indexOf = (key: string, itemId: unknown) => list(key).findIndex((item) => Predicate.isObject(item) && item.id === itemId);
     for (const [key, items] of Object.entries(row.add ?? {})) {
-      if (!Predicate.isObject(rowOf(id).config)) next = applyEdits(next, modify(next, [section, id, "config"], {}, FORMAT));
-      if (!Array.isArray((rowOf(id).config as Record<string, unknown>)[key])) next = applyEdits(next, modify(next, [section, id, "config", key], [], FORMAT));
+      if (!Predicate.isObject(rowOf(id).config)) next = applyEdits(next, modify(next, ["plugins", id, "config"], {}, FORMAT));
+      if (!Array.isArray((rowOf(id).config as Record<string, unknown>)[key])) next = applyEdits(next, modify(next, ["plugins", id, "config", key], [], FORMAT));
       for (const item of items) {
         const at = indexOf(key, item.id);
         next =
           at === -1
-            ? applyEdits(next, modify(next, [section, id, "config", key, list(key).length], item, { ...FORMAT, isArrayInsertion: true }))
-            : applyEdits(next, modify(next, [section, id, "config", key, at], item, FORMAT));
+            ? applyEdits(next, modify(next, ["plugins", id, "config", key, list(key).length], item, { ...FORMAT, isArrayInsertion: true }))
+            : applyEdits(next, modify(next, ["plugins", id, "config", key, at], item, FORMAT));
       }
     }
     for (const [key, ids] of Object.entries(row.remove ?? {})) {
       for (const itemId of ids) {
         const at = indexOf(key, itemId);
-        if (at !== -1) next = applyEdits(next, modify(next, [section, id, "config", key, at], undefined, FORMAT));
+        if (at !== -1) next = applyEdits(next, modify(next, ["plugins", id, "config", key, at], undefined, FORMAT));
       }
     }
-    const rows: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.[section];
+    const rows: unknown = parseJsonc(next, [], { allowTrailingComma: true })?.plugins;
     if (Predicate.isObject(rows) && Predicate.isObject(rows[id]) && Object.keys(rows[id]).length === 0)
-      next = applyEdits(next, modify(next, [section, id], undefined, FORMAT));
+      next = applyEdits(next, modify(next, ["plugins", id], undefined, FORMAT));
   }
   return next;
 }
@@ -239,16 +235,11 @@ const writeConfig = async (path: string, text: string): Promise<void> => {
 };
 
 /** Applies `patchConfig` to the file at `path`, creating it and its directory if needed. */
-export function updateConfig(
-  path: string,
-  rows: Readonly<Record<string, PluginChange>>,
-  scope: ConfigScope = "user",
-  section: ConfigSection = "plugins",
-): Effect.Effect<ConfigUpdate, Diagnostic> {
+export function updateConfig(path: string, rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope = "user"): Effect.Effect<ConfigUpdate, Diagnostic> {
   return Effect.gen(function* () {
     const previous = yield* readConfigText(path);
     if (previous !== undefined && previous.trim() !== "") yield* Effect.fromResult(parseConfig(path, previous));
-    const text = patchConfig(previous ?? "", rows, scope, section);
+    const text = patchConfig(previous ?? "", rows, scope);
     yield* Effect.tryPromise({
       try: () => writeConfig(path, text),
       catch: (cause) =>
@@ -273,7 +264,6 @@ interface ReadConfig {
   readonly path: string;
   readonly found: boolean;
   readonly plugins: NonNullable<ConfigFile["plugins"]>;
-  readonly ui: NonNullable<ConfigFile["ui"]>;
   readonly trustedProjects: readonly string[];
   readonly diagnostics: readonly Diagnostic[];
 }
@@ -282,7 +272,7 @@ const exists = (path: string): Effect.Effect<boolean> => Effect.promise(async ()
 
 /** An untrusted project's file: only whether it exists, never its contents. */
 const skipConfig = (path: string): Effect.Effect<ReadConfig> =>
-  Effect.map(exists(path), (found) => ({ path, found, plugins: {}, ui: {}, trustedProjects: [], diagnostics: [] }));
+  Effect.map(exists(path), (found) => ({ path, found, plugins: {}, trustedProjects: [], diagnostics: [] }));
 
 const readConfig = (path: string): Effect.Effect<ReadConfig> =>
   Effect.gen(function* () {
@@ -290,7 +280,6 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
       path,
       found,
       plugins: {},
-      ui: {},
       trustedProjects: [],
       diagnostics,
     });
@@ -307,13 +296,23 @@ const readConfig = (path: string): Effect.Effect<ReadConfig> =>
     }
     const parsed = parseConfig(path, text.success);
     if (Result.isFailure(parsed)) return empty(true, [parsed.failure]);
+    // The `ui` section is gone, not ignored without a word: a plugin's one row in `plugins` decides both its halves.
+    const raw: unknown = parseJsonc(text.success, [], { allowTrailingComma: true, disallowComments: false });
+    const leftover = Predicate.isObject(raw) && "ui" in raw;
     return {
       path,
       found: true,
       plugins: parsed.success.plugins ?? {},
-      ui: parsed.success.ui ?? {},
       trustedProjects: parsed.success.trustedProjects ?? [],
-      diagnostics: [],
+      diagnostics: leftover
+        ? [
+            new Diagnostic({
+              severity: "warning",
+              message: `${path}: its "ui" section is no longer read`,
+              suggestion: `Move its rows into "plugins": one row decides both halves of a plugin`,
+            }),
+          ]
+        : [],
     };
   });
 
@@ -342,7 +341,7 @@ function parseConfig(path: string, text: string): Result.Result<ConfigFile, Diag
         ...(typeof at[1] === "string" ? { pluginId: at[1] } : {}),
         path: at,
         message: `${path}: invalid config at ${at.length ? at.join(".") : "root"}: ${issue?.message ?? decoded.failure.message}`,
-        suggestion: `Expected { "trustedProjects"?: string[], "plugins"?: { "<id>": { "enabled"?: boolean, "config"?: unknown } }, "ui"?: { "<id>": { … } } }`,
+        suggestion: `Expected { "trustedProjects"?: string[], "plugins"?: { "<id>": { "enabled"?: boolean, "config"?: unknown } } }`,
       }),
     );
   }

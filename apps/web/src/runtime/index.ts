@@ -3,7 +3,7 @@ import type { Host } from "@lemma/client";
 import type { ApplicationServices } from "@lemma/core";
 import type { AnyRoute } from "@lemma/router";
 import { Client, HostPlugins, Interactions, Notify, Router, Slots, UI_API, UiApi, UiPlugins } from "@lemma/ui";
-import type { NotifyService, UiPluginsService } from "@lemma/ui";
+import type { HostPluginsService, NotifyService, UiPluginsService } from "@lemma/ui";
 import { createClient } from "./client.ts";
 import { createHostPlugins } from "./host-plugins.ts";
 import { createInteractions } from "./interactions.ts";
@@ -26,6 +26,8 @@ export const provides = [Client, UiPlugins, UiApi(UI_API), Notify, HostPlugins, 
 export interface WebRuntime {
   /** The page's messages, for what the boot itself reports (problems, faults). */
   readonly notify: NotifyService;
+  /** The host's plugins, for the boot to run a web half only while its host half runs. */
+  readonly hostPlugins: HostPluginsService;
   /** For `makeLoader`'s `provide`, and `provided` when planning. */
   readonly services: ApplicationServices<typeof provides>;
 }
@@ -64,5 +66,5 @@ export function createWebRuntime(options: {
       );
     }),
   );
-  return { notify: notify.notify, services: { provides, layer } };
+  return { notify: notify.notify, hostPlugins: hostPlugins.plugins, services: { provides, layer } };
 }
