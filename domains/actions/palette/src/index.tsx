@@ -3,10 +3,10 @@ import type { Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { InteractionRequest } from "@lemma/contracts";
 import type { CommandInfo } from "@lemma/commands";
-import { shownKeys, ActionIds, Actions, PaletteSources } from "@lemma/actions";
-import { formatKeys, listKey, quickKey, shortcut } from "@lemma/web/keys";
+import { keysFor, overridesFrom, shownKeys, ActionIds, Actions, PaletteSources } from "@lemma/actions";
+import { formatKeys, listKey, matchesKeys, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
-import { load, save } from "@lemma/web/storage";
+import { loadStrings, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
 import { parseQuery, rank, remember } from "@lemma/web/match";
 import type { Searchable } from "@lemma/web/match";
@@ -22,6 +22,8 @@ import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIco
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
+/** What opens it, and closes it while it shows. */
+const CLOSE_KEYS = "mod+k";
 
 interface Deps {
   readonly interactions: InteractionsService;
@@ -29,6 +31,8 @@ interface Deps {
   readonly slots: SlotsService;
   /** An action to ask for at once when the palette opens: its keys were pressed and it needs a value. Taken once read. */
   readonly takeRequested: () => string | undefined;
+  /** The keys that open it, and close it while it shows: its own, or what the user bound it to. Reactive. */
+  readonly closeKeys: () => readonly string[];
 }
 
 /** A row: a source's item, or an option of a question (which has nothing to run). */
@@ -51,14 +55,7 @@ const RECENT_KEY = "lemma.palette.recent";
 const SESSIONS_BROWSED = 8;
 const RESULTS = 60;
 
-const loadRecent = (): string[] => {
-  try {
-    const parsed: unknown = JSON.parse(load(RECENT_KEY) ?? "[]");
-    return Array.isArray(parsed) ? parsed.filter((key): key is string => typeof key === "string") : [];
-  } catch {
-    return [];
-  }
-};
+const loadRecent = (): string[] => loadStrings(RECENT_KEY);
 
 const basename = (path: string) => path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
 
@@ -284,6 +281,12 @@ function Palette(props: { deps: Deps }) {
   const onKeyDown = (event: KeyboardEvent) => {
     hold.track(event);
     if (event.isComposing) return;
+    // Its own keys close it, as its footer says, before a list takes them (Ctrl+K moves up one where mod is Ctrl).
+    if (props.deps.closeKeys().some((keys) => matchesKeys(keys, event))) {
+      event.preventDefault();
+      close();
+      return;
+    }
     const list = listKey(event);
     if (list !== undefined) {
       event.preventDefault();
@@ -472,9 +475,13 @@ function Palette(props: { deps: Deps }) {
                   )}
                 </For>
               </span>
-              <span class="palette-foot-end">
-                <kbd>{shortcut("mod", "K")}</kbd> close
-              </span>
+              <Show when={props.deps.closeKeys()[0]}>
+                {(keys) => (
+                  <span class="palette-foot-end">
+                    <kbd>{formatKeys(keys())}</kbd> close
+                  </span>
+                )}
+              </Show>
             </Show>
           </footer>
         </div>
@@ -509,6 +516,7 @@ export default defineWebPlugin({
         requested = undefined;
         return id;
       },
+      closeKeys: () => keysFor(ActionIds.palette, CLOSE_KEYS, overridesFrom(webPlugins.list())),
     };
     // Its own sources go through the slot a plugin adds a source to (files, symbols): they are defaults, not built in.
     const source = (id: string, order: number, value: PaletteSource) => slots.add(PaletteSources, { id, order, ...value });
@@ -593,7 +601,7 @@ export default defineWebPlugin({
       title: "Command palette",
       icon: CommandIcon,
       hidden: true,
-      keys: "mod+k",
+      keys: CLOSE_KEYS,
       // Opens over any other dialog; a question the host asks keeps the screen until answered.
       global: true,
       when: () => dialogs.current() === DIALOG || interactions.open().length === 0,

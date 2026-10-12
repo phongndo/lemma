@@ -167,28 +167,44 @@ run its tool through `tools.registry` against a fake `Sessions`. A tool alone
 runs with `@lemma/tools/testing`. A folder plugin is a workspace package of
 its own when it lives in this repository, as the examples are.
 
+When one misbehaves, [Debugging plugins](debugging.md) says where to look.
+
 ## Coming from Pi
 
 Lemma's plugins do what [Pi's extensions](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md)
 do (as of Pi's docs at `c30840c`, 2026-10-05), in Lemma's shapes:
 
-| Pi                                               | Lemma                                                                 |
-| ------------------------------------------------ | --------------------------------------------------------------------- |
-| `pi.registerTool()`                              | `add(Tools, tool)`                                                    |
-| `pi.on("tool_call")`, blocking a call            | `add(Guards, { tool, guard })`, or intercept `ToolExecuteHook`        |
-| `pi.on("tool_result")`                           | Intercept `ToolExecuteHook` after `next`; observe `ToolExecuted`      |
-| `pi.on("before_agent_start")`, the system prompt | `add(PromptSections, section)`; intercept `AgentRequestHook`          |
-| `pi.on("context")`                               | Intercept `AgentRequestHook`, appending events (a `compaction`)       |
-| `pi.on("turn_end")`, continuing a turn           | Intercept `AgentContinueHook`; observe `TurnEnded`                    |
-| `pi.on("input")`, rewriting or handling a prompt | Intercept `AgentInputHook`: place, rewrite, handle, or refuse it      |
-| `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma do`                  |
-| `pi.registerShortcut()`                          | A web half's `Actions` item                                           |
-| `pi.registerProvider()`                          | `add(Providers, provider)`                                            |
-| `pi.registerToolRenderer()`, `renderCall`        | A web half's `ToolViews` item, or the `ChatToolPart` part             |
-| `ctx.ui` widgets and components                  | A web half's slots and parts: views, pages, layers, settings sections |
-| Tool-result `details` for branch state           | The same: a result's `details` in the session log                     |
-| `pi.events` between extensions                   | A contract of your own: a capability, a registry, a hook, or an event |
-| `~/.pi/agent/extensions/`                        | `~/.lemma/plugins/`                                                   |
+| Pi                                               | Lemma                                                                                                                                      |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pi.registerTool()`                              | `add(Tools, tool)`                                                                                                                         |
+| `pi.on("tool_call")`, blocking a call            | `add(Guards, { tool, guard })`, or intercept `ToolExecuteHook`                                                                             |
+| `pi.on("tool_result")`                           | Intercept `ToolExecuteHook` after `next`; observe `ToolExecuted`                                                                           |
+| `pi.on("before_agent_start")`, the system prompt | `add(PromptSections, section)`; intercept `AgentRequestHook`                                                                               |
+| `pi.on("context")`                               | Intercept `AgentRequestHook`, appending events (a `compaction`)                                                                            |
+| `pi.on("turn_end")`, continuing a turn           | Intercept `AgentContinueHook`; observe `TurnEnded`                                                                                         |
+| `pi.on("input")`, rewriting or handling a prompt | Intercept `AgentInputHook`: place, rewrite, handle, or refuse it                                                                           |
+| Compaction controls, a `compaction` entry        | Intercept `CompactionHook` (`@lemma/context`): write the summary, move the cut, or skip it                                                 |
+| `pi.on("provider_stream_event")`                 | Observe `LlmProviderStreamEvent` (with `llm.pi-ai`'s `providerEvents` on), and `LlmProviderResponse` for the response's status and headers |
+| A provider request's headers                     | Intercept `LlmProviderHeadersHook`                                                                                                         |
+| `pi.registerVirtualModel()`, routing a request   | Intercept `LlmRequestHook`, or set the draft's `model` in `AgentRequestHook`                                                               |
+| `pi.sendUserMessage()`                           | `Agent.prompt` (the `agent.prompt` channel from a client)                                                                                  |
+| `pi.appendEntry()`                               | `Sessions.append` a `custom` event, which the model does not see                                                                           |
+| `pi.registerFlag()`                              | A `config` Schema: a row in `config.jsonc`, a settings form                                                                                |
+| `session_start`, `session_shutdown`              | Setup and `onCleanup`: a plugin runs once per host, keying what it does for a session by its id until `SessionRemoved`                     |
+| Session replacement, tree navigation             | Intercept `SessionCheckoutHook`; observe `SessionCheckedOut`                                                                               |
+| `ctx.ui.notify()`                                | Publish a `Notice` from the host, or call `Notify` in a web half                                                                           |
+| `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma do`                                                                                       |
+| `pi.registerShortcut()`                          | A web half's `Actions` item                                                                                                                |
+| `pi.registerProvider()`                          | `add(Providers, provider)`                                                                                                                 |
+| `pi.registerToolRenderer()`, `renderCall`        | A web half's `ToolViews` item, or the `ChatToolPart` part                                                                                  |
+| `ctx.ui` widgets and components                  | A web half's slots and parts: views, pages, layers, settings sections                                                                      |
+| Tool-result `details` for branch state           | The same: a result's `details` in the session log                                                                                          |
+| `pi.events` between extensions                   | A contract of your own: a capability, a registry, a hook, or an event                                                                      |
+| `~/.pi/agent/extensions/`                        | `~/.lemma/plugins/`                                                                                                                        |
+
+Lemma has nothing yet for MCP servers (`pi.registerMcpServer()`), prompt-cache
+warming (`cache_warming_decision`), or a shell command typed by the user
+(`user_bash`).
 
 Where Pi has one extension object, Lemma has two halves of one plugin,
 because its interface is a web app the host serves. Lemma's own parts (the

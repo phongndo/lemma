@@ -3,7 +3,7 @@ import { Option, Schema } from "effect";
 /** The plugin whose config is the look; `appearance-page` edits its row. */
 export const APPEARANCE_PLUGIN = "look.appearance";
 
-/** The look, as `ui.appearance` in config.jsonc holds it. An absent field follows the default. */
+/** The look, as `look.appearance`'s row in config.jsonc holds it (its `config`). An absent field follows the default. */
 export const AppearanceConfig = Schema.Struct({
   scheme: Schema.optional(Schema.Literals(["system", "light", "dark"])).annotate({
     title: "Scheme",

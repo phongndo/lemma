@@ -7,7 +7,7 @@ import { ACCENTS, FONTS, THEMES } from "./presets.ts";
 const isColor = (value: string) => CSS.supports("color", value);
 
 /**
- * The look: its config (`ui.appearance`) chooses a scheme, a theme for each
+ * The look: its config (its row's `config`) chooses a scheme, a theme for each
  * scheme, an accent, fonts, and the conversation width, among what the
  * `Themes`, `Accents`, and `Fonts` slots offer, and it paints that look on the
  * page (`lib/paint.ts`), which the next load shows before plugins start. It

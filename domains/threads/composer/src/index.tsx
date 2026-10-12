@@ -382,11 +382,15 @@ function Composer(props: { deps: Deps }) {
     });
   };
   const addFiles = async (files: Iterable<File>) => {
-    const images = [...files].filter((file) => file.type.startsWith("image/"));
-    const supported = images.filter((file) => IMAGE_TYPES.has(file.type));
+    const given = [...files];
+    // A file of no type the browser knows (an image with an unusual extension, say) is told it is not a format taken,
+    // not that it is no image.
+    const others = given.filter((file) => file.type !== "" && !file.type.startsWith("image/")).length;
+    const supported = given.filter((file) => IMAGE_TYPES.has(file.type));
     const accepted = supported.filter((file) => file.size <= MAX_IMAGE_BYTES);
-    const unsupported = images.length - supported.length;
+    const unsupported = given.length - others - supported.length;
     const tooLarge = supported.length - accepted.length;
+    if (others > 0) notify.toast({ level: "warning", message: `${others === 1 ? "A file was" : `${others} files were`} not attached: only images can be.` });
     if (unsupported > 0)
       notify.toast({
         level: "warning",
@@ -398,9 +402,18 @@ function Composer(props: { deps: Deps }) {
         message: `${tooLarge === 1 ? "An image was" : `${tooLarge} images were`} not attached: over the 3.75 MB limit providers accept.`,
       });
     if (accepted.length === 0) return;
-    const read = await Promise.all(accepted.map(readImage));
+    // One that cannot be read (gone from a network share, say) is told of; the rest attach.
+    const read = await Promise.allSettled(accepted.map(readImage));
+    const unread = read.filter((result) => result.status === "rejected").length;
+    if (unread > 0)
+      notify.toast({
+        level: "warning",
+        message: `${unread === 1 ? "An image" : `${unread} images`} could not be read, and ${unread === 1 ? "was" : "were"} not attached.`,
+      });
+    const attached = read.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
+    if (attached.length === 0) return;
     edited();
-    setImages((current) => [...current, ...read]);
+    setImages((current) => [...current, ...attached]);
   };
 
   const hold = createQuickHold();
@@ -451,17 +464,20 @@ function Composer(props: { deps: Deps }) {
     }
   };
 
+  // Files pasted or dropped attach, or are told why not (`addFiles`); text is the field's, pasted or dropped as it is.
   const onPaste = (event: ClipboardEvent) => {
-    const files = [...(event.clipboardData?.files ?? [])].filter((file) => file.type.startsWith("image/"));
+    const files = [...(event.clipboardData?.files ?? [])];
     if (files.length === 0) return;
     event.preventDefault();
     void addFiles(files);
   };
 
   const onDrop = (event: DragEvent) => {
-    event.preventDefault();
     setDragging(false);
-    if (event.dataTransfer !== null) void addFiles(event.dataTransfer.files);
+    const files = [...(event.dataTransfer?.files ?? [])];
+    if (files.length === 0) return;
+    event.preventDefault();
+    void addFiles(files);
   };
 
   const placeholder = () => {

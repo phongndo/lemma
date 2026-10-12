@@ -3,7 +3,7 @@ import type { JSX } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { stepFor, withKeys } from "@lemma/web/keys";
-import { loadJson, save } from "@lemma/web/storage";
+import { loadStrings, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
 import { shownKeys, ActionIds, Actions } from "@lemma/actions";
 import { fileSessions, sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
@@ -176,7 +176,8 @@ function SessionRow(props: SidebarRowProps) {
   );
 }
 
-const COLLAPSED_KEY = "lemma.sidebar.collapsed";
+/** Its own key: `frame.shell` keeps whether the whole sidebar is collapsed under `lemma.sidebar.collapsed`. */
+const FOLDED_KEY = "lemma.sidebar.folded";
 /** The pinned section's key among the folded ones, which are otherwise project directories. */
 const PINNED = ":pinned";
 
@@ -185,13 +186,13 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
   const [query, setQuery] = createSignal("");
   // Sections folded shut, by project directory (or PINNED); kept across reloads. A search shows every match regardless.
-  const [collapsed, setCollapsed] = createSignal(new Set(loadJson<string[]>(COLLAPSED_KEY, [])));
+  const [collapsed, setCollapsed] = createSignal(new Set(loadStrings(FOLDED_KEY)));
   const isOpen = (key: string) => query().trim() !== "" || !collapsed().has(key);
   const toggle = (key: string) => {
     const next = new Set(collapsed());
     if (!next.delete(key)) next.add(key);
     setCollapsed(next);
-    save(COLLAPSED_KEY, next.size === 0 ? undefined : JSON.stringify([...next]));
+    save(FOLDED_KEY, next.size === 0 ? undefined : JSON.stringify([...next]));
   };
   const filed = createMemo(() => {
     const needle = query().trim().toLowerCase();

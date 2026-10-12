@@ -1,7 +1,7 @@
 import { createEffect, createMemo, createSignal, on } from "solid-js";
 import { WorkspaceChannels } from "@lemma/workspace";
 import type { WorkspaceStatus } from "@lemma/workspace";
-import { load, loadJson, save } from "@lemma/web/storage";
+import { load, loadJson, loadStrings, recordOf, save } from "@lemma/web/storage";
 import { branchSlug } from "./slug.ts";
 import { knownProjects, patchProjectSettings, projectName, Workspace } from "@lemma/workspace/web";
 import type { ProjectSettings, WorktreeDraft } from "@lemma/workspace/web";
@@ -18,15 +18,22 @@ const HIDDEN_KEY = "lemma.hiddenProjects";
  * fresh while connected (a turn or a command may commit or switch branches),
  * and whether a new chat starts in its own worktree.
  */
+/** What a project's stored settings may hold: a name, and whether it starts threads in worktrees. */
+const isProjectSettings = (value: unknown): value is ProjectSettings =>
+  typeof value === "object" &&
+  value !== null &&
+  (!("name" in value) || typeof value.name === "string") &&
+  (!("worktree" in value) || typeof value.worktree === "boolean");
+
 export default defineWebPlugin({
   id: "workspace.client",
   requires: { client: Client, notify: Notify, threads: Threads },
   provides: { workspace: Workspace },
   setup: ({ client, notify, threads }, plugin) => {
-    const [added, setAdded] = createSignal<readonly string[]>(loadJson(PROJECTS_KEY, []));
+    const [added, setAdded] = createSignal<readonly string[]>(loadStrings(PROJECTS_KEY));
     const [status, setStatus] = createSignal<WorkspaceStatus>();
     const statusOf = (path: string) => client.channel.call(WorkspaceChannels.status, { path });
-    const [settings, setSettings] = createSignal<Readonly<Record<string, ProjectSettings>>>(loadJson(PROJECT_SETTINGS_KEY, {}));
+    const [settings, setSettings] = createSignal<Readonly<Record<string, ProjectSettings>>>(loadJson(PROJECT_SETTINGS_KEY, {}, recordOf(isProjectSettings)));
     const [worktree, setWorktreeDraft] = createSignal<WorktreeDraft>({ enabled: load(WORKTREE_KEY) === "1" });
     /** Whether a new thread in `cwd` starts in a worktree: its project's setting, else the global one. */
     const worktreeDefault = (cwd: string | undefined) => (cwd === undefined ? undefined : settings()[cwd]?.worktree) ?? load(WORKTREE_KEY) === "1";
@@ -38,7 +45,7 @@ export default defineWebPlugin({
     const workingDir = createMemo(() => threads.active()?.cwd ?? threads.pendingCwd() ?? standaloneDir());
     const isStandalone = (cwd: string | undefined) => cwd !== undefined && cwd === standaloneDir();
     // Removed projects stay out of the list until a thread starts in them again (or they are added again).
-    const [hidden, setHidden] = createSignal<readonly string[]>(loadJson(HIDDEN_KEY, []));
+    const [hidden, setHidden] = createSignal<readonly string[]>(loadStrings(HIDDEN_KEY));
     const setHiddenSaved = (next: readonly string[]) => {
       setHidden(next);
       save(HIDDEN_KEY, next.length === 0 ? undefined : JSON.stringify(next));
