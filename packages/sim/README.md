@@ -132,12 +132,12 @@ commit that drew it:
 
 ### Testing the tester
 
-Reintroduced, each of three earlier bugs is caught (200 seeds at the default
-200 ticks):
+Reintroduced, each of three earlier bugs is caught (seeds 1 to 200 at the
+default 200 ticks, measured at the commit that last changed the generator):
 
-- tool output delivered on a detached fiber, after its call returned (#22): in
-  66 seeds, the first seed 2;
-- no `agent.started` event before tools run: in 44, the first seed 7;
+- each chunk of a tool's output sent on a detached fiber of its own, a turn
+  later, so after its call returned (#22): in 65 seeds, the first seed 2;
+- no `agent.started` event before tools run: in 44, the first seed 2;
 - no repair of a session's last line before it is served (#26): in 1, seed 189.
   It needs a sync, then the cut of the line it left, to fail, then a restart,
   then a crash: about one run in 200, ten a night. The session log's own

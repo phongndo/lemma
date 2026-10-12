@@ -511,7 +511,20 @@ export class World {
         return;
       }
       case "withdraw": {
-        // One of the prompts the session's queue shows, as a client withdraws one it lists.
+        // Now and then any prompt sent, as a client with a stale list withdraws one (often placed already, or in a
+        // session not yet checked against its log); else one of the prompts the session's queue shows.
+        if (this.prng.chance(1 / 3)) {
+          const prompted = this.prompted.length === 0 ? undefined : this.prng.pick(this.prompted);
+          if (prompted === undefined) return;
+          this.client(
+            `withdraw ${prompted.requestId} in ${prompted.sessionId}`,
+            (call) => Effect.orElseSucceed(call("agent.withdraw", { sessionId: prompted.sessionId, requestId: prompted.requestId }), () => false),
+            (ended) => {
+              if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.withdrew(prompted.sessionId, prompted.requestId);
+            },
+          );
+          return;
+        }
         const sessionId = this.sessionFor();
         if (sessionId === undefined) return;
         const draw = this.prng.next();
