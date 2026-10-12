@@ -35,8 +35,8 @@ export class TimeLimit extends Error {
  * A run of Effect code in simulated time, deterministic for its seed: every fiber it starts has the simulation's
  * clock (`SimClock`), Effect's `Random` from the seed, `Verify` on, and a scheduler only the driver runs. The driver
  * runs whatever is ready until nothing is (`settle`), then moves the clock to the next timer, and again, so a run
- * takes as long as its work, not its waits. Nothing in it may reach the event loop's own timers or another random
- * source (`scripts/check-boundaries.ts` keeps the plugins it runs from them); then the same seed runs the same.
+ * takes as long as its work, not its waits. What it runs is held to the seams the README's "The driver" names; then
+ * the same seed runs the same.
  */
 export class Simulation {
   readonly seed: number;

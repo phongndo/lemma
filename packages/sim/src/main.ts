@@ -1,5 +1,5 @@
-// `pnpm sim`: runs the harness simulation for a seed, printing the seed first, so a failure always says how to replay it.
-//   pnpm sim [--seed <n>]
+// Runs the harness simulation for a seed, printing the seed first, so a failure always says how to replay it: the
+// README's "Running it" says how to run it.
 process.env.TZ = "UTC";
 
 import { parseArgs } from "node:util";

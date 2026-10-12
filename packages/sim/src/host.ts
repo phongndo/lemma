@@ -94,10 +94,7 @@ export class SimHost {
   }
 }
 
-/**
- * `writeFileAtomic`'s temporary file names end in its process's pid and a count of the writes that process has made,
- * in every run before this one too.
- */
+/** How `writeFileAtomic`'s temporary file names end (`openTemp` in `@lemma/contracts/fs` says how it numbers them). */
 const TEMPORARY = /\.\d+-\d+\.tmp$/;
 
 /**

@@ -38,8 +38,8 @@ the whole run.
 
 What it runs must not reach the event loop's timers, the wall clock, or another
 random source, or real time would decide what happens when:
-`scripts/check-boundaries.ts` keeps the plugins it runs to their seams, and the
-determinism tests fail on any timer started during a run.
+`scripts/check-boundaries.ts` keeps the plugins it runs to their seams, and
+the determinism tests check a run keeps to them (see "Running it").
 
 ## A host
 
@@ -51,8 +51,7 @@ a lock an earlier one holds is stale once it is not among them, as a crashed
 process's is. `parts` adds the model and the tools: `simModel`, which
 answers each request as its `Answering` draws (text in timed deltas, and calls
 to the tools offered), and `simTools`. `digestOf(disk)` hashes every file on
-the disk, a temporary one a crash left by the file it was for, not the pid and
-write count its name ends in.
+the disk (its doc says how it counts a temporary one a crash left).
 
 ## Running it
 
