@@ -59,8 +59,10 @@ Effect.gen(function* () {
    time, and what it changed: `+section skills`, `-tool bash`, `model a → b`,
    `+compaction`), the `HostControl.composition` id, and `system`/`tools` only
    when they differ from `requestState(branch)`. The request
-   actually sent is `rebuildRequest` over the branch ending at that event, so the
-   log invariant holds by construction.
+   actually sent is built from the branch and request state the turn keeps as it
+   appends (`requestFrom`), which is `rebuildRequest` over the branch ending at
+   that event: where `Verify` is on (every simulated run), each request is
+   checked against a rebuild from the store's branch.
 4. `Llm.stream`: every event is published as `AssistantDelta`. `done` appends the
    assistant `message` with timing (`firstTokenAt` = first text, thinking, or
    tool-call delta). `error` appends an `attempt` with the call's `failure`, and

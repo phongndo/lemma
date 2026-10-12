@@ -75,7 +75,6 @@ const settle = Effect.gen(function* () {
   for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
 });
 
-/** The sessions store, but the next `branch` read is followed by `race.checkout`: a client moving the leaf as a turn starts. */
 /**
  * The sessions store, but right after a read of where a session's branch ends (`on`: reading the branch, or the
  * session's info and its leaf; `skip` such reads first), the checkout `race.checkout` names is made, as a client's

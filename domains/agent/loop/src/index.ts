@@ -190,7 +190,7 @@ const REVISIONS_PER_INSTANCE = 2 ** 32;
 
 /**
  * Sessions whose branch, as their last turn left it, the agent keeps for the next turn to start from, the most recently
- * used: one kept longer would hold events the store has let go of.
+ * used: a bound on the memory they hold, which may be events the store has let go of (kept branches do not expire).
  */
 const BRANCHES_KEPT = 16;
 
