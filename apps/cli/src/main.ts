@@ -58,9 +58,10 @@ if (argv[0] === "serve") {
   // The host app runs until SIGINT/SIGTERM and reads its own flags (`--no-open`) from argv.
   await import("@lemma/host");
 } else {
-  // The first Ctrl+C stops the command and lets it clean up (a login cancels on the host); a second one exits at once.
+  // The first Ctrl+C stops the command and lets it clean up (a login cancels on the host, a check stops its host and
+  // removes its home); a second one exits at once. A SIGTERM or SIGHUP (a closed terminal) stops it so too.
   const interrupt = new AbortController();
-  process.once("SIGINT", () => interrupt.abort());
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.once(signal, () => interrupt.abort());
   process.exitCode = await run(argv, {
     env: process.env,
     // `pnpm lemma` runs from the workspace root; INIT_CWD is where the user invoked it.

@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,6 +32,27 @@ describe("lemma plugins check", () => {
     const report = JSON.parse(out);
     expect(report.plugins).toMatchObject([{ id: "broken", state: "failed", fault: expect.stringContaining("cannot start: no settings") }]);
     expect(report.problems).toEqual([expect.stringMatching(/^broken is failed: .*cannot start: no settings/)]);
+  }, 60_000);
+
+  test("reports a plugin that keeps its host from exiting, which it stops all the same", async () => {
+    const { code, out } = await invoke(["plugins", "check", fixture("leaky.js"), "--json"], home);
+    expect(code).toBe(1);
+    expect(JSON.parse(out).problems).toEqual([expect.stringMatching(/^The host did not exit within 15 s of being asked to stop/)]);
+  }, 90_000);
+
+  test("reports a folder whose package.json cannot be read, with what the host said, rather than failing", async () => {
+    const folder = await mkdtemp(join(tmpdir(), "lemma-cli-check-unreadable-"));
+    try {
+      await writeFile(join(folder, "package.json"), '{ "name": "unreadable", "lemma": { "host": "./index.js", }, }\n');
+      await writeFile(join(folder, "index.js"), "export default undefined;\n");
+      const { code, out } = await invoke(["plugins", "check", folder, "--json"], home);
+      expect(code).toBe(1);
+      const report = JSON.parse(out);
+      expect(report.problems).toEqual([expect.stringMatching(/^Its package.json cannot be read: /), expect.stringMatching(/^No host half loaded from /)]);
+      expect(report.output.some((line: string) => line.startsWith("lemma: open "))).toBe(true);
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
   }, 60_000);
 
   test("says what does not exist", async () => {

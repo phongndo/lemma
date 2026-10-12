@@ -78,7 +78,7 @@ export { ExitCode } from "./command.ts";
 const USAGE = `Usage: lemma <command> [options] [--json]
 
 Everything the web app can do, from a shell. Every command except serve, remote,
-and token talks to a running host: the one LEMMA_URL (with LEMMA_TOKEN) names,
+token, and plugins check talks to a running host: the one LEMMA_URL (with LEMMA_TOKEN) names,
 else the one in $LEMMA_HOME/remote.json, else the local host found in
 $LEMMA_HOME/transport.json ($LEMMA_HOME defaults to ~/.lemma).
 
