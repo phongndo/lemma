@@ -4,6 +4,7 @@ import { fontAvailable } from "./fonts.ts";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
 import { CORNERS, SCHEMES, TEXT_SIZES, WIDTHS, defaultTheme, themeFor, themeTokens, Markdown, Segmented, SendIcon, SettingRow } from "@lemma/look";
 import type { AppearanceSettings, Field, Look, Scheme, Accent, Font, Theme } from "@lemma/look";
+import { usePlugin } from "@lemma/web";
 import type { SlotItem } from "@lemma/web";
 
 /** What the plugins offer, by slot, in order. */
@@ -217,8 +218,7 @@ export function FontSetting(props: { readonly deps: Deps; readonly kind: "ui" | 
   const [fontsChanged, setFontsChanged] = createSignal(0);
   const recheck = () => setFontsChanged((count) => count + 1);
   onCleanup(onLookChange(recheck));
-  document.fonts.addEventListener("loadingdone", recheck);
-  onCleanup(() => document.fonts.removeEventListener("loadingdone", recheck));
+  onCleanup(usePlugin().listen(document.fonts, "loadingdone", recheck));
   const label = (font: Font) => {
     fontsChanged();
     return fontAvailable(font.family) ? font.title : `${font.title} (not installed)`;

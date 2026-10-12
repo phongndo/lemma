@@ -8,7 +8,7 @@ import { inputTokens } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
 import { ToolViews, TrajectoryTabs } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/web";
+import { Contained, usePlugin } from "@lemma/web";
 import type { View, Kind } from "./state.ts";
 
 /** The selected record's or request's details, in tabs. */
@@ -44,10 +44,25 @@ export function createDetails(view: View) {
     );
   }
 
+  /** Copies the request exactly as it was sent, rebuilt from the log. */
+  function CopyRequest(props: { eventId: string }) {
+    const plugin = usePlugin();
+    const copyRequest = plugin.action("copy the request", async () => {
+      const rebuilt = rebuildRequest(deps.threads.branch(), props.eventId);
+      if (rebuilt !== undefined) await copy(json(rebuilt));
+    });
+    return (
+      <button class="icon-button" aria-label="Copy exact request" data-tip="Copy exact request" onClick={() => copyRequest()}>
+        <CopyIcon />
+      </button>
+    );
+  }
+
   function Pre(props: { text: string; error?: boolean }) {
+    const plugin = usePlugin();
     return (
       <div class="trj-pre-wrap">
-        <button class="trj-copy" aria-label="Copy" data-tip="Copy" onClick={() => void copy(props.text)}>
+        <button class="trj-copy" aria-label="Copy" data-tip="Copy" onClick={plugin.action("copy", () => copy(props.text))}>
           <CopyIcon />
         </button>
         <pre class="trj-pre" classList={{ "trj-error": props.error === true }}>
@@ -244,17 +259,7 @@ export function createDetails(view: View) {
             <Section title="Prompt by source" aside={`${request.sections.length} sections · ${request.tools.length} tools`}>
               <Sources request={request} />
             </Section>
-            <button
-              class="icon-button"
-              aria-label="Copy exact request"
-              data-tip="Copy exact request"
-              onClick={() => {
-                const rebuilt = rebuildRequest(deps.threads.branch(), request.eventId);
-                if (rebuilt !== undefined) void copy(json(rebuilt));
-              }}
-            >
-              <CopyIcon />
-            </button>
+            <CopyRequest eventId={request.eventId} />
           </>
         ),
       },

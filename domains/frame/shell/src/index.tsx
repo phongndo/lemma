@@ -1,4 +1,4 @@
-import { Show, createSignal, onCleanup, onMount } from "solid-js";
+import { Show, createSignal, onCleanup } from "solid-js";
 import { load, save } from "@lemma/web/storage";
 import { Actions } from "@lemma/actions";
 import { Docks, Layers, Layout, MainRegion, SidebarRegion } from "@lemma/frame";
@@ -34,7 +34,7 @@ export default defineWebPlugin({
   styles,
   requires: { slots: Slots },
   provides: { layout: Layout },
-  setup: ({ slots }) => {
+  setup: ({ slots }, plugin) => {
     const [drawer, setDrawer] = createSignal(false);
     // The chosen width survives a narrower window; only the displayed width is clamped.
     const [chosen, setChosen] = createSignal(Number(load(WIDTH_KEY)) || DEFAULT_WIDTH);
@@ -101,14 +101,8 @@ export default defineWebPlugin({
     function Shell() {
       const onResize = () => setViewport(window.innerWidth);
       const onGeometry = () => setTitlebar(controlsOverlay?.visible === true);
-      onMount(() => {
-        window.addEventListener("resize", onResize);
-        controlsOverlay?.addEventListener("geometrychange", onGeometry);
-      });
-      onCleanup(() => {
-        window.removeEventListener("resize", onResize);
-        controlsOverlay?.removeEventListener("geometrychange", onGeometry);
-      });
+      onCleanup(plugin.listen(window, "resize", onResize));
+      if (controlsOverlay !== undefined) onCleanup(plugin.listen(controlsOverlay, "geometrychange", onGeometry));
       const sidebar = () => slots.first(SidebarRegion);
       const main = () => slots.first(MainRegion);
       return (

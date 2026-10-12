@@ -96,10 +96,13 @@ export interface SlotsService {
   readonly get: <T>(slot: Slot<T>, id: string) => SlotItem<T> | undefined;
   /** The id of the plugin that added the item with this id (to name it when the item fails). Reactive. */
   readonly owner: <T>(slot: Slot<T>, id: string) => string | undefined;
+  /** The id of the plugin that added `item`, while it is in a slot (`Contained` draws it as that plugin's). */
+  readonly pluginOf: (item: SlotItem<unknown>) => string | undefined;
   /** The slot's items in order, each with the plugin that added it and its order. Reactive. */
   readonly contributions: <T>(slot: Slot<T>) => readonly { readonly item: SlotItem<T>; readonly pluginId: string; readonly order: number }[];
   /**
-   * An item that threw while drawing (`Contained` calls this): reported as a
+   * An item that threw while drawing (`Contained` calls this) or as another
+   * plugin used it (the keymap running an action): reported as a
    * fault of the plugin that added it, and left out of `list`, `first`, and
    * `get` from then on, so a region shows its next item and a part its default.
    * The item returns when its plugin adds it again (a restart).
@@ -209,6 +212,7 @@ export function createSlots(
     first: (slot) => items(slot)[0],
     get: (slot, id) => items(slot).find((item) => item.id === id),
     owner: (slot, id) => signal(slot)[0]().find((contribution) => (contribution.item as SlotItem<unknown>).id === id)?.pluginId,
+    pluginOf: (item) => contributors.get(item)?.id,
     contributions: <T>(slot: Slot<T>) =>
       signal(slot)[0]().map((contribution) => ({ item: contribution.item as SlotItem<T>, pluginId: contribution.pluginId, order: contribution.order })),
     as: service,

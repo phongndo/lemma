@@ -20,8 +20,8 @@ import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
 import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
+import { DEFAULT_PART_ORDER, defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema, usePlugin } from "@lemma/web";
 import * as webRuntime from "@lemma/web";
-import { DEFAULT_PART_ORDER, defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema } from "@lemma/web";
 import type { Part } from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
 import { bundled } from "../bundled.ts";
@@ -76,6 +76,8 @@ const contracts = {
  */
 export const api = {
   defineWebPlugin,
+  /** In a component a plugin draws (its slot item, or what it hands a part): that plugin's `action`, `listen`, `after`, … */
+  usePlugin,
   /** A plugin made from another's definition, such as a bundled one's: a replacement that keeps the original's later updates. */
   extendWebPlugin,
   /**
@@ -137,7 +139,10 @@ export const api = {
     SearchField: defaults.SearchField,
   },
   copyText,
-  /** For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's context. */
+  /**
+   * For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's
+   * context. Its items have no `usePlugin`, so they draw the kit's parts through `partView`, not `defaults`.
+   */
   core: { definePlugin, Event, Hook },
   /** Enough of Effect Schema to declare a config and a route's params and search (see `WebSchema`). */
   Schema: WebSchema,

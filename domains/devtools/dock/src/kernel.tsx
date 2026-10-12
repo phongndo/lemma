@@ -16,7 +16,7 @@ import { PLUGIN_PANEL } from "@lemma/devtools";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { DevtoolsService } from "@lemma/devtools";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
-import { DEFAULT_PART_ORDER, definedSlots } from "@lemma/web";
+import { DEFAULT_PART_ORDER, definedSlots, usePlugin } from "@lemma/web";
 
 type Kind = "web" | "host";
 const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host" };
@@ -808,12 +808,12 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
       }
     },
   );
-  const timer = setInterval(() => void refetch(), INSPECT_EVERY);
-  onCleanup(() => clearInterval(timer));
+  const plugin = usePlugin();
+  onCleanup(plugin.every(INSPECT_EVERY, () => refetch(), { name: "refresh inspectors" }));
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Inspectors toolbar">
-        <button class="dt-chip" onClick={() => void refetch()}>
+        <button class="dt-chip" onClick={plugin.action("refresh inspectors", () => refetch())}>
           Refresh
         </button>
         <span class="dt-sep" />

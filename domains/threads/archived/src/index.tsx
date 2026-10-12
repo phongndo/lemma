@@ -3,7 +3,7 @@ import { relativeTime, tildePath } from "@lemma/web/format";
 import { sessionTitle, Threads } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { Client, Slots, defineWebPlugin } from "@lemma/web";
+import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SettingsService } from "@lemma/settings";
 import type { ThreadsService } from "@lemma/threads";
 import type { ClientService } from "@lemma/web";
@@ -13,10 +13,11 @@ import styles from "./archived-page.css?inline";
 const SECTION = "archived";
 
 function ArchivedRow(props: { client: ClientService; threads: ThreadsService; settings: SettingsService; session: SessionInfo }) {
-  const open = () => {
+  const plugin = usePlugin();
+  const open = plugin.action("open thread", () => {
     props.settings.open(undefined);
-    void props.threads.select(props.session.id);
-  };
+    return props.threads.select(props.session.id);
+  });
   return (
     <div class="setting-row archived-row">
       <div class="setting-text">
@@ -28,10 +29,10 @@ function ArchivedRow(props: { client: ClientService; threads: ThreadsService; se
         </div>
       </div>
       <div class="setting-control">
-        <button class="button small" onClick={() => void props.threads.mark(props.session.id, { archived: false })}>
+        <button class="button small" onClick={plugin.action("unarchive thread", () => props.threads.mark(props.session.id, { archived: false }))}>
           Unarchive
         </button>
-        <button class="button small archived-delete" onClick={() => void props.threads.remove(props.session.id)}>
+        <button class="button small archived-delete" onClick={plugin.action("delete thread", () => props.threads.remove(props.session.id))}>
           Delete
         </button>
       </div>

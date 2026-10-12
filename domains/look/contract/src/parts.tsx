@@ -125,6 +125,7 @@ export interface ConfigFormProps {
   /** Where the fields are written, for the note under the form. */
   readonly file: string;
   readonly disabled?: boolean;
+  /** Saves fields, reporting what failed itself; a rejection shows as the field's error. */
   readonly onSave: (values: Readonly<Record<string, unknown>>) => Promise<void>;
 }
 

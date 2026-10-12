@@ -1,6 +1,7 @@
 import { ErrorBoundary, For, Show, createContext, useContext } from "solid-js";
 import type { Accessor, Component, JSX } from "solid-js";
 import { Dynamic } from "solid-js/web";
+import { ownerOf, PluginOwner } from "./owner.ts";
 import { fallbackOf } from "./slots.ts";
 import type { Region, Slot, SlotItem, SlotsService } from "./slots.ts";
 
@@ -16,7 +17,10 @@ import type { Region, Slot, SlotItem, SlotsService } from "./slots.ts";
 /** The page's slots, for whatever draws below: the boot provides them to the whole page. */
 export const SlotsContext = createContext<Accessor<SlotsService | undefined>>(() => undefined);
 
-/** `component` (an item's, or a piece of one: its icon, its intro) with `props`, drawn for `item` of `slot`, contained. */
+/**
+ * `component` (an item's, or a piece of one: its icon, its intro) with `props`, drawn for `item` of `slot`, contained,
+ * and as the plugin that added it: a component it draws finds that plugin with `usePlugin`.
+ */
 export function Contained<P extends Record<string, any>>(props: {
   readonly slot: Slot<any>;
   readonly item: SlotItem<any>;
@@ -36,7 +40,9 @@ export function Contained<P extends Record<string, any>>(props: {
         return null;
       }}
     >
-      <Dynamic component={props.component} {...(props.props ?? ({} as P))} />
+      <PluginOwner.Provider value={ownerOf(slots()?.pluginOf(props.item))}>
+        <Dynamic component={props.component} {...(props.props ?? ({} as P))} />
+      </PluginOwner.Provider>
     </ErrorBoundary>
   );
 }

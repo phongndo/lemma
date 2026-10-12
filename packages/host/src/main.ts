@@ -15,7 +15,7 @@ import type { Running } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
-import { hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
+import { catchUnhandled, hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
 import type { HostControlHandle } from "./runtime.ts";
 import { listWebFiles, userPluginsDir as pluginsDirOf } from "./web.ts";
 import { watchConfig, watchPlugins } from "./watch.ts";
@@ -585,6 +585,7 @@ const program = Effect.gen(function* () {
   yield* log("shutting down");
 });
 
+catchUnhandled();
 const exit = await Effect.runPromiseExit(Effect.scoped(program));
 if (Exit.isFailure(exit)) {
   const failure = Cause.findErrorOption(exit.cause);

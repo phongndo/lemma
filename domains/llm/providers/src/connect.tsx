@@ -4,6 +4,7 @@ import type { InteractionRequest, NoticePayload } from "@lemma/contracts";
 import type { ProviderInfo } from "@lemma/llm";
 import { copyText } from "@lemma/web/clipboard";
 import { providerBrand, signInState, ProviderLogo } from "@lemma/llm/web";
+import { usePlugin } from "@lemma/web";
 import type { InteractionsService } from "@lemma/web";
 import { CopyButton, Dialog, ExternalIcon, Spinner } from "@lemma/look";
 
@@ -250,6 +251,7 @@ export function ConnectDialog(props: {
   interactions: InteractionsService;
   onCancel: () => void;
 }) {
+  const plugin = usePlugin();
   const state = () => signInState(props.notices());
   const question = () => props.questions()[0];
   /** The paste-the-address prompt racing the browser's return to the host, as the host marks it. */
@@ -320,7 +322,7 @@ export function ConnectDialog(props: {
                 rel="noopener noreferrer"
                 ref={focus}
                 // Copied on the way, so the code is ready to paste on the page that opens.
-                onClick={() => void copyText(device().code)}
+                onClick={plugin.action("copy code", () => copyText(device().code))}
               >
                 Copy code and open {hostOf(device().url)} <ExternalIcon />
               </a>

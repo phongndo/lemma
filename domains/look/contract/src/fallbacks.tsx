@@ -82,10 +82,12 @@ export function ConfigFormFallback(props: ConfigFormProps) {
   const commit = (field: ConfigField, input: HTMLInputElement) => {
     const edit = configEdit(field, value(field), input.value);
     if (edit === undefined) return;
-    if ("error" in edit) {
-      input.setCustomValidity(edit.error);
+    const refuse = (error: string) => {
+      input.setCustomValidity(error);
       input.reportValidity();
-    } else void props.onSave({ [field.key]: edit.value });
+    };
+    if ("error" in edit) refuse(edit.error);
+    else props.onSave({ [field.key]: edit.value }).catch((error: unknown) => refuse(error instanceof Error ? error.message : String(error)));
   };
   return (
     <div>

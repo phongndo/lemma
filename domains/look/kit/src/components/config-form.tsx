@@ -13,11 +13,14 @@ export function ConfigForm(props: ConfigFormProps) {
   const [saving, setSaving] = createSignal<string>();
   const [errors, setErrors] = createSignal<Readonly<Record<string, string>>>({});
   const value = (field: ConfigField) => props.config?.values[field.key];
+  // `onSave` is the caller's: what it rejects with is the field's error, not this form's fault.
   const save = async (field: ConfigField, next: unknown) => {
     setErrors((all) => ({ ...all, [field.key]: "" }));
     setSaving(field.key);
     try {
       await props.onSave({ [field.key]: next });
+    } catch (error) {
+      setErrors((all) => ({ ...all, [field.key]: error instanceof Error ? error.message : String(error) }));
     } finally {
       setSaving(undefined);
     }
@@ -27,7 +30,7 @@ export function ConfigForm(props: ConfigFormProps) {
     const edit = configEdit(field, value(field), text);
     if (edit === undefined) return;
     if ("error" in edit) setErrors((all) => ({ ...all, [field.key]: edit.error }));
-    else void save(field, edit.value);
+    else save(field, edit.value);
   };
   const resettable = (field: ConfigField) =>
     !field.secret && field.type !== "other" && value(field) !== undefined && JSON.stringify(value(field)) !== JSON.stringify(field.default);
@@ -79,7 +82,7 @@ export function ConfigForm(props: ConfigFormProps) {
                 }
               >
                 <Match when={field.type === "boolean"}>
-                  <Toggle label={field.title} checked={value(field) === true} disabled={busy()} onChange={(checked) => void save(field, checked)} />
+                  <Toggle label={field.title} checked={value(field) === true} disabled={busy()} onChange={(checked) => save(field, checked)} />
                 </Match>
                 <Match when={field.type === "enum"}>
                   <select
@@ -87,7 +90,7 @@ export function ConfigForm(props: ConfigFormProps) {
                     class="field"
                     disabled={busy()}
                     value={configText(value(field))}
-                    onChange={(event) => void save(field, event.currentTarget.value)}
+                    onChange={(event) => save(field, event.currentTarget.value)}
                   >
                     <Show when={value(field) === undefined}>
                       <option value="">Not set</option>
@@ -103,7 +106,7 @@ export function ConfigForm(props: ConfigFormProps) {
                 <button
                   class="link-button small"
                   disabled={busy()}
-                  onClick={() => void save(field, null)}
+                  onClick={() => save(field, null)}
                   data-tip={field.default === undefined ? "Unset" : `Back to ${configText(field.default)}`}
                 >
                   Reset

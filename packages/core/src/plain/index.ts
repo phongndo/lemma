@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Scope, Tracer } from "effect";
+import { Cause, Context, Deferred, Duration, Effect, Scope, Tracer } from "effect";
 import type { Schema } from "effect";
 import { awaitable, EffectOf, inContext, isExpectedFailure, settle } from "../awaitable.ts";
 import { PluginStopped } from "../errors.ts";
@@ -41,6 +41,26 @@ export type PlainServices<C extends Capabilities> = { readonly [K in keyof C]: P
  * aborted if the operation is interrupted.
  */
 export type PlainHandler<I, O, E> = (input: I, next: (input: I) => Promise<O>, signal: AbortSignal) => Awaitable<O, E | HookError | CoreClosed>;
+
+/** What `listen` attaches to: a DOM `EventTarget` (`window`, `document`, an element, a media query), or an emitter. */
+export type Listenable =
+  | {
+      readonly addEventListener: (type: string, listener: (event: any) => void, options?: ListenOptions) => void;
+      readonly removeEventListener: (type: string, listener: (event: any) => void, options?: ListenOptions) => void;
+    }
+  | { readonly on: (type: string, listener: (...args: any[]) => void) => unknown; readonly off: (type: string, listener: (...args: any[]) => void) => unknown };
+
+/** As a DOM listener's options: `capture` and `passive` pass through; `once` removes it after its first call. */
+export interface ListenOptions {
+  readonly capture?: boolean;
+  readonly passive?: boolean;
+  readonly once?: boolean;
+}
+
+/** A timer's name, which its faults and traces carry: `after 500ms` and `every 1000ms` without one. */
+export interface TimerOptions {
+  readonly name?: string;
+}
 
 /** What a promise-based `setup` receives besides its services. */
 export interface PlainSetup<Config, Carried = unknown> extends PluginIdentity {
@@ -86,6 +106,36 @@ export interface PlainSetup<Config, Carried = unknown> extends PluginIdentity {
   readonly fault: (operation: string, error: unknown, options?: FaultOptions) => void;
   /** Runs an Effect with the plugin's context, as a step towards writing it with Effects. */
   readonly run: <A, E>(effect: Effect.Effect<A, E, any>) => Promise<A>;
+  /*
+   * The helpers below are what a plugin would otherwise write with raw timers, listeners, and promises. Each is
+   * supervised work of the plugin's underneath: it ends when the plugin stops, and what fails in it is the plugin's
+   * fault, named for it, rather than an error nobody owns.
+   */
+  /** Calls `fn` once, `ms` from now, unless the plugin stops or the returned cancel runs first. */
+  readonly after: (ms: number, fn: (signal: AbortSignal) => Awaitable<unknown, unknown>, options?: TimerOptions) => () => void;
+  /**
+   * Calls `fn` every `ms`, the first `ms` from now, until the plugin stops or the returned cancel runs. A run that fails
+   * is reported and the next still comes; the next waits for the last to end, so runs never overlap.
+   */
+  readonly every: (ms: number, fn: (signal: AbortSignal) => Awaitable<unknown, unknown>, options?: TimerOptions) => () => void;
+  /**
+   * Listens to what the plugin does not own (`window`, `document`, a media query, an emitter) until it stops, or the
+   * returned removal runs. The listener runs as an `action`. Once the plugin is stopping it attaches nothing, as do
+   * `after` and `every`: nothing would end them.
+   */
+  readonly listen: <A = any>(target: Listenable, type: string, listener: (event: A) => unknown, options?: ListenOptions) => () => void;
+  /**
+   * Runs `fn` as the plugin's own work, its signal aborted when the plugin stops: as `background`, but resolving with
+   * what `fn` resolves with, or `undefined` when it failed (its fault, named `name`) or the plugin had stopped. Setup does
+   * not wait for it. Asked as the plugin stops (a cleanup's flush), it runs at once, as part of stopping.
+   */
+  readonly task: <A>(name: string, fn: (signal: AbortSignal) => Awaitable<A, unknown>) => Promise<A | undefined>;
+  /**
+   * `fn` as a callback for others to call (an event handler, a library's callback): it runs as the plugin's own work,
+   * wherever it is called, and does nothing once the plugin is stopping. A throw or rejection is the plugin's fault, named
+   * `name`, rather than an error nobody owns; a `PluginStopped` (a call refused as a plugin stopped) is none.
+   */
+  readonly action: <Args extends readonly unknown[]>(name: string, fn: (...args: Args) => unknown) => (...args: Args) => void;
 }
 
 export interface PlainDefinition<
@@ -123,12 +173,15 @@ export interface Embedding {
   /**
    * `"plain"` (the default): as `Plain<S>`, refused once the plugin stops.
    * `"raw"`: as provided, for contracts that are promise-based already.
-   * A function: the embedder's own view, given the plugin's `PluginContext`.
+   * A function: the embedder's own view, given the plugin's `PluginContext` and its signal, aborted as it stops.
    */
   readonly services?:
     | "plain"
     | "raw"
-    | ((services: Readonly<Record<string, unknown>>, owner: Context.Service.Shape<typeof PluginContext>) => Record<string, unknown>);
+    | ((
+        services: Readonly<Record<string, unknown>>,
+        owner: Context.Service.Shape<typeof PluginContext> & { readonly signal: AbortSignal },
+      ) => Record<string, unknown>);
   /** Runs `setup` (it calls the plugin's), inside whatever the embedder needs: a reactive root, an error boundary. */
   readonly run?: <T>(setup: () => T, plugin: PlainSetup<unknown>) => T;
 }
@@ -262,7 +315,7 @@ export function definePlugin<
             if (errors.length > 1) throw new AggregateError(errors, `${errors.length} cleanups of "${owner.id}" failed`);
           }),
         );
-        const plugin = context(owner, bridge, hooks, events, registries, cleanups);
+        const plugin = context(owner, bridge, hooks, events, registries, cleanups, base);
         const raw = services as Readonly<Record<string, unknown>>;
         const view =
           embedding.services === "raw"
@@ -298,8 +351,37 @@ const context = (
   events: Context.Service.Shape<typeof Events>,
   registries: Context.Service.Shape<typeof Registries>,
   cleanups: (() => void | PromiseLike<void>)[],
+  base: Context.Context<never>,
 ): PlainSetup<unknown> => {
   const causeOf = (error: unknown) => (isExpectedFailure(error) ? Cause.fail(error) : Cause.die(error));
+  // A call refused as a plugin stopped (its own, or another's it was waiting on) is how stopping ends work: no fault.
+  const report = (operation: string, error: unknown) => {
+    if (!(error instanceof PluginStopped)) Effect.runFork(owner.fault(operation, causeOf(error)));
+  };
+  /** Stopping or stopped: its signal aborts before its cleanups run, and what starts now would outlive it. */
+  const gone = () => bridge.stopped() || owner.signal.aborted;
+  // Run as the plugin's own work, whatever invocation is current where the handler fires (another plugin's emit).
+  const action: PlainSetup<unknown>["action"] =
+    (name, fn) =>
+    (...args) => {
+      if (gone()) return;
+      try {
+        const result = within({ context: base, invocation: undefined }, () => fn(...args));
+        if (typeof (result as PromiseLike<unknown> | undefined)?.then === "function")
+          (result as PromiseLike<unknown>).then(undefined, (error) => report(name, error));
+      } catch (error) {
+        report(name, error);
+      }
+    };
+  /** Background work the returned function cancels: it completes quietly, as the plugin stopping interrupts it. */
+  const cancellable = (name: string, work: Effect.Effect<unknown, unknown>) => {
+    if (gone()) return () => {};
+    const cancel = Deferred.makeUnsafe<void>();
+    void bridge.run(owner.background(name, Effect.raceFirst(work, Deferred.await(cancel))), `background ${name}`, BELONGS_TO_PLUGIN).catch(() => undefined);
+    return () => void Effect.runSync(Deferred.succeed(cancel, undefined));
+  };
+  const called = (fn: (signal: AbortSignal) => Awaitable<unknown, unknown>): Effect.Effect<unknown, unknown> =>
+    inContext((invocation) => fn(invocation.signal())) as Effect.Effect<unknown, unknown>;
   return {
     id: owner.id,
     ...(owner.version === undefined ? {} : { version: owner.version }),
@@ -376,5 +458,45 @@ const context = (
       ),
     fault: (operation, error, options) => void Effect.runFork(owner.fault(operation, causeOf(error), options)),
     run: (effect) => bridge.run(effect, "run"),
+    after: (ms, fn, options) => cancellable(options?.name ?? `after ${ms}ms`, Effect.andThen(Effect.sleep(Duration.millis(ms)), called(fn))),
+    every: (ms, fn, options) => {
+      const name = options?.name ?? `every ${ms}ms`;
+      // A failed run is reported, and the timer goes on.
+      const run = Effect.catchCause(called(fn), (cause) => (Cause.hasInterruptsOnly(cause) ? Effect.failCause(cause) : owner.fault(name, cause)));
+      return cancellable(name, Effect.forever(Effect.andThen(Effect.sleep(Duration.millis(ms)), run)));
+    },
+    listen: (target, type, listener, options) => {
+      // Nothing would remove it: its cleanups have run, or are running.
+      if (gone()) return () => {};
+      // `once` for an emitter too, which has no such option.
+      const handler = action(`listen ${type}`, options?.once === true ? (event: any) => (remove(), listener(event)) : listener);
+      const detach =
+        "addEventListener" in target
+          ? (target.addEventListener(type, handler, options), () => target.removeEventListener(type, handler, options))
+          : (target.on(type, handler), () => target.off(type, handler));
+      let attached = true;
+      const remove = () => {
+        if (!attached) return;
+        attached = false;
+        detach();
+        // Removed by hand, it leaves the cleanups: a view that listens each time it opens adds none for good.
+        const at = cleanups.indexOf(remove);
+        if (at !== -1) cleanups.splice(at, 1);
+      };
+      cleanups.push(remove);
+      return remove;
+    },
+    task: (name, fn) =>
+      new Promise((resolve) => {
+        if (bridge.stopped()) return resolve(undefined);
+        // Asked as it stops (a cleanup's flush, say): its scope is closing, so it runs as a call of the cleanup's, now.
+        if (owner.signal.aborted) return void bridge.run(called(fn), `task ${name}`).then(resolve as (value: unknown) => void, () => resolve(undefined));
+        const work = called(fn).pipe(
+          Effect.tap((value) => Effect.sync(() => resolve(value as never))),
+          Effect.onExit((exit) => Effect.sync(() => (exit._tag === "Failure" ? resolve(undefined) : undefined))),
+        );
+        void bridge.run(owner.background(name, work), `task ${name}`, BELONGS_TO_PLUGIN).catch(() => resolve(undefined));
+      }),
+    action,
   };
 };

@@ -97,10 +97,15 @@ replace it.
    buttons, tabs, and rows go through the same slot or part a user's plugin
    would use, as the sidebar's buttons and the palette's sources do.
 3. Keep the plugin's effects inside what it owns: its slot items, its parts,
-   its own DOM (through refs), its stylesheet. Draw what a slot holds with
-   `Contained`, `Each`, or `First` from `@lemma/web`, never a bare
-   `Dynamic`: an item that throws then fails alone, named for its plugin, and
-   a region shows its next item. A component handed over as data (a
+   its own DOM (through refs), its stylesheet. What it starts beyond them goes
+   through its handle (`plugin` in setup, `usePlugin()` in a component it
+   draws): `listen` for the page's events, `every` and `after` for timers,
+   `action` for an event handler that returns a promise, so each ends with it
+   and fails as its fault (`check-boundaries` fails a page-wide
+   `addEventListener`, a `setInterval`, or a handler that drops a promise).
+   Draw what a slot holds with `Contained`, `Each`, or `First` from
+   `@lemma/web`, never a bare `Dynamic`: an item that throws then fails alone,
+   named for its plugin, and a region shows its next item. A component handed over as data (a
    completion's icon) draws with `Isolated`. Overlays are `Layers` items drawn
    with the `dialog` part; app-wide keys are `Actions`, and an overlay handles
    its own keys on its own element; the page's theme goes through

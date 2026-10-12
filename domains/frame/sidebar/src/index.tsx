@@ -9,7 +9,7 @@ import { shownKeys, ActionIds, Actions } from "@lemma/actions";
 import { fileSessions, sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
 import { createNow } from "@lemma/web/now";
 import { SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
-import { Client, Notify, Slots, WebPlugins, DEFAULT_PART_ORDER, defineWebPlugin, Contained, Each } from "@lemma/web";
+import { Client, Notify, Slots, WebPlugins, DEFAULT_PART_ORDER, defineWebPlugin, Contained, Each, usePlugin } from "@lemma/web";
 import { ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { MenuAction } from "@lemma/frame";
@@ -182,6 +182,7 @@ const PINNED = ":pinned";
 
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const { client, threads, slots, workspace } = props.deps;
+  const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
   const [query, setQuery] = createSignal("");
   // Sections folded shut, by project directory (or PINNED); kept across reloads. A search shows every match regardless.
   const [collapsed, setCollapsed] = createSignal(new Set(loadJson<string[]>(COLLAPSED_KEY, [])));
@@ -340,7 +341,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
                   data-tip={standalone(group.cwd) ? "New thread in no project" : `New thread in ${tildePath(group.cwd, home())}`}
                   onClick={() => {
                     if (standalone(group.cwd)) {
-                      void workspace.newStandalone();
+                      newStandalone();
                       props.onPick();
                     } else newChatIn(group.cwd);
                   }}

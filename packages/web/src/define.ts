@@ -1,20 +1,29 @@
 import type { Schema } from "effect";
 import { catchError, createRoot } from "solid-js";
 import type { Capabilities, Plugin, Services } from "@lemma/core";
-import { definePlugin as definePlainPlugin } from "@lemma/core/plain";
+import { definePlugin as definePlainPlugin, PluginStopped } from "@lemma/core/plain";
+import type { PlainSetup } from "@lemma/core/plain";
 import type { AnyRoute } from "@lemma/router";
-import { Slots, WebApi } from "./runtime.ts";
+import { owners } from "./owner.ts";
+import { Client, Slots, WebApi } from "./runtime.ts";
+import type { ClientService } from "./runtime.ts";
 import type { SlotsService } from "./slots.ts";
 
 /** Named capabilities (a plugin's `requires` or `provides`), and the services behind them: the kernel's. */
 export type { Capabilities, Services };
 
-export interface WebPluginContext<Config> {
-  readonly id: string;
+/**
+ * What a web plugin's `setup` receives besides its services: the same handle a host plugin written with promises has
+ * (`@lemma/core/plain`), but for what only the host has (hooks, events, registries). Everything it starts through
+ * it is the plugin's: it ends when the plugin stops, and what fails in it is the plugin's fault, named for it.
+ * Components drawn for the plugin's slot items reach it with `usePlugin`.
+ */
+/** What of the promise-based handle a web plugin's context is (its `config` typed apart): one list, for the type and the value. */
+const CONTEXT_KEYS = ["id", "signal", "onCleanup", "background", "task", "after", "every", "listen", "action", "fault", "previous", "handoff", "run"] as const;
+
+export interface WebPluginContext<Config> extends Pick<PlainSetup<Config>, (typeof CONTEXT_KEYS)[number]> {
   /** Decoded from the plugin's `config` Schema; its row in config.jsonc's `plugins` sets it. */
   readonly config: Config;
-  /** Runs when the plugin stops: turned off, replaced, or restarted with a dependency. */
-  readonly onCleanup: (fn: () => void) => void;
 }
 
 export interface WebPluginDefinition<Requires extends Capabilities, Provides extends Capabilities, Config> {
@@ -82,6 +91,87 @@ export function extendWebPlugin(
   return defineWebPlugin(change(definition));
 }
 
+/** A web plugin's context from the promise-based handle, listed in `owners` while it runs, for `usePlugin`. */
+const contextOf = (plugin: PlainSetup<unknown>): WebPluginContext<unknown> => {
+  const context = { config: plugin.config, ...Object.fromEntries(CONTEXT_KEYS.map((key) => [key, plugin[key]])) } as WebPluginContext<unknown>;
+  const { id } = plugin;
+  // A replacement starts before this one stops, and is listed by then: only its own entry is removed. One that fails to
+  // start gives the entry back to the instance it was to replace, which goes on running.
+  const before = owners.get(id);
+  owners.set(id, context);
+  plugin.onCleanup(() => {
+    if (owners.get(id) !== context) return;
+    if (before !== undefined && !before.signal.aborted) owners.set(id, before);
+    else owners.delete(id);
+  });
+  return context;
+};
+
+/**
+ * A plugin's own view of the connection: what it subscribes to (events, reconnects, streams) ends when it stops, and a
+ * call it makes is refused once it has stopped, or rejects with `PluginStopped` if it stops first, so an answer never
+ * lands in a plugin that is gone.
+ */
+const ownedClient = (client: ClientService, pluginId: string, signal: AbortSignal): ClientService => {
+  const stopped = (operation: string) => new PluginStopped({ pluginId, operation });
+  const call =
+    <Args extends unknown[], A>(operation: string, fn: (...args: Args) => Promise<A>) =>
+    (...args: Args): Promise<A> => {
+      if (signal.aborted) return Promise.reject(stopped(operation));
+      return new Promise<A>((resolve, reject) => {
+        const abort = () => reject(stopped(operation));
+        signal.addEventListener("abort", abort, { once: true });
+        fn(...args).then(
+          (value) => {
+            signal.removeEventListener("abort", abort);
+            resolve(value);
+          },
+          (error: unknown) => {
+            signal.removeEventListener("abort", abort);
+            reject(error);
+          },
+        );
+      });
+    };
+  const subscription =
+    <Args extends unknown[]>(fn: (...args: Args) => () => void) =>
+    (...args: Args): (() => void) => {
+      if (signal.aborted) return () => {};
+      const end = fn(...args);
+      let ended = false;
+      const once = () => {
+        if (ended) return;
+        ended = true;
+        signal.removeEventListener("abort", once);
+        end();
+      };
+      signal.addEventListener("abort", once, { once: true });
+      return once;
+    };
+  // Each looked up as it is called, so the view follows the connection's own methods, as a test that wraps them does.
+  type Fn = (...args: any[]) => any;
+  return {
+    status: () => client.status(),
+    connected: () => client.connected(),
+    info: () => client.info(),
+    onEvent: subscription((...args: Parameters<ClientService["onEvent"]>) => client.onEvent(...args)),
+    onConnect: subscription((...args: Parameters<ClientService["onConnect"]>) => client.onConnect(...args)),
+    follow: subscription((...args: unknown[]) => (client.follow as Fn)(...args)) as ClientService["follow"],
+    channel: {
+      list: call("channel.list", () => client.channel.list()),
+      call: call("channel.call", (...args: unknown[]) => (client.channel.call as Fn)(...args)) as ClientService["channel"]["call"],
+      open: subscription((...args: unknown[]) => (client.channel.open as Fn)(...args)) as ClientService["channel"]["open"],
+    },
+    plugins: call("plugins", () => client.plugins()),
+    restartPlugin: call("restartPlugin", (...args: Parameters<ClientService["restartPlugin"]>) => client.restartPlugin(...args)),
+    reload: call("reload", () => client.reload()),
+    configure: call("configure", (...args: Parameters<ClientService["configure"]>) => client.configure(...args)),
+    inspectors: call("inspectors", () => client.inspectors()),
+    inspect: call("inspect", (id: string) => client.inspect(id)),
+    web: { composition: call("web.composition", () => client.web.composition()) },
+  };
+};
+
 /** Where a plugin's API-version requirement sits among its named capabilities; no plugin names one so. */
 const API = "~api";
 
@@ -106,17 +196,22 @@ export function defineWebPlugin<const Requires extends Capabilities = {}, const 
       ...(definition.config === undefined ? {} : { config: definition.config }),
       requires,
       ...(definition.provides === undefined ? {} : { provides: definition.provides }),
-      setup: (use, plugin) =>
-        definition.setup(use as unknown as Services<Requires>, { id: plugin.id, config: plugin.config as Config, onCleanup: plugin.onCleanup }) as never,
+      setup: (use, plugin) => definition.setup(use as unknown as Services<Requires>, contextOf(plugin) as WebPluginContext<Config>) as never,
     },
     {
       services: (raw, owner) => {
         const use: Record<string, unknown> = {};
         for (const [name, service] of Object.entries(raw)) {
           if (name === API) continue;
-          // Its own view of the slots, so what it adds is its own: attributed to it, and gone when it stops.
+          const key = requires[name]?.key;
+          // Its own view of the slots, so what it adds is its own: attributed to it, and gone when it stops. And of the
+          // connection, so what it subscribes to ends with it, and a call it made does not answer into a plugin gone.
           use[name] =
-            requires[name]?.key === Slots.key && typeof (service as Partial<SlotsService>).as === "function" ? (service as SlotsService).as(owner) : service;
+            key === Slots.key && typeof (service as Partial<SlotsService>).as === "function"
+              ? (service as SlotsService).as(owner)
+              : key === Client.key
+                ? ownedClient(service as ClientService, owner.id, owner.signal)
+                : service;
         }
         return use;
       },

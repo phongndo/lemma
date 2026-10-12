@@ -1,11 +1,33 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Result, Stream } from "effect";
-import { definePlugin as defineEffectPlugin, Event, Hook, Hooks, makeCore, makeLoader, PluginFault, PluginStopped, Registry } from "../src/index.ts";
-import type { Plugin } from "../src/index.ts";
+import {
+  definePlugin as defineEffectPlugin,
+  Event,
+  Hook,
+  Hooks,
+  makeCore,
+  makeLoader,
+  PluginFault,
+  PluginStopped,
+  Registry,
+  reportUnhandled,
+} from "../src/index.ts";
+import type { Plugin, Unhandled } from "../src/index.ts";
 import { asEffect, awaitable, definePlugin, fail, followsAwait } from "../src/plain/index.ts";
 import type { PlainSetup } from "../src/plain/index.ts";
 import { testPlugin } from "../src/testing.ts";
 import { run } from "./support.ts";
+
+/**
+ * Resolves once a witness timer of `ms` has fired `times` times: by then a timer of that period that outlived its plugin
+ * would have run too, however loaded the machine is.
+ */
+const outlast = async (ms: number, times = 3) => {
+  let fired = 0;
+  const witness = setInterval(() => fired++, ms);
+  await expect.poll(() => fired).toBeGreaterThanOrEqual(times);
+  clearInterval(witness);
+};
 
 class NotFound extends Error {
   readonly _tag = "NotFound";
@@ -382,6 +404,195 @@ describe("a plugin written with promises", () => {
     expect(signal!.aborted).toBe(false);
     await tested.close();
     expect(signal!.aborted).toBe(true);
+  });
+
+  test("after and every run as the plugin's: cancelled when asked, gone when it stops, and a failing run its fault", async () => {
+    const seen: string[] = [];
+    let ticks = 0;
+    let api: PlainSetup<unknown> | undefined;
+    const tested = await testPlugin(
+      definePlugin({
+        id: "timers",
+        setup: (_, plugin) => {
+          api = plugin;
+          plugin.after(5, () => void seen.push("after"));
+          plugin.after(5, () => void seen.push("cancelled"))();
+          plugin.every(
+            5,
+            () => {
+              ticks++;
+              if (ticks === 2) throw new Error("second tick");
+            },
+            { name: "ticker" },
+          );
+        },
+      }),
+    );
+    await expect.poll(() => seen).toEqual(["after"]);
+    // The failing tick is reported, and the timer goes on.
+    const fault = await tested.waitForFault((candidate) => candidate.operation === "ticker");
+    expect(fault.pluginId).toBe("timers");
+    await expect.poll(() => ticks).toBeGreaterThan(3);
+    await tested.close();
+    const stopped = ticks;
+    api!.after(1, () => void seen.push("late"));
+    await outlast(5);
+    expect([ticks, seen]).toEqual([stopped, ["after"]]);
+  });
+
+  test("an error nothing handled is the fault of the plugin whose work raised it, as async-local storage follows that work", async () => {
+    expect(followsAwait).toBe(true);
+    const heard: Unhandled[] = [];
+    const tested = await testPlugin(
+      definePlugin({
+        id: "stray",
+        setup: () => {
+          // What a process's handlers hear from work the plugin left running: a timer's throw, a promise's rejection.
+          setTimeout(() => void heard.push(reportUnhandled(new Error("stray timer"))), 1);
+          void Promise.resolve().then(() => void heard.push(reportUnhandled(new Error("stray promise"))));
+        },
+      }),
+    );
+    await expect.poll(() => heard.length).toBe(2);
+    expect(heard).toEqual([
+      { kind: "fault", pluginId: "stray" },
+      { kind: "fault", pluginId: "stray" },
+    ]);
+    const fault = await tested.waitForFault((candidate) => candidate.operation === "unhandled");
+    expect(fault.pluginId).toBe("stray");
+    await tested.close();
+    // A call a stopped plugin made, refused, is no fault; an error from no plugin's work is nobody's.
+    expect(reportUnhandled(new PluginStopped({ pluginId: "stray", operation: "invoke" }))).toEqual({ kind: "stopped", pluginId: "stray" });
+    expect(reportUnhandled(new Error("elsewhere"))).toEqual({ kind: "unknown" });
+  });
+
+  test("listen attaches until the plugin stops, to an EventTarget or an emitter; a failing listener is its fault", async () => {
+    const target = new EventTarget();
+    const listeners = new Set<(value: string) => void>();
+    const emitter = {
+      on: (_: string, listener: (value: string) => void) => listeners.add(listener),
+      off: (_: string, listener: (value: string) => void) => listeners.delete(listener),
+    };
+    const heard: string[] = [];
+    const tested = await testPlugin(
+      definePlugin({
+        id: "listener",
+        setup: (_, { listen }) => {
+          listen(target, "ping", () => void heard.push("ping"));
+          listen(target, "boom", () => Promise.reject(new Error("listener rejected")));
+          const remove = listen(target, "removed", () => void heard.push("removed"));
+          remove();
+          listen(emitter, "data", (value: string) => void heard.push(value));
+          listen(emitter, "data", (value: string) => void heard.push(`once ${value}`), { once: true });
+        },
+      }),
+    );
+    target.dispatchEvent(new globalThis.Event("ping"));
+    target.dispatchEvent(new globalThis.Event("removed"));
+    for (const listener of listeners) listener("emitted");
+    expect(listeners.size).toBe(1);
+    target.dispatchEvent(new globalThis.Event("boom"));
+    const fault = await tested.waitForFault((candidate) => candidate.operation === "listen boom");
+    expect(fault.pluginId).toBe("listener");
+    await tested.close();
+    target.dispatchEvent(new globalThis.Event("ping"));
+    expect([heard, listeners.size]).toEqual([["ping", "emitted", "once emitted"], 0]);
+  });
+
+  test("task resolves with its result, or undefined when it failed (its fault) or the plugin stopped; setup does not wait", async () => {
+    let results: Promise<unknown>[] = [];
+    let aborted = false;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const tested = await testPlugin(
+      definePlugin({
+        id: "tasks",
+        setup: (_, { task }) => {
+          results = [
+            task("answer", async () => 42),
+            task("broken", async () => {
+              throw new Error("task failed");
+            }),
+            // Never ends on its own: setup is over without it, and stopping aborts it.
+            task("held", (signal) => {
+              signal.addEventListener("abort", () => void (aborted = true));
+              return new Promise(() => {});
+            }),
+            task("after release", async () => {
+              await held;
+              return "released";
+            }),
+          ];
+        },
+      }),
+    );
+    expect(await results[0]).toBe(42);
+    expect(await results[1]).toBeUndefined();
+    expect((await tested.waitForFault((candidate) => candidate.operation === "broken")).pluginId).toBe("tasks");
+    release();
+    expect(await results[3]).toBe("released");
+    await tested.close();
+    expect([await results[2], aborted]).toEqual([undefined, true]);
+  });
+
+  test("action does nothing once the plugin has stopped, and its throw or rejection is the plugin's fault", async () => {
+    const calls: string[] = [];
+    let api: PlainSetup<unknown> | undefined;
+    const tested = await testPlugin(definePlugin({ id: "actions", setup: (_, plugin) => void (api = plugin) }));
+    const save = api!.action("save", (value: string) => void calls.push(value));
+    const throws = api!.action("throws", () => {
+      throw new Error("handler threw");
+    });
+    const rejects = api!.action("rejects", () => Promise.reject(new Error("handler rejected")));
+    save("first");
+    throws();
+    rejects();
+    expect((await tested.waitForFault((candidate) => candidate.operation === "throws")).pluginId).toBe("actions");
+    expect((await tested.waitForFault((candidate) => candidate.operation === "rejects")).pluginId).toBe("actions");
+    await tested.close();
+    save("after stop");
+    expect(calls).toEqual(["first"]);
+  });
+
+  test("action runs as its own plugin's work wherever it is called, and a call refused as a plugin stopped is no fault", async () => {
+    const heard: Unhandled[] = [];
+    let api: PlainSetup<unknown> | undefined;
+    const tested = await testPlugin(definePlugin({ id: "handling", setup: (_, plugin) => void (api = plugin) }));
+    const handle = api!.action("handle", () => void heard.push(reportUnhandled(new Error("in the handler"))));
+    // Called from another plugin's work (its emit, say), the handler is still this plugin's.
+    const caller = await testPlugin(definePlugin({ id: "caller", setup: () => handle() }));
+    expect(heard).toEqual([{ kind: "fault", pluginId: "handling" }]);
+    api!.action("refused", () => Promise.reject(new PluginStopped({ pluginId: "elsewhere", operation: "invoke" })))();
+    api!.action("broken", () => Promise.reject(new Error("broken")))();
+    await tested.waitForFault((candidate) => candidate.operation === "broken");
+    expect(tested.faults.map((fault) => fault.operation)).not.toContain("refused");
+    await caller.close();
+    await tested.close();
+  });
+
+  test("asked as its plugin stops (a cleanup's flush), task runs then; listen, after, and action do nothing", async () => {
+    const listeners = new Set<() => void>();
+    const emitter = { on: (_: string, listener: () => void) => listeners.add(listener), off: (_: string, listener: () => void) => listeners.delete(listener) };
+    const late: string[] = [];
+    let flushed: unknown;
+    const tested = await testPlugin(
+      definePlugin({
+        id: "flusher",
+        setup: (_, { onCleanup, task, listen, after, action }) => {
+          onCleanup(async () => {
+            flushed = await task("flush", async () => "saved");
+            // Its cleanups are running: nothing would end these.
+            listen(emitter, "late", () => void late.push("listened"));
+            after(1, () => void late.push("timer"));
+            action("late", () => void late.push("action"))();
+          });
+        },
+      }),
+    );
+    await tested.close();
+    expect(flushed).toBe("saved");
+    await outlast(1);
+    expect([late, listeners.size]).toEqual([[], 0]);
   });
 
   test("owns an operation others intercept, and reads registries", async () => {
