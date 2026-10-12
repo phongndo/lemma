@@ -76,9 +76,7 @@ const counting = (sessions: Context.Service.Shape<typeof Sessions>): Context.Ser
 
 /**
  * Counts every public hook the harness runs and every event it publishes, passing each on: what a step costs in the
- * kernel's dispatch. Not counted: the simulated model is an `Llm` of its own, so no `LlmRequestHook` runs (a provider
- * plugin's would, one a step); and the agent's own probe of whether the core is closing, a hook of its own no other
- * plugin can name, runs about once a tool step.
+ * kernel's dispatch. The README's "What it measures" says which hooks a step runs that it cannot count.
  */
 const meter = definePlugin({
   id: "bench.meter",
