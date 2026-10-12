@@ -78,7 +78,7 @@ const rates = <K extends string>(prng: Prng, kinds: readonly K[], max: number, f
  * failing a lot, not every part a little. Broad runs keep the rest of the space sampled, so the focus does not leave
  * a blind spot (TigerBeetle's "Fuzzer Blind Spots").
  */
-export const FOCUSES = ["broad", "disk", "model", "lifecycle"] as const;
+export const FOCUSES = ["broad", "disk", "model", "tools", "lifecycle"] as const;
 export type Focus = (typeof FOCUSES)[number];
 
 /** The mix a seed draws. Prompts and waits are always on, so every run does something. */
@@ -102,7 +102,7 @@ export const drawSwarm = (prng: Prng, focus: Focus = prng.pick(FOCUSES)): Swarm 
       focus === "model" ? 0.5 : 0.2,
       focus === "model",
     ),
-    tools: rates(prng, ["fail", "slow"], 0.4),
+    tools: rates(prng, ["fail", "slow"], 0.4, focus === "tools"),
     hooks: rates(prng, ["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail"], 0.3),
     disk: rates(prng, ["write", "sync", "truncate", "rename", "open"], focus === "disk" ? 0.5 : 0.1, focus === "disk"),
   };
@@ -181,10 +181,12 @@ export class World {
   private requests = 0;
   /** Steps a turn may take: few in some runs, so turns end `max-steps`. */
   private readonly maxSteps: number;
+  private readonly shuffled: boolean;
 
   constructor(options: WorldOptions) {
     // Shuffled scheduling in odd seeds, so half the runs reorder fibers' work.
     const shuffle = options.shuffle ?? (options.seed & 1) === 1;
+    this.shuffled = shuffle;
     this.sim = new Simulation({ seed: options.seed, shuffle });
     this.checker = new Checker({ ordered: !shuffle });
     this.prng = this.sim.random.split("workload");
@@ -232,7 +234,7 @@ export class World {
         .map(([kind, weight]) => `${kind} ${weight < 1 ? weight.toFixed(3) : weight}`)
         .join(", ") || "none";
     return [
-      `focus: ${this.swarm.focus}`,
+      `focus: ${this.swarm.focus}, ${this.shuffled ? "shuffled" : "in order"}, at most ${this.maxSteps} steps a turn`,
       `actions: ${on(this.swarm.actions)}`,
       `model faults: ${on(this.swarm.model)}`,
       `tool faults: ${on(this.swarm.tools)}`,
@@ -492,7 +494,10 @@ export class World {
         return this.prompt("reject");
       case "retry": {
         const unknown = this.unknown();
-        if (unknown.length > 0) this.send(this.prng.pick(unknown));
+        if (unknown.length > 0) {
+          this.checker.count("retried");
+          this.send(this.prng.pick(unknown));
+        }
         return;
       }
       case "cancel": {
@@ -506,13 +511,21 @@ export class World {
         return;
       }
       case "withdraw": {
-        const prompted = this.prompted.length === 0 ? undefined : this.prng.pick(this.prompted);
-        if (prompted === undefined) return;
+        // One of the prompts the session's queue shows, as a client withdraws one it lists.
+        const sessionId = this.sessionFor();
+        if (sessionId === undefined) return;
+        const draw = this.prng.next();
         this.client(
-          `withdraw ${prompted.requestId} in ${prompted.sessionId}`,
-          (call) => Effect.orElseSucceed(call("agent.withdraw", { sessionId: prompted.sessionId, requestId: prompted.requestId }), () => false),
+          `withdraw in ${sessionId}`,
+          (call) =>
+            Effect.gen(function* () {
+              const queue = (yield* call("agent.queue", { sessionId })) as readonly { readonly requestId: string }[];
+              if (queue.length === 0) return undefined;
+              const requestId = queue[Math.floor(draw * queue.length)]!.requestId;
+              return (yield* Effect.orElseSucceed(call("agent.withdraw", { sessionId, requestId }), () => false)) ? requestId : undefined;
+            }),
           (ended) => {
-            if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.withdrew(prompted.sessionId, prompted.requestId);
+            if (ended !== "gone" && Exit.isSuccess(ended) && ended.value !== undefined) this.checker.withdrew(sessionId, ended.value);
           },
         );
         return;
@@ -526,10 +539,14 @@ export class World {
           (call) =>
             Effect.gen(function* () {
               const events = (yield* call("sessions.events", { sessionId })) as readonly SessionEvent[];
-              if (events.length === 0) return;
+              if (events.length === 0) return false;
               yield* call("sessions.checkout", { sessionId, eventId: events[Math.floor(draw * events.length)]!.id });
-            }).pipe(Effect.ignore),
-          () => {},
+              return true;
+            }).pipe(Effect.orElseSucceed(() => false)),
+          // Counted once it took effect: a generator whose checkouts all fail would otherwise go on looking busy.
+          (ended) => {
+            if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.count("checked out");
+          },
         );
         return;
       }
@@ -552,8 +569,14 @@ export class World {
         if (core !== undefined)
           this.client(
             `restart ${id}`,
-            () => Effect.ignore(core.restart(id, { force: true })),
-            () => {},
+            () =>
+              core.restart(id, { force: true }).pipe(
+                Effect.as(true),
+                Effect.orElseSucceed(() => false),
+              ),
+            (ended) => {
+              if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.count(`restarted ${id}`);
+            },
           );
         return;
       }

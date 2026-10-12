@@ -98,8 +98,10 @@ export const answerAsSimulated =
       ending: { kind: "error", failure, message },
     });
     if (isSummaryRequest(request)) {
-      return prng.chance(faults.fatal)
-        ? { ...failing("summary failed", { kind: "fatal" }, "The summary failed"), usage: usage(100) }
+      // A summary fails as any request can: for good, or as an overloaded provider does.
+      const failed = prng.chance(faults.fatal) ? ("fatal" as const) : prng.chance(faults.transient) ? ("transient" as const) : undefined;
+      return failed !== undefined
+        ? { ...failing("summary failed", { kind: failed }, "The summary failed"), usage: usage(100) }
         : { kinds: ["summary"], latencyMs, deltas, usage: usage(100), ending: { kind: "done", calls: [] } };
     }
     if (prng.chance(faults.fatal)) return failing("fatal", { kind: "fatal" }, "Invalid API key");

@@ -63,7 +63,7 @@ counts a temporary one a crash left).
 `new World({ seed }).run()` is TigerBeetle's VOPR for the harness. The seed
 draws the run's mix (`drawSwarm`): which actions its clients and the world take
 and how often, and how often each part fails. A run leans on one part
-(`focus`): `broad` draws every part alike; `disk`, `model`, and `lifecycle`
+(`focus`): `broad` draws every part alike; `disk`, `model`, `tools`, and `lifecycle`
 draw that part's faults often and high, with the actions that make them matter
 on, as a bug often needs one part failing a lot rather than every part a
 little. Odd seeds shuffle fibers' work (`shuffle`).
@@ -154,11 +154,14 @@ prints how to replay it; `--dump` prints each session's log as the run left
 it, and `--coverage` how often each kind of action, fault, and outcome
 happened across the seeds.
 
-`tests/world.test.ts` runs `LEMMA_HARNESS_RUNS` seeds (default 40) from
+`tests/world.test.ts` runs `LEMMA_HARNESS_RUNS` seeds (default 100) from
 `LEMMA_HARNESS_SEED` at `LEMMA_HARNESS_TICKS` ticks (default 120), and fails if
 a kind of action, fault, or outcome (a crash part-way through a write, a turn
 ending `max-steps`, a prompt answered `unknown`…) never happens across them,
-which would be a part of the space the generator stopped reaching. The nightly
+which would be a part of the space the generator stopped reaching. An action
+counts once it took effect (a checkout made, a plugin restarted), so one whose
+calls all fail is not taken for reached. The rarest kinds happen in about a
+tenth of runs, so any 100 seeds reach them all but about once in a thousand. The nightly
 job runs 2,000 seeds at 200 ticks from a window no earlier night ran (`pnpm
 test:random`). `tests/determinism.test.ts` checks a seed leaves the same disk
 in another process, starting no timer of the event loop's. Simulated runs name
