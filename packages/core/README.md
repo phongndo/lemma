@@ -160,8 +160,9 @@ export default definePlugin({
   not keep that operation's references for the next.
 - **`setup`** may be `async`, and receives the `PluginContext` operations as
   promise-based functions (`on`, `add`, `observe`, `publish`, `invoke`,
-  `items`, `changes`, `background`, `fault`, `run`) plus `config`, `signal`,
-  `onCleanup`, and the helpers below. The plugin is active once setup has returned and every call it
+  `items`, `changes`, `background`, `fault`, `run`, `trace`) plus `config`, `signal`,
+  `onCleanup`, and the helpers below. `trace(name, fn)` runs `fn` in a span
+  attributed to the plugin, under the span of the work that called it. The plugin is active once setup has returned and every call it
   made before it returned has settled (calls a background task or a loop
   makes later are not setup's). A call
   that failed, which setup neither awaited nor caught, fails the activation, as
@@ -220,9 +221,13 @@ export default definePlugin({
   it; a `PluginStopped` is expected, a call a stopped plugin made; anything else
   is nobody's that can be told. With `AsyncLocalStorage`, work follows the
   timers and promises it starts, so a plugin's stray `setTimeout` is still its
-  own; in a browser only refusals are told apart. Work a promise-based plugin
-  calls into (an Effect-written plugin's handler) runs in its context, so a
-  stray error there is reported as the caller's. A plugin that has stopped
+  own; in a browser only refusals are told apart. Effect work a promise-based
+  plugin starts (a call through a service, the rest of a hook's chain, an event
+  it publishes) runs outside its async-local context, with the context it needs
+  passed explicitly: Effect code carries none, so an error that work leaves
+  behind (an Effect-written plugin's stray timer) is nobody's that can be told,
+  rather than the fault of the promise-based plugin that called it, which did
+  nothing wrong. A plugin that has stopped
   records no fault, so a caller logs what is not a refusal. The host installs
   it: a plugin's stray error does not end the process, and one that is
   nobody's does, as Node.js would end it, since the host's state may be broken.

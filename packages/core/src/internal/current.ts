@@ -24,6 +24,7 @@ export interface Current {
 
 interface Storage<T> {
   run<R>(store: T, run: () => R): R;
+  exit<R>(run: () => R): R;
   getStore(): T | undefined;
 }
 
@@ -70,6 +71,24 @@ export const within = <T>(current: Current, run: () => T): T => {
   synchronous = current;
   try {
     return run();
+  } finally {
+    synchronous = previous;
+  }
+};
+
+/**
+ * Runs `run` with no current invocation, and so does what it starts. Promise-based code starts Effect work through it
+ * (a call through a service, the rest of a hook's chain, a published event): the context it runs with is passed to it
+ * explicitly, and what it leaves running (a timer an Effect-written plugin's handler forgot, a fiber the scheduler
+ * resumes later) is not taken for the caller's work. Effect code carries no async-local context of its own, so where
+ * an error it leaves behind came from cannot be told: it is no plugin's (`reportUnhandled`), rather than the fault of
+ * a promise-based plugin that did nothing wrong.
+ */
+export const outside = <T>(run: () => T): T => {
+  const previous = synchronous;
+  synchronous = undefined;
+  try {
+    return storage === undefined ? run() : storage.exit(run);
   } finally {
     synchronous = previous;
   }

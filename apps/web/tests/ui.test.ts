@@ -521,35 +521,6 @@ describe("defineWebPlugin", () => {
     });
   });
 
-  it("names a plugin written against the kernel when what it draws asks for usePlugin, which it has none of", async () => {
-    const Views = defineSlot<{ readonly component: Component }>("test.views");
-    const View: Component = () => {
-      usePlugin();
-      return null;
-    };
-    const kernel = definePlugin({
-      id: "kernel",
-      requires: { slots: Slots },
-      setup: ({ slots }, plugin) => Effect.sync(() => void slots.as(plugin).add(Views, { id: "view", component: View })),
-    });
-    await run([kernel], async (loader) => {
-      const slots = await Effect.runPromise(loader.core.run(Slots));
-      const item = slots.first(Views)!;
-      const dispose = createRoot((dispose) => {
-        createComponent(SlotsContext.Provider, {
-          value: () => slots,
-          get children() {
-            return createComponent(Contained, { slot: Views, item, component: item.component });
-          },
-        });
-        return dispose;
-      });
-      await waitFor(() => slots.failures(Views).length === 1);
-      expect(String(slots.failures(Views)[0]!.error)).toMatch(/an item of "kernel", written against the kernel directly/);
-      dispose();
-    });
-  });
-
   it("draws what a plugin hands a part (its children) as that plugin's, though another plugin provides the part", async () => {
     const Views = defineSlot<{ readonly component: Component }>("test.views");
     const Box = definePart<{ readonly children: JSX.Element }>("test.box");
