@@ -13,9 +13,10 @@ import type { ToolContribution } from "@lemma/tools";
 export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
   /**
-   * `Retracted`: the prompt never ran, and never will: `withdraw` took it out of the queue before a turn placed it, or
-   * the turn it was to start or join was cancelled before it placed it. Sent again with the same `requestId`, it is
-   * refused again. `Io`: the agent could not record
+   * `Retracted`: the prompt never ran: `withdraw` took it out of the queue before a turn placed it, or the turn it was
+   * to start or join was cancelled before it placed it. Sent again with the same `requestId`, it is refused again while
+   * it is among the session's latest 64 retracted ids (a cancel's record of it is written as the turn ends, and a
+   * failed write loses it). `Io`: the agent could not record
    * the change the call asked for on disk (its journal), so it did not make it in this instance: the queue is as it
    * was. A write that failed may have landed part-way, so the next instance may find the change made: send the
    * prompt again with the same `requestId` to settle its fate.

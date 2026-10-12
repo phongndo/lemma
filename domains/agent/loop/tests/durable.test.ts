@@ -448,7 +448,12 @@ describe("resume", () => {
     // As if the host stopped right after recording the turn, before logging it, and a cancel came before it resumed.
     await fs.mkdir(path.join(dir, "agent"), { recursive: true });
     const prompt = { requestId: "r", content: text("go"), mode: "follow-up", at: 1 };
-    await fs.writeFile(path.join(dir, "agent", `${id}.json`), JSON.stringify({ turn: { turnId: "t-cut", prompts: [prompt], cancelling: true }, queue: [] }));
+    // And a prompt queued behind it, which a cancelled turn leaves waiting for the next prompt.
+    const queued = { requestId: "q", content: text("after"), mode: "follow-up", at: 2 };
+    await fs.writeFile(
+      path.join(dir, "agent", `${id}.json`),
+      JSON.stringify({ turn: { turnId: "t-cut", prompts: [prompt], cancelling: true }, queue: [queued] }),
+    );
     await run({ scripts: [reply("should not run")] }, ({ requests }) =>
       Effect.gen(function* () {
         // The turn is gone from the journal, which keeps only its prompt's id, retracted: sent again, it is refused.
@@ -456,7 +461,7 @@ describe("resume", () => {
           Effect.promise(() => fs.readFile(path.join(dir, "agent", `${id}.json`), "utf8").then((text) => JSON.parse(text) as Record<string, unknown>)),
           (journal) => journal.turn === undefined,
         );
-        expect(journal).toMatchObject({ queue: [], withdrawn: ["r"] });
+        expect(journal).toMatchObject({ queue: [{ requestId: "q" }], held: true, withdrawn: ["r"] });
         expect(yield* log(id)).toEqual([]);
         expect(requests).toHaveLength(0);
         const refused = yield* Effect.flip(Effect.flatMap(Agent, (agent) => agent.prompt(id, text("go"), { requestId: "r" })));

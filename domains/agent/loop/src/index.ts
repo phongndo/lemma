@@ -698,6 +698,8 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
               : [];
             if (retractedIds.length > 0) {
               state.withdrawn = [...state.withdrawn, ...retractedIds].slice(-WITHDRAWN_KEPT);
+              // Written as the turn will end it: a cancelled turn runs no queue on, which waits for the next prompt.
+              state.held = state.queue.length > 0;
               yield* persistOrWarn(sessionId);
             }
             if ((interrupted && suspending) || (Exit.isSuccess(exit) && exit.value === "suspended")) {
