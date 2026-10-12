@@ -15,7 +15,11 @@ const span = (id: string, name: string, attributes: SpanRecord["attributes"], st
   attributes,
 });
 
-const kept = [span("a", "agent.turn", { "session.id": "s1" }), span("b", "core.hook", { "session.id": "s2", "plugin.id": "p" }, 5)];
+const kept = [
+  span("a", "agent.turn", { "session.id": "s1" }),
+  span("b", "core.hook", { "session.id": "s2", "plugin.id": "p" }, 5),
+  span("r", "http.server GET", { "url.query": "token=abc123" }, 6),
+];
 const changes: CompositionChange[] = [{ at: 1, cause: "start", started: ["p"], stopped: [], restarted: [], failed: [] }];
 
 /** Runs the plugin over a host `Trace` that kept `kept`, then ends `later`, and hands `body` its channels. */
@@ -37,13 +41,19 @@ describe("devtools.trace", () => {
       "url.full": "http://127.0.0.1:7433/rpc?token=abc123&x=1",
       "http.request.header.authorization": "Bearer abc123",
       "http.request.header.cookie": "lemma=abc123",
+      // Effect's HTTP tracer records the query on its own too, without its `?`.
+      "url.query": "token=abc123&x=1",
       "http.response.status_code": 200,
+      // A count of tokens is no secret.
+      "gen_ai.usage.output_tokens": 42,
     });
     expect(redacted(request).attributes).toEqual({
       "url.full": "http://127.0.0.1:7433/rpc?token=<redacted>&x=1",
       "http.request.header.authorization": "<redacted>",
       "http.request.header.cookie": "<redacted>",
+      "url.query": "token=<redacted>&x=1",
       "http.response.status_code": 200,
+      "gen_ai.usage.output_tokens": 42,
     });
     const plain = span("p", "core.hook", { "plugin.id": "p" });
     expect(redacted(plain)).toBe(plain);
@@ -53,10 +63,15 @@ describe("devtools.trace", () => {
     withTrace([], (channels) =>
       Effect.gen(function* () {
         const spans = channels.get("devtools.trace.spans") as ChannelCall;
-        expect(((yield* resultOf(spans, {})) as SpanRecord[]).map((found) => found.id)).toEqual(["a", "b"]);
+        expect(((yield* resultOf(spans, {})) as SpanRecord[]).map((found) => found.id)).toEqual(["a", "b", "r"]);
+        // Matched as served: a secret cannot be guessed by asking for it.
+        expect(yield* resultOf(spans, { where: { "url.query": "token=abc123" } })).toEqual([]);
         expect(((yield* resultOf(spans, { where: { "session.id": "s2" } })) as SpanRecord[]).map((found) => found.id)).toEqual(["b"]);
-        expect(((yield* resultOf(spans, { since: 3 })) as SpanRecord[]).map((found) => found.id)).toEqual(["b"]);
-        expect(((yield* resultOf(spans, { limit: 1 })) as SpanRecord[]).map((found) => found.id)).toEqual(["b"]);
+        expect(((yield* resultOf(spans, { since: 3 })) as SpanRecord[]).map((found) => found.id)).toEqual(["b", "r"]);
+        expect(((yield* resultOf(spans, { limit: 1 })) as SpanRecord[]).map((found) => found.id)).toEqual(["r"]);
+        // A limit is a count: none at zero or below, rounded down.
+        for (const limit of [0, -1, 0.5]) expect(yield* resultOf(spans, { limit })).toEqual([]);
+        expect(((yield* resultOf(spans, { limit: 1.5 })) as SpanRecord[]).map((found) => found.id)).toEqual(["r"]);
         expect(yield* resultOf(channels.get("devtools.trace.changes") as ChannelCall, undefined)).toEqual(changes);
       }),
     ));

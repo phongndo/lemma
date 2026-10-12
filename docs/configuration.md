@@ -28,8 +28,9 @@ change to the transport itself is answered first and applied after, and
 clients reconnect. Each plugin's README lists its settings.
 
 The host itself is not a plugin. It provides `Paths`, `HostControl` (managing
-the plugins), `Interaction` (questions to the user), and `HostApi` (its API
-version) to every plugin, so they have no row and nothing turns them off. A
+the plugins), `Interaction` (questions to the user), `Trace` (the spans its
+work ends, and its composition's changes), and `HostApi` (its API version) to
+every plugin, so they have no row and nothing turns them off. A
 `host` or `interaction` row left from when they were plugins names no plugin,
 and is ignored with a warning. A plugin that provides one of them is left out,
 and one from your own files stops the start (they are required, below): to

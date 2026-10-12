@@ -34,9 +34,14 @@ const ERROR_CHARS = 300;
 const plain = (value: unknown): value is string | number | boolean => typeof value === "string" || typeof value === "number" || typeof value === "boolean";
 
 const failure = (cause: Cause.Cause<unknown>): string => {
-  const error = Cause.squash(cause);
-  const text = error instanceof Error ? `${error.name === "Error" ? "" : `${error.name}: `}${error.message}` : String(error);
-  return text.split("\n", 1)[0]!.slice(0, ERROR_CHARS);
+  try {
+    const error = Cause.squash(cause);
+    const text = error instanceof Error ? `${error.name === "Error" ? "" : `${error.name}: `}${error.message}` : String(error);
+    return text.split("\n", 1)[0]!.slice(0, ERROR_CHARS);
+  } catch {
+    // An error with no string form (`Object.create(null)`, a throwing getter) still fails its span.
+    return "a failure with no description";
+  }
 };
 
 /**
@@ -90,7 +95,10 @@ export function makeSpanCollector(options?: { readonly limit?: number }): SpanCo
   class CollectedSpan extends Tracer.NativeSpan {
     override end(endTime: bigint, exit: Exit.Exit<unknown, unknown>): void {
       super.end(endTime, exit);
-      record(this, endTime, exit);
+      // Keeping a span never fails the work it traced: one that cannot be kept is dropped.
+      try {
+        record(this, endTime, exit);
+      } catch {}
     }
   }
   return {

@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
+import type { Tracer } from "effect";
 import { TestClock } from "effect/testing";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Events, Plugin } from "@lemma/core";
@@ -223,6 +224,8 @@ export interface AgentSetup {
   readonly sessions?: Plugin;
   /** Runs on Effect's test clock: waits (a retry's) last until the body adjusts it. */
   readonly testClock?: boolean;
+  /** Traces the run (`makeSpanCollector().tracer`). */
+  readonly tracer?: Tracer.Tracer;
 }
 
 /**
@@ -251,7 +254,10 @@ export const runAgent = <A, E>(
         );
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),
-    ).pipe(setup.testClock === true ? Effect.provide(TestClock.layer()) : (effect) => effect),
+    ).pipe(
+      setup.testClock === true ? Effect.provide(TestClock.layer()) : (effect) => effect,
+      setup.tracer === undefined ? (effect) => effect : Effect.withTracer(setup.tracer),
+    ),
   );
 };
 

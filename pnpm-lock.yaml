@@ -2765,6 +2765,9 @@ importers:
       '@lemma/credentials-file':
         specifier: workspace:*
         version: link:../../domains/credentials/file
+      '@lemma/devtools':
+        specifier: workspace:*
+        version: link:../../domains/devtools/contract
       '@lemma/devtools-trace':
         specifier: workspace:*
         version: link:../../domains/devtools/trace

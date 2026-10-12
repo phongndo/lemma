@@ -376,7 +376,7 @@ Effect.gen(function* () {
 
 `PluginContext.fault(operation, cause, { fatal })` reports a failure of a plugin's own work that the core does not run, such as a callback another library calls or a view it draws: a `PluginFault` (phase `service`) attributed to the plugin, which with `fatal` fails as a required task's failure fails it, as soon as it is published when it is still starting. A stopped or retired plugin's reports are dropped: its replacement owns the faults.
 
-Recovery is explicit: `core.restart(id)` reactivates the failed plugin and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). A plugin with a `restart` schedule is retried automatically; the schedule persists across failures, so one that keeps failing exhausts it rather than restarting forever. An explicit restart resets it.
+Recovery is explicit: `core.restart(id)` reactivates the failed plugin and retries the dependents it halted. The named plugin must activate; a dependent that cannot is left failed, and its own dependents halted, without blocking the rest. An active plugin is left alone unless `core.restart(id, { force: true })`, which replaces it and restarts its dependents as a config change would (an `exclusive` plugin stops first). It returns a `ReloadReport`: what it restarted (nothing, for an active plugin left alone) and which dependents it left failed. A plugin with a `restart` schedule is retried automatically; the schedule persists across failures, so one that keeps failing exhausts it rather than restarting forever. An explicit restart resets it.
 
 `core.faults` streams `ReportedFault` values (`PluginFault` plus a core-wide,
 monotonically increasing `sequence`). Delivery retains at most 256 queued entries
@@ -454,7 +454,8 @@ A hook may say what a trace shows of each handler: `Hook.make(name, { summary: {
 
 These spans and composition snapshots describe runtime provenance. Applications
 own durable audit history, persistence, domain events, and payload redaction.
-Runtime-generated spans do not include hook arguments/results or plugin configuration.
+Runtime-generated spans do not include hook arguments or results, only what a
+hook's summary says of them, nor plugin configuration.
 
 ## Develop
 

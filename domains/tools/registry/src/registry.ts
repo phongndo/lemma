@@ -195,12 +195,19 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           for (const candidate of yield* registries.items(Guards)) {
             if (candidate.item.tool !== "*" && candidate.item.tool !== call.name) continue;
             const began = performance.now();
-            const decision = yield* awaitable(() => candidate.item.guard(call));
-            const ms = Math.round((performance.now() - began) * 100) / 100;
+            const ms = () => Math.round((performance.now() - began) * 100) / 100;
+            // A guard that fails stops the call too, and is named for it.
+            const decision = yield* awaitable(() => candidate.item.guard(call)).pipe(
+              Effect.tapCause((cause) =>
+                Effect.sync(() => {
+                  if (!Cause.hasInterruptsOnly(cause)) checks.push({ source: candidate.pluginId, allowed: false, ms: ms(), reason: "the guard failed" });
+                }),
+              ),
+            );
             checks.push({
               source: candidate.pluginId,
               allowed: decision._tag === "allow",
-              ms,
+              ms: ms(),
               ...(decision._tag === "deny" ? { reason: decision.reason } : {}),
             });
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
@@ -270,13 +277,17 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             Effect.raceFirst(aborted(invocation.name, signal)),
           );
           yield* events.publish(ToolExecuted, { invocation, result: settled, durationMs: Date.now() - started });
-          if (executeOptions?.credit !== undefined) {
+          const credit = executeOptions?.credit;
+          if (credit !== undefined) {
             const handlers = inChainOrder(steps).map((step) => creditOf(step, toolChanges(step)));
-            executeOptions.credit({
-              ...(handlers.length === 0 ? {} : { handlers }),
-              ...(checks.length === 0 ? {} : { checks }),
-              ...(cut === undefined ? {} : { cut }),
-            });
+            // The call has finished: a listener that throws is logged, as an output listener's failure is, never the call's.
+            yield* Effect.sync(() =>
+              credit({
+                ...(handlers.length === 0 ? {} : { handlers }),
+                ...(checks.length === 0 ? {} : { checks }),
+                ...(cut === undefined ? {} : { cut }),
+              }),
+            ).pipe(Effect.catchCause((cause) => Effect.logWarning("A tool credit listener failed", cause)));
           }
           return settled;
         }),

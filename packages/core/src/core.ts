@@ -3,6 +3,7 @@ import type { Duration, Layer, Scope, Stream } from "effect";
 import type { CompositionError, CoreClosed, PluginFault, ReloadError, ReportedFault, ShutdownTimeout } from "./errors.ts";
 import type { Events } from "./events.ts";
 import type { Hooks } from "./hooks.ts";
+import type { ReloadReport } from "./loader.ts";
 import type { EventSnapshot } from "./internal/events.ts";
 import type { HookSnapshot } from "./internal/hooks.ts";
 import type { RegistrySnapshot } from "./internal/registries.ts";
@@ -92,8 +93,11 @@ export interface Core<Capabilities = never> {
   readonly inspect: Effect.Effect<CoreSnapshot>;
   /** Ordered live faults; retains 256 entries, dropping oldest without blocking. Sequence gaps reveal loss. */
   readonly faults: Stream.Stream<ReportedFault>;
-  /** Reactivate a failed plugin and the dependents it halted. Active plugins are left alone unless `force` is set. */
-  readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<void, ReloadError | CoreClosed>;
+  /**
+   * Reactivate a failed plugin and the dependents it halted. Active plugins are left alone unless `force` is set. The
+   * report says what it restarted (none, for an active plugin left alone) and which dependents it left failed.
+   */
+  readonly restart: (pluginId: string, options?: RestartOptions) => Effect.Effect<ReloadReport, ReloadError | CoreClosed>;
 }
 
 /**

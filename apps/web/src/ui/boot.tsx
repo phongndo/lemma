@@ -124,7 +124,7 @@ export async function boot(options: BootOptions): Promise<void> {
       await runPromise(
         loader.core.restart(plugin.id, restartOptions?.force ? { force: true } : undefined).pipe(
           Effect.withTracer(runtime.trace.tracer),
-          Effect.tap(() => Effect.sync(() => runtime.trace.applied("restart", { restarted: [plugin.id] }, [plugin.id]))),
+          Effect.tap((report) => Effect.sync(() => runtime.trace.applied("restart", report, [plugin.id]))),
           Effect.tapCause((cause) => Effect.sync(() => runtime.trace.refused("restart", describeFailure(cause).join("; "), [plugin.id]))),
         ),
       );
@@ -306,6 +306,7 @@ export async function boot(options: BootOptions): Promise<void> {
   } else {
     // Rows or files that keep the app's own frame from starting still leave the app as shipped.
     if (made !== undefined) bootProblems = [...bootProblems, ...describeFailure(made.cause)];
+    runtime.trace.refused("start", (made === undefined ? first.errors : describeFailure(made.cause)).join("; "));
     first = await planFor(EMPTY);
     adopt(first.plan);
     made = await start(first.plan);
@@ -316,10 +317,7 @@ export async function boot(options: BootOptions): Promise<void> {
   // The look the last load remembered stays only if a plugin painted it again.
   settlePaint();
   const started = (await runPromise(loader.core.inspect)).plugins;
-  runtime.trace.applied("start", {
-    started: started.filter((plugin) => plugin.state === "active").map((plugin) => plugin.id),
-    failed: started.filter((plugin) => plugin.state === "failed" || plugin.haltedBy !== undefined).map((plugin) => plugin.id),
-  });
+  runtime.trace.started(started);
   // Plugins that failed to start, left failed: no fault stream existed yet to hear them.
   for (const plugin of started) {
     if (plugin.state !== "failed" || plugin.fault === undefined) continue;

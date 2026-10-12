@@ -10,7 +10,7 @@ import { CompositionChange, defineChannel, SpanRecord } from "@lemma/contracts";
 export const SpanQuery = Schema.Struct({
   where: Schema.optional(Schema.Record(Schema.String, Schema.String)),
   since: Schema.optional(Schema.Number),
-  /** At most this many, the newest (2000 when absent). */
+  /** At most this many, the newest (2000 when absent); a count, so a fraction rounds down and below zero is none. */
   limit: Schema.optional(Schema.Number),
 });
 export type SpanQuery = typeof SpanQuery.Type;
@@ -47,6 +47,16 @@ export const TraceChannels = {
   }),
 } as const;
 
-/** Whether `span` has every attribute `where` names, with its value. */
+/** How many spans a query answers with when it names no limit. */
+export const SPANS_ANSWERED = 2000;
+
+/** The spans of `spans` that `query` asks for, in their order: those that match, ended after `since`, the newest `limit`. */
+export const selectSpans = (spans: readonly SpanRecord[], { where, since, limit }: SpanQuery): readonly SpanRecord[] => {
+  const found = spans.filter((span) => (since === undefined || span.start + span.ms > since) && matches(span, where));
+  const count = limit === undefined || Number.isNaN(limit) ? SPANS_ANSWERED : Math.max(0, Math.floor(limit));
+  return found.slice(Math.max(0, found.length - count));
+};
+
+/** Whether `span` has every attribute `where` names, with its value (a span without one has no value, not `"undefined"`). */
 export const matches = (span: SpanRecord, where: Readonly<Record<string, string>> | undefined): boolean =>
-  where === undefined || Object.entries(where).every(([key, value]) => String(span.attributes[key]) === value);
+  where === undefined || Object.entries(where).every(([key, value]) => Object.hasOwn(span.attributes, key) && String(span.attributes[key]) === value);
