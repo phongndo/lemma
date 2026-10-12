@@ -1,0 +1,33 @@
+{
+  "name": "@lemma/sim",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A deterministic simulator of the harness: the real plugins in simulated time, on a simulated disk, under faults drawn from a seed",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run",
+    "sim": "node --conditions=lemma-source src/main.ts"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/agent-loop": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/sessions-files": "workspace:*",
+    "@lemma/testing": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/tools-registry": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}
