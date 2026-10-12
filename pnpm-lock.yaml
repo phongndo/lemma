@@ -3057,6 +3057,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
+      '@lemma/context-compaction':
+        specifier: workspace:*
+        version: link:../../domains/context/compaction
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../contracts

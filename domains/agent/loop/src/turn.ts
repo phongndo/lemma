@@ -56,6 +56,9 @@ interface Offer {
 /** The longest wait a provider may ask for before a retry; a longer one is cut to this. */
 const MAX_REQUESTED_DELAY_MS = 15 * 60_000;
 
+/** The longest a retry waits: the longest delay a provider may ask for, or the backoff's longest with its jitter. */
+const longestWait = (settings: Pick<TurnSettings, "maxRetryDelay">): number => Math.max(MAX_REQUESTED_DELAY_MS, Math.round(settings.maxRetryDelay * 1.2));
+
 /**
  * Milliseconds before retry `attempt` (from 1): the provider's delay when it named one, else doubling backoff with
  * ±20% jitter. `jitter` is a draw from [0, 1), from Effect's `Random` so a test can seed it.
@@ -275,13 +278,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
 
   /**
    * Waits until epoch `at`, without a slot; a stopping agent suspends the turn instead, and the rest of the wait comes
-   * when it resumes. Times in a turn come from Effect's `Clock`, as its waits do, so a test's clock drives both.
+   * when it resumes. Times in a turn come from Effect's `Clock`, as its waits do, so a test's clock drives both. `at` is
+   * wall-clock time, logged: a wall clock set back since (a correction) never makes the wait longer than a retry's
+   * could be.
    */
   const waitUntil = (at: number) =>
     Effect.andThen(
       input.idle(
         Effect.raceFirst(
-          Effect.flatMap(Clock.currentTimeMillis, (now) => Effect.sleep(Math.max(0, at - now))),
+          Effect.flatMap(Clock.currentTimeMillis, (now) => Effect.sleep(Math.min(Math.max(0, at - now), longestWait(settings)))),
           input.stopping,
         ),
       ),
@@ -799,6 +804,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         state.overflowed = plan.retry.overflowed;
         state.shorten = plan.retry.overflow;
       }
+      // What closing the turn needs, set before anything is written, so a write that fails below (a full disk) still
+      // closes it as it should: the cut-off step, and the calls it left without results.
+      if (at.kind === "tools" || at.kind === "model" || at.kind === "before-request" || (at.kind === "failed" && !at.closed)) {
+        state.step = { id: at.stepId, model: input.model };
+      }
+      if (at.kind === "tools") {
+        state.pending = [...at.pending];
+        for (const id of at.started) state.started.add(id);
+      }
       yield* append({ type: "custom", kind: RESUMED, data: { turnId } });
       for (const prompt of input.prompts) yield* userMessage(prompt);
       const stepId = at.kind === "between" ? undefined : at.stepId;
@@ -820,15 +834,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const again = () => Effect.andThen(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
 
       if (at.kind === "failed") {
-        if (!at.closed) state.step = { id: at.stepId, model: input.model };
         const aborted = at.attempt.stopReason === "aborted";
         return { reason: aborted ? "cancelled" : "error", error: at.attempt.errorMessage ?? (aborted ? "Aborted" : "Model error") } satisfies Ended;
       }
       if (cancelling) {
-        // The closing sequence logs the cut-off call and answers the pending tool calls.
-        if (at.kind !== "between") state.step = { id: at.stepId, model: input.model };
+        // The closing sequence logs the cut-off call and answers the pending tool calls (set above).
         if (at.kind === "model" && !at.logged) yield* append({ type: "attempt", turnId, stepId: at.stepId, message: cutOff(), timing: timing() });
-        if (at.kind === "tools") state.pending = [...at.pending];
         return { reason: "cancelled" } satisfies Ended;
       }
       switch (at.kind) {
@@ -844,14 +855,13 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             });
           }
           yield* append({ type: "step-end", turnId, stepId: at.stepId });
+          state.step = undefined;
           return yield* again();
         case "before-request":
           yield* append({ type: "step-end", turnId, stepId: at.stepId });
+          state.step = undefined;
           return yield* again();
         case "tools": {
-          state.step = { id: at.stepId, model: input.model };
-          state.pending = [...at.pending];
-          for (const id of at.started) state.started.add(id);
           const listed = yield* tools.list;
           const repeatable = new Set(listed.filter((tool) => tool.replay === "safe").map((tool) => tool.spec.name));
           // A call that may have begun is run again only when that is safe; one that had not begun runs now.

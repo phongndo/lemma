@@ -32,7 +32,12 @@ const userTexts = (events: readonly SessionEvent[]) =>
   );
 
 const ended = (sessionId: string, count = 1) => waitFor(log(sessionId), (events) => ofType(events, "turn-end").length >= count);
-const stateFiles = () => fs.readdir(path.join(dir, "agent")).catch(() => [] as string[]);
+/** The sessions' state files: each session's journal and live file (not the count of its starts, the agent's own). */
+const stateFiles = () =>
+  fs
+    .readdir(path.join(dir, "agent"))
+    .then((names) => names.filter((name) => name !== "instance"))
+    .catch(() => [] as string[]);
 
 /** Prints a line, then runs until its call is aborted: a long command cut off by a restart. */
 const slow: Tool<Record<string, never>> = {

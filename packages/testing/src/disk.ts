@@ -39,6 +39,8 @@ export class SimDisk {
   private countdown: number | undefined;
   private clock = 1_700_000_000_000;
   private readonly random: () => number;
+  /** Told of every crash as it strikes, before anything else runs: a process on the disk dies with it. */
+  onCrash: () => void = () => {};
 
   constructor(random: () => number = Math.random) {
     this.random = random;
@@ -83,12 +85,18 @@ export class SimDisk {
     return this.countdown !== undefined;
   }
 
+  /** Crashes so far, `crash`'s and those `crashAfter` scheduled: a caller can tell the disk crashed under it. */
+  get crashes(): number {
+    return this.generation;
+  }
+
   /**
    * A power loss: unsynced data and names are lost or torn, decided by the
    * random source, and every earlier mount stops working.
    */
   crash(): void {
     this.countdown = undefined;
+    this.onCrash();
     this.generation++;
     for (const inode of this.files.values()) {
       if (inode.kind !== "file") continue;

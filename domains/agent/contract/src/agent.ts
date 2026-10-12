@@ -14,8 +14,9 @@ export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
   /**
    * `Retracted`: `withdraw` took the prompt out of the queue before a turn placed it. `Io`: the agent could not record
-   * the change the call asked for on disk (its journal), so it did not make it: the queue is as it was, and the call
-   * may be made again (a prompt with the same `requestId`).
+   * the change the call asked for on disk (its journal), so it did not make it in this instance: the queue is as it
+   * was. A write that failed may have landed part-way, so the next instance may find the change made: send the
+   * prompt again with the same `requestId` to settle its fate.
    */
   readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted" | "Io";
   readonly message: string;
