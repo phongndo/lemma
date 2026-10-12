@@ -148,10 +148,18 @@ export const syncParents = async (fs: FileSystem, dir: string, created: unknown)
   }
 };
 
-/** Removes the file at `path` if there is one; `sync`, its absence survives a crash before this returns. */
+/**
+ * Removes the file at `path` if there is one; `sync`, its absence survives a crash before this returns. With none
+ * there (nor, perhaps, its directory), there is nothing to remove or to sync.
+ */
 export async function removeFile(path: string, options: { readonly sync?: boolean; readonly fs?: FileSystem } = {}): Promise<void> {
   const fs = options.fs ?? nodeFileSystem;
-  await fs.rm(path, { force: true });
+  try {
+    await fs.rm(path);
+  } catch (error) {
+    if ((error as { readonly code?: unknown }).code === "ENOENT") return;
+    throw error;
+  }
   if (options.sync === true) await syncDirectory(fs, dirname(path));
 }
 
@@ -172,7 +180,7 @@ export interface AtomicWriteOptions {
   readonly fs?: FileSystem;
 }
 
-/** Temporary files this process has made: their names are its pid and a count, so a simulated run names them alike. */
+/** Temporary files this process has made: their names are its pid and a count, drawing on no random source. */
 let temps = 0;
 /** A new temporary file beside `path`. A name left by a crashed process whose pid this one has now is skipped. */
 const openTemp = async (fs: FileSystem, path: string, mode: number): Promise<{ readonly temp: string; readonly handle: FileHandle }> => {

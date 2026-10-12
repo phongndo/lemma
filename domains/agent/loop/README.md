@@ -142,9 +142,11 @@ while no agent ran goes when the next starts.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Retracted`), `promote` makes a queued follow-up a steer in its place (the
-running turn places it after its current step; with no turn running it stays a follow-up), and `QueueChanged` reports every change with a revision that only
-grows, across restarts too (it is journaled, and drawn from the clock: `view`
-carries it as well), so a client keeps the
+running turn places it after its current step; with no turn running it stays a
+follow-up), and `QueueChanged` reports every change with a revision that only
+grows while the agent runs, and across a restart unless the clock went back (it
+is journaled while anything waits, and drawn from the clock: `view` carries it
+as well), so a client keeps the
 newest queue it has heard of whichever arrives first. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
 prompts first, then itself, in one turn. Each `prompt` call resolves when the

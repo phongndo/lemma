@@ -668,7 +668,7 @@ if (lower.length) console.log(`Ceilings to lower in scripts/check-boundaries.ts,
 report("Test hygiene violations (scripts/check-boundaries.ts)", testProblems, "test hygiene: ok");
 
 // Code behind a seam reaches time, randomness, timers, and the disk only through it, so a simulation controls all of
-// them (domains/sessions/files/README.md#testing, packages/sim): Effect's `Clock` (its sleeps for timers) and `Random`,
+// them (domains/sessions/files/README.md#testing): Effect's `Clock` (its sleeps for timers) and `Random`,
 // and the `FileSystem` and `IdSource` it is made with.
 const reach = {
   clock: [/\bDate\.now\(|\bnew Date\(\)|\bperformance\.now\(/g, "the wall clock (use Effect's Clock)"],

@@ -1,4 +1,4 @@
-import { Effect, Exit, Fiber, Scope, Stream } from "effect";
+import { Cause, Effect, Exit, Fiber, Option, Scope, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { Events, makeCore } from "@lemma/core";
 import { Agent, QueueChanged } from "@lemma/agent";
@@ -166,6 +166,61 @@ describe("a change the journal cannot record", () => {
       }),
     );
     expect(seen).toEqual({ refused: "Io", queue: ["b"], withdrawn: true });
+  });
+});
+
+describe("a withdrawal whose caller gives up while it is written", () => {
+  it("still takes the prompt out, and answers the prompt's caller", async () => {
+    const seen = await Effect.runPromise(
+      Effect.gen(function* () {
+        const disk = new SimDisk(seededRandom(1)).mount();
+        // The session's journal writes wait at the gate while it is shut: the withdrawal is mid-write when its caller goes.
+        let shut: string | undefined;
+        let reach!: () => void;
+        let open!: () => void;
+        const reached = new Promise<void>((resolve) => (reach = resolve));
+        const opened = new Promise<void>((resolve) => (open = resolve));
+        const fs: FileSystem = {
+          ...disk,
+          open: async (path, flags, mode) => {
+            if (shut !== undefined && path.startsWith(`${HOME}/agent/${shut}.json`) && flags !== "r") {
+              reach();
+              await opened;
+            }
+            return disk.open(path, flags, mode);
+          },
+        };
+        const running = yield* start(fs, [hang("thinking")]);
+        const seen = yield* running.core.run(
+          Effect.gen(function* () {
+            const { id } = yield* (yield* Sessions).create();
+            const agent = yield* Agent;
+            yield* Effect.forkChild(agent.prompt(id, text("first"), { requestId: "a" }));
+            yield* waitFor(agent.busy(id), (busy) => busy);
+            const queued = yield* changingQueue(id, (requestIds) => requestIds.includes("b"), agent.prompt(id, text("second"), { requestId: "b" }));
+            shut = id;
+            const withdrawing = yield* Effect.forkChild(agent.withdraw(id, "b"));
+            yield* Effect.promise(() => reached);
+            // Its caller gives up while the journal is written (the interruption delivered while the write waits), then the
+            // write goes on.
+            const interrupting = yield* Effect.forkChild(Fiber.interrupt(withdrawing));
+            for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+            open();
+            yield* Fiber.join(interrupting);
+            // Answered, not left waiting: a hang fails the test with a timeout.
+            const answer = yield* Fiber.await(queued).pipe(Effect.timeout("2 seconds"));
+            const failure = Exit.isFailure(answer) ? Option.getOrUndefined(Cause.findErrorOption(answer.cause)) : undefined;
+            return {
+              answer: Exit.isSuccess(answer) ? "placed" : (failure?.reason ?? "died"),
+              queue: (yield* agent.queue(id)).map((prompt) => prompt.requestId),
+            };
+          }),
+        );
+        yield* Scope.close(running.scope, Exit.void);
+        return seen;
+      }),
+    );
+    expect(seen).toEqual({ answer: "Retracted", queue: [] });
   });
 });
 

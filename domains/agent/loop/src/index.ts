@@ -910,24 +910,28 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const withdraw = (sessionId: string, requestId: string) =>
         Effect.andThen(
           checked(sessionId),
+          // Not split by the caller's interruption, as admission is not: a prompt taken out of the queue and never answered
+          // would leave its caller waiting for good.
           admit.withPermits(1)(
-            Effect.gen(function* () {
-              const state = states.get(sessionId);
-              const item = state?.queue.find((candidate) => candidate.prompt.requestId === requestId);
-              // Being placed in the running turn: too late to take out.
-              if (state === undefined || item === undefined || item.placing) return false;
-              const queue = state.queue;
-              yield* setQueue(
-                state,
-                queue.filter((candidate) => candidate !== item),
-              );
-              // Withdrawn once the journal no longer has it, as a crash would bring it back otherwise.
-              yield* persist(sessionId).pipe(Effect.tapError(() => setQueue(state, queue)));
-              yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Retracted", message: "The prompt was withdrawn from the queue" }));
-              forget(sessionId, state);
-              yield* queueChanged(sessionId);
-              return true;
-            }),
+            Effect.uninterruptible(
+              Effect.gen(function* () {
+                const state = states.get(sessionId);
+                const item = state?.queue.find((candidate) => candidate.prompt.requestId === requestId);
+                // Being placed in the running turn: too late to take out.
+                if (state === undefined || item === undefined || item.placing) return false;
+                const queue = state.queue;
+                yield* setQueue(
+                  state,
+                  queue.filter((candidate) => candidate !== item),
+                );
+                // Withdrawn once the journal no longer has it, as a crash would bring it back otherwise.
+                yield* persist(sessionId).pipe(Effect.tapError(() => setQueue(state, queue)));
+                yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Retracted", message: "The prompt was withdrawn from the queue" }));
+                forget(sessionId, state);
+                yield* queueChanged(sessionId);
+                return true;
+              }),
+            ),
           ),
         );
 

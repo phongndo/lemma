@@ -325,7 +325,8 @@ export class Agent extends Context.Service<
     /**
      * Takes a queued prompt out; its `prompt` call fails `Retracted`. False
      * when it was not queued (placed already). Fails as `queue` does, rather
-     * than take out a prompt that may have been placed.
+     * than take out a prompt that may have been placed; and `Io` when the agent
+     * could not record that it was taken out, the prompt left queued.
      */
     readonly withdraw: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
     /**
@@ -384,8 +385,10 @@ export const AgentChannels = {
    * (`PromptOptions.requestId`): a retry without it would place the prompt
    * again.
    *
-   * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`, or
-   * `Retracted` when `agent.withdraw` took the prompt out of the queue, each
+   * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`,
+   * `Io` when the agent could not record the prompt (it was not taken: a
+   * retry with the same id may place it), or `Retracted` when `agent.withdraw`
+   * took the prompt out of the queue, each
    * with the session as its subject; `Withdrawn` (its subject `agent.prompt`)
    * only when no agent answers once the change that stopped it has finished,
    * as when the agent is turned off. A client that clears
