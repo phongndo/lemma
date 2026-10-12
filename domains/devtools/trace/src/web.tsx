@@ -1,4 +1,4 @@
-import { For, Match, Show, Switch, createEffect, createMemo, createSignal, on, onMount } from "solid-js";
+import { For, Match, Show, Switch, createComputed, createMemo, createSignal, on, onMount } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
 import type { PluginStatus, SpanRecord } from "@lemma/contracts";
 import { Devtools, DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL } from "@lemma/devtools/web";
@@ -11,7 +11,7 @@ import type { ClientService, PageTraceService, PluginsService, RouterService } f
 import { clockTime } from "@lemma/web/format";
 import { createTrace, hostTrace, pageTrace } from "./model.ts";
 import type { TraceModel, TraceSource } from "./model.ts";
-import { matcher, parseQuery, turnOrder } from "./query.ts";
+import { matcher, narrowedBy, parseQuery, turnOrder } from "./query.ts";
 import { contains, flatten, forest, profile } from "./tree.ts";
 import type { SpanNode } from "./tree.ts";
 import styles from "./trace.css?inline";
@@ -28,7 +28,18 @@ const MODES: readonly { readonly id: Mode; readonly label: string }[] = [
   { id: "faults", label: "Faults" },
 ];
 
+/** What the panel shows: kept by the plugin, so the panel drawn again (another tab, then this one) shows it still. */
+interface PanelState {
+  readonly which: Accessor<Which>;
+  readonly setWhich: (which: Which) => void;
+  readonly mode: Accessor<Mode>;
+  readonly setMode: (mode: Mode) => void;
+  readonly query: Accessor<string>;
+  readonly setQuery: (query: string) => void;
+}
+
 interface Deps {
+  readonly state: PanelState;
   readonly client: ClientService;
   readonly page: PageTraceService;
   readonly devtools: DevtoolsService;
@@ -37,7 +48,8 @@ interface Deps {
   readonly web: PluginsService;
 }
 
-const ms = (value: number) => (value < 10 ? value.toFixed(2) : value < 1000 ? value.toFixed(1) : `${(value / 1000).toFixed(2)}s`);
+/** A time with its unit: milliseconds below a second, seconds from there. */
+const ms = (value: number) => (value < 10 ? `${value.toFixed(2)} ms` : value < 1000 ? `${value.toFixed(1)} ms` : `${(value / 1000).toFixed(2)} s`);
 const pluginOf = (span: SpanRecord) => (typeof span.attributes["plugin.id"] === "string" ? (span.attributes["plugin.id"] as string) : undefined);
 
 /** What the panel shares between its views: the trace shown, its filter, and the span selected. */
@@ -95,7 +107,7 @@ function SpanDetails(props: { shown: Shown; span: SpanRecord }) {
           <dt>Started</dt>
           <dd>{clockTime(span().start)}</dd>
           <dt>Took</dt>
-          <dd>{ms(span().ms)} ms</dd>
+          <dd>{ms(span().ms)}</dd>
           <dt>Status</dt>
           <dd classList={{ "dt-err": span().status === "error" }}>{span().status}</dd>
           <Show when={span().error}>
@@ -188,7 +200,16 @@ function Waterfall(props: { shown: Shown; root: SpanNode; matches: (span: SpanRe
 function SpansView(props: { shown: Shown }) {
   const spans = () => props.shown.trace.spans();
   const matches = createMemo(() => matcher(parseQuery(props.shown.query()), turnOrder(spans())));
-  const roots = createMemo(() => forest(spans()));
+  // A trace whose spans did not change keeps its node, so its row and open waterfall are not drawn again each batch.
+  let kept = new Map<string, SpanNode>();
+  const roots = createMemo(() => {
+    const steady = forest(spans()).map((root) => {
+      const before = kept.get(root.span.id);
+      return before !== undefined && before.span === root.span && before.size === root.size ? before : root;
+    });
+    kept = new Map(steady.map((root) => [root.span.id, root]));
+    return steady;
+  });
   const shown = createMemo(() => {
     const found: SpanNode[] = [];
     const all = roots();
@@ -211,8 +232,8 @@ function SpansView(props: { shown: Shown }) {
             <tr>
               <th>Span</th>
               <th style={{ width: "160px" }}>Plugin</th>
-              <th style={{ width: "72px" }} class="dt-num">
-                ms
+              <th style={{ width: "80px" }} class="dt-num">
+                Took
               </th>
               <th style={{ width: "34%" }}>When, within its trace</th>
             </tr>
@@ -230,12 +251,21 @@ function SpansView(props: { shown: Shown }) {
             >
               {(root) => (
                 <>
-                  <tr data-row data-selected={props.shown.selected() === root.span.id} onClick={() => toggle(root.span.id)}>
+                  <tr
+                    data-row
+                    data-selected={props.shown.selected() === root.span.id}
+                    onClick={() => {
+                      // Opens its waterfall and shows its details; again, closes both.
+                      const closing = open().has(root.span.id) && props.shown.selected() === root.span.id;
+                      if (closing || !open().has(root.span.id)) toggle(root.span.id);
+                      props.shown.select(closing ? undefined : root.span.id);
+                    }}
+                  >
                     <td class="dt-code trc-name" title={root.span.error}>
                       <span class="trc-caret">{open().has(root.span.id) ? "▾" : "▸"}</span>
                       {root.span.name}
                       <Show when={root.children.length > 0}>
-                        <span class="dt-muted"> · {flatten(root).length - 1} under it</span>
+                        <span class="dt-muted"> · {root.size - 1} under it</span>
                       </Show>
                     </td>
                     <td>
@@ -264,9 +294,10 @@ function SpansView(props: { shown: Shown }) {
 
 /** Each plugin's spans: how many, their time, their own time, the slowest, and how many failed. */
 function PluginsView(props: { shown: Shown }) {
+  // The trees of every span, so a span's own time leaves out its children though the filter does not pick them.
   const rows = createMemo(() => {
-    const matches = matcher(parseQuery(props.shown.query()), turnOrder(props.shown.trace.spans()));
-    return profile(forest(props.shown.trace.spans().filter(matches)));
+    const spans = props.shown.trace.spans();
+    return profile(forest(spans), matcher(parseQuery(props.shown.query()), turnOrder(spans)));
   });
   return (
     <div class="dt-main" tabindex="-1">
@@ -275,8 +306,8 @@ function PluginsView(props: { shown: Shown }) {
           <tr>
             <th>Plugin</th>
             <th class="dt-num">Spans</th>
-            <th class="dt-num">Own ms</th>
-            <th class="dt-num">Total ms</th>
+            <th class="dt-num">Own</th>
+            <th class="dt-num">Total</th>
             <th class="dt-num">p95</th>
             <th class="dt-num">Max</th>
             <th>Slowest</th>
@@ -298,7 +329,7 @@ function PluginsView(props: { shown: Shown }) {
               <tr
                 data-row
                 onClick={() => {
-                  props.shown.setQuery(`plugin:${row.plugin}`);
+                  props.shown.setQuery(narrowedBy(props.shown.query(), "plugin", row.plugin));
                   props.shown.setMode("spans");
                 }}
               >
@@ -534,28 +565,13 @@ function TraceView(props: {
   );
 }
 
-/** The host's trace, or the page's, in the view picked; a subject the devtools are shown with is its filter. */
+/** The host's trace, or the page's, in the view picked (`PanelState`). */
 function TracePanel(props: { deps: Deps }) {
-  const [which, setWhich] = createSignal<Which>("host");
-  const [mode, setMode] = createSignal<Mode>("spans");
-  const [query, setQuery] = createSignal("");
+  const { which, setWhich, mode, setMode, query, setQuery } = props.deps.state;
   const sources: Record<Which, Accessor<TraceSource>> = {
     host: createMemo(() => hostTrace(props.deps.client)),
     page: createMemo(() => pageTrace(props.deps.page)),
   };
-  createEffect(
-    on(
-      () => props.deps.devtools.subject(TRACE_PANEL),
-      (subject) => {
-        if (subject === undefined) return;
-        // `trace:page` picks the page's trace (the host's otherwise); the rest is the filter.
-        const words = subject.split(/\s+/);
-        setWhich(words.includes("trace:page") ? "page" : "host");
-        setMode("spans");
-        setQuery(words.filter((word) => !word.startsWith("trace:")).join(" "));
-      },
-    ),
-  );
   return (
     <div class="dt-scope trc" aria-label="Trace panel">
       <div class="dt-toolbar" role="toolbar" aria-label="Which trace">
@@ -603,14 +619,32 @@ export default defineWebPlugin({
     web: WebPlugins,
   },
   setup: ({ slots, client, page, devtools, router, host, web }) => {
-    const deps: Deps = { client, page, devtools, router, host, web };
+    const [which, setWhich] = createSignal<Which>("host");
+    const [mode, setMode] = createSignal<Mode>("spans");
+    const [query, setQuery] = createSignal("");
+    const state: PanelState = { which, setWhich, mode, setMode, query, setQuery };
+    /** A subject: `trace:page` picks the page's trace (the host's otherwise), and the rest is the filter. */
+    const take = (asked: string) => {
+      const words = asked.split(/\s+/);
+      setWhich(words.includes("trace:page") ? "page" : "host");
+      setMode("spans");
+      setQuery(words.filter((word) => !word.startsWith("trace:")).join(" "));
+    };
+    // One the devtools are shown with is taken when it changes, before the panel draws: drawn again, it keeps its state.
+    const subject = createMemo(() => devtools.subject(TRACE_PANEL));
+    createComputed(on(subject, (asked) => asked !== undefined && take(asked)));
+    const deps: Deps = { state, client, page, devtools, router, host, web };
     // After the dock's own panels (the inspectors are at 50).
     slots.add(DevtoolsPanels, { id: TRACE_PANEL, order: 60, title: "Trace", component: () => <TracePanel deps={deps} /> });
     slots.add(TrajectoryActions, {
       id: "devtools.trace.show",
       label: "Show in trace",
       when: (record) => subjectOf(record) !== undefined,
-      run: (record) => devtools.show(TRACE_PANEL, subjectOf(record)!),
+      // Taken here too: the same record asked again, after the filter changed, shows it again.
+      run: (record) => {
+        take(subjectOf(record)!);
+        devtools.show(TRACE_PANEL, subjectOf(record)!);
+      },
     });
   },
 });

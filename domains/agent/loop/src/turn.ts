@@ -649,27 +649,34 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     Effect.gen(function* () {
       const steps: HandlerStep<StepOutcome, "continue" | "stop">[] = [];
       // Tool results the model has not read yet keep it going too, whatever the provider called its stop.
-      const why =
-        outcome.message.stopReason === "toolUse"
+      const reason = (seen: StepOutcome) =>
+        seen.message.stopReason === "toolUse"
           ? "the model asked for tools"
-          : outcome.results.length > 0
+          : seen.results.length > 0
             ? "tool results to read"
-            : `the model stopped (${outcome.message.stopReason})`;
+            : `the model stopped (${seen.message.stopReason})`;
+      // What the default saw, which a handler may have rewritten; none, when a handler answered itself.
+      let why = reason(outcome);
       const result = yield* hooks
         .invoke(
           AgentContinueHook,
           { sessionId, turnId, step, message: outcome.message, results: outcome.results },
-          (final) => Effect.succeed(final.message.stopReason === "toolUse" || final.results.length > 0 ? ("continue" as const) : ("stop" as const)),
+          (final) =>
+            Effect.sync(() => {
+              why = reason(final);
+              return final.message.stopReason === "toolUse" || final.results.length > 0 ? ("continue" as const) : ("stop" as const);
+            }),
           { onStep: (heard) => void steps.push(heard) },
         )
         .pipe(Effect.mapError(hookError("AgentContinueHook")));
+      // A handler changed the decision by what it returned, or by what it passed on.
       const handlers = inChainOrder(steps).map((heard) =>
-        creditOf(
-          heard,
-          heard.output !== undefined && heard.next?.output !== undefined && heard.output !== heard.next.output
+        creditOf(heard, [
+          ...(heard.next !== undefined && heard.next.input !== heard.input ? ["input"] : []),
+          ...(heard.output !== undefined && heard.next?.output !== undefined && heard.output !== heard.next.output
             ? [`${heard.next.output} → ${heard.output}`]
-            : [],
-        ),
+            : []),
+        ]),
       );
       return { result, why, ...(handlers.length === 0 ? {} : { handlers }) };
     });
@@ -699,9 +706,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
         yield* boundary;
         const stepId = newId();
-        const next = yield* services
-          .trace("agent.step", Effect.andThen(Effect.annotateCurrentSpan("step.index", step), oneStep(step, stepId, asking)))
-          .pipe(Effect.annotateSpans({ "step.id": stepId }));
+        // Every span of the step's work carries both, so a trace narrows to a step by either.
+        const next = yield* services.trace("agent.step", oneStep(step, stepId, asking)).pipe(Effect.annotateSpans({ "step.id": stepId, "step.index": step }));
         if (typeof next === "object" && "retryAt" in next) {
           yield* waitUntil(next.retryAt);
           continue;
@@ -822,7 +828,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             .trace(
               "agent.step",
               Effect.andThen(
-                Effect.annotateCurrentSpan({ "step.index": plan.steps, "step.resumed": true }),
+                Effect.annotateCurrentSpan("step.resumed", true),
                 Effect.gen(function* () {
                   const ran =
                     at.message.stopReason === "length"
@@ -835,14 +841,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
                 }),
               ),
             )
-            .pipe(Effect.annotateSpans({ "step.id": at.stepId }));
+            .pipe(Effect.annotateSpans({ "step.id": at.stepId, "step.index": plan.steps }));
           return ended ?? (yield* steps(plan.steps + 1));
         }
         case "between": {
           // Prompts already placed after the last step are what the model answers next.
           if (at.outcome === undefined || at.steered) return yield* again();
-          const decision = yield* decide(plan.steps, at.outcome);
-          return (yield* afterStep(plan.steps, decision.result)) ?? (yield* steps(plan.steps + 1));
+          // The decision its step-end logged is what the turn acts on; one logged before decisions were is made now.
+          const decision = at.decision ?? (yield* decide(plan.steps, at.outcome)).result;
+          return (yield* afterStep(plan.steps, decision)) ?? (yield* steps(plan.steps + 1));
         }
       }
     });

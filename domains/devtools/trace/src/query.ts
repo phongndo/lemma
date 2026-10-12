@@ -5,9 +5,9 @@ import type { SpanRecord } from "@lemma/contracts";
  *
  *   plugin:tools          a plugin, or a domain's plugins (`tools.bash`, `tools.registry`)
  *   session:4f2a  turn:2  step:3  tool:bash  hook:agent.request
- *   name:core.hook  status:error  slow:>5ms
+ *   name:core.hook  status:error  slow:>5ms  slow:>1.5s
  *   -plugin:transport     any of them negated
- *   anything else         in the span's name or any attribute's value
+ *   anything else         in the span's name, its status, or any attribute's value
  *
  * `turn:N` is the Nth turn the trace kept (by when it started), `step:N` a step's index in its turn; an id, or the
  * start of one, works for both, as for a session or a tool call.
@@ -24,6 +24,16 @@ export interface Query {
 
 const KEYS = new Set(["plugin", "session", "turn", "step", "tool", "hook", "name", "status"]);
 
+/** A `slow:` value in milliseconds: `5`, `>5ms`, `>=1.5s`; undefined when it is none. */
+const duration = (value: string): number | undefined => {
+  const match = /^>?=?(\d+(?:\.\d+)?|\.\d+)(ms|s)?$/i.exec(value);
+  return match === null ? undefined : Number(match[1]) * (match[2]?.toLowerCase() === "s" ? 1000 : 1);
+};
+
+/** `text` with `key:value` in place of any `key:` word it had, so it narrows what it showed rather than starting over. */
+export const narrowedBy = (text: string, key: string, value: string): string =>
+  [...text.split(/\s+/).filter((word) => word !== "" && !word.toLowerCase().startsWith(`${key}:`)), `${key}:${value}`].join(" ");
+
 export const parseQuery = (text: string): Query => ({
   terms: text
     .trim()
@@ -36,8 +46,8 @@ export const parseQuery = (text: string): Query => ({
       const key = colon > 0 ? bare.slice(0, colon).toLowerCase() : "";
       const value = colon > 0 ? bare.slice(colon + 1) : bare;
       if (key === "slow" || key === "ms") {
-        const ms = Number.parseFloat(value.replace(/^>=?/, "").replace(/ms$/, ""));
-        if (Number.isFinite(ms)) return { term: { kind: "slow", ms } as const, negated };
+        const ms = duration(value);
+        if (ms !== undefined) return { term: { kind: "slow", ms } as const, negated };
       }
       if (KEYS.has(key) && value !== "") return { term: { kind: "key", key, value } as const, negated };
       return { term: { kind: "text", value: bare.toLowerCase() } as const, negated };
@@ -92,6 +102,8 @@ export const matcher =
           ? span.ms >= term.ms
           : term.kind === "key"
             ? matchesKey(span, term.key, term.value, turns)
-            : span.name.toLowerCase().includes(term.value) || Object.values(span.attributes).some((value) => String(value).toLowerCase().includes(term.value));
+            : span.name.toLowerCase().includes(term.value) ||
+              span.status.includes(term.value) ||
+              Object.values(span.attributes).some((value) => String(value).toLowerCase().includes(term.value));
       return found !== negated;
     });
