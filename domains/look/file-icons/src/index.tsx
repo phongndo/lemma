@@ -3,7 +3,7 @@ import { Show, createMemo } from "solid-js";
 import { FILE_GLYPHS } from "./file-glyphs.ts";
 import { DEFAULT_FILE_TYPE, fileType, parseFileTypeRules } from "./file-icons.ts";
 import { FileIconPart, Icon } from "@lemma/look";
-import { Slots, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import type { FileIconProps } from "@lemma/look";
 import styles from "./file-icons.css?inline";
 
@@ -46,7 +46,7 @@ export default defineWebPlugin({
         </Show>
       );
     }
-    // Just below the default: it replaces `kit`'s, and any replacement below `DEFAULT_PART_ORDER` still replaces it.
-    slots.add(FileIconPart, { id: "file-icons", order: DEFAULT_PART_ORDER - 1, component: TypedFileIcon });
+    // A better default: first among the defaults, so it shows over `kit`'s, and any replacement still shows over it.
+    slots.add(FileIconPart, { id: "file-icons", phase: "default", order: -1, component: TypedFileIcon });
   },
 });

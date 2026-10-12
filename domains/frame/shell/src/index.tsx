@@ -147,7 +147,7 @@ export default defineWebPlugin({
         </div>
       );
     }
-    slots.add(Root, { id: "shell", component: Shell });
+    slots.add(Root, { id: "shell", phase: "default", component: Shell });
     return { layout: { toggleSidebar, closeDrawer } };
   },
 });

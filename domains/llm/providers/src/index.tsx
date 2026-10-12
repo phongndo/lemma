@@ -23,7 +23,7 @@ import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { ComposerNotices } from "@lemma/threads";
-import { Client, Interactions, Notify, Slots, WebPlugins, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
+import { Client, Interactions, Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import { CheckIcon, FilterIcon, KeyIcon, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
 import { CustomProviderDialog, pickSvg } from "./custom.tsx";
@@ -427,10 +427,10 @@ export default defineWebPlugin({
       }
     };
     const groups = createMemo(() => providerGroups(models.providers(), query(), filter()));
-    // Its rows are a part: its own is the default, and a plugin replaces it everywhere by adding a lower order.
+    // Its rows are a part: its own is the default, and a plugin replaces it everywhere by adding one of its own.
     slots.add(ProviderRowPart, {
       id: "providers.row",
-      order: DEFAULT_PART_ORDER,
+      phase: "default",
       component: (props: ProviderRowProps) => <ProviderRow models={models} provider={props.provider} login={(_, type) => props.login(type)} custom={custom} />,
     });
     const row = (provider: ProviderInfo) => () => <ProviderRowView provider={provider} login={(type) => void login(provider, type)} />;

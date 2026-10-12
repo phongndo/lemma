@@ -4,8 +4,8 @@ Shows the open thread as a conversation: each prompt, the answers as markdown,
 thoughts and tool calls as lines that open to what they hold, a divider where
 the context was compacted, and under each finished turn its model, tokens,
 cost, and time. Adds the `transcript` view to `Views` (order -10, first, with the
-composer under it), and the defaults of the chat's parts at
-`DEFAULT_PART_ORDER`: `ChatUserPart`, `ChatThinkingPart`, `ChatToolPart`,
+composer under it), and the defaults of the chat's parts in the phase
+`default`: `ChatUserPart`, `ChatThinkingPart`, `ChatToolPart`,
 `ChatWorkPart`, `ChatWorkGroupPart`, `ChatWorkingPart`, and `ChatTurnFooterPart`
 ([`@lemma/threads`](../contract/src/parts.tsx)). A tool's calls show as its
 `ToolViews` item says. It reads `Threads.branch` and `Threads.live` through the

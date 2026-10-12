@@ -16,7 +16,7 @@ import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
 import type { DevtoolsService } from "@lemma/devtools/web";
-import { DEFAULT_PART_ORDER, definedSlots, usePlugin } from "@lemma/web";
+import { definedSlots, usePlugin } from "@lemma/web";
 
 type Kind = "web" | "host";
 const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host" };
@@ -155,7 +155,10 @@ interface SlotView {
   readonly name: string;
   readonly contract: { readonly name: string; readonly from: string } | undefined;
   readonly shows: "first" | "all";
-  readonly items: readonly { readonly id: string; readonly plugin: string; readonly order: number }[];
+  /** Its phases, first first, and the one an item naming none goes in, when it declares them. */
+  readonly phases?: readonly string[];
+  readonly defaultPhase?: string;
+  readonly items: readonly { readonly id: string; readonly plugin: string; readonly phase?: string; readonly order: number }[];
 }
 const slotViews = (slots: SlotsService): SlotView[] =>
   definedSlots()
@@ -163,19 +166,33 @@ const slotViews = (slots: SlotsService): SlotView[] =>
       name: slot.name,
       contract: exportNames.get(slot),
       shows,
-      items: slots.contributions(slot).map((contribution) => ({ id: contribution.item.id, plugin: contribution.pluginId, order: contribution.order })),
+      ...(slot.options.phases === undefined ? {} : { phases: slot.options.phases, defaultPhase: slot.options.defaultPhase! }),
+      items: slots
+        .contributions(slot)
+        .map(({ item, pluginId, phase, order }) => ({ id: item.id, plugin: pluginId, ...(phase === undefined ? {} : { phase }), order })),
     }))
     .sort((a, b) => (a.name < b.name ? -1 : 1));
+
+/** An item's place, as the slot's items table and a plugin's contributions show it. */
+const placeOf = (item: { readonly phase?: string; readonly order: number }) => `${item.phase === undefined ? "" : `${item.phase} · `}${item.order}`;
 
 const snippet = (view: SlotView): string => {
   const target = view.contract === undefined ? `defineSlot(${JSON.stringify(view.name)})` : view.contract.name;
   // A web half takes the contracts from its api (no build step resolves an import); the name says which contract.
   const from = view.contract === undefined ? "" : `const { ${view.contract.name} } = api.contracts; // ${view.contract.from}\n`;
+  const { phases, defaultPhase } = view;
+  const rank = (phase: string | undefined) => phases?.indexOf(phase ?? defaultPhase!) ?? 0;
+  const inPhases = phases === undefined ? "" : ` Phases: ${phases.join(", ")} (an item naming none goes in "${defaultPhase}").`;
   if (view.shows === "first") {
-    const first = view.items[0]?.order ?? DEFAULT_PART_ORDER;
-    return `${from}// One item shows: the first by order. To replace "${view.items[0]?.id ?? "it"}", add with a lower order.\nslots.add(${target}, { id: "my-plugin.${view.name}", order: ${first - 1}, component: Mine });`;
+    const shown = view.items[0];
+    // An item in the default phase already comes before one in a later phase; within a phase, a lower order comes first.
+    const place =
+      shown === undefined || rank(undefined) < rank(shown.phase)
+        ? ""
+        : `${shown.phase === undefined || shown.phase === defaultPhase ? "" : `phase: ${JSON.stringify(shown.phase)}, `}order: ${shown.order - 1}, `;
+    return `${from}// One item shows: the first.${inPhases} This replaces "${shown?.id ?? "it"}".\nslots.add(${target}, { id: "my-plugin.${view.name}", ${place}component: Mine });`;
   }
-  return `${from}// Every item shows, in order (then by plugin id).\nslots.add(${target}, { id: "my-plugin.thing", order: 0, ... });`;
+  return `${from}// Every item shows, in order: ${phases === undefined ? "" : "by phase, then "}lower order first, then by plugin id.${inPhases}\nslots.add(${target}, { id: "my-plugin.thing", order: 0, ... });`;
 };
 
 /**
@@ -324,7 +341,9 @@ function PluginView(props: {
                     return (
                       <tr data-row>
                         <td class="dt-code">{hook.name}</td>
-                        <td class="dt-num dt-muted">order {hook.order}</td>
+                        <td class="dt-num dt-muted">
+                          {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order}
+                        </td>
                         <td class="dt-muted">
                           {chain().findIndex((handler) => handler.plugin === plugin().id) + 1} of {chain().length}
                         </td>
@@ -364,7 +383,7 @@ function PluginView(props: {
                       <tr data-row>
                         <td class="dt-code">{item.slot}</td>
                         <td class="dt-code">{item.id}</td>
-                        <td class="dt-num dt-muted">{item.order}</td>
+                        <td class="dt-num dt-muted">{placeOf(item)}</td>
                       </tr>
                     )}
                   </For>
@@ -556,7 +575,7 @@ function HooksPanel(props: { deps: Deps }) {
       ? kernel().hooks.map((hook) => ({
           name: hook.name,
           plugins: hook.handlers.map((handler) => handler.plugin),
-          orders: hook.handlers.map((handler) => handler.order),
+          orders: hook.handlers.map((handler) => `${handler.phase === undefined ? "" : `${handler.phase} · `}order ${handler.order}`),
         }))
       : kernel().events.map((event) => ({ name: event.name, plugins: event.observers, orders: undefined }));
   const current = () => rows().find((row) => row.name === selected()) ?? rows()[0];
@@ -613,7 +632,7 @@ function HooksPanel(props: { deps: Deps }) {
               <div class="dt-side-body">
                 <Section
                   title={row.orders === undefined ? "Observers" : "Chain"}
-                  aside={row.orders === undefined ? "each hears every event" : "lowest order runs first"}
+                  aside={row.orders === undefined ? "each hears every event" : "by phase, then lowest order first"}
                 >
                   <table class="dt-table">
                     <tbody>
@@ -626,7 +645,7 @@ function HooksPanel(props: { deps: Deps }) {
                             <td>
                               <PluginName deps={deps} kind={kind()} id={id} />
                             </td>
-                            <td class="dt-muted">{row.orders === undefined ? "" : `order ${row.orders[index()]}`}</td>
+                            <td class="dt-muted">{row.orders?.[index()] ?? ""}</td>
                           </tr>
                         )}
                       </For>
@@ -757,17 +776,27 @@ function RegistriesPanel(props: { deps: Deps }) {
                     <div class="dt-side-body">
                       <dl class="dt-facts">
                         <dt>Shows</dt>
-                        <dd>{view.shows === "first" ? "the first item by order; the rest are replaced" : "every item, in order"}</dd>
+                        <dd>{view.shows === "first" ? "the first item; the rest are replaced" : "every item, in order"}</dd>
+                        <Show when={view.phases}>
+                          {(phases) => (
+                            <>
+                              <dt>Phases</dt>
+                              <dd>
+                                {phases().join(", ")}; an item naming none goes in {view.defaultPhase}
+                              </dd>
+                            </>
+                          )}
+                        </Show>
                       </dl>
-                      <Section title="Items" aside="by order, then plugin">
+                      <Section title="Items" aside={view.phases === undefined ? "by order, then plugin" : "by phase, then order, then plugin"}>
                         <Show when={view.items.length > 0} fallback={<p class="dt-muted">Empty: nothing adds to it now.</p>}>
                           <table class="dt-table" aria-label="Registry items">
                             <tbody>
                               <For each={view.items}>
                                 {(item, index) => (
                                   <tr data-row>
-                                    <td class="dt-num dt-muted" style={{ width: "40px" }}>
-                                      {item.order}
+                                    <td class="dt-num dt-muted" style={{ "white-space": "nowrap" }}>
+                                      {placeOf(item)}
                                     </td>
                                     <td class="dt-code">{item.id}</td>
                                     <td>

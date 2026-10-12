@@ -35,7 +35,7 @@ import type {
 import { Actions } from "@lemma/actions";
 import { Models } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, DEFAULT_PART_ORDER, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
+import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
@@ -947,12 +947,12 @@ export default defineWebPlugin({
         label: "composer: an unsent prompt asks before the tab closes",
       }),
     );
-    use.slots.add(ComposerRegion, { id: "composer", component: () => <Composer deps={deps} /> });
+    use.slots.add(ComposerRegion, { id: "composer", phase: "default", component: () => <Composer deps={deps} /> });
     use.slots.add(ComposerNotices, { id: "composer.answer", order: 50, component: () => <PromptAnswerNotice threads={use.threads} /> });
     // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
     use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
-    use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow });
-    use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow });
+    use.slots.add(ComposerQueuedPart, { id: "composer.queued", phase: "default", component: QueuedRow });
+    use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", phase: "default", component: SuggestionRow });
     // How it sends and stops belongs with the keys, so it offers those settings on the Keyboard page. A default is
     // written as unset, so the file keeps only what was changed.
     const setOption = <K extends keyof typeof ComposerConfig.Type>(key: K, value: (typeof ComposerConfig.Type)[K]) => {

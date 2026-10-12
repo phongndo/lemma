@@ -147,13 +147,14 @@ as `api.contracts`). The bundled plugins use nothing else:
   `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`, `PageTrace`)
   the app provides itself; every other comes from a plugin.
 - **Slots** are places any number of plugins add to: regions of the screen,
-  where the first item by `order` shows, and lists such as `Actions` (the
+  where the first item shows, and lists such as `Actions` (the
   palette and shortcuts) or `ComposerCompletions`. A plugin adds through the
   `Slots` its setup receives, and an item leaves when the plugin that added it
   stops.
 - **Parts** are the pieces plugins draw with, such as `icon`, `dialog`, or
-  `chat.tool`. Replace one everywhere by adding an item with an `order` below
-  `DEFAULT_PART_ORDER`; `api.defaults` holds the bundled implementations. Some
+  `chat.tool`. Replace one everywhere by adding an item of your own: the
+  bundled defaults are in the phase `default`, and an item that names no
+  phase comes before them; `api.defaults` holds the bundled implementations. Some
   bundled parts declare a plain fallback, drawn while nothing provides them;
   a part from `api.definePart` has none, since its plugin provides it.
 
@@ -184,7 +185,7 @@ export default ({ defineWebPlugin, contracts: { Slots, ChatThinkingPart }, html 
     id: "quiet-thoughts",
     requires: { slots: Slots },
     setup: ({ slots }) => {
-      slots.add(ChatThinkingPart, { id: "quiet", order: 0, component: () => html`<p class="muted small">thought for a moment</p>` });
+      slots.add(ChatThinkingPart, { id: "quiet", component: () => html`<p class="muted small">thought for a moment</p>` });
     },
   });
 ```

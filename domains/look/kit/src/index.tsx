@@ -23,7 +23,7 @@ import {
   SearchFieldPart,
   TogglePart,
 } from "@lemma/look";
-import { Slots, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import type { Part } from "@lemma/web";
 import styles from "./kit.css?inline";
 
@@ -31,8 +31,8 @@ import styles from "./kit.css?inline";
  * The shared parts every view draws with: markdown, dialogs, menus, toggles,
  * copy buttons, setting rows, the config form, provider logos, icons, and file icons. The only plugin
  * that imports rendering components; everything else draws these parts, so
- * replacing one here (or adding one with a lower order from any plugin or UI
- * file) changes it everywhere.
+ * replacing one here (or adding one of its own from any plugin, as its items
+ * are in the phase `default`) changes it everywhere.
  */
 export default defineWebPlugin({
   id: "look.kit",
@@ -40,7 +40,7 @@ export default defineWebPlugin({
   requires: { slots: Slots },
   setup: ({ slots }) => {
     const add = <P extends Record<string, any>>(part: Part<P>, component: (props: P) => any) =>
-      slots.add(part, { id: `kit.${part.name.slice("part.".length)}`, order: DEFAULT_PART_ORDER, component });
+      slots.add(part, { id: `kit.${part.name.slice("part.".length)}`, phase: "default", component });
     add(MarkdownPart, Markdown);
     add(DialogPart, Dialog);
     add(PopoverPart, Popover);

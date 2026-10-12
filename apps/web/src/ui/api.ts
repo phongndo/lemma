@@ -20,7 +20,7 @@ import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
 import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
-import { DEFAULT_PART_ORDER, defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema, usePlugin } from "@lemma/web";
+import { defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema, usePlugin } from "@lemma/web";
 import * as webRuntime from "@lemma/web";
 import type { Part } from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
@@ -102,8 +102,6 @@ export const api = {
   isRoute,
   /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. It has no fallback: the plugin provides it. */
   definePart: <P extends Record<string, any>>(name: string): Part<P> => definePart<P>(name),
-  /** The order bundled parts are added at: add with a lower one to replace a part. */
-  DEFAULT_PART_ORDER,
   contracts,
   /**
    * The page's look (see "the look" in the contracts): `paint` applies a scheme and tokens for an owner, as the

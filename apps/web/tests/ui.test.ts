@@ -159,6 +159,40 @@ describe("slots", () => {
     });
   });
 
+  it("shows a part's replacement over its defaults by phase, whatever the numbers, and a better default over another", async () => {
+    // As `look.kit` and `look.file-icons` add theirs (`ui:check` checks theirs in the app).
+    const providing = (id: string, item: { readonly id: string; readonly phase?: string; readonly order?: number }) =>
+      defineWebPlugin({ id, requires: { slots: Slots }, setup: ({ slots }) => void slots.add(look.FileIconPart, { ...item, component: () => null }) });
+    const kit = providing("look.kit", { id: "kit.file-icon", phase: "default" });
+    const fileIcons = providing("look.file-icons", { id: "file-icons", phase: "default", order: -1 });
+    // A phase it does not name: it goes in `replace`, before every default, however high its order.
+    const mine = providing("aaa.mine", { id: "mine", order: 1_000_000 });
+    await run([kit, fileIcons, mine], async (loader) => {
+      const slots = await Effect.runPromise(loader.core.run(Slots));
+      expect(slots.contributions(look.FileIconPart).map(({ item, phase, order }) => [item.id, phase, order])).toEqual([
+        ["mine", "replace", 1_000_000],
+        ["file-icons", "default", -1],
+        ["kit.file-icon", "default", 0],
+      ]);
+      await Effect.runPromise(loader.apply({ plugins: { "look.kit": {}, "look.file-icons": {}, "aaa.mine": { enabled: false } } }));
+      await waitFor(() => slots.first(look.FileIconPart)?.id === "file-icons");
+      await Effect.runPromise(loader.apply({ plugins: { "look.kit": {}, "look.file-icons": { enabled: false }, "aaa.mine": { enabled: false } } }));
+      await waitFor(() => slots.first(look.FileIconPart)?.id === "kit.file-icon");
+    });
+  });
+
+  it("fixes what a slot shows and its phases at its first declaration, and refuses a different one", () => {
+    const declared = defineSlot<{ readonly label: string }>("test.declared", { shows: "first" });
+    expect(declared.options.phases).toEqual(["replace", "default"]);
+    expect(defineSlot("test.declared")).toBe(declared);
+    expect(defineSlot("test.declared", { shows: "first" })).toBe(declared);
+    expect(() => defineSlot("test.declared", { shows: "all" })).toThrow("test.declared is declared already, showing first in phases replace, default");
+    expect(() => defineSlot("test.declared", { shows: "first", phases: ["a", "b"], defaultPhase: "a" })).toThrow("is declared already");
+    const phased = defineSlot("test.phased", { phases: ["early", "late"], defaultPhase: "late" });
+    expect(defineSlot("test.phased", { phases: ["early", "late"], defaultPhase: "late" })).toBe(phased);
+    expect(() => defineSlot("test.phased", { phases: ["early", "late"], defaultPhase: "early" })).toThrow("is declared already");
+  });
+
   it("fixes a bundled part's fallback by its declaration: a web half defining the part again cannot change it", () => {
     const declared = fallbackOf(TogglePart);
     expect(declared).toBeDefined();

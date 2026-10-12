@@ -6,8 +6,8 @@ import { ConfigFormFallback, IconFallback, SearchFieldFallback, SegmentedFallbac
 /*
  * Parts: the pieces plugins draw with, and the pieces of the big views. Each
  * is a region slot (see `definePart`): wherever a plugin uses one, the first
- * item by order renders, so any plugin, a user's web half too, replaces a part everywhere
- * by adding an item with a lower order than the default (`DEFAULT_PART_ORDER`).
+ * item renders, and a default is added in the phase `default`, so any plugin, a
+ * user's web half too, replaces a part everywhere by adding an item of its own.
  * The `kit` plugin supplies the shared parts; a view supplies its own.
  * Plugins draw these through `ui/parts.tsx`, never by importing a component.
  * The parts the always-on plugins draw (`shell`, `pages`, `settings`, and
@@ -205,8 +205,8 @@ export interface FileIconProps {
 /**
  * The icon for a file or folder, wherever one is named (the composer's `@`
  * menu, a tool call's path). `kit`'s default is the plain `file` and `folder`
- * icons; the `file-icons` plugin draws each file's type, just below
- * `DEFAULT_PART_ORDER`, so a replacement below that replaces either.
+ * icons; the `file-icons` plugin draws each file's type, first among the
+ * defaults (order -1), so a replacement replaces either.
  */
 export const FileIconPart = definePart<FileIconProps>("file-icon");
 

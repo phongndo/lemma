@@ -62,13 +62,22 @@ same way, one package each under `domains/`.
 A plugin meets the others in five ways, and every domain's contract offers
 its extension points in these forms:
 
-| Shape     | What it does                                              | Host half                                                         | Web half                                                    |
-| --------- | --------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------- |
-| Add       | Puts an item where others look: a tool, a command, a view | `add(Tools, tool)`: an item of a registry                         | `slots.add(Views, view)`: an item of a slot                 |
-| Intercept | Changes or stops an operation as it happens               | `on(ToolExecuteHook, (call, next) => next(call))`: a hook handler | An item of a part below `DEFAULT_PART_ORDER`: draws instead |
-| Observe   | Hears what happened                                       | `observe(TurnEnded, (turn) => …)`: an event                       | A capability's signals: `threads.branch()`                  |
-| Call      | Uses what another plugin provides                         | `requires: { sessions: Sessions }`                                | `requires: { threads: Threads }`; `client.channel.call(…)`  |
-| Serve     | Provides it: a capability, or a channel to clients        | `provides: { llm: Llm }`; `add(Channels, serveChannel(…))`        | `provides: { … }`                                           |
+| Shape     | What it does                                              | Host half                                                         | Web half                                                   |
+| --------- | --------------------------------------------------------- | ----------------------------------------------------------------- | ---------------------------------------------------------- |
+| Add       | Puts an item where others look: a tool, a command, a view | `add(Tools, tool)`: an item of a registry                         | `slots.add(Views, view)`: an item of a slot                |
+| Intercept | Changes or stops an operation as it happens               | `on(ToolExecuteHook, (call, next) => next(call))`: a hook handler | An item of a part: draws instead of the bundled default    |
+| Observe   | Hears what happened                                       | `observe(TurnEnded, (turn) => …)`: an event                       | A capability's signals: `threads.branch()`                 |
+| Call      | Uses what another plugin provides                         | `requires: { sessions: Sessions }`                                | `requires: { threads: Threads }`; `client.channel.call(…)` |
+| Serve     | Provides it: a capability, or a channel to clients        | `provides: { llm: Llm }`; `add(Channels, serveChannel(…))`        | `provides: { … }`                                          |
+
+Where the order of handlers or items means something, the hook, registry, or
+slot declares named **phases** in its contract, and a plugin says which one it
+belongs in rather than picking a number: compaction runs in
+`AgentRequestHook`'s `fit`, after every handler shaping the request in
+`shape`, and a slot or part that shows one item has `replace` and `default`,
+so an item that names no phase shows instead of the bundled default. An
+`order` places an item within its phase ([the core](../packages/core/README.md#plugin-defined-hooks)
+says how).
 
 What a plugin adds, intercepts, or observes belongs to it and leaves when it
 stops, so it cleans up nothing itself but what it holds outside them (a

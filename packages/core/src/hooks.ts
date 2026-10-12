@@ -3,6 +3,7 @@ import type { Cause } from "effect";
 import type { CoreClosed, EventError, HookError, RegistryError } from "./errors.ts";
 import type { Event, Observer, ObserveOptions } from "./events.ts";
 import type { ContributeOptions, Registry } from "./registries.ts";
+import { checkPhases } from "./internal/phases.ts";
 import { token } from "./internal/tokens.ts";
 
 const HookTypeId: unique symbol = Symbol("@lemma/core/Hook");
@@ -13,7 +14,7 @@ const HookTypeId: unique symbol = Symbol("@lemma/core/Hook");
  * is never skipped. Share this token with contributors; a name may identify
  * only one token per core.
  */
-export interface Hook<Input, Output, Error = never> {
+export interface Hook<Input, Output, Error = never> extends PhaseOptions {
   readonly name: string;
   readonly summary?: HookSummary<Input, Output>;
   readonly [HookTypeId]: {
@@ -35,15 +36,38 @@ export interface HookSummary<Input, Output> {
   readonly output?: (output: Output) => Summary;
 }
 
+/**
+ * Named places in order, which a token's owner declares (a hook's for its handlers, a registry's for its items): a
+ * contributor names the one it belongs in (`phase`), and comes after everything in an earlier phase and before
+ * everything in a later one, whatever their `order`, which orders it within its phase. So a handler that must see what
+ * every other has made (compaction, sizing the request they shaped) says so, rather than guessing a number above
+ * theirs. One that names no phase goes in `defaultPhase`. A token without phases orders by `order` alone.
+ */
+export interface PhaseOptions {
+  /** The phases, first first. Each named once; with them, a `defaultPhase` among them. */
+  readonly phases?: readonly string[];
+  readonly defaultPhase?: string;
+}
+
 export const Hook = {
-  make<Input, Output, Error = never>(name: string, options?: { readonly summary?: HookSummary<Input, Output> }): Hook<Input, Output, Error> {
-    return token(Object.freeze({ name, ...(options?.summary === undefined ? {} : { summary: options.summary }) })) as Hook<Input, Output, Error>;
+  /** Throws when `phases` cannot order anything: none, one named twice, or no `defaultPhase` among them. */
+  make<Input, Output, Error = never>(name: string, options?: { readonly summary?: HookSummary<Input, Output> } & PhaseOptions): Hook<Input, Output, Error> {
+    checkPhases("Hook", name, options ?? {});
+    return token(
+      Object.freeze({
+        name,
+        ...(options?.summary === undefined ? {} : { summary: options.summary }),
+        ...(options?.phases === undefined ? {} : { phases: Object.freeze([...options.phases]), defaultPhase: options.defaultPhase! }),
+      }),
+    ) as Hook<Input, Output, Error>;
   },
 };
 
 /** One handler's part in an invocation, as it ended (`InvokeOptions.onStep`). */
 export interface HandlerStep<Input, Output> {
   readonly pluginId: string;
+  /** Its phase, when the hook declares phases. */
+  readonly phase?: string;
   readonly order: number;
   /** Its place in the chain, from 0. */
   readonly index: number;
@@ -78,7 +102,12 @@ export type Handler<Input, Output, Error, Requirements = never> = (
 ) => Effect.Effect<Output, Error | HookError | CoreClosed, Requirements>;
 
 export interface HookOptions {
-  /** Lower values run first; ties use plugin id, then registration order. */
+  /**
+   * Where it runs, when the hook declares phases (see `PhaseOptions`): its `defaultPhase` when absent. Naming one the
+   * hook does not declare fails with `HookError` ("InvalidOrder").
+   */
+  readonly phase?: string;
+  /** Lower values run first, within the phase; ties use plugin id, then registration order. */
   readonly order?: number;
 }
 

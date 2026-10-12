@@ -19,7 +19,19 @@ export {
 export { Event, Events } from "./events.ts";
 export type { Observer, ObserveOptions } from "./events.ts";
 export { Hook, Hooks, PluginContext } from "./hooks.ts";
-export type { BackgroundOptions, FaultOptions, HandlerStep, Handler, HookOptions, HookSummary, InvokeOptions, Next, PluginIdentity, Summary } from "./hooks.ts";
+export type {
+  BackgroundOptions,
+  FaultOptions,
+  HandlerStep,
+  Handler,
+  HookOptions,
+  HookSummary,
+  InvokeOptions,
+  Next,
+  PhaseOptions,
+  PluginIdentity,
+  Summary,
+} from "./hooks.ts";
 export { makeLoader } from "./loader.ts";
 export { Admitted, Registries, Registry } from "./registries.ts";
 export type { AdmittedWork, ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";

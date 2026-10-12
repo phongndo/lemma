@@ -1,6 +1,6 @@
 # workspace.search-fff
 
-Searches files with [fff](https://github.com/dmtrKovalenko/fff), a fuzzy file finder in Rust, through `@ff-labs/fff-node`. It contributes the bundled entry of `FileSearchers` (`@lemma/workspace`) at order 100 and requires nothing. Clients search through `files.search`, a channel `workspace.local` serves, and host plugins through `searchFiles`, both of which ask `FileSearchers` at each search, so this plugin can be turned off (searches then fail `Unavailable`, and nothing else stops) or replaced by a plugin contributing below order 100.
+Searches files with [fff](https://github.com/dmtrKovalenko/fff), a fuzzy file finder in Rust, through `@ff-labs/fff-node`. It contributes the bundled entry of `FileSearchers` (`@lemma/workspace`), in its phase `default`, and requires nothing. Clients search through `files.search`, a channel `workspace.local` serves, and host plugins through `searchFiles`, both of which ask `FileSearchers` at each search, so this plugin can be turned off (searches then fail `Unavailable`, and nothing else stops) or replaced by a plugin contributing a searcher of its own.
 
 ```jsonc
 { "plugins": { "workspace.search-fff": { "config": { "idleMinutes": 15 } } } }

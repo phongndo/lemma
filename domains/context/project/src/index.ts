@@ -93,7 +93,7 @@ export default definePlugin({
           return files.length === 0 ? undefined : renderSection(files);
         },
       },
-      // Between the agent's base (`SectionOrder.base`) and its environment, whose date changes daily.
+      // In `body`, between the agent's base and its environment, whose date changes daily.
       { order: 500 },
     );
   },

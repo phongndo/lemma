@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeCore, Registries } from "@lemma/core";
-import { PromptSections, SectionOrder } from "@lemma/agent";
+import { PromptSections } from "@lemma/agent";
 import type { SectionRequest } from "@lemma/agent";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import projectContext, { makeLoader } from "../src/index.ts";
@@ -73,8 +73,7 @@ describe("project context", () => {
         }),
       ),
     );
-    expect([added.item.id, added.pluginId, added.order]).toEqual(["project-context", "context.project", 500]);
-    expect(SectionOrder.base < added.order && added.order < SectionOrder.environment).toBe(true);
+    expect([added.item.id, added.pluginId, added.phase, added.order]).toEqual(["project-context", "context.project", "body", 500]);
     expect(text).toContain(`<project_instructions path="${path.join(dir, "repo/AGENTS.md")}">\nUse tabs.\n</project_instructions>`);
     // No instructions where it is asked: no section.
     expect(empty).toBeUndefined();

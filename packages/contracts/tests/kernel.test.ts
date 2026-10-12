@@ -39,6 +39,18 @@ describe("plugin wiring", () => {
     ]);
   });
 
+  test("a hook's handlers by phase before order, where the hook declares phases", () => {
+    const phased = [
+      plugin("compaction", { hooks: [{ name: "agent.request", phase: "fit", rank: 1, order: -1_000 }] }),
+      plugin("skills", { hooks: [{ name: "agent.request", phase: "shape", rank: 0, order: 1_000 }] }),
+    ];
+    expect(hookChain(phased, "agent.request")).toEqual([
+      { plugin: "skills", phase: "shape", rank: 0, order: 1_000 },
+      { plugin: "compaction", phase: "fit", rank: 1, order: -1_000 },
+    ]);
+    expect(kernelOf(phased, []).hooks[0]?.handlers.map((handler) => handler.plugin)).toEqual(["skills", "compaction"]);
+  });
+
   test("a restart helps a failed plugin or one a failure halted", () => {
     expect(recoverable(plugin("a", { state: "failed" }))).toBe(true);
     expect(recoverable(plugin("a", { state: "closed", haltedBy: "llm" }))).toBe(true);

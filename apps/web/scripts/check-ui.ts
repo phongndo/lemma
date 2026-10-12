@@ -474,7 +474,6 @@ const parts = async () => {
     const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
     const remove = (window as any).checkSlots.add(MarkdownPart, {
       id: "check.markdown",
-      order: 0,
       component: (props: { text: string }) => {
         const element = document.createElement("div");
         element.className = "replaced-markdown";
@@ -490,13 +489,28 @@ const parts = async () => {
   await page.waitForSelector(".turn .md");
   assert.equal(await page.locator(".replaced-markdown").count(), 0, "the replacement outlives its removal");
   expectNoErrors("replacing a part");
+  // The file icons are a better default than kit's: first among the defaults, which a replacement such as the one
+  // above, naming no phase, comes before.
+  assert.deepEqual(
+    await page.evaluate(async () => {
+      const { FileIconPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      return (window as any).lemma
+        .slots()
+        .contributions(FileIconPart)
+        .map((contribution: any) => [contribution.item.id, contribution.phase]);
+    }),
+    [
+      ["file-icons", "default"],
+      ["kit.file-icon", "default"],
+    ],
+    "the file icons do not come first among the file icon part's defaults",
+  );
   // A replacement that throws while drawing is left out for the default, its failure named for its plugin, and the
   // app keeps updating: a later turn still draws.
   await page.evaluate(async () => {
     const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (window as any).removeBroken = (window as any).checkSlots.add(MarkdownPart, {
       id: "check.broken-markdown",
-      order: 0,
       component: () => {
         throw new Error("check markdown boom");
       },
@@ -609,7 +623,6 @@ const parts = async () => {
     // Its rows draw through the `composer.suggestion` part, which a plugin replaces.
     (window as any).removeSuggestion = slots.add(ComposerSuggestionPart, {
       id: "check.suggestion",
-      order: 0,
       component: (props: { suggestion: { label: string } }) => {
         const element = document.createElement("span");
         element.className = "replaced-suggestion";
@@ -1355,7 +1368,6 @@ const devtools = async () => {
     const { ComposerQueuedPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (window as any).removeRow = (window as any).checkSlots.add(ComposerQueuedPart, {
       id: "check.queued",
-      order: 0,
       component: (props: { prompt: { requestId: string } }) => {
         const element = document.createElement("li");
         element.className = "check-queued";

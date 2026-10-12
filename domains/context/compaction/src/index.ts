@@ -37,8 +37,6 @@ type Config = typeof Config.Type;
 
 class SummaryFailed extends Data.TaggedError("SummaryFailed")<{ readonly message: string }> {}
 
-/** Runs after every other request handler (those adding sections and tools), so the draft it sizes is final. */
-const ORDER = 1_000;
 /** Tokens set aside for the summary prompt's own text, and the characters a token is taken to be at most in what is sent. */
 const PROMPT_TOKENS = 1_000;
 const DENSE_CHARS_PER_TOKEN = 1.5;
@@ -189,7 +187,8 @@ export default definePlugin({
           }
           return yield* next(draft);
         }),
-      { order: ORDER },
+      // After every handler shaping the request (adding sections and tools), so the draft it sizes is final.
+      { phase: "fit" },
     );
   },
 });

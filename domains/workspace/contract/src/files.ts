@@ -70,14 +70,18 @@ export interface FileSearcher {
 }
 
 /**
- * Who searches files: the first contribution by order answers (`searchFiles`).
- * The `workspace.search-fff` plugin is the bundled one; a plugin replaces it by
- * contributing with a lower order (`PluginContext.add(FileSearchers, …, { order })`),
- * or by its being turned off. With none, searches fail `Unavailable`, and
- * nothing else stops: `searchFiles` and `files.search` read this rather than
- * requiring it.
+ * Who searches files: the first contribution answers (`searchFiles`). The
+ * `workspace.search-fff` plugin is the bundled one, in the phase `default`; a
+ * plugin replaces it by contributing one of its own, which goes in `replace`
+ * unless it names a phase, or by its being turned off. With none, searches fail
+ * `Unavailable`, and nothing else stops: `searchFiles` and `files.search` read
+ * this rather than requiring it.
  */
-export const FileSearchers = Registry.make<FileSearcher>("lemma/file-searchers", { key: (searcher) => searcher.id });
+export const FileSearchers = Registry.make<FileSearcher>("lemma/file-searchers", {
+  key: (searcher) => searcher.id,
+  phases: ["replace", "default"],
+  defaultPhase: "replace",
+});
 
 /** Searches with the first of `FileSearchers`; `Unavailable` when no plugin contributes one. */
 export const searchFiles = (

@@ -1,7 +1,7 @@
 # context.compaction
 
 Keeps a conversation within its model's context window. Handles
-`AgentRequestHook` after every other handler (order 1000), so it sizes the
+`AgentRequestHook` in its phase `fit`, after every handler that shapes the request, so it sizes the
 request as it will be sent: before a model call that would fill more than `at`
 of the window, the older part of the turn's history is summarized by a model
 and a `compaction` event is appended to the turn (`RequestDraft.append`).

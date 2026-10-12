@@ -9,7 +9,7 @@ import { shownKeys, ActionIds, Actions } from "@lemma/actions";
 import { fileSessions, sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
 import { createNow } from "@lemma/web/now";
 import { SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
-import { Client, Notify, Slots, WebPlugins, DEFAULT_PART_ORDER, defineWebPlugin, Contained, Each, usePlugin } from "@lemma/web";
+import { Client, Notify, Slots, WebPlugins, defineWebPlugin, Contained, Each, usePlugin } from "@lemma/web";
 import { ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { MenuAction } from "@lemma/frame";
@@ -381,8 +381,8 @@ export default defineWebPlugin({
     };
     const scopeName = (cwd: string) => (workspace.isStandalone(cwd) ? "No project" : workspace.projectName(cwd));
     const deps: Deps = { client, threads, slots, workspace, now, newChatIn, scope };
-    slots.add(SidebarRegion, { id: "sidebar", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
-    slots.add(SidebarRowPart, { id: "sidebar.row", order: DEFAULT_PART_ORDER, component: SessionRow });
+    slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
+    slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: SessionRow });
 
     // Its menus' items go through the slots other plugins add theirs to.
     const sessionAction = (id: string, order: number, action: ThreadAction) => slots.add(ThreadActions, { id, order, ...action });

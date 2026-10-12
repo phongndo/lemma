@@ -12,8 +12,6 @@ import { expandHome, kindOf } from "@lemma/contracts/fs";
 export const DEFAULT_LIMIT = 50;
 /** How long a search waits for a directory's first scan before answering with what is indexed so far (`indexing`). */
 export const SCAN_WAIT_MS = 2_000;
-/** Where the bundled searcher sits in `FileSearchers`: a plugin contributing below it answers instead. */
-export const SEARCHER_ORDER = 100;
 /** The longest delay a timer takes; beyond it Node fires at once. */
 const MAX_TIMEOUT_MS = 2 ** 31 - 1;
 
@@ -232,7 +230,7 @@ export default definePlugin({
   config: FileSearchConfig,
   setup: function* (_, owner) {
     const { service, snapshot } = yield* makeFileSearch({ idleMs: owner.config.idleMinutes * 60_000 });
-    yield* owner.add(FileSearchers, { id: owner.id, ...service }, { order: SEARCHER_ORDER }).pipe(Effect.orDie);
+    yield* owner.add(FileSearchers, { id: owner.id, ...service }, { phase: "default" }).pipe(Effect.orDie);
     yield* owner
       .add(Inspectors, {
         id: "workspace.search-fff.indexes",

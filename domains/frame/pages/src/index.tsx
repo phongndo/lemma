@@ -84,6 +84,6 @@ export default defineWebPlugin({
         unmatched={(match) => missing("No page here", `Nothing in the app lives at ${match().location.pathname}.`)}
       />
     );
-    slots.add(MainRegion, { id: "pages", component: Outlet });
+    slots.add(MainRegion, { id: "pages", phase: "default", component: Outlet });
   },
 });

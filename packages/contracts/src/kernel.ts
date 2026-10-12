@@ -1,4 +1,5 @@
 import { Order, Predicate } from "effect";
+import type { HookUse } from "./host.ts";
 import type { PluginStatus } from "./status.ts";
 
 /*
@@ -10,10 +11,19 @@ import type { PluginStatus } from "./status.ts";
  * the devtools' kernel panels and `lemma kernel` show.
  */
 
+/** A handler's place in its hook's chain: its phase, when the hook declares phases, and its order within it. */
+export interface ChainPlace {
+  readonly plugin: string;
+  readonly phase?: string;
+  /** Its phase's place among the hook's phases (`HookUse.rank`); absent when the hook declares none. */
+  readonly rank?: number;
+  readonly order: number;
+}
+
 export interface HookChain {
   readonly name: string;
-  /** In run order: lower `order` first, then plugin id. */
-  readonly handlers: readonly { readonly plugin: string; readonly order: number }[];
+  /** In run order: by phase, then lower `order` first, then plugin id. */
+  readonly handlers: readonly ChainPlace[];
 }
 
 export interface RegistryView {
@@ -44,8 +54,14 @@ export interface KernelView {
 }
 
 const byName = Order.mapInput(Order.String, (item: { readonly name: string }) => item.name);
-const runOrder = (a: { readonly plugin: string; readonly order: number }, b: { readonly plugin: string; readonly order: number }) =>
-  a.order - b.order || Order.String(a.plugin, b.plugin);
+const runOrder = (a: ChainPlace, b: ChainPlace) => (a.rank ?? 0) - (b.rank ?? 0) || a.order - b.order || Order.String(a.plugin, b.plugin);
+
+const placeOf = (plugin: string, hook: HookUse): ChainPlace => ({
+  plugin,
+  ...(hook.phase === undefined ? {} : { phase: hook.phase }),
+  ...(hook.rank === undefined ? {} : { rank: hook.rank }),
+  order: hook.order,
+});
 
 /** `lemma/Llm` reads as `Llm`. */
 export const capabilityName = (key: string): string => key.slice(key.lastIndexOf("/") + 1);
@@ -60,9 +76,7 @@ export const providerOf = (plugins: readonly PluginStatus[], key: string): Plugi
 
 /** Every plugin's handlers of hook `name`, in run order (`HookChain.handlers`). */
 export const hookChain = (plugins: readonly PluginStatus[], name: string): HookChain["handlers"] =>
-  plugins
-    .flatMap((plugin) => plugin.hooks?.filter((hook) => hook.name === name).map((hook) => ({ plugin: plugin.id, order: hook.order })) ?? [])
-    .sort(runOrder);
+  plugins.flatMap((plugin) => plugin.hooks?.filter((hook) => hook.name === name).map((hook) => placeOf(plugin.id, hook)) ?? []).sort(runOrder);
 
 /** Whether a restart would do anything without `force`: the plugin failed, or a failed dependency halted it. */
 export const recoverable = (plugin: { readonly state?: string | undefined; readonly haltedBy?: string | undefined }): boolean =>
@@ -70,11 +84,11 @@ export const recoverable = (plugin: { readonly state?: string | undefined; reado
 
 /** `plugins` as their kernel runs them; `runtime` is what the app provides itself, by capability key. */
 export const kernelOf = (plugins: readonly PluginStatus[], runtime: readonly string[]): KernelView => {
-  const hooks = new Map<string, { plugin: string; order: number }[]>();
+  const hooks = new Map<string, ChainPlace[]>();
   const registries = new Map<string, { plugin: string; items: number; keys: readonly string[] }[]>();
   const events = new Map<string, string[]>();
   for (const plugin of plugins) {
-    for (const hook of plugin.hooks ?? []) hooks.set(hook.name, [...(hooks.get(hook.name) ?? []), { plugin: plugin.id, order: hook.order }]);
+    for (const hook of plugin.hooks ?? []) hooks.set(hook.name, [...(hooks.get(hook.name) ?? []), placeOf(plugin.id, hook)]);
     for (const registry of plugin.contributes ?? [])
       registries.set(registry.name, [...(registries.get(registry.name) ?? []), { plugin: plugin.id, items: registry.items, keys: registry.keys ?? [] }]);
     for (const event of plugin.observes ?? []) events.set(event, [...(events.get(event) ?? []), plugin.id]);
