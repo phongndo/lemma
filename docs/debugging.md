@@ -59,6 +59,10 @@ README has the rest.
 - **A web half's item fails alone.** A slot item or part that throws while it
   draws is its plugin's fault, and the region draws the next item
   ([the web app](../apps/web/README.md)).
+- **A blocked event loop is named.** When the host's event loop is blocked for
+  a second, it says so on stderr while it lasts. It names the plugin whose
+  code was running, and keeps the stall in the trace as a `host.stall` span
+  under that plugin ([the host](../packages/host/README.md#a-blocked-event-loop)).
 - **A failed turn says why in its log**: the trajectory shows the error, the
   attempts a request took, and what decided where each step ended.
 

@@ -1,0 +1,190 @@
+import inspector from "node:inspector";
+import { Context, Exit, Option } from "effect";
+import type { Tracer } from "effect";
+import { sep } from "node:path";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
+
+/*
+ * Telling that the host's event loop is blocked, and by whose code. A plugin stuck in synchronous work (a loop that
+ * never yields, a huge `JSON.parse`) stops every session, the transport, and its own supervision with it: nothing that
+ * runs on the loop can notice. A worker thread can: the loop bumps a counter in shared memory every `TICK_MS`, and the
+ * worker, on a loop of its own, sees when the counter has not moved for `thresholdMs`. It then reads the blocked
+ * thread's stack a few times through the inspector, and names the plugin whose code most of them were in, from where
+ * each plugin's code lives (`CodeOwner`).
+ *
+ * Each read pauses the thread for a few milliseconds (`Debugger.pause`, served while it runs JavaScript) and resumes it
+ * at once. A CPU profile would not pause it, but one started after the work began misses that work's own frame once
+ * V8 has optimized the running loop (the profiler never saw that code made), and names its caller instead: often the
+ * kernel, which called the plugin's handler. A thread blocked outside JavaScript answers no pause until it returns:
+ * a stack read once the loop has run again shows other work, and is left out.
+ */
+
+/** Where a plugin's code lives: a directory (a bundled plugin's package, a folder plugin) or one file. */
+export interface CodeOwner {
+  readonly path: string;
+  readonly id: string;
+}
+
+/** A stall, reported once the loop runs again. */
+export interface Stall {
+  /** Epoch milliseconds the loop last ran before it, and how long it was blocked. */
+  readonly start: number;
+  readonly ms: number;
+  /** The plugin whose code most of the stacks read were in, and what share of them; absent when none could be told. */
+  readonly pluginId?: string;
+  readonly share?: number;
+}
+
+export interface StallOptions {
+  /** How long the loop may be blocked before it is a stall (default 1,000 ms). */
+  readonly thresholdMs?: number;
+  /** Where each plugin's code lives now: asked as the loop runs, and sent to the worker when it returns another array. */
+  readonly owners: () => readonly CodeOwner[];
+  /** Hears a stall once the loop runs again. */
+  readonly onStall: (stall: Stall) => void;
+}
+
+export interface StallWatch {
+  /** Resolves once the worker is watching. */
+  readonly ready: Promise<void>;
+  readonly stop: () => void;
+}
+
+/** How often the loop bumps its counter, and the worker looks at it. */
+export const TICK_MS = 100;
+export const DEFAULT_THRESHOLD_MS = 1_000;
+/** How many times the worker reads a stall's stack, and how long it waits between reads. */
+export const SNAPSHOTS = 5;
+export const SNAPSHOT_GAP_MS = 20;
+
+/** What the worker says: that it is watching, and each stall once the loop runs again. */
+export type WorkerMessage = { readonly type: "ready" } | { readonly type: "stall"; readonly stall: Stall };
+
+/** What the worker hears: where plugins' code is. */
+export interface OwnersMessage {
+  readonly owners: readonly CodeOwner[];
+}
+
+/** What the worker starts with. */
+export interface StallWorkerData {
+  /** Two counters: [0] the loop's beats, [1] 1 while a debugger is attached (a paused loop is no stall). */
+  readonly shared: SharedArrayBuffer;
+  readonly thresholdMs: number;
+  readonly tickMs: number;
+  readonly snapshots: number;
+  readonly gapMs: number;
+  /** Whether the inspector can read the main thread's stack: false where the runtime has none. */
+  readonly inspectable: boolean;
+}
+
+/**
+ * Starts watching the loop. The worker writes a line to stderr while the loop is still blocked (straight to the file
+ * descriptor, as the loop that would print it is the one blocked), and `onStall` hears the stall once the loop runs
+ * again. Neither the timer nor the worker keeps the process alive once the worker is watching (`ready`). Returns
+ * undefined where a worker cannot start.
+ */
+export function watchStalls(options: StallOptions): StallWatch | undefined {
+  const thresholdMs = options.thresholdMs ?? DEFAULT_THRESHOLD_MS;
+  const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
+  const counters = new Int32Array(shared);
+  const debuggable = process.features.inspector;
+  const data: StallWorkerData = { shared, thresholdMs, tickMs: TICK_MS, snapshots: SNAPSHOTS, gapMs: SNAPSHOT_GAP_MS, inspectable: debuggable };
+  let worker: Worker;
+  try {
+    worker = new Worker(new URL("./stall-worker.ts", import.meta.url), { workerData: data });
+  } catch (error) {
+    console.error(`lemma: cannot watch for a blocked event loop: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+  let sent: readonly CodeOwner[] | undefined;
+  const beat = () => {
+    Atomics.add(counters, 0, 1);
+    Atomics.store(counters, 1, debuggable && inspector.url() !== undefined ? 1 : 0);
+    const owners = options.owners();
+    if (owners !== sent) {
+      sent = owners;
+      worker.postMessage({ owners } satisfies OwnersMessage);
+    }
+  };
+  beat();
+  const timer = setInterval(beat, TICK_MS);
+  timer.unref();
+  let started!: () => void;
+  const ready = new Promise<void>((resolve) => (started = resolve));
+  worker.on("message", (message: WorkerMessage) => {
+    if (message.type === "stall") return options.onStall(message.stall);
+    // Held until it is watching (a moment), so `ready` resolves; then it keeps nothing alive. The `message` listener
+    // refs the worker's port, so this comes after it.
+    worker.unref();
+    started();
+  });
+  // A watchdog that cannot run (its file cannot load where the host is packaged) is no reason to stop the host.
+  worker.on("error", (error) => {
+    clearInterval(timer);
+    console.error(`lemma: stopped watching for a blocked event loop: ${error.message}`);
+    worker.unref();
+  });
+  return {
+    ready,
+    stop: () => {
+      clearInterval(timer);
+      void worker.terminate();
+    },
+  };
+}
+
+/**
+ * Says a stall once the loop runs again, and keeps it in the trace: a `host.stall` span over the time the loop was
+ * blocked, with `stall.ms`, and `plugin.id` (and `stall.share`) when whose code it was could be told.
+ */
+export function recordStall(tracer: Tracer.Tracer, stall: Stall): void {
+  const whose = stall.pluginId === undefined ? "" : `, running ${stall.pluginId}'s code`;
+  console.error(`lemma: the event loop was blocked for ${(stall.ms / 1000).toFixed(1)} s${whose}`);
+  const nanos = (ms: number) => BigInt(Math.round(ms * 1e6));
+  const span = tracer.span({
+    name: "host.stall",
+    parent: Option.none(),
+    annotations: Context.empty(),
+    links: [],
+    startTime: nanos(stall.start),
+    kind: "internal",
+    root: true,
+    sampled: true,
+  });
+  span.attribute("stall.ms", stall.ms);
+  if (stall.pluginId !== undefined) span.attribute("plugin.id", stall.pluginId);
+  if (stall.share !== undefined) span.attribute("stall.share", stall.share);
+  span.end(nanos(stall.start + stall.ms), Exit.void);
+}
+
+/** The plugin whose code a file is: the owner whose path is the file, or the deepest directory holding it. */
+export const ownerOfFile = (owners: readonly CodeOwner[], file: string): string | undefined => {
+  let found: CodeOwner | undefined;
+  for (const owner of owners) {
+    if ((file === owner.path || file.startsWith(owner.path + sep)) && (found === undefined || owner.path.length > found.path.length)) found = owner;
+  }
+  return found?.id;
+};
+
+/**
+ * Whose code a stall ran, from stacks of the blocked thread (each a list of script URLs, innermost first): each stack
+ * goes to the plugin owning its innermost frame that is a plugin's (the kernel, Effect, and the host are no plugin's,
+ * so time spent in them goes to the plugin that called them), and the plugin with the most stacks is named, with its
+ * share of them all. None is named when no stack held any plugin's code.
+ */
+export function attribute(stacks: readonly (readonly string[])[], owners: readonly CodeOwner[]): { readonly pluginId?: string; readonly share?: number } {
+  const byUrl = new Map<string, string | undefined>();
+  const ownerOfUrl = (url: string) => {
+    if (!byUrl.has(url)) byUrl.set(url, url.startsWith("file:") ? ownerOfFile(owners, fileURLToPath(url)) : undefined);
+    return byUrl.get(url);
+  };
+  const counts = new Map<string, number>();
+  for (const stack of stacks) {
+    const id = stack.map(ownerOfUrl).find((owner) => owner !== undefined);
+    if (id !== undefined) counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  let top: [string, number] | undefined;
+  for (const entry of counts) if (top === undefined || entry[1] > top[1]) top = entry;
+  return top === undefined ? {} : { pluginId: top[0], share: top[1] / stacks.length };
+}

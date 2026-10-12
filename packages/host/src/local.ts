@@ -86,6 +86,8 @@ interface LocalPlugin {
   readonly plugin: Plugin;
   /** The directory in `dirs` the plugin's file was found in. */
   readonly dir: string;
+  /** Where its code is: its file, or its package's folder (`CodeOwner`). */
+  readonly code: string;
 }
 
 interface LocalPlugins {
@@ -135,7 +137,7 @@ export function loadLocalPlugins(dirs: readonly string[], context: LocalContext)
               new Diagnostic({ severity: "warning", message: `${file}: no plugin in the default export`, suggestion: "export default definePlugin({ ... })" }),
             );
           }
-          plugins.push(...found.map((plugin) => ({ plugin, dir })));
+          plugins.push(...found.map((plugin) => ({ plugin, dir, code: folder ?? file })));
         } catch (cause) {
           diagnostics.push(
             new Diagnostic({
