@@ -143,11 +143,11 @@ while no agent ran goes when the next starts.
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Retracted`), `promote` makes a queued follow-up a steer in its place (the
 running turn places it after its current step; with no turn running it stays a
-follow-up), and `QueueChanged` reports every change with a revision that only
-grows while the agent runs, and across a restart unless the clock went back (it
-is journaled while anything waits, and drawn from the clock: `view` carries it
-as well), so a client keeps the
-newest queue it has heard of whichever arrives first. After a turn that failed
+follow-up), and `QueueChanged` reports every change with a revision (`view`
+carries it as well). The revision falls short of the contract's promise across a
+restart: it is journaled while anything waits and drawn from the clock
+otherwise, so it can go back with the clock, or repeat in an instance started in
+the same millisecond. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
 prompts first, then itself, in one turn. Each `prompt` call resolves when the
 turn that placed its prompt ends.
@@ -179,7 +179,9 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
   the log will not record (a turn starting, a prompt queued, withdrawn, or
   promoted) is made only once the journal has it: when the journal cannot be
   written (a full or failing disk), the call that asked for it fails `Io` and
-  nothing changes (`AgentError` in the contract). A change the log records
+  nothing changes (`AgentError` in the contract); a turn the agent starts
+  itself, for the next queued prompt once one ends, is not started, and the
+  queue waits for the next prompt. A change the log records
   already (a steer placed, a turn ended, a cancel asked for) is made whatever
   the write does, and checked against the log on the next start.
 - `<session>.live.json`: the running turn's model output and tool output so

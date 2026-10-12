@@ -14,7 +14,8 @@ export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
   /**
    * `Retracted`: `withdraw` took the prompt out of the queue before a turn placed it. `Io`: the agent could not record
-   * the change on disk (its journal), so it did not make it: a prompt was not accepted, or not withdrawn.
+   * the change the call asked for on disk (its journal), so it did not make it: the queue is as it was, and the call
+   * may be made again (a prompt with the same `requestId`).
    */
   readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted" | "Io";
   readonly message: string;
@@ -254,8 +255,8 @@ export const TurnEnded = Event.make<{
   readonly reason: TurnEndReason;
 }>("lemma/agent.turn.ended");
 /**
- * The session's queue changed: a prompt was queued, placed, or withdrawn.
- * `revision` grows with every change (across restarts too), so a client
+ * The session's queue changed. `revision` grows with every change (across
+ * restarts too), so a client
  * holding a queue from `Agent.view` and from this event keeps the newer.
  */
 export const QueueChanged = Event.make<{ readonly sessionId: string; readonly queue: readonly QueuedPrompt[]; readonly revision: number }>(
@@ -325,8 +326,8 @@ export class Agent extends Context.Service<
     /**
      * Takes a queued prompt out; its `prompt` call fails `Retracted`. False
      * when it was not queued (placed already). Fails as `queue` does, rather
-     * than take out a prompt that may have been placed; and `Io` when the agent
-     * could not record that it was taken out, the prompt left queued.
+     * than take out a prompt that may have been placed; and `Io` (see
+     * `AgentError`).
      */
     readonly withdraw: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
     /**
@@ -335,7 +336,7 @@ export class Agent extends Context.Service<
      * False when it was not a queued follow-up (placed already, withdrawn, or a
      * steer), or no turn runs to place it (the queue held after a failed or
      * cancelled turn, or the turn suspended). Fails as `queue` does, and `Io`
-     * when the agent could not record the change, the prompt left a follow-up.
+     * (see `AgentError`).
      */
     readonly promote: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
     /** The session as a client joining now should show it (see `AgentView`). Fails as `queue` does. */
@@ -386,8 +387,7 @@ export const AgentChannels = {
    * again.
    *
    * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`,
-   * `Io` when the agent could not record the prompt (it was not taken: a
-   * retry with the same id may place it), or `Retracted` when `agent.withdraw`
+   * `Io` (see `AgentError`), or `Retracted` when `agent.withdraw`
    * took the prompt out of the queue, each
    * with the session as its subject; `Withdrawn` (its subject `agent.prompt`)
    * only when no agent answers once the change that stopped it has finished,

@@ -159,8 +159,8 @@ interface SessionState {
   unchecked: boolean;
   queue: Item[];
   /**
-   * Grows with every change to the queue, from the clock and the journal, so it keeps growing across restarts (see
-   * `QueueChanged`).
+   * Drawn from the clock, and from the journal while anything waits: what it promises is `QueueChanged`'s, and where
+   * it falls short the README's.
    */
   revision: number;
   /** The last turn failed or was cancelled: queued prompts wait for the next one rather than starting a turn. */
@@ -369,8 +369,8 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         };
       };
       /**
-       * Records the session's state in its journal, durably. Fails `Io` when it cannot: the change it records is then
-       * undone and reported not made (a prompt not accepted, one not withdrawn), as a crash would lose it.
+       * Records the session's state in its journal, durably. Fails `Io` when it cannot (see `AgentError`): its caller
+       * then undoes the change it records, as a crash would lose it.
        */
       const persist = (sessionId: string): Effect.Effect<void, AgentError> =>
         writing
