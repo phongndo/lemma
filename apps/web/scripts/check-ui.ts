@@ -763,6 +763,13 @@ const parts = async () => {
   await page.waitForSelector("[aria-label=Handlers] tr:has(td:text-is('context.compaction')) >> text=+compaction");
   await page.waitForSelector(".dt-section h4 >> text=Compaction");
   await page.waitForSelector(".dt-section h4 >> text=Then it stopped");
+  // The answer of the step that asked a failed call again (the row after the failed attempt's): the attempt before it,
+  // and that the turn went on.
+  await page.click(".trj tr[data-kind=assistant] >> nth=1");
+  await page.click("[aria-label='Event details'] [role=tab] >> text=Pipeline");
+  await page.waitForSelector(".dt-section h4:has(span:text-is('Model')) .dt-section-aside >> text=1 failed first");
+  await page.waitForSelector("[aria-label='Event details'] >> text=Answered");
+  await page.waitForSelector(".dt-section h4 >> text=Then it went on");
   // A tool call's: who checked it.
   await page.click(".trj tr[data-kind=tool] >> nth=0");
   await page.click("[aria-label='Event details'] [role=tab] >> text=Pipeline");

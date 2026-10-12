@@ -59,7 +59,7 @@ export interface TrajectoryCompaction {
   readonly usage?: Usage;
 }
 
-/** Whether the turn took another step after this one, and why (the `step-end` event's `decision`). */
+/** What `AgentContinueHook` decided after a step, and why (the `step-end` event's `decision`). */
 export type StepDecision = NonNullable<Extract<EventData, { readonly type: "step-end" }>["decision"]>;
 
 export interface TrajectoryToolRun {
@@ -93,10 +93,18 @@ export interface TrajectoryStep {
   readonly request?: TrajectoryRequest;
   readonly response?: { readonly eventId: string; readonly message: AssistantMessage; readonly timing?: Timing };
   readonly attempts: readonly TrajectoryAttempt[];
+  /**
+   * The failed attempts of the steps that asked this call before it, in order: a call asked again after a failure
+   * is a step of its own, with the same number in the agent's count.
+   */
+  readonly earlier: readonly TrajectoryAttempt[];
   readonly tools: readonly TrajectoryToolRun[];
   /** Compactions its request made, before it was logged. */
   readonly compactions: readonly TrajectoryCompaction[];
+  /** What `AgentContinueHook` decided after it; the turn may still have ended at its step limit, or gone on for steers. */
   readonly decision?: StepDecision;
+  /** What the turn did after it, as the log goes on: another step, or its end. Absent while the turn runs. */
+  readonly after?: { readonly kind: "step" } | { readonly kind: "end"; readonly reason: TurnEndReason };
 }
 
 export interface TrajectoryTurn {
@@ -152,9 +160,11 @@ interface MutableStep {
   request?: TrajectoryRequest;
   response?: NonNullable<TrajectoryStep["response"]>;
   attempts: TrajectoryAttempt[];
+  earlier: TrajectoryAttempt[];
   tools: { -readonly [K in keyof TrajectoryToolRun]: TrajectoryToolRun[K] }[];
   compactions: TrajectoryCompaction[];
   decision?: StepDecision;
+  after?: NonNullable<TrajectoryStep["after"]>;
 }
 interface MutableTurn {
   turnId: string;
@@ -191,7 +201,12 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
     if (existing !== undefined) return existing;
     const turn = turnById.get(turnId);
     if (turn === undefined) return undefined;
-    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], tools: [], compactions: [] };
+    // A step after one whose call failed and was asked again asks it again: it carries the attempts that failed.
+    const previous = turn.steps.at(-1);
+    const retried = previous !== undefined && previous.response === undefined && previous.attempts.at(-1)?.retry !== undefined;
+    const earlier = retried ? [...previous.earlier, ...previous.attempts] : [];
+    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], earlier, tools: [], compactions: [] };
+    if (previous !== undefined) previous.after = { kind: "step" };
     turn.steps.push(step);
     stepById.set(stepId, step);
     return step;
@@ -211,6 +226,8 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         if (turn === undefined) return;
         turn.endedAt = event.at;
         turn.end = { reason: data.reason, ...(data.error === undefined ? {} : { error: data.error }) };
+        const last = turn.steps.at(-1);
+        if (last !== undefined) last.after = { kind: "end", reason: data.reason };
         return;
       }
       case "step-start":

@@ -946,6 +946,29 @@ describe("agent", () => {
     );
   });
 
+  it("logs the continue decision as the default saw it, and credits a handler that changed what it passed on", async () => {
+    // Hands on the answer as if the model had stopped: the default stops, and says why by what it was handed.
+    const rewriter = definePlugin({
+      id: "rewriter",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(AgentContinueHook, (input, next) => next({ ...input, message: { ...input.message, stopReason: "stop" }, results: [] })),
+        ),
+      ),
+    });
+    await withAgent({ plugins: [rewriter], scripts: [useTools(call("c1", "echo", { text: "a" }))] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        expect(ofType(yield* log(id), "step-end")[0]!.decision).toEqual({
+          result: "stop",
+          why: "the model stopped (stop)",
+          handlers: [{ source: "rewriter", ms: expect.any(Number), changed: ["input"] }],
+        });
+      }),
+    );
+  });
+
   it("lets AgentContinueHook stop a tool loop early", async () => {
     const stopper = definePlugin({
       id: "stopper",

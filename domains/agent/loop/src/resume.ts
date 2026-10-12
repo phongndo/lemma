@@ -32,7 +32,13 @@ export type ResumePoint =
    * Between steps: after the last closed step's `outcome` (with `steered`, prompts placed after it, which the model
    * has yet to answer), or ready for a step (before the first, or after one whose call is to be asked again).
    */
-  | { readonly kind: "between"; readonly outcome?: StepOutcome; readonly steered: boolean }
+  | {
+      readonly kind: "between";
+      readonly outcome?: StepOutcome;
+      /** What `AgentContinueHook` decided after that step, as its `step-end` logged it. */
+      readonly decision?: "continue" | "stop";
+      readonly steered: boolean;
+    }
   /** A step was begun but nothing was asked of the model yet. */
   | { readonly kind: "before-request"; readonly stepId: string }
   /**
@@ -133,6 +139,8 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
     attempt?: Attempt;
     /** Tool calls a `TOOLS_STARTED` event names; undefined while none does. */
     started?: Set<string>;
+    /** What its `step-end` logged `AgentContinueHook` decided. */
+    decision?: "continue" | "stop";
   };
   let open: Open | undefined;
   /** The last step closed, and whether prompts were placed after it. */
@@ -183,7 +191,7 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
         }
         break;
       case "step-end":
-        if (open !== undefined) closed = open;
+        if (open !== undefined) closed = data.decision === undefined ? open : { ...open, decision: data.decision.result };
         open = undefined;
         steered = false;
         break;
@@ -195,7 +203,10 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
 
   const at = ((): ResumePoint => {
     if (open === undefined) {
-      if (closed?.message !== undefined) return { kind: "between", outcome: { message: closed.message, results: closed.results }, steered };
+      if (closed?.message !== undefined) {
+        const outcome = { message: closed.message, results: closed.results };
+        return { kind: "between", outcome, ...(closed.decision === undefined ? {} : { decision: closed.decision }), steered };
+      }
       // A step closed on a failed call: the turn was closing, unless the call is to be asked again.
       if (closed?.attempt !== undefined && !retried(closed.attempt)) {
         return { kind: "failed", stepId: closed.stepId, attempt: closed.attempt.message, closed: true };

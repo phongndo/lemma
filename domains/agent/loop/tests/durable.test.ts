@@ -490,6 +490,12 @@ describe("planResume", () => {
       event(6, "f", "e", { type: "message", turnId: "t", requestId: "s1", message: { role: "user", content: text("also"), timestamp: 1 } }),
     ];
     expect(planResume(events, "t")).toMatchObject({ kind: "open", plan: { steps: 1, at: { kind: "between", steered: true } } });
+    // What the step-end logged the hook decided is what a resumed turn acts on, not a decision made again.
+    const decided = [
+      ...events.slice(0, 4),
+      event(5, "e", "d", { type: "step-end", turnId: "t", stepId: "s", decision: { result: "stop", why: "the model stopped (stop)" } }),
+    ];
+    expect(planResume(decided, "t")).toMatchObject({ kind: "open", plan: { at: { kind: "between", decision: "stop", steered: false } } });
   });
 
   it("closes a turn whose failed call's step was closed before the restart, and retries one closed on an interrupted call", () => {

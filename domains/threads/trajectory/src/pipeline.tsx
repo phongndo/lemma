@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { formatDuration, formatTokens } from "@lemma/client/format";
 import type { CheckCredit, HandlerCredit } from "@lemma/contracts";
-import type { TrajectoryStep, TrajectoryToolRun } from "@lemma/sessions";
+import type { TrajectoryStep, TrajectoryToolRun, TurnEndReason } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
 import { inputTokens } from "./scale.ts";
 
@@ -13,6 +13,14 @@ export interface PipelineParts {
 }
 
 const ms = (value: number) => (value < 10 ? value.toFixed(2) : value.toFixed(0));
+
+/** Why a turn ended, as the Pipeline says it. */
+const ENDED: Readonly<Record<TurnEndReason, string>> = {
+  done: "Then it stopped",
+  "max-steps": "Then it ended: out of steps",
+  cancelled: "Then it was cancelled",
+  error: "Then it ended in an error",
+};
 
 /** A hook's handlers in the order they ran: each one's own time, and what it changed. */
 function Handlers(props: { handlers: readonly HandlerCredit[] | undefined; none: string }) {
@@ -82,12 +90,21 @@ function Checks(props: { checks: readonly CheckCredit[] | undefined; none: strin
 
 /**
  * What shaped a model call and what came of it, from the log: the compactions its request made, the request's handlers
- * (`AgentRequestHook`), the attempts that failed and when each was asked again, the answer, and why the turn went on or
- * stopped after it (`AgentContinueHook`).
+ * (`AgentRequestHook`), the attempts that failed (in earlier steps too, each asked again in a step of its own) and when
+ * each was asked again, the answer, what `AgentContinueHook` decided, and what the turn then did.
  */
 export function createPipeline({ Section, Facts }: PipelineParts) {
   function StepPipeline(props: { step: TrajectoryStep }) {
     const step = () => props.step;
+    const attempts = () => [...step().earlier, ...step().attempts];
+    const askedAgain = () => step().response === undefined && step().attempts.at(-1)?.retry?.reason === "failure";
+    /** What the turn did after the step, or, while it runs, what the hook decided. */
+    const then = () => {
+      const after = step().after;
+      if (after?.kind === "end") return ENDED[after.reason];
+      if (after?.kind === "step") return step().decision?.result === "stop" ? "Then it went on, for prompts placed meanwhile" : "Then it went on";
+      return step().decision === undefined ? undefined : step().decision!.result === "continue" ? "It goes on" : "It stops";
+    };
     return (
       <div class="trj-pipeline-steps">
         <Show when={step().compactions.length > 0}>
@@ -115,8 +132,8 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
         <Section title="Request" aside="AgentRequestHook">
           <Handlers handlers={step().request?.handlers} none="No plugin changed the request." />
         </Section>
-        <Section title="Model" aside={step().attempts.length === 0 ? undefined : `${step().attempts.length} failed first`}>
-          <For each={step().attempts}>
+        <Section title="Model" aside={attempts().length === 0 ? undefined : `${attempts().length} failed first`}>
+          <For each={attempts()}>
             {(attempt) => (
               <Facts
                 rows={[
@@ -133,7 +150,7 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
               />
             )}
           </For>
-          <Show when={step().response} fallback={<p class="trj-desc">No answer was logged.</p>}>
+          <Show when={step().response} fallback={<p class="trj-desc">{askedAgain() ? "It was asked again in the next step." : "No answer was logged."}</p>}>
             {(response) => (
               <Facts
                 rows={[
@@ -150,11 +167,19 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
             )}
           </Show>
         </Section>
-        <Show when={step().decision}>
-          {(decision) => (
-            <Section title={decision().result === "continue" ? "Then it went on" : "Then it stopped"} aside="AgentContinueHook">
-              <p class="trj-desc">By default: {decision().why}.</p>
-              <Handlers handlers={decision().handlers} none="No plugin weighed in." />
+        <Show when={then()}>
+          {(title) => (
+            <Section title={title()} aside="AgentContinueHook">
+              <Show when={step().decision}>
+                {(decision) => (
+                  <>
+                    <p class="trj-desc">
+                      It decided to {decision().result === "continue" ? "go on" : "stop"}; by default, {decision().why}.
+                    </p>
+                    <Handlers handlers={decision().handlers} none="No plugin weighed in." />
+                  </>
+                )}
+              </Show>
             </Section>
           )}
         </Show>

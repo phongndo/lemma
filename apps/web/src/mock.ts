@@ -637,16 +637,17 @@ export const createMockHost = (): Host => {
       at(),
       true,
     );
-    append(s, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
     // What the agent logs of each request: the prompt by source, and the handlers that shaped it.
     const request = (stepId: string, handlers: Extract<EventData, { type: "request" }>["handlers"]) => mockRequest("t1", stepId, MODELS[0]!.ref, handlers);
-    append(s, request("p1", [{ source: "context.compaction", ms: 0.31 }]), at(), true);
+    // A call that failed and was asked again, as the agent logs it: the attempt closes its step, and the next asks again.
+    append(s, { type: "step-start", turnId: "t1", stepId: "p0" }, at(), true);
+    append(s, request("p0", [{ source: "context.compaction", ms: 0.31 }]), at(), true);
     append(
       s,
       {
         type: "attempt",
         turnId: "t1",
-        stepId: "p1",
+        stepId: "p0",
         message: assistant([], usage(0, 0), "error", "529 overloaded_error: Overloaded"),
         timing: { startedAt: t, endedAt: at(900) },
         failure: { kind: "transient" },
@@ -655,6 +656,9 @@ export const createMockHost = (): Host => {
       t,
       true,
     );
+    append(s, { type: "step-end", turnId: "t1", stepId: "p0" }, at(), true);
+    append(s, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
+    append(s, request("p1", [{ source: "context.compaction", ms: 0.27 }]), at(), true);
     const callA = { type: "toolCall" as const, id: "c1", name: "bash", arguments: { command: "pnpm --filter @lemma/client test -- --reporter=dot" } };
     const callB = {
       type: "toolCall" as const,
@@ -906,17 +910,21 @@ export const createMockHost = (): Host => {
     const turnId = id("t");
     const started = Date.now();
     const turnSpan = mockTrace.begin("agent.turn", { "session.id": sessionId, "turn.id": turnId, "turn.resumed": false, "plugin.id": "agent.loop" });
+    /** Each step's number in the turn, which every span of its work carries, as the agent marks them. */
+    const indexOf = new Map<string, number>();
     /** A step's spans as the agent makes them: the request and its handlers, then the model call while it streams. */
-    const stepSpan = (stepId: string, index: number) =>
-      mockTrace.begin(
+    const stepSpan = (stepId: string, index: number) => {
+      indexOf.set(stepId, index);
+      return mockTrace.begin(
         "agent.step",
         { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "step.index": index, "plugin.id": "agent.loop" },
         turnSpan.id,
       );
+    };
     const asked = async (step: MockSpan, stepId: string, message: AssistantMessage) => {
       append(sessionId, { type: "step-start", turnId, stepId });
       append(sessionId, mockRequest(turnId, stepId, by.ref, [{ source: "context.compaction", ms: 0.29 }]));
-      const where = { "session.id": sessionId, "turn.id": turnId, "step.id": stepId };
+      const where = { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "step.index": indexOf.get(stepId)! };
       const request = mockTrace.begin("agent.request", { ...where, "plugin.id": "agent.loop" }, step.id);
       for (const plugin of ["agent.loop", "context.compaction"]) {
         mockTrace.begin("core.hook", { ...where, "plugin.id": plugin, "hook.name": "lemma/agent.request", "hook.in.model": by.ref }, request.id).end();
@@ -930,7 +938,15 @@ export const createMockHost = (): Host => {
     const toolSpan = (step: MockSpan, stepId: string, call: { readonly id: string; readonly name: string }) =>
       mockTrace.begin(
         `tools.execute ${call.name}`,
-        { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "tool.call.id": call.id, "tool.name": call.name, "plugin.id": "tools.registry" },
+        {
+          "session.id": sessionId,
+          "turn.id": turnId,
+          "step.id": stepId,
+          "step.index": indexOf.get(stepId)!,
+          "tool.call.id": call.id,
+          "tool.name": call.name,
+          "plugin.id": "tools.registry",
+        },
         step.id,
       );
     append(sessionId, { type: "turn-start", turnId, model: by.ref });

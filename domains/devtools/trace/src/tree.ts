@@ -6,6 +6,8 @@ export interface SpanNode {
   readonly children: SpanNode[];
   /** Its own time: what no span under it accounts for. */
   self: number;
+  /** How many spans it and those under it are. */
+  size: number;
 }
 
 /**
@@ -13,7 +15,7 @@ export interface SpanNode {
  * long ago, or is still running) is a root.
  */
 export function forest(spans: readonly SpanRecord[]): SpanNode[] {
-  const nodes = new Map(spans.map((span) => [span.id, { span, children: [] as SpanNode[], self: span.ms }]));
+  const nodes = new Map(spans.map((span) => [span.id, { span, children: [] as SpanNode[], self: span.ms, size: 1 }]));
   const roots: SpanNode[] = [];
   for (const node of nodes.values()) {
     const parent = node.span.parentId === undefined ? undefined : nodes.get(node.span.parentId);
@@ -28,6 +30,8 @@ export function forest(spans: readonly SpanRecord[]): SpanNode[] {
     node.self = Math.max(0, node.self);
     node.children.sort(byStart);
   }
+  const count = (node: SpanNode): number => (node.size = 1 + node.children.reduce((sum, child) => sum + count(child), 0));
+  for (const root of roots) count(root);
   return roots.sort(byStart);
 }
 
@@ -58,21 +62,26 @@ export interface PluginProfile {
   readonly errors: number;
 }
 
-const percentile = (sorted: readonly number[], p: number) => (sorted.length === 0 ? 0 : sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]!);
+/** The value at or below which `p` of `sorted` lie (nearest rank). */
+const percentile = (sorted: readonly number[], p: number) => (sorted.length === 0 ? 0 : sorted[Math.max(0, Math.ceil(p * sorted.length) - 1)]!);
 
-/** Each plugin's profile over `nodes` (every node, not only roots), the costliest by own time first. */
-export function profile(nodes: readonly SpanNode[]): PluginProfile[] {
+/**
+ * Each plugin's profile over the spans under `roots` that `matches` picks (all of them when absent), the costliest by
+ * own time first. Own time is each span's in the whole trace: a span's children count against it though they do not
+ * match.
+ */
+export function profile(roots: readonly SpanNode[], matches: (span: SpanRecord) => boolean = () => true): PluginProfile[] {
   const byPlugin = new Map<string, SpanNode[]>();
   const visit = (node: SpanNode) => {
     const plugin = node.span.attributes["plugin.id"];
-    if (typeof plugin === "string") {
+    if (typeof plugin === "string" && matches(node.span)) {
       const own = byPlugin.get(plugin);
       if (own === undefined) byPlugin.set(plugin, [node]);
       else own.push(node);
     }
     for (const child of node.children) visit(child);
   };
-  for (const node of nodes) visit(node);
+  for (const root of roots) visit(root);
   return [...byPlugin]
     .map(([plugin, own]): PluginProfile => {
       const times = own.map((node) => node.span.ms).sort((a, b) => a - b);

@@ -39,6 +39,36 @@ describe("splitSystem", () => {
 });
 
 describe("trajectory", () => {
+  it("gives the step that asked a failed call again the attempts before it, and each step what the turn did next", () => {
+    const failed = assistant([], "error");
+    const turns = trajectory(
+      log(
+        { type: "turn-start", turnId: "t" },
+        { type: "message", turnId: "t", message: { role: "user", content: [{ type: "text", text: "go" }], timestamp: 0 } },
+        { type: "step-start", turnId: "t", stepId: "s1" },
+        {
+          type: "attempt",
+          turnId: "t",
+          stepId: "s1",
+          message: failed,
+          timing: { startedAt: 0, endedAt: 1 },
+          failure: { kind: "transient" },
+          retry: { reason: "failure", attempt: 1, at: 2 },
+        },
+        { type: "step-end", turnId: "t", stepId: "s1" },
+        { type: "step-start", turnId: "t", stepId: "s2" },
+        { type: "message", turnId: "t", stepId: "s2", message: assistant([{ type: "text", text: "ok" }], "stop") },
+        { type: "step-end", turnId: "t", stepId: "s2", decision: { result: "continue", why: "tool results to read" } },
+        { type: "turn-end", turnId: "t", reason: "max-steps" },
+      ),
+    );
+    const [first, second] = turns[0]!.steps;
+    expect([first!.earlier, first!.attempts.length, first!.after]).toEqual([[], 1, { kind: "step" }]);
+    expect(second!.earlier.map((attempt) => attempt.message)).toEqual([failed]);
+    // The hook said go on; the turn was out of steps.
+    expect([second!.decision?.result, second!.after]).toEqual(["continue", { kind: "end", reason: "max-steps" }]);
+  });
+
   it("counts the messages each request carried as deriveMessages does, across a compaction", () => {
     const say = (turnId: string, text: string): EventData => ({
       type: "message",
