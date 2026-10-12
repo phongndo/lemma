@@ -8,13 +8,15 @@ import { catalog, compositionHistory, faultHistory, planComposition, restartedBy
 import type { KnownPlugin, Resolved } from "@lemma/composition";
 import type { ChangeReport, CompositionChange, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { appDefaults, bundled, bundledWeb } from "./bundled.ts";
+import { appDefaults, bundled, bundledCode, bundledWeb } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
+import { recordStall, watchStalls } from "./stall.ts";
+import type { CodeOwner, StallWatch } from "./stall.ts";
 import { catchUnhandled, hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
 import type { HostControlHandle } from "./runtime.ts";
 import { listWebFiles, userPluginsDir as pluginsDirOf } from "./web.ts";
@@ -73,10 +75,14 @@ interface Loaded {
   readonly web: WebComposition;
   /** The web halves' ids, known without running them: the bundled ones, and each web file's plugin (it is named for it). */
   readonly webIds: readonly string[];
+  /** Where each known plugin's code is, so a stall names whose code blocked the loop (`watchStalls`). */
+  readonly code: readonly CodeOwner[];
 }
 
 /** The last load the loader accepted; the catalog and `configure` reason about this. */
 let applied!: Loaded;
+/** The event loop's watchdog (`watchStalls`), told where plugins' code is each time `applied` changes. */
+let stalls: StallWatch | undefined;
 /**
  * What each config file held when the host last read or wrote it. The watcher
  * debounces both files into one event naming only the last, so an event
@@ -114,7 +120,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       const planned = planComposition({ ...input, local: [], rows: {} });
       const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
       if (errors.length) return yield* new ReloadError({ diagnostics: errors });
-      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB, webIds: bundledWeb };
+      return { ...planned, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB, webIds: bundledWeb, code: bundledCode(bundled) };
     }
     const loaded = yield* loadComposition(paths);
     // Project plugins run only in a project the user config trusts; see `loadComposition`.
@@ -162,6 +168,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
       trusted: loaded.trusted,
       web: { plugins: loaded.rows, enabledIn: loaded.enabledIn, configIn: loaded.configIn, files },
       webIds,
+      code: [...bundledCode(bundled), ...local.plugins.map(({ plugin, code }) => ({ path: code, id: plugin.id }))],
     };
   });
 
@@ -272,10 +279,13 @@ const program = Effect.gen(function* () {
     Effect.gen(function* () {
       const previous = applied;
       applied = next;
+      // Before the plugins it brings start, so a stall in one's activation names it.
+      stalls?.refresh();
       const report = yield* loader.apply(next.resolved.composition).pipe(
         Effect.tapError(() =>
           Effect.sync(() => {
             applied = previous;
+            stalls?.refresh();
           }),
         ),
       );
@@ -498,6 +508,7 @@ const program = Effect.gen(function* () {
 
   if (safe) yield* log("safe mode: the bundled plugins as shipped; no config file or plugin file is read or written");
   applied = yield* load();
+  stalls?.refresh();
   // What cannot start is left failed, restartable, unless it is required: the essential plugins, your own, and rows marked so.
   const loader = yield* makeLoader({
     source,
@@ -633,6 +644,9 @@ const program = Effect.gen(function* () {
 });
 
 catchUnhandled();
+// A plugin stuck in synchronous work blocks every session: said while it lasts, and kept in the trace as `host.stall`.
+const NO_CODE: readonly CodeOwner[] = [];
+stalls = watchStalls({ owners: () => (applied === undefined ? NO_CODE : applied.code), onStall: (stall) => recordStall(spans.tracer, stall) });
 const exit = await Effect.runPromiseExit(Effect.scoped(program).pipe(Effect.withTracer(spans.tracer)));
 if (Exit.isFailure(exit)) {
   const failure = Cause.findErrorOption(exit.cause);

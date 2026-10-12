@@ -3,7 +3,9 @@ import { Layer, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import type { PluginRow } from "@lemma/contracts";
 import { planComposition } from "@lemma/composition";
-import { appDefaults, bundled as shipped, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { appDefaults, bundled as shipped, bundledCode, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
 import { domainPlugins } from "../../../scripts/plugins.ts";
 
@@ -30,6 +32,12 @@ describe("bundled", () => {
   test("holds the host half of every plugin in domains/, under the id its folder names", () => {
     const halves = [...domainPlugins()].filter(([, plugin]) => plugin.host !== undefined).map(([id]) => id);
     expect(shipped.map((plugin) => plugin.id).sort()).toEqual(halves.sort());
+  });
+
+  test("knows where every bundled plugin's code is, for a stall to name it", () => {
+    const code = bundledCode(shipped);
+    expect(code.map((owner) => owner.id)).toEqual(shipped.map((plugin) => plugin.id));
+    for (const owner of code) expect(existsSync(join(owner.path, "package.json")), owner.path).toBe(true);
   });
 
   test("knows the id of every web half in domains/, which the web app runs, so a row naming one is no typo", () => {

@@ -1,3 +1,4 @@
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
 import agentLoop from "@lemma/agent-loop";
@@ -57,6 +58,15 @@ export const bundled: readonly Plugin[] = [
   devtoolsTrace,
   transportServer,
 ];
+
+const domains = fileURLToPath(new URL("../../../domains/", import.meta.url));
+
+/** Where each bundled plugin's code is: its package, `domains/<domain>/<name>` for the id `<domain>.<name>`. */
+export const bundledCode = (plugins: readonly Plugin[]): readonly { readonly path: string; readonly id: string }[] =>
+  plugins.flatMap((plugin) => {
+    const [domain, name, ...rest] = plugin.id.split(".");
+    return domain === undefined || name === undefined || rest.length > 0 ? [] : [{ path: join(domains, domain, name), id: plugin.id }];
+  });
 
 /**
  * The bundled web halves' ids: the web app runs them (`apps/web/src/bundled.ts`), and a row naming one is a plugin's,
