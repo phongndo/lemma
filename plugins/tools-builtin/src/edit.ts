@@ -1,7 +1,7 @@
 import { constants } from "node:fs";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { Schema, SchemaTransformation } from "effect";
-import type { Tool } from "@lemma/contracts";
+import type { Tool } from "@lemma/tools";
 import { unifiedPatch } from "./diff.ts";
 import { fsMessage, resolveToCwd, text, throwIfAborted, withFileLock } from "./files.ts";
 

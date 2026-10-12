@@ -13,9 +13,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/commands": "workspace:*",
     "@lemma/composition": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/credentials": "workspace:*",
+    "@lemma/llm": "workspace:*",
     "@lemma/plugin-agent": "workspace:*",
     "@lemma/plugin-commands": "workspace:*",
     "@lemma/plugin-commands-builtin": "workspace:*",
@@ -29,6 +33,9 @@
     "@lemma/plugin-tools-builtin": "workspace:*",
     "@lemma/plugin-transport": "workspace:*",
     "@lemma/plugin-workspace": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/workspace": "workspace:*",
     "effect": "4.0.1",
     "jsonc-parser": "3.3.1"
   },

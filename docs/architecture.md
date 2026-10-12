@@ -11,14 +11,16 @@ provide themselves (the kernel's
 so no row turns it off and no plugin replaces it. The host's is in
 `packages/host`, the web app's in its boot (`apps/web/src/runtime`), and both
 plan what runs with `packages/composition`. Its contracts are
-`@lemma/contracts/runtime` and the web app's `ui/runtime.ts`. It holds no
-domain ([AGENTS.md](../AGENTS.md#design)): each subsystem reaches clients
-through channels of its own, below.
+`@lemma/contracts` and the web app's `ui/runtime.ts`. It holds no domain
+([AGENTS.md](../AGENTS.md#design)): each domain is a folder under `domains/`,
+its contract a package of its own (`domains/<domain>/contract`, named
+`@lemma/<domain>`), and it reaches clients through channels of its own, below.
 
 | Path                                                          | Responsibility                                                                                                                                                                                   |
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [`packages/core`](../packages/core/README.md)                 | The plugin kernel: capabilities, hooks, events, registries, reloads ([design](../packages/core/DESIGN.md))                                                                                       |
-| [`packages/contracts`](../packages/contracts/src/index.ts)    | The runtime's contracts (`/runtime`), and each subsystem's: capabilities, events, channels, and projections                                                                                      |
+| [`packages/contracts`](../packages/contracts/src/index.ts)    | The runtime's contracts: what the host and the web app give every plugin, and what clients reach the host by                                                                                     |
+| [`domains/*/contract`](../domains)                            | Each domain's contract, `@lemma/<domain>`: its capabilities, hooks, events, channels, and projections                                                                                            |
 | [`packages/client`](../packages/client/src/index.ts)          | The host RPC client the web app and CLI share, the only reader of the host's streams: reconnecting, typed channel calls, one reopen policy for streams (`follow`), prompts sent once (`/prompt`) |
 | [`packages/host`](../packages/host/README.md)                 | The host and its runtime (paths, plugin control, questions): reads config, loads and hot-reloads plugins                                                                                         |
 | [`packages/composition`](../packages/composition/README.md)   | The runtime's planner: what runs from the known plugins and config rows, for the host and web app alike                                                                                          |

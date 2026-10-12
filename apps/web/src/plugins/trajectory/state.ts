@@ -1,6 +1,6 @@
 import { createSignal } from "solid-js";
-import { recordFailed, recordStatus } from "@lemma/contracts";
-import type { AssistantRecord, LedgerRecord, LedgerSort } from "@lemma/contracts";
+import { recordFailed, recordStatus } from "@lemma/sessions";
+import type { AssistantRecord, LedgerRecord, LedgerSort } from "@lemma/sessions";
 import { wheeled } from "../../model/timeline.ts";
 import { copyText } from "../../lib/clipboard.ts";
 import type { NotifyService, ThreadsService } from "../../ui/contracts.ts";

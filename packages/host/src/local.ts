@@ -15,7 +15,8 @@ import type { Plugin } from "@lemma/core";
  * every plugin.
  *
  * Bare imports that the file's own location cannot resolve (`effect`,
- * `@lemma/core`, `@lemma/contracts`) fall back to the host's packages, so a
+ * `@lemma/core`, `@lemma/contracts`, a domain's contract such as
+ * `@lemma/tools`) fall back to the host's packages, so a
  * plugin file needs no install step and shares the host's module instances.
  */
 let hooked = false;

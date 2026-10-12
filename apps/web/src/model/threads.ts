@@ -1,5 +1,7 @@
-import { branchOf, HostError, SessionChannels } from "@lemma/contracts";
-import type { QueuedPrompt, SessionEvent, SessionInfo, SessionsChange } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { branchOf, SessionChannels } from "@lemma/sessions";
+import type { QueuedPrompt } from "@lemma/agent";
+import type { SessionEvent, SessionInfo, SessionsChange } from "@lemma/sessions";
 
 interface SessionGroup {
   readonly cwd: string;

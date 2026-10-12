@@ -1,8 +1,8 @@
 import { Effect, Layer, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
-import { Tools } from "@lemma/contracts";
-import type { Tool } from "@lemma/contracts";
+import { Tools } from "@lemma/tools";
+import type { Tool } from "@lemma/tools";
 import { DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
 import { codemodeTool } from "./codemode.ts";
 import { editTool } from "./edit.ts";

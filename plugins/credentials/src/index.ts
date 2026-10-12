@@ -1,7 +1,8 @@
 import { join } from "node:path";
 import { Effect, Semaphore } from "effect";
-import { CredentialError, Credentials, Paths } from "@lemma/contracts";
-import type { Credential } from "@lemma/contracts";
+import { Paths } from "@lemma/contracts";
+import { CredentialError, Credentials } from "@lemma/credentials";
+import type { Credential } from "@lemma/credentials";
 import { awaitable, definePlugin } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
 import { decodeEntry, readStore, withFileLock, writeStore } from "./store.ts";

@@ -1,5 +1,5 @@
-import { recordFailed } from "@lemma/contracts";
-import type { LedgerRecord, LedgerSpan } from "@lemma/contracts";
+import { recordFailed } from "@lemma/sessions";
+import type { LedgerRecord, LedgerSpan } from "@lemma/sessions";
 
 /*
  * The Trajectory's timeline: an axis of fractions (0 to 1) over the session's

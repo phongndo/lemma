@@ -1,47 +1,25 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
-import {
-  AgentChannels,
-  CommandChannels,
-  FileChannels,
-  HostError,
-  LlmChannels,
-  SessionChannels,
-  WorkspaceChannels,
-  configValues,
-  describeConfig,
-  emptyUsage,
-  providerOf,
-  secret,
-  wireCodec,
-  withdrawnFrom,
-} from "@lemma/contracts";
+import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
+import { AgentChannels } from "@lemma/agent";
+import { CommandChannels } from "@lemma/commands";
+import { LlmChannels, emptyUsage } from "@lemma/llm";
+import { SessionChannels } from "@lemma/sessions";
+import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { fuzzy } from "./model/palette.ts";
 import type {
-  AgentActivity,
-  AgentView,
-  AssistantMessage,
   ChannelDeclaration,
   ChannelInfo,
-  EventData,
   InteractionAnswer,
   InteractionRequest,
-  LlmChange,
-  ModelInfo,
   NoticePayload,
   PluginStatus,
-  PromptContent,
-  QueuedPrompt,
-  ProviderInfo,
   RuntimeEvent,
-  SessionEvent,
-  SessionInfo,
-  SessionsChange,
-  StreamEvent,
-  TurnOptions,
   UiComposition,
-  Usage,
 } from "@lemma/contracts";
+import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { AssistantMessage, LlmChange, ModelInfo, ProviderInfo, StreamEvent, Usage } from "@lemma/llm";
+import type { EventData, SessionEvent, SessionInfo, SessionsChange } from "@lemma/sessions";
 
 /**
  * Dev-only in-browser fake of the host (`?mock`, or `?mock=fresh` for a first
@@ -379,7 +357,7 @@ export const createMockHost = (): Host => {
     return { ...plugin, configFields: fields, config: configValues(schema, configRows[plugin.id] ?? {}, fields) };
   };
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
-  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/api@2"];
+  const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", `lemma/api@${HOST_API}`];
   const plugins: PluginStatus[] = [
     bundled("credentials", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
     bundled("llm", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),

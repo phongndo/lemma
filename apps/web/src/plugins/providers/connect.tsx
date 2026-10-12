@@ -1,6 +1,7 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
-import type { InteractionRequest, NoticePayload, ProviderInfo } from "@lemma/contracts";
+import type { InteractionRequest, NoticePayload } from "@lemma/contracts";
+import type { ProviderInfo } from "@lemma/llm";
 import { copyText } from "../../lib/clipboard.ts";
 import { providerBrand, signInState } from "../../model/providers.ts";
 import type { InteractionsService } from "../../ui/contracts.ts";

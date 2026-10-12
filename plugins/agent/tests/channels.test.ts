@@ -1,8 +1,12 @@
 import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
-import { Agent, AgentChannels, Paths, SessionError, SessionRemoveHook, Sessions } from "@lemma/contracts";
-import type { AgentView, ChannelInfo, QueuedPrompt, SessionEvent, SessionInfo } from "@lemma/contracts";
+import { Paths } from "@lemma/contracts";
+import { Agent, AgentChannels } from "@lemma/agent";
+import { SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
+import type { ChannelInfo } from "@lemma/contracts";
+import type { AgentView, QueuedPrompt } from "@lemma/agent";
+import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import sessions from "../../sessions/src/index.ts";
 import { call, collect, hostError, open, served } from "../../sessions/tests/served.ts";
 import tools from "../../tools/src/index.ts";

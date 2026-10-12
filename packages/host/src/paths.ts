@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Context } from "effect";
-import type { Paths } from "@lemma/contracts/runtime";
+import type { Paths } from "@lemma/contracts";
 
 export type PathsService = Context.Service.Shape<typeof Paths>;
 

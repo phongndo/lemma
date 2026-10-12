@@ -2,7 +2,7 @@ import { Cause, Deferred, Duration, Effect, Exit, Fiber, Schema, Scope, Stream }
 import type { Layer } from "effect";
 import { RpcClientError } from "effect/rpc";
 import type { Socket } from "effect/socket";
-import { HostError, wireCodec } from "@lemma/contracts/runtime";
+import { HostError, wireCodec } from "@lemma/contracts";
 import type {
   ChannelDeclaration,
   ChannelInfo,
@@ -16,7 +16,7 @@ import type {
   ReloadResult,
   RuntimeEvent,
   UiComposition,
-} from "@lemma/contracts/runtime";
+} from "@lemma/contracts";
 import { makeHostRpc, raw, rpcUrl } from "./rpc.ts";
 import type { HostRpcClient, RawHostRpcClient } from "./rpc.ts";
 

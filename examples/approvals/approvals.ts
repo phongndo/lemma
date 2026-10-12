@@ -2,8 +2,9 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core/plain";
-import { Interaction, InteractionError, Tools } from "@lemma/contracts";
-import type { GuardDecision, ToolInvocation } from "@lemma/contracts";
+import { Interaction, InteractionError } from "@lemma/contracts";
+import { Tools } from "@lemma/tools";
+import type { GuardDecision, ToolInvocation } from "@lemma/tools";
 import { resolveToCwd } from "@lemma/plugin-tools-builtin";
 
 /**
@@ -13,7 +14,7 @@ import { resolveToCwd } from "@lemma/plugin-tools-builtin";
  *
  * A plugin file, written the way a user writes one: copy or link it into
  * `~/.lemma/plugins/` and run `lemma reload`. It imports only packages the
- * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, and the file
+ * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, `@lemma/tools`, and the file
  * tools' own path resolution, so it judges the file a tool will touch. It is
  * written with promises (`@lemma/core/plain`): its services are promise-based
  * views of the same contracts an Effect plugin uses.

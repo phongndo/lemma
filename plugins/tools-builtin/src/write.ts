@@ -1,7 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { Schema } from "effect";
-import type { Tool } from "@lemma/contracts";
+import type { Tool } from "@lemma/tools";
 import { fsMessage, resolveToCwd, text, throwIfAborted, withFileLock } from "./files.ts";
 
 export const WriteInput = Schema.Struct({

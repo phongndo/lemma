@@ -3,23 +3,11 @@ import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, definePlugin } from "@lemma/core";
-import {
-  Channels,
-  Credentials,
-  HostControl,
-  Interaction,
-  InteractionError,
-  InteractionOrigin,
-  Llm,
-  LlmError,
-  LlmRequestHook,
-  ModelsChanged,
-  Notice,
-  Paths,
-  parseModelRef,
-  serveLlm,
-} from "@lemma/contracts";
-import type { AuthType, LlmRequest, NoticePayload, ProviderInfo, StreamEvent } from "@lemma/contracts";
+import { Channels, HostControl, Interaction, InteractionError, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
+import { Credentials } from "@lemma/credentials";
+import { Llm, LlmError, LlmRequestHook, ModelsChanged, parseModelRef, serveLlm } from "@lemma/llm";
+import type { NoticePayload } from "@lemma/contracts";
+import type { AuthType, LlmRequest, ProviderInfo, StreamEvent } from "@lemma/llm";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";

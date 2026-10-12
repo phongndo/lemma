@@ -2,13 +2,12 @@
   "name": "@lemma/contracts",
   "version": "0.1.0",
   "private": true,
-  "description": "Capability contracts shared by the Lemma harness plugins and clients",
+  "description": "The runtime's contracts: what the host and the web app give every plugin, and what clients reach the host by",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./discovery": "./src/discovery.ts",
     "./fs": "./src/fs.ts",
-    "./runtime": "./src/runtime.ts",
     "./testing": "./src/testing.ts"
   },
   "scripts": {
@@ -17,7 +16,6 @@
   },
   "dependencies": {
     "@lemma/core": "workspace:*",
-    "@lemma/router": "workspace:*",
     "effect": "4.0.1"
   },
   "devDependencies": {

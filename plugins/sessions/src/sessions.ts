@@ -3,8 +3,9 @@ import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Sche
 import type { Context, Scope } from "effect";
 import { Events, Hooks, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
-import { Notice, Paths, SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, SessionRemoveHook } from "@lemma/contracts";
-import type { SessionInfo, Sessions } from "@lemma/contracts";
+import { Notice, Paths } from "@lemma/contracts";
+import { SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRemoved, SessionRemoveHook } from "@lemma/sessions";
+import type { SessionInfo, Sessions } from "@lemma/sessions";
 import { errorCode } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { applyMarks, CHANGED_ON_DISK, createFile, infoOf, io, lineHash, load, openFile, scan, syncDirectory, unfiled } from "./file.ts";

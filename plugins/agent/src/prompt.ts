@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import type { PromptContent, SystemSection } from "@lemma/contracts";
+import type { PromptContent, SystemSection } from "@lemma/agent";
 
 /**
  * The default base prompt, after pi's: an identity line and guidelines for the

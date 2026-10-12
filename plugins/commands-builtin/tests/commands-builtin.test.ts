@@ -2,7 +2,10 @@ import { describe, expect, test } from "vitest";
 import { Effect } from "effect";
 import type { Context } from "effect";
 import { awaitable } from "@lemma/core";
-import type { Command, HostControl, Interaction, Llm, Workspace } from "@lemma/contracts";
+import type { HostControl, Interaction } from "@lemma/contracts";
+import type { Command } from "@lemma/commands";
+import type { Llm } from "@lemma/llm";
+import type { Workspace } from "@lemma/workspace";
 import { hostCommands, llmCommands, workspaceCommands } from "../src/index.ts";
 
 type Ask = Context.Service.Shape<typeof Interaction>;

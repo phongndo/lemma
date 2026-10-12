@@ -100,35 +100,132 @@ for (const home of frameworks) {
 }
 report("Framework doc links leaving the framework packages", linkProblems, "framework doc links: ok");
 
-// A bundled host plugin is one a user could have written: it meets the others only through `packages/contracts`
-// (AGENTS.md), so its package depends on no other plugin and its source imports none.
-const pluginProblems: string[] = [];
-for (const dir of readdirSync(join(root, "plugins"))) {
-  const home = join(root, "plugins", dir);
-  const manifest = JSON.parse(readFileSync(join(home, "package.json"), "utf8"));
-  for (const dependency of Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies })) {
-    if (dependency.startsWith("@lemma/plugin-")) pluginProblems.push(`plugins/${dir}/package.json: runtime dependency "${dependency}" (use a contract)`);
+// Each domain is a folder under domains/: its contract (`domains/<domain>/contract`, the package `@lemma/<domain>`) and
+// its plugins (`domains/<domain>/<name>`). A contract declares and implements nothing: it depends only on the runtime's
+// contracts, the core, Effect, and other domains' contracts, which form no cycle, and defines no plugin. A bundled plugin
+// is one a user could have written: it meets the others only through contracts (AGENTS.md), so its package depends on no
+// other plugin and its source imports none.
+const domainsDir = join(root, "domains");
+/** The folders in `dir` (none when it is absent): a stray file beside them (`.DS_Store`, a README) is no package. */
+const foldersIn = (dir: string) =>
+  existsSync(dir)
+    ? readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => entry.name)
+    : [];
+/** The workspace's packages in `group`: its folders with a package.json, each with its manifest. */
+const packagesIn = (group: string) =>
+  foldersIn(join(root, group))
+    .filter((name) => existsSync(join(root, group, name, "package.json")))
+    .map((name) => {
+      const dir = join(root, group, name);
+      return { name, dir, manifest: JSON.parse(readFileSync(join(dir, "package.json"), "utf8")) };
+    });
+/** Whether `path` is `dir` or inside it, so a sibling whose name starts with it (`tools-builtin` beside `tools`) is not. */
+const inside = (dir: string, path: string) => path === dir || path.startsWith(`${dir}/`);
+const domainPackages = foldersIn(domainsDir).flatMap((domain) => packagesIn(`domains/${domain}`).map((pkg) => ({ ...pkg, domain })));
+const contractPackages = new Map(domainPackages.filter((pkg) => pkg.name === "contract").map((pkg) => [pkg.manifest.name as string, pkg]));
+const pluginPackages = [...domainPackages.filter((pkg) => pkg.name !== "contract"), ...packagesIn("plugins").map((pkg) => ({ ...pkg, domain: "" }))];
+const pluginNames = new Set(pluginPackages.map((pkg) => pkg.manifest.name as string));
+const dependenciesOf = (manifest: { dependencies?: object; peerDependencies?: object }) =>
+  Object.keys({ ...manifest.dependencies, ...manifest.peerDependencies });
+const contractProblems: string[] = [];
+const contractAllowed = (name: string) => ["@lemma/contracts", "@lemma/core", "@lemma/router", "effect"].includes(name) || contractPackages.has(name);
+for (const [name, pkg] of contractPackages) {
+  const home = relative(root, pkg.dir);
+  if (name !== `@lemma/${pkg.domain}`) contractProblems.push(`${home}/package.json: named "${name}" (a domain's contract is @lemma/${pkg.domain})`);
+  for (const dependency of dependenciesOf(pkg.manifest)) {
+    if (!contractAllowed(dependency))
+      contractProblems.push(`${home}/package.json: runtime dependency "${dependency}" (a contract depends on contracts, the core, and Effect)`);
   }
-  for (const file of walk(join(home, "src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
-    for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
+  for (const file of walk(join(pkg.dir, "src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
+    const text = readFileSync(file, "utf8");
+    if (/\bdefinePlugin\s*\(/.test(text)) contractProblems.push(`${relative(root, file)}: defines a plugin (a contract declares; its plugins implement)`);
+    for (const match of text.matchAll(importPattern)) {
       const specifier = match[1]!;
-      const escapes = specifier.startsWith(".") && !resolve(dirname(file), specifier).startsWith(home);
-      if (specifier.startsWith("@lemma/plugin-") || escapes) pluginProblems.push(`${relative(root, file)}: imports "${specifier}" (use a contract)`);
+      const escapes = specifier.startsWith(".") && !inside(pkg.dir, resolve(dirname(file), specifier));
+      if (escapes) contractProblems.push(`${relative(root, file)}: imports "${specifier}" (outside its package)`);
     }
   }
 }
-report("Host plugin boundary violations", pluginProblems, "host plugin boundary: ok");
+// Contracts depend on one another in layers: a cycle would make two domains one.
+const visiting = new Set<string>();
+const done = new Set<string>();
+const visit = (name: string, path: readonly string[]) => {
+  if (done.has(name)) return;
+  if (visiting.has(name)) return contractProblems.push(`contract cycle: ${[...path.slice(path.indexOf(name)), name].join(" → ")}`);
+  visiting.add(name);
+  for (const dependency of dependenciesOf(contractPackages.get(name)!.manifest)) if (contractPackages.has(dependency)) visit(dependency, [...path, name]);
+  visiting.delete(name);
+  done.add(name);
+};
+for (const name of contractPackages.keys()) visit(name, []);
+// The runtime's contracts reach no domain: they are what every domain is written against.
+for (const dependency of dependenciesOf(JSON.parse(readFileSync(join(root, "packages/contracts/package.json"), "utf8")))) {
+  if (contractPackages.has(dependency) || pluginNames.has(dependency))
+    contractProblems.push(`packages/contracts/package.json: depends on "${dependency}", a domain`);
+}
+// What the runtime's contracts are is a list, so a domain's contract added there is caught rather than taken for the
+// runtime's: a new module is one or the other, and says so here.
+const RUNTIME_CONTRACTS = [
+  "addresses.ts",
+  "channels.ts",
+  "config.ts",
+  "discovery.ts",
+  "fs.ts",
+  "host.ts",
+  "index.ts",
+  "inspectors.ts",
+  "interaction.ts",
+  "kernel.ts",
+  "rpc.ts",
+  "status.ts",
+  "testing.ts",
+];
+for (const file of walk(join(root, "packages/contracts/src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
+  if (!RUNTIME_CONTRACTS.includes(relative(join(root, "packages/contracts/src"), file)))
+    contractProblems.push(
+      `${relative(root, file)}: not one of the runtime's contracts (RUNTIME_CONTRACTS in scripts/check-boundaries.ts): a domain's contract is a package under domains/`,
+    );
+}
+// Plugin files resolve bare imports through the host's packages (packages/host/src/local.ts), so a domain's contract
+// the host's own plugins are written against, but the host does not list, is one a plugin file cannot import.
+const hostDependencies = dependenciesOf(JSON.parse(readFileSync(join(root, "packages/host/package.json"), "utf8")));
+const hostContracts = new Set(
+  pluginPackages
+    .filter((pkg) => hostDependencies.includes(pkg.manifest.name))
+    .flatMap((pkg) => dependenciesOf(pkg.manifest).filter((name) => contractPackages.has(name))),
+);
+for (const name of hostContracts) {
+  if (!hostDependencies.includes(name))
+    contractProblems.push(`packages/host/package.json: does not list "${name}", so a plugin file cannot import it (packages/host/src/local.ts)`);
+}
+report("Domain contract violations", contractProblems, "domain contracts: ok");
+
+const pluginProblems: string[] = [];
+for (const pkg of pluginPackages) {
+  const home = relative(root, pkg.dir);
+  for (const dependency of dependenciesOf(pkg.manifest)) {
+    if (pluginNames.has(dependency)) pluginProblems.push(`${home}/package.json: runtime dependency "${dependency}", another plugin (use a contract)`);
+  }
+  for (const file of walk(join(pkg.dir, "src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
+    for (const match of readFileSync(file, "utf8").matchAll(importPattern)) {
+      const specifier = match[1]!;
+      const escapes = specifier.startsWith(".") && !inside(pkg.dir, resolve(dirname(file), specifier));
+      const [first = "", second = ""] = specifier.split("/");
+      if (pluginNames.has(`${first}/${second}`) || escapes) pluginProblems.push(`${relative(root, file)}: imports "${specifier}" (use a contract)`);
+    }
+  }
+}
+report("Plugin boundary violations", pluginProblems, "plugin boundary: ok");
 
 // The runtime is the API every plugin is written against (AGENTS.md): the host's (packages/host, but not `bundled.ts`,
 // the list of bundled plugins, which the walk does not enter), the planner both apps share (packages/composition), the
-// web app's (`runtime/` and the boot's modules in `ui/`), and its contracts (`@lemma/contracts/runtime`). It knows no
-// domain: nothing it imports, however indirectly and if only for a type, is a domain contract, which is any module of
-// packages/contracts but the runtime's own (`runtimeContracts`; a new module counts as domain until it is listed
-// there). The barrel `@lemma/contracts` is every contract, so the runtime imports `@lemma/contracts/runtime`. The walk
-// follows relative imports, and workspace packages through their `exports`. The transport is a plugin, held to the
-// runtime by its `requires` instead.
+// web app's (`runtime/` and the boot's modules in `ui/`), and its contracts (`@lemma/contracts`). It knows no domain:
+// nothing it imports, however indirectly and if only for a type, is anything under domains/, a domain's contract or one
+// of its plugins. The walk follows relative imports, and workspace packages through their `exports`. The transport is a
+// plugin, held to the runtime by its `requires` instead.
 const contracts = join(root, "packages/contracts/src");
-const runtimeContracts = ["addresses", "channels", "config", "discovery", "fs", "host", "inspectors", "interaction", "kernel", "rpc", "runtime", "status"];
 const isCode = (path: string) => /\.(ts|tsx|mts|js|jsx|mjs)$/.test(path);
 const bundledList = join(root, "packages/host/src/bundled.ts");
 const runtimeCode = [
@@ -136,16 +233,18 @@ const runtimeCode = [
   ...walk(join(root, "packages/composition/src")),
   ...walk(join(root, "apps/web/src/runtime")),
   ...["boot.tsx", "define.ts", "draw.tsx", "files.ts", "runtime.ts", "slots.ts"].map((name) => join(root, "apps/web/src/ui", name)),
-  join(contracts, "runtime.ts"),
+  ...walk(contracts),
 ].filter(isCode);
 const workspacePackages = new Map<string, { readonly dir: string; readonly exports: Readonly<Record<string, unknown>> }>();
-for (const group of ["apps", "examples", "packages", "plugins"]) {
-  for (const name of readdirSync(join(root, group))) {
-    const manifest = join(root, group, name, "package.json");
-    if (!existsSync(manifest)) continue;
-    const { name: id, exports = {} } = JSON.parse(readFileSync(manifest, "utf8"));
-    workspacePackages.set(id, { dir: join(root, group, name), exports: typeof exports === "string" ? { ".": exports } : exports });
-  }
+for (const { dir, manifest } of [
+  ...packagesIn("apps"),
+  ...packagesIn("examples"),
+  ...packagesIn("packages"),
+  ...pluginPackages,
+  ...contractPackages.values(),
+]) {
+  const { name: id, exports = {} } = manifest;
+  workspacePackages.set(id, { dir, exports: typeof exports === "string" ? { ".": exports } : exports });
 }
 const unresolved: string[] = [];
 /** What a relative import may name besides code, which the walk does not enter. */
@@ -198,8 +297,9 @@ const followImports = (roots: readonly string[], onward: (from: string, to: stri
     return chain;
   };
 };
-const isDomain = (path: string) =>
-  !path.startsWith("node:") && !relative(contracts, path).startsWith("..") && !runtimeContracts.includes(relative(contracts, path).replace(/\.ts$/, ""));
+// A plugin is no part of the runtime either, the transport included, which uses only the runtime's contracts: the
+// runtime reaches plugins only through the bundled lists.
+const isDomain = (path: string) => !path.startsWith("node:") && (inside(domainsDir, path) || pluginPackages.some((pkg) => inside(pkg.dir, path)));
 const crossings = new Map<string, { readonly from: string; readonly to: string }>();
 const runtimeChain = followImports(runtimeCode, (from, to) => {
   if (to === bundledList) return false;
@@ -215,8 +315,7 @@ const compositionChain = followImports(walk(join(root, "packages/composition/src
 });
 const runtimeProblems = [...new Set(unresolved)];
 for (const { from, to } of crossings.values()) {
-  const what = relative(contracts, to) === "index.ts" ? "every contract, the domain's too (import @lemma/contracts/runtime)" : "a domain contract";
-  runtimeProblems.push(`${[...runtimeChain(from), relative(root, to)].join(" → ")}: ${what}`);
+  runtimeProblems.push(`${[...runtimeChain(from), relative(root, to)].join(" → ")}: a domain's or a plugin's`);
 }
 for (const { from, to } of nodeImports) {
   runtimeProblems.push(`${[...compositionChain(from), to].join(" → ")}: Node's, in @lemma/composition, which the web app bundles`);
@@ -242,7 +341,7 @@ const importsRpcClient = (names: string, module: string | undefined) =>
         .split(",")
         .some((name) => /^RpcClient(\s+as\s+\w+)?$/.test(name.trim()));
 const clientProblems: string[] = [];
-for (const dir of ["apps", "examples", "packages", "plugins", "scripts"]) {
+for (const dir of ["apps", "domains", "examples", "packages", "plugins", "scripts"].filter((dir) => existsSync(join(root, dir)))) {
   for (const path of walk(join(root, dir)).filter(isCode)) {
     const file = relative(root, path);
     if (path.startsWith(`${clientSource}/`) || /(^|\/)tests\//.test(file) || /\.test\.tsx?$/.test(file)) continue;
@@ -470,7 +569,7 @@ const ratchet = (counts: ReadonlyMap<string, number>, ceilings: Readonly<Record<
 };
 const waits = new Map<string, number>();
 const tempNames = new Map<string, number>();
-for (const dir of ["apps", "examples", "packages", "plugins", "scripts"]) {
+for (const dir of ["apps", "domains", "examples", "packages", "plugins", "scripts"].filter((dir) => existsSync(join(root, dir)))) {
   for (const path of walk(join(root, dir)).filter((file) => /\.(ts|tsx|mts)$/.test(file))) {
     const file = relative(root, path);
     // This file names the patterns it looks for.

@@ -2,17 +2,13 @@ import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { Cause, Effect, Exit, Schema, Stream } from "effect";
 import type { Scope } from "effect";
+import { appUrl, HOST_PROTOCOL, HostError, kernelOf, parseConfigValue } from "@lemma/contracts";
+import { AgentChannels, WhenBusy } from "@lemma/agent";
+import { ThinkingLevel } from "@lemma/llm";
 import {
-  AgentChannels,
-  appUrl,
   branchOf,
-  FILE_SEARCH_LIMIT,
-  HOST_PROTOCOL,
-  HostError,
-  kernelOf,
   NewThreadRoute,
   ThreadRoute,
-  parseConfigValue,
   LEDGER_SORTS,
   ledger,
   parseLedgerFilter,
@@ -23,11 +19,11 @@ import {
   recordSummary,
   SessionChannels,
   sortRecords,
-  ThinkingLevel,
   trajectory,
-  WhenBusy,
-} from "@lemma/contracts";
-import type { ConfigScope, LedgerSort, PluginChange, TrajectoryStep, TrajectoryTurn } from "@lemma/contracts";
+} from "@lemma/sessions";
+import { FILE_SEARCH_LIMIT } from "@lemma/workspace";
+import type { ConfigScope, PluginChange } from "@lemma/contracts";
+import type { LedgerSort, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
 import { makeHostRpcHttp } from "@lemma/client";
 import type { HostRpcClient } from "@lemma/client";
 import { resolvePaths } from "@lemma/host/paths";

@@ -1,19 +1,8 @@
 import { For, Match, Show, Switch, createMemo, onCleanup, onMount } from "solid-js";
-import {
-  RECORD_KIND_LABEL,
-  contentText,
-  formatCost,
-  formatDuration,
-  formatTokens,
-  rebuildRequest,
-  recordDuration,
-  recordFailed,
-  recordName,
-  recordRequest,
-  recordWithin,
-  sortRecords,
-} from "@lemma/contracts";
-import type { AssistantRecord, LedgerRecord, LedgerSpan } from "@lemma/contracts";
+import { formatCost, formatDuration, formatTokens } from "@lemma/client/format";
+import { contentText } from "@lemma/llm";
+import { RECORD_KIND_LABEL, rebuildRequest, recordDuration, recordFailed, recordName, recordRequest, recordWithin, sortRecords } from "@lemma/sessions";
+import type { AssistantRecord, LedgerRecord, LedgerSpan } from "@lemma/sessions";
 import { inputTokens, ledgerStats, ttftPercent } from "../../model/timeline.ts";
 import type { Scale } from "../../model/timeline.ts";
 import { clockTime } from "../../model/format.ts";

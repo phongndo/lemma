@@ -1,8 +1,9 @@
 import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries, Registry } from "@lemma/core";
-import { Channels, CommandError, Commands, CommandsChanged, Inspectors, InteractionError, Paths, serveCommands, withContribution } from "@lemma/contracts";
-import type { Command, CommandInfo } from "@lemma/contracts";
+import { Channels, Inspectors, InteractionError, Paths, withContribution } from "@lemma/contracts";
+import { CommandError, Commands, CommandsChanged, serveCommands } from "@lemma/commands";
+import type { Command, CommandInfo } from "@lemma/commands";
 
 type Service = Context.Service.Shape<typeof Commands>;
 

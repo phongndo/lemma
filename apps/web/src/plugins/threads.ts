@@ -1,8 +1,11 @@
 import { batch, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import { startPrompt } from "@lemma/client/prompt";
-import { AgentChannels, branchOf, HostError, SessionChannels } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { AgentChannels } from "@lemma/agent";
+import { branchOf, SessionChannels } from "@lemma/sessions";
 import { isRoute } from "@lemma/router";
-import type { AgentActivity, AgentView, PromptContent, SessionEvent, SessionInfo, SessionMarks, SessionsChange, TurnOptions } from "@lemma/contracts";
+import type { AgentActivity, AgentView, PromptContent, TurnOptions } from "@lemma/agent";
+import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
 import { appendOutput, applyDelta, beginJoin, emptyLive, endTurn, joinLive, reconcileLive } from "../model/live.ts";
 import type { LiveState } from "../model/live.ts";
 import { appendLog, applySessionsChange, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../model/threads.ts";

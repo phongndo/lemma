@@ -10,8 +10,9 @@ import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completio
 import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { Events, PluginContext, definePlugin } from "@lemma/core";
-import { InteractionError, InteractionOrigin, Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/contracts";
-import type { Credential } from "@lemma/contracts";
+import { InteractionError, InteractionOrigin } from "@lemma/contracts";
+import { Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/llm";
+import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
 import { envContext, fakeCredentials, fakeHost, fakeInteraction, noticeRecorder, offline, runWith } from "./helpers.ts";

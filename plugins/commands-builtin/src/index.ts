@@ -1,8 +1,11 @@
 import { Effect } from "effect";
 import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
-import { CommandError, Commands, describeReload, HostControl, Interaction, Llm, recoverable, Workspace } from "@lemma/contracts";
-import type { Command } from "@lemma/contracts";
+import { describeReload, HostControl, Interaction, recoverable } from "@lemma/contracts";
+import { CommandError, Commands } from "@lemma/commands";
+import { Llm } from "@lemma/llm";
+import { Workspace } from "@lemma/workspace";
+import type { Command } from "@lemma/commands";
 
 type Ask = Context.Service.Shape<typeof Interaction>;
 

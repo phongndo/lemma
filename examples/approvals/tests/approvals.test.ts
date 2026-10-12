@@ -5,8 +5,9 @@ import { Effect, Layer, Schema } from "effect";
 import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Interaction, InteractionError, ToolInvocation, ToolResult, Tools } from "@lemma/contracts";
-import type { Tool } from "@lemma/contracts";
+import { Interaction, InteractionError } from "@lemma/contracts";
+import { ToolInvocation, ToolResult, Tools } from "@lemma/tools";
+import type { Tool } from "@lemma/tools";
 import tools from "@lemma/plugin-tools";
 import approvals, { question } from "../approvals.ts";
 

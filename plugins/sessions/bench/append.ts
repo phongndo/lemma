@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Duration, Effect } from "effect";
 import { makeCore } from "@lemma/core";
-import { Sessions } from "@lemma/contracts";
+import { Sessions } from "@lemma/sessions";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { finish, record } from "../../../packages/core/bench/budgets.ts";
 import sessions from "../src/index.ts";

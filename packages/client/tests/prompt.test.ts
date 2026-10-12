@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { HostError } from "@lemma/contracts";
-import type { AgentActivity, ChannelInfo, RuntimeEvent } from "@lemma/contracts";
+import type { ChannelInfo, RuntimeEvent } from "@lemma/contracts";
+import type { AgentActivity } from "@lemma/agent";
 import { follow } from "../src/follow.ts";
 import type { Followable } from "../src/follow.ts";
 import { startPrompt } from "../src/prompt.ts";

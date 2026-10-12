@@ -6,8 +6,11 @@ import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, awaitable, definePlugin, makeCore } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Credentials, HostControl, Interaction, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
-import type { ConfigScope, Credential, InteractionError, Llm, NoticePayload, PluginChange } from "@lemma/contracts";
+import { HostControl, Interaction, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
+import { Credentials } from "@lemma/credentials";
+import type { ConfigScope, InteractionError, NoticePayload, PluginChange } from "@lemma/contracts";
+import type { Credential } from "@lemma/credentials";
+import type { Llm } from "@lemma/llm";
 
 export function fakeCredentials(initial: Record<string, Credential> = {}) {
   const store = new Map<string, Credential>(Object.entries(initial));

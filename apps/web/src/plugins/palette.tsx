@@ -1,7 +1,8 @@
 import { For, Show, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount } from "solid-js";
 import type { Component } from "solid-js";
 import { Portal } from "solid-js/web";
-import type { CommandInfo, InteractionRequest } from "@lemma/contracts";
+import type { InteractionRequest } from "@lemma/contracts";
+import type { CommandInfo } from "@lemma/commands";
 import { shownKeys } from "../model/keybindings.ts";
 import { formatKeys, listKey, quickKey, shortcut } from "../lib/keys.ts";
 import { createQuickHold } from "../lib/quick-pick.ts";

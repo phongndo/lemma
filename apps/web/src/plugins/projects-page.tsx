@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
-import type { SessionInfo } from "@lemma/contracts";
+import type { SessionInfo } from "@lemma/sessions";
 import { copyAndTell } from "../lib/clipboard.ts";
 import { tildePath } from "../model/format.ts";
 import { folderName } from "../model/prefs.ts";

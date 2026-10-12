@@ -1,5 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import type { ModelInfo, ThinkingLevel } from "@lemma/contracts";
+import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
 import { contextSize } from "../model/format.ts";
 import { DEFAULT_THINKING, filterModels, thinkingLevels } from "../model/prefs.ts";
 import { ActionIds, Actions, ComposerControls, Models, SectionIds, SettingsGroups, Slots } from "../ui/contracts.ts";

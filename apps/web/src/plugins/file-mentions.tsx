@@ -1,6 +1,7 @@
 import { Effect, Schema } from "effect";
-import type { FileEntry } from "@lemma/contracts";
-import { FILE_SEARCH_LIMIT, FileChannels, HostError } from "@lemma/contracts";
+import type { FileEntry } from "@lemma/workspace";
+import { HostError } from "@lemma/contracts";
+import { FILE_SEARCH_LIMIT, FileChannels } from "@lemma/workspace";
 import { fileView, mentionPath } from "../model/completion.ts";
 import { Client, ComposerCompletions, Slots, Workspace } from "../ui/contracts.ts";
 import type { ComposerSuggestion } from "../ui/contracts.ts";

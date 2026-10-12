@@ -1,6 +1,7 @@
 import { createSignal } from "solid-js";
-import { CommandChannels, HostError } from "@lemma/contracts";
-import type { CommandInfo } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { CommandChannels } from "@lemma/commands";
+import type { CommandInfo } from "@lemma/commands";
 import { Client, Commands, Notify, Threads, Workspace } from "../ui/contracts.ts";
 import { defineUiPlugin } from "../ui/define.ts";
 

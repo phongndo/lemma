@@ -1,5 +1,7 @@
 import { Predicate } from "effect";
-import type { AgentView, AssistantMessage, SessionEvent, StreamEvent, ToolCall } from "@lemma/contracts";
+import type { AgentView } from "@lemma/agent";
+import type { AssistantMessage, StreamEvent, ToolCall } from "@lemma/llm";
+import type { SessionEvent } from "@lemma/sessions";
 
 /**
  * Streaming state for one session: what the model is producing right now,

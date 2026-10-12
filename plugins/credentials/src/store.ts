@@ -3,7 +3,7 @@ import { mkdir, open, readFile, rm, utimes } from "node:fs/promises";
 import { hostname } from "node:os";
 import { dirname } from "node:path";
 import { Duration, Effect, Result, Schedule, Schema } from "effect";
-import { Credential, CredentialError } from "@lemma/contracts";
+import { Credential, CredentialError } from "@lemma/credentials";
 import { errorCode, isAlive, writeFileAtomic } from "@lemma/contracts/fs";
 
 /** The raw file: provider id → entry. Entries are decoded on use so unknown ones survive a write untouched. */

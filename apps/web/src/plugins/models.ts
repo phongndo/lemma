@@ -1,6 +1,7 @@
 import { batch, createMemo, createSignal } from "solid-js";
-import { HostError, LlmChannels } from "@lemma/contracts";
-import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, ThinkingLevel } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { LlmChannels } from "@lemma/llm";
+import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, ThinkingLevel } from "@lemma/llm";
 import { load, loadJson, save } from "../lib/storage.ts";
 import { DEFAULT_THINKING, clampThinking, resolveModel } from "../model/prefs.ts";
 import { Client, Models, Notify } from "../ui/contracts.ts";

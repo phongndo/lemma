@@ -1,6 +1,10 @@
 import { Data, Effect, Schema, Stream } from "effect";
-import { AgentRequestHook, Llm, LlmRequest, modelView, Notice } from "@lemma/contracts";
-import type { ModelInfo, RequestDraft, StreamEvent } from "@lemma/contracts";
+import { Notice } from "@lemma/contracts";
+import { AgentRequestHook } from "@lemma/agent";
+import { Llm, LlmRequest } from "@lemma/llm";
+import { modelView } from "@lemma/sessions";
+import type { RequestDraft } from "@lemma/agent";
+import type { ModelInfo, StreamEvent } from "@lemma/llm";
 import { definePlugin, Events } from "@lemma/core";
 import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript } from "./compact.ts";
 

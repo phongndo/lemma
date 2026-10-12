@@ -2,21 +2,14 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { extname, resolve } from "node:path";
 import { Deferred, Duration, Effect, Fiber, Semaphore, Stream } from "effect";
-import { AgentChannels, branchOf, contentText, HostError, SessionChannels, trajectory } from "@lemma/contracts";
-import type {
-  AgentActivity,
-  AgentView,
-  AssistantMessage,
-  ChannelDeclaration,
-  ImageContent,
-  PromptContent,
-  RuntimeEvent,
-  SessionEvent,
-  SessionInfo,
-  SessionLogUpdate,
-  TextContent,
-  TurnOptions,
-} from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { AgentChannels } from "@lemma/agent";
+import { contentText } from "@lemma/llm";
+import { branchOf, SessionChannels, trajectory } from "@lemma/sessions";
+import type { ChannelDeclaration, RuntimeEvent } from "@lemma/contracts";
+import type { AgentActivity, AgentView, PromptContent, TurnOptions } from "@lemma/agent";
+import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
+import type { SessionEvent, SessionInfo, SessionLogUpdate } from "@lemma/sessions";
 import { tooLarge } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { callOn, follow, ofChannel, on, reconnecting, RUN_AGAIN } from "./channels.ts";

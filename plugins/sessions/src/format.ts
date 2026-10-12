@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import * as path from "node:path";
 import { Context, Effect, Result, Schema } from "effect";
-import { SessionEvent } from "@lemma/contracts";
+import { SessionEvent } from "@lemma/sessions";
 
 /**
  * One JSONL file per session. Line 1 is the header; every later line is a

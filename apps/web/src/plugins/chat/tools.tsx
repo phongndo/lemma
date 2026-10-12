@@ -1,6 +1,7 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import { contentText, formatDuration } from "@lemma/contracts";
-import type { ImageContent, TextContent } from "@lemma/contracts";
+import { formatDuration } from "@lemma/client/format";
+import { contentText } from "@lemma/llm";
+import type { ImageContent, TextContent } from "@lemma/llm";
 import { diffStats, parseDiff, readDetails } from "../../model/details.ts";
 import { formatElapsed, summarizeToolArgs, summarizePartialArgs, truncateLines } from "../../model/format.ts";
 import type { ToolResultView } from "../../model/transcript.ts";

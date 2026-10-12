@@ -1,7 +1,7 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type * as Pi from "@earendil-works/pi-ai";
-import { ThinkingLevel } from "@lemma/contracts";
-import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ToolCall } from "@lemma/contracts";
+import { ThinkingLevel } from "@lemma/llm";
+import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ToolCall } from "@lemma/llm";
 
 // Pure mappings between pi-ai values and the contract shapes. Contract messages
 // are pi-ai-shaped, so requests pass through; results are rebuilt field by field

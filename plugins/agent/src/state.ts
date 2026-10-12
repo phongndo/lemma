@@ -1,7 +1,8 @@
 import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
-import { AssistantMessage, QueuedPrompt } from "@lemma/contracts";
+import { QueuedPrompt } from "@lemma/agent";
+import { AssistantMessage } from "@lemma/llm";
 import { readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 
 /*

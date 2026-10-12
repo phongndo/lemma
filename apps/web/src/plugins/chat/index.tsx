@@ -1,7 +1,8 @@
 import { For, Index, Match, Show, Switch, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
 import type { Component, JSX } from "solid-js";
-import { formatDuration, formatTokens, parseModelRef } from "@lemma/contracts";
-import type { TextContent } from "@lemma/contracts";
+import { formatDuration, formatTokens } from "@lemma/client/format";
+import { parseModelRef } from "@lemma/llm";
+import type { TextContent } from "@lemma/llm";
 import { formatElapsed, summarizeUsage } from "../../model/format.ts";
 import { answerText, entryKey, foldRunning, foldTurn } from "../../model/fold.ts";
 import type { TurnEntry } from "../../model/fold.ts";

@@ -1,6 +1,6 @@
 // Runs in a separate Node process: increments a counter credential `count` times through the plugin.
 import { Effect } from "effect";
-import { Credentials } from "@lemma/contracts";
+import { Credentials } from "@lemma/credentials";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { makeCore } from "@lemma/core";
 import credentials from "../../src/index.ts";

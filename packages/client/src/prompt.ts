@@ -4,8 +4,10 @@
  * imports, which reaches no domain contract (scripts/check-boundaries.ts).
  */
 
-import { AgentChannels, HostError } from "@lemma/contracts";
-import type { ChannelDeclaration, PromptContent, TurnOptions, WhenBusy } from "@lemma/contracts";
+import { HostError } from "@lemma/contracts";
+import { AgentChannels } from "@lemma/agent";
+import type { ChannelDeclaration } from "@lemma/contracts";
+import type { PromptContent, TurnOptions, WhenBusy } from "@lemma/agent";
 import type { Host } from "./host.ts";
 
 /** A random request id. `crypto.getRandomValues`, unlike `crypto.randomUUID`, exists outside secure contexts too (a page over plain HTTP). */

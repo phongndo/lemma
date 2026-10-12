@@ -5,8 +5,8 @@ import * as path from "node:path";
 import { Effect, Result } from "effect";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeLoader, Registries } from "@lemma/core";
-import { FileSearchError, searchFiles } from "@lemma/contracts";
-import type { FileSearchOptions } from "@lemma/contracts";
+import { FileSearchError, searchFiles } from "@lemma/workspace";
+import type { FileSearchOptions } from "@lemma/workspace";
 import fileSearch, { insideGlob, makeFileSearch } from "../src/index.ts";
 import type { Finder, OpenFinder } from "../src/index.ts";
 

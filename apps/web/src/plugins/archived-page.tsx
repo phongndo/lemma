@@ -1,4 +1,4 @@
-import type { SessionInfo } from "@lemma/contracts";
+import type { SessionInfo } from "@lemma/sessions";
 import { relativeTime, tildePath } from "../model/format.ts";
 import { sessionTitle } from "../model/threads.ts";
 import { Actions, Client, Threads, Settings, SettingsGroups, SettingsSections, Slots } from "../ui/contracts.ts";

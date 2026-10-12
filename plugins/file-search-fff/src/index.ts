@@ -3,8 +3,9 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
-import { FileSearchError, FileSearchers, Inspectors } from "@lemma/contracts";
-import type { FileEntry, FileKind, FileSearcher, FileSearchOptions, FileSearchResult } from "@lemma/contracts";
+import { Inspectors } from "@lemma/contracts";
+import { FileSearchError, FileSearchers } from "@lemma/workspace";
+import type { FileEntry, FileKind, FileSearcher, FileSearchOptions, FileSearchResult } from "@lemma/workspace";
 import { expandHome, kindOf } from "@lemma/contracts/fs";
 
 /** Entries a search returns when the caller does not say. */

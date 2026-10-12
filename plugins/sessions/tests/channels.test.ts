@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { Effect, Exit, Layer } from "effect";
-import { SessionError, SessionRemoveHook, Sessions, SessionChannels } from "@lemma/contracts";
-import type { ChannelInfo, SessionEvent, SessionInfo } from "@lemma/contracts";
+import { SessionError, SessionRemoveHook, Sessions, SessionChannels } from "@lemma/sessions";
+import type { ChannelInfo } from "@lemma/contracts";
+import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import sessions from "../src/index.ts";

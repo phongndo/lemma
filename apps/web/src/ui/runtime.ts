@@ -16,7 +16,7 @@ import type {
   RuntimeEvent,
   UiComposition,
   UiFile,
-} from "@lemma/contracts/runtime";
+} from "@lemma/contracts";
 import type {
   AnyRoute,
   BlockOptions,
@@ -63,7 +63,7 @@ type StreamEnd = (error?: HostError | Error) => void;
 /**
  * The page's one connection to the host: its status, the host's own calls and
  * events, and the channels host plugins serve, through which every subsystem
- * is reached, with the declarations in `@lemma/contracts` (`SessionChannels`,
+ * is reached, with the declarations in each subsystem's contract (`SessionChannels`,
  * `AgentChannels`, `LlmChannels`, `WorkspaceChannels`, `FileChannels`,
  * `CommandChannels`) or by id. Calls reject with a `HostError`, or with an
  * `Error` when the connection failed (see `@lemma/client`'s `Host`).
