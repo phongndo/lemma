@@ -19,8 +19,11 @@ export type Unhandled =
  * promises it starts, so a throw from a plugin's stray `setTimeout` is still its own; elsewhere only a refused call is
  * told apart. The fault does not stop the plugin, and one that has stopped records none, so a caller logs it as well.
  *
- * The context is a promise-based plugin's (`within`): its setup, handlers, actions, and what they start. Work it calls
- * into runs in it too, so a stray error from an Effect-written plugin's handler it invoked is reported as the caller's.
+ * The context is a promise-based plugin's (`within`): its setup, handlers, actions, and what they start. Effect work it
+ * starts (a call through a service, the rest of a hook's chain, an event it publishes) runs outside it (`outside`), with
+ * its context passed explicitly: Effect code carries no async-local context, so an error such work leaves behind (an
+ * Effect-written plugin's stray timer) is no plugin's that can be told, rather than the fault of the promise-based
+ * plugin that called it.
  */
 export function reportUnhandled(error: unknown): Unhandled {
   if (error instanceof PluginStopped) return { kind: "stopped", pluginId: error.pluginId };

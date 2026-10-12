@@ -15,7 +15,7 @@ import { Registries } from "../registries.ts";
 import type { ContributeOptions, Contribution, Registry } from "../registries.ts";
 import { makeBridge } from "./bridge.ts";
 import type { Bridge, RunOptions } from "./bridge.ts";
-import { followsAwait, within } from "../internal/current.ts";
+import { followsAwait, outside, within } from "../internal/current.ts";
 import type { Current } from "../internal/current.ts";
 import { plainView } from "./view.ts";
 import type { Plain } from "./view.ts";
@@ -112,6 +112,11 @@ export interface PlainSetup<Config, Carried = unknown> extends PluginIdentity {
   readonly fault: (operation: string, error: unknown, options?: FaultOptions) => void;
   /** Runs an Effect with the plugin's context, as a step towards writing it with Effects. */
   readonly run: <A, E>(effect: Effect.Effect<A, E, any>) => Promise<A>;
+  /**
+   * Runs `fn` in a span named `name`, attributed to the plugin (`plugin.id`), under the span of the work that called it
+   * (a hook's operation, an observed event's): the calls it makes trace under it. Resolves or rejects as `fn` does.
+   */
+  readonly trace: <A>(name: string, fn: (signal: AbortSignal) => Awaitable<A, unknown>) => Promise<A>;
   /*
    * The helpers below are what a plugin would otherwise write with raw timers, listeners, and promises. Each is
    * supervised work of the plugin's underneath: it ends when the plugin stops, and what fails in it is the plugin's
@@ -204,6 +209,10 @@ export const asEffect =
   (...args: Args): Effect.Effect<A, E> =>
     awaitable(() => fn(...args));
 
+/** Effect work promise-based code starts, outside its invocation (see `outside`): what it leaves running is not that code's. */
+const runFork = <A, E>(effect: Effect.Effect<A, E>) => outside(() => Effect.runFork(effect));
+const runSync = <A, E>(effect: Effect.Effect<A, E>): A => outside(() => Effect.runSync(effect));
+
 /**
  * What a plugin registers (a handler, an observer, an item, a background
  * task) is the plugin's, not the work's that was running when it registered:
@@ -295,7 +304,7 @@ export function definePlugin<
             value: Context.getOrUndefined(base, key as Context.Key<unknown, unknown>),
           })),
           signal: owner.signal,
-          report: (operation, cause) => void Effect.runFork(owner.fault(operation, cause)),
+          report: (operation, cause) => void runFork(owner.fault(operation, cause)),
         });
         const cleanups: (() => void | PromiseLike<void>)[] = [];
         // Added before anything it registers, so it runs after those are removed and after its signal aborts; its
@@ -362,7 +371,7 @@ const context = (
   const causeOf = (error: unknown) => (isExpectedFailure(error) ? Cause.fail(error) : Cause.die(error));
   // A call refused as a plugin stopped (its own, or another's it was waiting on) is how stopping ends work: no fault.
   const report = (operation: string, error: unknown) => {
-    if (!(error instanceof PluginStopped)) Effect.runFork(owner.fault(operation, causeOf(error)));
+    if (!(error instanceof PluginStopped)) runFork(owner.fault(operation, causeOf(error)));
   };
   /** Stopping or stopped: its signal aborts before its cleanups run, and what starts now would outlive it. */
   const gone = () => bridge.stopped() || owner.signal.aborted;
@@ -384,7 +393,7 @@ const context = (
     if (gone()) return () => {};
     const cancel = Deferred.makeUnsafe<void>();
     void bridge.run(owner.background(name, Effect.raceFirst(work, Deferred.await(cancel))), `background ${name}`, BELONGS_TO_PLUGIN).catch(() => undefined);
-    return () => void Effect.runSync(Deferred.succeed(cancel, undefined));
+    return () => void runSync(Deferred.succeed(cancel, undefined));
   };
   const called = (fn: (signal: AbortSignal) => Awaitable<unknown, unknown>): Effect.Effect<unknown, unknown> =>
     inContext((invocation) => fn(invocation.signal())) as Effect.Effect<unknown, unknown>;
@@ -394,7 +403,7 @@ const context = (
     config: owner.config,
     signal: owner.signal,
     previous: owner.previous,
-    handoff: (save) => Effect.runSync(owner.handoff(save)),
+    handoff: (save) => runSync(owner.handoff(save)),
     onCleanup: (cleanup) => void cleanups.push(cleanup),
     on: (hook, handler, options) => {
       const wantsSignal = handler.length >= 3;
@@ -439,7 +448,7 @@ const context = (
       void bridge.run(register, `observe ${event.name}`, BELONGS_TO_PLUGIN);
     },
     // A stopped plugin's news is dropped: publishing never fails.
-    publish: (event, payload) => void (bridge.stopped() ? undefined : Effect.runFork(events.publish(event, payload))),
+    publish: (event, payload) => void (bridge.stopped() ? undefined : runFork(events.publish(event, payload))),
     invoke: (hook, input, terminal, options) => {
       const wantsSignal = terminal.length >= 2;
       return bridge.run(
@@ -454,7 +463,7 @@ const context = (
     },
     items: (registry) => {
       if (bridge.stopped()) throw new PluginStopped({ pluginId: owner.id, operation: `items ${registry.name}` });
-      return Effect.runSync(registries.items(registry));
+      return runSync(registries.items(registry));
     },
     changes: (registry) => bridge.iterate(registries.changes(registry), `changes ${registry.name}`),
     background: (name, task, options) =>
@@ -467,8 +476,10 @@ const context = (
         `background ${name}`,
         BELONGS_TO_PLUGIN,
       ),
-    fault: (operation, error, options) => void Effect.runFork(owner.fault(operation, causeOf(error), options)),
+    fault: (operation, error, options) => void runFork(owner.fault(operation, causeOf(error), options)),
     run: (effect) => bridge.run(effect, "run"),
+    trace: <A>(name: string, fn: (signal: AbortSignal) => Awaitable<A, unknown>) =>
+      bridge.run(owner.trace(name, called(fn) as Effect.Effect<A, unknown>), `trace ${name}`),
     after: (ms, fn, options) => cancellable(options?.name ?? `after ${ms}ms`, Effect.andThen(Effect.sleep(Duration.millis(ms)), called(fn))),
     every: (ms, fn, options) => {
       const name = options?.name ?? `every ${ms}ms`;

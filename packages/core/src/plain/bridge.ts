@@ -2,7 +2,7 @@ import { Cause, Context, Effect, Exit, Option, Scope, Stream } from "effect";
 import { fail } from "../awaitable.ts";
 import type { Invocation } from "../awaitable.ts";
 import { PluginStopped } from "../errors.ts";
-import { current } from "../internal/current.ts";
+import { current, outside } from "../internal/current.ts";
 import type { SetupCalls } from "../internal/current.ts";
 
 /**
@@ -212,12 +212,16 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
       const release = invocation?.follow();
       let failed: Cause.Cause<unknown> | undefined;
       const promise = new Watched<A>((resolve, reject) => {
-        Effect.runPromiseExitWith(context)(effect as Effect.Effect<A, unknown, never>, { signal }).then((exit) => {
-          release?.();
-          if (Exit.isSuccess(exit)) return resolve(exit.value as A);
-          failed = exit.cause;
-          reject(thrown(exit.cause, signal, operation, invocation));
-        });
+        // Outside the caller's invocation: its context is passed explicitly, and what the Effect leaves running is not
+        // the caller's work (see `outside`).
+        outside(() =>
+          Effect.runPromiseExitWith(context)(effect as Effect.Effect<A, unknown, never>, { signal }).then((exit) => {
+            release?.();
+            if (Exit.isSuccess(exit)) return resolve(exit.value as A);
+            failed = exit.cause;
+            reject(thrown(exit.cause, signal, operation, invocation));
+          }),
+        );
       });
       watch(promise as Watched<unknown>, operation, setup, (error) => failed ?? Cause.die(error));
       return promise;
@@ -234,6 +238,7 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
           signal.addEventListener("abort", onAbort, { once: true });
           return Effect.sync(() => signal.removeEventListener("abort", onAbort));
         });
+        // The stream runs outside the caller's invocation, as `run`'s Effects do: each read starts it there.
         const iterator = Stream.toAsyncIterableWith(
           (stream as Stream.Stream<A, unknown, never>).pipe(
             // Its failure is the stream's typed error, as a call's is: rethrown in the same invocation, it stays one.
@@ -244,11 +249,11 @@ export const makeBridge = (options: BridgeOptions): Bridge => {
           context,
         )[Symbol.asyncIterator]();
         const done = async (): Promise<IteratorResult<A>> => {
-          await iterator.return?.();
+          await outside(() => iterator.return?.());
           return { done: true, value: undefined };
         };
         // What the stream had buffered when the signal aborted is not read: the iterable ends there.
-        return { next: () => (signal.aborted ? done() : iterator.next()), return: done };
+        return { next: () => (signal.aborted ? done() : outside(() => iterator.next())), return: done };
       },
     }),
     refuse,

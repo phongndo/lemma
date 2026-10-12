@@ -147,8 +147,7 @@ export interface SlotsService {
   /** The slot's items that failed, with who added each and what it threw. Reactive. */
   readonly failures: <T>(slot: Slot<T>) => readonly SlotFailure<T>[];
   /**
-   * The same registry, adding as `contributor`'s. `defineWebPlugin` hands each plugin its own; a plugin written against
-   * the kernel directly makes its own from its `PluginContext`.
+   * The same registry, adding as `contributor`'s: how `defineWebPlugin` hands each plugin its own.
    */
   readonly as: (contributor: Contributor) => SlotsService;
 }

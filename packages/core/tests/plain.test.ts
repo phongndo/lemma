@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Result, Stream } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Option, Result, Stream, Tracer } from "effect";
 import {
   definePlugin as defineEffectPlugin,
   Event,
@@ -7,6 +7,7 @@ import {
   Hooks,
   makeCore,
   makeLoader,
+  PluginContext,
   PluginFault,
   PluginStopped,
   Registry,
@@ -464,6 +465,104 @@ describe("a plugin written with promises", () => {
     // A call a stopped plugin made, refused, is no fault; an error from no plugin's work is nobody's.
     expect(reportUnhandled(new PluginStopped({ pluginId: "stray", operation: "invoke" }))).toEqual({ kind: "stopped", pluginId: "stray" });
     expect(reportUnhandled(new Error("elsewhere"))).toEqual({ kind: "unknown" });
+  });
+
+  describe("an error Effect-written work leaves behind is no plugin's, not the promise-based plugin's that called it", () => {
+    const Leak = Hook.make<string, string>("test/leak");
+    /** An Effect-written handler that forgets a timer, which throws: Effect code carries no async-local context. */
+    const leaking = (heard: Unhandled[]) =>
+      defineEffectPlugin({
+        id: "leaky",
+        layer: Layer.effectDiscard(
+          Effect.flatMap(PluginContext, (owner) =>
+            owner.on(Leak, (input, next) =>
+              Effect.andThen(
+                Effect.sync(() => void setTimeout(() => void heard.push(reportUnhandled(new Error("leaky's stray timer"))), 1)),
+                next(input),
+              ),
+            ),
+          ),
+        ),
+      });
+
+    test("invoked from the plugin's own work", async () => {
+      const heard: Unhandled[] = [];
+      let api: PlainSetup<unknown> | undefined;
+      const tested = await testPlugin(definePlugin({ id: "caller", setup: (_, plugin) => void (api = plugin) }), { with: [leaking(heard)] });
+      // Its own work: an action, as an event handler of its would be.
+      api!.action("go", () => api!.invoke(Leak, "x", (value) => value))();
+      await expect.poll(() => heard.length).toBe(1);
+      expect(heard).toEqual([{ kind: "unknown" }]);
+      expect(tested.faults.filter((fault) => fault.pluginId === "caller")).toEqual([]);
+      await tested.close();
+    });
+
+    test("as the rest of a hook's chain its handler awaits", async () => {
+      const heard: Unhandled[] = [];
+      const upstream = definePlugin({
+        id: "upstream",
+        setup: (_, { on }) => on(Leak, async (input, next) => await next(input), { order: -1 }),
+      });
+      const tested = await testPlugin(upstream, { with: [leaking(heard)] });
+      expect(await tested.run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(Leak, "x", Effect.succeed)))).toBe("x");
+      await expect.poll(() => heard.length).toBe(1);
+      expect(heard).toEqual([{ kind: "unknown" }]);
+      expect(tested.faults.filter((fault) => fault.pluginId === "upstream")).toEqual([]);
+      await tested.close();
+    });
+
+    test("while the plugin's own stray work, after a call into Effect code, is still its own", async () => {
+      const heard: Unhandled[] = [];
+      let api: PlainSetup<unknown> | undefined;
+      const tested = await testPlugin(definePlugin({ id: "caller", setup: (_, plugin) => void (api = plugin) }), { with: [leaking(heard)] });
+      api!.action("go", async () => {
+        await api!.invoke(Leak, "x", (value) => value);
+        setTimeout(() => void heard.push(reportUnhandled(new Error("caller's stray timer"))), 1);
+      })();
+      await expect.poll(() => heard.length).toBe(2);
+      expect(heard).toEqual(expect.arrayContaining([{ kind: "unknown" }, { kind: "fault", pluginId: "caller" }]));
+      await tested.close();
+    });
+  });
+
+  test("trace runs work in a span of its plugin's, under the work that called it", async () => {
+    const spans: Tracer.Span[] = [];
+    const Traced = Hook.make<string, string>("test/traced");
+    let traced: unknown;
+    await Effect.runPromise(
+      Tracer.Tracer.use((base) => {
+        const tracer = Tracer.make({
+          ...(base.context === undefined ? {} : { context: base.context }),
+          span(options) {
+            const span = base.span(options);
+            spans.push(span);
+            return span;
+          },
+        });
+        return Effect.scoped(
+          Effect.gen(function* () {
+            const core = yield* makeCore([
+              definePlugin({
+                id: "tracing",
+                version: "2.0.0",
+                setup: (_, plugin) =>
+                  plugin.on(Traced, async (input, next) => {
+                    traced = await plugin.trace("tracing.work", async (signal) => `${input} ${signal.aborted ? "aborted" : "ran"}`);
+                    return next(input);
+                  }),
+              }),
+            ]);
+            yield* core.run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(Traced, "x", Effect.succeed))).pipe(Effect.withSpan("request"));
+          }),
+        ).pipe(Effect.withTracer(tracer));
+      }),
+    );
+    expect(traced).toBe("x ran");
+    const handler = spans.find((span) => span.name === "core.hook" && span.attributes.get("plugin.id") === "tracing")!;
+    const work = spans.find((span) => span.name === "tracing.work")!;
+    expect(work.attributes.get("plugin.id")).toBe("tracing");
+    expect(work.attributes.get("plugin.version")).toBe("2.0.0");
+    expect(Option.getOrThrow(work.parent).spanId).toBe(handler.spanId);
   });
 
   test("listen attaches until the plugin stops, to an EventTarget or an emitter; a failing listener is its fault", async () => {
