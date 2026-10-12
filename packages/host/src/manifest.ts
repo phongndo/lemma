@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, relative } from "node:path";
 import { Predicate } from "effect";
+import { isCompiled } from "./compile.ts";
 
 /*
  * A plugin directory (`<home>/plugins`, a trusted project's `.lemma/plugins`) holds a plugin's halves as files, by
@@ -72,9 +73,9 @@ const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; r
   };
   const [hostPath] = await inside("host", host);
   let [webPath] = await inside("web", web);
-  // The web app imports a web half as it is: a module in JavaScript.
-  if (webPath !== undefined && !/\.m?js$/.test(webPath)) {
-    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript (.js or .mjs), which the web app imports as it is`);
+  // A web half is JavaScript the web app imports as it is, or TypeScript or JSX the host compiles for it (`isCompiled`).
+  if (webPath !== undefined && !/\.m?js$/.test(webPath) && !isCompiled(webPath)) {
+    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript (.js, .mjs), or TypeScript or JSX (.ts, .tsx, .jsx) the host compiles`);
     webPath = undefined;
   }
   if (styles !== undefined && !Array.isArray(styles)) problems.push(`"lemma.styles" is not a list of paths`);
