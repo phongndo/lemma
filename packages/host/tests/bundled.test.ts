@@ -3,7 +3,7 @@ import { Layer, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import type { PluginRow } from "@lemma/contracts";
 import { planComposition } from "@lemma/composition";
-import { appDefaults, bundled as shipped, bundledWebIds, cliCommand, webDist } from "../src/bundled.ts";
+import { appDefaults, bundled as shipped, bundledWeb, cliCommand, webDist } from "../src/bundled.ts";
 import { runtimeCapabilities } from "../src/runtime.ts";
 import { domainPlugins } from "../../../scripts/plugins.ts";
 
@@ -32,10 +32,9 @@ describe("bundled", () => {
     expect(shipped.map((plugin) => plugin.id).sort()).toEqual(halves.sort());
   });
 
-  test("knows the id of every web half in domains/, so a row naming one is no typo", () => {
+  test("knows the id of every web half in domains/, which the web app runs, so a row naming one is no typo", () => {
     const halves = [...domainPlugins()].filter(([, plugin]) => plugin.web !== undefined).map(([id]) => id);
-    expect(bundledWebIds).toEqual(halves.sort());
-    expect(bundledWebIds).toContain("devtools.trace");
+    expect([...bundledWeb].sort()).toEqual(halves.sort());
   });
 });
 

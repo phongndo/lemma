@@ -226,9 +226,11 @@ export class HostControl extends Context.Service<
     /**
      * Write plugin rows into a config file (the user's by default) and apply the
      * result. A change the host rejects is undone in the file, so a bad row never
-     * outlives the call; the diagnostics say why. A row naming no host plugin is
-     * written for the web app, which plans its halves from the same rows
-     * (`WebChanged`) and says what it does not know.
+     * outlives the call; the diagnostics say why. A row naming a web half (one
+     * the host knows by its file's name, `WebFile.plugin`) is written for the
+     * web app, which plans its halves from the same rows (`WebChanged`); one
+     * naming no plugin either app has is refused, naming the plugin meant when
+     * it is a typo off.
      */
     readonly configure: (
       plugins: Readonly<Record<string, PluginChange>>,
@@ -247,8 +249,14 @@ export class HostControl extends Context.Service<
  * or a package's `lemma.styles`).
  */
 export const WebFile = Schema.Struct({
-  /** Its path in the plugins directory: `notes.web.js`, `ticker/web.js`. */
+  /** Its path in the plugins directory, with `/` on every platform: `notes.web.js`, `ticker/web.js`. */
   name: Schema.String,
+  /**
+   * The plugin it belongs to, by its name: a web half's file is named for its plugin (`notes.web.js` is `notes`), and
+   * a package's folder for its own (`ticker/`). So the host knows a web half's id without running it, and the web app
+   * loads one only if it defines that plugin. Absent for a stylesheet of no package.
+   */
+  plugin: Schema.optional(Schema.String),
   source: Schema.Literals(["user", "project"]),
   kind: Schema.Literals(["script", "style"]),
   /** Where it is on the host. */

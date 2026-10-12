@@ -430,6 +430,20 @@ const toggling = async () => {
   await page.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
   await page.waitForFunction(() => !(window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "my-notify"));
   expectNoErrors("a web half providing part of the runtime");
+
+  // A web half is the plugin its file is named for (the host knows its id by that): one defining another is not run.
+  await page.evaluate(() => {
+    const source = `export default ({ defineWebPlugin }) => defineWebPlugin({ id: "other", setup: () => {} });`;
+    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+    (window as any).lemmaMock.setWebFiles([{ name: "named.web.js", plugin: "named", source: "user", kind: "script", path: "/check/named.web.js", url }]);
+  });
+  await page
+    .waitForFunction(() => (window as any).lemma.plugins.problems().some((problem: string) => problem.includes('defines "other"')), undefined, {
+      timeout: 10_000,
+    })
+    .catch(() => assert.fail("a web half defining a plugin other than its file's name was not refused"));
+  assert(!(await page.evaluate(() => (window as any).lemma.plugins.list().some((plugin: any) => plugin.id === "other"))), "a misnamed web half ran");
+  await page.evaluate(() => (window as any).lemmaMock.setWebFiles([]));
   return `booted; every part provided; ${toggled.length - locked.length} plugins turned off and on, ${locked.length} locked ones kept on (${locked.join(", ")}); the Plugins page filters, saves settings, and keeps its switches without kit; the runtime answers with every plugin off, and a web half providing Notify is left out`;
 };
 
