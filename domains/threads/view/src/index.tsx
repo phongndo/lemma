@@ -1,20 +1,17 @@
 import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
-import { tildePath } from "@lemma/ui/format";
-import { sessionTitle } from "@lemma/threads";
+import { tildePath } from "@lemma/web/format";
+import { sessionTitle, ComposerRegion, ThreadHeader, Threads, Views } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
-import { ComposerRegion, ThreadHeader, Threads, Views } from "@lemma/threads";
-import { Client, Notify, Pages, Router, Slots } from "@lemma/ui";
+import { Client, Notify, Pages, Router, Slots, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
-import { defineUiPlugin } from "@lemma/ui";
-import type { SlotItem } from "@lemma/ui";
+import type { SlotItem } from "@lemma/web";
 import { CopyIcon, PenSquareIcon, SidebarIcon, Spinner, StopIcon } from "@lemma/look";
-import { Contained, Each, First } from "@lemma/ui";
-import { copyAndTell } from "@lemma/ui/clipboard";
+import { copyAndTell } from "@lemma/web/clipboard";
 import styles from "./thread-view.css?inline";
 
 /**
@@ -24,7 +21,7 @@ import styles from "./thread-view.css?inline";
  * view (`/threads/<id>/trajectory`, the first when absent), the choice
  * carries over when switching threads, and a new thread opens in the first.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.view",
   styles,
   routes: [NewThreadRoute, ThreadRoute],

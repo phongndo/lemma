@@ -2,8 +2,8 @@ import { Effect, Stream } from "effect";
 import type { Scope } from "effect";
 import { Registries } from "@lemma/core";
 import type { Contribution } from "@lemma/core";
-import { createSlots } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import { createSlots } from "@lemma/web";
+import type { SlotsService } from "@lemma/web";
 
 /**
  * The runtime's `Slots` over this core's registries (`createSlots`), the
@@ -23,7 +23,7 @@ export const makeSlots: Effect.Effect<SlotsService, never, Registries | Scope.Sc
             try {
               apply(items);
             } catch (error) {
-              console.error(`lemma ui: a reader of ${name} failed`, error);
+              console.error(`lemma web: a reader of ${name} failed`, error);
             }
           }),
         ),

@@ -64,7 +64,7 @@ export const makeHolder: Effect.Effect<ControlHolder> = Effect.map(Deferred.make
   core,
   restarted: [],
   off: {},
-  ui: { plugins: {}, enabledIn: {}, configIn: {}, files: [] },
+  web: { plugins: {}, enabledIn: {}, configIn: {}, files: [] },
 }));
 
 /** The transport, fakes of the host's runtime behind it, and the bundled `commands` with a command of a plugin's, homed in `home`. */

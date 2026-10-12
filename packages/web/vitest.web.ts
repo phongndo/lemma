@@ -2,7 +2,7 @@ import { defineConfig } from "vitest/config";
 import solid from "vite-plugin-solid";
 
 /**
- * `@lemma/ui/vitest`: the config a web plugin's package tests with (its `vitest.config.ts` default-exports it), so its
+ * `@lemma/web/vitest`: the config a web plugin's package tests with (its `vitest.config.ts` default-exports it), so its
  * tests compile Solid's JSX and run against Solid's browser build, as the page does.
  */
 export default defineConfig({

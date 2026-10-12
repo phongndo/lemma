@@ -19,6 +19,6 @@ What the contract offers in each of the [five shapes](../../docs/plugins.md#the-
 | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Add       | `Themes`, `Accents`, `Fonts`, `CodeBlocks` (a renderer for a fenced block's language)                                                                                                             |
 | Intercept | The shared parts: `IconPart`, `DialogPart`, `PopoverPart`, `TogglePart`, `SegmentedPart`, `SearchFieldPart`, `SettingRowPart`, `ConfigFormPart`, `MarkdownPart`, `CopyButtonPart`, `FileIconPart` |
-| Observe   | `onLookChange` (`@lemma/ui/paint`)                                                                                                                                                                |
-| Call      | `@lemma/ui/paint`: the look's tokens and colors                                                                                                                                                   |
+| Observe   | `onLookChange` (`@lemma/web/paint`)                                                                                                                                                               |
+| Call      | `@lemma/web/paint`: the look's tokens and colors                                                                                                                                                  |
 | Serve     | Nothing: the look is `look.appearance`'s config                                                                                                                                                   |

@@ -1,8 +1,7 @@
 import { For, Show, createEffect, createMemo } from "solid-js";
 import { Layers } from "@lemma/frame";
-import { Notify, Slots } from "@lemma/ui";
-import type { Toast } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Notify, Slots, defineWebPlugin } from "@lemma/web";
+import type { Toast } from "@lemma/web";
 import { AlertIcon, CopyButton, ExternalIcon, XIcon } from "@lemma/look";
 import styles from "./toasts.css?inline";
 
@@ -62,7 +61,7 @@ function ToastView(props: { toast: Toast; onDismiss: () => void }) {
  * up, and the oldest when too many show. Turning it off leaves the messages
  * undrawn, not lost.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.toasts",
   styles,
   requires: { notify: Notify, slots: Slots },

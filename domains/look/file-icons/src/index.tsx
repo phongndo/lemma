@@ -2,12 +2,9 @@ import { Schema } from "effect";
 import { Show, createMemo } from "solid-js";
 import { FILE_GLYPHS } from "./file-glyphs.ts";
 import { DEFAULT_FILE_TYPE, fileType, parseFileTypeRules } from "./file-icons.ts";
-import { FileIconPart } from "@lemma/look";
-import { Slots } from "@lemma/ui";
+import { FileIconPart, Icon } from "@lemma/look";
+import { Slots, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
 import type { FileIconProps } from "@lemma/look";
-import { defineUiPlugin } from "@lemma/ui";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
-import { Icon } from "@lemma/look";
 import styles from "./file-icons.css?inline";
 
 const FileIconsConfig = Schema.Struct({
@@ -24,7 +21,7 @@ const FileIconsConfig = Schema.Struct({
  * turning it off brings the plain icons back. Folders keep the folder icon.
  * Colors are tokens in its stylesheet, and `rules` add matches of the user's.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "look.file-icons",
   styles,
   config: FileIconsConfig,

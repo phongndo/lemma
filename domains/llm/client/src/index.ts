@@ -2,11 +2,9 @@ import { batch, createMemo, createSignal } from "solid-js";
 import { HostError } from "@lemma/contracts";
 import { LlmChannels } from "@lemma/llm";
 import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, ThinkingLevel } from "@lemma/llm";
-import { load, loadJson, save } from "@lemma/ui/storage";
-import { DEFAULT_THINKING, clampThinking, resolveModel } from "@lemma/llm/web";
-import { Models } from "@lemma/llm/web";
-import { Client, Notify } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { load, loadJson, save } from "@lemma/web/storage";
+import { DEFAULT_THINKING, clampThinking, resolveModel, Models } from "@lemma/llm/web";
+import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
 const MODEL_KEY = "lemma.model";
 const THINKING_KEY = "lemma.thinkingByModel";
@@ -18,7 +16,7 @@ const SETTLE_MS = 5_000;
  * Providers and models as the host reports them, and this browser's choices:
  * the preferred model, a reasoning level per model, and favorites.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "llm.client",
   requires: { client: Client, notify: Notify },
   provides: { models: Models },

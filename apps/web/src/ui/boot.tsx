@@ -5,20 +5,17 @@ import { render } from "solid-js/web";
 import { runPromise } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { faultMessage, toPluginStatus } from "@lemma/contracts";
-import type { PluginStatus, ReloadResult, UiComposition, UiFile } from "@lemma/contracts";
+import type { PluginStatus, ReloadResult, WebComposition, WebFile } from "@lemma/contracts";
 import { Diagnostic, makeLoader, ReloadError } from "@lemma/core";
-import { settlePaint } from "@lemma/ui/paint";
+import { settlePaint } from "@lemma/web/paint";
 import type { Loader, Plugin, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, faultHistory, planComposition, withReplacements } from "@lemma/composition";
 import type { Plan } from "@lemma/composition";
 import type { AnyRoute } from "@lemma/router";
 import { createWebRuntime, provides } from "../runtime/index.ts";
-import { routesOf } from "@lemma/ui";
-import { First, SlotsContext } from "@lemma/ui";
+import { routesOf, First, SlotsContext, Root, Slots } from "@lemma/web";
 import { createFileLoader } from "./files.ts";
-import { Root, Slots } from "@lemma/ui";
-import type { UiPluginsService } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import type { WebPluginsService, SlotsService } from "@lemma/web";
 
 /**
  * Always on, with everything they need ("Needed by …"): the switches that turn
@@ -31,9 +28,9 @@ const PINNED: Readonly<Record<string, string>> = {
   "frame.shell": "Draws the frame every other view shows in, settings included; replace it with a web half of your own instead of turning it off",
   "frame.pages": "Shows the page the address names, settings included; replace it with a web half of your own instead of turning it off",
 };
-/** The keys of what the runtime provides (`UiPlugins.runtime`). */
+/** The keys of what the runtime provides (`WebPlugins.runtime`). */
 const RUNTIME = provides.map((tag) => tag.key);
-const EMPTY: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+const EMPTY: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
 /** How long the first paint waits for the host's rows before starting with the defaults. */
 const FIRST_ROWS_MS = 3_000;
 
@@ -70,7 +67,7 @@ const timeout = <A,>(promise: Promise<A>, ms: number): Promise<A | undefined> =>
  * directories, over the runtime the app provides them (`createWebRuntime`),
  * and renders the `root` slot. A plugin is one id with a host half, a web
  * half, or both: its one row decides both, and a web half whose host half is
- * not running waits for it. A `ui-changed` from the host (an edited config
+ * not running waits for it. A `web-changed` from the host (an edited config
  * file, a file added to `~/.lemma/plugins`, a switch on the Plugins page), or
  * a host half starting or stopping, is applied in place: only what changed,
  * and what depends on it, restarts.
@@ -78,11 +75,11 @@ const timeout = <A,>(promise: Promise<A>, ms: number): Promise<A | undefined> =>
 export async function boot(options: BootOptions): Promise<void> {
   const { host, safe } = options;
   const [statuses, setStatuses] = createSignal<readonly PluginStatus[]>([]);
-  const [files, setFiles] = createSignal<readonly UiFile[]>([]);
+  const [files, setFiles] = createSignal<readonly WebFile[]>([]);
   const [problems, setProblems] = createSignal<readonly string[]>([]);
   const [routes, setRoutes] = createSignal<readonly { readonly route: AnyRoute; readonly pluginId: string }[]>([]);
   const fileLoader = createFileLoader(options.token, options.api);
-  let ui: UiComposition = EMPTY;
+  let composition: WebComposition = EMPTY;
   /** What the running plan was made from: the rows and files, and which host halves ran (see `planFor`). */
   let planned: string | undefined;
   let plan!: Plan;
@@ -108,14 +105,14 @@ export async function boot(options: BootOptions): Promise<void> {
       registries: snapshot.registries,
       faults: faults.get(),
       problems: plan.problems,
-      enabledIn: safe ? {} : ui.enabledIn,
-      configIn: safe ? {} : ui.configIn,
+      enabledIn: safe ? {} : composition.enabledIn,
+      configIn: safe ? {} : composition.configIn,
       pinned: PINNED,
     });
     setStatuses(infos.map(toPluginStatus));
   };
 
-  const service: UiPluginsService = {
+  const service: WebPluginsService = {
     list: statuses,
     runtime: () => RUNTIME,
     files,
@@ -131,11 +128,11 @@ export async function boot(options: BootOptions): Promise<void> {
     setEnabled: async (plugin, enabled) => {
       // Turning on a plugin that provides what another does turns that one off, as on the host.
       const rows = withReplacements(plan.known, plan.composition, { [plugin.id]: { enabled } });
-      await host.host.configure(rows, ui.enabledIn[plugin.id] === "project" ? { scope: "project" } : undefined);
+      await host.host.configure(rows, composition.enabledIn[plugin.id] === "project" ? { scope: "project" } : undefined);
       return toResult(await apply());
     },
     setConfig: async (plugin, values) => {
-      await host.host.configure({ [plugin.id]: { values } }, ui.configIn[plugin.id] === "project" ? { scope: "project" } : undefined);
+      await host.host.configure({ [plugin.id]: { values } }, composition.configIn[plugin.id] === "project" ? { scope: "project" } : undefined);
       return toResult(await apply());
     },
   };
@@ -146,8 +143,8 @@ export async function boot(options: BootOptions): Promise<void> {
     const fresh = found.filter((problem) => !toasted.has(problem));
     for (const problem of found) toasted.add(problem);
     for (const problem of fresh) {
-      console.warn(`lemma ui: ${problem}`);
-      runtime.notify.toast({ level: "warning", source: "ui", message: problem });
+      console.warn(`lemma web: ${problem}`);
+      runtime.notify.toast({ level: "warning", source: "web", message: problem });
     }
   };
 
@@ -173,7 +170,7 @@ export async function boot(options: BootOptions): Promise<void> {
    * run is left out, with what needs it, and said so; `errors` are what keeps
    * it from running at all (a pinned plugin that cannot).
    */
-  const planFor = async (next: UiComposition) => {
+  const planFor = async (next: WebComposition) => {
     const loaded = safe ? { plugins: [], problems: [] } : await fileLoader.load(next.files);
     const halves = hostHalves();
     // Whether a required plugin runs is the host's to decide for its half: here, a web half waiting on its host half is
@@ -234,7 +231,7 @@ export async function boot(options: BootOptions): Promise<void> {
   const apply = (): Promise<ReloadReport | undefined> => {
     const run = queue.then(async () => {
       if (safe) return undefined;
-      const next = await host.ui.composition().catch(() => undefined);
+      const next = await host.web.composition().catch(() => undefined);
       if (next === undefined) return undefined;
       synced = host.status().generation;
       const key = JSON.stringify([next, hostHalves().key]);
@@ -250,7 +247,7 @@ export async function boot(options: BootOptions): Promise<void> {
       const exit = await Effect.runPromiseExit(loader.apply(made.plan.resolved.composition));
       if (Exit.isSuccess(exit)) {
         adopt(made.plan);
-        ui = next;
+        composition = next;
         planned = key;
         setFiles(next.files);
       } else plan = previous;
@@ -267,14 +264,14 @@ export async function boot(options: BootOptions): Promise<void> {
   let synced = -1;
   const firstRows = safe
     ? undefined
-    : host.ui.composition().then((rows) => {
+    : host.web.composition().then((rows) => {
         synced = host.status().generation;
         return rows;
       });
   // And for the host's plugins, so a web half whose host half is not running never starts only to stop.
   const firstHalves = safe ? undefined : runtime.hostPlugins.refresh();
   // Both under one bound, so a slow host holds the first paint back FIRST_ROWS_MS at most, keeping the rows if they came.
-  let rowsFound: UiComposition | undefined;
+  let rowsFound: WebComposition | undefined;
   await timeout(Promise.allSettled([firstRows?.then((rows) => (rowsFound = rows)), firstHalves]), FIRST_ROWS_MS);
   const initial = rowsFound ?? EMPTY;
   const scope = await runPromise(Scope.make());
@@ -294,7 +291,7 @@ export async function boot(options: BootOptions): Promise<void> {
   let made = first.errors.length > 0 ? undefined : await start(first.plan);
   let bootProblems = [...first.problems, ...first.errors];
   if (made !== undefined && Exit.isSuccess(made)) {
-    ui = initial;
+    composition = initial;
     planned = JSON.stringify([initial, hostHalves().key]);
   } else {
     // Rows or files that keep the app's own frame from starting still leave the app as shipped.
@@ -314,7 +311,7 @@ export async function boot(options: BootOptions): Promise<void> {
     faults.record(plugin.fault as ReportedFault);
     bootProblems = [...bootProblems, `"${plugin.id}" failed to start: ${faultMessage(plugin.fault)}`];
   }
-  setFiles(ui.files);
+  setFiles(composition.files);
   await refresh();
   // A host half starting or stopping starts or stops its web half: planned again with the same rows. For the page's life.
   createRoot(() =>
@@ -361,7 +358,7 @@ export async function boot(options: BootOptions): Promise<void> {
   Effect.runFork(
     Stream.runForEach(loader.core.faults, (fault) =>
       Effect.promise(async () => {
-        console.error(`lemma ui: ${fault.message}`, Cause.pretty(fault.cause));
+        console.error(`lemma web: ${fault.message}`, Cause.pretty(fault.cause));
         faults.record(fault);
         await refresh();
         runtime.notify.toast({ level: "error", source: fault.pluginId, message: faultMessage(fault) });
@@ -370,7 +367,7 @@ export async function boot(options: BootOptions): Promise<void> {
   );
   if (safe) return;
   host.onEvent((event) => {
-    if (event.type === "ui-changed") void apply();
+    if (event.type === "web-changed") void apply();
   });
   // A first reply slower than the first paint still applies.
   void firstRows?.then(

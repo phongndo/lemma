@@ -15,7 +15,7 @@
     "@lemma/router-solid": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/settings": "workspace:*",
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "solid-js": "1.9.15"
   },
   "devDependencies": {

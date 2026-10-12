@@ -1,10 +1,8 @@
 import { Schema } from "effect";
-import { bindsTyping, matchesKeys, typing } from "@lemma/ui/keys";
-import { KEYMAP_PLUGIN, keysFor, parseBindings } from "@lemma/actions";
-import { ActionIds, Actions } from "@lemma/actions";
+import { bindsTyping, matchesKeys, typing } from "@lemma/web/keys";
+import { KEYMAP_PLUGIN, keysFor, parseBindings, ActionIds, Actions } from "@lemma/actions";
 import { Dialogs } from "@lemma/frame";
-import { Interactions, Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
 
 const KeymapConfig = Schema.Struct({
   bindings: Schema.optional(Schema.Array(Schema.String)).annotate({
@@ -21,7 +19,7 @@ const KeymapConfig = Schema.Struct({
  * without a modifier waits until focus leaves a text field unless the action
  * says `whileTyping`.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: KEYMAP_PLUGIN,
   config: KeymapConfig,
   requires: { slots: Slots, dialogs: Dialogs, interactions: Interactions },

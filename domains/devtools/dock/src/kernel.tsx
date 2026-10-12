@@ -10,14 +10,13 @@ import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
 import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
-import * as ui from "@lemma/ui";
+import * as webRuntime from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
 import { PLUGIN_PANEL } from "@lemma/devtools";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { DevtoolsService } from "@lemma/devtools";
-import type { ClientService, RouterService } from "@lemma/ui";
-import { DEFAULT_PART_ORDER, definedSlots } from "@lemma/ui";
-import type { Slot, SlotItem, SlotsService } from "@lemma/ui";
+import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
+import { DEFAULT_PART_ORDER, definedSlots } from "@lemma/web";
 
 type Kind = "web" | "host";
 const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host" };
@@ -136,7 +135,7 @@ const followSubject = (deps: Deps, panel: string, apply: (subject: string) => vo
 
 /** The bundled contracts, by the package each is imported from. */
 const contracts: Readonly<Record<string, object>> = {
-  "@lemma/ui": ui,
+  "@lemma/web": webRuntime,
   "@lemma/frame": frame,
   "@lemma/look": look,
   "@lemma/settings": settings,

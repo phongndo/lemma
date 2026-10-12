@@ -146,7 +146,7 @@ describe("turns against a running host", () => {
     expect(seqs[0]).toBe(1);
     expect(seqs).toEqual(seqs.map((_, index) => index + 1));
     // The host's own events: what the domains report comes on their streams.
-    const runtime = ["notice", "interaction", "interaction-closed", "plugins-changed", "channels-changed", "ui-changed"];
+    const runtime = ["notice", "interaction", "interaction-closed", "plugins-changed", "channels-changed", "web-changed"];
     expect(of("host").every((element) => runtime.includes(element.type))).toBe(true);
   }, 30_000);
 

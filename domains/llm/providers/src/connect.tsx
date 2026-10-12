@@ -2,10 +2,9 @@ import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { InteractionRequest, NoticePayload } from "@lemma/contracts";
 import type { ProviderInfo } from "@lemma/llm";
-import { copyText } from "@lemma/ui/clipboard";
-import { providerBrand, signInState } from "@lemma/llm/web";
-import type { InteractionsService } from "@lemma/ui";
-import { ProviderLogo } from "@lemma/llm/web";
+import { copyText } from "@lemma/web/clipboard";
+import { providerBrand, signInState, ProviderLogo } from "@lemma/llm/web";
+import type { InteractionsService } from "@lemma/web";
 import { CopyButton, Dialog, ExternalIcon, Spinner } from "@lemma/look";
 
 const hostOf = (url: string) => {

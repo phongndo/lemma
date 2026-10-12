@@ -78,7 +78,7 @@ export default definePlugin({
       Layer.succeed(Startup, startup),
     );
     const address = yield* startServer(
-      { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, ui: control.ui },
+      { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, web: control.web },
       handlers,
     );
     const url = `http://${clientHost(address.hostname)}:${address.port}`;

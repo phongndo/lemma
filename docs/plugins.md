@@ -40,8 +40,8 @@ chat shows `greet`'s calls:
 
 ```js
 // ~/.lemma/plugins/greet.web.js
-export default ({ defineUiPlugin, contracts: { Slots, ToolViews } }) =>
-  defineUiPlugin({
+export default ({ defineWebPlugin, contracts: { Slots, ToolViews } }) =>
+  defineWebPlugin({
     id: "greet",
     requires: { slots: Slots },
     setup: ({ slots }) => {
@@ -146,7 +146,7 @@ bundled plugin provides turns that one off unless a row decides
 ([Configuration](configuration.md#your-plugins)). To keep what the bundled
 one does and change part of it, wrap it rather than copy it. A host half whose
 default export is a function receives `{ bundled }`, and a web half receives
-`api.bundled` and `extendUiPlugin`
+`api.bundled` and `extendWebPlugin`
 ([the web app's README](../apps/web/README.md#writing-a-plugin)).
 
 ## Testing

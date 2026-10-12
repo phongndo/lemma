@@ -1,15 +1,12 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
 import { contextSize } from "./context-size.ts";
-import { DEFAULT_THINKING, filterModels, thinkingLevels } from "@lemma/llm/web";
+import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ProviderLogo } from "@lemma/llm/web";
 import { Actions } from "@lemma/actions";
-import { Models, LlmActionIds } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, ThreadsActionIds } from "@lemma/threads";
-import { Slots } from "@lemma/ui";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import type { ModelsService } from "@lemma/llm/web";
-import { defineUiPlugin } from "@lemma/ui";
-import { ProviderLogo } from "@lemma/llm/web";
 import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
 import styles from "./model-picker.css?inline";
@@ -289,7 +286,7 @@ function ModelPicker(props: {
  * The model and reasoning pickers: in the composer's toolbar, in General
  * settings, and behind "Switch model…".
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "llm.model-picker",
   styles,
   requires: { models: Models, slots: Slots },

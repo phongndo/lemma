@@ -1,8 +1,7 @@
 import { Show, createSignal, onCleanup, onMount } from "solid-js";
 import { Portal } from "solid-js/web";
 import { Layers } from "@lemma/frame";
-import { Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import styles from "./tooltips.css?inline";
 
 const DELAY = 450;
@@ -105,7 +104,7 @@ function TooltipLayer() {
 }
 
 /** Shows `data-tip` attributes as tooltips, for every plugin's controls. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.tooltips",
   styles,
   requires: { slots: Slots },

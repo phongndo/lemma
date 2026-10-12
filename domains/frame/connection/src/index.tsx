@@ -1,11 +1,10 @@
 import { Show } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
-import { createNow } from "@lemma/ui/now";
+import { createNow } from "@lemma/web/now";
 import { SidebarFooter } from "@lemma/frame";
 import { ComposerNotices } from "@lemma/threads";
-import { Client, Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { AlertIcon, CopyButton } from "@lemma/look";
 import styles from "./connection.css?inline";
 
@@ -64,7 +63,7 @@ function ConnectionNotice(props: { status: Accessor<ConnectionStatus>; now: Acce
 }
 
 /** How the connection to the host is doing: a dot in the sidebar (its label is the tooltip), a notice above the composer while it is down. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.connection",
   styles,
   requires: { client: Client, slots: Slots },

@@ -1,6 +1,6 @@
 // The todo plugin's web half: how its calls show, and a Todos view of the thread (see README.md).
 // It needs no build step; package.json's `lemma` manifest names it beside the host half, todo.ts.
-export default ({ defineUiPlugin, contracts: { Icon, Slots, Threads, ToolViews, Views }, solid: { createMemo, For, Show }, html }) => {
+export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews, Views }, solid: { createMemo, For, Show }, html }) => {
   /** The list on a branch, as the host half reads it: the `details` of the last successful `todo` call. */
   const todosOf = (branch) => {
     for (let index = branch.length - 1; index >= 0; index--) {
@@ -18,9 +18,9 @@ export default ({ defineUiPlugin, contracts: { Icon, Slots, Threads, ToolViews, 
     .todo-view .done { color: var(--text-3); text-decoration: line-through; }
   `;
 
-  return defineUiPlugin({
+  return defineWebPlugin({
     id: "todo",
-    api: 3,
+    api: 4,
     styles,
     requires: { slots: Slots, threads: Threads },
     setup: ({ slots, threads }) => {

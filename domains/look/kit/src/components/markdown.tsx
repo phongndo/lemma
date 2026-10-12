@@ -1,12 +1,9 @@
 import { createEffect, createRoot, getOwner, onCleanup, runWithOwner, useContext } from "solid-js";
 import type { JSX, Owner } from "solid-js";
-import { copyText } from "@lemma/ui/clipboard";
-import { codePlaces, createBlockLexer } from "@lemma/look";
-import type { CodeBlock, MarkdownBlock } from "@lemma/look";
-import { CodeBlocks } from "@lemma/look";
-import type { CodeBlockRenderer, MarkdownProps } from "@lemma/look";
-import { CheckIcon, CodeIcon, CopyIcon, ImageIcon, XIcon } from "@lemma/look";
-import { SlotsContext } from "@lemma/ui";
+import { copyText } from "@lemma/web/clipboard";
+import { codePlaces, createBlockLexer, CodeBlocks, CheckIcon, CodeIcon, CopyIcon, ImageIcon, XIcon } from "@lemma/look";
+import type { CodeBlock, MarkdownBlock, CodeBlockRenderer, MarkdownProps } from "@lemma/look";
+import { SlotsContext } from "@lemma/web";
 
 /**
  * Builds code blocks as plain DOM, outside Solid's tree, for the markdown

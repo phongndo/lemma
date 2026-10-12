@@ -34,7 +34,7 @@ const webPackages = folders(domains)
   })
   .map((dir) => join(dir, "src"));
 /** Where the bundled plugins' source is: the app's own, the page's packages under domains/, and the plugin API. */
-const sources = [src, ...webPackages, resolve(import.meta.dirname, "../../packages/ui/src")];
+const sources = [src, ...webPackages, resolve(import.meta.dirname, "../../packages/web/src")];
 const CANDIDATES = "virtual:lemma/utility-candidates";
 
 /**

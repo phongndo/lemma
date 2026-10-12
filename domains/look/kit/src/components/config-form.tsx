@@ -1,8 +1,7 @@
 import { For, Match, Show, Switch, createSignal } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
-import { configEdit, configText } from "@lemma/look";
+import { configEdit, configText, Toggle } from "@lemma/look";
 import type { ConfigFormProps } from "@lemma/look";
-import { Toggle } from "@lemma/look";
 
 /**
  * A plugin's settings, projected from its config Schema: a control per

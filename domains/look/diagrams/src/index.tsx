@@ -1,10 +1,8 @@
 import { Show, createSignal } from "solid-js";
 import { Layers } from "@lemma/frame";
-import { CodeBlocks } from "@lemma/look";
-import { Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
-import { Dialog } from "@lemma/look";
-import { currentTheme, currentToken, onLookChange, tokenColor } from "@lemma/ui/paint";
+import { CodeBlocks, Dialog } from "@lemma/look";
+import { Slots, defineWebPlugin } from "@lemma/web";
+import { currentTheme, currentToken, onLookChange, tokenColor } from "@lemma/web/paint";
 import type { DiagramLook } from "./mermaid.ts";
 import { viewerScale } from "./viewer.ts";
 import styles from "./diagrams.css?inline";
@@ -81,7 +79,7 @@ function Viewer(props: { viewing: Viewing; onClose: () => void }) {
  * `--diagram-text`, `--diagram-background`, `--diagram-note`), and drawn
  * again when the look changes. Mermaid loads on first use.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "look.diagrams",
   styles,
   requires: { slots: Slots },

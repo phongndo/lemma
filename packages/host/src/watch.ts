@@ -4,7 +4,7 @@ import { basename, dirname } from "node:path";
 import { Duration, Effect, Queue, Stream } from "effect";
 import type { PathsService } from "./paths.ts";
 import { projectPluginsDir } from "./config.ts";
-import { userPluginsDir } from "./ui.ts";
+import { userPluginsDir } from "./web.ts";
 
 interface WatchOptions {
   /** Quiet period before a burst of changes becomes one emission. Default 250ms. */

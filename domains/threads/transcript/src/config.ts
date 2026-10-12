@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import type { ThreadsService, ToolView } from "@lemma/threads";
-import type { RouterService } from "@lemma/ui";
+import type { RouterService } from "@lemma/web";
 
 /** The chat's settings. */
 export const ChatConfig = Schema.Struct({

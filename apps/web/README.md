@@ -1,4 +1,4 @@
-# @lemma/web
+# @lemma/web-app
 
 The web app, and how to change any part of it. It is a composition of plugins
 on the same kernel as the host: the models of host state, the frame, the
@@ -9,8 +9,8 @@ the router, messages, the plugins, and the host's questions. With every
 plugin off, the page is blank, and the runtime still runs.
 
 ```sh
-nix develop -c pnpm --filter @lemma/web dev    # http://127.0.0.1:5173/?mock runs against an in-browser fake host
-nix develop -c pnpm --filter @lemma/web test
+nix develop -c pnpm --filter @lemma/web-app dev    # http://127.0.0.1:5173/?mock runs against an in-browser fake host
+nix develop -c pnpm --filter @lemma/web-app test
 ```
 
 While a turn runs, sending steers it (the prompt joins after its current step),
@@ -88,8 +88,8 @@ colors, and `tokens` for any other:
 
 ```js
 // ~/.lemma/plugins/tokyo-night.web.js
-export default ({ defineUiPlugin, contracts: { Slots, Themes, Accents } }) =>
-  defineUiPlugin({
+export default ({ defineWebPlugin, contracts: { Slots, Themes, Accents } }) =>
+  defineWebPlugin({
     id: "tokyo-night",
     requires: { slots: Slots },
     setup: ({ slots }) => {
@@ -136,13 +136,13 @@ tokens do.
 [Writing plugins](../../docs/plugins.md) covers a plugin's two halves and the
 shapes they meet the others in; this is the web half. A plugin requires and
 provides capabilities, and adds items to slots.
-The contracts declare them all: the runtime's in [`@lemma/ui`](../../packages/ui/src/index.ts), and each
+The contracts declare them all: the runtime's in [`@lemma/web`](../../packages/web/src/index.ts), and each
 domain's in its own package (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …; a web half gets them all
 as `api.contracts`). The bundled plugins use nothing else:
 
 - **Capabilities** are services with one provider, such as `Threads` or
-  `Models`. The runtime's ([`@lemma/ui`](../../packages/ui/src/runtime.ts): `Client`,
-  `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `UiPlugins`)
+  `Models`. The runtime's ([`@lemma/web`](../../packages/web/src/runtime.ts): `Client`,
+  `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`)
   the app provides itself; every other comes from a plugin.
 - **Slots** are places any number of plugins add to: regions of the screen,
   where the first item by `order` shows, and lists such as `Actions` (the
@@ -160,12 +160,12 @@ it.
 
 A web half needs no build step: its default export may be a function that
 receives [the api](src/ui/api.ts), including Solid, the contracts,
-`defineUiPlugin`, and `html` (Solid's JSX without a compiler).
+`defineWebPlugin`, and `html` (Solid's JSX without a compiler).
 
 ```js
 // ~/.lemma/plugins/tool-count.web.js
-export default ({ defineUiPlugin, contracts: { Slots, Threads, SidebarFooter }, html }) =>
-  defineUiPlugin({
+export default ({ defineWebPlugin, contracts: { Slots, Threads, SidebarFooter }, html }) =>
+  defineWebPlugin({
     id: "tool-count",
     requires: { slots: Slots, threads: Threads },
     setup: ({ slots, threads }) => {
@@ -177,8 +177,8 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, SidebarFooter }, 
 
 ```js
 // ~/.lemma/plugins/quiet-thoughts.web.js: thoughts as a single muted line
-export default ({ defineUiPlugin, contracts: { Slots, ChatThinkingPart }, html }) =>
-  defineUiPlugin({
+export default ({ defineWebPlugin, contracts: { Slots, ChatThinkingPart }, html }) =>
+  defineWebPlugin({
     id: "quiet-thoughts",
     requires: { slots: Slots },
     setup: ({ slots }) => {
@@ -189,8 +189,8 @@ export default ({ defineUiPlugin, contracts: { Slots, ChatThinkingPart }, html }
 
 ```js
 // ~/.lemma/plugins/thread-links.web.js: `#` in the composer offers threads by title
-export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletions } }) =>
-  defineUiPlugin({
+export default ({ defineWebPlugin, contracts: { Slots, Threads, ComposerCompletions } }) =>
+  defineWebPlugin({
     id: "thread-links",
     requires: { slots: Slots, threads: Threads },
     setup: ({ slots, threads }) => {
@@ -204,7 +204,7 @@ export default ({ defineUiPlugin, contracts: { Slots, Threads, ComposerCompletio
   });
 ```
 
-`defineUiPlugin` is the kernel's promise-based `definePlugin`
+`defineWebPlugin` is the kernel's promise-based `definePlugin`
 ([`@lemma/core/plain`](../../packages/core/README.md#plugins-written-with-promises))
 with the page's conventions. `setup` runs in its own Solid root. What it adds to slots leaves when it stops;
 release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
@@ -212,8 +212,8 @@ release anything else it holds (a listener, a timer) with `plugin.onCleanup`. A
 `Record`, `between`, `positive`, `nonNegative`, `optionalWith`,
 `propertySignature`, and `.annotations(…)`, so a file written for Effect 3 keeps
 working) becomes the plugin's settings form. `styles` apply while it runs.
-`api: 3` says which version of
-the contracts it is written for (`contracts.UI_API`), so a later incompatible
+`api: 4` says which version of
+the contracts it is written for (`contracts.WEB_API`), so a later incompatible
 version leaves it out, saying so, rather than letting it fail at a call;
 `routes` lists the routes it shows pages at, so their addresses name it while
 it is off. Draw what a slot holds with `api.parts.Contained`, `Each`, or
@@ -242,15 +242,15 @@ host half serves prices and whose web half shows them at `/ticker`.
 
 A replacement with a bundled plugin's id can wrap it rather than copy it, and
 so keep what it gains in later versions: `api.bundled` holds the bundled
-plugins, and `api.extendUiPlugin` makes a plugin from another's definition.
+plugins, and `api.extendWebPlugin` makes a plugin from another's definition.
 The runtime is not in `api.bundled`, and a plugin providing one of its
 capabilities is left out: draw messages differently by replacing `frame.toasts`,
 which decides how long each shows, rather than `Notify`.
 
 ```js
 // ~/.lemma/plugins/toasts.web.js: the bundled toasts, logging each one too
-export default ({ bundled, extendUiPlugin }) =>
-  extendUiPlugin(bundled["frame.toasts"], (base) => ({
+export default ({ bundled, extendWebPlugin }) =>
+  extendWebPlugin(bundled["frame.toasts"], (base) => ({
     ...base,
     setup: (use, plugin) => {
       const made = base.setup(use, plugin);
@@ -282,7 +282,7 @@ A plugin adds a page with `api.defineRoute` and a `Pages` item, routed by
 
 ```js
 const Note = api.defineRoute("notes.note", { path: "/notes/:id" }); // params: { id: string }
-api.defineUiPlugin({
+api.defineWebPlugin({
   id: "notes",
   routes: [Note],
   requires: { slots: Slots },

@@ -1,5 +1,5 @@
 import type { ModelInfo, ThinkingLevel } from "../llm.ts";
-import { matchesQuery } from "@lemma/ui/match";
+import { matchesQuery } from "@lemma/web/match";
 
 interface ModelGroup {
   readonly provider: string;

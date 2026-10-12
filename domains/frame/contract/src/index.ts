@@ -1,5 +1,5 @@
-import { defineSlot } from "@lemma/ui";
-import type { Region } from "@lemma/ui";
+import { defineSlot } from "@lemma/web";
+import type { Region } from "@lemma/web";
 import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
 
@@ -9,7 +9,7 @@ export interface DialogsService {
   readonly open: (id: string | undefined) => void;
 }
 
-export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-ui/Dialogs") {}
+export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-web/Dialogs") {}
 
 export interface LayoutService {
   readonly toggleSidebar: () => void;
@@ -17,7 +17,7 @@ export interface LayoutService {
   readonly closeDrawer: () => void;
 }
 
-export class Layout extends Context.Service<Layout, LayoutService>()("lemma-ui/Layout") {}
+export class Layout extends Context.Service<Layout, LayoutService>()("lemma-web/Layout") {}
 
 /**
  * Mounted over the whole app in order: dialogs (the bundled ones at orders 10 to 40), questions (50), toasts (100),

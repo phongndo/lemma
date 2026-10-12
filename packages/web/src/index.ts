@@ -7,7 +7,7 @@
  * and every slot item, comes from a plugin. Every bundled plugin is written
  * against these alone, so any of them can be replaced by a plugin that
  * provides the same capability or fills the same slot. Keys are namespaced
- * `lemma-ui/…`.
+ * `lemma-web/…`.
  *
  * A few contracts are in the DOM rather than in code, because every plugin's
  * markup takes part in them:

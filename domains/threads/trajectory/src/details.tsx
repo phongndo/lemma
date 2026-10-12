@@ -5,10 +5,10 @@ import { contentText } from "@lemma/llm";
 import { RECORD_KIND_LABEL, promptDiff, rebuildRequest, recordRequest } from "@lemma/sessions";
 import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/sessions";
 import { inputTokens } from "./scale.ts";
-import { clockTime } from "@lemma/ui/format";
+import { clockTime } from "@lemma/web/format";
 import { ToolViews, TrajectoryTabs } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/ui";
+import { Contained } from "@lemma/web";
 import type { View, Kind } from "./state.ts";
 
 /** The selected record's or request's details, in tabs. */

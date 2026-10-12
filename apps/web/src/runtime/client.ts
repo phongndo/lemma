@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { follow } from "@lemma/client";
 import type { ConnectionStatus, Host } from "@lemma/client";
 import type { HostError, HostInfo } from "@lemma/contracts";
-import type { ClientService } from "@lemma/ui";
+import type { ClientService } from "@lemma/web";
 
 /**
  * The page's one connection as the runtime's `Client`, for as long as the
@@ -20,7 +20,7 @@ export function createClient(host: Host): { readonly client: ClientService; read
     try {
       sync();
     } catch (error) {
-      console.error("lemma ui: a resync failed", error);
+      console.error("lemma web: a resync failed", error);
     }
   };
   const dispose = host.onStatus((next) => {
@@ -52,8 +52,8 @@ export function createClient(host: Host): { readonly client: ClientService; read
       configure: (plugins, options) => host.host.configure(plugins, options?.scope === undefined ? undefined : { scope: options.scope }),
       inspectors: () => host.host.inspectors(),
       inspect: (id) => host.host.inspect(id),
-      ui: {
-        composition: () => host.ui.composition(),
+      web: {
+        composition: () => host.web.composition(),
       },
     },
     dispose,

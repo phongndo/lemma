@@ -2,12 +2,11 @@ import { Show, createEffect, createMemo, on } from "solid-js";
 import type { JSX } from "solid-js";
 import { ledger, ledgerSpans, parseLedgerFilter, trajectory as projectTrajectory } from "@lemma/sessions";
 import type { LedgerRecord } from "@lemma/sessions";
-import { stepFor } from "@lemma/ui/keys";
+import { stepFor } from "@lemma/web/keys";
 import { timeScale } from "./scale.ts";
-import { createNow } from "@lemma/ui/now";
+import { createNow } from "@lemma/web/now";
 import { Threads, Views } from "@lemma/threads";
-import { Notify, Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Notify, Slots, defineWebPlugin } from "@lemma/web";
 import { TrajectoryIcon } from "@lemma/look";
 import styles from "./trajectory.css?inline";
 import { createDetails } from "./details.tsx";
@@ -144,7 +143,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
 }
 
 /** The session as the requests and tool runs behind it, like DevTools' Network panel. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.trajectory",
   styles,
   requires: { threads: Threads, notify: Notify, slots: Slots },

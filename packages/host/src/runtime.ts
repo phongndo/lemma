@@ -64,7 +64,7 @@ export function hostRuntime(options: { readonly paths: PathsService; readonly co
         // A failed reload leaves the composition untouched; a report may still carry dispose faults.
         reload: detached(control.reload.pipe(Effect.tap(() => changed))),
         configure: (plugins, options) => detached(control.configure(plugins, options).pipe(Effect.ensuring(changed))),
-        ui: control.ui,
+        web: control.web,
       } satisfies HostControlService;
     }),
   );

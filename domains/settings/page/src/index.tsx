@@ -1,18 +1,15 @@
 import { For, Show, createEffect, createMemo, createSignal, on, onCleanup, onMount, untrack } from "solid-js";
-import { withKeys } from "@lemma/ui/keys";
-import { shownKeys } from "@lemma/actions";
+import { withKeys } from "@lemma/web/keys";
+import { shownKeys, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
-import { Actions } from "@lemma/actions";
 import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, Settings, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
-import { Pages, Router, Slots, UiPlugins } from "@lemma/ui";
+import { Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
 import type { SettingsEntry, SettingsSection } from "@lemma/settings";
-import { defineUiPlugin } from "@lemma/ui";
-import type { SlotItem, SlotsService } from "@lemma/ui";
+import type { SlotItem, SlotsService } from "@lemma/web";
 import { ArrowLeftIcon, GearIcon, SearchIcon, SidebarIcon, SlidersIcon, XIcon } from "@lemma/look";
-import { Contained } from "@lemma/ui";
 import styles from "./settings.css?inline";
 
 type Section = SlotItem<SettingsSection>;
@@ -54,13 +51,13 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
  * and clearing it returns to the section being browsed. Closing returns to
  * where settings were opened from.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "settings.page",
   styles,
   routes: [SettingsRoute],
-  requires: { slots: Slots, router: Router, uiPlugins: UiPlugins, layout: Layout },
+  requires: { slots: Slots, router: Router, webPlugins: WebPlugins, layout: Layout },
   provides: { settings: Settings },
-  setup: ({ slots, router, uiPlugins, layout }) => {
+  setup: ({ slots, router, webPlugins, layout }) => {
     const [focus, setFocus] = createSignal<() => void>();
     const here = () => router.matchOf(SettingsRoute);
     const section = createMemo(() => {
@@ -120,7 +117,7 @@ export default defineUiPlugin({
     /** One of its actions' bindings, as the user has it. */
     const keysOf = (id: string) => {
       const action = slots.get(Actions, id);
-      return action === undefined ? undefined : shownKeys(action, uiPlugins.list());
+      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
     };
     const [query, setQuery] = createSignal("");
     const searching = () => query().trim() !== "";

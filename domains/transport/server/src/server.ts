@@ -9,7 +9,7 @@ import { NodeHttpServer } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
 import { HOST_PROTOCOL } from "@lemma/contracts";
-import type { UiComposition } from "@lemma/contracts";
+import type { WebComposition } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 import { ServedRpcs } from "./channels.ts";
 import type { ChannelLifetime } from "./channels.ts";
@@ -29,8 +29,8 @@ interface ServerOptions {
   readonly token: string;
   readonly version: string;
   readonly staticDir?: string | undefined;
-  /** The files the web app loads from the plugin directories; `/api/ui/<source>/<path>` serves only a file listed here. */
-  readonly ui?: Effect.Effect<UiComposition>;
+  /** The files the web app loads from the plugin directories; `/api/web/<source>/<path>` serves only a file listed here. */
+  readonly web?: Effect.Effect<WebComposition>;
 }
 
 const equalTokens = (a: string, b: string): boolean => {
@@ -124,8 +124,8 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
         if (path === "/rpc") return yield* websocket;
         if (path === "/rpc/http" && request.method === "POST") return yield* http;
         if (path === "/api/health") return HttpServerResponse.jsonUnsafe({ ok: true, version: options.version, protocol: HOST_PROTOCOL });
-        if (under(path, "/api/ui") && options.ui !== undefined && (request.method === "GET" || request.method === "HEAD")) {
-          const listed = (yield* options.ui).files.find((file) => file.url.slice(0, file.url.indexOf("?")) === path);
+        if (under(path, "/api/web") && options.web !== undefined && (request.method === "GET" || request.method === "HEAD")) {
+          const listed = (yield* options.web).files.find((file) => file.url.slice(0, file.url.indexOf("?")) === path);
           if (listed === undefined) return HttpServerResponse.jsonUnsafe({ error: "Not found" }, { status: 404 });
           // The version in the URL makes an edited file a new URL, so nothing needs revalidating by date.
           return yield* HttpServerResponse.file(listed.path, { headers: { "cache-control": "no-cache" } }).pipe(

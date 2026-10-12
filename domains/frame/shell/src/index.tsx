@@ -1,11 +1,9 @@
 import { Show, createSignal, onCleanup, onMount } from "solid-js";
-import { load, save } from "@lemma/ui/storage";
+import { load, save } from "@lemma/web/storage";
 import { Actions } from "@lemma/actions";
 import { Docks, Layers, Layout, MainRegion, SidebarRegion } from "@lemma/frame";
-import { Root, Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
-import { Contained, Each } from "@lemma/ui";
 import styles from "./shell.css?inline";
 
 const WIDTH_KEY = "lemma.sidebar.width";
@@ -31,7 +29,7 @@ const clampWidth = (width: number) => Math.round(Math.max(MIN_WIDTH, Math.min(wi
  * `root` slot; each region is whatever plugin fills it, so any can be left
  * empty or replaced.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.shell",
   styles,
   requires: { slots: Slots },

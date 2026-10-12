@@ -5,7 +5,7 @@
   "type": "module",
   "main": "src/main.ts",
   "scripts": {
-    "start": "pnpm --filter @lemma/core --filter @lemma/web build && env -u ELECTRON_RUN_AS_NODE electron .",
+    "start": "pnpm --filter @lemma/core --filter @lemma/web-app build && env -u ELECTRON_RUN_AS_NODE electron .",
     "dev": "pnpm --filter @lemma/core build && LEMMA_WEB_URL=${LEMMA_WEB_URL:-http://127.0.0.1:5173} env -u ELECTRON_RUN_AS_NODE electron .",
     "check": "tsc --noEmit"
   },

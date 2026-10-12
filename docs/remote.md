@@ -19,7 +19,7 @@ a restart cut off resume when it does, and queued prompts run on (see the
 [agent plugin](../domains/agent/loop/README.md#durability)):
 
 ```sh
-nix develop -c pnpm --filter @lemma/web build
+nix develop -c pnpm --filter @lemma/web-app build
 nix develop -c pnpm lemma serve --no-open   # what the services below run
 ```
 

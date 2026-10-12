@@ -1,4 +1,4 @@
-import { fuzzy } from "@lemma/ui/match";
+import { fuzzy } from "@lemma/web/match";
 import type { FileEntry } from "@lemma/workspace";
 
 /**

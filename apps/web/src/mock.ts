@@ -6,7 +6,7 @@ import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { SessionChannels } from "@lemma/sessions";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
-import { fuzzy } from "@lemma/ui/match";
+import { fuzzy } from "@lemma/web/match";
 import type {
   ChannelDeclaration,
   ChannelInfo,
@@ -17,7 +17,7 @@ import type {
   PluginChange,
   PluginStatus,
   RuntimeEvent,
-  UiComposition,
+  WebComposition,
 } from "@lemma/contracts";
 import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { AssistantMessage, LlmChange, ModelInfo, ProviderInfo, StreamEvent, Usage } from "@lemma/llm";
@@ -410,16 +410,16 @@ export const createMockHost = (): Host => {
     "agent.loop": { hooks: [{ name: "lemma/agent.request", order: 0 }] },
     "transport.server": {
       hooks: [{ name: "lemma/interaction.request", order: 0 }],
-      observes: ["lemma/notice", "lemma/plugins.changed", "lemma/ui.changed"],
+      observes: ["lemma/notice", "lemma/plugins.changed", "lemma/web.changed"],
     },
   };
   for (const [index, plugin] of plugins.entries()) plugins[index] = withConfig({ ...plugin, ...wiring[plugin.id] });
-  let ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+  let composition: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
   /** Writes rows as the host does into its config file, and tells the page, which plans its web halves from them. */
   const writeRows = (rows: Readonly<Record<string, PluginChange>>, scope: ConfigScope) => {
-    const next = { ...ui.plugins };
-    const enabledIn = { ...ui.enabledIn };
-    const configIn = { ...ui.configIn };
+    const next = { ...composition.plugins };
+    const enabledIn = { ...composition.enabledIn };
+    const configIn = { ...composition.configIn };
     for (const [id, row] of Object.entries(rows)) {
       const entry: { enabled?: boolean; config?: Record<string, unknown> } = { ...(next[id] as { enabled?: boolean; config?: Record<string, unknown> }) };
       if (row.enabled !== undefined) {
@@ -442,17 +442,17 @@ export const createMockHost = (): Host => {
       if (Object.keys(entry).length === 0) delete next[id];
       else next[id] = entry;
     }
-    ui = { ...ui, plugins: next, enabledIn, configIn };
-    emit({ type: "ui-changed", ui });
+    composition = { ...composition, plugins: next, enabledIn, configIn };
+    emit({ type: "web-changed", web: composition });
   };
   /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
   let heldStarts: (() => void)[] | undefined;
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
     lemmaMock: {
-      setUiFiles: (files: UiComposition["files"]) => {
-        ui = { ...ui, files };
-        emit({ type: "ui-changed", ui });
+      setWebFiles: (files: WebComposition["files"]) => {
+        composition = { ...composition, files };
+        emit({ type: "web-changed", web: composition });
       },
       /** Holds each `turn-started` back until released: what a slow connection does to a prompt's acceptance. */
       holdTurnStarted: () => {
@@ -1600,8 +1600,8 @@ export const createMockHost = (): Host => {
         return { started: after.filter((id) => !before.includes(id)), restarted: [], stopped: before.filter((id) => !after.includes(id)) };
       },
     },
-    ui: {
-      composition: async () => ui,
+    web: {
+      composition: async () => composition,
     },
     status: () => status,
     onStatus: (listener) => {

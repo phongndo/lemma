@@ -1,9 +1,7 @@
 import { createEffect, createMemo, createSignal, createUniqueId } from "solid-js";
-import { paint, unpaint } from "@lemma/ui/paint";
-import { APPEARANCE_PLUGIN, AppearanceConfig, resolveLook } from "@lemma/look";
-import { Accents, Fonts, Themes } from "@lemma/look";
-import { Slots } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { paint, unpaint } from "@lemma/web/paint";
+import { APPEARANCE_PLUGIN, AppearanceConfig, resolveLook, Accents, Fonts, Themes } from "@lemma/look";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import { ACCENTS, FONTS, THEMES } from "./presets.ts";
 
 const isColor = (value: string) => CSS.supports("color", value);
@@ -18,7 +16,7 @@ const isColor = (value: string) => CSS.supports("color", value);
  * It draws nothing: `appearance-page` edits its config, as anything may.
  * Turned off, the page returns to the system scheme and the stylesheet's look.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: APPEARANCE_PLUGIN,
   config: AppearanceConfig,
   requires: { slots: Slots },

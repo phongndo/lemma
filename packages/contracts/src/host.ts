@@ -181,7 +181,7 @@ export interface RestartReport {
  * one, so a plugin written for another is left out with a message naming the
  * version rather than failing at some later call.
  */
-export const HOST_API = 3;
+export const HOST_API = 4;
 /** What a plugin written for host API `version` requires; the host provides `HostApi(HOST_API)`. */
 export const HostApi = (version: number): Context.Key<`lemma/api@${number}`, number> => Context.Service<`lemma/api@${number}`, number>(`lemma/api@${version}`);
 
@@ -228,14 +228,14 @@ export class HostControl extends Context.Service<
      * result. A change the host rejects is undone in the file, so a bad row never
      * outlives the call; the diagnostics say why. A row naming no host plugin is
      * written for the web app, which plans its halves from the same rows
-     * (`UiChanged`) and says what it does not know.
+     * (`WebChanged`) and says what it does not know.
      */
     readonly configure: (
       plugins: Readonly<Record<string, PluginChange>>,
       options?: { readonly scope?: ConfigScope },
     ) => Effect.Effect<ChangeReport, ReloadError>;
     /** What the web app plans its halves from: the rows, and the web halves and stylesheets in the plugins directories. */
-    readonly ui: Effect.Effect<UiComposition>;
+    readonly web: Effect.Effect<WebComposition>;
   }
 >()("lemma/HostControl") {}
 
@@ -246,7 +246,7 @@ export class HostControl extends Context.Service<
  * plugins; a style is a stylesheet applied after the app's own (`theme.css`,
  * or a package's `lemma.styles`).
  */
-export const UiFile = Schema.Struct({
+export const WebFile = Schema.Struct({
   /** Its path in the plugins directory: `notes.web.js`, `ticker/web.js`. */
   name: Schema.String,
   source: Schema.Literals(["user", "project"]),
@@ -256,25 +256,25 @@ export const UiFile = Schema.Struct({
   /** Served by the transport under `/api` (it needs the token); changes when the file does. */
   url: Schema.String,
 });
-export type UiFile = typeof UiFile.Type;
+export type WebFile = typeof WebFile.Type;
 
 /**
  * What the web app needs to plan its halves: the rows of both config files
  * (every plugin's, host halves' too: a plugin's one row decides both its
  * halves), and the files to load.
  */
-export const UiComposition = Schema.Struct({
+export const WebComposition = Schema.Struct({
   plugins: Schema.Record(Schema.String, PluginRow),
   /** Per plugin id, the file whose row sets `enabled` (the project's wins). */
   enabledIn: Schema.Record(Schema.String, ConfigScope),
   /** Per plugin id, the file whose row sets `config`. */
   configIn: Schema.Record(Schema.String, ConfigScope),
-  files: Schema.Array(UiFile),
+  files: Schema.Array(WebFile),
 });
-export type UiComposition = typeof UiComposition.Type;
+export type WebComposition = typeof WebComposition.Type;
 
 /** Emitted when the rows or the web halves' files change, so web apps apply them. */
-export const UiChanged = Event.make<UiComposition>("lemma/ui.changed");
+export const WebChanged = Event.make<WebComposition>("lemma/web.changed");
 
 /** Emitted after any composition change or plugin fault so clients can refresh plugin views. */
 export const PluginsChanged = Event.make<{ readonly plugins: readonly PluginInfo[] }>("lemma/plugins.changed");

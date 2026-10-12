@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Fiber, Layer, Schedule } from "effect";
 import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged } from "@lemma/contracts";
-import type { CompositionInfo, NoticePayload, PluginInfo, UiComposition } from "@lemma/contracts";
+import type { CompositionInfo, NoticePayload, PluginInfo, WebComposition } from "@lemma/contracts";
 import { definePlugin, Diagnostic, makeLoader, PluginContext } from "@lemma/core";
 import type { Composition, Loader, Plugin, PluginSource } from "@lemma/core";
 import { faultHistory } from "@lemma/composition";
@@ -48,7 +48,7 @@ const start = (plugins: readonly Plugin[], composition: Composition, reloading: 
     const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
     const history = faultHistory();
     const configured: Record<string, unknown>[] = [];
-    const ui: UiComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
+    const ui: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
     const handle: HostControlHandle = {
       // Each plugin with its recorded faults, as the catalog lists them.
       plugins: withLoader((loader) =>
@@ -66,7 +66,7 @@ const start = (plugins: readonly Plugin[], composition: Composition, reloading: 
           configured.push(rows);
           return loader.apply(composition);
         }),
-      ui: Effect.sync(() => ui),
+      web: Effect.sync(() => ui),
     };
     const byId = new Map(plugins.map((plugin) => [plugin.id, plugin]));
     const source: PluginSource = {

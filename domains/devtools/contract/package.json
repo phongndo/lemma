@@ -11,7 +11,7 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
-    "@lemma/ui": "workspace:*",
+    "@lemma/web": "workspace:*",
     "effect": "4.0.1",
     "solid-js": "1.9.15"
   },

@@ -10,8 +10,8 @@ import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
 import * as defaults from "@lemma/look-kit/defaults";
-import { copyText } from "@lemma/ui/clipboard";
-import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/ui/paint";
+import { copyText } from "@lemma/web/clipboard";
+import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/web/paint";
 import * as actions from "@lemma/actions";
 import * as commands from "@lemma/commands/web";
 import * as devtools from "@lemma/devtools";
@@ -20,9 +20,9 @@ import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
 import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
-import * as ui from "@lemma/ui";
-import { DEFAULT_PART_ORDER, defineSlot, defineUiPlugin, definePart, extendUiPlugin, UiSchema } from "@lemma/ui";
-import type { Part } from "@lemma/ui";
+import * as webRuntime from "@lemma/web";
+import { DEFAULT_PART_ORDER, defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema } from "@lemma/web";
+import type { Part } from "@lemma/web";
 import * as workspace from "@lemma/workspace/web";
 import { bundled } from "../bundled.ts";
 
@@ -31,13 +31,13 @@ const omit = <T extends object, K extends keyof T>(value: T, keys: readonly K[])
   Object.fromEntries(Object.entries(value).filter(([key]) => !(keys as readonly PropertyKey[]).includes(key))) as Omit<T, K>;
 
 /**
- * Every bundled contract as one namespace: the web runtime's (`@lemma/ui`: `Client`, `Slots`, `Router`, …) and each
+ * Every bundled contract as one namespace: the web runtime's (`@lemma/web`: `Client`, `Slots`, `Router`, …) and each
  * domain's (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …), with the views that draw each part, and the thread
  * routes (`@lemma/sessions`). Not what makes slots and parts: a web half makes those with `api.defineSlot` and
  * `api.definePart`, which gives a part no fallback, since a fallback belongs to no plugin and outlives the half.
  */
 export const contractModules = {
-  "@lemma/ui": omit(ui, ["definePart", "createSlots"]),
+  "@lemma/web": omit(webRuntime, ["definePart", "createSlots"]),
   "@lemma/frame": frame,
   "@lemma/look": look,
   "@lemma/settings": settings,
@@ -51,7 +51,7 @@ export const contractModules = {
 };
 // One namespace of them all: a name two of them export would be one's, silently (tests/api.test.ts fails that).
 const contracts = {
-  ...contractModules["@lemma/ui"],
+  ...contractModules["@lemma/web"],
   ...frame,
   ...look,
   ...settings,
@@ -71,16 +71,16 @@ const contracts = {
  * contracts' tags with the app, and needs no build step (`html` is Solid's
  * tagged template, JSX without a compiler).
  *
- *   export default ({ defineUiPlugin, contracts: { Slots, Actions }, html }) =>
- *     defineUiPlugin({ id: "hello", requires: { slots: Slots }, setup: ({ slots }, plugin) => { … } });
+ *   export default ({ defineWebPlugin, contracts: { Slots, Actions }, html }) =>
+ *     defineWebPlugin({ id: "hello", requires: { slots: Slots }, setup: ({ slots }, plugin) => { … } });
  */
 export const api = {
-  defineUiPlugin,
+  defineWebPlugin,
   /** A plugin made from another's definition, such as a bundled one's: a replacement that keeps the original's later updates. */
-  extendUiPlugin,
+  extendWebPlugin,
   /**
-   * The bundled plugins by id: what a replacement with the same id wraps (`extendUiPlugin`) rather than copies. The
-   * runtime (`Client`, `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `UiPlugins`) is not among them:
+   * The bundled plugins by id: what a replacement with the same id wraps (`extendWebPlugin`) rather than copies. The
+   * runtime (`Client`, `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `WebPlugins`) is not among them:
    * the app provides it, and no plugin replaces or provides it. Requiring it is as before, by its tag in `contracts`.
    */
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
@@ -139,8 +139,9 @@ export const api = {
   copyText,
   /** For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's context. */
   core: { definePlugin, Event, Hook },
-  /** Enough of Effect Schema to declare a config and a route's params and search (see `UiSchema`). */
-  Schema: UiSchema,
+  /** Enough of Effect Schema to declare a config and a route's params and search (see `WebSchema`). */
+  Schema: WebSchema,
 };
 
-export type UiApi = typeof api;
+/** What a web half's default export receives (not `WebApi`, the version key a plugin requires). */
+export type WebHalfApi = typeof api;

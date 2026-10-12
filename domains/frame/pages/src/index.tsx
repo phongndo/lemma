@@ -3,10 +3,8 @@ import type { RouteFailure } from "@lemma/router-solid";
 import { MainRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
-import { Notify, Pages, Router, Slots, UiPlugins } from "@lemma/ui";
-import type { Page } from "@lemma/ui";
-import type { SlotItem } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
+import { Notify, Pages, Router, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
+import type { Page, SlotItem } from "@lemma/web";
 import styles from "./pages.css?inline";
 
 /**
@@ -17,10 +15,10 @@ import styles from "./pages.css?inline";
  * that throws fails alone: the rest of the app stays, the failure names its
  * plugin, and it is tried again on retry or the next navigation.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "frame.pages",
   styles,
-  requires: { router: Router, slots: Slots, notify: Notify, plugins: UiPlugins },
+  requires: { router: Router, slots: Slots, notify: Notify, plugins: WebPlugins },
   setup: ({ router, slots, notify, plugins }) => {
     function Failed(props: { failure: RouteFailure<SlotItem<Page>> }) {
       const owner = slots.owner(Pages, props.failure.entry.id);

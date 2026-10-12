@@ -4,19 +4,16 @@ import { formatDuration, formatTokens } from "@lemma/client/format";
 import { parseModelRef } from "@lemma/llm";
 import type { TextContent } from "@lemma/llm";
 import { formatElapsed, summarizeUsage } from "./format.ts";
-import { answerText, entryKey, foldRunning, foldTurn } from "@lemma/threads";
-import type { TurnEntry } from "@lemma/threads";
-import { draftEntries, parseDraftArgs } from "@lemma/threads";
-import type { DraftBlock, StepDraft } from "@lemma/threads";
-import { errorView } from "./error.ts";
-import { thoughtHeadline } from "./thought.ts";
-import { workEntries } from "./work.ts";
-import type { WorkEntry, WorkRow } from "./work.ts";
-import { createProjector, pendingToolCalls, promptMarks } from "@lemma/threads";
-import type { AssistantItem, AttemptItem, Block, Item, TurnView } from "@lemma/threads";
-import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
-import { createNow } from "@lemma/ui/now";
 import {
+  answerText,
+  entryKey,
+  foldRunning,
+  foldTurn,
+  draftEntries,
+  parseDraftArgs,
+  createProjector,
+  pendingToolCalls,
+  promptMarks,
   ChatThinkingPart,
   ChatToolPart,
   ChatTurnFooterPart,
@@ -26,15 +23,39 @@ import {
   ChatWorkPart,
   Threads,
   Views,
+  ChatThinking,
+  ChatTurnFooter,
+  ChatUser,
+  ChatWork,
+  ChatWorkGroup,
+  ChatWorking,
+  ToolViews,
 } from "@lemma/threads";
-import { Client, Router, Slots } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
-import type { ChatThinkingProps, ChatTurnFooterProps, ChatUserProps, ChatWorkGroupProps, ChatWorkingProps, ChatWorkProps } from "@lemma/threads";
-import { defineUiPlugin } from "@lemma/ui";
-import { DEFAULT_PART_ORDER } from "@lemma/ui";
-import type { Part } from "@lemma/ui";
+import type {
+  TurnEntry,
+  DraftBlock,
+  StepDraft,
+  AssistantItem,
+  AttemptItem,
+  Block,
+  Item,
+  TurnView,
+  ChatThinkingProps,
+  ChatTurnFooterProps,
+  ChatUserProps,
+  ChatWorkGroupProps,
+  ChatWorkingProps,
+  ChatWorkProps,
+} from "@lemma/threads";
+import { errorView } from "./error.ts";
+import { thoughtHeadline } from "./thought.ts";
+import { workEntries } from "./work.ts";
+import type { WorkEntry, WorkRow } from "./work.ts";
+import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
+import { createNow } from "@lemma/web/now";
+import { Client, Router, Slots, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
+import type { SlotsService, Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, Spinner, CopyButton } from "@lemma/look";
-import { ChatThinking, ChatTurnFooter, ChatUser, ChatWork, ChatWorkGroup, ChatWorking, ToolViews } from "@lemma/threads";
 import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
@@ -709,7 +730,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
  * The session as a conversation, projected from its log. Tool calls render
  * through the `chat.tools` slot when a plugin fills it for that tool.
  */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "threads.transcript",
   styles,
   config: ChatConfig,

@@ -1,4 +1,4 @@
-import { displayPath } from "@lemma/ui/format";
+import { displayPath } from "@lemma/web/format";
 import type { ToolView } from "@lemma/threads";
 
 /** How the web app shows a `read` call: the file and the lines read. */

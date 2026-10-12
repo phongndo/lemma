@@ -3,27 +3,22 @@ import type { Component } from "solid-js";
 import { Portal } from "solid-js/web";
 import type { InteractionRequest } from "@lemma/contracts";
 import type { CommandInfo } from "@lemma/commands";
-import { shownKeys } from "@lemma/actions";
-import { formatKeys, listKey, quickKey, shortcut } from "@lemma/ui/keys";
-import { createQuickHold } from "@lemma/ui/quick-pick";
-import { load, save } from "@lemma/ui/storage";
-import { relativeTime, tildePath } from "@lemma/ui/format";
-import { parseQuery, rank, remember } from "@lemma/ui/match";
-import type { Searchable } from "@lemma/ui/match";
-import { sessionTitle } from "@lemma/threads";
-import { ActionIds, Actions, PaletteSources } from "@lemma/actions";
+import { shownKeys, ActionIds, Actions, PaletteSources } from "@lemma/actions";
+import { formatKeys, listKey, quickKey, shortcut } from "@lemma/web/keys";
+import { createQuickHold } from "@lemma/web/quick-pick";
+import { load, save } from "@lemma/web/storage";
+import { relativeTime, tildePath } from "@lemma/web/format";
+import { parseQuery, rank, remember } from "@lemma/web/match";
+import type { Searchable } from "@lemma/web/match";
+import { sessionTitle, Threads } from "@lemma/threads";
 import { Commands } from "@lemma/commands/web";
 import { Dialogs, Layers } from "@lemma/frame";
-import { Threads } from "@lemma/threads";
-import { Client, Interactions, Slots, UiPlugins } from "@lemma/ui";
+import { Client, Interactions, Slots, WebPlugins, defineWebPlugin, Isolated, Highlighted } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { PaletteItem, PaletteSource } from "@lemma/actions";
 import type { DialogsService } from "@lemma/frame";
-import type { InteractionsService } from "@lemma/ui";
-import { defineUiPlugin } from "@lemma/ui";
-import type { SlotsService } from "@lemma/ui";
+import type { InteractionsService, SlotsService } from "@lemma/web";
 import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, KeyIcon, PuzzleIcon, RefreshIcon, Spinner } from "@lemma/look";
-import { Isolated, Highlighted } from "@lemma/ui";
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
@@ -489,7 +484,7 @@ function Palette(props: { deps: Deps }) {
 }
 
 /** Search and run everything: plugins' actions, the host's commands, threads, projects. */
-export default defineUiPlugin({
+export default defineWebPlugin({
   id: "actions.palette",
   styles,
   requires: {
@@ -499,11 +494,11 @@ export default defineUiPlugin({
     commands: Commands,
     interactions: Interactions,
     dialogs: Dialogs,
-    uiPlugins: UiPlugins,
+    webPlugins: WebPlugins,
     slots: Slots,
   },
   setup: (services) => {
-    const { client, threads, workspace, commands, dialogs, interactions, uiPlugins, slots } = services;
+    const { client, threads, workspace, commands, dialogs, interactions, webPlugins, slots } = services;
     let requested: string | undefined;
     const deps: Deps = {
       interactions,
@@ -525,7 +520,7 @@ export default defineUiPlugin({
           .list(Actions)
           .filter((action) => action.hidden !== true && (action.when?.() ?? true))
           .map((action): PaletteItem => {
-            const keys = shownKeys(action, uiPlugins.list());
+            const keys = shownKeys(action, webPlugins.list());
             return {
               key: `action:${action.id}`,
               category: action.category,

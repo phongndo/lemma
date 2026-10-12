@@ -7,7 +7,7 @@ import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels } from "@lemma/llm";
 import { SessionChannels } from "@lemma/sessions";
-import type { ChannelDeclaration, InteractionAnswer, InteractionRequest, NoticePayload, RuntimeEvent, UiComposition } from "@lemma/contracts";
+import type { ChannelDeclaration, InteractionAnswer, InteractionRequest, NoticePayload, RuntimeEvent, WebComposition } from "@lemma/contracts";
 import type { AgentActivity } from "@lemma/agent";
 import type { LlmChange } from "@lemma/llm";
 import type { SessionLogUpdate, SessionsChange } from "@lemma/sessions";
@@ -299,7 +299,7 @@ export const withdrawCommand =
 
 /**
  * `lemma events`: what the host publishes, as it happens. Its own events
- * (`RuntimeEvent`: notices, questions, and plugin, channel, and UI changes),
+ * (`RuntimeEvent`: notices, questions, and plugin, channel, and web changes),
  * and the bundled domains' streams: `agent.activity`, `sessions.changes`,
  * `llm.changes`, and `commands.changes`. `--session <id>` keeps only that
  * session's elements of the first two, and adds its log from now
@@ -403,8 +403,8 @@ const hostLine = (event: RuntimeEvent): string => {
       return `plugins: ${event.plugins.map((plugin) => `${plugin.id}=${plugin.state}`).join(" ")}`;
     case "channels-changed":
       return `channels: ${event.channels.map((channel) => channel.id).join(" ")}`;
-    case "ui-changed":
-      return uiLine(event.ui);
+    case "web-changed":
+      return webLine(event.web);
   }
 };
 
@@ -445,9 +445,9 @@ const logLines = (sessionId: string, update: SessionLogUpdate): string =>
     ? appendedLine(sessionId, update.event.seq, update.event.data.type)
     : [`${sessionId} log: subscribed`, ...update.events.map((event) => appendedLine(sessionId, event.seq, event.data.type))].join("\n");
 
-const uiLine = (ui: UiComposition): string => {
-  const rows = Object.entries(ui.plugins).map(([id, row]) => `${id}${row.enabled === false ? "=off" : ""}${row.config === undefined ? "" : "+config"}`);
-  return `ui: ${rows.length ? rows.join(" ") : "no rows"}; files ${ui.files.length ? ui.files.map((file) => `${file.source}/${file.name}`).join(" ") : "none"}`;
+const webLine = (web: WebComposition): string => {
+  const rows = Object.entries(web.plugins).map(([id, row]) => `${id}${row.enabled === false ? "=off" : ""}${row.config === undefined ? "" : "+config"}`);
+  return `web: ${rows.length ? rows.join(" ") : "no rows"}; files ${web.files.length ? web.files.map((file) => `${file.source}/${file.name}`).join(" ") : "none"}`;
 };
 
 export const questionsCommand: Command = ({ rpc }) =>
