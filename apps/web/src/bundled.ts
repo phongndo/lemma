@@ -30,6 +30,7 @@ import threadView from "@lemma/threads-view";
 import bash from "@lemma/tools-bash/web";
 import edit from "@lemma/tools-edit/web";
 import read from "@lemma/tools-read/web";
+import search from "@lemma/tools-search-fff/web";
 import write from "@lemma/tools-write/web";
 import threads from "@lemma/threads-client";
 import settings from "@lemma/settings-page";
@@ -73,6 +74,7 @@ export const bundled: readonly Plugin[] = [
   write,
   edit,
   bash,
+  search,
   composer,
   fileMentions,
   modelPicker,

@@ -62,6 +62,7 @@
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-read": "workspace:*",
+    "@lemma/tools-search-fff": "workspace:*",
     "@lemma/tools-write": "workspace:*",
     "@lemma/web": "workspace:*",
     "@lemma/workspace": "workspace:*",

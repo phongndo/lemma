@@ -15,6 +15,7 @@ import toolsCodemode from "@lemma/tools-codemode";
 import toolsEdit from "@lemma/tools-edit";
 import toolsRead from "@lemma/tools-read";
 import toolsRegistry from "@lemma/tools-registry";
+import toolsSearchFff from "@lemma/tools-search-fff";
 import toolsWrite from "@lemma/tools-write";
 import transportServer from "@lemma/transport-server";
 import workspaceCommands from "@lemma/workspace-commands";
@@ -41,6 +42,7 @@ export const bundled: readonly Plugin[] = [
   toolsEdit,
   toolsBash,
   toolsCodemode,
+  toolsSearchFff,
   sessionsFiles,
   agentLoop,
   contextCompaction,
@@ -95,6 +97,7 @@ export const bundledWeb: readonly string[] = [
   "tools.bash",
   "tools.edit",
   "tools.read",
+  "tools.search-fff",
   "tools.write",
   "workspace.add-project",
   "workspace.bar",
