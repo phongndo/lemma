@@ -115,7 +115,8 @@ const stopHost = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped>
  * A host of its own in `home`, until the scope closes: what it printed, once it serves (`started`), has ended
  * (`ended`), or did neither within `START_MS`; and `stop`, which stops it, if it runs, saying how (`Stopped`). It leads
  * a process group of its own, so stopping it stops whatever its plugin started, and the terminal's Ctrl-C reaches the
- * check alone, which stops it.
+ * check alone, which stops it. Its stdin is a pipe from the check (`LEMMA_SUPERVISED`), so a check that dies without
+ * stopping it (a second Ctrl-C, a SIGKILL) stops it all the same.
  */
 const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>) =>
   Effect.gen(function* () {
@@ -126,8 +127,8 @@ const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>)
     const child = yield* Effect.acquireRelease(
       Effect.sync(() =>
         spawn(process.execPath, ["--conditions=lemma-source", cliMain, "serve", "--no-open"], {
-          env: { ...process.env, ...env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined } as NodeJS.ProcessEnv,
-          stdio: ["ignore", "pipe", "pipe"],
+          env: { ...process.env, ...env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined, LEMMA_SUPERVISED: "1" } as NodeJS.ProcessEnv,
+          stdio: ["pipe", "pipe", "pipe"],
           detached: true,
         }),
       ),

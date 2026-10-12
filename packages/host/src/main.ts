@@ -29,6 +29,35 @@ const args = new Set(process.argv.slice(2));
  * customization that keeps the host from starting.
  */
 const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
+/**
+ * `LEMMA_SUPERVISED=1`: started, leading a process group of its own, by a process that holds the host's stdin open
+ * while it wants the host (`lemma plugins check`). However that process ends, its end of the pipe closes: the host
+ * then stops as on SIGTERM, and, once stopped, kills its group, so that neither it nor anything its plugins started
+ * outlives it. Resolves when stdin ends.
+ */
+const supervisorGone =
+  process.env.LEMMA_SUPERVISED === "1"
+    ? new Promise<void>((resolve) => {
+        // What it prints has no reader once its supervisor is gone: a write to the closed pipe must not fail the host.
+        for (const stream of [process.stdout, process.stderr]) stream.on("error", () => {});
+        process.stdin
+          .on("end", resolve)
+          .on("close", resolve)
+          .on("error", () => resolve())
+          .resume();
+        // Read without keeping the host running: it exits once its work is done, as any host does.
+        (process.stdin as { unref?: () => void }).unref?.();
+      })
+    : undefined;
+// Consumed here, as tools inherit this environment.
+delete process.env.LEMMA_SUPERVISED;
+const killOwnGroup = () => {
+  try {
+    process.kill(-process.pid, "SIGKILL");
+  } catch {
+    process.exit(1);
+  }
+};
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
 const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
@@ -185,6 +214,7 @@ const untilSignal = Effect.callback<void>((resume) => {
   const done = () => resume(Effect.void);
   process.once("SIGINT", done);
   process.once("SIGTERM", done);
+  void supervisorGone?.then(done);
   return Effect.sync(() => {
     process.off("SIGINT", done);
     process.off("SIGTERM", done);
@@ -661,3 +691,4 @@ if (Exit.isFailure(exit)) {
 }
 // Its own work is done: if the process does not exit now, something its plugins started keeps it running.
 console.log("lemma: stopped");
+void supervisorGone?.then(killOwnGroup);

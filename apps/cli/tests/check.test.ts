@@ -1,13 +1,29 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { invoke } from "./invoke.ts";
 
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/check/${name}`, import.meta.url));
+const cliMain = fileURLToPath(new URL("../src/main.ts", import.meta.url));
+
+/** The pid of the spawner fixture's child, if it runs. */
+const spawned = () =>
+  promisify(execFile)("pgrep", ["-f", "^sleep 4329$"]).then(
+    ({ stdout }) => stdout.trim(),
+    () => "",
+  );
+const alive = (pid: number) => {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 describe("lemma plugins check", () => {
   // The home commands would otherwise go to: the check uses a home of its own, and leaves this one alone.
@@ -47,12 +63,35 @@ describe("lemma plugins check", () => {
     expect(code).toBe(1);
     expect(JSON.parse(out).problems).toEqual([expect.stringMatching(/^The host stopped but did not exit/)]);
     // Its child went with the host's process group.
-    const running = await promisify(execFile)("pgrep", ["-f", "^sleep 4329$"]).then(
-      ({ stdout }) => stdout.trim(),
-      () => "",
-    );
-    expect(running).toBe("");
+    expect(await spawned()).toBe("");
   }, 90_000);
+
+  test("stops its host, and what the plugin started, when the check itself is killed", async () => {
+    // The check's own temporary home goes in here, as it is left behind.
+    const scratch = await mkdtemp(join(tmpdir(), "lemma-cli-check-killed-"));
+    const check = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "plugins", "check", fixture("spawner.js")], {
+      env: { ...process.env, LEMMA_HOME: home, TMPDIR: scratch },
+      stdio: "ignore",
+    });
+    try {
+      // Its host is up, the plugin's child running in the host's process group, which the host leads.
+      const host = await vi.waitFor(
+        async () => {
+          const child = await spawned();
+          expect(child).not.toBe("");
+          const { stdout } = await promisify(execFile)("ps", ["-o", "pgid=", "-p", child]);
+          return Number(stdout.trim());
+        },
+        { timeout: 60_000, interval: 100 },
+      );
+      check.kill("SIGKILL");
+      await vi.waitFor(() => expect(alive(-host)).toBe(false), { timeout: 30_000, interval: 100 });
+      expect(await spawned()).toBe("");
+    } finally {
+      check.kill("SIGKILL");
+      await rm(scratch, { recursive: true, force: true });
+    }
+  }, 120_000);
 
   test("reports a folder whose package.json cannot be read, with what the host said, rather than failing", async () => {
     const folder = await mkdtemp(join(tmpdir(), "lemma-cli-check-unreadable-"));
