@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { removeFile, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { seededRandom, SimDisk } from "../src/index.ts";
 
@@ -195,5 +195,20 @@ describe("SimDisk", () => {
       // Its temporary file went before it returned, and the directory was synced after.
       expect(disk.list().filter((file) => file.endsWith(".tmp"))).toEqual([]);
     }
+  });
+
+  test("removeFile with sync: once it returns, a crash keeps the file gone, removed by an earlier unsynced call too", async () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const disk = new SimDisk(seededRandom(seed));
+      const fs = disk.mount();
+      await writeFileAtomic("/state/x.json", "kept", { fs, sync: true });
+      // Removed, but its directory not synced: a crash now could bring it back.
+      await fs.rm("/state/x.json");
+      await removeFile("/state/x.json", { fs, sync: true });
+      disk.crash();
+      expect(disk.list(), `seed ${seed}`).not.toContain("/state/x.json");
+    }
+    // A directory that is not there has nothing to sync.
+    await removeFile("/missing/x.json", { fs: new SimDisk(seededRandom(1)).mount(), sync: true });
   });
 });

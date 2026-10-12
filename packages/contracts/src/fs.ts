@@ -149,18 +149,18 @@ export const syncParents = async (fs: FileSystem, dir: string, created: unknown)
 };
 
 /**
- * Removes the file at `path` if there is one; `sync`, its absence survives a crash before this returns. With none
- * there (nor, perhaps, its directory), there is nothing to remove or to sync.
+ * Removes the file at `path` if there is one; `sync`, its absence survives a crash before this returns. The directory
+ * is synced even when the file is gone already, as an earlier removal may not have been; only a directory that is
+ * not there has nothing to sync.
  */
 export async function removeFile(path: string, options: { readonly sync?: boolean; readonly fs?: FileSystem } = {}): Promise<void> {
   const fs = options.fs ?? nodeFileSystem;
-  try {
-    await fs.rm(path);
-  } catch (error) {
-    if ((error as { readonly code?: unknown }).code === "ENOENT") return;
-    throw error;
+  await fs.rm(path, { force: true });
+  if (options.sync === true) {
+    await syncDirectory(fs, dirname(path)).catch((cause: unknown) => {
+      if (errorCode(cause) !== "ENOENT") throw cause;
+    });
   }
-  if (options.sync === true) await syncDirectory(fs, dirname(path));
 }
 
 export interface AtomicWriteOptions {
