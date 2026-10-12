@@ -368,7 +368,12 @@ describe("channels", () => {
     const [client, caller] = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([paths, commands, contributor("p", [stuck])], { deadlines: { dispose: Duration.millis(20) } });
+          // The stuck command outlives its plugin's dispose deadline; closing the core at the end has a limit of its own,
+          // or it would default to the same 20 ms, which a slow machine's shutdown can take.
+          const core = yield* makeCore([paths, commands, contributor("p", [stuck])], {
+            deadlines: { dispose: Duration.millis(20) },
+            shutdownTimeout: Duration.seconds(10),
+          });
           const registries = yield* core.run(Registries);
           const registry = yield* core.run(CommandRunner);
           // Both outside `core.run`, as the transport calls: a restart drains `core.run` work too.
