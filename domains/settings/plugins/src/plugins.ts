@@ -110,6 +110,67 @@ export const pairHalves = (host: readonly PluginStatus[], web: readonly PluginSt
   ];
 };
 
+/** The domain a plugin's id names, `tools` for `tools.bash`; none for an id without one, as a user's plugin often has. */
+export const domainOf = (id: string): string | undefined => {
+  const at = id.indexOf(".");
+  return at > 0 ? id.slice(0, at) : undefined;
+};
+
+/** A domain's plugins, as the table folds them under one row; or, with `domain` `""`, the plugins in none. */
+export interface PluginGroup {
+  readonly domain: string;
+  readonly entries: readonly KindedPlugin[];
+}
+
+const byId = (a: KindedPlugin, b: KindedPlugin) => a.plugin.id.localeCompare(b.plugin.id);
+
+/**
+ * The plugins as they are organized: one group per domain, by name, each domain's plugins by id, then those in no
+ * domain, a user's own, as their ids rarely name one (a user's plugin that names a domain, replacing a bundled one,
+ * is in that domain).
+ */
+export const groupPlugins = (entries: readonly KindedPlugin[]): PluginGroup[] => {
+  const groups = new Map<string, KindedPlugin[]>();
+  for (const entry of entries) {
+    const domain = domainOf(entry.plugin.id) ?? "";
+    const members = groups.get(domain);
+    if (members === undefined) groups.set(domain, [entry]);
+    else members.push(entry);
+  }
+  return [...groups]
+    .sort(([a], [b]) => (a === "" ? 1 : b === "" ? -1 : a.localeCompare(b)))
+    .map(([domain, members]) => ({ domain, entries: members.sort(byId) }));
+};
+
+/** A domain's row while it is folded: the halves its plugins have, and how they are doing, the worst first. */
+export interface DomainSummary {
+  /** Which halves its plugins have, as a list (`host, web`): a plugin's own row says `host + web` for both of one. */
+  readonly kinds: string;
+  /** `Running`, or what is not: `1 failed · 2 off`. */
+  readonly state: string;
+  /** Its state, as the state classes name it: failed when one is, disabled when one is off or not running, else active. */
+  readonly tone: "active" | "failed" | "disabled";
+  /** How many of its plugins are the user's (a replacement of a bundled one, or their own), which the row says. */
+  readonly yours: number;
+}
+
+export const summarizeDomain = (group: PluginGroup): DomainSummary => {
+  const halves = group.entries.flatMap(halvesOf);
+  const failing = (entry: KindedPlugin) => halvesOf(entry).some(({ plugin }) => plugin.state === "failed" || plugin.problem !== undefined);
+  const failed = group.entries.filter(failing).length;
+  // Off when either half is, as its own row shows it.
+  const isOff = (entry: KindedPlugin) => halvesOf(entry).some(({ plugin }) => !plugin.enabled);
+  const off = group.entries.filter((entry) => !failing(entry) && isOff(entry)).length;
+  const stopped = group.entries.filter((entry) => !isOff(entry) && !failing(entry) && halvesOf(entry).some(({ plugin }) => plugin.state !== "active")).length;
+  const said = [...(failed === 0 ? [] : [`${failed} failed`]), ...(off === 0 ? [] : [`${off} off`]), ...(stopped === 0 ? [] : [`${stopped} not running`])];
+  return {
+    kinds: (["host", "web"] as const).filter((kind) => halves.some((half) => half.kind === kind)).join(", "),
+    state: said.length === 0 ? "Running" : said.join(" · "),
+    tone: failed > 0 ? "failed" : off + stopped > 0 ? "disabled" : "active",
+    yours: group.entries.filter((entry) => halvesOf(entry).some(({ plugin }) => plugin.source !== "bundled")).length,
+  };
+};
+
 /** The halves of an entry, the one it shows first first. */
 export const halvesOf = (entry: KindedPlugin): readonly { readonly kind: PluginKind; readonly plugin: PluginStatus }[] =>
   entry.pair === undefined ? [entry] : [entry, entry.pair];
@@ -136,10 +197,11 @@ export const PLUGIN_FILTERS = [
   "kind:host",
   "kind:web",
   "source:user",
+  "domain:tools",
 ];
 
 /**
- * A plugins table filter: `is:<state>`, `kind:host|web`, `source:bundled|user|project`,
+ * A plugins table filter: `is:<state>`, `kind:host|web`, `source:bundled|user|project`, `domain:<domain>`,
  * and words matched against `pluginText`; `-` before any term excludes it. Every term must hold.
  */
 export const matchPlugins = (entries: readonly KindedPlugin[], query: string): KindedPlugin[] => {
@@ -151,6 +213,7 @@ export const matchPlugins = (entries: readonly KindedPlugin[], query: string): K
       if (key === "is") return STATES[value]?.(plugin) ?? false;
       if (key === "kind") return kind === value;
       if (key === "source") return plugin.source === value;
+      if (key === "domain") return domainOf(plugin.id) === value;
       return `${pluginText(plugin)} ${kind}`.toLowerCase().includes(term);
     });
   return entries.filter((entry) => terms.every((term) => (term.startsWith("-") && term.length > 1 ? !test(term.slice(1), entry) : test(term, entry))));

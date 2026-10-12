@@ -3,8 +3,21 @@ import type { JSX } from "solid-js";
 import { capabilityName, describeReload, hookChain, providerOf, recoverable, usersOf } from "@lemma/contracts";
 import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "@lemma/ui/format";
-import { PLUGIN_FILTERS, dependentsOf, describeState, halvesOf, matchPlugins, pairHalves, pluginText, replaces, waitingOn } from "./plugins.ts";
-import type { KindedPlugin, PluginKind } from "./plugins.ts";
+import {
+  PLUGIN_FILTERS,
+  dependentsOf,
+  describeState,
+  domainOf,
+  groupPlugins,
+  halvesOf,
+  matchPlugins,
+  pairHalves,
+  pluginText,
+  replaces,
+  summarizeDomain,
+  waitingOn,
+} from "./plugins.ts";
+import type { KindedPlugin, PluginGroup, PluginKind } from "./plugins.ts";
 import { stepFor } from "@lemma/ui/keys";
 import { Actions } from "@lemma/actions";
 import { PluginTabs, PluginsFacts, SectionIds, Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
@@ -13,7 +26,7 @@ import type { PluginTab, PluginsFact } from "@lemma/settings";
 import type { ClientService, PluginsService, UiPluginsService } from "@lemma/ui";
 import { defineUiPlugin } from "@lemma/ui";
 import type { SlotsService } from "@lemma/ui";
-import { ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
+import { ChevronIcon, ConfigForm, PuzzleIcon, RefreshIcon, SearchField, Segmented, Spinner, Toggle, XIcon } from "@lemma/look";
 import { Contained } from "@lemma/ui";
 import styles from "./plugins-page.css?inline";
 
@@ -144,7 +157,55 @@ function Confirm(props: { inspector: Inspector; plugin: PluginStatus; pending: C
   );
 }
 
-function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
+/**
+ * A domain's row: its plugins folded into one line, which a click, Enter, or Space opens and closes (→ opens, ← folds).
+ * It takes the keyboard's focus as the table's arrow keys move through it (`data-nav`).
+ */
+function DomainRow(props: { group: PluginGroup; open: boolean; onToggle: () => void }) {
+  const summary = createMemo(() => summarizeDomain(props.group));
+  const onKeyDown = (event: KeyboardEvent) => {
+    const wants = event.key === "Enter" || event.key === " " ? !props.open : event.key === "ArrowRight" ? true : event.key === "ArrowLeft" ? false : undefined;
+    if (wants === undefined) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (wants !== props.open) props.onToggle();
+  };
+  return (
+    <div
+      class="inspector-row inspector-domain"
+      classList={{ open: props.open }}
+      role="row"
+      aria-expanded={props.open}
+      tabindex="-1"
+      data-nav={`domain:${props.group.domain}`}
+      onClick={() => props.onToggle()}
+      onKeyDown={onKeyDown}
+    >
+      <span class="inspector-name" role="rowheader">
+        {/* The chevron turns in its own box: an icon's fallback, with look.kit off, takes no class. */}
+        <span class="chevron">
+          <ChevronIcon />
+        </span>
+        <span class={`state-dot state-${summary().tone}`} />
+        <span class="plugin-id">{props.group.domain}</span>
+        <span class="muted">{props.group.entries.length}</span>
+        <Show when={summary().yours > 0}>
+          <span class="tag">{summary().yours === props.group.entries.length ? "yours" : `${summary().yours} yours`}</span>
+        </Show>
+      </span>
+      <span class="inspector-kind muted" role="cell">
+        {summary().kinds}
+      </span>
+      <span class={`inspector-state state-text-${summary().tone === "failed" ? "failed" : "active"}`} role="cell">
+        {summary().state}
+      </span>
+      <span role="cell" />
+    </div>
+  );
+}
+
+/** A plugin's row; `nested` under its domain's. */
+function Row(props: { inspector: Inspector; entry: KindedPlugin; nested?: boolean }) {
   const { inspector } = props;
   const plugin = () => props.entry.plugin;
   /** The half whose state the row shows: the first half, unless it runs and its other half does not. */
@@ -163,15 +224,27 @@ function Row(props: { inspector: Inspector; entry: KindedPlugin }) {
     <>
       <div
         class="inspector-row"
-        classList={{ selected: selected(), off: !plugin().enabled }}
+        classList={{ selected: selected(), off: !plugin().enabled, nested: props.nested === true }}
         role="row"
         aria-selected={selected()}
+        tabindex="-1"
         data-key={key()}
+        data-nav={key()}
         onClick={() => inspector.select({ kind: kind(), id: plugin().id })}
       >
         <span class="inspector-name" role="cell">
           <span class={`state-dot state-${plugin().state}`} />
-          <span class="plugin-id">{plugin().id}</span>
+          <span class="plugin-id">
+            {/* Its section names the domain: the name stands out, and the id stays whole, as config rows write it. */}
+            <Show when={domainOf(plugin().id)} fallback={plugin().id}>
+              {(domain) => (
+                <>
+                  <span class="plugin-domain">{domain()}.</span>
+                  {plugin().id.slice(domain().length + 1)}
+                </>
+              )}
+            </Show>
+          </span>
           <Show when={sourceLabel(plugin())}>{(label) => <span class="tag">{label()}</span>}</Show>
         </span>
         <span class="inspector-kind muted" role="cell">
@@ -659,7 +732,38 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
   const { inspector } = props;
   // One row per plugin: a host half and a web half with one id are one plugin, with one row and one switch.
   const entries = createMemo((): KindedPlugin[] => pairHalves(inspector.services.host.list(), inspector.services.web.list()));
-  const shown = createMemo(() => matchPlugins(entries(), props.filter()));
+  const matched = createMemo(() => matchPlugins(entries(), props.filter()));
+  /** The plugins as they are organized: each domain one row, which opens to its plugins; then those in no domain. */
+  const groups = createMemo(() => groupPlugins(matched()));
+  const domains = () => groups().filter((group) => group.domain !== "");
+  const loose = () => groups().find((group) => group.domain === "")?.entries ?? [];
+  // Domains start folded, and a filter shows the ones with a match open; either way a click folds or opens one. What is
+  // open while filtering starts over with each filter, and the folded table comes back as it was when it is cleared.
+  const filtering = () => props.filter().trim() !== "";
+  const [opened, setOpened] = createSignal<ReadonlySet<string>>(new Set());
+  const [shut, setShut] = createSignal<ReadonlySet<string>>(new Set());
+  createEffect(on(props.filter, () => setShut(new Set<string>()), { defer: true }));
+  let split!: HTMLDivElement;
+  const isOpen = (domain: string) => (filtering() ? !shut().has(domain) : opened().has(domain));
+  const flip = (set: ReadonlySet<string>, domain: string) => {
+    const next = new Set(set);
+    if (next.has(domain)) next.delete(domain);
+    else next.add(domain);
+    return next;
+  };
+  const toggle = (domain: string) => (filtering() ? setShut((was) => flip(was, domain)) : setOpened((was) => flip(was, domain)));
+  // The selected plugin's domain opens, so its row shows: a link to it, a reload, or the keys moving to it.
+  // While filtering too, so it is still open once the filter is cleared.
+  createEffect(
+    on(inspector.selected, (selection) => {
+      const domain = domainOf(selection?.id ?? "");
+      if (domain === undefined) return;
+      if (!isOpen(domain)) toggle(domain);
+      if (filtering() && !opened().has(domain)) setOpened((was) => new Set(was).add(domain));
+    }),
+  );
+  /** The plugin rows that show, in order, for the keys that move the selection. */
+  const shown = createMemo(() => groups().flatMap((group) => (group.domain === "" || isOpen(group.domain) ? group.entries : [])));
   const current = () => {
     const selection = inspector.selected();
     return selection === undefined ? undefined : entries().find((entry) => entry.plugin.id === selection.id);
@@ -669,21 +773,33 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
     return entry === undefined ? undefined : entry.plugin.id;
   });
   let table!: HTMLDivElement;
-  // Keep the selected row in view as the selection moves by keys or links.
+  // Keep the selected row in view as the selection moves by keys or links, and, in a narrow page, where the details stood
+  // in the table's place, the row they were for when they close; the details open at their top.
   createEffect(
-    on(inspector.selected, (selection) => {
-      const entry = selection === undefined ? undefined : entries().find((candidate) => candidate.plugin.id === selection.id);
-      if (entry !== undefined) table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" });
+    on(inspector.selected, (selection, previous) => {
+      const narrow = getComputedStyle(split).getPropertyValue("--inspector-narrow").trim() === "1";
+      if (selection !== undefined && narrow && selection.id !== previous?.id) split.scrollTop = 0;
+      const shownFor = selection ?? (narrow ? previous : undefined);
+      const entry = shownFor === undefined ? undefined : entries().find((candidate) => candidate.plugin.id === shownFor.id);
+      // Once drawn: its domain may open in this same change.
+      if (entry !== undefined)
+        requestAnimationFrame(() =>
+          table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" }),
+        );
     }),
   );
+  // The keys move through every row that shows, a domain's too (which Enter or → opens), and select a plugin's.
   const onKey = (event: KeyboardEvent) => {
-    const rows = shown();
-    const at = rows.findIndex((entry) => entry.plugin.id === inspector.selected()?.id);
-    const step = stepFor(event.key, at, rows.length);
+    const rows = [...table.querySelectorAll<HTMLElement>("[data-nav]")];
+    const focused = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>("[data-nav]") : null;
+    const from = focused ?? table.querySelector<HTMLElement>('[data-nav][aria-selected="true"]');
+    const step = stepFor(event.key, from === null ? -1 : rows.indexOf(from), rows.length);
     if (step === undefined) return;
     event.preventDefault();
     const next = rows[step];
-    if (next !== undefined) inspector.select({ kind: next.kind, id: next.plugin.id });
+    next?.focus();
+    const entry = shown().find((candidate) => `${candidate.kind}:${candidate.plugin.id}` === next?.dataset.nav);
+    if (entry !== undefined) inspector.select({ kind: entry.kind, id: entry.plugin.id });
   };
   return (
     <div class="inspector">
@@ -698,9 +814,9 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
         </div>
       </Show>
       <SearchField value={props.filter()} onInput={props.setFilter} placeholder={`Filter: ${PLUGIN_FILTERS.slice(0, 4).join(" ")} …`} label="Filter plugins">
-        <span class="muted small">{shown().length === entries().length ? `${entries().length} plugins` : `${shown().length} of ${entries().length}`}</span>
+        <span class="muted small">{matched().length === entries().length ? `${entries().length} plugins` : `${matched().length} of ${entries().length}`}</span>
       </SearchField>
-      <div class="inspector-split">
+      <div class="inspector-split" classList={{ "has-selection": selected() !== undefined }} ref={split}>
         <div class="inspector-table" role="grid" aria-label="Plugins" tabindex="0" ref={table} onKeyDown={onKey}>
           <div class="inspector-row inspector-head" role="row">
             <span role="columnheader">Plugin</span>
@@ -710,9 +826,19 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
               On
             </span>
           </div>
-          <For each={shown()} fallback={<p class="settings-empty">No plugins match “{props.filter().trim()}”</p>}>
-            {(entry) => <Row inspector={inspector} entry={entry} />}
-          </For>
+          <Show when={matched().length > 0} fallback={<p class="settings-empty">No plugins match “{props.filter().trim()}”</p>}>
+            <For each={domains()}>
+              {(group) => (
+                <div role="rowgroup" aria-label={group.domain}>
+                  <DomainRow group={group} open={isOpen(group.domain)} onToggle={() => toggle(group.domain)} />
+                  <Show when={isOpen(group.domain)}>
+                    <For each={group.entries}>{(entry) => <Row inspector={inspector} entry={entry} nested />}</For>
+                  </Show>
+                </div>
+              )}
+            </For>
+            <For each={loose()}>{(entry) => <Row inspector={inspector} entry={entry} />}</For>
+          </Show>
         </div>
         <aside class="inspector-detail" aria-label="Plugin details">
           {/* A new selection starts fresh; a refresh of the selected plugin's status does not. */}
@@ -744,7 +870,8 @@ export default defineUiPlugin({
     );
     const tab = (): Tab => params().tab ?? DEFAULT_TAB;
     const setTab = (next: Tab) => settings.setParams({ tab: next === DEFAULT_TAB ? undefined : next });
-    const filter = () => params().filter ?? "";
+    // A memo: a change of selection or tab in the address is no change of filter.
+    const filter = createMemo(() => params().filter ?? "");
     const setFilter = (next: string) => settings.setParams({ filter: next });
     const [confirming, setConfirming] = createSignal<Confirmation>();
     const [busy, setBusy] = createSignal<string>();

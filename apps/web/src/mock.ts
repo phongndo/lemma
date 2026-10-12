@@ -216,6 +216,10 @@ const MOCK_COMMANDS = [
     source: "workspace.commands",
   },
   { id: "host.reload", title: "Reload config", category: "Host", description: "Re-read the config files and apply them", source: "commands.host" },
+  // What the mock's plugins say they add (`contributes`), so the palette and the Plugins page agree.
+  { id: "host.restart-plugin", title: "Restart plugin…", category: "Host", description: "Restart a failed or halted plugin", source: "commands.host" },
+  { id: "host.toggle-plugin", title: "Turn plugin on or off…", category: "Host", description: "Turn a plugin on or off", source: "commands.host" },
+  { id: "llm.logout", title: "Log out of a provider…", category: "Providers", description: "Forget a provider's credentials", source: "llm.commands" },
 ];
 
 const noChannel = (id: string) => new HostError({ code: "NotFound", subject: id, message: `No channel "${id}"` });
@@ -365,7 +369,7 @@ export const createMockHost = (): Host => {
     bundled("llm.pi-ai", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
     bundled("llm.commands", {
       requires: ["lemma/Interaction", "lemma/Llm"],
-      contributes: [{ name: "lemma/commands", items: 2, keys: ["llm.login", "llm.logout"] }],
+      contributes: [{ name: "lemma/commands", items: 1, keys: ["llm.logout"] }],
     }),
     bundled("tools.registry", { provides: ["lemma/ToolRunner"] }),
     bundled("tools.read", { contributes: [{ name: "lemma/tools", items: 1, keys: ["read"] }] }),
@@ -390,7 +394,7 @@ export const createMockHost = (): Host => {
     bundled("commands.registry", { provides: ["lemma/CommandRunner"] }),
     bundled("commands.host", {
       requires: ["lemma/Interaction", "lemma/HostControl"],
-      contributes: [{ name: "lemma/commands", items: 2, keys: ["host.reload", "host.restart-plugin"] }],
+      contributes: [{ name: "lemma/commands", items: 3, keys: ["host.reload", "host.restart-plugin", "host.toggle-plugin"] }],
     }),
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     bundled("transport.server", {
