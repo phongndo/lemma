@@ -5,30 +5,65 @@ import * as web from "solid-js/web";
 import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels } from "@lemma/llm";
-import { SessionChannels } from "@lemma/sessions";
+import { NewThreadRoute, SessionChannels, ThreadRoute } from "@lemma/sessions";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { definePlugin, Event, Hook } from "@lemma/core";
 import { defineRoute, isRoute } from "@lemma/router";
-import { ConfigForm as DefaultConfigForm } from "../components/config-form.tsx";
-import { CopyButton as DefaultCopyButton } from "../components/copy-button.tsx";
-import { Dialog as DefaultDialog } from "../components/dialog.tsx";
-import { PlainFileIcon } from "../components/file-icon.tsx";
-import { DefaultIcon, icons as defaultIcons } from "../components/icons.tsx";
-import { Markdown as DefaultMarkdown } from "../components/markdown.tsx";
-import { Popover as DefaultPopover } from "../components/popover.tsx";
-import { ProviderLogo as DefaultProviderLogo } from "../components/provider-logo.tsx";
-import { Segmented as DefaultSegmented, SettingRow as DefaultSettingRow } from "../components/setting-row.tsx";
-import { SearchField as DefaultSearchField } from "../components/search-field.tsx";
-import { Toggle as DefaultToggle } from "../components/toggle.tsx";
-import { copyText } from "../lib/clipboard.ts";
-import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "../lib/paint.ts";
-import { bundled } from "../plugins/index.ts";
-import * as contracts from "./contracts.ts";
-import { defineUiPlugin, extendUiPlugin } from "./define.ts";
-import * as parts from "./parts.tsx";
-import { UiSchema } from "./schema.ts";
-import { DEFAULT_PART_ORDER, definePart, defineSlot } from "./slots.ts";
-import type { Part } from "./slots.ts";
+import * as defaults from "@lemma/look-kit/defaults";
+import { copyText } from "@lemma/ui/clipboard";
+import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/ui/paint";
+import * as actions from "@lemma/actions";
+import * as commands from "@lemma/commands/web";
+import * as devtools from "@lemma/devtools";
+import * as frame from "@lemma/frame";
+import * as llm from "@lemma/llm/web";
+import * as look from "@lemma/look";
+import * as settings from "@lemma/settings";
+import * as threads from "@lemma/threads";
+import * as ui from "@lemma/ui";
+import { DEFAULT_PART_ORDER, defineSlot, defineUiPlugin, definePart, extendUiPlugin, UiSchema } from "@lemma/ui";
+import type { Part } from "@lemma/ui";
+import * as workspace from "@lemma/workspace/web";
+import { bundled } from "../bundled.ts";
+
+/** `value` without `keys`, typed so. */
+const omit = <T extends object, K extends keyof T>(value: T, keys: readonly K[]): Omit<T, K> =>
+  Object.fromEntries(Object.entries(value).filter(([key]) => !(keys as readonly PropertyKey[]).includes(key))) as Omit<T, K>;
+
+/**
+ * Every bundled contract as one namespace: the web runtime's (`@lemma/ui`: `Client`, `Slots`, `Router`, …) and each
+ * domain's (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …), with the views that draw each part, and the thread
+ * routes (`@lemma/sessions`). Not what makes slots and parts: a web half makes those with `api.defineSlot` and
+ * `api.definePart`, which gives a part no fallback, since a fallback belongs to no plugin and outlives the half.
+ */
+export const contractModules = {
+  "@lemma/ui": omit(ui, ["definePart", "createSlots"]),
+  "@lemma/frame": frame,
+  "@lemma/look": look,
+  "@lemma/settings": settings,
+  "@lemma/actions": actions,
+  "@lemma/devtools": devtools,
+  "@lemma/threads": threads,
+  "@lemma/llm/web": llm,
+  "@lemma/workspace/web": workspace,
+  "@lemma/commands/web": commands,
+  "@lemma/sessions": { NewThreadRoute, ThreadRoute },
+};
+// One namespace of them all: a name two of them export would be one's, silently (tests/api.test.ts fails that).
+const contracts = {
+  ...contractModules["@lemma/ui"],
+  ...frame,
+  ...look,
+  ...settings,
+  ...actions,
+  ...devtools,
+  ...threads,
+  ...llm,
+  ...workspace,
+  ...commands,
+  NewThreadRoute,
+  ThreadRoute,
+};
 
 /**
  * What a UI file's default export receives when it is a function: the page's
@@ -51,7 +86,7 @@ export const api = {
   bundled: Object.fromEntries(bundled.map((plugin) => [plugin.id, plugin])),
   defineSlot,
   /**
-   * The bundled domains' channels, as each one's contract declares them: what
+   * The bundled domains' channels, as each domain's contract declares them: what
    * the bundled plugins reach the host's sessions, agent, models, workspace,
    * files, and commands through, with `Client`. A UI file passes one to
    * `client.channel.call` or `client.follow` to have its payload and results
@@ -80,27 +115,26 @@ export const api = {
   store,
   html,
   /**
-   * The shared parts as the bundled plugins draw them, each following whatever
-   * replaces it (`Icon`, `Dialog`, `PlusIcon`, …); `Contained`, `Each`, and
-   * `First` draw a slot's items, each contained, and `partView` draws a
-   * plugin's own part.
+   * The parts as the bundled plugins draw them, each following whatever replaces it (`Icon`, `Dialog`, `PlusIcon`,
+   * `ChatTool`, …); `Contained`, `Each`, and `First` draw a slot's items, each contained, and `partView` draws a
+   * plugin's own part. The same namespace as `contracts`, where each view sits beside its part.
    */
-  parts,
+  parts: contracts,
   /** The bundled implementations of the shared parts, to wrap or fall back to from a replacement. */
   defaults: {
-    ConfigForm: DefaultConfigForm,
-    CopyButton: DefaultCopyButton,
-    Dialog: DefaultDialog,
-    FileIcon: PlainFileIcon,
-    Icon: DefaultIcon,
-    icons: defaultIcons,
-    Markdown: DefaultMarkdown,
-    Popover: DefaultPopover,
-    ProviderLogo: DefaultProviderLogo,
-    Segmented: DefaultSegmented,
-    SettingRow: DefaultSettingRow,
-    Toggle: DefaultToggle,
-    SearchField: DefaultSearchField,
+    ConfigForm: defaults.ConfigForm,
+    CopyButton: defaults.CopyButton,
+    Dialog: defaults.Dialog,
+    FileIcon: defaults.PlainFileIcon,
+    Icon: defaults.DefaultIcon,
+    icons: defaults.icons,
+    Markdown: defaults.Markdown,
+    Popover: defaults.Popover,
+    ProviderLogo: defaults.ProviderLogo,
+    Segmented: defaults.Segmented,
+    SettingRow: defaults.SettingRow,
+    Toggle: defaults.Toggle,
+    SearchField: defaults.SearchField,
   },
   copyText,
   /** For plugins written against the kernel directly; one adds to slots through `slots.as(context)`, with its setup's context. */

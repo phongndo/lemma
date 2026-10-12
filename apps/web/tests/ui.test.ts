@@ -9,11 +9,14 @@ import type { ApplicationServices, Loader, Plugin } from "@lemma/core";
 import { planComposition } from "@lemma/composition";
 import { defineRoute } from "@lemma/router";
 import { makeSlots } from "../src/runtime/slots.ts";
-import * as contracts from "../src/ui/contracts.ts";
-import { Notify, Slots, TogglePart, UI_API, UiApi } from "../src/ui/contracts.ts";
-import { defineUiPlugin, extendUiPlugin, routesOf } from "../src/ui/define.ts";
-import { definePart, defineSlot, fallbackOf } from "../src/ui/slots.ts";
-import type { Part, SlotsService } from "../src/ui/slots.ts";
+import * as look from "@lemma/look";
+import * as llm from "@lemma/llm/web";
+import * as threads from "@lemma/threads";
+import { TogglePart } from "@lemma/look";
+import { Notify, Slots, UI_API, UiApi } from "@lemma/ui";
+import { defineUiPlugin, extendUiPlugin, routesOf } from "@lemma/ui";
+import { definePart, defineSlot, fallbackOf } from "@lemma/ui";
+import type { Part, SlotsService } from "@lemma/ui";
 
 /** Resolves once `ready` holds; slot changes from a plugin starting or stopping arrive asynchronously. */
 const waitFor = async (ready: () => boolean) => {
@@ -150,12 +153,15 @@ describe("slots", () => {
     expect(fallbackOf(definePart("test.bare"))).toBeUndefined();
   });
 
-  it("gives a fallback to every part the always-on plugins draw, as their imports of ui/parts.tsx name them", () => {
-    const src = fileURLToPath(new URL("../src/", import.meta.url));
-    // What each export of ui/parts.tsx draws: the parts its definition names, directly or through another export
-    // (`PlusIcon` through `Icon`).
+  it("gives a fallback to every part the always-on plugins draw, as their imports of the parts' views name them", () => {
+    const repo = fileURLToPath(new URL("../../../", import.meta.url));
+    const contracts = { ...look, ...threads, ...llm } as unknown as Readonly<Record<string, Part<any>>>;
+    // What each view exported beside its part draws: the parts its definition names, directly or through another
+    // export (`PlusIcon` through `Icon`).
     const exports = new Map<string, string>();
-    for (const [, name, body] of readFileSync(join(src, "ui/parts.tsx"), "utf8").matchAll(/^export const (\w+)\s*=([\s\S]*?);$/gm)) exports.set(name!, body!);
+    for (const file of ["domains/look/contract/src/parts.tsx", "domains/threads/contract/src/parts.tsx", "domains/llm/contract/src/web/parts.tsx"]) {
+      for (const [, name, body] of readFileSync(join(repo, file), "utf8").matchAll(/^export const (\w+)\s*=([\s\S]*?);$/gm)) exports.set(name!, body!);
+    }
     const partsOf = (name: string, seen = new Set<string>()): string[] => {
       if (seen.has(name)) return [];
       seen.add(name);
@@ -165,18 +171,19 @@ describe("slots", () => {
     };
     // The plugins kept on: `PINNED` in ui/boot.tsx and what they need (ui:check asserts the list).
     const drawn = new Set<string>();
-    for (const id of ["shell", "pages", "settings", "plugins-page"]) {
-      const dir = join(src, "plugins", id);
-      const files = existsSync(dir) ? readdirSync(dir, { recursive: true }).map((file) => join(dir, String(file))) : [join(src, "plugins", `${id}.tsx`)];
-      for (const file of files.filter((path) => /\.tsx?$/.test(path))) {
-        for (const [, names] of readFileSync(file, "utf8").matchAll(/import\s*\{([^}]*)\}\s*from\s*["'](?:\.\.\/)+ui\/parts\.tsx["']/g)) {
+    for (const dir of ["domains/frame/shell", "domains/frame/pages", "domains/settings/page", "domains/settings/plugins"].map((dir) =>
+      join(repo, dir, "src"),
+    )) {
+      const files = readdirSync(dir, { recursive: true }).map((file) => join(dir, String(file)));
+      for (const file of files.filter((path) => /\.tsx?$/.test(path) && existsSync(path))) {
+        for (const [, names] of readFileSync(file, "utf8").matchAll(/import\s*\{([^}]*)\}\s*from\s*["']@lemma\/(?:look|threads|llm\/web)["']/g)) {
           for (const name of names!.split(",").map((entry) => entry.trim().split(/\s+as\s+/)[0]!)) for (const part of partsOf(name)) drawn.add(part);
         }
       }
     }
     // What they draw today, so a reading that finds nothing cannot pass.
     expect([...drawn]).toEqual(expect.arrayContaining(["ConfigFormPart", "IconPart", "SearchFieldPart", "TogglePart"]));
-    for (const part of drawn) expect(fallbackOf((contracts as unknown as Readonly<Record<string, Part<any>>>)[part]!), part).toBeDefined();
+    for (const part of drawn) expect(fallbackOf(contracts[part]!), part).toBeDefined();
   });
 
   it("ignores an add from a plugin that has stopped", async () => {

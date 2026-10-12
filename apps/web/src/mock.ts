@@ -6,7 +6,7 @@ import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { SessionChannels } from "@lemma/sessions";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
-import { fuzzy } from "./model/palette.ts";
+import { fuzzy } from "@lemma/ui/match";
 import type {
   ChannelDeclaration,
   ChannelInfo,

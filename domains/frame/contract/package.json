@@ -1,0 +1,23 @@
+{
+  "name": "@lemma/frame",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The frame domain's contract: the app's regions, layers, docks, layout, and dialogs",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/ui": "workspace:*",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

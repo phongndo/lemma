@@ -1,0 +1,26 @@
+{
+  "name": "@lemma/look-kit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The shared parts every view draws with",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx",
+    "./defaults": "./src/defaults.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

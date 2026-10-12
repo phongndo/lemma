@@ -1,0 +1,27 @@
+{
+  "name": "@lemma/look",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The look domain's contract: themes, accents, fonts, code block renderers, and the shared parts every view draws with",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "dompurify": "3.4.16",
+    "effect": "4.0.1",
+    "marked": "18.0.14",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

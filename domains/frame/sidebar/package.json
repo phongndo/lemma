@@ -1,0 +1,28 @@
+{
+  "name": "@lemma/frame-sidebar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The sidebar: threads grouped by project, its head's buttons, and its foot's items",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/actions": "workspace:*",
+    "@lemma/frame": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "@lemma/workspace": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

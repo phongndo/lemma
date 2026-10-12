@@ -1,0 +1,23 @@
+{
+  "name": "@lemma/look-appearance",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The look: paints the scheme, theme, accent, fonts, and sizes its config chooses, from the themes, accents, and fonts plugins offer",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/look": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

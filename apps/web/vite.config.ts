@@ -1,7 +1,8 @@
 /// <reference types="vitest/config" />
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Scanner } from "@tailwindcss/oxide";
 import tailwindcss from "@tailwindcss/vite";
 import { compile } from "tailwindcss";
@@ -18,11 +19,27 @@ const token = process.env.LEMMA_HOST_TOKEN;
 const auth = token === undefined ? {} : { headers: { authorization: `Bearer ${token}` } };
 
 const src = resolve(import.meta.dirname, "src");
+const domains = resolve(import.meta.dirname, "../../domains");
+const folders = (dir: string) =>
+  readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(dir, entry.name));
+/** The page's packages under domains/: those that draw, so depend on Solid (web plugins, web contracts), not the host's. */
+const webPackages = folders(domains)
+  .flatMap(folders)
+  .filter((dir) => {
+    if (!existsSync(join(dir, "package.json"))) return false;
+    const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+    return "solid-js" in { ...manifest.dependencies, ...manifest.peerDependencies };
+  })
+  .map((dir) => join(dir, "src"));
+/** Where the bundled plugins' source is: the app's own, the page's packages under domains/, and the plugin API. */
+const sources = [src, ...webPackages, resolve(import.meta.dirname, "../../packages/ui/src")];
 const CANDIDATES = "virtual:lemma/utility-candidates";
 
 /**
- * `virtual:lemma/utility-candidates`: the Tailwind classes the app's own
- * source uses, as the build finds them (`@source` in `src/tailwind.css`). The
+ * `virtual:lemma/utility-candidates`: the Tailwind classes the bundled
+ * plugins' source uses, as the build finds them (`@source` in `src/tailwind.css`). The
  * page compiles them with UI files' classes into one sheet (`ui/utilities.ts`),
  * so a utility from a UI file sorts among the app's own as one build would.
  */
@@ -34,7 +51,7 @@ function utilityCandidates(): Plugin {
     resolveId: (source) => (source === CANDIDATES ? id : undefined),
     async load(source) {
       if (source !== id) return undefined;
-      const scanned = new Scanner({ sources: [{ base: src, pattern: "**/*", negated: false }] }).scan();
+      const scanned = new Scanner({ sources: sources.map((base) => ({ base, pattern: "**/*", negated: false })) }).scan();
       const compiler = await compile(await readFile(resolve(src, "tailwind.css"), "utf8"), {
         base: src,
         loadStylesheet: async (sheet, base) => {
@@ -53,7 +70,7 @@ function utilityCandidates(): Plugin {
       return `export default ${JSON.stringify(used.sort())};`;
     },
     hotUpdate({ file }) {
-      if (!file.startsWith(src)) return;
+      if (!sources.some((dir) => file.startsWith(dir)) || file.includes("/node_modules/")) return;
       const module = this.environment.moduleGraph.getModuleById(id);
       if (module !== undefined) this.environment.moduleGraph.invalidateModule(module);
     },

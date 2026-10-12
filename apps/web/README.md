@@ -20,18 +20,19 @@ and Alt with the send key queues the prompt for after the turn.
 
 [`ui/boot.tsx`](src/ui/boot.tsx) plans the composition from three inputs:
 
-1. The bundled plugins, listed in [`plugins/index.ts`](src/plugins/index.ts).
+1. The bundled plugins, listed in [`bundled.ts`](src/bundled.ts): each a package in its domain's folder
+   (`domains/<domain>/<name>`, id `<domain>.<name>`), as `frame.shell` is `domains/frame/shell`.
 2. UI files in `~/.lemma/ui/` and, for a trusted project, `<project>/.lemma/ui/`:
    `.js`/`.mjs` files load as plugins, and `.css` files apply over the app's
    styles. Every color, radius, width, and stacking level is a `--` token in
    [`styles.css`](src/styles.css), and a file's rules win over the app's own.
 3. The `"ui"` rows of `config.jsonc`, which work like the host's
    [`"plugins"` rows](../../docs/configuration.md):
-   `{ "ui": { "chat": { "config": { "expandTools": true } } } }`.
+   `{ "ui": { "threads.transcript": { "config": { "expandTools": true } } } }`.
 
 Edits apply without a reload: the plugins that changed, and what depends on
 them, restart. Change rows from the Plugins settings page or with
-`lemma ui enable|disable|config`. Keyboard shortcuts are the `keymap`
+`lemma ui enable|disable|config`. Keyboard shortcuts are the `actions.keymap`
 plugin's config, which Settings › Keyboard records. The runtime is not a
 plugin: it has no row, and the Plugins page lists what it provides in its
 summary.
@@ -60,10 +61,10 @@ tint from them. A plugin's own colors are tokens in its stylesheet:
 `--diagram-*` (Mermaid's own until set). `--text-scale` sizes every font and
 `--radius-scale` rounds every corner.
 
-The look is the `appearance` plugin's config, which it paints on the page:
+The look is the `look.appearance` plugin's config, which it paints on the page:
 
 ```jsonc
-"ui": { "appearance": { "config": {
+"ui": { "look.appearance": { "config": {
   "scheme": "dark",              // system (the default), light, or dark
   "darkTheme": "tokyo-night",    // a theme a plugin offers; unset, Lemma's own
   "accent": "blue",              // an accent a plugin offers, or any CSS color
@@ -74,10 +75,10 @@ The look is the `appearance` plugin's config, which it paints on the page:
 } } }
 ```
 
-Settings › Appearance (the `appearance-page` plugin) edits that row, as
-`lemma ui config appearance accent blue` or an agent's edit to `config.jsonc`
+Settings › Appearance (the `look.appearance-page` plugin) edits that row, as
+`lemma ui config look.appearance accent blue` or an agent's edit to `config.jsonc`
 does, and the palette's Appearance commands switch the scheme. What there is
-to choose from is three slots, `Themes`, `Accents`, and `Fonts`: `appearance`
+to choose from is three slots, `Themes`, `Accents`, and `Fonts`: `look.appearance`
 adds Lemma's own there, and a plugin adds others beside them, so a theme pack
 is a UI file, offered while it loads and gone with it. A theme is its base
 colors, and `tokens` for any other:
@@ -105,7 +106,7 @@ A font plugin declares its file with `@font-face` in its `styles` and adds a
 `Fonts` item; the file loads only once the font is chosen. A plugin's rows in
 the `SectionIds.appearance` settings section sit beside the look's own. A
 stylesheet in `~/.lemma/ui` sets any token the look leaves unset, and a
-plugin that replaces `appearance` paints through `api.look` (`paint`,
+plugin that replaces `look.appearance` paints through `api.look` (`paint`,
 `unpaint`), so the next load shows its look before plugins start; a renderer
 that does not draw with CSS reads the look there too (`tokenColor`,
 `onLookChange`).
@@ -130,11 +131,12 @@ tokens do.
 ## Writing a plugin
 
 A plugin requires and provides capabilities, and adds items to slots.
-[`ui/contracts.ts`](src/ui/contracts.ts) declares them all, and the bundled
-plugins use nothing else:
+The contracts declare them all: the runtime's in [`@lemma/ui`](../../packages/ui/src/index.ts), and each
+domain's in its own package (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …; a UI file gets them all
+as `api.contracts`). The bundled plugins use nothing else:
 
 - **Capabilities** are services with one provider, such as `Threads` or
-  `Models`. The runtime's ([`ui/runtime.ts`](src/ui/runtime.ts): `Client`,
+  `Models`. The runtime's ([`@lemma/ui`](../../packages/ui/src/runtime.ts): `Client`,
   `Slots`, `Router`, `Notify`, `HostPlugins`, `Interactions`, `UiPlugins`)
   the app provides itself; every other comes from a plugin.
 - **Slots** are places any number of plugins add to: regions of the screen,
@@ -237,13 +239,13 @@ A replacement with a bundled plugin's id can wrap it rather than copy it, and
 so keep what it gains in later versions: `api.bundled` holds the bundled
 plugins, and `api.extendUiPlugin` makes a plugin from another's definition.
 The runtime is not in `api.bundled`, and a plugin providing one of its
-capabilities is left out: draw messages differently by replacing `toasts`,
+capabilities is left out: draw messages differently by replacing `frame.toasts`,
 which decides how long each shows, rather than `Notify`.
 
 ```js
 // ~/.lemma/ui/toasts.js: the bundled toasts, logging each one too
 export default ({ bundled, extendUiPlugin }) =>
-  extendUiPlugin(bundled.toasts, (base) => ({
+  extendUiPlugin(bundled["frame.toasts"], (base) => ({
     ...base,
     setup: (use, plugin) => {
       const made = base.setup(use, plugin);
@@ -261,7 +263,7 @@ boot's `appRoutes`), and the plugins that show them list them in their
 `routes` too, so a page whose plugin is off names it: a session's in
 [`@lemma/sessions`](../../domains/sessions/contract/src/sessions.ts), shared with the
 desktop app's `lemma://` links and `lemma open`, and settings' in
-[`ui/contracts.ts`](src/ui/contracts.ts):
+[`@lemma/settings`](../../domains/settings/contract/src/index.ts):
 
 | Address                                 | Shows                                                                                 |
 | --------------------------------------- | ------------------------------------------------------------------------------------- |

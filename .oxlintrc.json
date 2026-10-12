@@ -2,11 +2,18 @@
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "ignorePatterns": ["**/dist/**"],
   "rules": {
-    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_", "caughtErrorsIgnorePattern": "^_" }]
+    "no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_"
+      }
+    ]
   },
   "overrides": [
     {
-      "files": ["apps/web/src/**/*.tsx"],
+      "files": ["apps/web/src/**/*.tsx", "domains/**/*.tsx", "packages/ui/src/**/*.tsx"],
       "rules": {
         "no-unassigned-vars": "off"
       }

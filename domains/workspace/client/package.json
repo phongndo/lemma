@@ -1,0 +1,25 @@
+{
+  "name": "@lemma/workspace-client",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Projects and the directory the composer works in",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/threads": "workspace:*",
+    "@lemma/ui": "workspace:*",
+    "@lemma/workspace": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}
