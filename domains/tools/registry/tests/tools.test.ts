@@ -1,9 +1,9 @@
-import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
+import { Cause, Context, Effect, Exit, Fiber, Layer, Schema, Stream } from "effect";
 import { describe, expect, it } from "vitest";
 import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Inspectors, snapshotOf } from "@lemma/contracts";
-import { ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/tools";
+import { Guards, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import type { Guard, Tool } from "@lemma/tools";
 import tools, { toolParameters } from "../src/index.ts";
 import { outputBatcher } from "../src/registry.ts";
@@ -21,20 +21,19 @@ const echo: Tool<{ readonly text: string }> = {
 const contributor = (id: string, contributed: readonly Tool<any>[], guards: readonly [string, Guard][] = []) =>
   definePlugin({
     id,
-    requires: [Tools],
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
-        const registry = yield* Tools;
-        for (const tool of contributed) yield* registry.register(tool);
-        for (const [name, guard] of guards) yield* registry.guard(name, guard);
+        const owner = yield* PluginContext;
+        for (const tool of contributed) yield* owner.add(Tools, tool);
+        for (const [tool, guard] of guards) yield* owner.add(Guards, { tool, guard });
       }),
     ),
   });
 
 const call = (name: string, input: unknown, signal = new AbortController().signal) =>
-  Effect.flatMap(Tools, (registry) => registry.execute(new ToolInvocation({ sessionId: "s", toolCallId: "c1", name, input, cwd: "/tmp" }), signal));
+  Effect.flatMap(ToolRunner, (registry) => registry.execute(new ToolInvocation({ sessionId: "s", toolCallId: "c1", name, input, cwd: "/tmp" }), signal));
 
-const run = <A, E>(plugins: readonly Plugin[], body: Effect.Effect<A, E, Tools | Events>) =>
+const run = <A, E>(plugins: readonly Plugin[], body: Effect.Effect<A, E, ToolRunner | Events>) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -75,7 +74,7 @@ describe("registry", () => {
     };
     const listed = await run(
       [contributor("mine", [shapes, echo])],
-      Effect.flatMap(Tools, (registry) => registry.list),
+      Effect.flatMap(ToolRunner, (registry) => registry.list),
     );
     expect(listed.map((tool) => [tool.spec.name, tool.source])).toEqual([
       ["echo", "mine"],
@@ -104,34 +103,18 @@ describe("registry", () => {
 
   it("rejects a duplicate name, failing the second contributor", async () => {
     const failure = await Effect.runPromise(Effect.scoped(Effect.flip(makeCore([tools, contributor("a", [echo]), contributor("b", [echo])]))));
-    expect(String(JSON.stringify(failure))).toContain("already registered by a");
+    expect(String(JSON.stringify(failure))).toContain('\\"echo\\" is already contributed to lemma/tools by \\"a\\"');
   });
 
-  it("removes a tool when its registering scope closes", async () => {
-    // A tool is attributed to the plugin registering it: this one lends its context to the test.
-    let captured: Context.Service.Shape<typeof PluginContext> | undefined;
-    const lender = definePlugin({
-      id: "temp",
-      layer: Layer.effectDiscard(
-        Effect.map(PluginContext, (context) => {
-          captured = context;
-        }),
-      ),
-    });
-    await run(
-      [lender],
-      Effect.gen(function* () {
-        const registry = yield* Tools;
-        const scope = yield* Scope.make();
-        yield* registry.register(echo).pipe(Effect.provideService(PluginContext, captured!), Scope.provide(scope));
-        expect((yield* registry.list).map((tool) => tool.source)).toEqual(["temp"]);
-        yield* Scope.close(scope, { _tag: "Success", value: undefined } as never);
-        expect(yield* registry.list).toEqual([]);
-      }),
+  it("refuses what is not a tool, failing its contributor", async () => {
+    const failure = await Effect.runPromise(
+      Effect.scoped(Effect.flip(makeCore([tools, contributor("bad", [{ ...echo, input: { text: "not a schema" } } as unknown as Tool<any>])]))),
     );
+    expect(String(JSON.stringify(failure))).toContain('Tool \\"echo\\" needs an input Schema');
   });
 
-  it("lifts a guard when its installing scope closes", async () => {
+  it("lists a tool, and runs a guard, only while it is there", async () => {
+    // Items belong to the plugin adding them: this one lends its context to the test.
     let captured: Context.Service.Shape<typeof PluginContext> | undefined;
     const lender = definePlugin({
       id: "plan-mode",
@@ -142,16 +125,17 @@ describe("registry", () => {
       ),
     });
     await run(
-      [contributor("p", [echo]), lender],
+      [lender],
       Effect.gen(function* () {
-        const registry = yield* Tools;
-        const scope = yield* Scope.make();
-        yield* registry
-          .guard("echo", () => Effect.succeed({ _tag: "deny", reason: "plan mode" }))
-          .pipe(Effect.provideService(PluginContext, captured!), Scope.provide(scope));
+        const registry = yield* ToolRunner;
+        const removeTool = yield* captured!.add(Tools, echo);
+        expect((yield* registry.list).map((tool) => tool.source)).toEqual(["plan-mode"]);
+        const removeGuard = yield* captured!.add(Guards, { tool: "echo", guard: () => Effect.succeed({ _tag: "deny", reason: "plan mode" }) });
         expect(textOf(yield* call("echo", { text: "hi" }))).toBe("Tool call denied: plan mode");
-        yield* Scope.close(scope, { _tag: "Success", value: undefined } as never);
+        yield* removeGuard;
         expect(textOf(yield* call("echo", { text: "hi" }))).toBe("hi");
+        yield* removeTool;
+        expect(yield* registry.list).toEqual([]);
       }),
     );
   });
@@ -378,7 +362,7 @@ describe("execute", () => {
     await run(
       [contributor("p", [context])],
       Effect.gen(function* () {
-        const registry = yield* Tools;
+        const registry = yield* ToolRunner;
         const invoke = (offered: readonly string[]) =>
           registry.execute(
             new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "context", input: {}, cwd: "/tmp", offered }),
@@ -411,7 +395,7 @@ describe("execute", () => {
         const watching = yield* Effect.forkChild(Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => published.push(payload))));
         yield* Effect.yieldNow;
         const received: string[] = [];
-        const registry = yield* Tools;
+        const registry = yield* ToolRunner;
         const result = yield* registry.execute(
           new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
           new AbortController().signal,
@@ -444,7 +428,7 @@ describe("execute", () => {
         [contributor("p", [chatty])],
         Effect.gen(function* () {
           const received: string[] = [];
-          const registry = yield* Tools;
+          const registry = yield* ToolRunner;
           const result = yield* registry.execute(
             new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
             new AbortController().signal,

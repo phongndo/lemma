@@ -1,7 +1,7 @@
 # tools.codemode
 
 The `codemode` tool: JavaScript in pi's QuickJS sandbox that calls the other
-tools. Requires `Tools`, whose registry its scripts call through. No config.
+tools. Adds it to `Tools`; requires `ToolRunner`, which its scripts call the other tools through. No config.
 
 | Input  | Behavior                                                                                                                                                                                                                                                                                                                          |
 | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

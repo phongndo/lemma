@@ -2,10 +2,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { describe, expect, it } from "vitest";
-import { Events, definePlugin, makeCore } from "@lemma/core";
+import { Events, definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { InteractionOrigin } from "@lemma/contracts";
-import { ToolInvocation, ToolOutput, ToolResult, Tools } from "@lemma/tools";
+import { Guards, ToolInvocation, ToolOutput, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import { tempDir, textOf } from "@lemma/tools/testing";
 import tools from "@lemma/tools-registry";
 import bash from "@lemma/tools-bash";
@@ -22,7 +22,7 @@ const run = (code: string, cwd = process.cwd(), extra: readonly Plugin[] = [], s
       Effect.gen(function* () {
         const core = yield* makeCore([tools, ...builtin, ...extra]);
         return yield* core.run(
-          Effect.flatMap(Tools, (registry) =>
+          Effect.flatMap(ToolRunner, (registry) =>
             registry.execute(new ToolInvocation({ sessionId: "s", toolCallId: "c", name: "codemode", input: { code }, cwd }), signal),
           ),
         );
@@ -30,13 +30,34 @@ const run = (code: string, cwd = process.cwd(), extra: readonly Plugin[] = [], s
     ),
   );
 
+describe("a tool only the model calls", () => {
+  it("is not offered to a script: its result must be logged as its own", async () => {
+    const direct = definePlugin({
+      id: "direct",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(Tools, {
+            name: "notebook",
+            description: "Keeps notes in its results",
+            input: Schema.Struct({}),
+            direct: true,
+            execute: () => new ToolResult({ content: [{ type: "text", text: "noted" }] }),
+          }),
+        ),
+      ),
+    });
+    const result = await run(`text(ALL_TOOLS.map((t) => t.name).includes("notebook") ? "offered" : "not offered");`, process.cwd(), [direct]);
+    expect(textOf(result)).toContain("not offered");
+  });
+});
+
 describe("codemode's registration", () => {
   it("registers under its name, with its plugin as the source and a clean schema", async () => {
     const listed = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const core = yield* makeCore([tools, ...builtin]);
-          return yield* core.run(Effect.flatMap(Tools, (registry) => registry.list));
+          return yield* core.run(Effect.flatMap(ToolRunner, (registry) => registry.list));
         }),
       ),
     );
@@ -71,7 +92,7 @@ const call = (
               Stream.runForEach(events.stream(ToolOutput), (payload) => Effect.sync(() => options.published?.push(payload))),
             );
             yield* Effect.yieldNow;
-            const registry = yield* Tools;
+            const registry = yield* ToolRunner;
             const invocation = new ToolInvocation({
               sessionId: "s",
               toolCallId: "c",
@@ -138,10 +159,12 @@ describe("pi codemode", () => {
   it("validates nested input and applies guards instead of bypassing the registry", async () => {
     const guard = definePlugin({
       id: "test-guard",
-      requires: [Tools],
       layer: Layer.effectDiscard(
-        Effect.flatMap(Tools, (registry) =>
-          registry.guard("bash", (call) => Effect.succeed(call.name === "bash" ? { _tag: "deny", reason: "shell denied" } : { _tag: "allow" })),
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(Guards, {
+            tool: "bash",
+            guard: (call) => Effect.succeed(call.name === "bash" ? { _tag: "deny", reason: "shell denied" } : { _tag: "allow" }),
+          }),
         ),
       ),
     });
@@ -172,10 +195,9 @@ describe("pi codemode", () => {
     let cancelled = false;
     const slow = definePlugin({
       id: "slow",
-      requires: [Tools],
       layer: Layer.effectDiscard(
-        Effect.flatMap(Tools, (registry) =>
-          registry.register({
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(Tools, {
             name: "slow",
             description: "wait",
             input: Schema.Struct({}),
@@ -217,10 +239,9 @@ describe("pi codemode", () => {
   it("runs nested calls in the turn's context, so their interaction requests keep its origin", async () => {
     const origin = definePlugin({
       id: "origin",
-      requires: [Tools],
       layer: Layer.effectDiscard(
-        Effect.flatMap(Tools, (registry) =>
-          registry.register({
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(Tools, {
             name: "origin",
             description: "the caller's interaction origin",
             input: Schema.Struct({}),

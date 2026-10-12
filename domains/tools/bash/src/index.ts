@@ -1,4 +1,4 @@
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Tools } from "@lemma/tools";
 import { DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
@@ -20,6 +20,7 @@ export default definePlugin({
   id: "tools.bash",
   version: "0.1.0",
   config: BashConfig,
-  requires: [Tools],
-  layer: (config: typeof BashConfig.Type) => Layer.effectDiscard(Effect.flatMap(Tools, (registry) => registry.register(makeBashTool(config.timeout)))),
+  setup: function* (_, owner) {
+    yield* owner.add(Tools, makeBashTool(owner.config.timeout));
+  },
 });

@@ -2,6 +2,7 @@
   "name": "@lemma/context-project",
   "version": "0.1.0",
   "private": true,
+  "description": "The project's AGENTS.md instructions, as a system prompt section",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

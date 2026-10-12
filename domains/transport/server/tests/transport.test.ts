@@ -302,18 +302,17 @@ describe("transport", () => {
     // `test.where` answers where it ran and for whom; `test.later` comes once `later` is done.
     const where = definePlugin({
       id: "where",
-      requires: [Commands],
       layer: Layer.effectDiscard(
         Effect.gen(function* () {
-          const commands = yield* Commands;
-          yield* commands.register({
+          const owner = yield* PluginContext;
+          yield* owner.add(Commands, {
             id: "test.where",
             title: "Where",
             category: "Test",
             run: ({ cwd, sessionId }) =>
               Effect.map(Effect.service(InteractionOrigin), (origin) => ({ message: [cwd, sessionId ?? "-", origin ?? "-"].join(" ") })),
           });
-          const added = commands.register({ id: "test.later", title: "Later", category: "Test", run: () => Effect.void });
+          const added = owner.add(Commands, { id: "test.later", title: "Later", category: "Test", run: () => Effect.void });
           yield* Effect.forkScoped(Effect.andThen(Deferred.await(later), Effect.orDie(added)));
         }),
       ),

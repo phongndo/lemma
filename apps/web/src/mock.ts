@@ -363,22 +363,35 @@ export const createMockHost = (): Host => {
   const plugins: PluginStatus[] = [
     bundled("credentials.file", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
     bundled("llm.pi-ai", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
-    bundled("llm.commands", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Llm"] }),
-    bundled("tools.registry", { provides: ["lemma/Tools"] }),
-    bundled("tools.read", { requires: ["lemma/Tools"] }),
-    bundled("tools.write", { requires: ["lemma/Tools"] }),
-    bundled("tools.edit", { requires: ["lemma/Tools"] }),
-    bundled("tools.bash", { requires: ["lemma/Tools"] }),
-    bundled("tools.codemode", { requires: ["lemma/Tools"] }),
+    bundled("llm.commands", {
+      requires: ["lemma/Interaction", "lemma/Llm"],
+      contributes: [{ name: "lemma/commands", items: 2, keys: ["llm.login", "llm.logout"] }],
+    }),
+    bundled("tools.registry", { provides: ["lemma/ToolRunner"] }),
+    bundled("tools.read", { contributes: [{ name: "lemma/tools", items: 1, keys: ["read"] }] }),
+    bundled("tools.write", { contributes: [{ name: "lemma/tools", items: 1, keys: ["write"] }] }),
+    bundled("tools.edit", { contributes: [{ name: "lemma/tools", items: 1, keys: ["edit"] }] }),
+    bundled("tools.bash", { contributes: [{ name: "lemma/tools", items: 1, keys: ["bash"] }] }),
+    bundled("tools.codemode", { requires: ["lemma/ToolRunner"], contributes: [{ name: "lemma/tools", items: 1, keys: ["codemode"] }] }),
     bundled("sessions.files", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] }),
-    bundled("agent.loop", { provides: ["lemma/Agent"], requires: ["lemma/Sessions", "lemma/Llm", "lemma/Tools", "lemma/HostControl"] }),
+    bundled("agent.loop", {
+      provides: ["lemma/Agent"],
+      requires: ["lemma/Sessions", "lemma/Llm", "lemma/ToolRunner", "lemma/HostControl"],
+      contributes: [{ name: "lemma/agent.sections", items: 2, keys: ["agent.base", "agent.environment"] }],
+    }),
     bundled("context.compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
-    bundled("context.project", { requires: ["lemma/Paths"] }),
+    bundled("context.project", { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] }),
     bundled("workspace.local", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] }),
     bundled("workspace.search-fff", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] }),
-    bundled("workspace.commands", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/Workspace"] }),
-    bundled("commands.registry", { provides: ["lemma/Commands"] }),
-    bundled("commands.host", { requires: ["lemma/Commands", "lemma/Interaction", "lemma/HostControl"] }),
+    bundled("workspace.commands", {
+      requires: ["lemma/Interaction", "lemma/Workspace"],
+      contributes: [{ name: "lemma/commands", items: 2, keys: ["workspace.checkout", "workspace.new-branch"] }],
+    }),
+    bundled("commands.registry", { provides: ["lemma/CommandRunner"] }),
+    bundled("commands.host", {
+      requires: ["lemma/Interaction", "lemma/HostControl"],
+      contributes: [{ name: "lemma/commands", items: 2, keys: ["host.reload", "host.restart-plugin"] }],
+    }),
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     bundled("transport.server", {
       requires: ["lemma/Paths", "lemma/HostControl"],
@@ -388,8 +401,7 @@ export const createMockHost = (): Host => {
 
   // Wiring as the kernel reports it, so the inspector has hooks and observers to show.
   const wiring: Record<string, Partial<PluginStatus>> = {
-    "context.compaction": { hooks: [{ name: "lemma/agent.request", order: 0 }] },
-    "context.project": { hooks: [{ name: "lemma/agent.request", order: 10 }] },
+    "context.compaction": { hooks: [{ name: "lemma/agent.request", order: 1000 }] },
     "tools.bash": { hooks: [{ name: "lemma/tool.execute", order: 0 }] },
     "agent.loop": { hooks: [{ name: "lemma/agent.request", order: 0 }] },
     "transport.server": {

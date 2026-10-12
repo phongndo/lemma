@@ -1,12 +1,12 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
 import type { Context } from "effect";
-import { definePlugin, Events, Hooks } from "@lemma/core";
-import { Channels, HostControl, Inspectors, InteractionOrigin, Paths } from "@lemma/contracts";
-import { Agent, AgentError, QueueChanged, serveAgent } from "@lemma/agent";
+import { awaitable, definePlugin, Events, Hooks, Registries } from "@lemma/core";
+import { Channels, HostControl, Inspectors, InteractionOrigin, Paths, withContribution } from "@lemma/contracts";
+import { Agent, AgentError, PromptSections, QueueChanged, SectionOrder, serveAgent } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
-import { ToolOutput, Tools } from "@lemma/tools";
-import type { AgentView, PromptContent, PromptOptions, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import { ToolOutput, ToolRunner } from "@lemma/tools";
+import type { AgentView, PromptContent, PromptOptions, QueuedPrompt, SectionRequest, SystemSection, TurnOptions } from "@lemma/agent";
 import type { ModelInfo } from "@lemma/llm";
 import type { SessionEvent, SessionInfo, TurnEndReason } from "@lemma/sessions";
 import { LiveTurn } from "./live.ts";
@@ -17,6 +17,7 @@ import type { SlotHolder } from "./slots.ts";
 import { LIVE_INTERVAL_MS, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
 import type { Journal } from "./state.ts";
 import { makeRequestIndex } from "./requests.ts";
+import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, newId, runTurn } from "./turn.ts";
 import type { TurnOutcome, TurnResume } from "./turn.ts";
 
@@ -141,12 +142,15 @@ interface SessionState {
   held: boolean;
 }
 
+/** A section whose plugin left, with no replacement, while the request was written: no section. */
+const GONE = Symbol("gone");
+
 export default definePlugin({
   id: "agent.loop",
   version: "0.1.0",
   config: AgentConfig,
   provides: { agent: Agent },
-  requires: { sessions: Sessions, llm: Llm, tools: Tools, host: HostControl, paths: Paths },
+  requires: { sessions: Sessions, llm: Llm, tools: ToolRunner, host: HostControl, paths: Paths },
   // Turns resume in the next instance: a reload stops this one (suspending its turns) before starting that one.
   exclusive: true,
   // Room for `stopGrace` (at most 20 seconds) and for cutting off what is still running after it.
@@ -154,6 +158,53 @@ export default definePlugin({
   setup: function* ({ sessions, llm, tools, host, paths }, owner) {
     const config = owner.config;
     const { home } = paths;
+    const registries = yield* Registries;
+    // Its own sections, beside any other plugin's.
+    yield* owner.add(PromptSections, baseSection(config.systemPrompt), { order: SectionOrder.base });
+    yield* owner.add(PromptSections, environmentSection(config.cli), { order: SectionOrder.environment });
+    /**
+     * Each section's text for the request, as part of its plugin's lifetime: one whose plugin a reload replaced since it
+     * was listed is found again by its id, and one whose plugin has left is left out. Empty text (or none) is no section.
+     */
+    const sections = (request: SectionRequest): Effect.Effect<readonly SystemSection[], AgentError> =>
+      Effect.flatMap(registries.items(PromptSections), (items) =>
+        Effect.forEach(
+          items,
+          (listed) => {
+            const failed = (message: string, cause?: unknown) =>
+              new AgentError({
+                sessionId: request.sessionId,
+                reason: "Hook",
+                message: `The "${listed.item.id}" prompt section from ${listed.pluginId} ${message}`,
+                ...(cause === undefined ? {} : { cause }),
+              });
+            return withContribution(
+              registries,
+              () => Effect.map(registries.items(PromptSections), (now) => now.find((contribution) => contribution.item.id === listed.item.id)),
+              (contribution) =>
+                Effect.map(
+                  awaitable(() => contribution.item.text(request)),
+                  (text: unknown) => ({ contribution, text }),
+                ),
+              { missing: () => GONE, expired: () => GONE },
+            ).pipe(
+              Effect.flatMap(({ contribution, text }): Effect.Effect<SystemSection[], AgentError> => {
+                if (text === undefined || text === null || text === "") return Effect.succeed([]);
+                if (typeof text !== "string") return Effect.fail(failed(`returned ${typeof text}, not text`));
+                return Effect.succeed([{ id: contribution.item.id, source: contribution.pluginId, text }]);
+              }),
+              Effect.catchIf(
+                (error) => error === GONE,
+                () => Effect.succeed([]),
+              ),
+              Effect.mapError((cause) =>
+                cause instanceof AgentError ? cause : failed(`failed: ${cause instanceof Error ? cause.message : String(cause)}`, cause),
+              ),
+            );
+          },
+          { concurrency: "unbounded" },
+        ),
+      ).pipe(Effect.map((written) => written.flat()));
     const services = {
       sessions,
       llm,
@@ -161,7 +212,7 @@ export default definePlugin({
       host,
       hooks: yield* Hooks,
       events: yield* Events,
-      source: owner.id,
+      sections,
     };
     const { events } = services;
     const settings = {
@@ -169,8 +220,6 @@ export default definePlugin({
       retries: config.retries,
       retryDelay: config.retryDelay * 1000,
       maxRetryDelay: config.maxRetryDelay * 1000,
-      ...(config.systemPrompt === undefined ? {} : { systemPrompt: config.systemPrompt }),
-      ...(config.cli === undefined ? {} : { cli: config.cli }),
     };
 
     // Turns belong to the plugin, not the caller: they outlive an interrupted `prompt`. They run in their own scope,

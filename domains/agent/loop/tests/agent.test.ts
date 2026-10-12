@@ -5,7 +5,7 @@ import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
-import { Agent, AgentContinueHook, AgentError, AgentRequestHook } from "@lemma/agent";
+import { Agent, AgentContinueHook, AgentError, AgentRequestHook, PromptSections } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
@@ -227,6 +227,31 @@ describe("agent", () => {
     );
   });
 
+  it("puts a section added without an order after the agent's base, and takes a section with nothing to say as none", async () => {
+    const sections = definePlugin({
+      id: "aaa.sections",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          Effect.all([
+            owner.add(PromptSections, { id: "aaa.rules", text: () => "Mind the rules." }),
+            // A plain-JS section's way of saying nothing.
+            owner.add(PromptSections, { id: "aaa.nothing", text: () => null as unknown as undefined }),
+          ]),
+        ),
+      ),
+    });
+    await withAgent({ plugins: [sections], scripts: [reply("ok")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        const system = requests[0]!.system ?? "";
+        // The base opens the prompt, whatever the id of a plugin adding a section without an order.
+        expect(system.startsWith("You are an expert coding assistant")).toBe(true);
+        expect(system.indexOf("Mind the rules.")).toBeGreaterThan(0);
+      }),
+    );
+  });
+
   it("records contributions with plugin ids and omits unchanged system and tools", async () => {
     let calls = 0;
     const context = definePlugin({
@@ -258,8 +283,8 @@ describe("agent", () => {
           const logged = ofType(events, "request");
           expect(logged).toHaveLength(3);
           expect(logged[0]!.contributions).toEqual([
-            { source: "agent.loop", kind: "system", label: "base", chars: expect.any(Number) },
-            { source: "agent.loop", kind: "system", label: "environment", chars: expect.any(Number) },
+            { source: "agent.loop", kind: "system", label: "agent.base", chars: expect.any(Number) },
+            { source: "agent.loop", kind: "system", label: "agent.environment", chars: expect.any(Number) },
             { source: "project-notes", kind: "system", label: "notes", chars: 8 },
             { source: "test-tools", kind: "tool", label: "echo", chars: expect.any(Number) },
           ]);

@@ -1,7 +1,7 @@
 # workspace.commands
 
-The workspace's git commands, on the caller's `cwd`. Requires `Commands`,
-`Interaction`, and `Workspace`. No config.
+The workspace's git commands, on the caller's `cwd`, added to `Commands`. Requires
+`Interaction` and `Workspace`. No config.
 
 | Command                | Title          | Does                                                                                                                                        |
 | ---------------------- | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -1,7 +1,7 @@
 import { Context, Data, Schema } from "effect";
-import type { Effect, Scope } from "effect";
-import { Event, Hook } from "@lemma/core";
-import type { Awaitable, PluginContext } from "@lemma/core";
+import type { Effect } from "effect";
+import { Event, Hook, Registry } from "@lemma/core";
+import type { Awaitable } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "@lemma/llm";
 
 export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
@@ -24,6 +24,12 @@ export interface ToolContext {
   readonly update?: (chunk: string) => void;
   /** The call's `ToolInvocation.offered`: a tool that runs others offers only these. */
   readonly offered?: readonly string[];
+  /**
+   * The session event the call's turn had reached: `Sessions.branch(sessionId, { leaf: leafId })` is the branch the call
+   * is on, whatever a checkout during the turn did to the session's leaf. A tool keeping its state in its results reads
+   * it from there.
+   */
+  readonly leafId?: string;
   /** Text characters a result keeps before the registry cuts it; a tool that truncates its own output fits under it. */
   readonly maxResultChars?: number;
 }
@@ -36,10 +42,10 @@ export class ToolError extends Data.TaggedError("ToolError")<{
 }> {}
 
 /**
- * A tool as registered by a plugin. `execute` returns its result, a promise
- * of it, or an Effect (`Awaitable`): a plugin written with promises or with
- * Effects registers one alike. A thrown or failed execution becomes an
- * `isError` result for the model.
+ * A tool a plugin adds to `Tools`. `execute` returns its result, a promise of
+ * it, or an Effect (`Awaitable`): a plugin written with promises or with
+ * Effects adds one alike. A thrown or failed execution becomes an `isError`
+ * result for the model.
  */
 export interface Tool<Input = any> {
   readonly name: string;
@@ -56,6 +62,11 @@ export interface Tool<Input = any> {
    * runs a run of consecutive such calls together. Absent: its calls run one at a time, in order.
    */
   readonly parallel?: "safe";
+  /**
+   * `true`: only the model calls it, never a tool that runs others (`codemode`). Its result is then logged as its own,
+   * which a tool keeping its state in its results' `details` needs: a nested call's result is the outer tool's to keep.
+   */
+  readonly direct?: true;
   readonly execute: (input: Input, context: ToolContext) => Awaitable<ToolResult, unknown>;
 }
 
@@ -70,6 +81,11 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
    * any other as `NotFound`. Absent: no request to hold it to, as for a call resumed after a restart.
    */
   offered: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * The session event the call's turn had reached when it was made (`ToolContext.leafId`). Absent: a call made outside
+   * a turn.
+   */
+  leafId: Schema.optional(Schema.String),
 }) {}
 
 /**
@@ -88,6 +104,39 @@ export type GuardDecision = { readonly _tag: "allow" } | { readonly _tag: "deny"
 /** Returns its decision, a promise of it, or an Effect (`Awaitable`), so a plugin written with promises can guard too. */
 export type Guard = (invocation: ToolInvocation) => Awaitable<GuardDecision, ToolError>;
 
+/** A guard a plugin adds to `Guards`, for the calls of one tool. */
+export interface ToolGuard {
+  /** The tool's name, or `*` for every tool. */
+  readonly tool: string;
+  readonly guard: Guard;
+}
+
+/**
+ * The tools the model may call: `PluginContext.add(Tools, tool)`. A tool belongs to the plugin that added it, which its
+ * calls are attributed to, and leaves with it; a name is one plugin's at a time (another adding it fails `Conflict`),
+ * and a plugin's replacement takes over its names. `ToolRunner` lists and runs them.
+ */
+export const Tools = Registry.make<Tool>("lemma/tools", {
+  key: (tool) => tool.name,
+  unique: true,
+  check: (value) => {
+    const tool = value as Partial<Tool> | null;
+    if (typeof tool !== "object" || tool === null) return "A tool is an object";
+    if (typeof tool.name !== "string" || tool.name === "") return "A tool needs a name";
+    if (typeof tool.description !== "string") return `Tool "${tool.name}" needs a description`;
+    if (!Schema.isSchema(tool.input)) return `Tool "${tool.name}" needs an input Schema`;
+    return typeof tool.execute === "function" ? undefined : `Tool "${tool.name}" needs an execute function`;
+  },
+});
+
+/** The guards every call passes before its tool runs: `PluginContext.add(Guards, { tool, guard })`. */
+export const Guards = Registry.make<ToolGuard>("lemma/tools.guards", {
+  check: (value) => {
+    const item = value as Partial<ToolGuard> | null;
+    return typeof item?.tool === "string" && typeof item.guard === "function" ? undefined : "A guard is { tool: string, guard: (call) => decision }";
+  },
+});
+
 export const ToolExecuted = Event.make<{
   readonly invocation: ToolInvocation;
   readonly result: ToolResult;
@@ -105,7 +154,7 @@ export const ToolOutput = Event.make<{
   readonly offset: number;
 }>("lemma/tool.output");
 
-/** A registered tool's model-facing spec and the plugin that registered it. */
+/** A tool's model-facing spec and the plugin that added it. */
 export interface ToolContribution {
   readonly spec: ToolSpec;
   readonly source: string;
@@ -113,6 +162,8 @@ export interface ToolContribution {
   readonly replay?: "safe";
   /** The tool's `parallel`. */
   readonly parallel?: "safe";
+  /** The tool's `direct`. */
+  readonly direct?: true;
 }
 
 export interface ExecuteOptions {
@@ -124,16 +175,11 @@ export interface ExecuteOptions {
   readonly update?: (chunk: string) => Awaitable<void, unknown>;
 }
 
-export class Tools extends Context.Service<
-  Tools,
+/** Lists and runs what `Tools` holds: the agent, and a tool that runs others, call it. */
+export class ToolRunner extends Context.Service<
+  ToolRunner,
   {
-    /**
-     * Call during activation: the registering plugin's `PluginContext` supplies
-     * the provenance id. Removed when that plugin's scope closes. A duplicate
-     * name fails with `InvalidInput`.
-     */
-    readonly register: <I>(tool: Tool<I>) => Effect.Effect<void, ToolError, Scope.Scope | PluginContext>;
-    readonly guard: (name: string, guard: Guard) => Effect.Effect<void, never, Scope.Scope | PluginContext>;
+    /** By name. */
     readonly list: Effect.Effect<readonly ToolContribution[]>;
     /**
      * Validates input, runs `ToolExecuteHook`, guards, then the tool. Tool
@@ -143,4 +189,4 @@ export class Tools extends Context.Service<
      */
     readonly execute: (invocation: ToolInvocation, signal: AbortSignal, options?: ExecuteOptions) => Effect.Effect<ToolResult, ToolError>;
   }
->()("lemma/Tools") {}
+>()("lemma/ToolRunner") {}

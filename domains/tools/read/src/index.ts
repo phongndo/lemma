@@ -9,6 +9,7 @@ export type { ReadDetails } from "./read.ts";
 export default definePlugin({
   id: "tools.read",
   version: "0.1.0",
-  requires: { tools: Tools },
-  setup: ({ tools }) => tools.register(readTool),
+  setup: function* (_, owner) {
+    yield* owner.add(Tools, readTool);
+  },
 });

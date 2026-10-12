@@ -9,9 +9,9 @@ import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThink
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
-import { Events, PluginContext, definePlugin } from "@lemma/core";
+import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
 import { InteractionError, InteractionOrigin } from "@lemma/contracts";
-import { Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, StreamEvent } from "@lemma/llm";
+import { Llm, LlmError, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
@@ -709,6 +709,63 @@ describe("custom providers", () => {
       Effect.flatMap(Llm, (llm) => llm.addCustom({ name: "Local", api: "openai-completions", baseUrl: "http://localhost:1", models: ["m"] })),
     );
     expect(host.scopes).toEqual(["project"]);
+  });
+});
+
+describe("providers plugins add", () => {
+  it("serves one while its plugin adds it, attributed to that plugin, and leaves out one it cannot serve", async () => {
+    const { plugins } = setup({ providers: () => [] });
+    let captured: Context.Service.Shape<typeof PluginContext> | undefined;
+    const gateway = definePlugin({
+      id: "gateway",
+      layer: Layer.effectDiscard(
+        Effect.map(PluginContext, (context) => {
+          captured = context;
+        }),
+      ),
+    });
+    const [listed, models, after] = await runWith(
+      [...plugins, gateway],
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        const events = yield* Events;
+        // The provider list changing: clients hear of it.
+        const changed = Effect.forkChild(Stream.runHead(events.stream(ModelsChanged)));
+        const added = yield* changed;
+        yield* Effect.yieldNow;
+        const remove = yield* captured!.add(Providers, {
+          id: "corp",
+          name: "Corp Gateway",
+          api: "openai-completions",
+          baseUrl: "http://localhost:1/v1",
+          models: [{ id: "big", name: "Big", contextWindow: 200_000 }],
+        });
+        // A protocol it does not know: left out, with a warning.
+        yield* captured!.add(Providers, { id: "pigeon", api: "carrier-pigeon", baseUrl: "http://x", models: [] });
+        yield* Fiber.join(added);
+        const listed = yield* llm.providers;
+        const models = yield* llm.models();
+        const removed = yield* changed;
+        yield* Effect.yieldNow;
+        yield* remove;
+        yield* Fiber.join(removed);
+        return [listed, models, yield* llm.providers] as const;
+      }),
+    );
+    expect(listed.find((provider) => provider.id === "corp")).toMatchObject({ name: "Corp Gateway", from: "gateway" });
+    expect(models.find((model) => model.ref === "corp/big")).toMatchObject({ name: "Big", contextWindow: 200_000 });
+    expect(listed.some((provider) => provider.id === "pigeon")).toBe(false);
+    expect(after.some((provider) => provider.id === "corp")).toBe(false);
+  });
+
+  it("refuses what is not a provider, failing the plugin adding it", async () => {
+    const { plugins } = setup({ providers: () => [] });
+    const broken = definePlugin({
+      id: "broken",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.add(Providers, { id: "a/b", api: "x" } as never))),
+    });
+    const exit = await Effect.runPromiseExit(Effect.scoped(makeCore([...plugins, fakeHost().plugin, broken])));
+    expect(JSON.stringify(exit)).toContain("Not a provider");
   });
 });
 

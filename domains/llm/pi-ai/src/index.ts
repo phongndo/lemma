@@ -2,18 +2,19 @@ import { Cause, Effect, Fiber, Queue, Schedule, Schema, Stream } from "effect";
 import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
-import { Events, Hooks, definePlugin } from "@lemma/core";
+import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
+import type { Contribution } from "@lemma/core";
 import { Channels, HostControl, Interaction, InteractionError, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
-import { Llm, LlmError, LlmRequestHook, ModelsChanged, parseModelRef, serveLlm } from "@lemma/llm";
+import { Llm, LlmError, LlmRequestHook, ModelsChanged, Providers, parseModelRef, serveLlm } from "@lemma/llm";
 import type { NoticePayload } from "@lemma/contracts";
-import type { AuthType, LlmRequest, ProviderInfo, StreamEvent } from "@lemma/llm";
+import type { AuthType, LlmRequest, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
 import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
-import { CustomProvider, customEntry, customProvider, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
+import { CustomProvider, customEntry, customProvider, knownApi, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
 
 const Config = Schema.Struct({
   include: Schema.optional(Schema.Array(Schema.String)).annotate({ description: "Built-in provider ids to register; default all." }),
@@ -61,8 +62,15 @@ interface Options {
   readonly fetch?: typeof fetch;
 }
 
-/** `custom`: the user's entry for a provider they added. */
-function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom: CustomProvider | undefined): ProviderInfo {
+/** `custom`: the user's entry for a provider they added; `from`: the plugin that added it to `Providers`. */
+function toProviderInfo(
+  provider: Provider,
+  check: AuthCheck | undefined,
+  custom: CustomProvider | undefined,
+  from: Contribution<ProviderSpec> | undefined,
+): ProviderInfo {
+  // The user's logo for their own provider; a plugin's provider brings its own.
+  const logo = custom?.logo ?? from?.item.logo;
   const { apiKey, oauth } = provider.auth;
   return {
     id: provider.id,
@@ -74,7 +82,8 @@ function toProviderInfo(provider: Provider, check: AuthCheck | undefined, custom
     configured: check !== undefined,
     ...(check?.source === undefined ? {} : { source: check.source }),
     ...(custom === undefined ? {} : { custom: true }),
-    ...(custom?.logo === undefined ? {} : { logo: custom.logo }),
+    ...(logo === undefined ? {} : { logo }),
+    ...(from === undefined ? {} : { from: from.pluginId }),
   };
 }
 
@@ -192,6 +201,44 @@ export function makeLlmPlugin(options: Options = {}) {
        * `announce` even when the models stayed the same, since what is configured and available changed.
        */
       const authChanged = (providerId: string) => refresh([providerId]).pipe(Effect.timeout("20 seconds"), Effect.ignore, Effect.andThen(announce));
+      /** The providers plugins added (`Providers`) that it serves, by id. */
+      let added = new Map<string, Contribution<ProviderSpec>>();
+      /** The providers left out, and said so: each is warned of once, not again on every later change. */
+      const warned = new Set<ProviderSpec>();
+      /** Serves what `Providers` holds now: each added, changed, or gone, and clients told when any is. */
+      const syncAdded = (items: readonly Contribution<ProviderSpec>[]) =>
+        Effect.gen(function* () {
+          const next = new Map<string, Contribution<ProviderSpec>>();
+          for (const contribution of items) {
+            const { id, api } = contribution.item;
+            const leftOut = !knownApi(api)
+              ? `speaks "${api}", which this plugin does not`
+              : builtins.some((provider) => provider.id === id) || custom.has(id)
+                ? "is left out: a built-in or the user's provider has its id"
+                : undefined;
+            if (leftOut === undefined) next.set(id, contribution);
+            else if (!warned.has(contribution.item)) {
+              warned.add(contribution.item);
+              yield* Effect.logWarning(`llm: ${contribution.pluginId}'s provider "${id}" ${leftOut}`);
+            }
+          }
+          const changed = [...added.keys()].some((id) => !next.has(id)) || [...next].some(([id, contribution]) => added.get(id)?.item !== contribution.item);
+          for (const id of added.keys()) if (!next.has(id)) models.deleteProvider(id);
+          for (const [id, contribution] of next) {
+            if (added.get(id)?.item !== contribution.item)
+              models.setProvider(customProvider({ ...contribution.item, api: contribution.item.api as CustomProvider["api"] }));
+          }
+          added = next;
+          return changed;
+        });
+      const registries = yield* Registries;
+      yield* syncAdded(yield* registries.items(Providers));
+      // Every list, the first too: one added before this stream started is in it. One unchanged changes nothing.
+      yield* plugin.background(
+        "providers",
+        Stream.runForEach(registries.changes(Providers), (items) => Effect.flatMap(syncAdded(items), (changed) => (changed ? announce : Effect.void))),
+      );
+
       // Now and every hour, so models a provider adds or retires show without a restart.
       yield* plugin.background(
         "refresh models",
@@ -285,14 +332,17 @@ export function makeLlmPlugin(options: Options = {}) {
         });
 
       const llm = Llm.of({
-        providers: Effect.forEach(
-          models.getProviders(),
-          (provider) =>
-            Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
-              Effect.orElseSucceed(() => undefined),
-              Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id))),
-            ),
-          { concurrency: "unbounded" },
+        // Read when asked: the providers plugins add come and go while it runs.
+        providers: Effect.suspend(() =>
+          Effect.forEach(
+            models.getProviders(),
+            (provider) =>
+              Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
+                Effect.orElseSucceed(() => undefined),
+                Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id), added.get(provider.id))),
+              ),
+            { concurrency: "unbounded" },
+          ),
         ),
 
         models: (query) =>

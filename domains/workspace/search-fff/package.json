@@ -2,6 +2,7 @@
   "name": "@lemma/workspace-search-fff",
   "version": "0.1.0",
   "private": true,
+  "description": "File search with fff",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"

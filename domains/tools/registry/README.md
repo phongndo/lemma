@@ -1,22 +1,20 @@
 # tools.registry
 
-Provides `Tools` (`@lemma/tools`): the registry the agent lists and executes
-tools through. Tool plugins require `Tools` and register during activation.
+Provides `ToolRunner` (`@lemma/tools`), which the agent lists and runs tools
+through: the tools plugins add to `Tools`, checked by the guards they add to
+`Guards`. A tool plugin needs no capability, only the registry:
 
 ```ts
 const greet = definePlugin({
   id: "greet",
-  requires: [Tools],
-  layer: Layer.effectDiscard(
-    Effect.flatMap(Tools, (tools) =>
-      tools.register({
-        name: "greet",
-        description: "Greets someone by name.",
-        input: Schema.Struct({ name: Schema.String }),
-        execute: async ({ name }, { signal }) => new ToolResult({ content: [{ type: "text", text: `Hello, ${name}` }] }),
-      }),
-    ),
-  ),
+  setup: function* (_, owner) {
+    yield* owner.add(Tools, {
+      name: "greet",
+      description: "Greets someone by name.",
+      input: Schema.Struct({ name: Schema.String }),
+      execute: async ({ name }, { signal }) => new ToolResult({ content: [{ type: "text", text: `Hello, ${name}` }] }),
+    });
+  },
 });
 ```
 
@@ -29,18 +27,20 @@ const greet = definePlugin({
 ## Behavior
 
 - **Inspector.** `tools.registered` (in `Inspectors`) lists every tool with the plugin
-  that registered it, and the guards: the devtools' Inspectors panel and
+  that added it, and the guards: the devtools' Inspectors panel and
   `lemma inspectors` show it.
-- `register` records the caller's `PluginContext` id as the tool's `source` and
-  unregisters when the caller's scope closes. A name another plugin holds fails
-  with `InvalidInput`, naming that plugin; a plugin's replacement takes its
-  names over when a reload swaps them, so contributors need not be `exclusive`.
+- A tool's `source` is the plugin that added it, and it leaves with that
+  plugin, or sooner when the removal `add` returns runs. `Tools` refuses what is
+  not a tool (no name, description, input Schema, or `execute`), and a name
+  another plugin holds fails `Conflict`, naming that plugin, either way failing
+  the plugin adding it; a plugin's replacement takes its names over when a
+  reload swaps them, so contributors need not be `exclusive`.
 - A tool that only reads declares `replay: "safe"`: a call a host restart cut
   off then runs again when the turn resumes, where any other is reported to the
   model as interrupted (see the [agent](../../agent/loop/README.md#durability)). One
   that may run alongside others declares `parallel: "safe"`: the agent runs a
   run of consecutive such calls of one response at once. `list` carries both.
-- `list` is sorted by name, so re-registration after a reload does not reorder
+- `list` is sorted by name, so a tool added again after a reload does not reorder
   (and re-log) the tool list. Parameters are the draft-07 JSON Schema of the
   input's encoded side (Effect's `SchemaRepresentation` compiler), closed
   (`additionalProperties: false`), with `$schema`, ids, and titles removed and
@@ -62,7 +62,8 @@ const greet = definePlugin({
      failed for that alone and its caller may run it again later;
   5. an aborted `signal` fails with `Cancelled`, interrupting the tool. Promise
      tools see the abort on `ToolContext.signal`.
-- `guard(name, guard)`: `name` is the tool the guard applies to, or `*` for every
-  tool. Guards run in registration order; the first `deny` wins and its reason is
-  the result text (`details.deniedBy` names the guarding plugin).
+- A guard in `Guards` (`{ tool, guard }`) applies to the tool it names, or with
+  `*` to every tool. Guards run in the registry's order; the first `deny` wins
+  and its reason is the result text (`details.deniedBy` names the guarding
+  plugin).
 - `ToolExecuted` is published for every result, with its duration.
