@@ -20,7 +20,7 @@ export async function digestRun(seed: number): Promise<string> {
   const toolset = simTools(sim.random.split("tools"));
   const parts = { plugins: [model.plugin, toolset.plugin], configs: { "agent.loop": { maxSteps: 6, stopGrace: 0 } } };
   const alive = new Set<number>([1]);
-  const first = await SimHost.start(sim, disk, 1, parts, alive);
+  const first = await SimHost.start(sim, disk.mount(), 1, parts, alive);
   const sessions = await first.run(
     Effect.gen(function* () {
       const store = yield* Sessions;
@@ -37,7 +37,7 @@ export async function digestRun(seed: number): Promise<string> {
   await first.stop();
   alive.delete(1);
   alive.add(2);
-  const second = await SimHost.start(sim, disk, 2, parts, alive);
+  const second = await SimHost.start(sim, disk.mount(), 2, parts, alive);
   await second.run(Effect.flatMap(Agent, (agent) => agent.prompt(sessions[1], [{ type: "text", text: "fourth" }])));
   await second.stop();
   return digestOf(disk);

@@ -145,6 +145,49 @@ default 200 ticks, measured at the commit that last changed the generator):
   test beside this whole-system one, as TigerBeetle pairs them, catches it every
   time.
 
+## The harness benchmark
+
+`pnpm harness:bench` (`bench/harness.ts`) runs one session through turns of two
+steps (the model calls `echo`, then answers in five deltas), in simulated time
+on a file system in memory (`MemFs`: an append grows its file in place, where
+`SimDisk` copies it whole), and measures each step at 100, 1,000, and 10,000
+entries. Simulated waits cost no wall time, so a step's wall time is the
+harness's own. What it counts per step is the same on every machine, and is a
+hard budget (`packages/core/bench/budgets.ts`); `tests/bench.test.ts` pins the
+counts on a short session in CI, on Linux and macOS. Timings are advisory, and
+`scripts/bench-compare.ts --harness` compares them between builds.
+
+### The estimate
+
+A step is one model call and the tools it asks for. What the harness adds to
+it, by resource (TigerStyle's sketch: network, disk, memory, CPU, each for
+bandwidth and latency):
+
+- **Network.** The request is the context, which the model needs whatever the
+  harness does; the harness adds nothing to it. Latency is the model's:
+  seconds.
+- **Disk.** About six log lines a step (step start, request, answer, the tools'
+  start and results, step end), 2.3 KB, each synced before the next, as resuming
+  after a crash depends on each: 6 to 8 syncs, at 0.2 to 2 ms on an SSD, 2 to 15
+  ms a step. The slowest resource the harness touches, and a cost per step that
+  stays the same as the session grows.
+- **Memory.** An open session's events, about 1 KB each: 10 MB at 10,000.
+- **CPU.** The request is built from the session's branch: done
+  incrementally, a step's work is the new events and the request's own size,
+  the same at 10,000 entries as at 100. The target: a step at 10,000 entries
+  within 1.5 times one at 1,000, and an event from the model reaching a client
+  within a frame (16 ms).
+
+### What it measures
+
+At first (2026-10-12, Ryzen 9 9950X): a step reads its whole branch back about
+three times (510, 3,201, and 30,228 events at 100, 1,000, and 10,000 entries)
+and takes 1.35, 1.59, and 5.16 ms, 3.3 times as long at 10,000 entries as at
+1,000; 8 syncs and 2.3 KB written; 3 hooks run and 22 events published; a
+delta reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs
+stay as they are: each is a point the agent's resume depends on, and syncing
+two lines at once would need the store's contract to say which may share one.
+
 ## Running it
 
 `pnpm sim [--seed <n>] [--count <n>] [--forever] [--ticks <n>] [--dump]
