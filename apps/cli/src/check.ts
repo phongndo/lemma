@@ -187,7 +187,10 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Unat
       // A plugin of one's own is required to start, so one that fails keeps the host down (it exits, naming it): once
       // more, not required, so the host starts with it failed, and says why as it says of any plugin.
       const failing = named(host.lines);
+      // How the first host, failed, left things: stopped first, so the retry starts as clean as it did.
+      let failed: Stopped | undefined;
       if (!host.started && host.ended && failing.length > 0) {
+        failed = yield* host.stop;
         yield* Effect.promise(() => configure(home, failing));
         host = yield* hostIn(home, io.env);
       }
@@ -244,6 +247,7 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Unat
             : stopped === "orphaned"
               ? ["Processes the plugin started were still running once the host had exited"]
               : []),
+        ...(failed === "orphaned" ? ["Processes the plugin started were still running once its host had failed to start"] : []),
       ];
       const text = [
         ...checked.flatMap((status) => [

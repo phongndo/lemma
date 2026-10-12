@@ -52,6 +52,18 @@ describe("lemma plugins check", () => {
     expect(report.problems).toEqual([expect.stringMatching(/^broken is failed: .*cannot start: no settings/)]);
   }, 60_000);
 
+  test("stops a host that failed to start before starting another, and reports what the plugin left running", async () => {
+    const { code, out } = await invoke(["plugins", "check", fixture("failing-spawner.js"), "--json"], home);
+    expect(code).toBe(1);
+    expect(JSON.parse(out).problems).toEqual([
+      expect.stringMatching(/^failing-spawner is failed: .*cannot start: its helper never answered/),
+      // The second host, where it failed again, its child keeping it running.
+      expect.stringMatching(/^The host stopped but did not exit/),
+      "Processes the plugin started were still running once its host had failed to start",
+    ]);
+    expect(await spawned(4333)).toBe("");
+  }, 90_000);
+
   test("reports a plugin that keeps its host from exiting, which it stops all the same", async () => {
     const { code, out } = await invoke(["plugins", "check", fixture("leaky.js"), "--json"], home);
     expect(code).toBe(1);
