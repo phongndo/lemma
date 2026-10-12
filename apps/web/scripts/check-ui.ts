@@ -47,9 +47,10 @@ import { domainPlugins } from "../../../scripts/plugins.ts";
  *    host's events and its domains' streams, the channels it serves, the
  *    host's and the page's traces): a capability the runtime provides is the
  *    web app's, not a missing one.
- * 9. While a turn runs, the composer queues a prompt for after it, or with
- *    Alt steers it; a queued prompt can steer it after all, or be withdrawn
- *    (its row is a replaceable part), and a steer shows in its turn. A running
+ * 9. While a turn runs, the composer steers it, the steer showing where it
+ *    will join, or with Alt queues a prompt for after it, under a header that
+ *    opens and closes the queue; a queued prompt can steer it after all, or be
+ *    withdrawn (its row is a replaceable part), and a steer shows in its turn. A running
  *    turn's thread left and opened again, and the agent restarting under it,
  *    leave the turn shown to its end and its prompt placed once. Up brings back
  *    prompts sent in the thread. A send that fails is retried with its request
@@ -1338,8 +1339,9 @@ const devtools = async () => {
   await page.fill("textarea", "");
   await page.evaluate(() => (window as any).lemmaMock.answerPrompts({}));
 
-  // 9. While a turn runs: Enter queues a prompt for after it (`whenBusy`), Alt+Enter steers it, and a queued one can
-  // steer it after all or be withdrawn. The turn holds its steers until the queue is done with, so none depends on timing.
+  // 9. While a turn runs: Enter steers it (`whenBusy`), the steer shown where it will join and in no queue row, Alt+Enter
+  // queues a prompt for after it, and a queued one can steer it after all or be withdrawn. The turn holds its steers
+  // until the queue is done with, so none depends on timing.
   await page.goto(`${url}/?mock`);
   await settled(page);
   await page.evaluate(async () => {
@@ -1355,16 +1357,41 @@ const devtools = async () => {
   await page.keyboard.press("Enter");
   await page.waitForSelector(".send.stop");
   await page.fill("textarea", "steer it");
-  await page.keyboard.press("Alt+Enter");
-  assert.equal(await page.locator(".queued:has-text('steer it')").count(), 0, "a steer went out before the prompt before it was taken");
-  await page.evaluate(() => (window as any).lemmaMock.releaseTurnStarted());
-  await page
-    .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer")
-    .catch(() => assert.fail("a steer sent while a turn runs is not shown queued"));
-  assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
-  await page.fill("textarea", "for later");
   await page.keyboard.press("Enter");
-  await page.waitForSelector(".queued:has-text('for later') .queued-mode >> text=Next");
+  assert.equal(await page.locator(".steer-pending:has-text('steer it')").count(), 0, "a steer went out before the prompt before it was taken");
+  await page.evaluate(() => (window as any).lemmaMock.releaseTurnStarted());
+  await page.waitForSelector(".steer-pending:has-text('steer it')").catch(() => assert.fail("a steer sent while a turn runs is not shown where it will join"));
+  assert.equal(await page.locator(".queued").count(), 0, "a steer has a row in the composer's queue");
+  assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
+  // Until the turn takes it, a steer can be withdrawn from beside it.
+  await page.fill("textarea", "never mind");
+  await page.keyboard.press("Enter");
+  await page.hover(".steer-pending:has-text('never mind')");
+  await page.click(".steer-pending:has-text('never mind') .steer-withdraw");
+  await page
+    .waitForSelector(".steer-pending:has-text('never mind')", { state: "detached" })
+    .catch(() => assert.fail("a steer cannot be withdrawn before it joins"));
+  await page.fill("textarea", "for later");
+  await page.keyboard.press("Alt+Enter");
+  await page.waitForSelector(".composer-queue .queued:has-text('for later')");
+  await page.fill("textarea", "and after that");
+  await page.keyboard.press("Alt+Enter");
+  // The queue's thin header counts it, and closes it to that one line and opens it again, the focus staying in the prompt.
+  await page.waitForSelector(".queue-head .queue-count:text-is('2')").catch(() => assert.fail("the queue's header does not count it"));
+  assert.deepEqual(
+    await page.locator(".queued .queued-text").allTextContents(),
+    ["for later", "and after that"],
+    "the queue is not open with its prompts in order",
+  );
+  await page.click(".queue-head");
+  await page.waitForSelector(".queued", { state: "hidden" }).catch(() => assert.fail("the queue's header does not close it"));
+  assert(
+    await page.evaluate(() => document.getElementById(document.querySelector(".queue-head")!.getAttribute("aria-controls")!) !== null),
+    "the closed queue's header names a list that is not there",
+  );
+  assert(await page.evaluate(() => document.activeElement?.tagName === "TEXTAREA"), "the queue's header took the focus from the prompt");
+  await page.click(".queue-head");
+  await page.waitForSelector(".queued:has-text('and after that')").catch(() => assert.fail("the queue's header does not open it again"));
   // The row is a part: a plugin's own replaces it, and the default returns when that goes.
   await checkPlugin(page);
   await page.evaluate(async () => {
@@ -1385,22 +1412,28 @@ const devtools = async () => {
   await page.evaluate(() => (window as any).removeRow());
   await page.click(".queued:has-text('for later') .queued-remove");
   await page.waitForSelector(".queued:has-text('for later')", { state: "detached" });
-  // A follow-up promoted from its row steers the turn after all. It ends in a file mention, so the menu is open: the
-  // send button queues it as Enter would.
+  await page.click(".queued:has-text('and after that') .queued-remove");
+  await page.waitForSelector(".composer-queue", { state: "detached" });
+  // A follow-up promoted from its row steers the turn after all, and shows where it will join. It ends in a file
+  // mention, so the menu is open: the send button with Alt queues it as Alt+Enter would.
   await page.fill("textarea", "steer after all @README.md");
-  await page.click(".send:not(.stop)");
+  await page.click(".send:not(.stop)", { modifiers: ["Alt"] });
   await page.click(".queued:has-text('steer after all') .queued-promote");
-  await page
-    .waitForSelector(".queued:has-text('steer after all') .queued-mode >> text=Steer")
-    .catch(() => assert.fail("a queued prompt promoted from its row does not steer"));
+  await page.waitForSelector(".steer-pending:has-text('steer after all')").catch(() => assert.fail("a queued prompt promoted from its row does not steer"));
+  await page.waitForSelector(".composer-queue", { state: "detached" });
   await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
   await page.waitForSelector(".turn-footer", { timeout: 20_000 });
-  await page.waitForSelector(".queued", { state: "detached" });
+  await page.waitForSelector(".steer-pending", { state: "detached" });
   // One turn, holding every prompt but the withdrawn one: the steers where they joined.
   assert.deepEqual(
     await page.locator(".turn").evaluateAll((turns) => turns.map((turn) => [...turn.querySelectorAll(".user-text")].map((user) => user.textContent))),
     [["start a turn", "steer it", "steer after all @README.md"]],
     "the steers are not shown in the turn they joined",
+  );
+  assert.deepEqual(
+    await page.locator(".turn .user-steer:has(.steer-mark) .user-text").allTextContents(),
+    ["steer it", "steer after all @README.md"],
+    "the steers are not marked as steers, or the prompt is",
   );
   expectNoErrors("steering and queueing");
 
@@ -1508,6 +1541,10 @@ const devtools = async () => {
         input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", repeat, bubbles: true, composed: true, cancelable: true }));
       return document.querySelector(".composer-hint") !== null;
     }, repeats);
+  // A steer the stopped turn never places waits for the next prompt, with the queue, where it can be withdrawn.
+  await page.fill("textarea", "held for the next");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector(".steer-pending:has-text('held for the next')");
   await page.focus("textarea");
   assert(await escapes([false]), "a first Escape while a turn runs does not say a second stops it");
   // The window closes: a press after it is a first again.
@@ -1517,6 +1554,10 @@ const devtools = async () => {
   // The turn ends cancelled once it goes on to its steers.
   await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
   await page.waitForSelector(".turn-footer .badge:text-is('cancelled')", { timeout: 20_000 }).catch(() => assert.fail("a second Escape did not stop the turn"));
+  await page.waitForSelector(".queued:has-text('held for the next')").catch(() => assert.fail("a stopped turn's steer is not with the queue"));
+  assert.equal(await page.locator(".steer-pending").count(), 0, "a stopped turn's steer still shows as joining it");
+  await page.click(".queued:has-text('held for the next') .queued-remove");
+  await page.waitForSelector(".composer-queue", { state: "detached" }).catch(() => assert.fail("a stopped turn's steer cannot be withdrawn"));
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
   return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, inspectors, and the traces, filtered, by plugin, and their changes; a running turn takes steers and queued prompts, promotes a queued one, and outlives its thread being left and the agent restarting; Up brings back sent prompts; a failed send is retried with its request id; Escape twice stops a turn";
