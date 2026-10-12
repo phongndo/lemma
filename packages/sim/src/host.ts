@@ -95,15 +95,23 @@ export class SimHost {
 }
 
 /**
+ * `writeFileAtomic`'s temporary file names end in its process's pid and a count of the writes that process has made,
+ * in every run before this one too.
+ */
+const TEMPORARY = /\.\d+-\d+\.tmp$/;
+
+/**
  * A digest of every file on `disk` as it stands, names and bytes: two runs that wrote the same have the same. A
- * temporary file a crash left behind (`writeFileAtomic`'s, never read) is left out: its name counts the writes this
- * process has made, in every run before this one too.
+ * temporary file a crash left behind counts by the file it was for and what it holds, not the pid and count its name
+ * ends in.
  */
 export const digestOf = (disk: SimDisk): string => {
   const hash = createHash("sha256");
-  for (const file of [...disk.list()].filter((path) => !path.endsWith(".tmp")).sort()) {
-    hash.update(`${file}\u0000`);
-    hash.update(disk.read(file) ?? "");
+  const files = disk.list().map((path) => ({ name: path.replace(TEMPORARY, ".tmp"), bytes: disk.read(path) ?? "" }));
+  files.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : a.bytes < b.bytes ? -1 : a.bytes > b.bytes ? 1 : 0));
+  for (const { name, bytes } of files) {
+    hash.update(`${name}\u0000`);
+    hash.update(bytes);
     hash.update("\u0000");
   }
   return hash.digest("hex");
