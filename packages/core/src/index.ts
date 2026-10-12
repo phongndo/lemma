@@ -25,6 +25,7 @@ export { Admitted, Registries, Registry } from "./registries.ts";
 export type { AdmittedWork, ContributeOptions, Contribution, RegistryOptions } from "./registries.ts";
 export type { RegistrySnapshot } from "./internal/registries.ts";
 export type { Composition, Loader, LoaderOptions, PluginEntry, PluginSource, ReloadReport } from "./loader.ts";
+export { assert, AssertionError, Verify } from "./assert.ts";
 export { awaitable, fail, isExpectedFailure } from "./awaitable.ts";
 export { reportUnhandled } from "./unhandled.ts";
 export { makeSpanCollector } from "./trace.ts";

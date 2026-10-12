@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { promises as nodeFs } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { Option, Schema } from "effect";
@@ -106,18 +105,86 @@ export const nodeFileSystem: FileSystem = {
   utimes: (path, atime, mtime) => nodeFs.utimes(path, atime, mtime),
 };
 
+/** What a platform that cannot open or sync a directory answers (Windows, some network file systems). */
+const UNSUPPORTED = new Set(["EISDIR", "EPERM", "EACCES", "EINVAL", "ENOTSUP", "EOPNOTSUPP"]);
+
+/** Rethrows `cause` unless it says the platform cannot do the sync asked for, which is then skipped. */
+export const unsupportedSync = (cause: unknown): void => {
+  if (!UNSUPPORTED.has(errorCode(cause) ?? "")) throw cause;
+};
+
+/**
+ * Makes the names in a directory durable: a new file's, or a removed one's absence. Skipped where the platform
+ * cannot sync a directory (the data itself is still synced); any other failure, such as EIO, is thrown, since a
+ * name that may not survive a crash must not be reported written.
+ */
+export const syncDirectory = async (fs: FileSystem, dir: string): Promise<void> => {
+  const handle = await fs.open(dir, "r").catch(unsupportedSync);
+  if (handle === undefined) return;
+  try {
+    await handle.sync().catch(unsupportedSync);
+  } finally {
+    await handle.close();
+  }
+};
+
+/**
+ * Syncs every directory above `dir`, so `dir` and each of its ancestors keep their names in a crash, whichever of
+ * them an earlier run made and then failed to sync.
+ */
+export const syncAncestors = async (fs: FileSystem, dir: string): Promise<void> => {
+  for (let at = dir; dirname(at) !== at; at = dirname(at)) await syncDirectory(fs, dirname(at));
+};
+
+/**
+ * Syncs the parent of `dir`, and of each directory above it up to `created` (what `mkdir(dir, { recursive: true })`
+ * returned: the first directory it made, if any). A directory's own name survives a crash only once its parent is
+ * synced, and `dir` may have been made by an earlier call that failed before syncing it.
+ */
+export const syncParents = async (fs: FileSystem, dir: string, created: unknown): Promise<void> => {
+  for (let at = dir; ; at = dirname(at)) {
+    await syncDirectory(fs, dirname(at));
+    if (typeof created !== "string" || at === created || dirname(at) === at) return;
+  }
+};
+
+/** Removes the file at `path` if there is one; `sync`, its absence survives a crash before this returns. */
+export async function removeFile(path: string, options: { readonly sync?: boolean; readonly fs?: FileSystem } = {}): Promise<void> {
+  const fs = options.fs ?? nodeFileSystem;
+  await fs.rm(path, { force: true });
+  if (options.sync === true) await syncDirectory(fs, dirname(path));
+}
+
 export interface AtomicWriteOptions {
   /** The file's mode, set explicitly since the creation mode is subject to umask. Default 0600. */
   readonly mode?: number;
   /** The directory's mode when it has to be created. Default 0700. */
   readonly dirMode?: number;
-  /** Syncs the data before it takes the file's place, so a power loss cannot leave it empty. */
+  /**
+   * Makes the write survive a crash before the call returns: the data is synced before it takes the file's place,
+   * so a power loss cannot leave it empty, and the directory after, so it cannot undo the rename (or the link).
+   * A directory the call created has its name synced too.
+   */
   readonly sync?: boolean;
   /** Only creates the file: one that exists is left as it is, and the call returns false. */
   readonly exclusive?: boolean;
   /** Default `nodeFileSystem`. */
   readonly fs?: FileSystem;
 }
+
+/** Temporary files this process has made: their names are its pid and a count, so a simulated run names them alike. */
+let temps = 0;
+/** A new temporary file beside `path`. A name left by a crashed process whose pid this one has now is skipped. */
+const openTemp = async (fs: FileSystem, path: string, mode: number): Promise<{ readonly temp: string; readonly handle: FileHandle }> => {
+  for (let attempt = 1; ; attempt++) {
+    const temp = `${path}.${process.pid}-${++temps}.tmp`;
+    try {
+      return { temp, handle: await fs.open(temp, "wx", mode) };
+    } catch (cause) {
+      if (errorCode(cause) !== "EEXIST" || attempt === 16) throw cause;
+    }
+  }
+};
 
 /**
  * Writes `text` to `path` whole or not at all: to a temporary file beside it,
@@ -128,28 +195,33 @@ export interface AtomicWriteOptions {
 export async function writeFileAtomic(path: string, text: string, options: AtomicWriteOptions = {}): Promise<boolean> {
   const fs = options.fs ?? nodeFileSystem;
   const mode = options.mode ?? 0o600;
-  await fs.mkdir(dirname(path), { recursive: true, mode: options.dirMode ?? 0o700 });
-  const temp = `${path}.${randomUUID()}.tmp`;
+  const sync = options.sync === true;
+  const created = await fs.mkdir(dirname(path), { recursive: true, mode: options.dirMode ?? 0o700 });
+  if (sync && created !== undefined) await syncParents(fs, dirname(path), created);
+  const { temp, handle } = await openTemp(fs, path, mode);
   try {
-    const handle = await fs.open(temp, "wx", mode);
     try {
       await handle.chmod(mode);
       await handle.writeFile(text);
-      if (options.sync === true) await handle.datasync();
+      if (sync) await handle.datasync();
     } finally {
       await handle.close();
     }
     if (options.exclusive !== true) {
       await fs.rename(temp, path);
+      if (sync) await syncDirectory(fs, dirname(path));
       return true;
     }
     try {
       await fs.link(temp, path);
-      return true;
     } catch (cause) {
       if (errorCode(cause) === "EEXIST") return false;
       throw cause;
     }
+    // The temporary name is removed below; synced after that, the directory keeps only the link.
+    await fs.rm(temp, { force: true });
+    if (sync) await syncDirectory(fs, dirname(path));
+    return true;
   } finally {
     // Gone already after a rename; a link or a failure leaves it.
     await fs.rm(temp, { force: true });

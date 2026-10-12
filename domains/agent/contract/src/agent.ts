@@ -12,8 +12,11 @@ import type { ToolContribution } from "@lemma/tools";
 
 export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
-  /** `Retracted`: `withdraw` took the prompt out of the queue before a turn placed it. */
-  readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted";
+  /**
+   * `Retracted`: `withdraw` took the prompt out of the queue before a turn placed it. `Io`: the agent could not record
+   * the change on disk (its journal), so it did not make it: a prompt was not accepted, or not withdrawn.
+   */
+  readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted" | "Io";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -330,7 +333,8 @@ export class Agent extends Context.Service<
      * turn places it after its current step, as if it had been sent to steer.
      * False when it was not a queued follow-up (placed already, withdrawn, or a
      * steer), or no turn runs to place it (the queue held after a failed or
-     * cancelled turn, or the turn suspended). Fails as `queue` does.
+     * cancelled turn, or the turn suspended). Fails as `queue` does, and `Io`
+     * when the agent could not record the change, the prompt left a follow-up.
      */
     readonly promote: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
     /** The session as a client joining now should show it (see `AgentView`). Fails as `queue` does. */

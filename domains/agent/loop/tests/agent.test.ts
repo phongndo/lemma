@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
 import type { Handler } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
+import { nodeFileSystem } from "@lemma/contracts/fs";
 import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
 import type { PromptDecision, PromptInput } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
@@ -794,7 +795,7 @@ describe("agent", () => {
         // Heard removed, the agent drops the session's queue and journal.
         expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: id, message: `Session ${id} was deleted` });
         expect(yield* a.queue(id)).toEqual([]);
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -838,7 +839,7 @@ describe("agent", () => {
           const a = yield* Agent;
           expect(yield* a.busy(id)).toBe(false);
           expect(yield* Effect.flip(a.prompt(id, text("now")))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
-          expect((yield* readJournals(dir)).get(id)?.turn).toBeDefined();
+          expect((yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id)?.turn).toBeDefined();
         }),
       );
     }
@@ -849,7 +850,7 @@ describe("agent", () => {
         const events = yield* log(id);
         expect(ofType(events, "turn-start")).toHaveLength(1);
         expect(ofType(events, "turn-end")).toMatchObject([{ reason: "done" }]);
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -864,7 +865,7 @@ describe("agent", () => {
         yield* waitFor(a.busy(id), (busy) => !busy);
         failing.after = false;
         expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "done" }]);
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -893,7 +894,7 @@ describe("agent", () => {
     await withAgent({ sessions: unreadableSessions({ holds: () => true }), scripts: [] }, ({ requests }) =>
       Effect.gen(function* () {
         yield* Effect.flatMap(Agent, (a) => a.cancel(id));
-        expect((yield* readJournals(dir)).get(id)?.turn).toMatchObject({ cancelling: true });
+        expect((yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id)?.turn).toMatchObject({ cancelling: true });
         expect(requests).toHaveLength(0);
       }),
     );
@@ -904,7 +905,7 @@ describe("agent", () => {
         yield* waitFor(a.busy(id), (busy) => !busy);
         expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "cancelled" }]);
         expect(requests).toHaveLength(0);
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -916,7 +917,7 @@ describe("agent", () => {
         yield* Effect.flatMap(Agent, (a) => a.cancel(id));
         expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "cancelled" }]);
         expect(requests).toHaveLength(0);
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -932,7 +933,7 @@ describe("agent", () => {
         expect(ofType(events, "attempt")).toMatchObject([{ message: { stopReason: "aborted", provider: "fake", model: "m1" } }]);
         expect(ofType(events, "turn-end")).toMatchObject([{ reason: "cancelled" }]);
         expect(requests).toHaveLength(0);
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -972,7 +973,7 @@ describe("agent", () => {
         const a = yield* Agent;
         expect(yield* a.queue(id)).toEqual([]);
         expect(yield* a.withdraw(id, "steer-placed")).toBe(false);
-        expect((yield* readJournals(dir)).get(id)?.queue).toEqual([]);
+        expect((yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id)?.queue).toEqual([]);
       }),
     );
     await withAgent({ scripts: [reply("done")] }, ({ requests }) =>
@@ -993,7 +994,7 @@ describe("agent", () => {
         expect(yield* Effect.flip(a.withdraw(id, "q1"))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
         expect(yield* Effect.flip(a.queue(id))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
         expect(yield* Effect.flip(a.view(id))).toMatchObject({ reason: "Session", sessionId: id, message: "unreadable" });
-        expect((yield* readJournals(dir)).get(id)?.queue).toMatchObject([{ requestId: "q1" }]);
+        expect((yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id)?.queue).toMatchObject([{ requestId: "q1" }]);
       }),
     );
   });
@@ -1009,10 +1010,10 @@ describe("agent", () => {
         expect((yield* a.queue(id)).map((prompt) => prompt.requestId)).toEqual(["q1"]);
         expect(yield* a.withdraw(id, "q1")).toBe(true);
         expect(yield* a.queue(id)).toEqual([]);
-        expect((yield* readJournals(dir)).get(id)).toMatchObject({ turn: { prompts: [expect.anything()] }, queue: [] });
+        expect((yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id)).toMatchObject({ turn: { prompts: [expect.anything()] }, queue: [] });
         // Nothing holds the session for a suspended turn.
         yield* Effect.flatMap(Sessions, (store) => store.remove(id));
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(id));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
       }),
     );
   });
@@ -1055,7 +1056,7 @@ describe("agent", () => {
           (exit) => exit !== undefined,
         );
         expect(yield* Fiber.join(queued)).toMatchObject({ reason: "Session", sessionId: queuedIn, message: `Session ${queuedIn} was deleted` });
-        yield* waitFor(readJournals(dir), (journals) => !journals.has(queuedIn));
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(queuedIn));
       }),
     );
   }, 30_000);

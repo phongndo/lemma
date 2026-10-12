@@ -1,4 +1,4 @@
-import * as os from "node:os";
+import { Clock, Effect } from "effect";
 import type { PromptContent, PromptSection } from "@lemma/agent";
 
 /**
@@ -34,6 +34,10 @@ interface EnvironmentFacts {
   readonly sessionId: string;
   /** How to run the `lemma` CLI from a shell, when the host app knows. */
   readonly cli?: string;
+  /** The platform, as `linux (x64)`. */
+  readonly platform: string;
+  /** Epoch ms now, from Effect's `Clock`; the date is the local one. */
+  readonly now: number;
 }
 
 /**
@@ -42,13 +46,13 @@ interface EnvironmentFacts {
  * (and with it the provider's prompt cache) stays stable within a session and day.
  */
 function environment(facts: EnvironmentFacts): string {
-  const now = new Date();
+  const now = new Date(facts.now);
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return [
     "<environment>",
     `Current working directory: ${facts.cwd}`,
     `Current date: ${date}`,
-    `Platform: ${os.platform()} (${os.arch()})`,
+    `Platform: ${facts.platform}`,
     `Lemma session: ${facts.sessionId}`,
     ...(facts.cli === undefined
       ? []
@@ -65,10 +69,11 @@ export const baseSection = (override?: string): PromptSection => ({
   text: ({ tools }) => override ?? basePrompt(new Set(tools.map((tool) => tool.spec.name))),
 });
 
-/** Where and when the agent runs; `cli` (its setting) names the `lemma` CLI. */
-export const environmentSection = (cli?: string): PromptSection => ({
+/** Where and when the agent runs, on `platform`; `cli` (its setting) names the `lemma` CLI. */
+export const environmentSection = (cli: string | undefined, platform: string): PromptSection => ({
   id: "agent.environment",
-  text: ({ cwd, sessionId }) => environment({ cwd, sessionId, ...(cli === undefined ? {} : { cli }) }),
+  text: ({ cwd, sessionId }) =>
+    Effect.map(Clock.currentTimeMillis, (now) => environment({ cwd, sessionId, platform, now, ...(cli === undefined ? {} : { cli }) })),
 });
 
 const TITLE_CHARS = 60;

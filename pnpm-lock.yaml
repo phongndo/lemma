@@ -598,6 +598,9 @@ importers:
       '@lemma/sessions-files':
         specifier: workspace:*
         version: link:../../sessions/files
+      '@lemma/testing':
+        specifier: workspace:*
+        version: link:../../../packages/testing
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../tools/registry

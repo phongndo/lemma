@@ -390,6 +390,20 @@ Faults belong to plugin instances: replacement/restart begins with no retained
 fault, removal drops its snapshot, and a retired or failed staged instance cannot
 overwrite its replacement's fault. Observer failures leave their plugin active.
 
+### Assertions
+
+`assert(condition, message)` checks what must hold where it is used (an
+argument, a result, an invariant between two states) and stays on in
+production: a broken one throws an `AssertionError`, a defect, which the core
+reports as the fault of the plugin whose work broke it, rather than letting it
+go on with state it can no longer trust. Assert a fact on both sides of a
+boundary (before a write, and after reading it back), and an implication as
+`if (a) assert(b, …)`. A check too costly for every call (rebuilding from
+scratch what was kept incrementally) runs only where `Verify` is true: off by
+default, and a runtime setting, so a caller that provides it (a simulation)
+turns it on for every plugin's work. Both come from `@lemma/core` and
+`@lemma/core/plain`.
+
 ## Loader and reload
 
 `makeLoader({ source, composition })` runs a composition described by data: plugin ids mapped to `{ enabled?, config? }`, resolved to definitions by a `PluginSource` the host supplies. `loader.apply(next)` changes it at runtime:

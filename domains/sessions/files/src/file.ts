@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { Effect, Result } from "effect";
 import { SessionError } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
-import { errorCode } from "@lemma/contracts/fs";
+import { errorCode, syncDirectory, syncParents, unsupportedSync } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
 import { decodeRecord, encodeLine } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
@@ -188,7 +188,7 @@ export const confirmLast = async (fs: FileSystem, file: string, from: Pick<Scann
     const bytes = Buffer.alloc(length);
     const { bytesRead } = await handle.read(bytes, 0, length, from.lastStart);
     await handle.write(bytes, 0, bytesRead, from.lastStart);
-    await handle.datasync().catch(unsupported);
+    await handle.datasync().catch(unsupportedSync);
   } finally {
     await handle.close();
   }
@@ -441,48 +441,6 @@ const writerFor = (handle: FileHandle, file: string, sessionId: string, confirme
     // `tryPromise`: a failed close is ignored like any other; `promise` would make it a defect.
     close: Effect.tryPromise(() => handle.close()).pipe(Effect.ignore),
   };
-};
-
-/** What a platform that cannot open or sync a directory answers (Windows, some network file systems). */
-const UNSUPPORTED = new Set(["EISDIR", "EPERM", "EACCES", "EINVAL", "ENOTSUP", "EOPNOTSUPP"]);
-const unsupported = (cause: unknown) => {
-  if (!UNSUPPORTED.has(errorCode(cause) ?? "")) throw cause;
-};
-
-/**
- * Makes the names in a directory durable: a new file's, or a removed one's absence. Skipped where the platform
- * cannot sync a directory (the data itself is still synced); any other failure, such as EIO, is thrown, since a
- * name that may not survive a crash must not be reported written.
- */
-export const syncDirectory = async (fs: FileSystem, dir: string) => {
-  const handle = await fs.open(dir, "r").catch(unsupported);
-  if (handle === undefined) return;
-  try {
-    await handle.sync().catch(unsupported);
-  } finally {
-    await handle.close();
-  }
-};
-
-/**
- * Syncs every directory above `dir`, so `dir` and each of its ancestors keep their names in a crash, whichever of
- * them an earlier run made and then failed to sync. Once per start, for the sessions directory.
- */
-export const syncAncestors = async (fs: FileSystem, dir: string) => {
-  for (let at = dir; path.dirname(at) !== at; at = path.dirname(at)) await syncDirectory(fs, path.dirname(at));
-};
-
-/**
- * Syncs the parent of `dir`, and of each directory above it up to `created` (what `mkdir(dir, { recursive: true })`
- * returned: the first directory it made, if any). A directory's own name survives a crash only once its parent is
- * synced, and `dir` may have been made by an earlier call that failed before syncing it. Without this, a crash
- * could take a project's new directory, and the session just created in it.
- */
-export const syncParents = async (fs: FileSystem, dir: string, created: unknown) => {
-  for (let at = dir; ; at = path.dirname(at)) {
-    await syncDirectory(fs, path.dirname(at));
-    if (typeof created !== "string" || at === created || path.dirname(at) === at) return;
-  }
 };
 
 /** Creates a session file with its header. Uninterruptible, so its handle always reaches the writer. */

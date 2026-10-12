@@ -177,6 +177,7 @@ const RUNTIME_CONTRACTS = [
   "discovery.ts",
   "fs.ts",
   "host.ts",
+  "ids.ts",
   "index.ts",
   "inspectors.ts",
   "interaction.ts",
@@ -666,25 +667,28 @@ ratchet(tempNames, tempNameCeilings, "tempNameCeilings", "fixed names under the 
 if (lower.length) console.log(`Ceilings to lower in scripts/check-boundaries.ts, so they stay down:\n${lower.map((note) => `  ${note}`).join("\n")}`);
 report("Test hygiene violations (scripts/check-boundaries.ts)", testProblems, "test hygiene: ok");
 
-// Code behind a seam reaches time, randomness, and the disk only through it, so a simulation controls all three
-// (domains/sessions/files/README.md#testing): Effect's `Clock` and `Random`, and the `FileSystem` it is given.
+// Code behind a seam reaches time, randomness, timers, and the disk only through it, so a simulation controls all of
+// them (domains/sessions/files/README.md#testing, packages/sim): Effect's `Clock` (its sleeps for timers) and `Random`,
+// and the `FileSystem` and `IdSource` it is made with.
 const reach = {
-  clock: [/\bDate\.now\(/g, "Date.now() (use Effect's Clock)"],
-  random: [/\bMath\.random\(|\brandom(?:Bytes|UUID|Int)\(/g, "a random source other than Effect's Random"],
+  clock: [/\bDate\.now\(|\bnew Date\(\)|\bperformance\.now\(/g, "the wall clock (use Effect's Clock)"],
+  random: [/\bMath\.random\(|\brandom(?:Bytes|UUID|Int)\(|\bgetRandomValues\(/g, "a random source other than Effect's Random or an IdSource"],
+  timer: [/\bset(?:Timeout|Interval|Immediate)\(/g, "a timer (use Effect.sleep, on Effect's Clock)"],
   disk: [/from\s+["']node:fs\/promises["']|\bpromises\b[^;]*from\s+["']node:fs["']/g, "node:fs's file operations (use the FileSystem given)"],
 } as const;
 const seamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
-  "domains/sessions/files/src": ["clock", "random", "disk"],
-  "domains/agent/loop/src/turn.ts": ["clock"],
-  "domains/agent/loop/src/live.ts": ["clock", "random"],
+  "domains/sessions/files/src": ["clock", "random", "timer", "disk"],
+  "domains/agent/loop/src": ["clock", "random", "timer", "disk"],
+  "domains/tools/registry/src": ["clock", "random", "timer"],
+  "domains/context/compaction/src": ["clock", "random", "timer"],
+  // A step's timing is logged as its credit.
+  "packages/core/src/internal/hooks.ts": ["clock", "random", "timer"],
 };
 // What a seamed file may still reach directly, and why.
 const unseamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
-  // The lock's lease is wall-clock time that other processes compare with the lock file's mtime; its token only
-  // has to be unique.
+  // The lock's lease is wall-clock time that other processes compare with the lock file's mtime, and its token only
+  // has to be unique: they are the defaults of the `Claimant`, which a simulation passes its own of.
   "domains/sessions/files/src/lock.ts": ["clock", "random"],
-  // Turn and step ids only have to be unique; nothing a simulation checks depends on them.
-  "domains/agent/loop/src/turn.ts": ["random"],
 };
 const seamProblems: string[] = [];
 for (const [prefix, kinds] of Object.entries(seamed)) {

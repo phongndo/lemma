@@ -128,6 +128,8 @@ A prompt sent while the session's turn runs does what its `whenBusy` says:
 - `steer`: queued; placed in the running turn after its current step (step 6).
 - `reject`: fails `Busy`.
 
+A queue holds at most 256 prompts (`MAX_QUEUED`): one more fails `Busy`.
+
 A session with a turn running cannot be deleted: each turn holds its session
 (`Sessions.hold`) from before it starts until it has stopped, through a
 stopping agent's grace too (see [Stopping](#stopping)). A prompt that would
@@ -141,7 +143,8 @@ while no agent ran goes when the next starts.
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
 `Retracted`), `promote` makes a queued follow-up a steer in its place (the
 running turn places it after its current step; with no turn running it stays a follow-up), and `QueueChanged` reports every change with a revision that only
-grows, across restarts too (`view` carries it as well), so a client keeps the
+grows, across restarts too (it is journaled, and drawn from the clock: `view`
+carries it as well), so a client keeps the
 newest queue it has heard of whichever arrives first. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
 prompts first, then itself, in one turn. Each `prompt` call resolves when the
@@ -169,8 +172,14 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
   was started with, whether it logs `agent.started` events, and whether it is
-  being cancelled), and the queue. Written, and synced, before the log is: when
-  a turn starts, a prompt is queued, placed, or withdrawn, and when a turn ends.
+  being cancelled), the queue, and its revision. Written, and synced with its
+  directory, before the log is: when a turn starts, a prompt is queued, placed,
+  or withdrawn, and when a turn ends. A change it records is made only once it
+  is durable: a prompt that cannot be queued, or start its turn, because the
+  journal cannot be written (a full or failing disk) fails `Io`, and so does a
+  withdrawal, each leaving the queue as it was. A change the log records
+  already (a steer placed, a turn ended, a cancel asked for) is made whatever
+  the write does, and checked against the log on the next start.
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 
@@ -273,6 +282,18 @@ asked again, or run (or reported interrupted) when the turn resumes.
 - **Errors.** LLM failures are recorded in the log (`attempt`, `turn-end` with
   `error`) and `prompt` resolves; `Session` and `Hook` failures also fail `prompt`.
   A cancelled turn resolves normally.
+
+## Testing
+
+The plugin is `makeAgentPlugin(options)` with the defaults filled in, as
+`sessions.files` is `makeSessionsPlugin`: a test or a simulation passes the
+`FileSystem` its journal is on (`fs`, a `SimDisk` mount), where its turn, step,
+and prompt ids' random bytes come from (`ids`, an `IdSource`), and the platform
+the environment section names (`platform`). Time comes from Effect's `Clock`
+(`scripts/check-boundaries.ts` keeps the plugin from reaching the wall clock, a
+timer, or the disk any other way), so one seed fixes a run.
+`tests/disk.test.ts` crashes a `SimDisk` right after the queue changes and
+checks the journal kept the change.
 
 ## Inspector
 

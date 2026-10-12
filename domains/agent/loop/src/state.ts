@@ -1,9 +1,9 @@
-import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Data, Effect, Schema } from "effect";
 import { QueuedPrompt } from "@lemma/agent";
 import { AssistantMessage } from "@lemma/llm";
-import { readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
+import { readJsonFile, removeFile, writeFileAtomic } from "@lemma/contracts/fs";
+import type { FileSystem } from "@lemma/contracts/fs";
 
 /*
  * What the agent keeps on disk beside the session log, per session, under
@@ -34,6 +34,8 @@ export const Journal = Schema.Struct({
   queue: Schema.Array(QueuedPrompt),
   /** The last turn failed or was cancelled: the queue waits for the next prompt rather than starting a turn. */
   held: Schema.optional(Schema.Boolean),
+  /** The queue's revision when this was written, so the next instance's keep growing from it (see `QueueChanged`). */
+  revision: Schema.optional(Schema.Number),
 });
 export type Journal = typeof Journal.Type;
 
@@ -44,27 +46,40 @@ export const LiveFile = Schema.Struct({
 });
 export type LiveFile = typeof LiveFile.Type;
 
-const stateDir = (home: string) => join(home, "agent");
-const journalPath = (home: string, sessionId: string) => join(stateDir(home), `${sessionId}.json`);
-const livePath = (home: string, sessionId: string) => join(stateDir(home), `${sessionId}.live.json`);
+/** A file of the agent's state could not be written or removed: a full or failing disk. */
+export class StateWriteError extends Data.TaggedError("StateWriteError")<{ readonly message: string; readonly cause: unknown }> {}
+
+/** Where the agent's state is, and the file system it is on. */
+export interface StateFiles {
+  readonly home: string;
+  readonly fs: FileSystem;
+}
+
+const stateDir = ({ home }: StateFiles) => join(home, "agent");
+const journalPath = (files: StateFiles, sessionId: string) => join(stateDir(files), `${sessionId}.json`);
+const livePath = (files: StateFiles, sessionId: string) => join(stateDir(files), `${sessionId}.live.json`);
+
+const attempt = (what: string, write: () => Promise<unknown>): Effect.Effect<void, StateWriteError> =>
+  Effect.tryPromise({
+    try: write,
+    catch: (cause) => new StateWriteError({ message: `could not ${what}: ${cause instanceof Error ? cause.message : String(cause)}`, cause }),
+  }).pipe(Effect.asVoid);
 
 /** A write that fails (a full disk) costs durability, not the turn: it is logged, and the next write tries again. */
 const bestEffort = (what: string, write: () => Promise<unknown>): Effect.Effect<void> =>
-  Effect.tryPromise(write).pipe(
-    Effect.asVoid,
-    Effect.catch((error) => Effect.logWarning(`agent: could not ${what}: ${error.cause instanceof Error ? error.cause.message : String(error.cause)}`)),
-  );
+  attempt(what, write).pipe(Effect.catch((error) => Effect.logWarning(`agent: ${error.message}`)));
 
 /** Every session's journal; one that cannot be read is skipped with a warning, so it never keeps the agent from starting. */
-export const readJournals = (home: string): Effect.Effect<ReadonlyMap<string, Journal>> =>
+export const readJournals = (files: StateFiles): Effect.Effect<ReadonlyMap<string, Journal>> =>
   Effect.gen(function* () {
-    const names = yield* Effect.promise(() => readdir(stateDir(home)).catch(() => [] as string[]));
+    const names = yield* Effect.promise(() => files.fs.readdir(stateDir(files)).catch(() => [] as string[]));
     const found = new Map<string, Journal>();
-    for (const name of names) {
+    // In name order, so the sessions are taken up in the same order on every start.
+    for (const name of [...names].sort()) {
       if (!name.endsWith(".json") || name.endsWith(".live.json")) continue;
       const sessionId = name.slice(0, -".json".length);
-      const journal = yield* Effect.promise(() => readJsonFile(join(stateDir(home), name), Journal));
-      if (journal === undefined) yield* Effect.logWarning(`agent: ignoring unreadable state ${join(stateDir(home), name)}`);
+      const journal = yield* Effect.promise(() => readJsonFile(join(stateDir(files), name), Journal, files.fs));
+      if (journal === undefined) yield* Effect.logWarning(`agent: ignoring unreadable state ${join(stateDir(files), name)}`);
       else found.set(sessionId, journal);
     }
     return found;
@@ -72,29 +87,28 @@ export const readJournals = (home: string): Effect.Effect<ReadonlyMap<string, Jo
 
 const isEmpty = (journal: Journal) => journal.turn === undefined && journal.queue.length === 0 && journal.held !== true;
 
-/** Replaces the session's journal, synced; an empty one is removed. */
-export const writeJournal = (home: string, sessionId: string, journal: Journal): Effect.Effect<void> =>
-  bestEffort(`write the state of session ${sessionId}`, async () => {
-    if (isEmpty(journal)) {
-      await rm(journalPath(home, sessionId), { force: true });
-      return;
-    }
-    await writeFileAtomic(journalPath(home, sessionId), `${JSON.stringify(journal)}\n`, { sync: true });
+/**
+ * Replaces the session's journal, durably: once this succeeds, a crash leaves it (or, for an empty one, its absence).
+ * Fails when it cannot, so the change it records is not reported made.
+ */
+export const writeJournal = (files: StateFiles, sessionId: string, journal: Journal): Effect.Effect<void, StateWriteError> =>
+  attempt(`write the state of session ${sessionId}`, async () => {
+    if (isEmpty(journal)) return removeFile(journalPath(files, sessionId), { sync: true, fs: files.fs });
+    await writeFileAtomic(journalPath(files, sessionId), `${JSON.stringify(journal)}\n`, { sync: true, fs: files.fs });
   });
 
-export const readLive = (home: string, sessionId: string): Effect.Effect<LiveFile | undefined> =>
-  Effect.promise(() => readJsonFile(livePath(home, sessionId), LiveFile));
+export const readLive = (files: StateFiles, sessionId: string): Effect.Effect<LiveFile | undefined> =>
+  Effect.promise(() => readJsonFile(livePath(files, sessionId), LiveFile, files.fs));
 
-export const writeLive = (home: string, sessionId: string, live: LiveFile): Effect.Effect<void> =>
-  bestEffort(`write the output of session ${sessionId}`, async () => {
-    await writeFileAtomic(livePath(home, sessionId), JSON.stringify(live));
-  });
+/** The running turn's output so far, unsynced: it is a convenience, which the log does not need. */
+export const writeLive = (files: StateFiles, sessionId: string, live: LiveFile): Effect.Effect<void> =>
+  bestEffort(`write the output of session ${sessionId}`, () => writeFileAtomic(livePath(files, sessionId), JSON.stringify(live), { fs: files.fs }));
 
-export const removeLive = (home: string, sessionId: string): Effect.Effect<void> =>
-  bestEffort(`remove the output of session ${sessionId}`, () => rm(livePath(home, sessionId), { force: true }));
+export const removeLive = (files: StateFiles, sessionId: string): Effect.Effect<void> =>
+  bestEffort(`remove the output of session ${sessionId}`, () => removeFile(livePath(files, sessionId), { fs: files.fs }));
 
 /** Both files, for a deleted session. */
-export const removeState = (home: string, sessionId: string): Effect.Effect<void> =>
+export const removeState = (files: StateFiles, sessionId: string): Effect.Effect<void> =>
   bestEffort(`remove the state of session ${sessionId}`, () =>
-    Promise.all([rm(journalPath(home, sessionId), { force: true }), rm(livePath(home, sessionId), { force: true })]),
+    Promise.all([removeFile(journalPath(files, sessionId), { sync: true, fs: files.fs }), removeFile(livePath(files, sessionId), { fs: files.fs })]),
   );

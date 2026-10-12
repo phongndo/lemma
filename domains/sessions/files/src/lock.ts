@@ -3,9 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Effect, Option, Schema } from "effect";
 import { SessionError } from "@lemma/sessions";
-import { errorCode, isAlive, nodeFileSystem, writeFileAtomic } from "@lemma/contracts/fs";
+import { errorCode, isAlive, nodeFileSystem, syncAncestors, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { io, syncAncestors } from "./file.ts";
+import { io } from "./file.ts";
 
 /**
  * One process writes a sessions directory: two appending to one session would
@@ -40,6 +40,10 @@ export interface Claimant {
   readonly isAlive: (pid: number) => boolean;
   /** Epoch ms this host booted: a lock taken before then is another process's, whatever has its pid now. */
   readonly bootedAt: number;
+  /** The wall clock, compared with the lock file's modification time. Default `Date.now`. */
+  readonly now?: () => number;
+  /** A token no other store has. Default a random UUID. */
+  readonly token?: () => string;
 }
 
 export const thisProcess: Claimant = {
@@ -54,12 +58,16 @@ const writeNew = (fs: FileSystem, file: string, text: string) =>
   Effect.tryPromise({ try: () => writeFileAtomic(file, text, { exclusive: true, sync: true, fs }), catch: io(undefined, `Cannot create ${file}`) });
 
 /** The file's text and how long ago it was last modified; `undefined` when there is none. */
-const inspect = (fs: FileSystem, file: string): Effect.Effect<{ readonly text: string; readonly age: number } | undefined, SessionError> =>
+const inspect = (
+  fs: FileSystem,
+  file: string,
+  now: () => number = Date.now,
+): Effect.Effect<{ readonly text: string; readonly age: number } | undefined, SessionError> =>
   Effect.tryPromise({
     try: async () => {
       try {
         const { mtimeMs } = await fs.stat(file);
-        return { text: await fs.readFile(file, "utf8"), age: Date.now() - mtimeMs };
+        return { text: await fs.readFile(file, "utf8"), age: now() - mtimeMs };
       } catch (cause) {
         if (errorCode(cause) === "ENOENT") return undefined;
         throw cause;
@@ -102,11 +110,12 @@ const inUse = (file: string, holder: Option.Option<Holder>) => {
 export function acquireLock(root: string, claimant: Claimant = thisProcess, fs: FileSystem = nodeFileSystem): Effect.Effect<Holder, SessionError> {
   const file = lockFile(root);
   const guard = guardFile(root);
-  const self: Holder = { pid: claimant.pid, hostname: claimant.hostname, token: randomUUID(), startedAt: Date.now() };
+  const now = claimant.now ?? Date.now;
+  const self: Holder = { pid: claimant.pid, hostname: claimant.hostname, token: (claimant.token ?? randomUUID)(), startedAt: now() };
   const text = JSON.stringify(self);
   const replace = Effect.tryPromise({ try: () => writeFileAtomic(file, text, { sync: true, fs }), catch: io(undefined, `Cannot replace ${file}`) });
   const stale = (holder: Option.Option<Holder>, age: number) => {
-    if (Option.isNone(holder)) return age > UNREADABLE_GRACE_MS || Date.now() - age < claimant.bootedAt - BOOT_SLACK_MS;
+    if (Option.isNone(holder)) return age > UNREADABLE_GRACE_MS || now() - age < claimant.bootedAt - BOOT_SLACK_MS;
     const { pid, hostname, startedAt } = holder.value;
     if (hostname !== claimant.hostname) return age > LEASE_MS;
     if (pid === claimant.pid || !claimant.isAlive(pid)) return true;
@@ -123,22 +132,22 @@ export function acquireLock(root: string, claimant: Claimant = thisProcess, fs: 
     });
     for (;;) {
       if (yield* writeNew(fs, file, text)) return self;
-      const found = yield* inspect(fs, file);
+      const found = yield* inspect(fs, file, now);
       // Released meanwhile.
       if (found === undefined) continue;
       const holder = decodeHolder(found.text);
       if (!stale(holder, found.age)) return yield* inUse(file, holder);
       if (!(yield* writeNew(fs, guard, text))) {
         // Another process is taking it over; or one crashed doing so, and its guard is old.
-        const other = yield* inspect(fs, guard);
+        const other = yield* inspect(fs, guard, now);
         if (other !== undefined && other.age > UNREADABLE_GRACE_MS) yield* remove(fs, guard);
         else yield* Effect.sleep(50);
         continue;
       }
       // Replaced only if it is still the lock found stale: another process may have taken it over meanwhile.
       const taken = yield* Effect.gen(function* () {
-        const now = yield* inspect(fs, file);
-        if (now?.text !== found.text) return false;
+        const current = yield* inspect(fs, file, now);
+        if (current?.text !== found.text) return false;
         yield* replace;
         return true;
       }).pipe(Effect.ensuring(Effect.ignore(remove(fs, guard))));

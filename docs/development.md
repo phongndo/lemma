@@ -72,11 +72,15 @@ that replay it:
 | `domains/sessions/files/tests/simulation.test.ts` | the session log on a simulated disk that crashes, tears writes, and fails ([README](../domains/sessions/files/README.md#testing)) | `LEMMA_SIM_*`                         |
 | `domains/agent/loop/tests/conversation.test.ts`   | random conversations and checkouts: every request is well formed and rebuilds from the log                                        | `LEMMA_CONVERSATION_*`                |
 
-Storage code takes its disk as a `FileSystem` (`@lemma/contracts/fs`), its
-time from Effect's `Clock`, and its randomness from Effect's `Random` or, where
-it must stay unguessable, a seedable source (the session ids' `IdBytes`), so
-these tests control all three; `scripts/check-boundaries.ts` fails on a seamed file that reaches
-around them. [`@lemma/testing`](../packages/testing/README.md) holds the
+Code a simulation runs (the sessions store, the agent loop, the tool registry,
+compaction, the kernel's step timings) takes its disk as a `FileSystem`
+(`@lemma/contracts/fs`), its time and timers from Effect's `Clock`, and its
+randomness from Effect's `Random` or, where it must stay unguessable, the
+`IdSource` it is made with (`@lemma/contracts`), so these tests control all of
+them; `scripts/check-boundaries.ts` fails on a seamed file that reaches around
+them (the wall clock, a timer, a random source, `node:fs`). Its invariants are
+`assert`ed (`@lemma/core`), on in production; checks too costly for every call
+run only under `Verify`, which a simulation turns on. [`@lemma/testing`](../packages/testing/README.md) holds the
 simulated disk and the contract conformance suites.
 
 `scripts/mock-openai.ts` is a scripted provider for end-to-end runs without an

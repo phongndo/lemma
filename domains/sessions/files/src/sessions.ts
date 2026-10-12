@@ -1,9 +1,10 @@
 import * as path from "node:path";
 import { Clock, Deferred, Duration, Effect, Exit, Option, Result, Schedule, Schema, SchemaIssue, Semaphore } from "effect";
 import type { Context, Scope } from "effect";
-import { Events, Hooks, PluginContext } from "@lemma/core";
+import { assert, Events, Hooks, PluginContext } from "@lemma/core";
 import type { CoreClosed } from "@lemma/core";
-import { Notice, Paths } from "@lemma/contracts";
+import { Notice, Paths, randomId } from "@lemma/contracts";
+import type { IdSource } from "@lemma/contracts";
 import {
   SessionAppended,
   SessionChanged,
@@ -15,14 +16,15 @@ import {
   SessionRemoveHook,
 } from "@lemma/sessions";
 import type { SessionInfo, Sessions } from "@lemma/sessions";
-import { errorCode } from "@lemma/contracts/fs";
+import { errorCode, syncDirectory } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, syncDirectory, unfiled } from "./file.ts";
+import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
 import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
-import { encodeCwd, encodeLine, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
+import { encodeCwd, encodeLine, EVENT_ID_BYTES, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
 import type { Header, Line } from "./format.ts";
 import { readIndex, writeIndex } from "./listing.ts";
 import { acquireLock, REFRESH_MS, refreshLock, releaseLock } from "./lock.ts";
+import type { Claimant } from "./lock.ts";
 
 type Service = Context.Service.Shape<typeof Sessions>;
 
@@ -97,9 +99,18 @@ interface Options {
   readonly unloadAfter: number;
   /** Where the files are: the real file system, or a simulated disk in tests. Time comes from Effect's `Clock`. */
   readonly fs: FileSystem;
+  /** Where session and event ids' random bytes come from. */
+  readonly ids: IdSource;
+  /** The process taking the sessions lock. */
+  readonly claimant: Claimant;
 }
 
-export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | Hooks | PluginContext | Scope.Scope> =>
+export const make = ({
+  unloadAfter,
+  fs,
+  ids,
+  claimant,
+}: Options): Effect.Effect<Service, SessionError | CoreClosed, Paths | Events | Hooks | PluginContext | Scope.Scope> =>
   Effect.gen(function* () {
     const paths = yield* Paths;
     const events = yield* Events;
@@ -107,7 +118,7 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
     const owner = yield* PluginContext;
     const root = path.join(paths.home, "sessions");
     // Taken first, so it is released last, after every file is closed.
-    const holder = yield* Effect.acquireRelease(acquireLock(root, undefined, fs), (holder) => releaseLock(root, holder, fs));
+    const holder = yield* Effect.acquireRelease(acquireLock(root, claimant, fs), (holder) => releaseLock(root, holder, fs));
     // Kept fresh while the store runs, so another process sees it live; one that took it over stops this store.
     yield* owner.background("keep the sessions lock", Effect.repeat(refreshLock(root, holder, fs), Schedule.spaced(Duration.millis(REFRESH_MS))), {
       required: true,
@@ -315,8 +326,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       Effect.gen(function* () {
         const cwd = path.resolve(options?.cwd ?? paths.cwd);
         const createdAt = yield* Clock.currentTimeMillis;
-        let id = yield* newSessionId;
-        while (entries.has(id)) id = yield* newSessionId;
+        let id = randomId(ids, SESSION_ID_BYTES);
+        while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
         const header: Header = { type: "session", version: 1, id, cwd, createdAt };
         const file = sessionFile(root, cwd, createdAt, id);
         const line = encodeLine(header);
@@ -362,8 +373,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
             if (parent !== null && !open.byId.has(parent)) {
               return yield* new SessionError({ sessionId, reason: "InvalidParent", message: `Event ${parent} does not exist in session ${sessionId}` });
             }
-            let id = yield* eventId;
-            while (open.byId.has(id)) id = yield* eventId;
+            let id = randomId(ids, EVENT_ID_BYTES);
+            while (open.byId.has(id)) id = randomId(ids, EVENT_ID_BYTES);
             // A line that does not read back as it was written would make memory and a reload disagree, or the session unreadable.
             const read = asRead({ seq: open.events.length + 1, id, parent, at: yield* Clock.currentTimeMillis, data });
             if (Result.isFailure(read)) {
@@ -380,6 +391,9 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
                 open.leaf = id;
                 open.updatedAt = Math.max(open.updatedAt, event.at);
                 if (event.data.type === "title") open.title = event.data.title;
+                // As `load` checks each line it reads back: seqs count from 1 without a gap, and every id is new.
+                assert(open.events.length === event.seq, `session ${sessionId}: event ${id} has seq ${event.seq} at ${open.events.length}`);
+                assert(open.byId.size === open.events.length, `session ${sessionId}: ${open.byId.size} ids for ${open.events.length} events`);
               },
               events.publish(SessionAppended, { sessionId, event }),
             );

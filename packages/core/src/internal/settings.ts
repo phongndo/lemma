@@ -1,4 +1,5 @@
 import { Clock, Context, Layer, Random, References, Schedule, Tracer } from "effect";
+import { Verify } from "../assert.ts";
 
 /**
  * Effect's runtime settings: references a caller sets for the work it runs
@@ -23,6 +24,8 @@ export const runtimeSettings: ReadonlySet<string> = new Set([
   "effect/Metric/FiberRuntimeMetrics",
   "effect/ExecutionPlan/CurrentMetadata",
   Schedule.CurrentMetadata.key,
+  // The core's own: whether to run the checks too costly for every call (assert.ts).
+  Verify.key,
 ]);
 
 /** `context`'s runtime settings only: what work forked from it keeps of the fiber that forked it. */
