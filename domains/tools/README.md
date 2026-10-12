@@ -2,14 +2,15 @@
 
 What the model can call, and how calls run. Its contract is [`@lemma/tools`](contract/src/tools.ts), with helpers for tools that bound their output, touch files (`/files`), and test themselves (`/testing`).
 
-| Plugin                                 | Halves     | What it does                                                                        |
-| -------------------------------------- | ---------- | ----------------------------------------------------------------------------------- |
-| [`tools.registry`](registry/README.md) | host       | Lists and runs the tools: provides `ToolRunner`, checking each call with the guards |
-| [`tools.read`](read/README.md)         | host + web | The `read` tool, and how its calls show                                             |
-| [`tools.write`](write/README.md)       | host + web | The `write` tool, and how its calls show                                            |
-| [`tools.edit`](edit/README.md)         | host + web | The `edit` tool, and how its calls show                                             |
-| [`tools.bash`](bash/README.md)         | host + web | The `bash` tool, and how its calls show                                             |
-| [`tools.codemode`](codemode/README.md) | host       | The `codemode` tool: JavaScript in a sandbox that calls the other tools             |
+| Plugin                                     | Halves     | What it does                                                                        |
+| ------------------------------------------ | ---------- | ----------------------------------------------------------------------------------- |
+| [`tools.registry`](registry/README.md)     | host       | Lists and runs the tools: provides `ToolRunner`, checking each call with the guards |
+| [`tools.read`](read/README.md)             | host + web | The `read` tool, and how its calls show                                             |
+| [`tools.write`](write/README.md)           | host + web | The `write` tool, and how its calls show                                            |
+| [`tools.edit`](edit/README.md)             | host + web | The `edit` tool, and how its calls show                                             |
+| [`tools.bash`](bash/README.md)             | host + web | The `bash` tool, and how its calls show                                             |
+| [`tools.codemode`](codemode/README.md)     | host       | The `codemode` tool: JavaScript in a sandbox that calls the other tools             |
+| [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show           |
 
 ## Extending it
 

@@ -1,0 +1,34 @@
+{
+  "name": "@lemma/tools-search-fff",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `grep` and `find` tools, searching with fff",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@ff-labs/fff-node": "0.11.0",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.ts"
+  }
+}

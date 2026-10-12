@@ -39,6 +39,7 @@
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-read": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
+    "@lemma/tools-search-fff": "workspace:*",
     "@lemma/tools-write": "workspace:*",
     "@lemma/transport-server": "workspace:*",
     "@lemma/workspace": "workspace:*",
