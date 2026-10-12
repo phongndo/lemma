@@ -147,6 +147,9 @@ jobs:
       LEMMA_HARNESS_SEED: ${{ github.run_number }}00000
       LEMMA_HARNESS_RUNS: "2000"
       LEMMA_HARNESS_TICKS: "200"
+      # The harness from the outside (scripts/torture.ts): a real host killed and stopped under a seeded workload.
+      LEMMA_TORTURE_SEED: ${{ github.run_number }}
+      LEMMA_TORTURE_SECONDS: "180"
       LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
       # Shared runner timings are advisory; correctness/resource assertions fail.
       LEMMA_PERF_ENFORCE: "0"
@@ -157,6 +160,7 @@ jobs:
       # simulation), many more of them;
       # every test runs in the jobs above.
       - run: nix develop -c pnpm test:random
+      - run: nix develop -c pnpm torture
       - run: nix develop -c pnpm perf:check
       - if: failure()
         run: >-

@@ -7,8 +7,11 @@ import { createInterface } from "node:readline";
  * key. A user turn gets a `bash` tool call; a tool result gets a streamed text
  * answer that quotes it. A prompt saying "slowly" gets a command that prints,
  * then runs until its host stops; one saying "ramble" gets a long answer and
- * no tool call: both are for cutting a turn off midway. Configure it as a
- * keyless custom provider:
+ * no tool call: both are for cutting a turn off midway. One saying "tally"
+ * gets a command that appends its call's id to `tally.log` in the session's
+ * directory and then takes half a second, so a test that kills the host
+ * meanwhile can tell whether the call ran twice. Each tool call has an
+ * id of its own (`call_<n>`). Configure it as a keyless custom provider:
  *
  *   { "plugins": { "llm.pi-ai": { "config": { "providers": [{ "id": "mock", "api": "openai-completions",
  *     "baseUrl": "http://127.0.0.1:7499/v1", "models": [{ "id": "scripted" }] }] } } } }
@@ -30,6 +33,9 @@ interface ChatMessage {
 
 const chunk = (delta: object, finish: string | null = null) =>
   `data: ${JSON.stringify({ id: "mock", object: "chat.completion.chunk", created: 0, model: "scripted", choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`;
+
+/** Tool calls made so far: each gets the next id. */
+let calls = 0;
 
 const opened = new Set<string>();
 const waiting = new Map<string, (() => void)[]>();
@@ -87,12 +93,15 @@ const server = createServer((request, response) => {
       send(chunk({}, "stop"));
     } else {
       // `$PPID` is the host: the command outlives neither it nor a cancel, which kills the command's process group.
+      const id = `call_${++calls}`;
       const command = prompt.includes("slowly")
         ? "echo started && while kill -0 $PPID 2>/dev/null; do sleep 0.1; done && echo finished"
-        : "echo hello from lemma, INIT_CWD=${INIT_CWD:-unset} && uname -s";
+        : prompt.includes("tally")
+          ? `echo ${id} >> tally.log && sleep 0.5 && echo tallied ${id}`
+          : "echo hello from lemma, INIT_CWD=${INIT_CWD:-unset} && uname -s";
       send(chunk({ content: "Let me check with bash." }));
       await pause(40);
-      send(chunk({ tool_calls: [{ index: 0, id: "call_1", type: "function", function: { name: "bash", arguments: "" } }] }));
+      send(chunk({ tool_calls: [{ index: 0, id, type: "function", function: { name: "bash", arguments: "" } }] }));
       send(
         chunk({
           tool_calls: [{ index: 0, function: { arguments: JSON.stringify({ command }) } }],

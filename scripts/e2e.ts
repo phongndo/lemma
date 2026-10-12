@@ -107,6 +107,8 @@ export interface LemmaOptions {
   readonly plugins?: Readonly<Record<string, unknown>>;
   /** Runs before the host starts: to put a plugin file in the home, say. */
   readonly prepare?: (home: string) => Promise<void>;
+  /** The provider's pause between streamed words (`PACE_MS`, default 0: a test holds an answer with a gate instead). */
+  readonly paceMs?: number;
 }
 
 export interface Lemma {
@@ -141,7 +143,7 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
     return host.child;
   };
   try {
-    const provider = launch("mock-openai", [mockProvider], { PORT: "0", PACE_MS: "0" });
+    const provider = launch("mock-openai", [mockProvider], { PORT: "0", PACE_MS: String(options.paceMs ?? 0) });
     processes.push(provider);
     const url = (await provider.line(/listening on (\S+)/))[1]!;
     const mock: Mock = {

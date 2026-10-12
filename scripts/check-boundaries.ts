@@ -636,6 +636,10 @@ const realWaits = [
 const fixedWaits = [...realWaits, /(?<![\w$.])sleep\(/g, /\bEffect\.sleep\(/g];
 /** Where a sleep is simulated time, which the simulation's driver moves on at once: only a real timer is a wait. */
 const simulated = (file: string) => file.startsWith("packages/sim/");
+/** Where a timer paces a workload rather than waiting for a condition: none is a wait. */
+const paced: Readonly<Record<string, string>> = {
+  "scripts/torture.ts": "a seeded workload's pauses between actions, and how long a stopped host stays stopped",
+};
 // `join(tmpdir(), "name")` and the like, but not a prefix handed to mkdtemp.
 const fixedTempName = /(?<!mkdtemp(?:Sync)?\(\s*(?:\w+\.)?)\b(?:join|resolve)\(\s*(?:\w+\.)?tmpdir\(\)\s*,\s*(?:"[^"]*"|'[^']*'|`[^`$]*`)/g;
 const testProblems: string[] = [];
@@ -657,7 +661,8 @@ for (const dir of ["apps", "domains", "examples", "packages", "scripts"]) {
     // This file names the patterns it looks for.
     if (file === "scripts/check-boundaries.ts" || (!/(^|\/)(tests|scripts)\//.test(file) && !/\.test\.tsx?$/.test(file))) continue;
     const text = readFileSync(path, "utf8");
-    const waited = (simulated(file) ? realWaits : fixedWaits).reduce((sum, pattern) => sum + [...text.matchAll(pattern)].length, 0);
+    const waited =
+      paced[file] === undefined ? (simulated(file) ? realWaits : fixedWaits).reduce((sum, pattern) => sum + [...text.matchAll(pattern)].length, 0) : 0;
     const named = [...text.matchAll(fixedTempName)].length;
     if (waited > 0) waits.set(file, waited);
     if (named > 0) tempNames.set(file, named);

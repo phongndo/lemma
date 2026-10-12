@@ -29,6 +29,7 @@
     "perf:check": "pnpm build && pnpm core:bench && pnpm core:stress && pnpm router:bench && pnpm sessions:bench && pnpm harness:bench",
     "router:bench": "pnpm --filter @lemma/router bench",
     "sim": "pnpm --filter @lemma/sim sim",
+    "torture": "node --conditions=lemma-source scripts/torture.ts",
     "harness:bench": "node --expose-gc --conditions=lemma-source packages/sim/bench/harness.ts"
   },
   "devDependencies": {
