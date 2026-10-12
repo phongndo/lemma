@@ -38,8 +38,7 @@ Effect.gen(function* () {
    session busy, before its first event, and gives its slot up while it waits
    to ask the model again (see [Retries](#retries)). Cancelled while it waits,
    it ends at once, having logged nothing, and its prompts' calls fail
-   `Retracted`, as a withdrawn prompt's do, their ids remembered as a withdrawn
-   prompt's are. The model is resolved (options →
+   `Retracted` (`AgentError` in the contract). The model is resolved (options →
    config → first available) and checked with `Llm.model`; failure is
    `NoModel`, before anything is logged.
 2. Answers tool calls the branch left without a result (a checkout put the leaf
