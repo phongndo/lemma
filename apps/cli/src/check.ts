@@ -26,6 +26,8 @@ const cliMain = fileURLToPath(new URL("./main.ts", import.meta.url));
  */
 const START_MS = 30_000;
 const STOP_MS = SHUTDOWN_TIMEOUT_MS + 5_000;
+/** How long the host has to answer the check, once it serves: a plugin blocking its event loop holds the answer back. */
+const ASK_MS = 15_000;
 const EXIT_MS = 2_000;
 
 /** How a command runs another (`run` in cli.ts), with `io` changed: to read a host's answers as JSON. */
@@ -72,6 +74,18 @@ const named = (lines: readonly string[]) => [...new Set(lines.flatMap((line) => 
  */
 type Stopped = "exited" | "lingered" | "stuck" | "orphaned";
 
+/** What a host's stop, and the failed first host's (`failed`), say of the plugin. */
+const stopProblems = (stopped: Stopped, failed: Stopped | undefined): string[] => [
+  ...(stopped === "lingered"
+    ? [`The host stopped but did not exit: something the plugin started (a timer, a socket, a child process) keeps it running`]
+    : stopped === "stuck"
+      ? [`The host did not finish stopping within ${STOP_MS / 1000} s of being asked to`]
+      : stopped === "orphaned"
+        ? ["Processes the plugin started were still running once the host had exited"]
+        : []),
+  ...(failed === "orphaned" ? ["Processes the plugin started were still running once its host had failed to start"] : []),
+];
+
 /** Kills the host's process group (it leads one of its own: `hostIn`), and so whatever its plugin started; true if any was left. */
 const killGroup = (child: ChildProcess): boolean => {
   if (child.pid === undefined) return false;
@@ -83,12 +97,22 @@ const killGroup = (child: ChildProcess): boolean => {
   }
 };
 
+/** Each host's stop, once begun: stopping it again says the same, and signals no group its pid may lead by then. */
+const stops = new WeakMap<ChildProcess, Promise<Stopped>>();
+
 /**
  * Stops a host: SIGTERM, then, once it says it is done (`stopped`), `EXIT_MS` to exit, else, or if it never says so
  * within `STOP_MS`, its whole process group is killed.
  */
-const stopHost = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped> =>
+const stopHost = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped> => {
+  const stopping = stops.get(child) ?? stopOnce(child, stopped);
+  stops.set(child, stopping);
+  return stopping;
+};
+const stopOnce = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped> =>
   new Promise((done) => {
+    // Never spawned: nothing runs.
+    if (child.pid === undefined) return done("exited");
     if (child.exitCode !== null || child.signalCode !== null) return done(killGroup(child) ? "orphaned" : "exited");
     let outcome: Stopped = "exited";
     const kill = (why: Stopped) => {
@@ -115,9 +139,10 @@ const stopHost = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped>
 /**
  * A host of its own in `home`, until the scope closes: what it printed, once it serves (`started`), has ended
  * (`ended`), or did neither within `START_MS`; and `stop`, which stops it, if it runs, saying how (`Stopped`). It leads
- * a process group of its own, so stopping it stops whatever its plugin started, and the terminal's Ctrl-C reaches the
- * check alone, which stops it. Its stdin is a pipe from the check (`LEMMA_SUPERVISED`), so a check that dies without
- * stopping it (a second Ctrl-C, a SIGKILL) stops it all the same.
+ * a process group of its own, so stopping it stops whatever its plugin started there (a process the plugin starts in a
+ * group of its own is out of reach, and goes unreported), and the terminal's Ctrl-C reaches the check alone, which
+ * stops it. Its stdin is a pipe from the check (`LEMMA_SUPERVISED`), so a check that dies without stopping it (a second
+ * Ctrl-C, a SIGKILL) stops it all the same.
  */
 const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>) =>
   Effect.gen(function* () {
@@ -144,13 +169,21 @@ const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>)
       });
     }
     child.on("close", () => Deferred.doneUnsafe(ready, Effect.succeed(false)));
+    let unspawned = false;
+    child.on("error", (error) => {
+      // Not started at all (it is spawned once, and stopped only by signals, which fail quietly).
+      if (child.pid !== undefined) return;
+      unspawned = true;
+      lines.push(`lemma: error: could not start a host: ${error.message}`);
+      Deferred.doneUnsafe(ready, Effect.succeed(false));
+    });
     const started = yield* Deferred.await(ready).pipe(Effect.timeoutOrElse({ duration: START_MS, orElse: () => Effect.succeed(false) }));
-    const ended = child.exitCode !== null || child.signalCode !== null;
+    const ended = unspawned || child.exitCode !== null || child.signalCode !== null;
     return { started, ended, lines, stop: Effect.promise(() => stopHost(child, stopped)) };
   });
 
-/** Runs `argv` against the host in `home` and reads its JSON answer. */
-const ask = (run: Runner, io: Io, home: string, argv: readonly string[]) =>
+/** Runs `argv` against the host in `home` and reads its JSON answer, or what failed (within `ASK_MS`). */
+const ask = (run: Runner, io: Io, home: string, argv: readonly string[]): Effect.Effect<unknown> =>
   Effect.promise(async () => {
     let out = "";
     let err = "";
@@ -161,7 +194,7 @@ const ask = (run: Runner, io: Io, home: string, argv: readonly string[]) =>
       err: (text) => void (err += `${text}\n`),
     });
     return code === 0 ? (JSON.parse(out) as unknown) : { error: err.trim() };
-  });
+  }).pipe(Effect.timeoutOrElse({ duration: ASK_MS, orElse: () => Effect.succeed({ error: `no answer within ${ASK_MS / 1000} s` }) }));
 
 /** One plugin from the checked path, as the host made of it. */
 export interface Checked {
@@ -195,20 +228,34 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Unat
         host = yield* hostIn(home, io.env);
       }
       if (!host.started) {
-        // A host neither serving nor ended is still starting: it goes before anything else does.
+        // A host neither serving nor ended is still starting: it goes before anything else does, and one that ended
+        // takes its group with it, so either says what it left.
         const ended = host.ended;
-        if (!ended) yield* host.stop;
+        const problems = stopProblems(yield* host.stop, failed);
         // What it said, but its advice to start without plugin files, which is no help here.
         const said = host.lines.filter((line) => !line.startsWith("lemma: --safe"));
         const why = ended ? "The host did not start with it:" : `The host had not started with it after ${START_MS / 1000} s:`;
         return {
-          json: { started: false, ...(ended ? {} : { timedOut: true }), output: said },
-          text: [why, ...said.map((line) => `  ${line}`)].join("\n"),
+          json: { started: false, ...(ended ? {} : { timedOut: true }), output: said, ...(problems.length === 0 ? {} : { problems }) },
+          text: [why, ...said.map((line) => `  ${line}`), ...(problems.length === 0 ? [] : ["problems:", ...problems.map((problem) => `  ${problem}`)])].join(
+            "\n",
+          ),
           exit: ExitCode.failed,
         } satisfies Output;
       }
       const listed = yield* ask(run, io, home, ["plugins"]);
-      if (!Array.isArray(listed)) return yield* fail("Failed", `Could not list the host's plugins: ${(listed as { readonly error?: string }).error ?? ""}`);
+      if (!Array.isArray(listed)) {
+        // The host it started, unanswering: what it printed says why (a stall names the plugin), and its stop what it left.
+        const problems = [
+          `Could not list the host's plugins: ${(listed as { readonly error?: string }).error ?? ""}`,
+          ...stopProblems(yield* host.stop, failed),
+        ];
+        return {
+          json: { problems, output: host.lines },
+          text: ["problems:", ...problems.map((problem) => `  ${problem}`), ...host.lines.map((line) => `  ${line}`)].join("\n"),
+          exit: ExitCode.failed,
+        } satisfies Output;
+      }
       const own = (listed as readonly PluginStatus[]).filter((status) => status.source === "user");
       const checked: Checked[] = own.map((status) => ({
         id: status.id,
@@ -240,14 +287,7 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Unat
         ...checked.flatMap((status) =>
           status.state === "active" ? [] : [`${status.id} is ${status.state}${status.fault === undefined ? "" : `: ${status.fault}`}`],
         ),
-        ...(stopped === "lingered"
-          ? [`The host stopped but did not exit: something the plugin started (a timer, a socket, a child process) keeps it running`]
-          : stopped === "stuck"
-            ? [`The host did not finish stopping within ${STOP_MS / 1000} s of being asked to`]
-            : stopped === "orphaned"
-              ? ["Processes the plugin started were still running once the host had exited"]
-              : []),
-        ...(failed === "orphaned" ? ["Processes the plugin started were still running once its host had failed to start"] : []),
+        ...stopProblems(stopped, failed),
       ];
       const text = [
         ...checked.flatMap((status) => [

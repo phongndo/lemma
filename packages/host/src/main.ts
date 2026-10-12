@@ -34,7 +34,8 @@ const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
  * `LEMMA_SUPERVISED=1`: started, leading a process group of its own, by a process that holds the host's stdin open
  * while it wants the host (`lemma plugins check`). However that process ends, its end of the pipe closes: the host
  * then stops as on SIGTERM, and, once stopped or however it exits, kills its group, so that neither it nor anything
- * its plugins started outlives it. Resolves when stdin ends.
+ * its plugins started in it outlives it (a process started in a group of its own is out of its reach). Resolves when
+ * stdin ends.
  */
 let supervisorLeft = false;
 const supervisorGone =
