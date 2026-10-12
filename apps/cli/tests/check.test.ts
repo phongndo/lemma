@@ -66,33 +66,40 @@ describe("lemma plugins check", () => {
     expect(await spawned(4329)).toBe("");
   }, 90_000);
 
-  test("stops its host, and what the plugin started, when the check itself is killed while the host starts", async () => {
-    // The check's own temporary home goes in here, as it is left behind.
-    const scratch = await mkdtemp(join(tmpdir(), "lemma-cli-check-killed-"));
-    const check = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "plugins", "check", fixture("slow-spawner.js")], {
-      env: { ...process.env, LEMMA_HOME: home, TMPDIR: scratch },
-      stdio: "ignore",
-    });
-    try {
-      // Its host is starting (the plugin's setup has 3 s to go), the plugin's child running in the host's process
-      // group, which the host leads.
-      const host = await vi.waitFor(
-        async () => {
-          const child = await spawned(4331);
-          expect(child).not.toBe("");
-          const { stdout } = await promisify(execFile)("ps", ["-o", "pgid=", "-p", child]);
-          return Number(stdout.trim());
-        },
-        { timeout: 60_000, interval: 100 },
-      );
-      check.kill("SIGKILL");
-      await vi.waitFor(() => expect(alive(-host)).toBe(false), { timeout: 30_000, interval: 100 });
-      expect(await spawned(4331)).toBe("");
-    } finally {
-      check.kill("SIGKILL");
-      await rm(scratch, { recursive: true, force: true });
-    }
-  }, 120_000);
+  test.each([
+    ["starts", "slow-spawner.js", 4331],
+    ["fails to start", "slow-failing-spawner.js", 4332],
+  ])(
+    "stops its host, and what the plugin started, when the check itself is killed while the host %s",
+    async (_, plugin, seconds) => {
+      // The check's own temporary home goes in here, as it is left behind.
+      const scratch = await mkdtemp(join(tmpdir(), "lemma-cli-check-killed-"));
+      const check = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "plugins", "check", fixture(plugin)], {
+        env: { ...process.env, LEMMA_HOME: home, TMPDIR: scratch },
+        stdio: "ignore",
+      });
+      try {
+        // Its host is starting (the plugin's setup has 3 s to go), the plugin's child running in the host's process
+        // group, which the host leads.
+        const host = await vi.waitFor(
+          async () => {
+            const child = await spawned(seconds);
+            expect(child).not.toBe("");
+            const { stdout } = await promisify(execFile)("ps", ["-o", "pgid=", "-p", child]);
+            return Number(stdout.trim());
+          },
+          { timeout: 60_000, interval: 100 },
+        );
+        check.kill("SIGKILL");
+        await vi.waitFor(() => expect(alive(-host)).toBe(false), { timeout: 30_000, interval: 100 });
+        expect(await spawned(seconds)).toBe("");
+      } finally {
+        check.kill("SIGKILL");
+        await rm(scratch, { recursive: true, force: true });
+      }
+    },
+    120_000,
+  );
 
   test("reports a folder whose package.json cannot be read, with what the host said, rather than failing", async () => {
     const folder = await mkdtemp(join(tmpdir(), "lemma-cli-check-unreadable-"));

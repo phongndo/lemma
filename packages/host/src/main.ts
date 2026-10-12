@@ -33,9 +33,10 @@ const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
 /**
  * `LEMMA_SUPERVISED=1`: started, leading a process group of its own, by a process that holds the host's stdin open
  * while it wants the host (`lemma plugins check`). However that process ends, its end of the pipe closes: the host
- * then stops as on SIGTERM, and, once stopped, kills its group, so that neither it nor anything its plugins started
- * outlives it. Resolves when stdin ends.
+ * then stops as on SIGTERM, and, once stopped or however it exits, kills its group, so that neither it nor anything
+ * its plugins started outlives it. Resolves when stdin ends.
  */
+let supervisorLeft = false;
 const supervisorGone =
   process.env.LEMMA_SUPERVISED === "1"
     ? new Promise<void>((resolve) => {
@@ -49,17 +50,24 @@ const supervisorGone =
           .resume();
         // Read without keeping the host running: it exits once its work is done, as any host does.
         (process.stdin as { unref?: () => void }).unref?.();
+      }).then(() => {
+        supervisorLeft = true;
       })
     : undefined;
 // Consumed here, as tools inherit this environment.
 delete process.env.LEMMA_SUPERVISED;
-const killOwnGroup = () => {
+/** Kills the host's process group, which a supervised host leads; false if it leads none. */
+const killOwnGroup = (): boolean => {
   try {
     process.kill(-process.pid, "SIGKILL");
+    return true;
   } catch {
-    process.exit(1);
+    return false;
   }
 };
+// However it exits (failing to start, a fault that ends it) once its supervisor is gone, nothing else would end what
+// its plugins started. While the supervisor runs, it does, and reports what was left.
+if (supervisorGone !== undefined) process.on("exit", () => void (supervisorLeft && killOwnGroup()));
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
 const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
@@ -688,4 +696,4 @@ if (Exit.isFailure(exit)) {
 }
 // Its own work is done: if the process does not exit now, something its plugins started keeps it running.
 console.log("lemma: stopped");
-void supervisorGone?.then(killOwnGroup);
+void supervisorGone?.then(() => killOwnGroup() || process.exit(1));
