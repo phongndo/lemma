@@ -1,11 +1,13 @@
 import { promises } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
+import type { Handler } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
-import { Agent, AgentContinueHook, AgentError, AgentRequestHook, PromptSections } from "@lemma/agent";
+import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
+import type { PromptDecision, PromptInput } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
@@ -206,6 +208,99 @@ describe("agent", () => {
     );
   });
 
+  it("lets a plugin rewrite a prompt (credited in the log), handle it, or refuse it, before it is placed", async () => {
+    const seen: string[] = [];
+    const input = (id: string, order: number, decide: (text: string) => "rewrite" | "handle" | "refuse" | "pass") =>
+      definePlugin({
+        id,
+        layer: Layer.effectDiscard(
+          Effect.flatMap(PluginContext, (owner) =>
+            owner.on(
+              AgentInputHook,
+              (prompt, next) => {
+                const said = prompt.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+                seen.push(`${id}:${said}`);
+                switch (decide(said)) {
+                  case "rewrite":
+                    return next({ ...prompt, content: text(said.replace("/hello", "Say hello")) });
+                  case "handle":
+                    return Effect.succeed({ kind: "handle", message: "pong" } as const);
+                  case "refuse":
+                    return Effect.succeed({ kind: "refuse", reason: "it names a secret" } as const);
+                  default:
+                    return next(prompt);
+                }
+              },
+              { order },
+            ),
+          ),
+        ),
+      });
+    const expand = input("expand", 0, (said) => (said.startsWith("/hello") ? "rewrite" : said === "/ping" ? "handle" : "pass"));
+    const guard = input("guard", 1, (said) => (said.includes("secret") ? "refuse" : "pass"));
+    await withAgent({ plugins: [expand, guard], scripts: [reply("hello!")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const agent = yield* Agent;
+        expect(yield* agent.prompt(id, text("/ping"))).toEqual({ kind: "handled", by: "expand", message: "pong" });
+        expect(yield* agent.prompt(id, text("my secret"))).toEqual({ kind: "refused", by: "guard", reason: "it names a secret" });
+        // Neither reached the model, or the log.
+        expect(requests).toHaveLength(0);
+        expect(yield* log(id)).toEqual([]);
+        expect(yield* agent.prompt(id, text("/hello world"), { requestId: "r1" })).toEqual({ kind: "placed" });
+        const [prompt] = (yield* log(id)).filter((event) => event.data.type === "message");
+        expect(prompt!.data).toMatchObject({
+          message: { content: text("Say hello world") },
+          credit: { handlers: [{ source: "expand", changed: ["content"] }, { source: "guard" }] },
+        });
+        // Sent again, an exactly-once retry: answered as placed, without asking the plugins again.
+        seen.length = 0;
+        expect(yield* agent.prompt(id, text("/hello world"), { requestId: "r1" })).toEqual({ kind: "placed" });
+        expect(seen).toEqual([]);
+        // One a plugin handled is answered the same when retried, and the plugin, which acted already, is not asked
+        // again; nor when two calls race.
+        const twice = yield* Effect.all([agent.prompt(id, text("/ping"), { requestId: "r2" }), agent.prompt(id, text("/ping"), { requestId: "r2" })], {
+          concurrency: "unbounded",
+        });
+        expect(yield* agent.prompt(id, text("/ping"), { requestId: "r2" })).toEqual({ kind: "handled", by: "expand", message: "pong" });
+        expect([twice, seen]).toEqual([
+          [
+            { kind: "handled", by: "expand", message: "pong" },
+            { kind: "handled", by: "expand", message: "pong" },
+          ],
+          ["expand:/ping"],
+        ]);
+      }),
+    );
+  });
+
+  it("names the plugin whose answer to a prompt stands, and places one with the options a handler handed on", async () => {
+    const on = (id: string, order: number, handle: Handler<PromptInput, PromptDecision, AgentError, any>) =>
+      definePlugin({ id, layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(AgentInputHook, handle, { order }))) });
+    // The inner one refuses; the outer one handles it instead (queued for review), and is the one that answered.
+    const guard = on("guard", 2, () => Effect.succeed({ kind: "refuse", reason: "not allowed" } as const));
+    const reviewer = on("reviewer", 1, (prompt, next) =>
+      Effect.map(next(prompt), (made) => (made.kind === "refuse" ? ({ kind: "handle", message: "queued for review" } as const) : made)),
+    );
+    await withAgent({ plugins: [guard, reviewer], scripts: [] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        expect(yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("deploy")))).toEqual({ kind: "handled", by: "reviewer", message: "queued for review" });
+      }),
+    );
+    // `/fast` asks a smaller model: the turn runs on it.
+    const fast = on("fast", 0, (prompt, next) => next({ ...prompt, options: { ...prompt.options, model: "fake/small" } }));
+    await withAgent({ plugins: [fast], scripts: [reply("quick")], models: ["fake/m1", "fake/small"] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        expect(yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("/fast hi"), { requestId: "r1" }))).toEqual({ kind: "placed" });
+        expect(requests.map((request) => request.model)).toEqual(["fake/small"]);
+        const [prompt] = (yield* log(id)).filter((event) => event.data.type === "message");
+        expect(prompt!.data).toMatchObject({ requestId: "r1", credit: { handlers: [{ source: "fast", changed: ["options"] }] } });
+      }),
+    );
+  });
+
   it("refuses a call to a tool the request did not offer", async () => {
     const readOnly = definePlugin({
       id: "read-only",
@@ -248,6 +343,42 @@ describe("agent", () => {
         // The base opens the prompt, whatever the id of a plugin adding a section without an order.
         expect(system.startsWith("You are an expert coding assistant")).toBe(true);
         expect(system.indexOf("Mind the rules.")).toBeGreaterThan(0);
+      }),
+    );
+  });
+
+  it("logs what a request passed on and how the provider answered, and streams the answer to no client", async () => {
+    const options = definePlugin({
+      id: "warm",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) => owner.on(AgentRequestHook, (draft, next) => next({ ...draft, providerOptions: { temperature: 0.2 } }))),
+      ),
+    });
+    const answered = Stream.concat(
+      Stream.make({
+        type: "provider" as const,
+        status: 200,
+        requestId: "req-7",
+        credit: { handlers: [{ source: "tracer", ms: 0.1, changed: ["x-trace"] }] },
+      }),
+      reply("hi"),
+    );
+    await withAgent({ plugins: [options], scripts: [answered] }, ({ requests, rec }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+        const events = yield* log(id);
+        const [request] = ofType(events, "request");
+        expect(request).toMatchObject({ providerOptions: { temperature: 0.2 }, handlers: [{ source: "warm", changed: ["providerOptions"] }] });
+        expect(requests[0]!.providerOptions).toEqual({ temperature: 0.2 });
+        const logged = events.find((event) => event.data.type === "request")!;
+        expect(rebuildRequest(branchOf(events, logged.id), logged.id, id)?.providerOptions).toEqual({ temperature: 0.2 });
+        const answer = ofType(events, "message").find((data) => data.message.role === "assistant");
+        expect(answer).toMatchObject({
+          response: { status: 200, requestId: "req-7" },
+          credit: { handlers: [{ source: "tracer", changed: ["x-trace"] }] },
+        });
+        expect(rec.deltas.map((event) => event.type)).toEqual(["start", "text-delta", "text-delta", "done"]);
       }),
     );
   });

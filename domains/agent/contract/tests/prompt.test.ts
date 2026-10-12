@@ -4,7 +4,7 @@ import type { ChannelInfo, RuntimeEvent } from "@lemma/contracts";
 import type { AgentActivity } from "@lemma/agent";
 import { follow } from "@lemma/client";
 import type { Followable } from "@lemma/client";
-import { startPrompt } from "../src/prompt.ts";
+import { PromptRefused, startPrompt } from "../src/prompt.ts";
 import type { PromptConnection } from "../src/prompt.ts";
 
 interface Call {
@@ -88,7 +88,7 @@ const unserved = (id: string) => new HostError({ code: "NotFound", subject: id, 
 const listed = (...ids: string[]): readonly ChannelInfo[] => ids.map((id) => ({ id, kind: "stream", source: "agent" }));
 
 describe("startPrompt", () => {
-  test("sends once agent.activity is subscribed, and is accepted when its session's turn starts, long before the turn ends", async () => {
+  test("sends once agent.activity is subscribed, and is accepted when a turn starts with it, long before the turn ends", async () => {
     const fake = fakeConnection();
     const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
     await tick();
@@ -97,9 +97,12 @@ describe("startPrompt", () => {
     fake.send({ type: "subscribed", running: [] });
     await tick();
     expect(fake.calls.map((call) => [call.id, call.payload.requestId])).toEqual([["agent.prompt", started.requestId]]);
-    fake.send({ type: "turn-started", sessionId: "other", turnId: "t0" });
+    fake.send({ type: "turn-started", sessionId: "other", turnId: "t0", requestIds: [started.requestId] });
     expect(await state(started.accepted)).toBe("pending");
-    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1" });
+    // Its session's turn, but started with another prompt (a queued one): not this prompt taken.
+    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: ["queued"] });
+    expect(await state(started.accepted)).toBe("pending");
+    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t2", requestIds: ["queued", started.requestId] });
     expect(await state(started.accepted)).toBe("resolved");
     // Taken: its activity is no longer needed.
     expect(fake.streams.size).toBe(0);
@@ -133,12 +136,29 @@ describe("startPrompt", () => {
     expect([fake.streams.size, fake.listeners.size]).toEqual([0, 0]);
   });
 
+  test("a prompt a plugin handled is accepted with what it said; one it refused is refused, naming it", async () => {
+    const fake = fakeConnection();
+    const handled = startPrompt(fake.connection, "s1", [{ type: "text", text: "/ping" }]);
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    fake.calls[0]!.resolve({ kind: "handled", by: "slash", message: "pong" });
+    expect(await state(handled.accepted)).toBe("resolved");
+    expect(await handled.done).toEqual({ kind: "handled", by: "slash", message: "pong" });
+    const refused = startPrompt(fake.connection, "s1", [{ type: "text", text: "secret" }]);
+    fake.send({ type: "subscribed", running: [] });
+    await tick();
+    fake.calls[1]!.resolve({ kind: "refused", by: "guard", reason: "it names a secret" });
+    const why = await refused.accepted.catch((error: unknown) => error);
+    expect(why).toBeInstanceOf(PromptRefused);
+    expect(why).toMatchObject({ by: "guard", reason: "it names a secret" });
+  });
+
   test("a turn that ends with no activity seen still counts as accepted, and a withdrawn prompt ends quietly", async () => {
     const fake = fakeConnection();
     const started = startPrompt(fake.connection, "s1", [{ type: "text", text: "hi" }]);
     fake.send({ type: "subscribed", running: [] });
     await tick();
-    fake.calls[0]!.resolve();
+    fake.calls[0]!.resolve({ kind: "placed" });
     expect(await state(started.accepted)).toBe("resolved");
     const retracted = startPrompt(fake.connection, "s1", [{ type: "text", text: "later" }]);
     fake.send({ type: "subscribed", running: ["s1"] });
@@ -166,7 +186,7 @@ describe("startPrompt", () => {
     await tick();
     expect(fake.opened()).toBe(4);
     fake.send({ type: "subscribed", running: [] });
-    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1" });
+    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [started.requestId] });
     expect(await state(started.accepted)).toBe("resolved");
     // The host made the call again on the replacement: this client sent it once.
     fake.calls[0]!.resolve();
@@ -188,7 +208,7 @@ describe("startPrompt", () => {
     fake.send({ type: "subscribed", running: [] });
     await tick();
     expect(fake.calls.map((call) => call.payload.requestId)).toEqual([started.requestId]);
-    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1" });
+    fake.send({ type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [started.requestId] });
     expect(await state(started.accepted)).toBe("resolved");
   });
 

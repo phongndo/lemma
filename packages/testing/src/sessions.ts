@@ -4,7 +4,16 @@ import { TestClock } from "effect/testing";
 import { describe, expect, test } from "vitest";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { SessionAppended, SessionChanged, SessionError, SessionRemoved, SessionRemoveHook, Sessions } from "@lemma/sessions";
+import {
+  SessionAppended,
+  SessionChanged,
+  SessionCheckedOut,
+  SessionCheckoutHook,
+  SessionError,
+  SessionRemoved,
+  SessionRemoveHook,
+  Sessions,
+} from "@lemma/sessions";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 
 type Store = Context.Service.Shape<typeof Sessions>;
@@ -100,15 +109,31 @@ export function sessionsConformance(name: string, compose: (deletions: Deletions
         }),
       ));
 
-    test("checkout moves the leaf, and the next append follows it", () =>
-      run((store) =>
+    test("checkout moves the leaf, says so (SessionCheckedOut), and the next append follows it", () =>
+      run((store, seen) =>
         Effect.gen(function* () {
           const { id } = yield* store.create({ cwd: "/work/a" });
           const root = yield* store.append(id, note("root"));
-          yield* store.append(id, note("child"));
+          const child = yield* store.append(id, note("child"));
           expect((yield* store.checkout(id, root.id)).leaf).toBe(root.id);
           expect(yield* store.branch(id)).toEqual([root]);
           expect((yield* store.append(id, note("sibling"))).parent).toBe(root.id);
+          yield* eventually(() => seen.checkedOut.length > 0);
+          expect(seen.checkedOut).toEqual([{ sessionId: id, from: child.id, to: root.id }]);
+        }),
+      ));
+
+    test("checkout asks SessionCheckoutHook first: a handler's refusal fails it with that error and keeps the leaf", () =>
+      run((store, seen) =>
+        Effect.gen(function* () {
+          const { id } = yield* store.create({ cwd: "/work/a" });
+          const root = yield* store.append(id, note("root"));
+          const child = yield* store.append(id, note("child"));
+          seen.holding.add(id);
+          expect(reason(yield* Effect.result(store.checkout(id, root.id)))).toBe("Busy");
+          expect((yield* store.get(id)).leaf).toBe(child.id);
+          seen.holding.delete(id);
+          expect((yield* store.checkout(id, root.id)).leaf).toBe(root.id);
         }),
       ));
 
@@ -294,17 +319,26 @@ interface Seen {
   readonly removed: string[];
   /** By session, what its `SessionRemoveHook` handler does around `next` (the rest of the removal), as a plugin's may. */
   readonly around: Map<string, <E>(next: Effect.Effect<void, E>) => Effect.Effect<void, E | SessionError>>;
+  readonly checkedOut: { readonly sessionId: string; readonly from: string | undefined; readonly to: string }[];
+  /** Sessions whose checkouts its `SessionCheckoutHook` handler refuses, as a plugin's may. */
+  readonly holding: Set<string>;
 }
 
 /** Another plugin beside the store: it records what the store publishes, and handles the removals it is told to. */
 function recorder(): Seen {
-  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], around: new Map() };
+  const seen: Omit<Seen, "plugin"> = { appended: [], changed: [], removed: [], around: new Map(), checkedOut: [], holding: new Set() };
   const plugin = definePlugin({
     id: "conformance-recorder",
     layer: Layer.effectDiscard(
       Effect.gen(function* () {
         const owner = yield* PluginContext;
         yield* owner.on(SessionRemoveHook, (input, next) => seen.around.get(input.sessionId)?.(next(input)) ?? next(input));
+        yield* owner.on(SessionCheckoutHook, (input, next) =>
+          seen.holding.has(input.sessionId)
+            ? Effect.fail(new SessionError({ sessionId: input.sessionId, reason: "Busy", message: `"${input.sessionId}" stays on its branch` }))
+            : next(input),
+        );
+        yield* owner.observe(SessionCheckedOut, (payload) => Effect.sync(() => void seen.checkedOut.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionAppended, (payload) => Effect.sync(() => void seen.appended.push(payload)), { buffer: 256 });
         yield* owner.observe(SessionChanged, ({ info }) => Effect.sync(() => void seen.changed.push(info)), { buffer: 256 });
         yield* owner.observe(SessionRemoved, ({ sessionId }) => Effect.sync(() => void seen.removed.push(sessionId)), { buffer: 256 });

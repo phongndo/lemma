@@ -29,6 +29,10 @@ export const Timing = Schema.Struct({
 });
 export type Timing = typeof Timing.Type;
 
+/** How a provider answered a model call, before its body: its HTTP status, and its request id when it named one. */
+export const ProviderAnswer = Schema.Struct({ status: Schema.Number, requestId: Schema.optional(Schema.String) });
+export type ProviderAnswer = typeof ProviderAnswer.Type;
+
 /** Who put a piece of the request there. `source` is a plugin id. */
 export const Contribution = Schema.Struct({
   source: Schema.String,
@@ -90,6 +94,8 @@ export const EventData = Schema.Union([
     contributions: Schema.Array(Contribution),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),
+    /** What the provider was told to pass on (`LlmRequest.providerOptions`), as a handler set them. */
+    providerOptions: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   }),
   /** Model-visible history. Assistant messages carry stream timing; tool results carry execution timing and UI details. */
   Schema.Struct({
@@ -101,8 +107,13 @@ export const EventData = Schema.Union([
     details: Schema.optional(Schema.Unknown),
     /** On a user message: the submission's id (see `Agent.prompt`), so a retried submission is not placed twice. */
     requestId: Schema.optional(Schema.String),
-    /** On a tool result: who shaped it (`ToolExecuteHook`'s handlers, the guards, the registry's cut). */
+    /**
+     * Who shaped it: on a tool result, `ToolExecuteHook`'s handlers, the guards, and the registry's cut; on a user
+     * message, `AgentInputHook`'s handlers; on an answer, `LlmProviderHeadersHook`'s (the headers each changed).
+     */
     credit: Schema.optional(ResultCredit),
+    /** On an answer: the provider's HTTP status, and its request id when it named one. */
+    response: Schema.optional(ProviderAnswer),
   }),
   /** A failed, cancelled, or retried model call. Kept for inspection; never model-visible. */
   Schema.Struct({
@@ -119,6 +130,9 @@ export const EventData = Schema.Union([
      * counts no failure).
      */
     retry: Schema.optional(Schema.Struct({ reason: Schema.Literals(["failure", "restart"]), attempt: Schema.Number, at: Schema.Number })),
+    /** The provider's answer, when it gave one before the call failed, and who shaped the headers sent. */
+    response: Schema.optional(ProviderAnswer),
+    credit: Schema.optional(ResultCredit),
   }),
   /** Replaces the history before `firstKeptId` with `summary` in the model's view; the originals stay in the log. */
   Schema.Struct({
@@ -194,6 +208,30 @@ export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/
  */
 export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
 
+/** A checkout asked for: the session, the event its leaf moves to, and the leaf it moves from (when it was asked). */
+export interface CheckoutRequest {
+  readonly sessionId: string;
+  readonly eventId: string;
+  readonly from: string | undefined;
+}
+
+/**
+ * Around every `Sessions.checkout`, whoever calls it; the terminal moves the leaf. A handler refuses a checkout by
+ * failing instead of calling `next` (a plugin keeping a session on its branch while it works there), or acts on one
+ * after `next` succeeded. A provider of `Sessions` runs each checkout through it.
+ */
+export const SessionCheckoutHook = Hook.make<CheckoutRequest, SessionInfo, SessionError>("lemma/session.checkout", {
+  summary: { input: (request) => ({ session: request.sessionId, to: request.eventId }) },
+});
+
+/**
+ * A session's leaf moved (`Sessions.checkout`): later appends branch from `to`. Published by a provider of `Sessions`
+ * after the move is durable, before `SessionChanged` for it.
+ */
+export const SessionCheckedOut = Event.make<{ readonly sessionId: string; readonly from: string | undefined; readonly to: string }>(
+  "lemma/session.checked-out",
+);
+
 /** A change to how a session is filed; an absent field keeps its value. */
 export interface SessionMarks {
   readonly pinned?: boolean;
@@ -218,7 +256,10 @@ export class Sessions extends Context.Service<
     readonly events: (sessionId: string, options?: { readonly after?: number }) => Effect.Effect<readonly SessionEvent[], SessionError>;
     /** Root-to-leaf events of the current branch, or of the branch ending at `leaf`. */
     readonly branch: (sessionId: string, options?: { readonly leaf?: string }) => Effect.Effect<readonly SessionEvent[], SessionError>;
-    /** Point the leaf at an existing event; later appends branch from there. */
+    /**
+     * Point the leaf at an existing event; later appends branch from there. Runs through `SessionCheckoutHook`, and
+     * publishes `SessionCheckedOut` once the leaf has moved.
+     */
     readonly checkout: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /** Pins or archives it. Neither moves the leaf nor `updatedAt`: filing a session is not activity in it. */
     readonly mark: (sessionId: string, marks: SessionMarks) => Effect.Effect<SessionInfo, SessionError>;

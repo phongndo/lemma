@@ -134,7 +134,8 @@ const scripted = (script: {
   const calls: Readonly<Record<string, (payload: any) => Effect.Effect<unknown, HostError>>> = {
     "agent.prompt": (payload) => {
       prompts.push(payload);
-      return script.prompt(host, prompts.length);
+      // Placed: a script's prompt is the agent's turn, which answers when it ends.
+      return Effect.as(script.prompt(host, prompts.length), { kind: "placed" });
     },
     "agent.view": () => (typeof view === "function" ? view(host) : Effect.succeed(view)),
     "sessions.events": () => Effect.sync(() => [...logged]),
@@ -214,7 +215,7 @@ describe("run --follow", () => {
     const host = scripted({
       prompt: ({ act, append }) =>
         Effect.sync(() => {
-          act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1), turnEnded);
+          act({ type: "turn-started", sessionId, turnId, requestIds: [] }, word("t1.1", 1), turnEnded);
           append(...started, ...step("t1.1", "word1 word2 "), ended);
         }),
     });
@@ -227,7 +228,7 @@ describe("run --follow", () => {
     const host = scripted({
       prompt: ({ act, append }) =>
         Effect.sync(() => {
-          act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1));
+          act({ type: "turn-started", sessionId, turnId, requestIds: [] }, word("t1.1", 1));
           append(...started, ...step("t1.1", "word1 word2 "));
           act(word("t1.1", 2), turnEnded);
           append(ended);
@@ -241,7 +242,7 @@ describe("run --follow", () => {
     const host = scripted({
       prompt: ({ act, append }) =>
         Effect.sync(() => {
-          act({ type: "turn-started", sessionId, turnId }, word("t1.2", 1, "second "));
+          act({ type: "turn-started", sessionId, turnId, requestIds: [] }, word("t1.2", 1, "second "));
           append(...started, ...step("t1.1", "first "), ...step("t1.2", "second "), ended);
           act(turnEnded);
         }),
@@ -322,7 +323,7 @@ describe("run --follow", () => {
       prompt: ({ act, append, reload, reopened, showing }) => {
         // Placed, then the agent reloads mid-answer: what it said meanwhile is lost with the activity. The call goes on,
         // made again on the replacement by the host, and answers when the turn ends there.
-        act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1));
+        act({ type: "turn-started", sessionId, turnId, requestIds: [] }, word("t1.1", 1));
         append(...started, { type: "step-start", turnId, stepId: "t1.1" });
         reload();
         return reopened.pipe(
@@ -421,7 +422,7 @@ describe("a run whose connection drops", () => {
         prompt: ({ act, append, drop, restore, reopened, showing }, n) =>
           n === 1
             ? Effect.gen(function* () {
-                act({ type: "turn-started", sessionId, turnId }, word("t1.1", 1));
+                act({ type: "turn-started", sessionId, turnId, requestIds: [] }, word("t1.1", 1));
                 append(...started, { type: "step-start", turnId, stepId: "t1.1" });
                 yield* showing("word1 ");
                 // What the agent says while the connection is down is lost with it; what the log gets meanwhile waits there.

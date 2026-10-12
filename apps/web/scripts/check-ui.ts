@@ -632,15 +632,11 @@ const parts = async () => {
   assert.equal(await page.inputValue("textarea"), "@README.md ", "Enter does not pick once the suggestions arrive");
   // A folder picked goes on completing inside it, and only inside it.
   await page.keyboard.type("@src");
-  const folderRow = () =>
-    page.evaluate(() => [...document.querySelectorAll(".completion")].findIndex((row) => row.querySelector(".menu-label")?.textContent === "src"));
-  await page.waitForFunction(() => [...document.querySelectorAll(".completion .menu-label")].some((label) => label.textContent === "src"), undefined, {
-    timeout: 5_000,
-  });
+  // By its label, not its place: the list may still be filling, and a row's index then moves under the click.
   await page
-    .locator(".completion")
-    .nth(await folderRow())
-    .click();
+    .locator(".completion", { has: page.locator(".menu-label", { hasText: /^src$/ }) })
+    .first()
+    .click({ timeout: 5_000 });
   assert.equal(await page.inputValue("textarea"), "@README.md @src/", "picking a folder does not leave it open to type on");
   await page.waitForSelector('.completions [role="listbox"][aria-busy="false"]', { timeout: 5_000 });
   const outside: string[] = await page.evaluate(() =>
@@ -1255,6 +1251,29 @@ const devtools = async () => {
   await page.waitForSelector(".devtools", { state: "detached" });
   assert.equal(await appHeight(), 900, "the app did not take its room back when the devtools closed");
   expectNoErrors("using the devtools");
+
+  // A plugin answering a prompt instead of placing it (`AgentInputHook`): handled, it leaves the composer and the
+  // composer says so; refused, it stays, and the composer says why.
+  await page.goto(`${url}/?mock`);
+  await settled(page);
+  await page.evaluate(() =>
+    (window as any).lemmaMock.answerPrompts({
+      "/ping": { kind: "handled", by: "check", message: "pong" },
+      "/nope": { kind: "refused", by: "check", reason: "not today" },
+    }),
+  );
+  await page.fill("textarea", "/ping");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("[aria-label='Prompt answered by a plugin'] >> text=handled the prompt: pong");
+  assert.equal(await page.inputValue("textarea"), "", "a handled prompt stayed in the composer");
+  await page.fill("textarea", "/nope");
+  await page.keyboard.press("Enter");
+  await page.waitForSelector("[aria-label='Prompt answered by a plugin'] >> text=refused the prompt: not today");
+  assert.equal(await page.inputValue("textarea"), "/nope", "a refused prompt left the composer");
+  await page.click("[aria-label='Prompt answered by a plugin'] [aria-label=Dismiss]");
+  await page.waitForSelector("[aria-label='Prompt answered by a plugin']", { state: "detached" });
+  await page.fill("textarea", "");
+  await page.evaluate(() => (window as any).lemmaMock.answerPrompts({}));
 
   // 9. While a turn runs: Enter steers it, Alt+Enter queues a prompt for after it, and a queued one can be withdrawn.
   await page.goto(`${url}/?mock`);

@@ -1,7 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
 import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
-import type { Contribution, EventData, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
+import type { Contribution, EventData, ProviderAnswer, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
  * The trajectory of a branch: per turn, per step, what the model was sent,
@@ -81,6 +81,9 @@ export interface TrajectoryAttempt {
   readonly failure?: LlmFailure;
   /** Asked again, and when (see the `attempt` event). */
   readonly retry?: { readonly reason: "failure" | "restart"; readonly attempt: number; readonly at: number };
+  /** How the provider answered before the call failed, and who shaped the headers sent. */
+  readonly provider?: ProviderAnswer;
+  readonly credit?: ResultCredit;
 }
 
 export interface TrajectoryStep {
@@ -91,7 +94,14 @@ export interface TrajectoryStep {
   readonly startedAt: number;
   readonly endedAt?: number;
   readonly request?: TrajectoryRequest;
-  readonly response?: { readonly eventId: string; readonly message: AssistantMessage; readonly timing?: Timing };
+  readonly response?: {
+    readonly eventId: string;
+    readonly message: AssistantMessage;
+    readonly timing?: Timing;
+    /** How the provider answered, before its body, and who shaped the headers sent (`LlmProviderHeadersHook`). */
+    readonly provider?: ProviderAnswer;
+    readonly credit?: ResultCredit;
+  };
   readonly attempts: readonly TrajectoryAttempt[];
   /**
    * The failed attempts of the steps that asked this call before it, in order: a call asked again after a failure
@@ -324,6 +334,8 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           timing: data.timing,
           ...(data.failure === undefined ? {} : { failure: data.failure }),
           ...(data.retry === undefined ? {} : { retry: data.retry }),
+          ...(data.response === undefined ? {} : { provider: data.response }),
+          ...(data.credit === undefined ? {} : { credit: data.credit }),
         });
         turn.usage = addUsage(turn.usage, data.message.usage);
         return;
@@ -340,7 +352,13 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         if (message.role === "assistant") {
           const step = data.stepId === undefined ? undefined : stepFor(turn.turnId, data.stepId, event.at);
           if (step === undefined) return;
-          step.response = { eventId: event.id, message, ...(data.timing === undefined ? {} : { timing: data.timing }) };
+          step.response = {
+            eventId: event.id,
+            message,
+            ...(data.timing === undefined ? {} : { timing: data.timing }),
+            ...(data.response === undefined ? {} : { provider: data.response }),
+            ...(data.credit === undefined ? {} : { credit: data.credit }),
+          };
           step.tools = message.content.filter((block): block is ToolCall => block.type === "toolCall").map((call) => ({ call }));
           turn.usage = addUsage(turn.usage, message.usage);
           return;

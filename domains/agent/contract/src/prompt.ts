@@ -7,7 +7,7 @@
 import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "./index.ts";
 import type { ChannelDeclaration } from "@lemma/contracts";
-import type { PromptContent, TurnOptions, WhenBusy } from "./index.ts";
+import type { PromptContent, PromptOutcome, TurnOptions, WhenBusy } from "./index.ts";
 import type { Host } from "@lemma/client";
 
 /** A random request id. `crypto.getRandomValues`, unlike `crypto.randomUUID`, exists outside secure contexts too (a page over plain HTTP). */
@@ -37,18 +37,32 @@ export interface StartedPrompt {
   /** The submission's id: sending again with it (after a lost connection, say) cannot place the prompt twice. */
   readonly requestId: string;
   /**
-   * Resolves once the agent has taken the prompt (its turn started, or it
-   * was queued or placed in the running turn), rejects when the prompt is
-   * refused (`Busy`, no model, the session is gone, no agent). A client clears
-   * its input only after this resolves.
+   * Resolves once the agent has taken the prompt (a turn started with it, or it
+   * was queued or placed in the running turn), or a plugin handled it; rejects
+   * when the prompt is refused: by the agent (`Busy`, no model, the session is
+   * gone, no agent), or by a plugin (`PromptRefused`). A client clears its
+   * input only after this resolves.
    */
   readonly accepted: Promise<void>;
   /**
-   * Settles when the turn that placed it ends, as `agent.prompt` answers;
-   * resolves too, quietly, when the prompt was taken out of the queue
-   * (`Retracted`), since whoever withdrew it meant to.
+   * Settles when the turn that placed it ends, as `agent.prompt` answers, with
+   * what became of it (`PromptOutcome`); resolves too, quietly, as `placed`, when
+   * the prompt was taken out of the queue (`Retracted`), since whoever withdrew
+   * it meant to.
    */
-  readonly done: Promise<void>;
+  readonly done: Promise<PromptOutcome>;
+}
+
+/** A prompt a plugin refused before it was placed (`AgentInputHook`): who, and why. */
+export class PromptRefused extends Error {
+  readonly by: string;
+  readonly reason: string;
+  constructor(by: string, reason: string) {
+    super(`${by} refused the prompt: ${reason}`);
+    this.name = "PromptRefused";
+    this.by = by;
+    this.reason = reason;
+  }
 }
 
 const isWithdrawn = (error: unknown): boolean => error instanceof HostError && error.code === "Withdrawn";
@@ -134,7 +148,7 @@ export function startPrompt(
           listening = true;
           stopEvents?.();
           resolve();
-        } else if (activity.type === "turn-started" && activity.sessionId === sessionId) accept();
+        } else if (activity.type === "turn-started" && activity.sessionId === sessionId && activity.requestIds.includes(requestId)) accept();
         else if (activity.type === "queue-changed" && activity.sessionId === sessionId && activity.queue.some((queued) => queued.requestId === requestId))
           accept();
       },
@@ -151,15 +165,20 @@ export function startPrompt(
   });
   // Taken, or refused, while it was first opened, before its close was known.
   if (closed) close?.();
-  const done = (async () => {
+  const done = (async (): Promise<PromptOutcome> => {
     try {
       await subscribed;
-      await connection.channel.call(AgentChannels.prompt, payload);
+      return await connection.channel.call(AgentChannels.prompt, payload);
     } catch (error) {
       if (!(error instanceof HostError && error.code === "Retracted")) throw error;
+      return { kind: "placed" };
     } finally {
       stopListening();
     }
   })();
-  return { requestId, accepted: Promise.race([accepted, done]), done };
+  // Answered without a turn, a prompt a plugin refused is refused; one it handled was taken.
+  const answered = done.then((outcome) => {
+    if (outcome.kind === "refused") throw new PromptRefused(outcome.by, outcome.reason);
+  });
+  return { requestId, accepted: Promise.race([accepted, answered]), done };
 }

@@ -1,7 +1,7 @@
 import { Context, Data, Effect, Schema, Stream } from "effect";
 import { Event, Hook, Registry } from "@lemma/core";
 import type { Awaitable, Events } from "@lemma/core";
-import { defineChannel, eventFeed, serveChannel } from "@lemma/contracts";
+import { defineChannel, eventFeed, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, ImageContent, Message, ModelRef, StreamEvent, TextContent, ThinkingLevel, Usage } from "@lemma/llm";
 import type { ToolResultMessage } from "@lemma/llm";
@@ -40,13 +40,28 @@ export type WhenBusy = typeof WhenBusy.Type;
 export const QueuedPrompt = Schema.Struct({
   /** The caller's `requestId`, or one the agent gave it. */
   requestId: Schema.String,
+  /** As `AgentInputHook` left it: what is placed. */
   content: PromptContent,
   mode: Schema.Literals(["steer", "follow-up"]),
   options: Schema.optional(TurnOptions),
   /** Epoch milliseconds it was queued. */
   at: Schema.Number,
+  /** `AgentInputHook`'s handlers, logged with the user message it becomes. */
+  credit: Schema.optional(ResultCredit),
 });
 export type QueuedPrompt = typeof QueuedPrompt.Type;
+
+/**
+ * What became of a prompt: `placed` (in a turn, now or queued), or answered by a plugin's `AgentInputHook` handler
+ * without reaching the model: `handled` (it did what was asked, and says so) or `refused` (and why). `by` is that
+ * plugin.
+ */
+export const PromptOutcome = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("placed") }),
+  Schema.Struct({ kind: Schema.Literal("handled"), by: Schema.String, message: Schema.optional(Schema.String) }),
+  Schema.Struct({ kind: Schema.Literal("refused"), by: Schema.String, reason: Schema.String }),
+]);
+export type PromptOutcome = typeof PromptOutcome.Type;
 
 /**
  * What a client that joins or reconnects needs to show a session as it is now,
@@ -141,6 +156,11 @@ export interface RequestDraft {
   readonly sections: readonly SystemSection[];
   readonly tools: readonly ToolContribution[];
   /**
+   * What the provider passes on as it is (`LlmRequest.providerOptions`: a temperature, sampling parameters,
+   * metadata), set by a handler; logged with the request.
+   */
+  readonly providerOptions?: Readonly<Record<string, unknown>>;
+  /**
    * The previous call failed because its request was too long for the model: a handler that shortens the history
    * (compaction) does so now, whatever its own estimate says. Asked once: another overflow before the model answers
    * ends the turn.
@@ -161,6 +181,39 @@ export interface RequestDraft {
 }
 
 export type RequestPlan = Omit<RequestDraft, "history" | "branch" | "append" | "sessionId" | "turnId" | "cwd" | "overflow">;
+
+/** A prompt as it was submitted, before the agent places it. */
+export interface PromptInput {
+  readonly sessionId: string;
+  readonly content: PromptContent;
+  readonly options: PromptOptions;
+}
+
+/**
+ * What a handler of `AgentInputHook` makes of a prompt: `place` it (as it came, or rewritten: what the terminal
+ * returns for what it is handed, its content and its options but the request id, which stays the caller's), `handle`
+ * it itself (nothing reaches the model; `message` tells whoever sent it what it did), or `refuse` it (and why). The
+ * prompt is the sender's until then: a handled or refused one is not logged.
+ */
+export type PromptDecision =
+  | { readonly kind: "place"; readonly content: PromptContent; readonly options: PromptOptions }
+  | { readonly kind: "handle"; readonly message?: string }
+  | { readonly kind: "refuse"; readonly reason: string };
+
+/**
+ * Around every new prompt, before the agent places it: rewrite it (`next` with other content or options, such as its
+ * model), handle it, or refuse it. A retry of a prompt with the same request id does not run it again: one placed
+ * already is known by where it was placed, and one handled or refused answers as it did (while the agent runs; after a
+ * restart it is asked again), as does one still being decided. Who rewrote a prompt is logged with the user message
+ * (its `credit`); who handled or refused one, in the prompt's outcome (`PromptOutcome`): the outermost handler whose
+ * answer differs from the one it was handed.
+ */
+export const AgentInputHook = Hook.make<PromptInput, PromptDecision, AgentError>("lemma/agent.input", {
+  summary: {
+    input: (input) => ({ parts: input.content.length, whenBusy: input.options.whenBusy ?? "follow-up" }),
+    output: (decision) => ({ decision: decision.kind }),
+  },
+});
 
 /** Runs before every model call. Skills, project context, and prompt plugins contribute here. */
 export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request", {
@@ -186,7 +239,10 @@ export const AgentContinueHook = Hook.make<StepOutcome, "continue" | "stop", Age
   summary: { input: (outcome) => ({ step: outcome.step, results: outcome.results.length }), output: (decision) => ({ decision }) },
 });
 
-export const TurnStarted = Event.make<{ readonly sessionId: string; readonly turnId: string }>("lemma/agent.turn.started");
+/** A turn began: with the prompts `requestIds` names (none, for one resumed after a restart). */
+export const TurnStarted = Event.make<{ readonly sessionId: string; readonly turnId: string; readonly requestIds: readonly string[] }>(
+  "lemma/agent.turn.started",
+);
 export const TurnEnded = Event.make<{
   readonly sessionId: string;
   readonly turnId: string;
@@ -234,14 +290,16 @@ export class Agent extends Context.Service<
   Agent,
   {
     /**
-     * Appends the user message and runs steps (model, then tools) until the
-     * model stops. One turn per session at a time: while one runs, the prompt
-     * steers it, follows it, or fails `Busy` (`whenBusy`). Resolves when the
-     * turn that placed the prompt has ended; progress arrives through events
-     * and the log. A turn cut off by a host restart resumes when the agent
-     * starts again.
+     * Runs the prompt through `AgentInputHook`, then appends the user message
+     * and runs steps (model, then tools) until the model stops. One turn per
+     * session at a time: while one runs, the prompt steers it, follows it, or
+     * fails `Busy` (`whenBusy`). Resolves `placed` when the turn that placed
+     * the prompt has ended, progress arriving through events and the log; or
+     * at once, `handled` or `refused`, when a plugin answered it instead, with
+     * no turn and nothing logged. A turn cut off by a host restart resumes
+     * when the agent starts again.
      */
-    readonly prompt: (sessionId: string, content: PromptContent, options?: PromptOptions) => Effect.Effect<void, AgentError>;
+    readonly prompt: (sessionId: string, content: PromptContent, options?: PromptOptions) => Effect.Effect<PromptOutcome, AgentError>;
     /**
      * Cancels the session's turn, if it has one. A running turn stops and
      * closes as cancelled, and this answers once it has ended. A turn a restart
@@ -275,7 +333,8 @@ export class Agent extends Context.Service<
 export const AgentActivity = Schema.Union([
   /** First: from here on the stream hears everything. `running` is the sessions with a turn running as of then (`Agent.running`). */
   Schema.Struct({ type: Schema.Literal("subscribed"), running: Schema.Array(Schema.String) }),
-  Schema.Struct({ type: Schema.Literal("turn-started"), sessionId: Schema.String, turnId: Schema.String }),
+  /** `TurnStarted`: `requestIds` are the prompts it started with, so a client tells its own prompt's turn from another's. */
+  Schema.Struct({ type: Schema.Literal("turn-started"), sessionId: Schema.String, turnId: Schema.String, requestIds: Schema.Array(Schema.String) }),
   /** `AssistantDelta`: model output, numbered by `seq` within its step. */
   Schema.Struct({
     type: Schema.Literal("delta"),
@@ -318,8 +377,10 @@ export const AgentChannels = {
    * only when no agent answers once the change that stopped it has finished,
    * as when the agent is turned off. A client that clears
    * its input once the prompt is taken reads that from `agent.activity`,
-   * opened first: `turn-started` for the session, or the `requestId` in a
-   * `queue-changed`; or its message on the session's `sessions.log`.
+   * opened first: the `requestId` in a `turn-started` or a `queue-changed`; or
+   * its message on the session's `sessions.log`. A prompt a plugin handled or
+   * refused (`AgentInputHook`) is answered at once, with no turn and nothing
+   * logged; a retry of it answers the same while the agent runs.
    */
   prompt: defineChannel({
     kind: "call",
@@ -334,7 +395,7 @@ export const AgentChannels = {
       requestId: Schema.NonEmptyString,
       whenBusy: Schema.optional(WhenBusy),
     }),
-    success: Schema.Void,
+    success: PromptOutcome,
     repeatable: true,
   }),
   /** `Agent.cancel`. */
@@ -420,7 +481,12 @@ export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: C
     eventFeed(
       Effect.map(agent.running, (running): AgentActivity => ({ type: "subscribed", running })),
       [
-        Stream.map(events.stream(TurnStarted, FEED), ({ sessionId, turnId }): AgentActivity => ({ type: "turn-started", sessionId, turnId })),
+        Stream.map(events.stream(TurnStarted, FEED), ({ sessionId, turnId, requestIds }): AgentActivity => ({
+          type: "turn-started",
+          sessionId,
+          turnId,
+          requestIds,
+        })),
         Stream.map(events.stream(AssistantDelta, FEED), ({ sessionId, turnId, stepId, seq, event }): AgentActivity => ({
           type: "delta",
           sessionId,

@@ -7,7 +7,7 @@ import { AgentChannels } from "@lemma/agent";
 import { contentText } from "@lemma/llm";
 import { branchOf, SessionChannels, trajectory } from "@lemma/sessions";
 import type { ChannelDeclaration, RuntimeEvent } from "@lemma/contracts";
-import type { AgentActivity, AgentView, PromptContent, TurnOptions } from "@lemma/agent";
+import type { AgentActivity, AgentView, PromptContent, PromptOutcome, TurnOptions } from "@lemma/agent";
 import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import type { SessionEvent, SessionInfo, SessionLogUpdate } from "@lemma/sessions";
 import { tooLarge } from "@lemma/client";
@@ -56,6 +56,15 @@ type Prompt = typeof AgentChannels.prompt extends ChannelDeclaration<"call", inf
  */
 const prompt = (host: Host, payload: Prompt) =>
   callOn(host, AgentChannels.prompt, payload).pipe(
+    // A plugin answered it instead of placing it (`AgentInputHook`): there is no turn to wait for. Refused, it fails;
+    // handled, what the plugin said is the command's result (`handledResult`).
+    Effect.flatMap((outcome): Effect.Effect<Exclude<PromptOutcome, { readonly kind: "refused" }>, CliError> =>
+      outcome.kind === "refused"
+        ? Effect.fail(
+            new CliError({ code: "Refused", message: `${outcome.by} refused the prompt: ${outcome.reason}`, subject: outcome.by, exit: ExitCode.failed }),
+          )
+        : Effect.succeed(outcome),
+    ),
     Effect.mapError((error) =>
       ofChannel(error, AgentChannels.prompt.id, "Withdrawn")
         ? new CliError({
@@ -127,6 +136,13 @@ export type TurnResult = ReturnType<typeof summarize>;
 /** The session's info and log, read once. */
 export const readSession = (calls: Calls, sessionId: string) =>
   Effect.all([calls(SessionChannels.get, { sessionId }), calls(SessionChannels.events, { sessionId })], { concurrency: "unbounded" });
+
+/** A prompt a plugin handled (`AgentInputHook`): no turn ran, and what the plugin said is the result. */
+const handledResult = (outcome: Extract<PromptOutcome, { readonly kind: "handled" }>, options: Options, streamed: boolean): Output => ({
+  json: { type: "handled", by: outcome.by, ...(outcome.message === undefined ? {} : { message: outcome.message }) },
+  text: outcome.message === undefined || outcome.message === "" ? `${outcome.by} handled the prompt` : outcome.message,
+  compact: options.json && streamed,
+});
 
 const result = (turn: TurnResult, options: Options, streamed: boolean): Output => ({
   json: options.json && streamed ? { type: "result", ...turn } : turn,
@@ -212,14 +228,15 @@ const send = (
   io: Io,
   options: Options,
   payload: Prompt,
-  place: Effect.Effect<void, Failure>,
+  place: Effect.Effect<PromptOutcome, Failure>,
   answers: boolean,
 ) =>
   Effect.gen(function* () {
     const { sessionId } = payload;
     if (options.follow) return yield* followed(host, heard, io, options, payload, place);
     if (answers) yield* hostEvents(heard, yield* questionHandler(host, io, options, `session:${sessionId}`));
-    yield* place;
+    const outcome = yield* place;
+    if (outcome.kind === "handled") return handledResult(outcome, options, false);
     const [info, events] = yield* readSession(on(host), sessionId);
     return result(summarize(info, events, payload.requestId), options, false);
   });
@@ -233,7 +250,7 @@ const send = (
  * the log from the last event shown, and the activity, whose output meanwhile
  * was lost, caught up from `agent.view`.
  */
-const followed = (host: Host, heard: Stream.Stream<RuntimeEvent>, io: Io, options: Options, payload: Prompt, place: Effect.Effect<void, Failure>) =>
+const followed = (host: Host, heard: Stream.Stream<RuntimeEvent>, io: Io, options: Options, payload: Prompt, place: Effect.Effect<PromptOutcome, Failure>) =>
   Effect.gen(function* () {
     const { sessionId, requestId } = payload;
     const view = turnView(io, options, sessionId, requestId, callOn(host, AgentChannels.view, { sessionId }));
@@ -255,11 +272,16 @@ const followed = (host: Host, heard: Stream.Stream<RuntimeEvent>, io: Io, option
       () => ({ sessionId, after: view.logSeq() }),
       (update) => serial(view.log(update)),
     );
-    yield* Effect.raceFirst(
+    const outcome = yield* Effect.raceFirst(
       place,
       // Either stream failing (not withdrawn or cut off, which reopens it) fails the command.
       Effect.andThen(Effect.raceFirst(Fiber.join(activity), Fiber.join(log)), Effect.never),
     );
+    if (outcome.kind === "handled") {
+      yield* serial(Effect.andThen(Fiber.interrupt(activity), Fiber.interrupt(log)));
+      view.close();
+      return handledResult(outcome, options, options.json || view.streamed());
+    }
     // `turn-ended` may trail the reply (each kind of the agent's output comes in its own order): what came before it too.
     yield* view.ended.pipe(Effect.timeout(Duration.seconds(2)), Effect.ignore);
     yield* serial(Effect.andThen(Fiber.interrupt(activity), Fiber.interrupt(log)));
