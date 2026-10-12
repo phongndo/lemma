@@ -18,3 +18,9 @@ tools. Adds it to `Tools`; requires `ToolRunner`, which its scripts call the oth
   resolves to text (pi's `bash` returns an object), `store`/`load` keep nothing
   between scripts, `models` is absent, and `searchTools` matches words rather
   than ranking with BM25.
+- **Tools only scripts call.** `codemode` `nests`, so a request offering it
+  offers a `nested` tool (an MCP server's, by default) without declaring it to
+  the model, which calls it only from a script: a script finds its declaration
+  by searching, as the description says (`await searchTools(query)`), and the
+  description stays the same as such tools come and go, keeping the request's
+  prefix cached.

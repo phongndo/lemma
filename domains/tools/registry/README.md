@@ -39,7 +39,11 @@ const greet = definePlugin({
   off then runs again when the turn resumes, where any other is reported to the
   model as interrupted (see the [agent](../../agent/loop/README.md#durability)). One
   that may run alongside others declares `parallel: "safe"`: the agent runs a
-  run of consecutive such calls of one response at once. `list` carries both.
+  run of consecutive such calls of one response at once. `list` carries both,
+  and `direct` (only the model calls it), `nests` (it runs others, as
+  `codemode` does), and `nested` (only a tool that runs others calls it, so a
+  request offering one does not declare it to the model: `declaredTools`);
+  `Tools` refuses a tool both `direct` and `nested`.
 - `list` is sorted by name, so a tool added again after a reload does not reorder
   (and re-log) the tool list. Parameters are the draft-07 JSON Schema of the
   input's encoded side (Effect's `SchemaRepresentation` compiler), closed
@@ -52,7 +56,9 @@ const greet = definePlugin({
   malformed shapes before decoding), put a check with a `toJsonSchema`
   annotation on its encoded side, as the builtin `edit` tool does.
 - `execute(invocation, signal)`:
-  1. unknown tool: fails with `ToolError` `NotFound` (message lists available tools);
+  1. unknown tool, or one the request did not offer (`ToolInvocation.offered`),
+     or, for the model's own call, did not declare to it (`declared`): fails
+     with `ToolError` `NotFound`, the message listing the tools the call may name;
   2. input decoded with the tool's schema: failure is an error result with the formatted parse error;
   3. `ToolExecuteHook`, whose terminal re-decodes input a handler rewrote, runs the
      guards, then the tool;

@@ -38,10 +38,12 @@ const SEARCH_LIMIT = 8;
 
 /**
  * pi's description with the tools all directly callable, as pi's default mode has them: their
- * declarations are the model's own tool list, so they are not repeated here.
+ * declarations are the model's own tool list, so they are not repeated here. Tools only scripts
+ * call (`nested`) are found by searching, so the description stays the same as they come and go.
  */
 const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw JavaScript (no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
 - \`await tools.<name>({ ...args })\` calls any of your other tools with the same arguments (characters not valid in identifiers become \`_\`). It resolves to the tool's text output as a string and rejects with an Error on failure. Calls still running when the script ends are cancelled.
+- Some tools are not in your tool list: only scripts call them. Find them with \`await searchTools(query)\` before calling one.
 - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\`. Without \`timeout_ms\`, a script stops after 300 seconds.
 
 Globals:
@@ -110,6 +112,7 @@ export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>)
   name: "codemode",
   description: DESCRIPTION,
   input: CodemodeInput,
+  nests: true,
   // No `replay`: a script may write files or run commands, so one cut off by a host restart is not run again.
   execute: (input, { sessionId, toolCallId, cwd, signal, update, offered, maxResultChars }) =>
     Effect.gen(function* () {

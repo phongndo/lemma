@@ -154,6 +154,7 @@ export interface RequestDraft {
   readonly model: ModelRef;
   readonly thinking?: ThinkingLevel;
   readonly sections: readonly SystemSection[];
+  /** The tools on offer: the model is sent the declarations of those `declaredTools` keeps (`@lemma/tools`). */
   readonly tools: readonly ToolContribution[];
   /**
    * What the provider passes on as it is (`LlmRequest.providerOptions`: a temperature, sampling parameters,

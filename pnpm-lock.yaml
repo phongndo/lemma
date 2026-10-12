@@ -737,6 +737,9 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../tools/contract
       effect:
         specifier: 4.0.1
         version: 4.0.1

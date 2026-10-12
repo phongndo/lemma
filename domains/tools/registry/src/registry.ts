@@ -172,6 +172,8 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           ...(tool.replay === undefined ? {} : { replay: tool.replay }),
           ...(tool.parallel === undefined ? {} : { parallel: tool.parallel }),
           ...(tool.direct === undefined ? {} : { direct: tool.direct }),
+          ...(tool.nested === undefined ? {} : { nested: tool.nested }),
+          ...(tool.nests === undefined ? {} : { nests: tool.nests }),
         }))
         .sort((a, b) => Order.String(a.spec.name, b.spec.name)),
     );
@@ -250,10 +252,10 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
         Effect.gen(function* () {
           const entry = yield* find(invocation.name);
           if (entry === undefined) return yield* unknown(invocation.name, yield* names);
-          // A tool the request did not offer is not there for this call, whoever makes it (a model, or a tool running others).
-          if (invocation.offered !== undefined && !invocation.offered.includes(invocation.name)) {
-            return yield* unknown(invocation.name, [...invocation.offered]);
-          }
+          // A tool the request did not offer is not there for this call, whoever makes it (a model, or a tool running
+          // others); nor, for the model's own call, is one the request did not declare to it, which only a tool calls.
+          const reachable = invocation.declared ?? invocation.offered;
+          if (reachable !== undefined && !reachable.includes(invocation.name)) return yield* unknown(invocation.name, [...reachable]);
           if (signal.aborted) return yield* new ToolError({ tool: invocation.name, reason: "Cancelled", message: `Tool "${invocation.name}" was cancelled` });
           const started = Date.now();
           // Who shaped the result, for a caller that keeps it (`ExecuteOptions.credit`).
