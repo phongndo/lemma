@@ -51,6 +51,8 @@ export const NO_MODEL_FAULTS: ModelFaults = { transient: 0, rateLimit: 0, fatal:
 
 /** What the model answers a request with, drawn from the run's seed. */
 export interface Answer {
+  /** What sort of answer it is (`reply`, `tools`, `transient`, `malformed`…), for a run's coverage. */
+  readonly kinds: readonly string[];
   /** Milliseconds before its first event. */
   readonly latencyMs: number;
   /** Text it writes, in deltas, each after its own delay. */
@@ -86,55 +88,46 @@ export const answerAsSimulated =
   (request, prng) => {
     const deltas = Array.from({ length: prng.between(1, 5) }, () => ({ text: `${prng.pick(WORDS)} `, afterMs: prng.between(5, 200) }));
     const latencyMs = prng.between(50, 2_000);
-    const normal = usage(prng.chance(faults.bigUsage) ? Math.round(CONTEXT_WINDOW * 0.85) : 100 + prng.int(2_000));
+    const big = prng.chance(faults.bigUsage);
+    const normal = usage(big ? Math.round(CONTEXT_WINDOW * 0.85) : 100 + prng.int(2_000));
+    const failing = (kind: string, failure: LlmFailure, message: string, kept = deltas.slice(0, 0), wait = latencyMs): Answer => ({
+      kinds: [kind],
+      latencyMs: wait,
+      deltas: kept,
+      usage: normal,
+      ending: { kind: "error", failure, message },
+    });
     if (isSummaryRequest(request)) {
-      return prng.chance(faults.fatal)
-        ? { latencyMs, deltas: [], usage: usage(100), ending: { kind: "error", failure: { kind: "fatal" }, message: "The summary failed" } }
-        : { latencyMs, deltas, usage: usage(100), ending: { kind: "done", calls: [] } };
+      // A summary fails as any request can: for good, or as an overloaded provider does.
+      const failed = prng.chance(faults.fatal) ? ("fatal" as const) : prng.chance(faults.transient) ? ("transient" as const) : undefined;
+      return failed !== undefined
+        ? { ...failing("summary failed", { kind: failed }, "The summary failed"), usage: usage(100) }
+        : { kinds: ["summary"], latencyMs, deltas, usage: usage(100), ending: { kind: "done", calls: [] } };
     }
-    if (prng.chance(faults.fatal))
-      return { latencyMs, deltas: [], usage: normal, ending: { kind: "error", failure: { kind: "fatal" }, message: "Invalid API key" } };
-    if (prng.chance(faults.overflow)) {
-      return {
-        latencyMs,
-        deltas: [],
-        usage: normal,
-        ending: { kind: "error", failure: { kind: "overflow" }, message: "The request is longer than the context window" },
-      };
-    }
-    if (prng.chance(faults.transient)) {
-      return { latencyMs, deltas: [], usage: normal, ending: { kind: "error", failure: { kind: "transient" }, message: "The provider is overloaded" } };
-    }
-    if (prng.chance(faults.rateLimit)) {
-      const retryAfterMs = prng.between(1_000, 60_000);
-      return { latencyMs, deltas: [], usage: normal, ending: { kind: "error", failure: { kind: "rate-limit", retryAfterMs }, message: "Rate limited" } };
-    }
-    if (prng.chance(faults.stall)) {
-      return {
-        latencyMs: prng.between(60_000, 300_000),
-        deltas: [],
-        usage: normal,
-        ending: { kind: "error", failure: { kind: "transient" }, message: "The stream stalled" },
-      };
-    }
-    if (prng.chance(faults.cut)) {
-      return { latencyMs, deltas, usage: normal, ending: { kind: "error", failure: { kind: "transient" }, message: "The connection was reset" } };
-    }
+    if (prng.chance(faults.fatal)) return failing("fatal", { kind: "fatal" }, "Invalid API key");
+    if (prng.chance(faults.overflow)) return failing("overflow", { kind: "overflow" }, "The request is longer than the context window");
+    if (prng.chance(faults.transient)) return failing("transient", { kind: "transient" }, "The provider is overloaded");
+    if (prng.chance(faults.rateLimit)) return failing("rateLimit", { kind: "rate-limit", retryAfterMs: prng.between(1_000, 60_000) }, "Rate limited");
+    if (prng.chance(faults.stall)) return failing("stall", { kind: "transient" }, "The stream stalled", [], prng.between(60_000, 300_000));
+    if (prng.chance(faults.cut)) return failing("cut", { kind: "transient" }, "The connection was reset", deltas);
     const offered = (request.tools ?? []).map((tool) => tool.name);
+    let malformed = false;
     const calls: ToolCall[] =
       offered.length > 0 && prng.chance(0.35)
         ? Array.from({ length: prng.between(1, 2) }, (_, index) => {
             const name = prng.pick(offered);
-            const malformed = prng.chance(faults.malformed);
+            const bad = prng.chance(faults.malformed);
+            malformed ||= bad;
             return {
               type: "toolCall" as const,
               id: `call-${prng.int(1 << 30).toString(36)}-${index}`,
               name,
-              arguments: malformed ? { unexpected: true } : { text: prng.pick(WORDS), steps: prng.between(1, 4) },
+              arguments: bad ? { unexpected: true } : { text: prng.pick(WORDS), steps: prng.between(1, 4) },
             };
           })
         : [];
-    return { latencyMs, deltas, usage: normal, ending: { kind: "done", calls } };
+    const kinds = [calls.length > 0 ? "tools" : "reply", ...(malformed ? ["malformed"] : []), ...(big ? ["bigUsage"] : [])];
+    return { kinds, latencyMs, deltas, usage: normal, ending: { kind: "done", calls } };
   };
 
 /** Text in a few deltas, and now and then calls to the tools offered; never failing. */
@@ -191,7 +184,16 @@ export interface ModelCall {
  * A plugin providing `Llm`: the simulated model, answering each request as `answering` draws it from `prng`. Every
  * request it is asked is kept in `calls`, which hosts of a run share, to check against the log.
  */
-export const simModel = (prng: Prng, options: { readonly answering?: Answering; readonly host?: number; readonly calls?: ModelCall[] } = {}) => {
+export const simModel = (
+  prng: Prng,
+  options: {
+    readonly answering?: Answering;
+    readonly host?: number;
+    readonly calls?: ModelCall[];
+    /** Hears each answer's sorts, for a run's coverage. */
+    readonly count?: (what: string) => void;
+  } = {},
+) => {
   const answering = options.answering ?? answerSimply;
   const calls = options.calls ?? [];
   const plugin = definePlugin({
@@ -205,7 +207,9 @@ export const simModel = (prng: Prng, options: { readonly answering?: Answering; 
         Stream.unwrap(
           Effect.sync(() => {
             calls.push({ host: options.host ?? 0, request, summary: isSummaryRequest(request) });
-            return play(answering(request, prng));
+            const answer = answering(request, prng);
+            for (const kind of answer.kinds) options.count?.(`model ${kind}`);
+            return play(answer);
           }),
         ),
       login: () => Effect.void,

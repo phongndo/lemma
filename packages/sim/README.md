@@ -63,7 +63,7 @@ counts a temporary one a crash left).
 `new World({ seed }).run()` is TigerBeetle's VOPR for the harness. The seed
 draws the run's mix (`drawSwarm`): which actions its clients and the world take
 and how often, and how often each part fails. A run leans on one part
-(`focus`): `broad` draws every part alike; `disk`, `model`, and `lifecycle`
+(`focus`): `broad` draws every part alike; `disk`, `model`, `tools`, and `lifecycle`
 draw that part's faults often and high, with the actions that make them matter
 on, as a bug often needs one part failing a lot rather than every part a
 little. Odd seeds shuffle fibers' work (`shuffle`).
@@ -97,7 +97,9 @@ The checker (`Checker`), TigerBeetle's state checker, holds the run to:
   (`Busy`, `Retracted`, handled, refused; `Io` is not a refusal, as a journal
   write that failed may have landed);
 - no call of `work`, unsafe to repeat, begins twice;
-- a tool's output only moves on, and all of it comes before its result;
+- a tool's output only moves on, and all of it comes before its result (where
+  fibers run in the order they became ready, so the checker hears events in
+  the order they were published);
 - a model call's streamed text is the text the log has for it;
 - a queue's revision only grows, across restarts and a clock set back;
 - no client call ends in a defect, no plugin breaks an assertion, and a
@@ -130,19 +132,37 @@ commit that drew it:
 
 ### Testing the tester
 
-Reintroduced, each of three earlier bugs is caught (200 seeds at the default
-200 ticks): tool output delivered on a detached fiber, after its call returned
-(#22), in 140 seeds; no repair of a session's last line before it is served
-(#26), in 4; and no `agent.started` event before tools run, in 44.
+Reintroduced, each of three earlier bugs is caught (seeds 1 to 200 at the
+default 200 ticks, measured at the commit that last changed the generator):
+
+- each chunk of a tool's output sent on a detached fiber of its own, a turn
+  later, so after its call returned (#22): in 65 seeds, the first seed 2;
+- no `agent.started` event before tools run: in 44, the first seed 2;
+- no repair of a session's last line before it is served (#26): in 1, seed 189.
+  It needs a sync, then the cut of the line it left, to fail, then a restart,
+  then a crash: about one run in 200, ten a night. The session log's own
+  simulation (`domains/sessions/files/tests/simulation.test.ts`), the focused
+  test beside this whole-system one, as TigerBeetle pairs them, catches it every
+  time.
 
 ## Running it
 
-`pnpm --filter @lemma/sim sim [--seed <n>] [--count <n>] [--forever] [--ticks
-<n>] [--dump]` runs seeds from `n` (a random one, printed first, when none is
-given), stopping at the first that fails, and prints how to replay it; `--dump`
-prints each session's log as the run left it. `tests/world.test.ts` runs
-`LEMMA_HARNESS_RUNS` seeds (default 16) from `LEMMA_HARNESS_SEED` at
-`LEMMA_HARNESS_TICKS` ticks (default 120), and a seed twice to check it leaves
-the same disk; `tests/determinism.test.ts` checks a seed leaves the same disk
+`pnpm sim [--seed <n>] [--count <n>] [--forever] [--ticks <n>] [--dump]
+[--coverage]` (from the repository's root) runs seeds from `n` (a random one,
+printed first, when none is given), stopping at the first that fails, and
+prints how to replay it; `--dump` prints each session's log as the run left
+it, and `--coverage` how often each kind of action, fault, and outcome
+happened across the seeds.
+
+`tests/world.test.ts` runs `LEMMA_HARNESS_RUNS` seeds (default 100) from
+`LEMMA_HARNESS_SEED` at `LEMMA_HARNESS_TICKS` ticks (default 120), and fails if
+a kind of action, fault, or outcome (a crash part-way through a write, a turn
+ending `max-steps`, a prompt answered `unknown`…) never happens across them,
+which would be a part of the space the generator stopped reaching. An action
+counts once it took effect (a checkout made, a plugin restarted), so one whose
+calls all fail is not taken for reached. The rarest kinds happen in about a
+tenth of runs, so any 100 seeds reach them all but about once in a thousand. The nightly
+job runs 2,000 seeds at 200 ticks from a window no earlier night ran (`pnpm
+test:random`). `tests/determinism.test.ts` checks a seed leaves the same disk
 in another process, starting no timer of the event loop's. Simulated runs name
 the date in UTC (`TZ`), so a run is the same on every machine.

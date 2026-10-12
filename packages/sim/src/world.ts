@@ -78,7 +78,7 @@ const rates = <K extends string>(prng: Prng, kinds: readonly K[], max: number, f
  * failing a lot, not every part a little. Broad runs keep the rest of the space sampled, so the focus does not leave
  * a blind spot (TigerBeetle's "Fuzzer Blind Spots").
  */
-export const FOCUSES = ["broad", "disk", "model", "lifecycle"] as const;
+export const FOCUSES = ["broad", "disk", "model", "tools", "lifecycle"] as const;
 export type Focus = (typeof FOCUSES)[number];
 
 /** The mix a seed draws. Prompts and waits are always on, so every run does something. */
@@ -102,7 +102,7 @@ export const drawSwarm = (prng: Prng, focus: Focus = prng.pick(FOCUSES)): Swarm 
       focus === "model" ? 0.5 : 0.2,
       focus === "model",
     ),
-    tools: rates(prng, ["fail", "slow"], 0.4),
+    tools: rates(prng, ["fail", "slow"], 0.4, focus === "tools"),
     hooks: rates(prng, ["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail"], 0.3),
     disk: rates(prng, ["write", "sync", "truncate", "rename", "open"], focus === "disk" ? 0.5 : 0.1, focus === "disk"),
   };
@@ -164,7 +164,7 @@ const text = (value: string) => [{ type: "text" as const, text: value }];
 export class World {
   readonly sim: Simulation;
   readonly swarm: Swarm;
-  readonly checker = new Checker();
+  readonly checker: Checker;
   readonly calls: ModelCall[] = [];
   readonly tools = newToolRecord();
   readonly disk: SimDisk;
@@ -179,15 +179,21 @@ export class World {
   private readonly sessions: string[] = [];
   private readonly prompted: Prompted[] = [];
   private requests = 0;
+  /** Steps a turn may take: few in some runs, so turns end `max-steps`. */
+  private readonly maxSteps: number;
+  private readonly shuffled: boolean;
 
   constructor(options: WorldOptions) {
     // Shuffled scheduling in odd seeds, so half the runs reorder fibers' work.
     const shuffle = options.shuffle ?? (options.seed & 1) === 1;
+    this.shuffled = shuffle;
     this.sim = new Simulation({ seed: options.seed, shuffle });
+    this.checker = new Checker({ ordered: !shuffle });
     this.prng = this.sim.random.split("workload");
     this.swarm = options.swarm ?? drawSwarm(this.sim.random.split("swarm"));
     this.faults = this.swarm;
     this.ticks = options.ticks ?? 200;
+    this.maxSteps = this.sim.random.split("limits").between(2, 8);
     const diskRandom = this.sim.random.split("disk");
     this.disk = new SimDisk(() => diskRandom.next());
     // A power loss kills the host as it strikes, part-way through a write too: its clients hear nothing more from it.
@@ -210,6 +216,16 @@ export class World {
     this.raise("the audit");
   }
 
+  /**
+   * What the run did that its checks count on, by what it is (`action crash`, `model transient`, `disk sync`, `turn
+   * cancelled`…): a kind that never shows up across many seeds is a part of the space no run reaches.
+   */
+  coverage(): ReadonlyMap<string, number> {
+    const seen = new Map(this.checker.seen);
+    for (const [operation, count] of this.disk.injected) seen.set(`disk ${operation}`, (seen.get(`disk ${operation}`) ?? 0) + count);
+    return seen;
+  }
+
   /** What a seed's run is: its mix and whether its scheduling is shuffled. */
   describe(): string {
     const on = (record: object) =>
@@ -218,7 +234,7 @@ export class World {
         .map(([kind, weight]) => `${kind} ${weight < 1 ? weight.toFixed(3) : weight}`)
         .join(", ") || "none";
     return [
-      `focus: ${this.swarm.focus}`,
+      `focus: ${this.swarm.focus}, ${this.shuffled ? "shuffled" : "in order"}, at most ${this.maxSteps} steps a turn`,
       `actions: ${on(this.swarm.actions)}`,
       `model faults: ${on(this.swarm.model)}`,
       `tool faults: ${on(this.swarm.tools)}`,
@@ -247,20 +263,22 @@ export class World {
   /** The plugins a host of this run adds, drawing from the faults in force now. */
   private parts(generation: number): { readonly plugins: readonly Plugin[]; readonly configs: Readonly<Record<string, unknown>> } {
     const faults = this.faults;
+    const count = (what: string) => this.checker.count(what);
     const model = simModel(this.sim.random.split(`model ${generation}`), {
       answering: answerAsSimulated(faults.model),
       host: generation,
       calls: this.calls,
+      count,
     });
     return {
       plugins: [
         compaction,
         model.plugin,
-        simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools }).plugin,
-        simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks),
+        simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools, count }).plugin,
+        simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks, count),
         this.checker.observer(),
       ],
-      configs: { "agent.loop": { maxSteps: 8, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 } },
+      configs: { "agent.loop": { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 } },
     };
   }
 
@@ -476,7 +494,10 @@ export class World {
         return this.prompt("reject");
       case "retry": {
         const unknown = this.unknown();
-        if (unknown.length > 0) this.send(this.prng.pick(unknown));
+        if (unknown.length > 0) {
+          this.checker.count("retried");
+          this.send(this.prng.pick(unknown));
+        }
         return;
       }
       case "cancel": {
@@ -490,13 +511,34 @@ export class World {
         return;
       }
       case "withdraw": {
-        const prompted = this.prompted.length === 0 ? undefined : this.prng.pick(this.prompted);
-        if (prompted === undefined) return;
+        // Now and then any prompt sent, as a client with a stale list withdraws one (often placed already, or in a
+        // session not yet checked against its log); else one of the prompts the session's queue shows.
+        if (this.prng.chance(1 / 3)) {
+          const prompted = this.prompted.length === 0 ? undefined : this.prng.pick(this.prompted);
+          if (prompted === undefined) return;
+          this.client(
+            `withdraw ${prompted.requestId} in ${prompted.sessionId}`,
+            (call) => Effect.orElseSucceed(call("agent.withdraw", { sessionId: prompted.sessionId, requestId: prompted.requestId }), () => false),
+            (ended) => {
+              if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.withdrew(prompted.sessionId, prompted.requestId);
+            },
+          );
+          return;
+        }
+        const sessionId = this.sessionFor();
+        if (sessionId === undefined) return;
+        const draw = this.prng.next();
         this.client(
-          `withdraw ${prompted.requestId} in ${prompted.sessionId}`,
-          (call) => Effect.orElseSucceed(call("agent.withdraw", { sessionId: prompted.sessionId, requestId: prompted.requestId }), () => false),
+          `withdraw in ${sessionId}`,
+          (call) =>
+            Effect.gen(function* () {
+              const queue = (yield* call("agent.queue", { sessionId })) as readonly { readonly requestId: string }[];
+              if (queue.length === 0) return undefined;
+              const requestId = queue[Math.floor(draw * queue.length)]!.requestId;
+              return (yield* Effect.orElseSucceed(call("agent.withdraw", { sessionId, requestId }), () => false)) ? requestId : undefined;
+            }),
           (ended) => {
-            if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.withdrew(prompted.sessionId, prompted.requestId);
+            if (ended !== "gone" && Exit.isSuccess(ended) && ended.value !== undefined) this.checker.withdrew(sessionId, ended.value);
           },
         );
         return;
@@ -510,10 +552,14 @@ export class World {
           (call) =>
             Effect.gen(function* () {
               const events = (yield* call("sessions.events", { sessionId })) as readonly SessionEvent[];
-              if (events.length === 0) return;
+              if (events.length === 0) return false;
               yield* call("sessions.checkout", { sessionId, eventId: events[Math.floor(draw * events.length)]!.id });
-            }).pipe(Effect.ignore),
-          () => {},
+              return true;
+            }).pipe(Effect.orElseSucceed(() => false)),
+          // Counted once it took effect: a generator whose checkouts all fail would otherwise go on looking busy.
+          (ended) => {
+            if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.count("checked out");
+          },
         );
         return;
       }
@@ -536,8 +582,14 @@ export class World {
         if (core !== undefined)
           this.client(
             `restart ${id}`,
-            () => Effect.ignore(core.restart(id, { force: true })),
-            () => {},
+            () =>
+              core.restart(id, { force: true }).pipe(
+                Effect.as(true),
+                Effect.orElseSucceed(() => false),
+              ),
+            (ended) => {
+              if (ended !== "gone" && Exit.isSuccess(ended) && ended.value) this.checker.count(`restarted ${id}`);
+            },
           );
         return;
       }
@@ -641,12 +693,16 @@ export class World {
     this.checker.audit(served, this.fileEvents(), this.calls, this.tools);
   }
 
-  /** Each session's events as its file's bytes parse, a torn last line left out. */
+  /** Each session's events as its file's bytes parse, a torn last line (no newline) left out. */
   fileEvents(): Map<string, SessionEvent[]> {
     const sessions = new Map<string, SessionEvent[]>();
     for (const file of this.disk.list()) {
       if (!file.startsWith(`${HOME}/sessions/`) || !file.endsWith(".jsonl")) continue;
-      const lines = (this.disk.read(file) ?? "").split("\n").filter((line) => line !== "");
+      // Whole lines only: one without its newline is a write a crash tore, which the store does not serve.
+      const lines = (this.disk.read(file) ?? "")
+        .split("\n")
+        .slice(0, -1)
+        .filter((line) => line !== "");
       let id: string | undefined;
       const events: SessionEvent[] = [];
       for (const line of lines) {

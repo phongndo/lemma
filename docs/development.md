@@ -71,6 +71,7 @@ that replay it:
 | `packages/core/tests/sequences.test.ts`           | the kernel's load, reload, fail, and restart sequences                                                                            | `LEMMA_SEQUENCE_*`                    |
 | `domains/sessions/files/tests/simulation.test.ts` | the session log on a simulated disk that crashes, tears writes, and fails ([README](../domains/sessions/files/README.md#testing)) | `LEMMA_SIM_*`                         |
 | `domains/agent/loop/tests/conversation.test.ts`   | random conversations and checkouts: every request is well formed and rebuilds from the log                                        | `LEMMA_CONVERSATION_*`                |
+| `packages/sim/tests/world.test.ts`                | the harness in simulated time under a seed's workload and faults, crashes, and restarts ([README](../packages/sim/README.md))     | `LEMMA_HARNESS_*` (`_TICKS`)          |
 
 Code a simulation runs (the sessions store, the agent loop, the tool registry,
 compaction, the kernel's step timings) takes its disk as a `FileSystem`
