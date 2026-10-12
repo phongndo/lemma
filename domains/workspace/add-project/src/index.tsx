@@ -25,7 +25,8 @@ interface Deps {
 }
 
 type Row =
-  | { readonly kind: "here"; readonly path: string }
+  /** `..`: goes up to `path`, highlighting `from`, the folder it leaves. */
+  | { readonly kind: "up"; readonly path: string; readonly from: string }
   | { readonly kind: "entry"; readonly entry: DirectoryEntry }
   | { readonly kind: "create"; readonly path: string };
 
@@ -34,8 +35,9 @@ const withSlash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
 /**
  * Pick a folder on the host by typing its path. Matching folders list as you
  * type (letters in order match), the arrow keys move, Tab or → goes into the
- * highlighted folder, Backspace after a slash goes up, Enter opens. A name
- * that matches nothing can be created as a new folder.
+ * highlighted folder, `..` or Backspace after a slash goes up with the folder
+ * left highlighted, Enter opens. A name that matches nothing can be created as
+ * a new folder.
  */
 function AddProjectDialog(props: { deps: Deps }) {
   // Unique per instance: the page could show two lists.
@@ -61,7 +63,10 @@ function AddProjectDialog(props: { deps: Deps }) {
     if (current === undefined) return [];
     const typed = needle();
     const out: Row[] = [];
-    if (typed === "") out.push({ kind: "here", path: current.parent });
+    const cut = current.parent.lastIndexOf("/");
+    if (typed === "" && current.parent !== "/") {
+      out.push({ kind: "up", path: current.parent.slice(0, cut) || "/", from: current.parent.slice(cut + 1) });
+    }
     out.push(...current.entries.map((entry): Row => ({ kind: "entry", entry })));
     const exact = current.entries.some((entry) => entry.name.toLowerCase() === typed.toLowerCase());
     if (typed !== "" && !exact) out.push({ kind: "create", path: `${withSlash(current.parent)}${typed}` });
@@ -69,38 +74,44 @@ function AddProjectDialog(props: { deps: Deps }) {
   });
 
   const close = () => dialogs.open(undefined);
-  const refresh = async (typed: string) => {
+  /** List `typed`, highlighting the folder named `select` when it is there. */
+  const refresh = async (typed: string, select?: string) => {
     const id = ++request;
     setLoading(true);
     try {
       const next = await client.channel.call(WorkspaceChannels.browse, { partialPath: typed });
       if (id !== request) return;
       setListing(next);
-      setActive(0);
+      const index = rows().findIndex((row) => row.kind === "entry" && row.entry.name === select);
+      setActive(Math.max(index, 0));
       list.scrollTop = 0;
+      if (index > 0) list.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
     } catch {
       if (id === request) setListing(undefined);
     } finally {
       if (id === request) setLoading(false);
     }
   };
-  const update = (next: string, immediate = false) => {
+  const update = (next: string, immediate = false, select?: string) => {
     setValue(next);
     window.clearTimeout(debounce);
-    if (immediate) void refresh(next);
+    if (immediate) void refresh(next, select);
     else debounce = window.setTimeout(() => void refresh(next), 50);
   };
-  const go = (path: string) => {
+  const go = (path: string, select?: string) => {
     const next = withSlash(tildePath(path, home()));
-    update(next, true);
+    update(next, true, select);
     input.focus();
     input.setSelectionRange(next.length, next.length);
   };
   const up = () => {
-    const trimmed = value().replace(/\/+$/, "");
+    // `~/` goes up too, to the folder holding the home folder.
+    const trimmed = value()
+      .replace(/\/+$/, "")
+      .replace(/^~(?=\/|$)/, () => home() ?? "~");
     const cut = trimmed.lastIndexOf("/");
     if (cut < 0) return;
-    go(trimmed.slice(0, cut) || "/");
+    go(trimmed.slice(0, cut) || "/", trimmed.slice(cut + 1));
   };
 
   const open = async (path: string) => {
@@ -127,8 +138,8 @@ function AddProjectDialog(props: { deps: Deps }) {
       return;
     }
     switch (row.kind) {
-      case "here":
-        void open(row.path);
+      case "up":
+        go(row.path, row.from);
         return;
       case "entry":
         void open(row.entry.path);
@@ -239,12 +250,13 @@ function AddProjectDialog(props: { deps: Deps }) {
                 >
                   {(() => {
                     switch (row.kind) {
-                      case "here":
+                      case "up":
                         return (
                           <>
                             <FolderIcon />
-                            <span class="palette-name">
-                              Open <span class="palette-mono">{tildePath(row.path, home())}</span>
+                            <span class="palette-name palette-mono">
+                              <span aria-hidden="true">..</span>
+                              <span class="tw:sr-only">Up to {tildePath(row.path, home())}</span>
                             </span>
                           </>
                         );
