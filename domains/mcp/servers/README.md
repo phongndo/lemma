@@ -1,6 +1,6 @@
 # mcp.servers
 
-Connects [Model Context Protocol](https://modelcontextprotocol.io) servers and adds their tools to the tools registry. Provides `Mcp` (`@lemma/mcp`), and serves it as the `mcp.*` channels. Requires `Paths`.
+Connects [Model Context Protocol](https://modelcontextprotocol.io) servers and adds their tools to the tools registry. Provides `Mcp` (`@lemma/mcp`), serves it as the `mcp.*` channels, and draws Settings › MCP in its web half. Requires `Paths`.
 
 ## Use
 
@@ -19,7 +19,7 @@ Add servers to `~/.lemma/mcp.json` (`<Paths.home>/mcp.json`), in the `mcpServers
 }
 ```
 
-The file is read again whenever it changes: a server connects as soon as it is saved. `lemma channels call mcp.state` prints every server with its state, why one failed (and what it printed), and its tools; `mcp.configure` turns one on or off and changes how its tools reach the model, in the file.
+The file is read again whenever it changes: a server connects as soon as it is saved. Settings › MCP shows every server with its state, why one failed (and what it printed), and a switch, and changes how its tools reach the model; `lemma channels call mcp.state` prints the same.
 
 | Field                           | Meaning                                                                                                                                                                         |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -34,7 +34,7 @@ The file is read again whenever it changes: a server connects as soon as it is s
 
 `${VAR}` and `${VAR:-default}` in `command`, `args`, `env`, `cwd`, `url`, and `headers` read the host's environment, and a leading `~/` in a path is the home directory. A server whose variable is not set does not start, and says which. A local server gets only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, and `USER` from the host's environment, and what its `env` names: pass a token as `"env": { "GITHUB_TOKEN": "${GITHUB_TOKEN}" }`.
 
-A plugin brings a server by adding it to `McpServers` (`add(McpServers, { name, command, … })`), as pi's `registerMcpServer()` does. An entry in the file with the same name and a `command` or `url` takes its place; one with neither changes only its `enabled`, `exposure`, `description`, and `timeout`, and adds its `toolExposure` to the plugin's, its patterns tried first. That is what `mcp.configure` writes for it: only what differs from the plugin's.
+A plugin brings a server by adding it to `McpServers` (`add(McpServers, { name, command, … })`), as pi's `registerMcpServer()` does. An entry in the file with the same name and a `command` or `url` takes its place; one with neither changes only its `enabled`, `exposure`, `description`, and `timeout`, and adds its `toolExposure` to the plugin's, its patterns tried first. That is what `mcp.configure`, which the settings page calls, writes for it: only what differs from the plugin's.
 
 ### How tools reach the model
 
@@ -46,7 +46,7 @@ A server's tools are named `mcp__<server>__<tool>`, every character other than l
 | `direct`   | is sent their declarations, as a builtin tool's                                                                                                                                                                                |
 | `hidden`   | does not have them                                                                                                                                                                                                             |
 
-A request that offers no tool running others (code mode off, or a request handler removing it) declares them to the model instead (`declaredTools`, in `@lemma/tools`), and the model may call only the tools declared to it.
+A request that offers no tool running others (code mode off, or a request handler removing it) declares them to the model instead (`declaredTools`, in `@lemma/tools`), and the model may call only the tools declared to it. In Settings › MCP a tool's Default drops the exposure the file gives it by name, leaving a pattern's, the plugin's, or its server's, which the page names.
 
 ## Config
 
@@ -60,7 +60,7 @@ A request that offers no tool running others (code mode off, or a request handle
 - **Protocol.** Through the official TypeScript SDK (`@modelcontextprotocol/client`), which speaks the stateless 2026-07-28 protocol and falls back to the earlier ones a server may speak only: it asks first (`server/discover`), on a short-lived second copy of a local server.
 - **Tools.** Each listed tool is added with the server's input schema as its parameters (its own `$ref`s inlined) and its title and description, ending in the server's name, which `searchTools` also matches. When a server says its tools changed, they are listed again: new ones are added, withdrawn ones removed. A call goes through the tools registry, so hooks and guards (an approval) apply to it as to any tool's.
 - **Results.** Text and images reach the model as they are; audio, resource links, and binary resources as a line saying what they were, and an embedded text resource as its text. A result with only structured content is its JSON. `details` keeps the server, the tool, and the structured content, for UIs.
-- **The file.** One that is not valid JSON keeps the servers it had, and `mcp.state` says what is wrong with it (`fileError`); an entry that is invalid fails alone. Changes through `mcp.configure` are written into the file without touching the rest of it, a value the server would have without it removed rather than written. A file that is a link (one home-manager keeps, say) is written where it links to; when that cannot be written, `mcp.configure` fails, saying to change it where it is managed.
+- **The file.** One that is not valid JSON keeps the servers it had, and Settings › MCP says what is wrong with it; an entry that is invalid fails alone. Changes from the settings page are written into the file without touching the rest of it, a value the server would have without it removed rather than written. A file that is a link (one home-manager keeps, say) is written where it links to; when that cannot be written, the page says to change it where it is managed.
 
 ## Rationale
 

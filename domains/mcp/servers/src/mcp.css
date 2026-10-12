@@ -1,0 +1,140 @@
+.mcp-server {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+}
+
+.mcp-server-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-state {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.mcp-server[data-state="connected"] .mcp-state {
+  background: var(--ok);
+}
+
+.mcp-server[data-state="connecting"] .mcp-state {
+  background: var(--warn);
+}
+
+.mcp-server[data-state="failed"] .mcp-state {
+  background: var(--err);
+}
+
+.mcp-server-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mcp-server-name {
+  font-weight: 600;
+}
+
+.mcp-server-meta,
+.mcp-server-description,
+.mcp-tool-description,
+.mcp-tool-rule {
+  color: var(--text-2);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.mcp-server-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-server-meta code,
+.mcp-tool-rule code,
+.mcp-tool-name {
+  font-size: calc(12px * var(--text-scale));
+}
+
+.mcp-server-description,
+.mcp-source {
+  margin: 0 0 0 18px;
+}
+
+.mcp-error,
+.mcp-stderr,
+.mcp-server-controls,
+.mcp-tools {
+  margin-left: 18px;
+}
+
+.mcp-stderr summary {
+  color: var(--text-2);
+  cursor: pointer;
+  font-size: calc(12px * var(--text-scale));
+}
+
+.mcp-stderr pre,
+.mcp-example pre {
+  overflow: auto;
+  max-height: 200px;
+  margin: 6px 0 0;
+  padding: 8px;
+  border-radius: calc(6px * var(--radius-scale));
+  background: var(--bg-sunk);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.mcp-server-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.mcp-tools-toggle[aria-expanded="true"] .icon {
+  transform: rotate(180deg);
+}
+
+.mcp-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  list-style: none;
+}
+
+.mcp-tool {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.mcp-tool-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.mcp-tool-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mcp-example {
+  position: relative;
+}
+
+.mcp-example .copy-button {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+}

@@ -37,7 +37,7 @@ const toMcpError = (cause: unknown) =>
 /**
  * Connects the MCP servers in `<home>/mcp.json`, and those plugins add (`McpServers`), and adds their tools to the
  * tools registry: by default only code mode calls them (`nested`), and the system prompt names the servers. Serves
- * `Mcp` to clients as the `mcp.*` channels.
+ * `Mcp` to clients as the `mcp.*` channels, which its web half, Settings › MCP, draws.
  */
 export default definePlugin({
   id: "mcp.servers",

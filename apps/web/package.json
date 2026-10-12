@@ -46,6 +46,7 @@
     "@lemma/look-file-icons": "workspace:*",
     "@lemma/look-highlight": "workspace:*",
     "@lemma/look-kit": "workspace:*",
+    "@lemma/mcp-servers": "workspace:*",
     "@lemma/router": "workspace:*",
     "@lemma/router-solid": "workspace:*",
     "@lemma/sessions": "workspace:*",

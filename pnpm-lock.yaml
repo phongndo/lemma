@@ -300,6 +300,9 @@ importers:
       '@lemma/look-kit':
         specifier: workspace:*
         version: link:../../domains/look/kit
+      '@lemma/mcp-servers':
+        specifier: workspace:*
+        version: link:../../domains/mcp/servers
       '@lemma/router':
         specifier: workspace:*
         version: link:../../packages/router
@@ -1669,18 +1672,30 @@ importers:
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
       '@lemma/mcp':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../../tools/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
       '@modelcontextprotocol/client':
         specifier: 2.3.1
         version: 2.3.1
       effect:
         specifier: 4.0.1
         version: 4.0.1
+      solid-js:
+        specifier: 1.9.15
+        version: 1.9.15
     devDependencies:
       '@lemma/tools-registry':
         specifier: workspace:*

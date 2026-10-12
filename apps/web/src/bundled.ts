@@ -18,6 +18,7 @@ import interactionDialog from "@lemma/frame-questions";
 import keymap from "@lemma/actions-keymap";
 import keysPage from "@lemma/actions-keys-page";
 import kit from "@lemma/look-kit";
+import mcp from "@lemma/mcp-servers/web";
 import modelPicker from "@lemma/llm-model-picker";
 import models from "@lemma/llm-client";
 import pages from "@lemma/frame-pages";
@@ -84,6 +85,7 @@ export const bundled: readonly Plugin[] = [
   palette,
   settings,
   providers,
+  mcp,
   pluginsPage,
   keysPage,
   appearancePage,

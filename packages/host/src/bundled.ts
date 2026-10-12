@@ -88,6 +88,7 @@ export const bundledWeb: readonly string[] = [
   "look.file-icons",
   "look.highlight",
   "look.kit",
+  "mcp.servers",
   "settings.page",
   "settings.plugins",
   "threads.archived",

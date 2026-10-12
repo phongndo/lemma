@@ -2,9 +2,9 @@
 
 Model Context Protocol servers: the tools they offer the model, and how a person sees and changes them. Its contract is [`@lemma/mcp`](contract/src/mcp.ts).
 
-| Plugin                             | Halves | What it does                                                                                            |
-| ---------------------------------- | ------ | ------------------------------------------------------------------------------------------------------- |
-| [`mcp.servers`](servers/README.md) | host   | Connects the servers in `~/.lemma/mcp.json` and those plugins add, and adds their tools: provides `Mcp` |
+| Plugin                             | Halves     | What it does                                                                                                                  |
+| ---------------------------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| [`mcp.servers`](servers/README.md) | host + web | Connects the servers in `~/.lemma/mcp.json` and those plugins add, adds their tools, and draws Settings › MCP: provides `Mcp` |
 
 ## Extending it
 
