@@ -39,6 +39,8 @@ export const ComposerSuggestionPart = definePart<ComposerSuggestionProps>("compo
 
 export interface ChatUserProps {
   readonly content: readonly (TextContent | ImageContent)[];
+  /** A steer: sent into the running turn, which places it (or will) after its current step. */
+  readonly steer?: boolean | undefined;
 }
 
 /** A prompt in the transcript. */
