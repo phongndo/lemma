@@ -7,7 +7,7 @@ import type { ClientService } from "../ui/runtime.ts";
 /**
  * The page's one connection as the runtime's `Client`, for as long as the
  * page runs: nothing a plugin does reconnects it. Models resync on every
- * reconnect, and follow the subsystems' streams through it.
+ * reconnect, and follow the domains' streams through it.
  */
 export function createClient(host: Host): { readonly client: ClientService; readonly dispose: () => void } {
   const [status, setStatus] = createSignal<ConnectionStatus>(host.status());

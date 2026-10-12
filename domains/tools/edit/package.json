@@ -1,0 +1,24 @@
+{
+  "name": "@lemma/tools-edit",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `edit` tool: exact replacements in a file, with a unified diff",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

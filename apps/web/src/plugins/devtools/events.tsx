@@ -19,10 +19,10 @@ import type { SlotItem } from "../../ui/slots.ts";
 export const EVENTS_PANEL = "devtools.events";
 /** Lines kept, newest last; older ones drop off the top. */
 const LIMIT = 1000;
-/** The host's own event stream, beside the subsystems' streams. */
+/** The host's own event stream, beside the domains' streams. */
 const HOST_EVENTS = "Host.Events";
 
-/** What a line heard: one of the host's own events, or an element of a subsystem's stream. */
+/** What a line heard: one of the host's own events, or an element of a domain's stream. */
 type Heard =
   | { readonly stream: typeof HOST_EVENTS; readonly event: RuntimeEvent }
   | { readonly stream: "sessions.changes"; readonly event: SessionsChange }
@@ -36,7 +36,7 @@ type Line =
   | { readonly seq: number; readonly at: number; readonly kind: "end"; readonly stream: string; readonly error?: string }
   | { readonly seq: number; readonly at: number; readonly kind: "conn"; readonly status: ConnectionStatus };
 
-/** Follows the subsystems' streams, each element heard and each ending told; returns the stops. */
+/** Follows the domains' streams, each element heard and each ending told; returns the stops. */
 const followStreams = (client: ClientService, hear: (heard: Heard) => void, ended: (stream: string, error?: Error) => void): (() => void)[] => [
   client.follow(
     SessionChannels.changes,
@@ -141,7 +141,7 @@ const size = (bytes: number) => (bytes < 1024 ? `${bytes}B` : `${(bytes / 1024).
 
 /**
  * What this page hears from the host, as a log: the host's own events
- * (`Host.Events`), the subsystems' streams while the devtools are open (their
+ * (`Host.Events`), the domains' streams while the devtools are open (their
  * changes, and the agent's activity), and changes in the connection carrying
  * them. One row per element with its time, the gap since the one before, its
  * stream and type, session, and size. Follows the tail while scrolled to the
@@ -326,7 +326,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
 /**
  * Records what the host sends this page from now until `onCleanup` runs, for
  * the Host events panel: its own events and the connection always, and the
- * subsystems' streams while `following` (the devtools are open), since
+ * domains' streams while `following` (the devtools are open), since
  * following them costs a subscription of the page's own, the agent's output
  * included.
  */

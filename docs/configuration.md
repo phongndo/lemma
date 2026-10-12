@@ -6,8 +6,8 @@ With no config, every bundled plugin runs. `~/.lemma/config.jsonc` and
 ```jsonc
 {
   "plugins": {
-    "compaction": { "enabled": false },
-    "agent": { "config": { "maxSteps": 100 } },
+    "context.compaction": { "enabled": false },
+    "agent.loop": { "config": { "maxSteps": 100 } },
   },
 }
 ```
@@ -21,7 +21,7 @@ The Plugins settings page and `lemma plugins` write these rows and apply them;
 a plugin's config Schema is its settings form in both. Turning a plugin off
 also unloads the plugins that require what it provides, which return with it.
 A capability has one provider, so turning on a plugin that provides what
-another provides turns that one off. The `transport` plugin stays on, and
+another provides turns that one off. The `transport.server` plugin stays on, and
 needs only what the host provides itself (below), so any other plugin turns
 off, or restarts with a change, without dropping a client's connection. A
 change to the transport itself is answered first and applied after, and
@@ -56,7 +56,7 @@ left out or failed. A config key a plugin does not read is a warning, which
 catches a setting renamed in an update. A row naming no plugin is ignored,
 unless it says `"required": true`.
 
-What is **required** must start, or the host does not: the `transport` plugin,
+What is **required** must start, or the host does not: the `transport.server` plugin,
 every plugin from your own files (a
 file that does not load, which therefore names no plugin, too), and any plugin
 whose row says `"required": true`, with what it needs: a row turning off what

@@ -24,8 +24,8 @@ its contract a package of its own (`domains/<domain>/contract`, named
 | [`packages/client`](../packages/client/src/index.ts)          | The host RPC client the web app and CLI share, the only reader of the host's streams: reconnecting, typed channel calls, one reopen policy for streams (`follow`), prompts sent once (`/prompt`) |
 | [`packages/host`](../packages/host/README.md)                 | The host and its runtime (paths, plugin control, questions): reads config, loads and hot-reloads plugins                                                                                         |
 | [`packages/composition`](../packages/composition/README.md)   | The runtime's planner: what runs from the known plugins and config rows, for the host and web app alike                                                                                          |
-| [`plugins/*`](../plugins)                                     | The host's bundled plugins, one README each                                                                                                                                                      |
-| [`apps/web`](../apps/web/README.md)                           | The web client: plugins on the same kernel, written against its boot's runtime, served by `transport`                                                                                            |
+| [`domains/*/*`](../domains)                                   | The host's bundled plugins, each in its domain (`domains/<domain>/<name>`, id `<domain>.<name>`), one README each                                                                                |
+| [`apps/web`](../apps/web/README.md)                           | The web client: plugins on the same kernel, written against its boot's runtime, served by `transport.server`                                                                                     |
 | [`apps/cli`](../apps/cli/README.md)                           | The `lemma` command: everything the web app does, from a shell                                                                                                                                   |
 | [`apps/desktop`](../apps/desktop/README.md)                   | The web app in a desktop window, attaching to a running host or starting one                                                                                                                     |
 | [`packages/router`](../packages/router/README.md)             | A router whose routes come and go at runtime, typed by each route; the web app's addresses                                                                                                       |
@@ -33,11 +33,11 @@ its contract a package of its own (`domains/<domain>/contract`, named
 | [`packages/testing`](../packages/testing/README.md)           | Test support: a simulated disk for crash tests, and contract conformance suites                                                                                                                  |
 | [`examples/*`](../examples)                                   | Plugin files written as a user writes them                                                                                                                                                       |
 
-Clients reach the host through the [transport](../plugins/transport/README.md)
+Clients reach the host through the [transport](../domains/transport/server/README.md)
 plugin's RPC, over a WebSocket or HTTP. A host plugin serves its own calls and
 streams there as [channels](../packages/contracts/src/channels.ts), with no
 change to the contracts or the transport.
 
-The [session log](../plugins/sessions/README.md) is the source of truth: every
+The [session log](../domains/sessions/files/README.md) is the source of truth: every
 model request can be rebuilt from it (`rebuildRequest` in the contracts), along
 with which plugins contributed each part.

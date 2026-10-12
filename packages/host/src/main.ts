@@ -37,7 +37,7 @@ const userPluginsDir = join(paths.home, "plugins");
 
 /** Plugins no config change may turn off, with the reason clients show. Everything they need is locked with them. */
 const pinned: Readonly<Record<string, string>> = {
-  transport: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
+  "transport.server": "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
 };
 /** What the host provides itself (see `hostRuntime`): planned as present, and refused from a plugin. */
 const provided = runtimeCapabilities;
@@ -353,7 +353,7 @@ const program = Effect.gen(function* () {
     reloading.withPermits(1)(
       Effect.gen(function* () {
         const next = yield* load();
-        // One that restarts the plugin asking for it (`commands-host` running `host.reload`, or `commands` serving that
+        // One that restarts the plugin asking for it (`commands.host` running `host.reload`, or `commands.registry` serving that
         // run), or the transport serving the request, is checked now and applied once that work is over.
         const touched = touchedBy(applied, next);
         const after = yield* deferral(touched, Object.keys(pinned));
@@ -407,7 +407,7 @@ const program = Effect.gen(function* () {
             }
           }
           // Only a loaded plugin that is not running, or is forced, restarts, with what needs it: one that restarts the
-          // plugin asking for it (`commands-host` running `host.restart-plugin`, or `commands` serving that run) applies
+          // plugin asking for it (`commands.host` running `host.restart-plugin`, or `commands.registry` serving that run) applies
           // once that work is over.
           const state = snapshot.plugins.find((plugin) => plugin.id === pluginId)?.state;
           const after =

@@ -7,7 +7,7 @@ stays on loopback and Tailscale carries it across machines over HTTPS.
 
 Keep the client's checkout at the server's version: the RPC protocol changes
 between versions (`HOST_PROTOCOL` in the transport plugin's
-[README](../plugins/transport/README.md#use)), and a CLI that finds the
+[README](../domains/transport/server/README.md#use)), and a CLI that finds the
 host on another one says so and asks for it to be restarted from its version.
 The web app comes from the host, so it always matches.
 
@@ -16,7 +16,7 @@ The web app comes from the host, so it always matches.
 Build the web app once (and after updating the checkout), then run the host
 under a supervisor so it comes back after a crash or a reboot. Turns a crash or
 a restart cut off resume when it does, and queued prompts run on (see the
-[agent plugin](../plugins/agent/README.md#durability)):
+[agent plugin](../domains/agent/loop/README.md#durability)):
 
 ```sh
 nix develop -c pnpm --filter @lemma/web build
@@ -80,7 +80,7 @@ lemma token                 # the token clients need
 ```
 
 The token is in `~/.lemma/token` (`<home>/token`) and survives restarts; see the
-[transport plugin](../plugins/transport/README.md).
+[transport plugin](../domains/transport/server/README.md).
 
 ## On the client
 

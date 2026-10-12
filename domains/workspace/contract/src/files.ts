@@ -71,7 +71,7 @@ export interface FileSearcher {
 
 /**
  * Who searches files: the first contribution by order answers (`searchFiles`).
- * The `file-search` plugin is the bundled one; a plugin replaces it by
+ * The `workspace.search-fff` plugin is the bundled one; a plugin replaces it by
  * contributing with a lower order (`PluginContext.add(FileSearchers, …, { order })`),
  * or by its being turned off. With none, searches fail `Unavailable`, and
  * nothing else stops: `searchFiles` and `files.search` read this rather than
@@ -88,7 +88,7 @@ export const searchFiles = (
 ): Effect.Effect<FileSearchResult, FileSearchError> =>
   Effect.flatMap(registries.items(FileSearchers), ([first]) =>
     first === undefined
-      ? Effect.fail(new FileSearchError({ path: cwd, reason: "Unavailable", message: "No plugin searches files: turn on file-search, or add one" }))
+      ? Effect.fail(new FileSearchError({ path: cwd, reason: "Unavailable", message: "No plugin searches files: turn on workspace.search-fff, or add one" }))
       : awaitable(() => first.item.search(cwd, query, options)),
   );
 

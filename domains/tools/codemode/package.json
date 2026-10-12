@@ -1,0 +1,32 @@
+{
+  "name": "@lemma/tools-codemode",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `codemode` tool: JavaScript in a sandbox that calls the other tools",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@earendil-works/pi-codemode": "1.0.2",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/tools-bash": "workspace:*",
+    "@lemma/tools-edit": "workspace:*",
+    "@lemma/tools-read": "workspace:*",
+    "@lemma/tools-registry": "workspace:*",
+    "@lemma/tools-write": "workspace:*",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

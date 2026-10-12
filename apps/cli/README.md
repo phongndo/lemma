@@ -53,7 +53,7 @@ so the two show the same records and accept the same queries.
   the web app's rows, questions) and its event stream are the runtime's. A
   channel whose plugin is off fails `NotFound`, naming the channel. While the
   host is still starting, a command fails `Unavailable` naming what it called
-  (exit 3, as for a host it cannot reach); a subsystem's own `Unavailable`
+  (exit 3, as for a host it cannot reach); a domain's own `Unavailable`
   (no plugin searches files, say) names what it concerns and exits 1. A
   prompt that the agent's reload cut off the host makes again on the
   replacement, with its request id, so it is never placed twice, as it does
@@ -85,7 +85,7 @@ so the two show the same records and accept the same queries.
   (`--questions ignore --answer x` answers the first with `x`, and holds the
   rest until they are answered elsewhere). Once no answering client is connected,
   the host waits 15 seconds for one to come back
-  ([`interactionGraceMs`](../../plugins/transport/README.md)) before the
+  ([`interactionGraceMs`](../../domains/transport/server/README.md)) before the
   question fails, so one asked during a longer drop is lost. Within that,
   questions still open reach a command again once it is back (the host sends
   them to each client that subscribes), an answer given while it was down is
@@ -99,7 +99,7 @@ so the two show the same records and accept the same queries.
   command (exit 130).
 - **Busy sessions.** `run` waits for the next turn by default; `--steer` joins
   the running turn, and `--when-busy reject` fails `Busy`, as the
-  [agent](../../plugins/agent/README.md#busy-sessions) defines. Each `run`
+  [agent](../../domains/agent/loop/README.md#busy-sessions) defines. Each `run`
   sends a request id (`--request-id` to choose it), so retrying with the same
   id reports the turn that placed the prompt rather than placing it twice. A
   `run` that fails once its prompt may be placed (it gave up on the
@@ -126,7 +126,7 @@ so the two show the same records and accept the same queries.
   a step's deltas that its answer in the log overtook are left out, since the
   answer has them.
 - **Events.** `lemma events` follows the host's own events (notices,
-  questions, plugin, channel, and UI changes) and the bundled subsystems'
+  questions, plugin, channel, and UI changes) and the bundled domains'
   streams: `agent.activity`, `sessions.changes`, `llm.changes`, and
   `commands.changes`. `--session <id>` keeps that session's turns and changes
   and adds its `sessions.log` from now on. A stream that its plugin's reload

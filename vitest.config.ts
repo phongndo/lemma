@@ -22,7 +22,6 @@ export default defineConfig({
     projects: [
       ...packagesIn("packages"),
       ...domains.flatMap((domain) => packagesIn(`domains/${domain.name}`)),
-      ...packagesIn("plugins"),
       ...packagesIn("apps"),
       ...packagesIn("examples"),
     ],

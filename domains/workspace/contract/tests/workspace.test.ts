@@ -27,7 +27,7 @@ describe("serveWorkspace", () => {
   };
   const call = (channels: readonly Channel[], id: string, payload: unknown) => resultOf(channels.find((channel) => channel.id === id) as ChannelCall, payload);
 
-  test("serves each declaration once, well formed, named for the subsystem and described for clients to discover", () => {
+  test("serves each declaration once, well formed, named for the domain and described for clients to discover", () => {
     const { channels } = recording();
     expect(channels.map(({ id, kind }) => `${kind} ${id}`)).toEqual(Object.values(WorkspaceChannels).map(({ id, kind }) => `${kind} ${id}`));
     for (const channel of channels) {

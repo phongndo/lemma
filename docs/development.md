@@ -66,11 +66,11 @@ Randomized tests run a fixed number of seeded cases in `pnpm test` and many
 more nightly, through `pnpm test:random`; a failure prints the seed and path
 that replay it:
 
-| Test                                        | Checks                                                                                                                      | Variables (`_RUNS`, `_SEED`, `_PATH`) |
-| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `packages/core/tests/sequences.test.ts`     | the kernel's load, reload, fail, and restart sequences                                                                      | `LEMMA_SEQUENCE_*`                    |
-| `plugins/sessions/tests/simulation.test.ts` | the session log on a simulated disk that crashes, tears writes, and fails ([README](../plugins/sessions/README.md#testing)) | `LEMMA_SIM_*`                         |
-| `plugins/agent/tests/conversation.test.ts`  | random conversations and checkouts: every request is well formed and rebuilds from the log                                  | `LEMMA_CONVERSATION_*`                |
+| Test                                              | Checks                                                                                                                            | Variables (`_RUNS`, `_SEED`, `_PATH`) |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `packages/core/tests/sequences.test.ts`           | the kernel's load, reload, fail, and restart sequences                                                                            | `LEMMA_SEQUENCE_*`                    |
+| `domains/sessions/files/tests/simulation.test.ts` | the session log on a simulated disk that crashes, tears writes, and fails ([README](../domains/sessions/files/README.md#testing)) | `LEMMA_SIM_*`                         |
+| `domains/agent/loop/tests/conversation.test.ts`   | random conversations and checkouts: every request is well formed and rebuilds from the log                                        | `LEMMA_CONVERSATION_*`                |
 
 Storage code takes its disk as a `FileSystem` (`@lemma/contracts/fs`), its
 time from Effect's `Clock`, and its randomness from Effect's `Random` or, where

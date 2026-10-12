@@ -8,7 +8,7 @@ import type { SlotItem } from "../../ui/slots.ts";
 
 /**
  * What host plugins serve (`Channels`): each call and stream, and the plugin
- * whose channel answers for its id. Every subsystem is reached through these,
+ * whose channel answers for its id. Every domain is reached through these,
  * the web app's own calls included. A channel selected opens its details.
  */
 function ChannelsView(props: { devtools: DevtoolsService; channels: Accessor<readonly ChannelInfo[]> }) {

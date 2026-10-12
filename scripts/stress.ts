@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
  * that a fix holds, before calling it fixed.
  *
  *   pnpm stress apps/cli/tests/turns.test.ts --runs 30 --jobs 8
- *   pnpm stress plugins/agent --name "resumes a turn"
+ *   pnpm stress domains/agent/loop --name "resumes a turn"
  *
  * Each run is `vitest run` in the target's package (`--name` is vitest's
  * `-t`; arguments after `--` go to vitest as they are). It prints each run as

@@ -157,8 +157,8 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
       join(home, "config.jsonc"),
       JSON.stringify({
         plugins: {
-          transport: { config: { port: 0 } },
-          llm: { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: url, models: [{ id: "scripted" }] }] } },
+          "transport.server": { config: { port: 0 } },
+          "llm.pi-ai": { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: url, models: [{ id: "scripted" }] }] } },
           ...options.plugins,
         },
       }),

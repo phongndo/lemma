@@ -1,0 +1,29 @@
+{
+  "name": "@lemma/context-compaction",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@lemma/agent-loop": "workspace:*",
+    "@lemma/sessions-files": "workspace:*",
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

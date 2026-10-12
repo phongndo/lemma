@@ -62,8 +62,8 @@ type StreamEnd = (error?: HostError | Error) => void;
 
 /**
  * The page's one connection to the host: its status, the host's own calls and
- * events, and the channels host plugins serve, through which every subsystem
- * is reached, with the declarations in each subsystem's contract (`SessionChannels`,
+ * events, and the channels host plugins serve, through which every domain
+ * is reached, with the declarations in each domain's contract (`SessionChannels`,
  * `AgentChannels`, `LlmChannels`, `WorkspaceChannels`, `FileChannels`,
  * `CommandChannels`) or by id. Calls reject with a `HostError`, or with an
  * `Error` when the connection failed (see `@lemma/client`'s `Host`).
@@ -73,7 +73,7 @@ export interface ClientService {
   readonly connected: Accessor<boolean>;
   /** `Host.Info`, fetched on every (re)connect. */
   readonly info: Accessor<HostInfo | undefined>;
-  /** The host's own events as they arrive (`RuntimeEvent`): each subsystem streams its own on a channel. Returns the unsubscribe. */
+  /** The host's own events as they arrive (`RuntimeEvent`): each domain streams its own on a channel. Returns the unsubscribe. */
   readonly onEvent: (listener: (event: RuntimeEvent) => void) => () => void;
   /**
    * Runs `sync` now if connected, then after every reconnect: where a model
@@ -88,7 +88,7 @@ export interface ClientService {
    * `follow` does over the page's connection: anew after every reconnect,
    * again at once when it ends `Withdrawn`, its plugin stopped or replaced,
    * and, after it ended otherwise (nothing served it, say), when a
-   * `channels-changed` lists it. Each opening starts afresh, so a subsystem's
+   * `channels-changed` lists it. Each opening starts afresh, so a domain's
    * stream begins with `subscribed`, from which its reader resyncs. `payload`
    * may be a function, read at each opening (`sessions.log` resumes `after`
    * the last event its reader has). `onEnd` hears each ending.

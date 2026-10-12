@@ -35,7 +35,7 @@ export interface ConnectionStatus {
 
 /**
  * The connection to a host, as promises over `RuntimeRpcs`: its status, the
- * runtime's calls and events, and the channels through which every subsystem
+ * runtime's calls and events, and the channels through which every domain
  * is reached (`channel`; `follow` keeps a stream open over it). Methods
  * reject with `HostError` for the host's refusals and an `Error` for
  * transport failures: an `RpcClientError` (`_tag` "RpcClientError", such as
