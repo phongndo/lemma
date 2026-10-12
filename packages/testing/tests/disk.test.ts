@@ -124,6 +124,37 @@ describe("SimDisk", () => {
     expect(disk.injected.get("sync")).toBe(1);
   });
 
+  test("a failed sync drops what it had to write: still read, but no later sync writes it until it is written again", async () => {
+    const encoder = new TextEncoder();
+    const kept = new Set<string>();
+    for (let seed = 0; seed < 40; seed++) {
+      const disk = new SimDisk(seededRandom(seed));
+      const { handle } = await withFile(disk, "/data/log", "one\n", "two\n");
+      disk.faults.sync = 1;
+      await expect(handle.datasync()).rejects.toMatchObject({ code: "EIO" });
+      disk.faults.sync = 0;
+      // Readable, and a later sync succeeds, but writes none of it.
+      expect(disk.read("/data/log")).toBe("one\ntwo\n");
+      await handle.datasync();
+      disk.crash();
+      kept.add(disk.read("/data/log")!.replace(/\0/g, "0"));
+    }
+    expect([...kept].sort()).toEqual(["one\n0000", "one\ntwo\n"]);
+    // Written again, it is pending once more, and a sync makes it durable.
+    for (let seed = 0; seed < 40; seed++) {
+      const disk = new SimDisk(seededRandom(seed));
+      const { handle } = await withFile(disk, "/data/log", "one\n", "two\n");
+      disk.faults.sync = 1;
+      await expect(handle.datasync()).rejects.toMatchObject({ code: "EIO" });
+      disk.faults.sync = 0;
+      const again = encoder.encode("two\n");
+      expect(await handle.write(again, 0, again.length, 4)).toEqual({ bytesWritten: 4 });
+      await handle.datasync();
+      disk.crash();
+      expect(disk.read("/data/log")).toBe("one\ntwo\n");
+    }
+  });
+
   test("another program's changes: an open handle keeps the file it opened", async () => {
     const disk = new SimDisk(seededRandom(4));
     const { fs, handle } = await withFile(disk, "/data/log", "mine\n", "");
