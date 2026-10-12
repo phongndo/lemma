@@ -51,7 +51,8 @@ a lock an earlier one holds is stale once it is not among them, as a crashed
 process's is. `parts` adds the model and the tools: `simModel`, which
 answers each request as its `Answering` draws (text in timed deltas, and calls
 to the tools offered), and `simTools`. `digestOf(disk)` hashes every file on
-the disk.
+the disk but a temporary one a crash left (whose name counts the writes of the
+whole process, in earlier runs too).
 
 ## Running it
 

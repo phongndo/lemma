@@ -94,10 +94,14 @@ export class SimHost {
   }
 }
 
-/** A digest of every file on `disk` as it stands, names and bytes: two runs that wrote the same have the same. */
+/**
+ * A digest of every file on `disk` as it stands, names and bytes: two runs that wrote the same have the same. A
+ * temporary file a crash left behind (`writeFileAtomic`'s, never read) is left out: its name counts the writes this
+ * process has made, in every run before this one too.
+ */
 export const digestOf = (disk: SimDisk): string => {
   const hash = createHash("sha256");
-  for (const file of [...disk.list()].sort()) {
+  for (const file of [...disk.list()].filter((path) => !path.endsWith(".tmp")).sort()) {
     hash.update(`${file}\u0000`);
     hash.update(disk.read(file) ?? "");
     hash.update("\u0000");
