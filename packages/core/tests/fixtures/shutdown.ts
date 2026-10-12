@@ -19,8 +19,10 @@ await Effect.runPromise(
       yield* Effect.forkDetach(core.run(Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never), Effect.ensuring(Effect.never))));
       yield* Deferred.await(entered);
     }
+    const started = Date.now();
     const exit = yield* Effect.exit(Effect.uninterruptible(Scope.close(scope, Exit.void)));
-    console.log(JSON.stringify({ exit: exit._tag, state: (yield* core.inspect).state }));
+    const closeMs = Date.now() - started;
+    console.log(JSON.stringify({ exit: exit._tag, state: (yield* core.inspect).state, closeMs }));
   }),
 );
 process.exit(0);

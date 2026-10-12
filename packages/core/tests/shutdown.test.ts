@@ -5,15 +5,19 @@ import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Scope } from "eff
 import { definePlugin, makeCore } from "../src/index.ts";
 import { waitFor } from "./support.ts";
 
+// The watchdog only stops a close that never returns; a loaded runner can take seconds just to start Node on the
+// core's sources, so the bound on the close is the fixture's own timing of it.
 test("stuck task and plugin finalizers cannot hang the closing caller", () => {
   for (const mode of ["task", "plugin"]) {
     const output = execFileSync(process.execPath, [fileURLToPath(new URL("./fixtures/shutdown.ts", import.meta.url)), mode], {
-      timeout: 2000,
+      timeout: 20_000,
       encoding: "utf8",
     });
-    expect(JSON.parse(output)).toMatchObject({ exit: "Failure", state: "closing" });
+    const result = JSON.parse(output) as { exit: string; state: string; closeMs: number };
+    expect(result).toMatchObject({ exit: "Failure", state: "closing" });
+    expect(result.closeMs).toBeLessThan(1000);
   }
-});
+}, 60_000);
 
 test("timed-out work retains resources until it finishes and cleanup runs exactly once", async () => {
   await Effect.runPromise(
