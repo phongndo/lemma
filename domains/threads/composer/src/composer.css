@@ -126,17 +126,13 @@
   stroke-width: 1.9;
 }
 
-/* What the word at the cursor could become (`ComposerCompletions`): over the conversation, as wide as the box. */
-.completions {
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: calc(100% + 6px);
-  display: flex;
-  flex-direction: column;
-  max-height: min(320px, 45vh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
+/*
+ * Just above the box and as wide as it, one look: what the word at the cursor could become (`ComposerCompletions`),
+ * over the conversation while it is asked for, and the prompts queued for after the turn, in the page's flow, so the
+ * conversation makes room for them rather than going under them. The menu, while open, covers the queue.
+ */
+.completions,
+.composer-queue {
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: calc(14px * var(--radius-scale));
@@ -144,6 +140,25 @@
   box-shadow: var(--composer-menu-shadow);
   animation: menu-in 0.12s cubic-bezier(0.2, 0.9, 0.3, 1);
   transform-origin: bottom center;
+}
+
+.completions {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+}
+
+.composer-queue {
+  margin-bottom: 6px;
+}
+
+.completions {
+  display: flex;
+  flex-direction: column;
+  max-height: min(320px, 45vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .completion .menu-label {
@@ -180,34 +195,71 @@
   color: var(--text-2);
 }
 
-/* Prompts sent while a turn runs, waiting to steer it or to follow it. */
+/*
+ * Prompts queued for after the turn: a thin header (what it is, how many, a chevron) that opens and closes them, then a
+ * menu item's line for each, the next first, scrolling past five.
+ */
 .composer-queue {
+  padding: 2px 4px;
+}
+
+.queue-head {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 20px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: calc(6px * var(--radius-scale));
+  background: transparent;
+  color: var(--text-3);
+  font-size: calc(11px * var(--text-scale));
+  text-align: left;
+}
+
+/* Smaller than a row's icon, in as wide a column, so the label lines up with the prompts under it. */
+.queue-head > .icon:first-child {
+  width: 13px;
+  height: 13px;
+  margin: 0 1.5px;
+}
+
+.queue-head:hover {
+  color: var(--text-2);
+}
+
+.queue-title {
+  flex: 1;
+}
+
+.queue-count {
+  font-variant-numeric: tabular-nums;
+}
+
+.queue-head > .icon:last-child {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.15s;
+}
+
+/* Closed, the chevron points up, the way the list opens. */
+.queue-head[aria-expanded="false"] > .icon:last-child {
+  transform: rotate(180deg);
+}
+
+.composer-queue ul {
+  max-height: min(160px, 30vh);
   margin: 0;
-  padding: 10px 12px 0;
+  padding: 0 0 2px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   list-style: none;
 }
 
 .queued {
-  display: flex;
-  align-items: center;
   gap: 8px;
-  min-width: 0;
-  padding: 2px 2px 2px 8px;
-  border-radius: calc(8px * var(--radius-scale));
-  background: var(--bg-hover);
-  font-size: calc(13px * var(--text-scale));
-}
-
-.queued-mode {
-  flex: none;
-  color: var(--text-3);
-  font-size: calc(11px * var(--text-scale));
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  padding-right: 2px;
 }
 
 .queued-text {
@@ -215,11 +267,13 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+  color: var(--text);
 }
 
-.queued-remove {
+.queued .icon-button {
   flex: none;
+  width: 26px;
+  height: 26px;
 }
 
 .attachments {
@@ -274,8 +328,4 @@
   color: var(--text-3);
   font-size: calc(12px * var(--text-scale));
   white-space: nowrap;
-}
-
-.queued-promote {
-  flex: none;
 }

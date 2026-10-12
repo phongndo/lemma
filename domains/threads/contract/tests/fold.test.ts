@@ -98,10 +98,12 @@ describe("foldRunning", () => {
     expect(ended.map(entryKey).slice(0, 2)).toEqual(entries.map(entryKey));
   });
 
-  it("keeps a steer where it joined, after the work it followed and before what answers it", () => {
-    const turn = turnOf(...step(1), user("look at the tests too", "t1"), ...step(2));
-    const entries = foldRunning(turn)!;
-    expect(describeEntries(entries)).toEqual(["user", { work: [["tool"], "user", ["tool"]], tools: 2, failed: 1 }]);
+  it("shows a steer after the fold, never inside it, where the finished turn shows it too", () => {
+    const steered = [...step(1), user("look at the tests too", "t1"), ...step(2)];
+    const entries = foldRunning(turnOf(...steered))!;
+    expect(describeEntries(entries)).toEqual(["user", { work: [["tool"], ["tool"]], tools: 2, failed: 1 }, "user"]);
+    const ended = foldTurn(turnOf(...steered, { type: "turn-end", turnId: "t1", reason: "done" }))!;
+    expect(ended.map(entryKey).slice(0, 3)).toEqual(entries.map(entryKey));
   });
 
   it("has a fold from the start, for its streaming step to join", () => {

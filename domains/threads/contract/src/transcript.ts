@@ -37,6 +37,8 @@ export interface UserItem {
   readonly id: string;
   readonly at: number;
   readonly content: readonly (TextContent | ImageContent)[];
+  /** A steer: placed in its turn after the work began, between two steps. */
+  readonly steer?: true;
 }
 
 export interface AssistantItem {
@@ -283,7 +285,10 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
         if (message.role === "user") {
           // A steer: a prompt placed in the running turn between its steps, shown where it joined.
           if (current !== undefined && current.hasUser && data.turnId !== undefined && current.turnId === data.turnId) {
-            current.items.push(cache.get(event.id, "", (): UserItem => ({ kind: "user", id: event.id, at: event.at, content: message.content })));
+            const steer = current.hasOutput;
+            current.items.push(
+              cache.get(event.id, "", (): UserItem => ({ kind: "user", id: event.id, at: event.at, content: message.content, ...(steer ? { steer } : {}) })),
+            );
             break;
           }
           const turn =
