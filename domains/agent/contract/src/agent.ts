@@ -15,12 +15,13 @@ export class AgentError extends Data.TaggedError("AgentError")<{
   /**
    * `Retracted`: the prompt never ran: `withdraw` took it out of the queue before a turn placed it, or the turn started
    * with it was cancelled before it placed it. (A steer queued for a turn that is cancelled is not retracted: it stays
-   * queued, held for the next prompt.) Sent again with the same `requestId`, it is refused again while
-   * it is among the session's latest 64 retracted ids (a cancel's record of it is written as the turn ends, and a
-   * failed write loses it). `Io`: the agent could not record
-   * the change the call asked for on disk (its journal), so it did not make it in this instance: the queue is as it
-   * was. A write that failed may have landed part-way, so the next instance may find the change made: send the
-   * prompt again with the same `requestId` to settle its fate.
+   * queued, held for the next prompt.) Sent again with the same `requestId`, it is refused again while it is among the
+   * session's latest 64 retracted ids (a cancel's record of it is written as the turn ends, and a failed write loses
+   * it).
+   *
+   * `Io`: the agent could not record the change the call asked for on disk (its journal), so it did not make it in
+   * this instance: the queue is as it was. A write that failed may have landed part-way, so the next instance may find
+   * the change made: send the prompt again with the same `requestId` to settle its fate.
    */
   readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted" | "Io";
   readonly message: string;
@@ -383,7 +384,8 @@ export const AgentChannels = {
    * `Agent.prompt` for a client: answers when the turn that places the prompt
    * ends. Calling again with the same `requestId` waits for the turn that
    * placed the prompt, or places it if it never was (unless it was retracted:
-   * that is refused again), and never places it twice. So the call is `repeatable`: when the agent reloads while it waits,
+   * see `AgentError`), and never places it twice. So the call is
+   * `repeatable`: when the agent reloads while it waits,
    * as it does whenever its configuration or a plugin it requires changes, the
    * host makes it again on the replacement, where a prompt it took stays
    * taken, its turn resuming. A client whose connection drops calls again with

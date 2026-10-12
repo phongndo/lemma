@@ -175,21 +175,20 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
   was started with, whether it logs `agent.started` events, and whether it is
-  being cancelled), the queue, and the latest 64 request ids retracted (a
-  prompt sent again with one is refused: `Retracted` in the contract). Written,
-  and synced with its directory, before the log is, whenever the turn or the
-  queue changes. A change the log will not record (a turn starting, a prompt
-  queued, withdrawn, or promoted) is made only once the journal has it: when the
-  journal cannot be written (a full or failing disk), the call that asked for it
-  fails `Io` and this instance does not make it (`AgentError` in the contract);
-  a turn the agent starts itself, for the next queued prompt once one ends, is
-  not started, and the queue waits for the next prompt.
-  A write that failed may still have landed (renamed into place, its directory
-  not synced), so an instance started after it may find the change made: a
-  client that got `Io` sends the prompt again with the same `requestId`, which
-  places it once at most. A change the log records already (a steer placed, a
-  turn ended, a cancel asked for) is made whatever the write does, and checked
-  against the log on the next start.
+  being cancelled), the queue, and the request ids retracted lately (how many,
+  and what a prompt sent again with one gets: `Retracted` in the contract).
+  Written, and synced with its directory, before the log is, whenever the turn
+  or the queue changes. A change the log will not record (a turn starting, a
+  prompt queued, withdrawn, or promoted) is made only once the journal has it:
+  when the journal cannot be written (a full or failing disk), the call that
+  asked for it fails `Io` and this instance does not make it (`AgentError` in
+  the contract); a turn the agent starts itself, for the next queued prompt once
+  one ends, is not started, and the queue waits for the next prompt. A write
+  that failed may still have landed (renamed into place, its directory not
+  synced), so an instance started after it may find the change made (what a
+  client then does: `Io` in the contract). A change the log records already (a
+  steer placed, a turn ended, a cancel asked for) is made whatever the write
+  does, and checked against the log on the next start.
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 

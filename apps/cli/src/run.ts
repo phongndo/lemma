@@ -79,8 +79,8 @@ const prompt = (host: Host, payload: Prompt) =>
 
 /**
  * Whether `agent.prompt` failed without placing the prompt: the agent refused
- * it (`Busy`, `NoModel`, `Session`, `Hook`) or took it out of the queue unrun
- * (`Retracted`), nothing serves the channel or the host is still starting,
+ * it (`Busy`, `NoModel`, `Session`, `Hook`) or never ran it (`Retracted`: see
+ * `AgentError`), nothing serves the channel or the host is still starting,
  * or the host refused the message as too large (`tooLarge`), so it never
  * arrived. Only its withdrawal (`prompt`), or a connection lost otherwise,
  * leaves it perhaps placed.
