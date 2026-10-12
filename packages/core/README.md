@@ -480,7 +480,7 @@ nix develop -c pnpm core:check                # type-check
 nix develop -c pnpm core:test                 # contract, lifecycle, failure, and property tests
 nix develop -c pnpm package:check             # install the packed package into a temporary consumer
 nix develop .#browser -c pnpm browser:check   # the same, plus a DOM consumer in Chromium
-nix develop -c pnpm perf:check                # build, then core:bench and core:stress
+nix develop -c pnpm perf:check                # build, then core:bench, core:stress, and the others' (harness:bench…)
 ```
 
 The package is private. `pnpm --filter @lemma/core pack` builds and packs it
@@ -527,4 +527,5 @@ beside the working tree, alternates the microbenchmarks of the two, and reports
 a change only when a Mann-Whitney U test finds it significant across `--runs`
 pairs (default 10), corrected for the number of benchmarks, and it is beyond
 `--threshold` (default 10%), as Go's benchstat does. `--fail` exits non-zero on
-a slowdown.
+a slowdown. In the Lemma repository, `--harness` compares the harness
+benchmark's step timings too.

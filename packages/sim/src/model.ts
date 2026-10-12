@@ -192,10 +192,15 @@ export const simModel = (
     readonly calls?: ModelCall[];
     /** Hears each answer's sorts, for a run's coverage. */
     readonly count?: (what: string) => void;
+    /** Hears each event as the model emits it: the benchmark times how long the harness takes to pass it on. */
+    readonly emit?: (event: StreamEvent) => void;
+    /** Keeps each request in `calls` (default): a long benchmark does not, as each holds its whole history. */
+    readonly keep?: boolean;
   } = {},
 ) => {
   const answering = options.answering ?? answerSimply;
   const calls = options.calls ?? [];
+  let asked = 0;
   const plugin = definePlugin({
     id: "sim.model",
     provides: [Llm],
@@ -206,10 +211,12 @@ export const simModel = (
       stream: (request) =>
         Stream.unwrap(
           Effect.sync(() => {
-            calls.push({ host: options.host ?? 0, request, summary: isSummaryRequest(request) });
+            if (options.keep !== false) calls.push({ host: options.host ?? 0, request, summary: isSummaryRequest(request) });
+            asked++;
             const answer = answering(request, prng);
             for (const kind of answer.kinds) options.count?.(`model ${kind}`);
-            return play(answer);
+            const emit = options.emit;
+            return emit === undefined ? play(answer) : play(answer).pipe(Stream.tap((event) => Effect.sync(() => emit(event))));
           }),
         ),
       login: () => Effect.void,
@@ -219,5 +226,10 @@ export const simModel = (
       setLogo: () => Effect.void,
     }),
   });
-  return { plugin, calls };
+  return {
+    plugin,
+    calls,
+    /** Requests asked so far, kept or not. */
+    asked: () => asked,
+  };
 };

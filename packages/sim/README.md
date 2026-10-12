@@ -43,9 +43,10 @@ the determinism tests fail on any timer a run starts (see "Running it").
 
 ## A host
 
-`SimHost.start(sim, disk, generation, parts, alive)` starts a host process: a
-core with `sessions.files`, `agent.loop`, and `tools.registry` on a mount of a
-`SimDisk` (`@lemma/testing`), their ids drawn from the run, the sessions lock
+`SimHost.start(sim, fs, generation, parts, alive)` starts a host process: a core
+with `sessions.files`, `agent.loop`, and `tools.registry` on `fs`, a mount of a
+`SimDisk` (`@lemma/testing`) or, for the benchmark, a `MemFs`, their ids drawn
+from the run, the sessions lock
 claimed by `generation` as its pid. `alive` holds the generations still running:
 a lock an earlier one holds is stale once it is not among them, as a crashed
 process's is. `parts` adds the rest: compaction, the simulated
@@ -55,7 +56,8 @@ stalls, broken streams, malformed calls, and usage that fills the context),
 tools (`simTools`: `echo`, safe to repeat; `work`, which prints a line per
 step, may fail or run for minutes, and is unsafe to repeat), a plugin around
 the agent's operations that slows or fails them (`simHooks`), and the checker's
-observer. `digestOf(disk)` hashes every file on the disk (its doc says how it
+observer; `wrapSessions` wraps the store's service (the benchmark counts its
+reads so). `digestOf(disk)` hashes every file on the disk (its doc says how it
 counts a temporary one a crash left).
 
 ## A run: `World`
@@ -144,6 +146,56 @@ default 200 ticks, measured at the commit that last changed the generator):
   simulation (`domains/sessions/files/tests/simulation.test.ts`), the focused
   test beside this whole-system one, as TigerBeetle pairs them, catches it every
   time.
+
+## The harness benchmark
+
+`pnpm harness:bench` (`bench/harness.ts`) runs one session through turns of two
+steps (the model calls `echo`, then answers in five deltas), in simulated time
+on a file system in memory (`MemFs`: an append grows its file in place, where
+`SimDisk` copies it whole), and measures each step at 100, 1,000, and 10,000
+entries. Simulated waits cost no wall time, so a step's wall time is the
+harness's own. What it counts per step is the same on every machine, and is a
+hard budget (`packages/core/bench/budgets.ts`); `tests/bench.test.ts` pins the
+counts on a short session in CI, on Linux and macOS. Timings are advisory;
+`scripts/bench-compare.ts --harness` compares a step's between builds.
+
+### The estimate
+
+A step is one model call and the tools it asks for. What the harness adds to
+it, by resource (TigerStyle's sketch: network, disk, memory, CPU, each for
+bandwidth and latency):
+
+- **Network.** The request is the context, which the model needs whatever the
+  harness does; the harness adds nothing to it. Latency is the model's:
+  seconds.
+- **Disk.** About six log lines a step (step start, request, answer, the tools'
+  start and results, step end), 2.3 KB, each synced before the next, as resuming
+  after a crash depends on each: 6 to 8 syncs, at 0.2 to 2 ms on an SSD, 2 to 15
+  ms a step. The slowest resource the harness touches, and a cost per step that
+  stays the same as the session grows.
+- **Memory.** An open session's events, about 1 KB each: 10 MB at 10,000.
+- **CPU.** The request is built from the session's branch: done
+  incrementally, a step's work is the new events and the request's own size,
+  the same at 10,000 entries as at 100. The target: a step at 10,000 entries
+  within 1.5 times one at 1,000, and an event from the model reaching a client
+  within a frame (16 ms).
+
+### What it measures
+
+At first (2026-10-12, Ryzen 9 9950X): a step reads its whole branch back about
+three times (510, 3,201, and 30,228 events at 100, 1,000, and 10,000 entries)
+and takes 1.35, 1.59, and 5.16 ms, 3.3 times as long at 10,000 entries as at
+1,000; 8 syncs and 2.3 KB written; 3 public hooks run and 23 events published;
+a delta reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs
+stay as they are: each is a point the agent's resume depends on, and syncing
+two lines at once would need the store's contract to say which may share one.
+
+The hooks counted leave out two: a provider plugin's `LlmRequestHook`, one a
+step, which the simulated model (an `Llm` of its own) runs none of; and the
+agent's own probe of whether the core is closing, a hook no other plugin can
+name, which runs before each batch of tool calls a step starts, before each
+call, and after a model call or a turn that fails: twice in the benchmark's
+tool step, not in its answer step.
 
 ## Running it
 

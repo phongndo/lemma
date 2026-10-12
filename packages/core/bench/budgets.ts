@@ -37,13 +37,34 @@ export const budgets = {
   browserBundleBytes: 480_000,
   browserBundleGzipBytes: 152_000,
   httpP99Ms: 25,
+  // The harness (packages/sim/bench/harness.ts, 2026-10-12, same machine): a session's step, in simulated time on a
+  // file system in memory, against its estimate (packages/sim/README.md#the-harness-benchmark). Counts per step are
+  // the same on every machine and always fail; timings are advisory. What it measured: the README's "What it measures".
+  "Harness / 100 entries / events read per step": 520,
+  "Harness / 1000 entries / events read per step": 3_300,
+  "Harness / 10000 entries / events read per step": 31_000,
+  "Harness / 100 entries / syncs per step": 8,
+  "Harness / 1000 entries / syncs per step": 8,
+  "Harness / 10000 entries / syncs per step": 8,
+  "Harness / 100 entries / bytes written per step": 2_600,
+  "Harness / 1000 entries / bytes written per step": 2_600,
+  "Harness / 10000 entries / bytes written per step": 2_600,
+  "Harness / 100 entries / hooks run per step": 3,
+  "Harness / 100 entries / events published per step": 23,
+  "Harness / 100 entries / ms per step": 3,
+  "Harness / 10000 entries / ms per step": 10,
+  "Harness / 10000 entries / heap MB": 64,
 } as const;
 
 const measurements: Record<string, { value: number; limit?: number; passed?: boolean }> = {};
 /** Timings vary with the machine, so their budgets fail only when asked to (on an idle, comparable machine). */
 export const enforced = process.env.LEMMA_PERF_ENFORCE === "1";
-/** Sizes are the same on every machine, so their budgets always fail. */
-const deterministic = new Set<string>(["browserBundleBytes", "browserBundleGzipBytes"]);
+/** Sizes, and counts of what a simulated run does, are the same on every machine, so their budgets always fail. */
+const deterministic = new Set<string>([
+  "browserBundleBytes",
+  "browserBundleGzipBytes",
+  ...Object.keys(budgets).filter((name) => name.startsWith("Harness / ") && !name.endsWith(" ms per step") && !name.endsWith(" heap MB")),
+]);
 
 export function record(name: string, value: number) {
   const limit = budgets[name as keyof typeof budgets];

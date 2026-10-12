@@ -1,4 +1,5 @@
 import { Effect, Schema } from "effect";
+import type { Context } from "effect";
 import { definePlugin, Events } from "@lemma/core";
 import { Channels, Paths, secureIds } from "@lemma/contracts";
 import type { IdSource } from "@lemma/contracts";
@@ -29,6 +30,8 @@ export interface SessionsPluginOptions {
   readonly ids?: IdSource;
   /** The process taking the sessions lock: this one by default; a simulation passes each host it starts as its own. */
   readonly claimant?: Claimant;
+  /** The service as provided, given the store's: a benchmark counts the calls the agent makes, a test fails some. */
+  readonly wrap?: (sessions: Context.Service.Shape<typeof Sessions>) => Context.Service.Shape<typeof Sessions>;
 }
 
 /** The plugin on what `options` gives it, and on this process and its file system for what they leave out. */
@@ -49,9 +52,10 @@ export const makeSessionsPlugin = (options: SessionsPluginOptions = {}) =>
         ids: options.ids ?? secureIds,
         claimant: options.claimant ?? thisProcess,
       });
+      const provided = options.wrap?.(sessions) ?? sessions;
       // How clients reach them: the transport serves what `Channels` holds.
-      for (const channel of serveSessions(sessions, yield* Events)) yield* owner.add(Channels, channel);
-      return { sessions };
+      for (const channel of serveSessions(provided, yield* Events)) yield* owner.add(Channels, channel);
+      return { sessions: provided };
     },
   });
 

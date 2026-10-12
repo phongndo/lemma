@@ -36,6 +36,9 @@ a failure prints the command that repeats it.
 `.github/workflows/bench.yml` compares the core's benchmarks with a base
 revision (by hand, or on a pull request labelled `performance`); locally,
 `node scripts/bench-compare.ts` (see [the core's README](../packages/core/README.md#develop)).
+`pnpm harness:bench` measures what the harness does per step, in simulated
+time, as a session grows ([`@lemma/sim`](../packages/sim/README.md#the-harness-benchmark)):
+its counts are the same on every machine, and hard budgets.
 
 Tests wait for a condition, never a fixed time, and make their temporary files
 with `mkdtemp`: `scripts/check-boundaries.ts` (in `pnpm check`) counts fixed

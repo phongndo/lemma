@@ -293,7 +293,7 @@ export class World {
       this.alive.add(generation);
       Object.assign(this.disk.faults, NO_DISK_FAULTS);
       const crashes = this.disk.crashes;
-      const host = await SimHost.start(this.sim, this.disk, generation, this.parts(generation), this.alive).catch((error: unknown) => {
+      const host = await SimHost.start(this.sim, this.disk.mount(), generation, this.parts(generation), this.alive).catch((error: unknown) => {
         if (this.disk.crashes === crashes) throw error;
         return undefined;
       });

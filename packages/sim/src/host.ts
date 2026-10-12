@@ -6,7 +6,8 @@ import { HostControl } from "@lemma/contracts";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { makeAgentPlugin } from "@lemma/agent-loop";
 import { makeSessionsPlugin } from "@lemma/sessions-files";
-import type { Claimant } from "@lemma/sessions-files";
+import type { Claimant, SessionsPluginOptions } from "@lemma/sessions-files";
+import type { FileSystem } from "@lemma/contracts/fs";
 import tools from "@lemma/tools-registry";
 import type { SimDisk } from "@lemma/testing";
 import type { Simulation } from "./simulation.ts";
@@ -35,11 +36,13 @@ export interface HostParts {
   readonly plugins: readonly Plugin[];
   /** Each plugin's config, by id. */
   readonly configs?: Readonly<Record<string, unknown>>;
+  /** The sessions service as provided, given the store's: the benchmark counts the calls made to it. */
+  readonly wrapSessions?: SessionsPluginOptions["wrap"];
 }
 
 /**
- * One host process of a simulation: a core with the bundled sessions store, agent loop, and tool registry, on a
- * mount of the simulated disk, its ids and its lock's claim drawn from the run. Hosts of one run are told apart by
+ * One host process of a simulation: a core with the bundled sessions store, agent loop, and tool registry, on a file
+ * system (a simulated disk's mount, or `MemFs` for the benchmark), its ids and its lock's claim drawn from the run. Hosts of one run are told apart by
  * `generation`, which the sessions lock takes as its pid.
  */
 export class SimHost {
@@ -55,8 +58,7 @@ export class SimHost {
     this.sim = sim;
   }
 
-  static async start(sim: Simulation, disk: SimDisk, generation: number, parts: HostParts, alive: ReadonlySet<number>): Promise<SimHost> {
-    const fs = disk.mount();
+  static async start(sim: Simulation, fs: FileSystem, generation: number, parts: HostParts, alive: ReadonlySet<number>): Promise<SimHost> {
     const claimant: Claimant = {
       pid: generation,
       hostname: "sim",
@@ -68,7 +70,12 @@ export class SimHost {
     const plugins: Plugin[] = [
       pathsPlugin(HOME),
       hostControl,
-      makeSessionsPlugin({ fs, ids: sim.random.split(`sessions ids ${generation}`).ids(), claimant }),
+      makeSessionsPlugin({
+        fs,
+        ids: sim.random.split(`sessions ids ${generation}`).ids(),
+        claimant,
+        ...(parts.wrapSessions === undefined ? {} : { wrap: parts.wrapSessions }),
+      }),
       makeAgentPlugin({ fs, ids: sim.random.split(`agent ids ${generation}`).ids(), platform: PLATFORM }),
       tools,
       ...parts.plugins,
