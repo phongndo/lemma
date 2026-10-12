@@ -196,18 +196,21 @@ export const simModel = (
     readonly emit?: (event: StreamEvent) => void;
     /** Keeps each request in `calls` (default): a long benchmark does not, as each holds its whole history. */
     readonly keep?: boolean;
+    /** The model's context window, in tokens (`CONTEXT_WINDOW` by default). */
+    readonly contextWindow?: number;
   } = {},
 ) => {
   const answering = options.answering ?? answerSimply;
   const calls = options.calls ?? [];
   let asked = 0;
+  const offered: ModelInfo = options.contextWindow === undefined ? info : { ...info, contextWindow: options.contextWindow };
   const plugin = definePlugin({
     id: "sim.model",
     provides: [Llm],
     layer: Layer.succeed(Llm, {
       providers: Effect.succeed([]),
-      models: () => Effect.succeed([info]),
-      model: (ref) => (ref === SIM_MODEL ? Effect.succeed(info) : Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` }))),
+      models: () => Effect.succeed([offered]),
+      model: (ref) => (ref === SIM_MODEL ? Effect.succeed(offered) : Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` }))),
       stream: (request) =>
         Stream.unwrap(
           Effect.sync(() => {

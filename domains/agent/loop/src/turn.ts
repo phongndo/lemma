@@ -5,13 +5,13 @@ import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
-import { deriveMessages, modelView, rebuildRequest, requestState } from "@lemma/sessions";
+import { deriveMessages, modelView, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
 import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
 import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
 import type { Llm, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage } from "@lemma/llm";
-import type { Contribution, EventData, ProviderAnswer, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
+import type { Contribution, EventData, ProviderAnswer, RequestState, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
 import type { ToolRunner } from "@lemma/tools";
 import { handlerChanges } from "./credit.ts";
 import { partialMessage } from "./live.ts";
@@ -53,6 +53,17 @@ interface Offer {
   readonly declared: readonly string[];
 }
 
+/** Each tool spec's JSON length, kept per spec: the registry hands out the same object for a tool until it changes. */
+const specLengths = new WeakMap<ToolSpec, number>();
+const specChars = (spec: ToolSpec): number => {
+  let chars = specLengths.get(spec);
+  if (chars === undefined) specLengths.set(spec, (chars = JSON.stringify(spec).length));
+  return chars;
+};
+
+/** The same spec objects, in the same order: unchanged without comparing their contents. */
+const sameSpecs = (logged: readonly ToolSpec[] | undefined, specs: readonly ToolSpec[]): boolean =>
+  logged !== undefined && logged.length === specs.length && logged.every((spec, index) => spec === specs[index]);
 /** The longest wait a provider may ask for before a retry; a longer one is cut to this. */
 const MAX_REQUESTED_DELAY_MS = 15 * 60_000;
 
@@ -124,6 +135,11 @@ interface TurnInput {
   readonly stopping: Effect.Effect<void>;
   /** Runs a wait (before a failed call is asked again) during which the turn holds no slot, then waits for one. */
   readonly idle: <A, E, R>(wait: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /**
+   * The session's branch as the last turn left it, which a new turn starts from rather than read it again when the
+   * session's leaf is still its end; and where the turn leaves its own when it ends.
+   */
+  readonly kept?: { readonly branch: () => readonly SessionEvent[] | undefined; readonly keep: (branch: readonly SessionEvent[]) => void };
 }
 
 /** How `runTurn` returns: the reason it ended, or `suspended` when it was left open in the log to resume. */
@@ -226,6 +242,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     overflowed: boolean;
     /** The last of them failed as too long: the next request asks handlers to shorten the history. */
     shorten: boolean;
+    /**
+     * The branch ending at `lastId`, kept as the turn appends (every event it appends chains onto it), so a step does
+     * not read the session back. Read from the store when there is none yet, or an append did not chain onto it.
+     */
+    branch: SessionEvent[] | undefined;
+    /** `requestState(branch)`, kept as the branch is. */
+    request: RequestState | undefined;
+    /** The tool specs the turn last logged (or found logged): unchanged by identity, they need no comparing. */
+    loggedSpecs: readonly ToolSpec[] | undefined;
   } = {
     lastId: undefined,
     usage: emptyUsage,
@@ -237,6 +262,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     retries: 0,
     overflowed: false,
     shorten: false,
+    branch: undefined,
+    request: undefined,
+    loggedSpecs: undefined,
   };
 
   const sessionError = failedAs(sessionId, "Session");
@@ -266,6 +294,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           Effect.tap((event) =>
             Effect.sync(() => {
               state.lastId = event.id;
+              const branch = state.branch;
+              if (branch !== undefined && event.parent === (branch.at(-1)?.id ?? null)) {
+                branch.push(event);
+                state.request = nextRequestState(state.request!, event);
+              } else {
+                state.branch = undefined;
+                state.request = undefined;
+              }
             }),
           ),
           Effect.mapError(sessionError),
@@ -337,9 +373,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    * results would.
    */
   const closeBranch = Effect.gen(function* () {
-    const branch = yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError));
+    // The branch the last turn left, if the session's leaf has not moved since (no checkout, no other append): no
+    // reading it all back.
+    const kept = input.kept?.branch();
+    const leaf = kept === undefined ? undefined : (yield* sessions.get(sessionId).pipe(Effect.mapError(sessionError))).leaf;
+    const branch =
+      kept !== undefined && leaf !== undefined && kept.at(-1)?.id === leaf ? kept : yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError));
     // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
     state.lastId = branch.at(-1)?.id;
+    keep(branch);
     const open = unansweredCalls(branch);
     if (open === undefined || open.event.data.type !== "message") return;
     const { turnId: callTurn, stepId: callStep } = open.event.data;
@@ -356,10 +398,29 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   /** The model a turn that runs steps asks: it has one (see `TurnInput.model`). */
   const asked = Effect.suspend(() => (input.model === undefined ? Effect.die(new Error(`Turn ${turnId} has no model to ask`)) : Effect.succeed(input.model)));
 
+  /** `branch`, read from the store, as the turn's branch from here on (`state.branch`). */
+  const keep = (branch: readonly SessionEvent[]) => {
+    state.branch = [...branch];
+    state.request = requestState(branch);
+  };
+  /** The turn's branch, ending at `lastId`: kept, or read from the store when it is not. */
+  const branchNow: Effect.Effect<SessionEvent[], AgentError> = Effect.suspend(() =>
+    state.branch !== undefined
+      ? Effect.succeed(state.branch)
+      : sessions.branch(sessionId, { leaf: state.lastId! }).pipe(
+          Effect.mapError(sessionError),
+          Effect.map((branch) => {
+            keep(branch);
+            return state.branch!;
+          }),
+        ),
+  );
+
   /** Builds, logs, and returns the exact request for this step, asking `asking` unless a handler names another. */
   const prepareRequest = (stepId: string, asking: ModelInfo) =>
     Effect.gen(function* () {
-      const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! }).pipe(Effect.mapError(sessionError));
+      // As it stands now: the branch kept grows as the turn appends, and handlers see this one.
+      const branch: readonly SessionEvent[] = (yield* branchNow).slice();
       const listed = yield* tools.list;
       const sections = yield* services.sections({ sessionId, turnId, cwd, model: asking.ref, tools: listed, branch });
       /** The events each plugin's handler appended, by type, for its credit. */
@@ -420,9 +481,13 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const specs: ToolSpec[] = declared.map((tool) => tool.spec);
       const contributions: Contribution[] = [
         ...plan.sections.map((section): Contribution => ({ source: section.source, kind: "system", label: section.id, chars: section.text.length })),
-        ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: JSON.stringify(tool.spec).length })),
+        ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: specChars(tool.spec) })),
       ];
-      const previous = requestState(branch);
+      // The branch as handlers left it (one may have appended a compaction), and what the request before it said.
+      const before = yield* branchNow;
+      const previous = state.request!;
+      const history = deriveMessages(before);
+      const unchanged = sameSpecs(state.loggedSpecs, specs) || isDeepStrictEqual(previous.tools ?? [], specs);
       const composition = yield* host.composition;
       const logged = yield* append({
         type: "request",
@@ -432,14 +497,30 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
         composition: composition.id,
         ...(previous.system === system ? {} : { system }),
-        ...(isDeepStrictEqual(previous.tools ?? [], specs) ? {} : { tools: specs }),
+        ...(unchanged ? {} : { tools: specs }),
         contributions,
         ...(handlers.length === 0 ? {} : { handlers }),
         ...(plan.providerOptions === undefined ? {} : { providerOptions: plan.providerOptions }),
       });
-      // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
-      const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
+      state.loggedSpecs = specs;
+      // Send what the log says was sent: the request as the branch now ending at the request event rebuilds it, from
+      // the state kept as the turn appended. Checked against a rebuild from the store's branch where it is `Verify`d.
+      const request =
+        state.request === undefined
+          ? rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId)
+          : requestFrom(state.request, history, logged, sessionId);
       if (request === undefined) return yield* Effect.die(new Error(`request ${logged.id} is not on its own branch`));
+      if (yield* Verify) {
+        const stored = yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError));
+        assert(isDeepStrictEqual(rebuildRequest(stored, logged.id, sessionId), request), `request ${logged.id} is not what its branch rebuilds`);
+        if (state.branch !== undefined) {
+          assert(state.branch.length === stored.length, `turn ${turnId} keeps ${state.branch.length} events of a branch of ${stored.length}`);
+          assert(
+            state.branch.every((event, index) => event.id === stored[index]!.id),
+            `turn ${turnId} keeps a branch that is not the store's`,
+          );
+        }
+      }
       const offer: Offer = { offered: plan.tools.map((tool) => tool.spec.name), declared: specs.map((spec) => spec.name) };
       return { request, model, offer };
     });
@@ -959,6 +1040,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       );
       if (step !== undefined) yield* append({ type: "step-end", turnId, stepId: step.id });
       yield* append({ type: "turn-end", turnId, reason: ended.reason, ...(ended.error === undefined ? {} : { error: ended.error }) });
+      if (state.branch !== undefined) input.kept?.keep(state.branch);
       // A closed turn has answered every call it made, or the next request would be malformed.
       if (yield* Verify) {
         const closed = yield* sessions.branch(sessionId, { leaf: state.lastId! });

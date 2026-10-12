@@ -152,8 +152,12 @@ default 200 ticks, measured at the commit that last changed the generator):
 `pnpm harness:bench` (`bench/harness.ts`) runs one session through turns of two
 steps (the model calls `echo`, then answers in five deltas), in simulated time
 on a file system in memory (`MemFs`: an append grows its file in place, where
-`SimDisk` copies it whole), and measures each step at 100, 1,000, and 10,000
-entries. Simulated waits cost no wall time, so a step's wall time is the
+`SimDisk` copies it whole), with compaction on: the model reports the context
+each request fills, in a window of 4,000 tokens, so the session compacts every
+few dozen turns as a real one does once its context is full, and a request's
+history stays within the same bounds at 1,000 entries as at 10,000. It
+measures each step at 100, 1,000, and 10,000 entries, with `Verify` off, as in
+production. Simulated waits cost no wall time, so a step's wall time is the
 harness's own. What it counts per step is the same on every machine, and is a
 hard budget (`packages/core/bench/budgets.ts`); `tests/bench.test.ts` pins the
 counts on a short session in CI, on Linux and macOS. Timings are advisory;
@@ -182,13 +186,18 @@ bandwidth and latency):
 
 ### What it measures
 
-At first (2026-10-12, Ryzen 9 9950X): a step reads its whole branch back about
-three times (510, 3,201, and 30,228 events at 100, 1,000, and 10,000 entries)
-and takes 1.35, 1.59, and 5.16 ms, 3.3 times as long at 10,000 entries as at
-1,000; 8 syncs and 2.3 KB written; 3 public hooks run and 23 events published;
-a delta reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs
-stay as they are: each is a point the agent's resume depends on, and syncing
-two lines at once would need the store's contract to say which may share one.
+At first (2026-10-12, Ryzen 9 9950X), a step read its whole branch back from
+the store about twice (422, 2,664, and 25,159 events at 100, 1,000, and
+10,000 entries) and took 1.38, 1.54, and 2.29 ms: 1.5 times as long at 10,000
+entries as at 1,000. Now a turn keeps its branch as it appends, and a new turn
+starts from the one the last left while the session's leaf is still its end
+(`agent.loop`'s README): a step reads nothing back, and takes 1.34, 1.41, and
+1.21 ms. Building the request no longer checks its history's messages again
+(`requestFrom`), as they were checked as they were logged. Each step writes 8
+syncs and 2.4 KB, runs 3 public hooks, and publishes 23 events; a delta
+reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs stay
+as they are: each is a point the agent's resume depends on, and syncing two
+lines at once would need the store's contract to say which may share one.
 
 The hooks counted leave out two: a provider plugin's `LlmRequestHook`, one a
 step, which the simulated model (an `Llm` of its own) runs none of; and the

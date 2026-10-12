@@ -38,11 +38,12 @@ export const budgets = {
   browserBundleGzipBytes: 152_000,
   httpP99Ms: 25,
   // The harness (packages/sim/bench/harness.ts, 2026-10-12, same machine): a session's step, in simulated time on a
-  // file system in memory, against its estimate (packages/sim/README.md#the-harness-benchmark). Counts per step are
-  // the same on every machine and always fail; timings are advisory. What it measured: the README's "What it measures".
-  "Harness / 100 entries / events read per step": 520,
-  "Harness / 1000 entries / events read per step": 3_300,
-  "Harness / 10000 entries / events read per step": 31_000,
+  // file system in memory, compacting as its context fills, against its estimate (packages/sim/README.md#the-harness-
+  // benchmark). Counts per step are the same on every machine and always fail; timings are advisory. What it
+  // measured: the README's "What it measures".
+  "Harness / 100 entries / events read per step": 0,
+  "Harness / 1000 entries / events read per step": 0,
+  "Harness / 10000 entries / events read per step": 0,
   "Harness / 100 entries / syncs per step": 8,
   "Harness / 1000 entries / syncs per step": 8,
   "Harness / 10000 entries / syncs per step": 8,
@@ -52,8 +53,9 @@ export const budgets = {
   "Harness / 100 entries / hooks run per step": 3,
   "Harness / 100 entries / events published per step": 23,
   "Harness / 100 entries / ms per step": 3,
-  "Harness / 10000 entries / ms per step": 10,
+  "Harness / 10000 entries / ms per step": 3,
   "Harness / 10000 entries / heap MB": 64,
+  "Harness / step time 10k vs 1k entries": 1.5,
 } as const;
 
 const measurements: Record<string, { value: number; limit?: number; passed?: boolean }> = {};
@@ -63,7 +65,8 @@ export const enforced = process.env.LEMMA_PERF_ENFORCE === "1";
 const deterministic = new Set<string>([
   "browserBundleBytes",
   "browserBundleGzipBytes",
-  ...Object.keys(budgets).filter((name) => name.startsWith("Harness / ") && !name.endsWith(" ms per step") && !name.endsWith(" heap MB")),
+  // The harness's counts, not its timings (ms, the heap, and how a step's time grows).
+  ...Object.keys(budgets).filter((name) => name.startsWith("Harness / ") && !/ ms per step$| heap MB$|^Harness \/ step time /.test(name)),
 ]);
 
 export function record(name: string, value: number) {

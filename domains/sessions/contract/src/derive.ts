@@ -90,20 +90,46 @@ export interface RequestState {
   readonly tools?: readonly ToolSpec[];
 }
 
+/** The request state after `event`: a `request` event's header, its omitted fields kept from `state`; any other, `state`. */
+export function nextRequestState(state: RequestState, event: SessionEvent): RequestState {
+  const data = event.data;
+  if (data.type !== "request") return state;
+  return {
+    model: data.model,
+    ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
+    ...(data.system !== undefined ? { system: data.system } : state.system === undefined ? {} : { system: state.system }),
+    ...(data.tools !== undefined ? { tools: data.tools } : state.tools === undefined ? {} : { tools: state.tools }),
+  };
+}
+
 /** System prompt and tools in effect after the last `request` on the branch, resolving omitted (unchanged) fields. */
 export function requestState(branch: readonly SessionEvent[]): RequestState {
-  let state: { -readonly [K in keyof RequestState]: RequestState[K] } = {};
-  for (const event of branch) {
-    const data = event.data;
-    if (data.type !== "request") continue;
-    state = {
-      model: data.model,
-      ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
-      ...(data.system !== undefined ? { system: data.system } : state.system === undefined ? {} : { system: state.system }),
-      ...(data.tools !== undefined ? { tools: data.tools } : state.tools === undefined ? {} : { tools: state.tools }),
-    };
-  }
+  let state: RequestState = {};
+  for (const event of branch) state = nextRequestState(state, event);
   return state;
+}
+
+/**
+ * The request a `request` event sent: its header resolved (`state`, after the event), the model's history before it
+ * (`messages`, `deriveMessages` of the branch before it), and what the event logged beside them. What
+ * `rebuildRequest` returns, for a caller that keeps `state` and `messages` as it goes rather than deriving them anew.
+ * Built from logged events, which were checked as they were logged and as they are read, so not checked again: a
+ * long history's messages would be, on every request.
+ */
+export function requestFrom(state: RequestState, messages: readonly Message[], logged: SessionEvent, sessionId?: string): LlmRequest {
+  const providerOptions = logged.data.type === "request" ? logged.data.providerOptions : undefined;
+  return new LlmRequest(
+    {
+      model: state.model!,
+      messages,
+      ...(state.system === undefined ? {} : { system: state.system }),
+      ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
+      ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
+      ...(sessionId === undefined ? {} : { sessionId }),
+      ...(providerOptions === undefined ? {} : { providerOptions }),
+    },
+    { disableChecks: true },
+  );
 }
 
 /**
@@ -114,17 +140,5 @@ export function requestState(branch: readonly SessionEvent[]): RequestState {
 export function rebuildRequest(branch: readonly SessionEvent[], requestId: string, sessionId?: string): LlmRequest | undefined {
   const index = branch.findIndex((event) => event.id === requestId);
   if (index === -1 || branch[index]!.data.type !== "request") return undefined;
-  const prefix = branch.slice(0, index + 1);
-  const state = requestState(prefix);
-  const logged = branch[index]!.data;
-  const providerOptions = logged.type === "request" ? logged.providerOptions : undefined;
-  return new LlmRequest({
-    model: state.model!,
-    messages: deriveMessages(branch.slice(0, index)),
-    ...(state.system === undefined ? {} : { system: state.system }),
-    ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
-    ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
-    ...(sessionId === undefined ? {} : { sessionId }),
-    ...(providerOptions === undefined ? {} : { providerOptions }),
-  });
+  return requestFrom(requestState(branch.slice(0, index + 1)), deriveMessages(branch.slice(0, index)), branch[index]!, sessionId);
 }
