@@ -20,6 +20,7 @@ import type { Current } from "../internal/current.ts";
 import { plainView } from "./view.ts";
 import type { Plain } from "./view.ts";
 
+export { assert, AssertionError, Verify } from "../assert.ts";
 export { awaitable, fail } from "../awaitable.ts";
 export type { Awaitable } from "../awaitable.ts";
 export { configSchema } from "../config.ts";

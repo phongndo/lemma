@@ -151,15 +151,16 @@ costs re-reading the files.
 
 `tests/simulation.test.ts` runs random operations on a simulated disk
 (`SimDisk` from `@lemma/testing`; the plugin takes it through
-`makeSessionsPlugin({ fs })`) that crashes, including part-way through an
+`makeSessionsPlugin({ fs, ids, claimant })`, beside the source of its ids'
+random bytes and the process the lock names) that crashes, including part-way through an
 append, keeps or tears what was not synced, fails writes, syncs, truncations,
 and opens at rates drawn per run, and is written to by other programs. It
 checks that every acknowledged event survives as returned, that a crash leaves
 at most one failed append, that no session nothing else wrote to is ever
 `Corrupt`, and that `list` agrees, then that every session takes an append once
-the disk is healthy. Time comes from Effect's `Clock`, and ids from
-`IdBytes` (secure random bytes unless a test seeds them), so one seed fixes a
-run. `LEMMA_SIM_RUNS` (default 100),
+the disk is healthy. Time comes from Effect's `Clock`, and ids from the
+`IdSource` (`secureIds`, from `@lemma/contracts`, unless a test seeds one), so
+one seed fixes a run. `LEMMA_SIM_RUNS` (default 100),
 `LEMMA_SIM_SEED`, and `LEMMA_SIM_PATH` (printed by a failure) control it; a
 failing seed becomes a regression test. It also counts the situations runs reach
 (torn tails, failed appends kept and dropped, sessions read again after an

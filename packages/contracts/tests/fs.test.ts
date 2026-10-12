@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { Schema } from "effect";
-import { expandHome, isAlive, isInside, kindOf, readJsonFile, writeFileAtomic } from "../src/fs.ts";
+import { expandHome, isAlive, isInside, kindOf, readJsonFile, removeFile, writeFileAtomic } from "../src/fs.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -38,6 +38,16 @@ describe("writeFileAtomic", () => {
     await mkdir(path);
     await expect(writeFileAtomic(path, "x")).rejects.toThrow();
     expect(await readdir(dir)).toEqual(["taken"]);
+  });
+});
+
+describe("removeFile", () => {
+  test("removes the file, and with nothing there (nor its directory) does nothing, synced or not", async () => {
+    await writeFile(join(dir, "gone.json"), "{}");
+    await removeFile(join(dir, "gone.json"), { sync: true });
+    expect(await readdir(dir)).toEqual([]);
+    await removeFile(join(dir, "gone.json"), { sync: true });
+    await removeFile(join(dir, "missing", "x.json"), { sync: true });
   });
 });
 

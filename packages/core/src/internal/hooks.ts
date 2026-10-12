@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Exit, Order, References, Scope } from "effect";
+import { Cause, Clock, Context, Effect, Exit, Order, References, Scope } from "effect";
 import type { Tracer } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
 import type { OwnServices } from "./own.ts";
@@ -204,19 +204,23 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
               if (step === undefined) return rest;
               const passed: { input: I; output?: O } = { input: nextInput };
               step.next = passed;
-              const began = performance.now();
-              return rest.pipe(
-                Effect.tap((output) =>
-                  Effect.sync(() => {
-                    passed.output = output;
-                  }),
-                ),
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    step.nextMs += performance.now() - began;
-                  }),
-                ),
-              );
+              const inner = rest;
+              // Effect's clock, so a simulated run times the steps it logs the same every time.
+              return Clock.clockWith((clock) => {
+                const began = clock.monotonicTimeNanosUnsafe();
+                return inner.pipe(
+                  Effect.tap((output) =>
+                    Effect.sync(() => {
+                      passed.output = output;
+                    }),
+                  ),
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      step.nextMs += Number(clock.monotonicTimeNanosUnsafe() - began) / 1e6;
+                    }),
+                  ),
+                );
+              });
             });
           const handle = registration.handle as Handler<I, O, E>;
           let run = Effect.suspend(() => handle(value, next)).pipe(
@@ -227,32 +231,35 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
             ),
           );
           if (onStep !== undefined && step !== undefined) {
-            const startedAt = Date.now();
-            const began = performance.now();
-            run = run.pipe(
-              Effect.onExit((exit) =>
-                Effect.sync(() => {
-                  const ms = performance.now() - began;
-                  const heard: HandlerStep<I, O> = {
-                    pluginId: registration.owner.identity.id,
-                    order: registration.order,
-                    index,
-                    input: value,
-                    ...(step.next === undefined ? {} : { next: step.next }),
-                    ...(Exit.isSuccess(exit) ? { output: exit.value } : {}),
-                    exit: Exit.isSuccess(exit) ? "success" : Cause.hasInterruptsOnly(exit.cause) ? "interrupted" : "failure",
-                    startedAt,
-                    ms,
-                    selfMs: Math.max(0, ms - step.nextMs),
-                  };
-                  try {
-                    onStep(heard);
-                  } catch {
-                    // Hearing a step never fails the operation.
-                  }
-                }),
-              ),
-            );
+            const handled = run;
+            run = Clock.clockWith((clock) => {
+              const startedAt = clock.currentTimeMillisUnsafe();
+              const began = clock.monotonicTimeNanosUnsafe();
+              return handled.pipe(
+                Effect.onExit((exit) =>
+                  Effect.sync(() => {
+                    const ms = Number(clock.monotonicTimeNanosUnsafe() - began) / 1e6;
+                    const heard: HandlerStep<I, O> = {
+                      pluginId: registration.owner.identity.id,
+                      order: registration.order,
+                      index,
+                      input: value,
+                      ...(step.next === undefined ? {} : { next: step.next }),
+                      ...(Exit.isSuccess(exit) ? { output: exit.value } : {}),
+                      exit: Exit.isSuccess(exit) ? "success" : Cause.hasInterruptsOnly(exit.cause) ? "interrupted" : "failure",
+                      startedAt,
+                      ms,
+                      selfMs: Math.max(0, ms - step.nextMs),
+                    };
+                    try {
+                      onStep(heard);
+                    } catch {
+                      // Hearing a step never fails the operation.
+                    }
+                  }),
+                ),
+              );
+            });
           }
           // With tracing off, no span at all: not even a no-op span's context change.
           return Effect.withFiber((fiber) => {

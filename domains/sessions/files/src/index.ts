@@ -1,12 +1,16 @@
 import { Effect, Schema } from "effect";
 import { definePlugin, Events } from "@lemma/core";
-import { Channels, Paths } from "@lemma/contracts";
+import { Channels, Paths, secureIds } from "@lemma/contracts";
+import type { IdSource } from "@lemma/contracts";
 import { serveSessions, Sessions } from "@lemma/sessions";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
+import { thisProcess } from "./lock.ts";
+import type { Claimant } from "./lock.ts";
 import { make } from "./sessions.ts";
 
 export { encodeCwd } from "./format.ts";
+export type { Claimant } from "./lock.ts";
 
 const Config = Schema.Struct({
   unloadAfter: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
@@ -18,8 +22,17 @@ const Config = Schema.Struct({
 });
 type Config = typeof Config.Type;
 
-/** The plugin on `fs`: the real file system by default; tests pass a simulated disk (`SimDisk` in `@lemma/testing`). */
-export const makeSessionsPlugin = (options: { readonly fs?: FileSystem } = {}) =>
+export interface SessionsPluginOptions {
+  /** Where the files are: the real file system by default; tests pass a simulated disk (`SimDisk` in `@lemma/testing`). */
+  readonly fs?: FileSystem;
+  /** Where ids' random bytes come from: the system's secure source by default; a simulation passes a seeded one. */
+  readonly ids?: IdSource;
+  /** The process taking the sessions lock: this one by default; a simulation passes each host it starts as its own. */
+  readonly claimant?: Claimant;
+}
+
+/** The plugin on what `options` gives it, and on this process and its file system for what they leave out. */
+export const makeSessionsPlugin = (options: SessionsPluginOptions = {}) =>
   definePlugin({
     id: "sessions.files",
     version: "0.1.0",
@@ -30,7 +43,12 @@ export const makeSessionsPlugin = (options: { readonly fs?: FileSystem } = {}) =
     // lock) before it starts the next.
     exclusive: true,
     setup: function* (_, owner) {
-      const sessions = yield* make({ ...owner.config, fs: options.fs ?? nodeFileSystem });
+      const sessions = yield* make({
+        ...owner.config,
+        fs: options.fs ?? nodeFileSystem,
+        ids: options.ids ?? secureIds,
+        claimant: options.claimant ?? thisProcess,
+      });
       // How clients reach them: the transport serves what `Channels` holds.
       for (const channel of serveSessions(sessions, yield* Events)) yield* owner.add(Channels, channel);
       return { sessions };

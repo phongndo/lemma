@@ -10,7 +10,6 @@ import type { EventData, SessionEvent } from "@lemma/sessions";
 import { seededRandom, SimDisk } from "@lemma/testing";
 import type { Faults } from "@lemma/testing";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { IdBytes } from "../src/format.ts";
 import { makeSessionsPlugin } from "../src/index.ts";
 
 /*
@@ -121,12 +120,13 @@ const asWritten = (data: EventData): unknown => JSON.parse(JSON.stringify(data))
 const simulate = (seed: number, faults: Faults, initial: number, commands: readonly Command[]) =>
   Effect.gen(function* () {
     const disk = new SimDisk(seededRandom(seed));
+    const ids = seededBytes(seed);
     const log: string[] = [];
     /** Starts a host process on the disk; faults stay off while it starts, so every run gets going. */
     const start = Effect.gen(function* () {
       Object.assign(disk.faults, { write: 0, sync: 0, truncate: 0, rename: 0, open: 0 });
       const scope = yield* Scope.make();
-      const core = yield* makeCore([paths, makeSessionsPlugin({ fs: disk.mount() })], { configs: { "sessions.files": { unloadAfter: 300 } } }).pipe(
+      const core = yield* makeCore([paths, makeSessionsPlugin({ fs: disk.mount(), ids })], { configs: { "sessions.files": { unloadAfter: 300 } } }).pipe(
         Scope.provide(scope),
       );
       const sessions = yield* core.run(Sessions);
@@ -342,7 +342,7 @@ const simulate = (seed: number, faults: Faults, initial: number, commands: reado
     }
     yield* restart("no");
     yield* Scope.close(host.scope, Exit.void);
-  }).pipe(Effect.provideService(IdBytes, seededBytes(seed)), Effect.provide(TestClock.layer()));
+  }).pipe(Effect.provide(TestClock.layer()));
 
 /** Ids from the run's seed, so a failure replays with the same files in the same order. */
 const seededBytes = (seed: number) => {

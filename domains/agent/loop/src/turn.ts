@@ -1,8 +1,7 @@
-import { randomBytes } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { Cause, Clock, Effect, Exit, Option, Random, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
-import { CoreClosed, Hook, PluginContext } from "@lemma/core";
+import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
@@ -33,6 +32,8 @@ interface TurnServices {
   readonly sections: (request: SectionRequest) => Effect.Effect<readonly SystemSection[], AgentError>;
   /** A span of the agent's own work, named for its plugin (`PluginContext.trace`). */
   readonly trace: Context.Service.Shape<typeof PluginContext>["trace"];
+  /** A new id for a step, from the agent's `IdSource`. */
+  readonly newId: () => string;
 }
 
 interface TurnSettings {
@@ -138,8 +139,6 @@ const interruptedText = (output: string | undefined) =>
   output === undefined || output === ""
     ? "Tool execution was interrupted: the host stopped while it ran. It may or may not have finished; check before running it again."
     : `Tool execution was interrupted: the host stopped while it ran. It may or may not have finished; check before running it again. Its output until then:\n${output}`;
-
-export const newId = (): string => randomBytes(6).toString("base64url");
 
 /** What a tool call the branch left without a result tells the model. */
 export const BRANCHED_CALL = "No result was recorded for this tool call: the conversation continued without it.";
@@ -741,7 +740,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         // A resumed turn can come here out of steps: a cut-off call counted as one.
         if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
         yield* boundary;
-        const stepId = newId();
+        const stepId = services.newId();
         // Every span of the step's work carries both, so a trace narrows to a step by either.
         const next = yield* services.trace("agent.step", oneStep(step, stepId, asking)).pipe(Effect.annotateSpans({ "step.id": stepId, "step.index": step }));
         if (typeof next === "object" && "retryAt" in next) {
@@ -937,6 +936,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       );
       if (step !== undefined) yield* append({ type: "step-end", turnId, stepId: step.id });
       yield* append({ type: "turn-end", turnId, reason: ended.reason, ...(ended.error === undefined ? {} : { error: ended.error }) });
+      // A closed turn has answered every call it made, or the next request would be malformed.
+      if (yield* Verify) {
+        const closed = yield* sessions.branch(sessionId, { leaf: state.lastId! });
+        assert(unansweredCalls(closed) === undefined, `turn ${turnId} of session ${sessionId} closed with tool calls unanswered`);
+      }
     }).pipe(
       Effect.catch((error) => Effect.logWarning(`agent: could not close turn ${turnId} in session ${sessionId}: ${error.message}`)),
       Effect.ensuring(

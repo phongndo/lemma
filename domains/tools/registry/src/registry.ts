@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { Cause, Effect, Exit, Fiber, Order, Queue, Result, Schema, Stream } from "effect";
+import { Cause, Clock, Effect, Exit, Fiber, Order, Queue, Result, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import type { HandlerStep } from "@lemma/core";
@@ -62,28 +62,35 @@ const OUTPUT_INTERVAL_MS = 50;
 /** Output kept between publishes; a flood keeps its tail, which is what a live view shows. */
 const OUTPUT_MAX_CHARS = 64 * 1024;
 
-/** Batches `ToolContext.update` chunks into one `publish` per interval; `flush` sends the rest. */
-export const outputBatcher = (publish: (chunk: string, offset: number) => void, interval = OUTPUT_INTERVAL_MS) => {
-  let pending = "";
-  /** Everything printed so far, the parts a batch dropped included. */
-  let printed = 0;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const flush = () => {
-    if (timer !== undefined) clearTimeout(timer);
-    timer = undefined;
-    if (pending === "") return;
-    const chunk = pending;
-    pending = "";
-    publish(chunk, printed - chunk.length);
-  };
-  const update = (chunk: string) => {
-    printed += chunk.length;
-    pending += chunk;
-    if (pending.length > OUTPUT_MAX_CHARS) pending = pending.slice(-OUTPUT_MAX_CHARS);
-    timer ??= setTimeout(flush, interval);
-  };
-  return { update, flush };
-};
+/**
+ * Batches `ToolContext.update` chunks into one `publish` per interval; `flush` sends the rest. `run`, forked beside the
+ * tool, publishes a batch `interval` after its first chunk, on Effect's clock.
+ */
+export const outputBatcher = (publish: (chunk: string, offset: number) => void, interval = OUTPUT_INTERVAL_MS) =>
+  Effect.map(Queue.dropping<void>(1), (due) => {
+    let pending = "";
+    /** Everything printed so far, the parts a batch dropped included. */
+    let printed = 0;
+    /** A batch is due: `run` publishes it after the interval. */
+    let scheduled = false;
+    const flush = () => {
+      scheduled = false;
+      if (pending === "") return;
+      const chunk = pending;
+      pending = "";
+      publish(chunk, printed - chunk.length);
+    };
+    const update = (chunk: string) => {
+      printed += chunk.length;
+      pending += chunk;
+      if (pending.length > OUTPUT_MAX_CHARS) pending = pending.slice(-OUTPUT_MAX_CHARS);
+      if (scheduled) return;
+      scheduled = true;
+      Queue.offerUnsafe(due, undefined);
+    };
+    const run: Effect.Effect<never> = Effect.forever(Effect.andThen(Queue.take(due), Effect.andThen(Effect.sleep(interval), Effect.sync(flush))));
+    return { update, flush, run };
+  });
 
 /** A caller's `ExecuteOptions.update` given one chunk: what it returns (an Effect, a promise) runs to its end. */
 const deliver = (update: NonNullable<ExecuteOptions["update"]>, chunk: string): Effect.Effect<void, unknown> => awaitable(() => update(chunk));
@@ -196,20 +203,20 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           const input = call === original ? decoded : yield* entry.decode(call.input);
           for (const candidate of yield* registries.items(Guards)) {
             if (candidate.item.tool !== "*" && candidate.item.tool !== call.name) continue;
-            const began = performance.now();
-            const ms = () => Math.round((performance.now() - began) * 100) / 100;
+            const began = yield* Clock.currentTimeNanos;
+            const ms = Effect.map(Clock.currentTimeNanos, (now) => Math.round(Number(now - began) / 10_000) / 100);
             // A guard that fails stops the call too, and is named for it.
             const decision = yield* awaitable(() => candidate.item.guard(call)).pipe(
               Effect.tapCause((cause) =>
-                Effect.sync(() => {
-                  if (!Cause.hasInterruptsOnly(cause)) checks.push({ source: candidate.pluginId, allowed: false, ms: ms(), reason: "the guard failed" });
-                }),
+                Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : Effect.map(ms, (taken) => void checks.push({ source: candidate.pluginId, allowed: false, ms: taken, reason: "the guard failed" })),
               ),
             );
             checks.push({
               source: candidate.pluginId,
               allowed: decision._tag === "allow",
-              ms: ms(),
+              ms: yield* ms,
               ...(decision._tag === "deny" ? { reason: decision.reason } : {}),
             });
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
@@ -225,7 +232,9 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           const sender = yield* Effect.forkChild(Stream.runForEach(Stream.fromQueue(outbox), send));
           const offer = (chunk: string, offset: number) => void Queue.offerUnsafe(outbox, { chunk, offset });
           // A listener takes chunks as they come; only the published output is batched and counted.
-          const output = update === undefined ? outputBatcher(offer) : { update: (chunk: string) => offer(chunk, 0), flush: () => {} };
+          const output =
+            update === undefined ? yield* outputBatcher(offer) : { update: (chunk: string) => offer(chunk, 0), flush: () => {}, run: Effect.never };
+          const batching = yield* Effect.forkChild(output.run);
           const context = {
             sessionId: call.sessionId,
             toolCallId: call.toolCallId,
@@ -237,7 +246,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           };
           return yield* runTool(entry.tool, input, context, signal).pipe(
             Effect.onExit((exit) =>
-              Effect.suspend(() => {
+              Effect.andThen(Fiber.interrupt(batching), () => {
                 output.flush();
                 Queue.endUnsafe(outbox);
                 return Exit.isSuccess(exit) ? Fiber.join(sender) : Fiber.interrupt(sender);
@@ -257,7 +266,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           const reachable = invocation.declared ?? invocation.offered;
           if (reachable !== undefined && !reachable.includes(invocation.name)) return yield* unknown(invocation.name, [...reachable]);
           if (signal.aborted) return yield* new ToolError({ tool: invocation.name, reason: "Cancelled", message: `Tool "${invocation.name}" was cancelled` });
-          const started = Date.now();
+          const started = yield* Clock.currentTimeMillis;
           // Who shaped the result, for a caller that keeps it (`ExecuteOptions.credit`).
           const steps: HandlerStep<ToolInvocation, ToolResult>[] = [];
           const checks: CheckCredit[] = [];
@@ -278,7 +287,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             Effect.catch((error) => (error._tag === "CoreClosed" ? Effect.die(error) : Effect.succeed(errorResult(error.message)))),
             Effect.raceFirst(aborted(invocation.name, signal)),
           );
-          yield* events.publish(ToolExecuted, { invocation, result: settled, durationMs: Date.now() - started });
+          yield* events.publish(ToolExecuted, { invocation, result: settled, durationMs: (yield* Clock.currentTimeMillis) - started });
           const credit = executeOptions?.credit;
           if (credit !== undefined) {
             const handlers = inChainOrder(steps).map((step) => creditOf(step, toolChanges(step)));

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { Data, Effect, Schema, Stream } from "effect";
+import { Clock, Data, Effect, Schema, Stream } from "effect";
 import { inChainOrder, Notice } from "@lemma/contracts";
 import { AgentRequestHook } from "@lemma/agent";
 import { CompactionError, CompactionHook } from "@lemma/context";
@@ -68,34 +68,38 @@ export default definePlugin({
     const failedIn = new Map<string, string>();
 
     const summarize = (writer: ModelInfo, text: string, output: number, sessionId: string) =>
-      llm
-        .stream(
-          new LlmRequest({
-            model: writer.ref,
-            system: SUMMARY_PROMPT,
-            messages: [{ role: "user", content: [{ type: "text", text: `${text}\n\nSummarize the conversation above.` }], timestamp: Date.now() }],
-            maxTokens: output,
-            sessionId,
-          }),
-        )
-        .pipe(
-          Stream.runFold(
-            (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
-            (last, event) => (event.type === "done" || event.type === "error" ? event : last),
-          ),
-          Effect.flatMap((settled) => {
-            if (settled?.type !== "done") return Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" }));
-            // A summary cut off at its length limit would lose the rest of what it replaces.
-            if (settled.message.stopReason === "length") return Effect.fail(new SummaryFailed({ message: `the summary ran past ${output} tokens` }));
-            const summary = settled.message.content
-              .flatMap((part) => (part.type === "text" ? [part.text] : []))
-              .join("")
-              .trim();
-            return summary === ""
-              ? Effect.fail(new SummaryFailed({ message: "the model gave an empty summary" }))
-              : Effect.succeed({ summary, usage: settled.message.usage });
-          }),
-        );
+      Clock.currentTimeMillis.pipe(
+        Effect.flatMap((now) =>
+          llm
+            .stream(
+              new LlmRequest({
+                model: writer.ref,
+                system: SUMMARY_PROMPT,
+                messages: [{ role: "user", content: [{ type: "text", text: `${text}\n\nSummarize the conversation above.` }], timestamp: now }],
+                maxTokens: output,
+                sessionId,
+              }),
+            )
+            .pipe(
+              Stream.runFold(
+                (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
+                (last, event) => (event.type === "done" || event.type === "error" ? event : last),
+              ),
+              Effect.flatMap((settled) => {
+                if (settled?.type !== "done") return Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" }));
+                // A summary cut off at its length limit would lose the rest of what it replaces.
+                if (settled.message.stopReason === "length") return Effect.fail(new SummaryFailed({ message: `the summary ran past ${output} tokens` }));
+                const summary = settled.message.content
+                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
+                  .join("")
+                  .trim();
+                return summary === ""
+                  ? Effect.fail(new SummaryFailed({ message: "the model gave an empty summary" }))
+                  : Effect.succeed({ summary, usage: settled.message.usage });
+              }),
+            ),
+        ),
+      );
 
     /** `CompactionHook`'s terminal: a model (the config's, else the request's) summarizes what comes before the cut. */
     const write = (asked: CompactionRequest): Effect.Effect<CompactionResult, CompactionError> =>

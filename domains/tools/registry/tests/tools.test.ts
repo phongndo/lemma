@@ -562,7 +562,7 @@ describe("execute", () => {
 
   it("keeps the tail of output that floods between publishes, its offset counting what was dropped", () => {
     const published: { chunk: string; offset: number }[] = [];
-    const batcher = outputBatcher((chunk, offset) => published.push({ chunk, offset }), 1_000);
+    const batcher = Effect.runSync(outputBatcher((chunk, offset) => published.push({ chunk, offset }), 1_000));
     batcher.update("a".repeat(70_000));
     batcher.update("end");
     batcher.flush();

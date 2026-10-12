@@ -1,6 +1,6 @@
 import { constants } from "node:fs";
 import { describe, expect, test } from "vitest";
-import { writeFileAtomic } from "@lemma/contracts/fs";
+import { removeFile, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { seededRandom, SimDisk } from "../src/index.ts";
 
@@ -165,21 +165,50 @@ describe("SimDisk", () => {
     expect((await fs.stat("/data/log")).size).toBe("theirs\nmore\n".length);
   });
 
-  test("writeFileAtomic on the simulated disk: a crash leaves the old or the new file, never a mix", async () => {
+  test("writeFileAtomic on the simulated disk: a crash part-way leaves the old or the new file, never a mix", async () => {
     const seen = new Set<string | undefined>();
+    for (let seed = 0; seed < 60; seed++) {
+      for (let operations = 0; operations < 12; operations++) {
+        const disk = new SimDisk(seededRandom(seed));
+        const fs = disk.mount();
+        await writeFileAtomic("/state/x.json", "old", { fs, sync: true });
+        disk.crashAfter(operations);
+        await writeFileAtomic("/state/x.json", "new", { fs, sync: true }).catch(() => undefined);
+        // Done before the countdown ran out: the crash comes now.
+        if (disk.crashPending) disk.crash();
+        const text = disk.read("/state/x.json");
+        expect(["old", "new"]).toContain(text);
+        seen.add(text);
+      }
+    }
+    expect([...seen].sort()).toEqual(["new", "old"]);
+  });
+
+  test("writeFileAtomic with sync: once it returns, a crash keeps the new file, in a directory it made too", async () => {
     for (let seed = 0; seed < 60; seed++) {
       const disk = new SimDisk(seededRandom(seed));
       const fs = disk.mount();
-      await writeFileAtomic("/state/x.json", "old", { fs, sync: true });
-      await syncDir(fs, "/");
-      await syncDir(fs, "/state");
-      await writeFileAtomic("/state/x.json", "new", { fs, sync: true });
+      await writeFileAtomic("/state/deep/x.json", "old", { fs, sync: true });
+      await writeFileAtomic("/state/deep/x.json", "new", { fs, sync: true });
       disk.crash();
-      const text = disk.read("/state/x.json");
-      expect(["old", "new"]).toContain(text);
-      seen.add(text);
+      expect(disk.read("/state/deep/x.json")).toBe("new");
+      // Its temporary file went before it returned, and the directory was synced after.
       expect(disk.list().filter((file) => file.endsWith(".tmp"))).toEqual([]);
     }
-    expect([...seen].sort()).toEqual(["new", "old"]);
+  });
+
+  test("removeFile with sync: once it returns, a crash keeps the file gone, removed by an earlier unsynced call too", async () => {
+    for (let seed = 0; seed < 40; seed++) {
+      const disk = new SimDisk(seededRandom(seed));
+      const fs = disk.mount();
+      await writeFileAtomic("/state/x.json", "kept", { fs, sync: true });
+      // Removed, but its directory not synced: a crash now could bring it back.
+      await fs.rm("/state/x.json");
+      await removeFile("/state/x.json", { fs, sync: true });
+      disk.crash();
+      expect(disk.list(), `seed ${seed}`).not.toContain("/state/x.json");
+    }
+    // A directory that is not there has nothing to sync.
+    await removeFile("/missing/x.json", { fs: new SimDisk(seededRandom(1)).mount(), sync: true });
   });
 });
