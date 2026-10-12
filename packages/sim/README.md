@@ -185,9 +185,10 @@ bandwidth and latency):
 At first (2026-10-12, Ryzen 9 9950X): a step reads its whole branch back about
 three times (510, 3,201, and 30,228 events at 100, 1,000, and 10,000 entries)
 and takes 1.35, 1.59, and 5.16 ms, 3.3 times as long at 10,000 entries as at
-1,000; 8 syncs and 2.3 KB written; 3 hooks run (and a provider plugin's
-`LlmRequestHook`, which the simulated model runs none of) and 23 events
-published; a
+1,000; 8 syncs and 2.3 KB written; 3 public hooks run (besides a provider
+plugin's `LlmRequestHook`, which the simulated model runs none of, and the
+agent's own probe of whether the core is closing, about one a step) and 23
+events published; a
 delta reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs
 stay as they are: each is a point the agent's resume depends on, and syncing
 two lines at once would need the store's contract to say which may share one.
