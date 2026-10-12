@@ -9,6 +9,7 @@ import { clockTime } from "@lemma/web/format";
 import { ToolViews, TrajectoryTabs } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
 import { Contained, usePlugin } from "@lemma/web";
+import { createPipeline } from "./pipeline.tsx";
 import type { View, Kind } from "./state.ts";
 
 /** The selected record's or request's details, in tabs. */
@@ -210,6 +211,8 @@ export function createDetails(view: View) {
     readonly render: () => JSX.Element;
   }
 
+  const { StepPipeline, ToolPipeline } = createPipeline({ Section, Facts });
+
   function TimingFacts(props: { timing: Timing; output?: number | undefined }) {
     const t = () => props.timing;
     const decoding = () => (t().firstTokenAt === undefined ? undefined : t().endedAt - t().firstTokenAt!);
@@ -263,6 +266,7 @@ export function createDetails(view: View) {
           </>
         ),
       },
+      ...(assistant === undefined ? [] : [{ id: "pipeline", label: "Pipeline", render: () => <StepPipeline step={assistant.step} /> }]),
       { id: "system", label: "System Prompt", render: () => <SystemPrompt request={request} /> },
       { id: "tools", label: "Tools", render: () => <ToolsList request={request} /> },
       { id: "diff", label: "Diff", render: () => <Diff previous={previous} request={request} /> },
@@ -351,6 +355,7 @@ export function createDetails(view: View) {
               </>
             ),
           },
+          { id: "pipeline", label: "Pipeline", render: () => <StepPipeline step={record.step} /> },
           {
             id: "preview",
             label: "Preview",
@@ -405,6 +410,7 @@ export function createDetails(view: View) {
               </>
             ),
           },
+          { id: "pipeline", label: "Pipeline", render: () => <ToolPipeline run={run} /> },
           { id: "payload", label: "Payload", render: () => <Pre text={json(run.call.arguments)} /> },
           ...(result === undefined ? [] : [{ id: "result", label: "Result", render: () => <Pre text={result} error={run.result?.isError === true} /> }]),
           ...(record.spec === undefined

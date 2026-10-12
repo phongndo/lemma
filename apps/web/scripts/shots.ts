@@ -60,12 +60,16 @@ try {
     await page.waitForSelector("textarea");
     await page.keyboard.press("ControlOrMeta+Shift+d");
     await page.waitForSelector(".devtools");
-    for (const [index, panel] of ["Routes", "Navigation", "Host events", "Plugins", "Hooks", "Registries", "Inspectors", "Channels"].entries()) {
+    for (const [index, panel] of ["Routes", "Navigation", "Host events", "Plugins", "Hooks", "Registries", "Inspectors", "Channels", "Trace"].entries()) {
       await page.click(`[aria-label='Devtools panels'] [role=tab] >> text=${panel}`);
       // The chat above the dock: where it is scrolled after settings and the dock opening varies between runs.
       await page.locator(".chat-view .scroller").evaluate((scroller) => scroller.scrollTo({ top: scroller.scrollHeight }));
       await shot(page, `${theme}-${String(11 + index).padStart(2, "0")}-devtools-${panel.toLowerCase().replace(" ", "-")}`);
     }
+    // The trace with its turn opened as a waterfall, and a span in it selected.
+    await page.click("[aria-label=Spans] tbody tr[data-row] .trc-name >> nth=0");
+    await page.click("[aria-label=Spans] tbody tr[data-row] .trc-name >> nth=4");
+    await shot(page, `${theme}-19-devtools-trace-open`);
     await page.keyboard.press("ControlOrMeta+Shift+d");
     // The thread's Trajectory, and a request selected in it.
     await page.click(".view-tab[aria-label=Trajectory]");
@@ -73,6 +77,10 @@ try {
     await shot(page, `${theme}-20-trajectory`);
     await page.click(".trj-table tbody tr[data-record]");
     await shot(page, `${theme}-21-trajectory-details`);
+    // A model call's pipeline: who shaped its request, and why the turn went on.
+    await page.click(".trj-table tbody tr[data-kind=assistant]");
+    await page.click("[aria-label='Event details'] [role=tab] >> text=Pipeline");
+    await shot(page, `${theme}-22-trajectory-pipeline`);
     await page.close();
   }
   console.log(`Shots in ${out}`);

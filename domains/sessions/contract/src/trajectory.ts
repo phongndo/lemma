@@ -1,6 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
-import type { AssistantMessage, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
-import type { Contribution, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
+import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
+import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
+import type { Contribution, EventData, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
  * The trajectory of a branch: per turn, per step, what the model was sent,
@@ -43,7 +44,23 @@ export interface TrajectoryRequest {
   readonly tools: readonly TrajectoryTool[];
   /** Section ids and tool names that were contributed before and are gone now. */
   readonly removed: readonly string[];
+  /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
+  readonly handlers?: readonly HandlerCredit[];
 }
+
+/** A compaction a step's request made before it was sent: who wrote the summary, and what it replaced. */
+export interface TrajectoryCompaction {
+  readonly eventId: string;
+  readonly at: number;
+  /** The plugin that wrote it. */
+  readonly source: string;
+  readonly tokensBefore: number;
+  readonly summary: string;
+  readonly usage?: Usage;
+}
+
+/** What `AgentContinueHook` decided after a step, and why (the `step-end` event's `decision`). */
+export type StepDecision = NonNullable<Extract<EventData, { readonly type: "step-end" }>["decision"]>;
 
 export interface TrajectoryToolRun {
   readonly call: ToolCall;
@@ -52,12 +69,18 @@ export interface TrajectoryToolRun {
   readonly eventId?: string;
   readonly timing?: Timing;
   readonly details?: unknown;
+  /** Who shaped its result: the handlers around it, the guards, a cut. */
+  readonly credit?: ResultCredit;
 }
 
 export interface TrajectoryAttempt {
   readonly eventId: string;
   readonly message: AssistantMessage;
   readonly timing: Timing;
+  /** How the call failed, as the provider's answer was classified. */
+  readonly failure?: LlmFailure;
+  /** Asked again, and when (see the `attempt` event). */
+  readonly retry?: { readonly reason: "failure" | "restart"; readonly attempt: number; readonly at: number };
 }
 
 export interface TrajectoryStep {
@@ -70,7 +93,18 @@ export interface TrajectoryStep {
   readonly request?: TrajectoryRequest;
   readonly response?: { readonly eventId: string; readonly message: AssistantMessage; readonly timing?: Timing };
   readonly attempts: readonly TrajectoryAttempt[];
+  /**
+   * The failed attempts of the steps that asked this call before it, in order: a call asked again after a failure
+   * is a step of its own, with the same number in the agent's count.
+   */
+  readonly earlier: readonly TrajectoryAttempt[];
   readonly tools: readonly TrajectoryToolRun[];
+  /** Compactions its request made, before it was logged. */
+  readonly compactions: readonly TrajectoryCompaction[];
+  /** What `AgentContinueHook` decided after it; the turn may still have ended at its step limit, or gone on for steers. */
+  readonly decision?: StepDecision;
+  /** What the turn did after it, as the log goes on: another step, or its end. Absent while the turn runs. */
+  readonly after?: { readonly kind: "step" } | { readonly kind: "end"; readonly reason: TurnEndReason };
 }
 
 export interface TrajectoryTurn {
@@ -126,7 +160,11 @@ interface MutableStep {
   request?: TrajectoryRequest;
   response?: NonNullable<TrajectoryStep["response"]>;
   attempts: TrajectoryAttempt[];
+  earlier: TrajectoryAttempt[];
   tools: { -readonly [K in keyof TrajectoryToolRun]: TrajectoryToolRun[K] }[];
+  compactions: TrajectoryCompaction[];
+  decision?: StepDecision;
+  after?: NonNullable<TrajectoryStep["after"]>;
 }
 interface MutableTurn {
   turnId: string;
@@ -163,7 +201,12 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
     if (existing !== undefined) return existing;
     const turn = turnById.get(turnId);
     if (turn === undefined) return undefined;
-    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], tools: [] };
+    // A step after one whose call failed and was asked again asks it again: it carries the attempts that failed.
+    const previous = turn.steps.at(-1);
+    const retried = previous !== undefined && previous.response === undefined && previous.attempts.at(-1)?.retry !== undefined;
+    const earlier = retried ? [...previous.earlier, ...previous.attempts] : [];
+    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], earlier, tools: [], compactions: [] };
+    if (previous !== undefined) previous.after = { kind: "step" };
     turn.steps.push(step);
     stepById.set(stepId, step);
     return step;
@@ -183,6 +226,8 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         if (turn === undefined) return;
         turn.endedAt = event.at;
         turn.end = { reason: data.reason, ...(data.error === undefined ? {} : { error: data.error }) };
+        const last = turn.steps.at(-1);
+        if (last !== undefined) last.after = { kind: "end", reason: data.reason };
         return;
       }
       case "step-start":
@@ -190,7 +235,9 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         return;
       case "step-end": {
         const step = stepById.get(data.stepId);
-        if (step !== undefined) step.endedAt = event.at;
+        if (step === undefined) return;
+        step.endedAt = event.at;
+        if (data.decision !== undefined) step.decision = data.decision;
         return;
       }
       case "request": {
@@ -242,6 +289,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           sections,
           tools,
           removed,
+          ...(data.handlers === undefined ? {} : { handlers: data.handlers }),
         };
         return;
       }
@@ -252,13 +300,31 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         // Writing the summary is part of what the turn cost.
         const turn = data.turnId === undefined ? undefined : turnById.get(data.turnId);
         if (turn !== undefined && data.usage !== undefined) turn.usage = addUsage(turn.usage, data.usage);
+        // Made by the request of the step open in its turn.
+        const open = turn?.steps.at(-1);
+        if (open !== undefined && open.endedAt === undefined) {
+          open.compactions.push({
+            eventId: event.id,
+            at: event.at,
+            source: data.source,
+            tokensBefore: data.tokensBefore,
+            summary: data.summary,
+            ...(data.usage === undefined ? {} : { usage: data.usage }),
+          });
+        }
         return;
       }
       case "attempt": {
         const turn = turnById.get(data.turnId);
         const step = stepFor(data.turnId, data.stepId, event.at);
         if (turn === undefined || step === undefined) return;
-        step.attempts.push({ eventId: event.id, message: data.message, timing: data.timing });
+        step.attempts.push({
+          eventId: event.id,
+          message: data.message,
+          timing: data.timing,
+          ...(data.failure === undefined ? {} : { failure: data.failure }),
+          ...(data.retry === undefined ? {} : { retry: data.retry }),
+        });
         turn.usage = addUsage(turn.usage, data.message.usage);
         return;
       }
@@ -287,6 +353,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           run.eventId = event.id;
           if (data.timing !== undefined) run.timing = data.timing;
           if (data.details !== undefined) run.details = data.details;
+          if (data.credit !== undefined) run.credit = data.credit;
           return;
         }
         return;

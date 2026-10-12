@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@lemma/client": "workspace:*",
+    "@lemma/contracts": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/sessions": "workspace:*",

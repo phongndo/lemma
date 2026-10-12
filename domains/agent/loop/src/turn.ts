@@ -31,6 +31,8 @@ interface TurnServices {
   readonly events: Context.Service.Shape<typeof Events>;
   /** The system prompt's sections for a request, in order (`PromptSections`), each attributed to the plugin that added it. */
   readonly sections: (request: SectionRequest) => Effect.Effect<readonly SystemSection[], AgentError>;
+  /** A span of the agent's own work, named for its plugin (`PluginContext.trace`). */
+  readonly trace: Context.Service.Shape<typeof PluginContext>["trace"];
 }
 
 interface TurnSettings {
@@ -642,13 +644,42 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     }),
   );
 
+  /** Whether the turn takes another step, why by default, and the handlers that weighed in (`step-end`'s `decision`). */
   const decide = (step: number, outcome: StepOutcome) =>
-    hooks
-      .invoke(AgentContinueHook, { sessionId, turnId, step, message: outcome.message, results: outcome.results }, (final) =>
-        // Tool results the model has not read yet keep it going too, whatever the provider called its stop.
-        Effect.succeed(final.message.stopReason === "toolUse" || final.results.length > 0 ? ("continue" as const) : ("stop" as const)),
-      )
-      .pipe(Effect.mapError(hookError("AgentContinueHook")));
+    Effect.gen(function* () {
+      const steps: HandlerStep<StepOutcome, "continue" | "stop">[] = [];
+      // Tool results the model has not read yet keep it going too, whatever the provider called its stop.
+      const reason = (seen: StepOutcome) =>
+        seen.message.stopReason === "toolUse"
+          ? "the model asked for tools"
+          : seen.results.length > 0
+            ? "tool results to read"
+            : `the model stopped (${seen.message.stopReason})`;
+      // What the default saw, which a handler may have rewritten; none, when a handler answered itself.
+      let why = reason(outcome);
+      const result = yield* hooks
+        .invoke(
+          AgentContinueHook,
+          { sessionId, turnId, step, message: outcome.message, results: outcome.results },
+          (final) =>
+            Effect.sync(() => {
+              why = reason(final);
+              return final.message.stopReason === "toolUse" || final.results.length > 0 ? ("continue" as const) : ("stop" as const);
+            }),
+          { onStep: (heard) => void steps.push(heard) },
+        )
+        .pipe(Effect.mapError(hookError("AgentContinueHook")));
+      // A handler changed the decision by what it returned, or by what it passed on.
+      const handlers = inChainOrder(steps).map((heard) =>
+        creditOf(heard, [
+          ...(heard.next !== undefined && heard.next.input !== heard.input ? ["input"] : []),
+          ...(heard.output !== undefined && heard.next?.output !== undefined && heard.output !== heard.next.output
+            ? [`${heard.next.output} → ${heard.output}`]
+            : []),
+        ]),
+      );
+      return { result, why, ...(handlers.length === 0 ? {} : { handlers }) };
+    });
 
   /**
    * After a step's `step-end`: whether the turn ends. Steers queued meanwhile
@@ -675,10 +706,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
         yield* boundary;
         const stepId = newId();
-        const next = yield* oneStep(step, stepId, asking).pipe(
-          Effect.withSpan("agent.step", { attributes: { "step.index": step } }),
-          Effect.annotateSpans({ "step.id": stepId }),
-        );
+        // Every span of the step's work carries both, so a trace narrows to a step by either.
+        const next = yield* services.trace("agent.step", oneStep(step, stepId, asking)).pipe(Effect.annotateSpans({ "step.id": stepId, "step.index": step }));
         if (typeof next === "object" && "retryAt" in next) {
           yield* waitUntil(next.retryAt);
           continue;
@@ -696,9 +725,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     Effect.gen(function* () {
       yield* append({ type: "step-start", turnId, stepId });
       state.step = { id: stepId, model: asking };
-      const { request, model, offered } = yield* prepareRequest(stepId, asking).pipe(Effect.withSpan("agent.request"));
+      const { request, model, offered } = yield* services.trace("agent.request", prepareRequest(stepId, asking));
       state.step = { id: stepId, model };
-      const outcome = yield* callModel(stepId, request, model).pipe(Effect.withSpan("agent.model", { attributes: { "llm.model": model.ref } }));
+      const outcome = yield* services.trace(
+        "agent.model",
+        Effect.andThen(Effect.annotateCurrentSpan("llm.model", model.ref), callModel(stepId, request, model)),
+      );
       if ("retry" in outcome) {
         yield* append({ type: "step-end", turnId, stepId });
         state.step = undefined;
@@ -706,13 +738,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       }
       if ("ended" in outcome) return outcome.ended;
       const results =
-        outcome.message.stopReason === "length"
-          ? yield* answerTruncated(stepId)
-          : yield* runTools(stepId, new Map(), offered).pipe(Effect.withSpan("agent.tools"));
+        outcome.message.stopReason === "length" ? yield* answerTruncated(stepId) : yield* services.trace("agent.tools", runTools(stepId, new Map(), offered));
       const decision = yield* decide(step, { message: outcome.message, results });
-      yield* append({ type: "step-end", turnId, stepId });
+      yield* append({ type: "step-end", turnId, stepId, decision });
       state.step = undefined;
-      return (yield* afterStep(step, decision)) ?? ("next" as const);
+      return (yield* afterStep(step, decision.result)) ?? ("next" as const);
     });
 
   /**
@@ -794,25 +824,31 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
           );
           // The rest of the cut-off step, traced as the step it is.
-          const ended = yield* Effect.gen(function* () {
-            const ran =
-              at.message.stopReason === "length"
-                ? yield* answerTruncated(at.stepId)
-                : yield* runTools(at.stepId, interrupted).pipe(Effect.withSpan("agent.tools"));
-            const decision = yield* decide(plan.steps, { message: at.message, results: [...at.results, ...ran] });
-            yield* append({ type: "step-end", turnId, stepId: at.stepId });
-            state.step = undefined;
-            return yield* afterStep(plan.steps, decision);
-          }).pipe(
-            Effect.withSpan("agent.step", { attributes: { "step.index": plan.steps, "step.resumed": true } }),
-            Effect.annotateSpans({ "step.id": at.stepId }),
-          );
+          const ended = yield* services
+            .trace(
+              "agent.step",
+              Effect.andThen(
+                Effect.annotateCurrentSpan("step.resumed", true),
+                Effect.gen(function* () {
+                  const ran =
+                    at.message.stopReason === "length"
+                      ? yield* answerTruncated(at.stepId)
+                      : yield* services.trace("agent.tools", runTools(at.stepId, interrupted));
+                  const decision = yield* decide(plan.steps, { message: at.message, results: [...at.results, ...ran] });
+                  yield* append({ type: "step-end", turnId, stepId: at.stepId, decision });
+                  state.step = undefined;
+                  return yield* afterStep(plan.steps, decision.result);
+                }),
+              ),
+            )
+            .pipe(Effect.annotateSpans({ "step.id": at.stepId, "step.index": plan.steps }));
           return ended ?? (yield* steps(plan.steps + 1));
         }
         case "between": {
           // Prompts already placed after the last step are what the model answers next.
           if (at.outcome === undefined || at.steered) return yield* again();
-          const decision = yield* decide(plan.steps, at.outcome);
+          // The decision its step-end logged is what the turn acts on; one logged before decisions were is made now.
+          const decision = at.decision ?? (yield* decide(plan.steps, at.outcome)).result;
           return (yield* afterStep(plan.steps, decision)) ?? (yield* steps(plan.steps + 1));
         }
       }
@@ -909,8 +945,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       Effect.catchCause((cause) => (open ? Effect.succeed("suspended" as const) : Effect.failCause(cause))),
     );
   }).pipe(
+    (turn) => services.trace("agent.turn", Effect.andThen(Effect.annotateCurrentSpan("turn.resumed", input.resume !== undefined), turn)),
     // Every span of its work, the plugins' included, says whose turn it was.
-    Effect.withSpan("agent.turn", { attributes: { "turn.resumed": input.resume !== undefined } }),
     Effect.annotateSpans({ "session.id": sessionId, "turn.id": turnId }),
   );
 }

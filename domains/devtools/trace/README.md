@@ -11,6 +11,34 @@ web half (`./web`) shows it as the devtools' Trace panel.
 
 Their declarations are `TraceChannels` in [`@lemma/devtools`](../contract/src/index.ts).
 
+## The Trace panel
+
+Its web half adds the devtools' Trace panel, for the host's trace or the
+page's (`PageTrace`):
+
+- **Spans**: the traces (root spans) that hold a span the filter picks, newest
+  first; one opens to a waterfall of the spans under it, each bar where it ran
+  in the trace. A span selected (a root too, as it opens) shows its attributes,
+  and leads to its plugin, its thread's trajectory, and the filter for its turn
+  or tool call.
+- **Plugins**: each plugin's spans that match: how many, their own and total
+  time, p95, the slowest, and how many failed. Own time is a span's in the whole
+  trace, so what runs under it counts against it though the filter leaves it
+  out. A row narrows the filter to the plugin.
+- **Changes**: the composition's changes, newest first.
+- **Faults**: each plugin's recent faults, and the spans that failed.
+
+The filter is words, each narrowing what shows: `plugin:tools` (a plugin, or a
+domain's), `session:`, `turn:` (an id, or the Nth turn the trace kept),
+`step:` (an id, or an index in its turn: a step's spans and all its work), `tool:`
+(a tool's name or a call's id), `hook:`, `name:`, `status:error`, `slow:>5ms`
+or `slow:>1.5s`, any of them negated with `-`, and plain words matched in
+names, statuses, and values. The panel keeps its trace, view, and filter while
+the devtools show another. Other plugins lead here with
+`devtools.show(TRACE_PANEL, filter)` (`trace:page` picks the page's trace): the
+Plugins panel's **Spans**, and a trajectory record's **Show in trace**, which
+this plugin adds to `TrajectoryActions`.
+
 ## Rationale
 
 - **The host keeps, a plugin serves.** Only the host can trace its whole

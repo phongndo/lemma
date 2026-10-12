@@ -76,6 +76,26 @@ const usage = (input: number, output: number, cacheRead = 0): Usage => ({
   },
 });
 
+/** The mock's tools and system prompt, as the agent logs them with a request. */
+const MOCK_SPECS = ["bash", "read", "edit"].map((name) => ({ name, description: `The ${name} tool`, parameters: {} }));
+const MOCK_SYSTEM = "You are an expert coding assistant.\n\nWorking directory: " + CWD;
+
+/** A `request` event as the agent logs it: the prompt by source, and the handlers that shaped it (`AgentRequestHook`). */
+const mockRequest = (turnId: string, stepId: string, model: string, handlers: Extract<EventData, { type: "request" }>["handlers"]): EventData => ({
+  type: "request",
+  turnId,
+  stepId,
+  model,
+  composition: "mock-composition",
+  system: MOCK_SYSTEM,
+  tools: MOCK_SPECS,
+  contributions: [
+    { source: "agent.loop", kind: "system", label: "base", chars: MOCK_SYSTEM.length },
+    ...MOCK_SPECS.map((spec) => ({ source: `tools.${spec.name}`, kind: "tool" as const, label: spec.name, chars: JSON.stringify(spec).length })),
+  ],
+  ...(handlers === undefined ? {} : { handlers }),
+});
+
 const assistant = (
   content: AssistantMessage["content"],
   u: Usage,
@@ -617,19 +637,28 @@ export const createMockHost = (): Host => {
       at(),
       true,
     );
-    append(s, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
+    // What the agent logs of each request: the prompt by source, and the handlers that shaped it.
+    const request = (stepId: string, handlers: Extract<EventData, { type: "request" }>["handlers"]) => mockRequest("t1", stepId, MODELS[0]!.ref, handlers);
+    // A call that failed and was asked again, as the agent logs it: the attempt closes its step, and the next asks again.
+    append(s, { type: "step-start", turnId: "t1", stepId: "p0" }, at(), true);
+    append(s, request("p0", [{ source: "context.compaction", ms: 0.31 }]), at(), true);
     append(
       s,
       {
         type: "attempt",
         turnId: "t1",
-        stepId: "p1",
+        stepId: "p0",
         message: assistant([], usage(0, 0), "error", "529 overloaded_error: Overloaded"),
         timing: { startedAt: t, endedAt: at(900) },
+        failure: { kind: "transient" },
+        retry: { reason: "failure", attempt: 1, at: t + 1200 },
       },
       t,
       true,
     );
+    append(s, { type: "step-end", turnId: "t1", stepId: "p0" }, at(), true);
+    append(s, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
+    append(s, request("p1", [{ source: "context.compaction", ms: 0.27 }]), at(), true);
     const callA = { type: "toolCall" as const, id: "c1", name: "bash", arguments: { command: "pnpm --filter @lemma/client test -- --reporter=dot" } };
     const callB = {
       type: "toolCall" as const,
@@ -670,6 +699,7 @@ export const createMockHost = (): Host => {
         stepId: "p1",
         timing: { startedAt: t, endedAt: at(2400) },
         details: { exitCode: 1 },
+        credit: { handlers: [{ source: "tools.bash", ms: 0.12 }], checks: [{ source: "plan-mode", allowed: true, ms: 0.08 }] },
         message: {
           role: "toolResult",
           toolCallId: "c1",
@@ -706,7 +736,9 @@ export const createMockHost = (): Host => {
       t,
       true,
     );
-    append(s, { type: "step-end", turnId: "t1", stepId: "p1" }, at(), true);
+    append(s, { type: "step-end", turnId: "t1", stepId: "p1", decision: { result: "continue", why: "the model asked for tools" } }, at(), true);
+    append(s, { type: "step-start", turnId: "t1", stepId: "p2" }, at(), true);
+    append(s, request("p2", [{ source: "context.compaction", ms: 0.27 }]), at(), true);
     const callC = {
       type: "toolCall" as const,
       id: "c3",
@@ -757,10 +789,30 @@ export const createMockHost = (): Host => {
           timestamp: t,
           content: [{ type: "text", text: "Edited packages/client/tests/session-log.test.ts" }],
         },
+        credit: { checks: [{ source: "plan-mode", allowed: true, ms: 0.06 }] },
       },
       t,
       true,
     );
+    const edited = sessions.get(s)!.events.at(-1)!;
+    append(s, { type: "step-end", turnId: "t1", stepId: "p2", decision: { result: "continue", why: "the model asked for tools" } }, at(), true);
+    append(s, { type: "step-start", turnId: "t1", stepId: "p3" }, at(), true);
+    // The history had grown past the compaction threshold: the request summarized what came before the edit.
+    append(
+      s,
+      {
+        type: "compaction",
+        summary: "They asked why the session-log test fails on CI; the tests showed SessionLog > holds events beyond a gap failing.",
+        firstKeptId: edited.id,
+        tokensBefore: 18200,
+        source: "context.compaction",
+        turnId: "t1",
+        usage: usage(18200, 140),
+      },
+      at(),
+      true,
+    );
+    append(s, request("p3", [{ source: "context.compaction", ms: 1840.5, changed: ["+compaction"] }]), at(), true);
     append(
       s,
       {
@@ -781,6 +833,7 @@ export const createMockHost = (): Host => {
       t,
       true,
     );
+    append(s, { type: "step-end", turnId: "t1", stepId: "p3", decision: { result: "stop", why: "the model stopped (stop)" } }, at(), true);
     append(s, { type: "turn-end", turnId: "t1", reason: "done" }, at(100), true);
 
     const s2 = create(`${HOME}/code/website`, t0 - 86400_000 * 2).id;
@@ -856,18 +909,28 @@ export const createMockHost = (): Host => {
     const by = available.find((model) => model.ref === options?.model) ?? available[0] ?? MODELS[0]!;
     const turnId = id("t");
     const started = Date.now();
-    const turnSpan = mockTrace.begin("agent.turn", { "session.id": sessionId, "turn.id": turnId, "turn.resumed": false });
+    const turnSpan = mockTrace.begin("agent.turn", { "session.id": sessionId, "turn.id": turnId, "turn.resumed": false, "plugin.id": "agent.loop" });
+    /** Each step's number in the turn, which every span of its work carries, as the agent marks them. */
+    const indexOf = new Map<string, number>();
     /** A step's spans as the agent makes them: the request and its handlers, then the model call while it streams. */
-    const stepSpan = (stepId: string, index: number) =>
-      mockTrace.begin("agent.step", { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "step.index": index }, turnSpan.id);
+    const stepSpan = (stepId: string, index: number) => {
+      indexOf.set(stepId, index);
+      return mockTrace.begin(
+        "agent.step",
+        { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "step.index": index, "plugin.id": "agent.loop" },
+        turnSpan.id,
+      );
+    };
     const asked = async (step: MockSpan, stepId: string, message: AssistantMessage) => {
-      const where = { "session.id": sessionId, "turn.id": turnId, "step.id": stepId };
-      const request = mockTrace.begin("agent.request", where, step.id);
+      append(sessionId, { type: "step-start", turnId, stepId });
+      append(sessionId, mockRequest(turnId, stepId, by.ref, [{ source: "context.compaction", ms: 0.29 }]));
+      const where = { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "step.index": indexOf.get(stepId)! };
+      const request = mockTrace.begin("agent.request", { ...where, "plugin.id": "agent.loop" }, step.id);
       for (const plugin of ["agent.loop", "context.compaction"]) {
         mockTrace.begin("core.hook", { ...where, "plugin.id": plugin, "hook.name": "lemma/agent.request", "hook.in.model": by.ref }, request.id).end();
       }
       request.end();
-      const model = mockTrace.begin("agent.model", { ...where, "llm.model": by.ref }, step.id);
+      const model = mockTrace.begin("agent.model", { ...where, "llm.model": by.ref, "plugin.id": "agent.loop" }, step.id);
       const ok = await stream(sessionId, turnId, stepId, message);
       model.end(ok ? "ok" : "interrupted");
       return ok;
@@ -875,7 +938,15 @@ export const createMockHost = (): Host => {
     const toolSpan = (step: MockSpan, stepId: string, call: { readonly id: string; readonly name: string }) =>
       mockTrace.begin(
         `tools.execute ${call.name}`,
-        { "session.id": sessionId, "turn.id": turnId, "step.id": stepId, "tool.call.id": call.id, "tool.name": call.name, "plugin.id": "tools.registry" },
+        {
+          "session.id": sessionId,
+          "turn.id": turnId,
+          "step.id": stepId,
+          "step.index": indexOf.get(stepId)!,
+          "tool.call.id": call.id,
+          "tool.name": call.name,
+          "plugin.id": "tools.registry",
+        },
         step.id,
       );
     append(sessionId, { type: "turn-start", turnId, model: by.ref });
@@ -940,6 +1011,7 @@ export const createMockHost = (): Host => {
       turnId,
       stepId: step1,
       details: { exitCode: 0 },
+      credit: { handlers: [{ source: "tools.bash", ms: 0.11 }] },
       timing: { startedAt: Date.now() - 900, endedAt: Date.now() },
       message: {
         role: "toolResult",
@@ -952,6 +1024,7 @@ export const createMockHost = (): Host => {
     });
     listing.end();
     span1.end();
+    append(sessionId, { type: "step-end", turnId, stepId: step1, decision: { result: "continue", why: "the model asked for tools" } });
     // A second step: two more calls, which the chat gathers with the first under one line.
     const stepB = id("p");
     const sB = Date.now();
@@ -991,6 +1064,7 @@ export const createMockHost = (): Host => {
       });
     }
     spanB.end();
+    append(sessionId, { type: "step-end", turnId, stepId: stepB, decision: { result: "continue", why: "the model asked for tools" } });
     if (cancelled.has(sessionId)) return end("cancelled");
     // Steers sent meanwhile join the turn here, between its steps.
     const steers = queueOf(sessionId).filter((queued) => queued.prompt.mode === "steer");
@@ -1029,6 +1103,7 @@ export const createMockHost = (): Host => {
     total = { ...total, input: total.input + m2.usage.input, output: total.output + m2.usage.output };
     append(sessionId, { type: "message", turnId, stepId: step2, message: m2, timing: { startedAt: s2, firstTokenAt: s2 + 250, endedAt: Date.now() } });
     span2.end();
+    append(sessionId, { type: "step-end", turnId, stepId: step2, decision: { result: "stop", why: "the model stopped (stop)" } });
     end("done");
     const info = sessions.get(sessionId)!.info;
     if (info.title === undefined) append(sessionId, { type: "title", title: text.slice(0, 48) });

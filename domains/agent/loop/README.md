@@ -84,7 +84,7 @@ Effect.gen(function* () {
 A turn runs in an `agent.turn` span, each step in an `agent.step` span (with
 `agent.request`, `agent.model`, and `agent.tools` inside), and every span of
 their work, the plugins' hooks included, carries `session.id`, `turn.id`,
-`step.id`, and for a tool call `tool.call.id`: the host's trace
+`step.id`, `step.index`, and for a tool call `tool.call.id`: the host's trace
 ([devtools.trace](../../devtools/trace/README.md)) shows a turn's work by them.
 
 `turn-end` closes every turn the agent finishes. On cancellation or failure the

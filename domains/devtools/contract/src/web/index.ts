@@ -18,6 +18,12 @@ export const DevtoolsPanels = defineSlot<DevtoolsPanel>("devtools.panels");
 /** The devtools panel showing one plugin: everything it does, and what depends on it. */
 export const PLUGIN_PANEL = "devtools.plugins";
 
+/**
+ * The devtools panel showing a trace (`devtools.trace`'s, when it runs): its subject is a filter (`plugin:tools.bash`,
+ * `turn:<id>`, `tool:<call id>`; see its README). A panel links to it only while `DevtoolsPanels` holds it.
+ */
+export const TRACE_PANEL = "devtools.trace";
+
 export interface DevtoolsService {
   readonly open: Accessor<boolean>;
   /** Opens or closes them; without `open`, toggles. */
