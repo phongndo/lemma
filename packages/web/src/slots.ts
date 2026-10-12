@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import type { Accessor, Component, Setter } from "solid-js";
 import { Registry } from "@lemma/core";
-import type { Contribution, PluginContext, Registries } from "@lemma/core";
+import type { Contribution, PhaseOptions, PluginContext, Registries } from "@lemma/core";
 import { Cause, Effect } from "effect";
 import type { Context, Stream } from "effect";
 
@@ -14,27 +14,60 @@ import type { Context, Stream } from "effect";
  */
 export type Slot<T> = Registry<SlotItem<T>>;
 
-export interface SlotOptions {
-  /** `first`: one item shows, the first by order (a region, a part); `all`: every item does, in order (the default). */
+export interface SlotOptions extends PhaseOptions {
+  /** `first`: one item shows, the first in order (a region, a part); `all`: every item does, in order (the default). */
   readonly shows?: "first" | "all";
 }
 
-const named = new Map<string, { readonly slot: Slot<any>; shows: "first" | "all"; fallback?: Component<any> }>();
+/**
+ * The phases of a slot that shows one item, unless it declares its own: a bundled plugin adds its default in
+ * `default`, and an item naming no phase goes in `replace`, so it shows instead, whatever the numbers.
+ */
+export const FIRST_WINS: PhaseOptions = Object.freeze({ phases: Object.freeze(["replace", "default"]), defaultPhase: "replace" });
+
+const named = new Map<string, { readonly slot: Slot<any>; readonly shows: "first" | "all"; fallback?: Component<any> }>();
+
+/** The phases a declaration gives its slot; a default phase without phases is passed on, for `Registry.make` to refuse. */
+const phasesOf = (options: SlotOptions): PhaseOptions =>
+  options.phases !== undefined || options.defaultPhase !== undefined
+    ? {
+        ...(options.phases === undefined ? {} : { phases: options.phases }),
+        ...(options.defaultPhase === undefined ? {} : { defaultPhase: options.defaultPhase }),
+      }
+    : options.shows === "first"
+      ? FIRST_WINS
+      : {};
+
+/** A part's slot (`definePart`) is named `part.<name>`. */
+const PART = "part.";
 
 /**
- * The slot with this name: the same token each time, so a web half loaded
- * again after an edit, or two files naming one slot, share it.
+ * The slot with this name: the same token each time, so a web half loaded again after an edit, or two files naming
+ * one slot, share it. The first declaration fixes what shows and the phases; naming the slot again without options
+ * finds it, and with different ones throws, as a slot cannot be two things. A part's slot (`part.<name>`) named
+ * without options before its part is declared (one web half adding to another's part, loaded first) is a part's.
  */
-export const defineSlot = <T>(name: string, options: SlotOptions = {}): Slot<T> => {
-  let found = named.get(name);
+export const defineSlot = <T>(name: string, given: SlotOptions = {}): Slot<T> => {
+  const found = named.get(name);
+  const options: SlotOptions =
+    found === undefined && given.shows === undefined && given.phases === undefined && given.defaultPhase === undefined && name.startsWith(PART)
+      ? { shows: "first" }
+      : given;
+  const declared: SlotOptions = { shows: options.shows ?? "all", ...phasesOf(options) };
   if (found === undefined) {
-    found = { slot: Registry.make<SlotItem<any>>(name, { key: (item) => item.id }), shows: options.shows ?? "all" };
-    named.set(name, found);
-  } else if (options.shows !== undefined) found.shows = options.shows;
+    const slot = Registry.make<SlotItem<any>>(name, { key: (item) => item.id, ...phasesOf(options) });
+    named.set(name, { slot, shows: declared.shows! });
+    return slot as Slot<T>;
+  }
+  if (options.shows !== undefined || options.phases !== undefined || options.defaultPhase !== undefined) {
+    const { phases, defaultPhase } = found.slot.options;
+    const same = declared.shows === found.shows && declared.defaultPhase === defaultPhase && JSON.stringify(declared.phases) === JSON.stringify(phases);
+    if (!same) throw new Error(`${name} is declared already, showing ${found.shows}${phases === undefined ? "" : ` in phases ${phases.join(", ")}`}`);
+  }
   return found.slot as Slot<T>;
 };
 
-/** Every slot defined so far, and whether one item or all of them show: what the devtools list. */
+/** Every slot defined so far, and whether one item or all of them show (its phases are `slot.options.phases`): what the devtools list. */
 export const definedSlots = (): readonly { readonly slot: Slot<unknown>; readonly shows: "first" | "all" }[] => [...named.values()];
 
 /** A region filled by one component: the first item wins. */
@@ -44,9 +77,10 @@ export interface Region<P extends Record<string, any> = {}> {
 
 /**
  * A replaceable piece of UI that plugins draw with: a region slot, named
- * `part.<name>`, whose first item by order renders wherever the part is used
- * (see `ui/parts.tsx`). A plugin replaces a part by adding an item with a
- * lower order than the default's; `P` is the props every provider takes.
+ * `part.<name>`, whose first item renders wherever the part is used (see
+ * `ui/parts.tsx`). Its phases are `FIRST_WINS`: the plugin that provides its
+ * default adds it in `default`, and a plugin replaces it by adding an item
+ * that names no phase; `P` is the props every provider takes.
  *
  * `fallback` renders wherever the part is drawn while no plugin provides it:
  * plain native markup, belonging to no plugin. Without one, a part nothing
@@ -57,7 +91,7 @@ export interface Region<P extends Record<string, any> = {}> {
  */
 export type Part<P extends Record<string, any>> = Slot<Region<P>>;
 export const definePart = <P extends Record<string, any>>(name: string, fallback?: Component<P>): Part<P> => {
-  const part = defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
+  const part = defineSlot<Region<P>>(`${PART}${name}`, { shows: "first" });
   if (fallback === undefined) return part;
   const entry = named.get(part.name)!;
   if (entry.fallback !== undefined && entry.fallback !== fallback) throw new Error(`${part.name} has a fallback from its declaration, which nothing changes`);
@@ -68,17 +102,17 @@ export const definePart = <P extends Record<string, any>>(name: string, fallback
 /** What renders for `slot` while nothing provides it: a part's fallback (`definePart`), or undefined. */
 export const fallbackOf = (slot: Slot<any>): Component<any> | undefined => named.get(slot.name)?.fallback;
 
-/** Where the defaults of parts are added: a replacement uses a lower order. */
-export const DEFAULT_PART_ORDER = 100;
-
 /**
- * Every item has an id, unique within its slot by convention. Lower `order`
- * comes first; equal orders go by the contributing plugin's id, then the
- * order that plugin added them in. Where a slot shows one item (a region),
- * the first one does, so a plugin takes over a region by adding with a lower
- * order than the item it replaces, or by the bundled plugin being turned off.
+ * Every item has an id, unique within its slot by convention. Items come in
+ * the slot's phases' order, when it declares phases (`phase`, its default
+ * phase when absent); within a phase, lower `order` comes first, and equal
+ * orders go by the contributing plugin's id, then the order that plugin added
+ * them in. Where a slot shows one item (a region, a part), the first one
+ * does: a plugin takes over a region by adding an item that names no phase,
+ * as the bundled default is in `default` (`FIRST_WINS`), or by the bundled
+ * plugin being turned off.
  */
-export type SlotItem<T> = T & { readonly id: string; readonly order?: number };
+export type SlotItem<T> = T & { readonly id: string; readonly phase?: string; readonly order?: number };
 
 type Contributor = Context.Service.Shape<typeof PluginContext>;
 
@@ -98,8 +132,10 @@ export interface SlotsService {
   readonly owner: <T>(slot: Slot<T>, id: string) => string | undefined;
   /** The id of the plugin that added `item`, while it is in a slot (`Contained` draws it as that plugin's). */
   readonly pluginOf: (item: SlotItem<unknown>) => string | undefined;
-  /** The slot's items in order, each with the plugin that added it and its order. Reactive. */
-  readonly contributions: <T>(slot: Slot<T>) => readonly { readonly item: SlotItem<T>; readonly pluginId: string; readonly order: number }[];
+  /** The slot's items in order, each with the plugin that added it, its phase (when the slot declares phases), and its order. Reactive. */
+  readonly contributions: <T>(
+    slot: Slot<T>,
+  ) => readonly { readonly item: SlotItem<T>; readonly pluginId: string; readonly phase?: string; readonly order: number }[];
   /**
    * An item that threw while drawing (`Contained` calls this) or as another
    * plugin used it (the keymap running an action): reported as a
@@ -175,7 +211,7 @@ export function createSlots(
       if (owner === undefined) throw new Error("Slots: add through a plugin's own slots, the ones its setup receives");
       // A stopping plugin's effects can still run; what they add would leave with it at once.
       const remove = run(
-        owner.add(slot, item, { order: item.order ?? 0 }).pipe(
+        owner.add(slot, item, { ...(item.phase === undefined ? {} : { phase: item.phase }), order: item.order ?? 0 }).pipe(
           Effect.catchIf(
             (error) => error._tag === "CoreClosed" || error.reason === "OwnerClosed",
             () => Effect.succeed(undefined),
@@ -214,7 +250,7 @@ export function createSlots(
     owner: (slot, id) => signal(slot)[0]().find((contribution) => (contribution.item as SlotItem<unknown>).id === id)?.pluginId,
     pluginOf: (item) => contributors.get(item)?.id,
     contributions: <T>(slot: Slot<T>) =>
-      signal(slot)[0]().map((contribution) => ({ item: contribution.item as SlotItem<T>, pluginId: contribution.pluginId, order: contribution.order })),
+      signal(slot)[0]().map(({ item, pluginId, phase, order }) => ({ item: item as SlotItem<T>, pluginId, ...(phase === undefined ? {} : { phase }), order })),
     as: service,
   });
   return service(undefined);

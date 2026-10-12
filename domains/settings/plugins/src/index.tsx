@@ -383,9 +383,9 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
   const all = () => inspector.services[props.kind].list();
   const plugin = () => props.plugin;
   /** Where its handler runs among every plugin's handlers of that hook. */
-  const position = (name: string, order: number) => {
-    const chain = hookChain(all(), name);
-    const index = chain.findIndex((entry) => entry.plugin === plugin().id && entry.order === order);
+  const position = (hook: { readonly name: string; readonly phase?: string | undefined; readonly order: number }) => {
+    const chain = hookChain(all(), hook.name);
+    const index = chain.findIndex((entry) => entry.plugin === plugin().id && entry.phase === hook.phase && entry.order === hook.order);
     return chain.length > 1 ? `${index + 1} of ${chain.length}` : "only handler";
   };
   // A part's slot (`part.*`) is how a web half takes over drawing a piece: an intercept, in the guide's shapes.
@@ -428,7 +428,7 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
                   <span class="capability">{hook.name}</span>
                   <span class="muted">
                     {" "}
-                    order {hook.order} · {position(hook.name, hook.order)}
+                    {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order} · {position(hook)}
                   </span>
                 </li>
               )}

@@ -17,10 +17,10 @@ Projects, git, directories, and file search. Its contract is [`@lemma/workspace`
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
 
-| Shape     | What the contract offers                                                                                                  |
-| --------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Add       | `FileSearchers`: a file search, the lowest order first. In the web app, `ProjectActions` and `WorkspaceBarItems`          |
-| Intercept | Nothing                                                                                                                   |
-| Observe   | Nothing: clients ask again                                                                                                |
-| Call      | `Workspace`: status, branches, worktrees, directories; `searchFiles`; clients call `WorkspaceChannels` and `FileChannels` |
-| Serve     | `Workspace`, with `serveWorkspace` and `serveFiles`: a plugin providing it replaces `workspace.local`                     |
+| Shape     | What the contract offers                                                                                                                                                    |
+| --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Add       | `FileSearchers`: a file search; the first answers, and one that names no phase comes before the bundled `default`. In the web app, `ProjectActions` and `WorkspaceBarItems` |
+| Intercept | Nothing                                                                                                                                                                     |
+| Observe   | Nothing: clients ask again                                                                                                                                                  |
+| Call      | `Workspace`: status, branches, worktrees, directories; `searchFiles`; clients call `WorkspaceChannels` and `FileChannels`                                                   |
+| Serve     | `Workspace`, with `serveWorkspace` and `serveFiles`: a plugin providing it replaces `workspace.local`                                                                       |

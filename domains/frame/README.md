@@ -21,7 +21,7 @@ What the contract offers in each of the [five shapes](../../docs/plugins.md#the-
 | Shape     | What the contract offers                                                    |
 | --------- | --------------------------------------------------------------------------- |
 | Add       | `Layers` (what covers the page), `Docks`, `SidebarActions`, `SidebarFooter` |
-| Intercept | `MainRegion` and `SidebarRegion`: the first item by order draws the region  |
+| Intercept | `MainRegion` and `SidebarRegion`: the first item draws the region           |
 | Observe   | `Layout`'s signals                                                          |
 | Call      | `Dialogs`, `Layout`                                                         |
 | Serve     | `Dialogs`, `Layout`: a plugin providing one replaces the frame's            |

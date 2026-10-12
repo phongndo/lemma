@@ -80,7 +80,13 @@ export const PluginSource = Schema.Literals(["bundled", "user", "project"]);
 export type PluginSource = typeof PluginSource.Type;
 
 /** A hook a plugin intercepts, with its handler's order (lower runs first). */
-export const HookUse = Schema.Struct({ name: Schema.String, order: Schema.Number });
+export const HookUse = Schema.Struct({
+  name: Schema.String,
+  /** Its phase, and that phase's place among the hook's phases (first 0), when the hook declares phases: they order before `order`. */
+  phase: Schema.optional(Schema.String),
+  rank: Schema.optional(Schema.Number),
+  order: Schema.Number,
+});
 export type HookUse = typeof HookUse.Type;
 
 /** A registry a plugin contributes to: how many of its items are there, and their keys where the registry names items. */

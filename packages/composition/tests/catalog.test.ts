@@ -204,6 +204,14 @@ describe("wiring and faults", () => {
             { pluginId: "agent", order: 10 },
           ],
         },
+        {
+          name: "lemma/agent.request",
+          phases: ["shape", "fit"],
+          handlers: [
+            { pluginId: "tools", phase: "shape", order: 50 },
+            { pluginId: "agent", phase: "fit", order: -50 },
+          ],
+        },
       ],
       events: [{ name: "lemma/turn.ended", observers: ["agent", "gateway"] }],
       faults: history.get(),
@@ -211,7 +219,10 @@ describe("wiring and faults", () => {
       pinned: {},
     });
     const agent = entries.find((entry) => entry.id === "agent")!;
-    expect(agent.hooks).toEqual([{ name: "lemma/llm.request", order: 10 }]);
+    expect(agent.hooks).toEqual([
+      { name: "lemma/llm.request", order: 10 },
+      { name: "lemma/agent.request", phase: "fit", rank: 1, order: -50 },
+    ]);
     expect(agent.observes).toEqual(["lemma/turn.ended"]);
     expect(agent.faults?.map((record) => [record.sequence, record.at, record.message])).toEqual([
       [3, 30, 'Plugin "agent" failed during observe lemma/turn.ended: three'],

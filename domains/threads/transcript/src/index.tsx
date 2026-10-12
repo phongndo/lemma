@@ -53,7 +53,7 @@ import { workEntries } from "./work.ts";
 import type { WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
-import { Client, Router, Slots, defineWebPlugin, DEFAULT_PART_ORDER } from "@lemma/web";
+import { Client, Router, Slots, defineWebPlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, Spinner, CopyButton } from "@lemma/look";
 import styles from "./chat.css?inline";
@@ -767,9 +767,9 @@ export default defineWebPlugin({
       now,
       toolView: (name) => slots.get(ToolViews, name),
     };
-    // Its own parts' defaults; any plugin replaces one by adding with a lower order.
+    // Its own parts' defaults, in the phase `default`: any plugin replaces one by adding one of its own.
     const part = <P extends Record<string, any>>(slot: Part<P>, component: Component<P>) =>
-      slots.add(slot, { id: `chat.${slot.name.slice("part.chat.".length)}`, order: DEFAULT_PART_ORDER, component });
+      slots.add(slot, { id: `chat.${slot.name.slice("part.chat.".length)}`, phase: "default", component });
     part(ChatUserPart, UserView);
     part(ChatThinkingPart, ThinkingView);
     part(ChatToolPart, toolView({ client, threads, slots }));

@@ -2,8 +2,8 @@
 
 The shared parts' defaults: the markdown, dialogs, menus, switches, search
 fields, copy buttons, setting rows, choices, settings forms, icons, file
-icons, and provider logos every view draws with. Adds a default at
-`DEFAULT_PART_ORDER`, with the id `kit.<part>` (`kit.dialog`), to each part
+icons, and provider logos every view draws with. Adds a default in the phase
+`default`, with the id `kit.<part>` (`kit.dialog`), to each part
 [`@lemma/look`](../contract/src/parts.tsx) declares (`MarkdownPart`,
 `DialogPart`, `PopoverPart`, `TogglePart`, `SearchFieldPart`,
 `CopyButtonPart`, `SettingRowPart`, `SegmentedPart`, `ConfigFormPart`,
@@ -14,8 +14,8 @@ app hands web halves as `api.defaults`, to wrap or fall back to.
 
 ## Behavior
 
-- **Replacing it.** A plugin replaces one part everywhere by adding to it
-  below `DEFAULT_PART_ORDER`; one with the id `look.kit` replaces all of
+- **Replacing it.** A plugin replaces one part everywhere by adding to it an
+  item that names no phase; one with the id `look.kit` replaces all of
   them, and a part it leaves out draws as though `look.kit` were off.
 - **With it off**, a part with a plain fallback
   ([`fallbacks.tsx`](../contract/src/fallbacks.tsx)) draws native markup:

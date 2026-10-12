@@ -134,21 +134,21 @@ export interface PromptSection {
 }
 
 /**
- * The system prompt's sections, in order (`PluginContext.add(PromptSections, section, { order })`): the agent asks each
- * for its text, then runs `AgentRequestHook`, whose handlers change or drop sections. The agent's own are at
- * `SectionOrder`: a section between them keeps the prompt's stable prefix long, as `environment`'s date changes daily.
+ * The system prompt's sections, in order: the agent asks each for its text, then runs `AgentRequestHook`, whose
+ * handlers change or drop sections. Its phases are `base` (the agent's base prompt), `body` (where a section naming no
+ * phase goes, ordered within it by `order`), and `environment` (the agent's, last): a section in `body` keeps the
+ * prompt's stable prefix long, as `environment`'s date changes daily.
  */
 export const PromptSections = Registry.make<PromptSection>("lemma/agent.sections", {
   key: (section) => section.id,
   unique: true,
+  phases: ["base", "body", "environment"],
+  defaultPhase: "body",
   check: (value) =>
     typeof value === "object" && value !== null && typeof (value as PromptSection).id === "string" && typeof (value as PromptSection).text === "function"
       ? undefined
       : "A prompt section is { id: string, text: (request) => string | undefined }",
 });
-
-/** Where the agent's own sections sit among `PromptSections`: the base prompt first, the environment last. */
-export const SectionOrder = { base: -1000, environment: 1000 } as const;
 
 /**
  * The model-facing request before it is logged and sent. Handlers of
@@ -226,8 +226,14 @@ export const AgentInputHook = Hook.make<PromptInput, PromptDecision, AgentError>
   },
 });
 
-/** Runs before every model call. Skills, project context, and prompt plugins contribute here. */
+/**
+ * Runs before every model call. Skills, project context, and prompt plugins contribute here. Its phases are `shape`
+ * (where a handler naming no phase goes: it adds and changes sections and tools) and `fit` (after every `shape` handler,
+ * so it sees the request they made: compaction sizes it against the model's window).
+ */
 export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request", {
+  phases: ["shape", "fit"],
+  defaultPhase: "shape",
   summary: {
     input: (draft) => ({ model: draft.model, sections: draft.sections.length, tools: draft.tools.length }),
     output: (plan) => ({ model: plan.model, sections: plan.sections.length, tools: plan.tools.length }),

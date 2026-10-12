@@ -8,7 +8,7 @@ import { Channels, creditOf, HostControl, inChainOrder, Inspectors, InteractionO
 import type { IdSource, ResultCredit } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { Agent, AgentError, AgentInputHook, PromptSections, QueueChanged, SectionOrder, serveAgent } from "@lemma/agent";
+import { Agent, AgentError, AgentInputHook, PromptSections, QueueChanged, serveAgent } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
 import { ToolOutput, ToolRunner } from "@lemma/tools";
@@ -235,10 +235,8 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const base = instance * REVISIONS_PER_INSTANCE;
       const registries = yield* Registries;
       // Its own sections, beside any other plugin's.
-      yield* owner.add(PromptSections, baseSection(config.systemPrompt), { order: SectionOrder.base });
-      yield* owner.add(PromptSections, environmentSection(config.cli, options.platform ?? `${os.platform()} (${os.arch()})`), {
-        order: SectionOrder.environment,
-      });
+      yield* owner.add(PromptSections, baseSection(config.systemPrompt), { phase: "base" });
+      yield* owner.add(PromptSections, environmentSection(config.cli, options.platform ?? `${os.platform()} (${os.arch()})`), { phase: "environment" });
       /**
        * Each section's text for the request, as part of its plugin's lifetime: one whose plugin a reload replaced since it
        * was listed is found again by its id, and one whose plugin has left is left out. Empty text (or none) is no section.

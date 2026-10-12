@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Context, Deferred, Effect, Exit, Fiber, Layer, Option, Tracer } from "effect";
 import { definePlugin, Hook, Hooks, makeCore, PluginContext } from "../src/index.ts";
-import type { Handler, Next } from "../src/index.ts";
+import type { Handler, Next, PluginFault } from "../src/index.ts";
 import { failure, run } from "./support.ts";
 
 const point = Hook.make<number, number, string>("test/compute");
@@ -176,6 +176,60 @@ describe("plugin-owned hooks", () => {
         }
       }),
     );
+  });
+
+  test("a hook's phases order its handlers before their numbers do, and name the one a handler omits", async () => {
+    const shaped = Hook.make<string, string>("test/phased", { phases: ["shape", "fit"], defaultPhase: "shape" });
+    const handler = (id: string, options: { readonly phase?: string; readonly order?: number }) =>
+      definePlugin({
+        id,
+        layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(shaped, (input, next) => next(`${input} ${id}`), options))),
+      });
+    const steps: { readonly pluginId: string; readonly phase?: string }[] = [];
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([
+          handler("fits", { phase: "fit", order: -10_000 }),
+          handler("shapes", { order: 10_000 }),
+          handler("also", { phase: "shape" }),
+        ]);
+        const value = yield* core.run(
+          Effect.flatMap(Hooks, (hooks) =>
+            hooks.invoke(shaped, "x", Effect.succeed, {
+              onStep: (step) => void steps.push({ pluginId: step.pluginId, ...(step.phase === undefined ? {} : { phase: step.phase }) }),
+            }),
+          ),
+        );
+        expect(value).toBe("x also shapes fits");
+        expect(steps.map((step) => step.phase)).toEqual(["fit", "shape", "shape"]);
+        expect((yield* core.inspect).hooks).toEqual([
+          {
+            name: "test/phased",
+            phases: ["shape", "fit"],
+            handlers: [
+              { pluginId: "also", phase: "shape", order: 0 },
+              { pluginId: "shapes", phase: "shape", order: 10_000 },
+              { pluginId: "fits", phase: "fit", order: -10_000 },
+            ],
+          },
+        ]);
+        const unknown = yield* Effect.exit(makeCore([handler("lost", { phase: "late" })]));
+        expect(Option.getOrThrow(Cause.findErrorOption((failure(unknown) as PluginFault).cause))).toMatchObject({
+          reason: "InvalidOrder",
+          message: 'Hook "test/phased" has no phase "late": its phases are shape, fit',
+        });
+        const unphased = definePlugin({
+          id: "unphased",
+          layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(point, (input, next) => next(input), { phase: "fit" }))),
+        });
+        const refused = yield* Effect.exit(makeCore([unphased]));
+        expect(Option.getOrThrow(Cause.findErrorOption((failure(refused) as PluginFault).cause))).toMatchObject({ reason: "InvalidOrder" });
+      }),
+    );
+    expect(() => Hook.make("test/none", { phases: [], defaultPhase: "a" })).toThrow("declares phases, but none");
+    expect(() => Hook.make("test/twice", { phases: ["a", "a"], defaultPhase: "a" })).toThrow("names a phase twice");
+    expect(() => Hook.make("test/stray", { phases: ["a"], defaultPhase: "b" })).toThrow("needs a default phase");
+    expect(() => Hook.make("test/orphan", { defaultPhase: "b" })).toThrow("has a default phase but no phases");
   });
 
   test("next cannot execute twice, even when the same lazy Effect is reused", async () => {

@@ -15,7 +15,7 @@ requires: a plugin providing `Settings` takes its place. No config.
 ## Behavior
 
 - **It takes the sidebar's place.** While settings show, it adds its list of
-  sections to `SidebarRegion` at order -10, ahead of the threads, so the shell
+  sections to `SidebarRegion` (in `replace`, at order -10), ahead of the threads, so the shell
   sizes, collapses, and makes a drawer of it as it does the threads.
 - **Search** finds the entries whose `text` holds every word of the query, in
   any order and case, and the list of sections shows how many each matched.

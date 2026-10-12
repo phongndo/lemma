@@ -3,6 +3,7 @@ import type { Context } from "effect";
 import { CoreClosed, RegistryError } from "../errors.ts";
 import type { PluginContext, PluginIdentity } from "../hooks.ts";
 import { Admitted } from "../registries.ts";
+import { placeIn } from "./phases.ts";
 import type { ContributeOptions, Contribution, Registries, Registry } from "../registries.ts";
 
 interface Entry {
@@ -32,6 +33,8 @@ interface Item {
   readonly owner: Owner;
   readonly entry: Entry;
   readonly contribution: Contribution<unknown>;
+  /** Its phase's place among the registry's phases (0 when it declares none). */
+  readonly rank: number;
   readonly sequence: number;
   readonly key: string | undefined;
   active: boolean;
@@ -60,8 +63,11 @@ const leave = (item: Item): void => {
 
 export interface RegistrySnapshot {
   readonly name: string;
+  /** The registry's phases, first first, when it declares them: its items come in them, then by order. */
+  readonly phases?: readonly string[];
   readonly items: readonly {
     readonly pluginId: string;
+    readonly phase?: string;
     readonly order: number;
     readonly key?: string;
   }[];
@@ -112,10 +118,16 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
       .sort((a, b) => Order.String(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
+        ...((entry.token as Registry<unknown>).options.phases === undefined ? {} : { phases: (entry.token as Registry<unknown>).options.phases }),
         items: entry.all
           .filter((item) => item.active && item.owner.visible)
           .sort(byOrder)
-          .map((item) => ({ pluginId: item.owner.identity.id, order: item.contribution.order, ...(item.key === undefined ? {} : { key: item.key }) })),
+          .map(({ owner, contribution: { phase, order }, key }) => ({
+            pluginId: owner.identity.id,
+            ...(phase === undefined ? {} : { phase }),
+            order,
+            ...(key === undefined ? {} : { key }),
+          })),
       }));
   }
 
@@ -151,6 +163,15 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
               message: "Contribution order must be finite",
             });
           }
+          const placed = placeIn(registry.options, options.phase);
+          if (typeof placed === "string") {
+            return yield* new RegistryError({
+              reason: "InvalidOrder",
+              registry: registry.name,
+              pluginId: identity.id,
+              message: `Registry "${registry.name}" ${placed}`,
+            });
+          }
           const entry = yield* this.entry(registry);
           const problem = entry.check?.(value);
           if (problem !== undefined) {
@@ -179,7 +200,8 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
           const item: Item = {
             owner,
             entry,
-            contribution: Object.freeze({ item: value, pluginId: identity.id, order }),
+            contribution: Object.freeze({ item: value, pluginId: identity.id, ...(placed.phase === undefined ? {} : { phase: placed.phase }), order }),
+            rank: placed.rank,
             sequence: this.sequence++,
             key,
             active: true,
@@ -369,7 +391,7 @@ export class RegistryStore implements Context.Service.Shape<typeof Registries> {
 }
 
 const byOrder = (a: Item, b: Item) =>
-  a.contribution.order - b.contribution.order || Order.String(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence;
+  a.rank - b.rank || a.contribution.order - b.contribution.order || Order.String(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence;
 
 /** Recomputes the visible array and tells readers, only when what they see changed. */
 function update(entry: Entry): void {

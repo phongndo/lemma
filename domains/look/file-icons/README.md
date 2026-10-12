@@ -2,8 +2,8 @@
 
 Shows each file as its type's icon (TypeScript, Rust, Nix, a Dockerfile, …),
 in that type's color, wherever the app names a file. Adds to `FileIconPart`
-([`@lemma/look`](../contract/src/parts.tsx)) just below `DEFAULT_PART_ORDER`,
-over `look.kit`'s plain icons, which return when it is turned off; a folder
+([`@lemma/look`](../contract/src/parts.tsx)) first among the defaults (the phase
+`default`, at order -1), over `look.kit`'s plain icons, which return when it is turned off; a folder
 keeps the `folder` icon (`IconPart`). Requires `Slots`.
 
 | Config  | Default | What it does                                                                                                                                                                                                       |

@@ -2,6 +2,7 @@ import { Cause, Clock, Context, Effect, Exit, Order, References, Scope } from "e
 import type { Tracer } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
 import type { OwnServices } from "./own.ts";
+import { placeIn } from "./phases.ts";
 import { servicesOf } from "./settings.ts";
 import type { HandlerStep, Handler, Hook, HookOptions, Hooks, InvokeOptions, Next, PluginContext, PluginIdentity, Summary } from "../hooks.ts";
 
@@ -23,6 +24,9 @@ interface Owner {
 interface Registration {
   readonly owner: Owner;
   readonly entry: Entry;
+  /** Its phase, when the hook declares phases, and that phase's place among them (0 when it declares none). */
+  readonly phase?: string;
+  readonly rank: number;
   readonly order: number;
   readonly sequence: number;
   readonly handle: Handler<unknown, unknown, unknown>;
@@ -34,8 +38,11 @@ interface Registration {
 
 export interface HookSnapshot {
   readonly name: string;
+  /** The hook's phases, first first, when it declares them: its handlers run in them, then by order. */
+  readonly phases?: readonly string[];
   readonly handlers: readonly {
     readonly pluginId: string;
+    readonly phase?: string;
     readonly order: number;
   }[];
 }
@@ -70,7 +77,8 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
       .sort((a, b) => Order.String(a.name, b.name))
       .map((entry) => ({
         name: entry.name,
-        handlers: entry.handlers.map(({ owner, order }) => ({ pluginId: owner.identity.id, order })),
+        ...((entry.token as Hook<unknown, unknown>).phases === undefined ? {} : { phases: (entry.token as Hook<unknown, unknown>).phases }),
+        handlers: entry.handlers.map(({ owner, phase, order }) => ({ pluginId: owner.identity.id, ...(phase === undefined ? {} : { phase }), order })),
       }));
   }
 
@@ -86,6 +94,10 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
           if (!Number.isFinite(order)) {
             return yield* new HookError({ reason: "InvalidOrder", hook: hook.name, pluginId: identity.id, message: "Hook order must be finite" });
           }
+          const placed = placeIn(hook, options.phase);
+          if (typeof placed === "string") {
+            return yield* new HookError({ reason: "InvalidOrder", hook: hook.name, pluginId: identity.id, message: `Hook "${hook.name}" ${placed}` });
+          }
           const entry = yield* this.entry(hook);
           // The plugin's own services, never the references of the work that registered it (see `OwnServices`).
           const environment: readonly Provided[] = [...own.capture(yield* Effect.context<R>()).mapUnsafe].map(([key, value]) => ({
@@ -95,10 +107,16 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
           const registration: Registration = {
             owner,
             entry,
+            ...placed,
             order,
             sequence: this.sequence++,
             active: true,
-            attributes: { ...attributes(identity), "hook.name": hook.name, "hook.order": order },
+            attributes: {
+              ...attributes(identity),
+              "hook.name": hook.name,
+              ...(placed.phase === undefined ? {} : { "hook.phase": placed.phase }),
+              "hook.order": order,
+            },
             // This erasure is local to the heterogeneous registry. Token identity protects dispatch.
             handle: ((input: I, next: Next<I, O, E>) =>
               Effect.updateContext(
@@ -241,6 +259,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
                     const ms = Number(clock.monotonicTimeNanosUnsafe() - began) / 1e6;
                     const heard: HandlerStep<I, O> = {
                       pluginId: registration.owner.identity.id,
+                      ...(registration.phase === undefined ? {} : { phase: registration.phase }),
                       order: registration.order,
                       index,
                       input: value,
@@ -334,7 +353,7 @@ function overriding(current: Context.Context<never>, environment: readonly Provi
 function rebuild(entry: Entry): void {
   entry.handlers = entry.all
     .filter((registration) => registration.active && registration.owner.visible)
-    .sort((a, b) => a.order - b.order || Order.String(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence);
+    .sort((a, b) => a.rank - b.rank || a.order - b.order || Order.String(a.owner.identity.id, b.owner.identity.id) || a.sequence - b.sequence);
 }
 
 export function attributes(identity: PluginIdentity): Record<string, string> {

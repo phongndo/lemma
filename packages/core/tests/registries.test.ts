@@ -47,6 +47,39 @@ describe("registries", () => {
     );
   });
 
+  test("a registry's phases order its items before their numbers do, and an item naming none goes in the default", async () => {
+    const Searchers = Registry.make<Entry>("test/searchers", { phases: ["replace", "default"], defaultPhase: "replace" });
+    const offering = (id: string, label: string, options: { readonly phase?: string; readonly order?: number }) =>
+      definePlugin({ id, layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.add(Searchers, { label }, options))) });
+    await run(
+      Effect.gen(function* () {
+        const core = yield* makeCore([offering("bundled", "fallback", { phase: "default", order: -1_000 }), offering("user", "mine", { order: 1_000 })]);
+        expect(yield* core.run(labels(Searchers))).toEqual(["mine", "fallback"]);
+        const items = yield* core.run(Effect.flatMap(Registries, (registries) => registries.items(Searchers)));
+        expect(items.map(({ pluginId, phase, order }) => ({ pluginId, phase, order }))).toEqual([
+          { pluginId: "user", phase: "replace", order: 1_000 },
+          { pluginId: "bundled", phase: "default", order: -1_000 },
+        ]);
+        expect((yield* core.inspect).registries).toEqual([
+          {
+            name: "test/searchers",
+            phases: ["replace", "default"],
+            items: [
+              { pluginId: "user", phase: "replace", order: 1_000 },
+              { pluginId: "bundled", phase: "default", order: -1_000 },
+            ],
+          },
+        ]);
+        const unknown = yield* Effect.exit(makeCore([offering("lost", "x", { phase: "first" })]));
+        expect(Option.getOrThrow(Cause.findErrorOption((failure(unknown) as PluginFault).cause))).toMatchObject({
+          reason: "InvalidOrder",
+          message: 'Registry "test/searchers" has no phase "first": its phases are replace, default',
+        });
+      }),
+    );
+    expect(() => Registry.make<Entry>("test/stray", { phases: ["a"], defaultPhase: "b" })).toThrow("needs a default phase");
+  });
+
   test("an item leaves with its plugin, or sooner through the effect `add` returns", async () => {
     await run(
       Effect.gen(function* () {

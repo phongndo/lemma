@@ -228,7 +228,13 @@ export function catalog({
     const configScope = configIn[plugin.id];
     const fields = formOf(plugin);
     const intercepts = hooks.flatMap((hook) =>
-      hook.handlers.filter((handler) => handler.pluginId === plugin.id).map(({ order }) => ({ name: hook.name, order })),
+      hook.handlers
+        .filter((handler) => handler.pluginId === plugin.id)
+        .map(({ phase, order }) => ({
+          name: hook.name,
+          ...(phase === undefined ? {} : { phase, rank: hook.phases?.indexOf(phase) ?? 0 }),
+          order,
+        })),
     );
     const observes = events.filter((event) => event.observers.includes(plugin.id)).map((event) => event.name);
     const contributes = registries.flatMap((registry) => {

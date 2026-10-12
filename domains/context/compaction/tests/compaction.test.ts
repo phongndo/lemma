@@ -7,7 +7,7 @@ import { CompactionHook } from "@lemma/context";
 import type { CompactionError } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Notice } from "@lemma/contracts";
-import { Agent } from "@lemma/agent";
+import { Agent, AgentRequestHook } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { branchOf, rebuildRequest, Sessions, trajectory } from "@lemma/sessions";
 import type { NoticePayload } from "@lemma/contracts";
@@ -286,13 +286,20 @@ describe("in a session", () => {
     const order = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, fakeLlm([]).plugin, agent, compaction]);
+          // However late another handler asks to run, compaction's phase comes after it.
+          const late = definePlugin({
+            id: "zzz.late",
+            setup: function* () {
+              yield* (yield* PluginContext).on(AgentRequestHook, (draft, next) => next(draft), { order: Number.MAX_SAFE_INTEGER });
+            },
+          });
+          const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, fakeLlm([]).plugin, agent, compaction, late]);
           const snapshot = yield* core.inspect;
-          return snapshot.hooks.find((hook) => hook.name === "lemma/agent.request")?.handlers.find((handler) => handler.pluginId === "context.compaction")
-            ?.order;
+          return snapshot.hooks.find((hook) => hook.name === "lemma/agent.request")?.handlers;
         }),
       ),
     );
-    expect(order).toBe(1_000);
+    expect(order?.at(-1)).toEqual({ pluginId: "context.compaction", phase: "fit", order: 0 });
+    expect(order?.at(-2)).toMatchObject({ pluginId: "zzz.late", phase: "shape" });
   });
 });

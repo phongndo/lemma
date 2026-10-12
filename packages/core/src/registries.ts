@@ -1,11 +1,13 @@
 import { Context } from "effect";
 import type { Effect, Stream } from "effect";
 import type { RegistryError } from "./errors.ts";
+import type { PhaseOptions } from "./hooks.ts";
+import { checkPhases } from "./internal/phases.ts";
 import { token } from "./internal/tokens.ts";
 
 const RegistryTypeId: unique symbol = Symbol("@lemma/core/Registry");
 
-export interface RegistryOptions<Item> {
+export interface RegistryOptions<Item> extends PhaseOptions {
   /** Names an item. With `unique`, one plugin at a time may contribute an item under a name. */
   readonly key?: (item: Item) => string;
   /** Adding an item whose key another plugin holds fails with `RegistryError` ("Conflict"). Requires `key`. */
@@ -33,13 +35,25 @@ export interface Registry<Item> {
 }
 
 export const Registry = {
+  /** Throws when `phases` cannot order anything: none, one named twice, or no `defaultPhase` among them. */
   make<Item>(name: string, options: RegistryOptions<Item> = {}): Registry<Item> {
-    return token(Object.freeze({ name, options: Object.freeze({ ...options }) })) as Registry<Item>;
+    checkPhases("Registry", name, options);
+    return token(
+      Object.freeze({
+        name,
+        options: Object.freeze({ ...options, ...(options.phases === undefined ? {} : { phases: Object.freeze([...options.phases]) }) }),
+      }),
+    ) as Registry<Item>;
   },
 };
 
 export interface ContributeOptions {
-  /** Lower values come first; ties use plugin id, then that plugin's contribution order. */
+  /**
+   * Where it comes, when the registry declares phases (see `PhaseOptions`): its `defaultPhase` when absent. Naming one
+   * the registry does not declare fails with `RegistryError` ("InvalidOrder").
+   */
+  readonly phase?: string;
+  /** Lower values come first, within the phase; ties use plugin id, then that plugin's contribution order. */
   readonly order?: number;
 }
 
@@ -47,6 +61,8 @@ export interface ContributeOptions {
 export interface Contribution<Item> {
   readonly item: Item;
   readonly pluginId: string;
+  /** Its phase, when the registry declares phases. */
+  readonly phase?: string;
   readonly order: number;
 }
 

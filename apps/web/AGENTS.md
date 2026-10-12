@@ -50,15 +50,20 @@ replace it.
 - **A slot** is a core registry (`defineSlot`): an item belongs to the plugin
   that added it, leaves when that plugin stops, and shows on the Plugins page.
   Items of equal `order` sort by plugin id: give an item whose place matters
-  an `order` of its own (the views of a thread, the layers).
+  an `order` of its own (the views of a thread, the layers). Where the order
+  means something beyond a position (a default and what replaces it), the slot
+  declares phases (`defineSlot(name, { phases, defaultPhase })`), and its first
+  declaration fixes them and what shows.
 - **A part** is a replaceable piece plugins draw with (`definePart`), declared
   in a contract beside its view (`partView(part)`, which plugins draw): the
-  first item by order in its slot renders wherever the part is used.
+  first item in its slot renders wherever the part is used.
   `look.kit` supplies the shared parts' defaults (`@lemma/look`), and is the
   only plugin with rendering components of that kind. A view that has pieces
   users would change on their own (a tool call, a row) defines parts for them
-  in its domain's contract and adds its own defaults at `DEFAULT_PART_ORDER`,
-  as `threads.transcript` does. A part may declare a plain fallback
+  in its domain's contract and adds its own defaults in the phase `default`
+  (`FIRST_WINS`, which every slot that shows one item has), as
+  `threads.transcript` does, so an item of a user's that names no phase
+  replaces them. A part may declare a plain fallback
   (`definePart(name, fallback)`): native markup with no styling of its own,
   used while nothing provides the part. The parts the always-on plugins draw
   (`frame.shell`, `frame.pages`, `settings.page`, `settings.plugins`) have
