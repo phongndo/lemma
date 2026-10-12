@@ -14,6 +14,7 @@ import {
   createProjector,
   pendingToolCalls,
   promptMarks,
+  queuePlaces,
   ChatThinkingPart,
   ChatToolPart,
   ChatTurnFooterPart,
@@ -46,6 +47,7 @@ import type {
   ChatWorkGroupProps,
   ChatWorkingProps,
   ChatWorkProps,
+  QueuePlaces,
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
 import { thoughtHeadline } from "./thought.ts";
@@ -53,9 +55,9 @@ import { workEntries } from "./work.ts";
 import type { WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
-import { Client, Router, Slots, defineWebPlugin } from "@lemma/web";
+import { Client, Router, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
-import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, Spinner, CopyButton } from "@lemma/look";
+import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
 import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
@@ -66,20 +68,31 @@ import type { ToolState } from "./tools.tsx";
 /** The chat's scroll position, kept with each history entry. */
 const SCROLL_STATE = "chat.scroll";
 
-/** The default `chat.user` part. */
+/** The default `chat.user` part: the prompt as sent, and over a steer a quiet mark saying so. */
 function UserView(props: ChatUserProps) {
   const text = () =>
     props.content
       .filter((part): part is TextContent => part.type === "text")
       .map((part) => part.text)
       .join("\n\n");
-  return (
+  const message = () => (
     <div class="user-message">
       <Show when={text()}>
         <div class="user-text">{text()}</div>
       </Show>
       <Images content={props.content} />
     </div>
+  );
+  return (
+    <Show when={props.steer} fallback={message()}>
+      <div class="user-steer">
+        <div class="steer-mark" data-tip="Steered the running turn">
+          <RedoIcon />
+          Steer
+        </div>
+        {message()}
+      </div>
+    </Show>
   );
 }
 
@@ -214,7 +227,7 @@ function Attempt(props: { chat: Chat; item: AttemptItem }) {
 function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: boolean }): JSX.Element {
   return (
     <Switch>
-      <Match when={props.item.kind === "user" && props.item}>{(item) => <ChatUser content={item().content} />}</Match>
+      <Match when={props.item.kind === "user" && props.item}>{(item) => <ChatUser content={item().content} steer={item().steer} />}</Match>
       <Match when={props.item.kind === "assistant" && props.item}>
         {(item) => (
           <div class="assistant">
@@ -425,8 +438,11 @@ function WorkingView(props: ChatWorkingProps) {
   );
 }
 
-/** A turn; `running` when it is the one the session is running now, whose live fold shows its streaming steps (`drafts`). */
-function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: readonly StepDraft[] }) {
+/**
+ * A turn; `running` when it is the one the session is running now, whose live fold shows its streaming steps (`drafts`).
+ * The last turn ends with the steers sent and not yet placed (`steers`), unless its streaming steps are drawn after it.
+ */
+function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: readonly StepDraft[]; steers: QueuePlaces["joining"] }) {
   const ended = () => props.turn.end !== undefined;
   /** The last model call's error, which its stop note already shows. */
   const lastError = () => {
@@ -461,7 +477,27 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
       <Show when={ended()}>
         <ChatTurnFooter turn={props.turn} answer={answerText(props.turn)} />
       </Show>
+      <For each={props.steers}>{(steer) => <PendingSteer chat={props.chat} steer={steer} />}</For>
     </section>
+  );
+}
+
+/** A steer sent and not yet placed, where it will join, as it will show once placed; until then it can be withdrawn. */
+function PendingSteer(props: { chat: Chat; steer: QueuePlaces["joining"][number] }) {
+  const withdraw = usePlugin().action("withdraw a steer", () => props.chat.threads.withdraw(props.steer.requestId));
+  return (
+    <div class="steer-pending">
+      <button
+        type="button"
+        class="icon-button steer-withdraw"
+        aria-label="Withdraw the steer"
+        data-tip="Withdraw: the turn has not taken it yet"
+        onClick={() => withdraw()}
+      >
+        <XIcon />
+      </button>
+      <ChatUser content={props.steer.content} steer />
+    </div>
   );
 }
 
@@ -513,6 +549,11 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
   const folding = () => (props.chat.config.foldWork ? running()?.turnId : undefined);
   const draftsOf = (turn: TurnView) => (turn.turnId === undefined || turn.turnId !== folding() ? [] : drafts().filter((draft) => draft.turnId === turn.turnId));
   const loose = () => drafts().filter((draft) => draft.turnId !== folding());
+  /**
+   * Steers the running turn has yet to place (`queuePlaces`' `joining`), which join after the step that streams: at the
+   * end of the last turn, or after its steps drawn loose. What a stopped turn left waits in the composer's queue.
+   */
+  const steers = createMemo(() => queuePlaces(threads).joining);
   // Shown for the whole turn, not only between steps (a line that came and went with each step made the transcript jump), unless its live fold says it.
   const working = () => threads.busy() && folding() === undefined;
   const turnStarted = () => {
@@ -521,8 +562,21 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
   };
   return (
     <div class="transcript">
-      <Index each={props.turns}>{(turn) => <Turn chat={props.chat} turn={turn()} running={turn() === running()} drafts={draftsOf(turn())} />}</Index>
+      <Index each={props.turns}>
+        {(turn) => (
+          <Turn
+            chat={props.chat}
+            turn={turn()}
+            running={turn() === running()}
+            drafts={draftsOf(turn())}
+            steers={turn() === props.turns.at(-1) && loose().length === 0 ? steers() : []}
+          />
+        )}
+      </Index>
       <Index each={loose()}>{(draft) => <Draft chat={props.chat} draft={draft()} />}</Index>
+      <Show when={loose().length > 0}>
+        <For each={steers()}>{(steer) => <PendingSteer chat={props.chat} steer={steer} />}</For>
+      </Show>
       <Show when={working()}>
         <ChatWorking startedAt={turnStarted()} now={props.chat.now()} />
       </Show>
