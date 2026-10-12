@@ -188,6 +188,12 @@ const ID_BYTES = 6;
  */
 const REVISIONS_PER_INSTANCE = 2 ** 32;
 
+/**
+ * Sessions whose branch, as their last turn left it, the agent keeps for the next turn to start from, the most recently
+ * used: a bound on the memory they hold, which may be events the store has let go of (kept branches do not expire).
+ */
+const BRANCHES_KEPT = 16;
+
 /** Prompts a session's queue holds at most: one past it fails `Busy`, as a turn's queue is for a person's prompts. */
 export const MAX_QUEUED = 256;
 
@@ -340,6 +346,19 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           );
 
       const requests = makeRequestIndex(sessions);
+      /** Each session's branch as its last turn left it, the most recently used last (`BRANCHES_KEPT`). */
+      const branches = new Map<string, readonly SessionEvent[]>();
+      const kept = (sessionId: string) => ({
+        branch: () => branches.get(sessionId),
+        keep: (branch: readonly SessionEvent[]) => {
+          branches.delete(sessionId);
+          branches.set(sessionId, branch);
+          for (const oldest of branches.keys()) {
+            if (branches.size <= BRANCHES_KEPT) break;
+            branches.delete(oldest);
+          }
+        },
+      });
       /** The session has no turn and nothing queued: what is kept for it goes (its queue revision stays, to keep growing). */
       const forget = (sessionId: string, state: SessionState) => {
         if (state.turn !== undefined || state.suspended !== undefined || state.queue.length > 0) return;
@@ -527,6 +546,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         suspended: () => suspending,
         stopping: Deferred.await(stopping),
         idle: idle(entry),
+        kept: kept(sessionId),
         ...(info.title === undefined ? {} : { title: info.title }),
       });
 
@@ -1025,6 +1045,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           const state = states.get(sessionId);
           states.delete(sessionId);
           requests.drop(sessionId);
+          branches.delete(sessionId);
           for (const item of state?.queue ?? []) {
             yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Session", message: `Session ${sessionId} was deleted` }));
           }

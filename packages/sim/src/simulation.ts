@@ -19,6 +19,8 @@ export interface SimulationOptions {
   readonly shuffle?: boolean;
   /** The wall clock's time at the start (`SIM_EPOCH_MS` by default). */
   readonly epochMs?: number;
+  /** Turns `Verify` on for every fiber (default): the benchmark leaves it off, measuring what production does. */
+  readonly verify?: boolean;
 }
 
 /** No work is left to run and no timer is set, yet what `run` waits for has not finished: a deadlock. */
@@ -45,9 +47,11 @@ export class Simulation {
   readonly scheduler: SimScheduler;
   /** Effect's `Random` for every fiber of the run: one source, so each draw moves it on, wherever it is drawn. */
   private readonly effectRandom: Random.Random;
+  private readonly verify: boolean;
 
   constructor(options: SimulationOptions) {
     this.seed = options.seed;
+    this.verify = options.verify ?? true;
     this.random = new Prng(options.seed);
     this.clock = new SimClock(options.epochMs);
     const order = this.random.split("scheduler");
@@ -55,12 +59,12 @@ export class Simulation {
     this.effectRandom = this.random.split("effect").effect();
   }
 
-  /** `effect` with what every fiber of the run has: the clock, Effect's `Random`, and `Verify`. */
+  /** `effect` with what every fiber of the run has: the clock, Effect's `Random`, and `Verify` (unless turned off). */
   provide<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
     return effect.pipe(
       Effect.provideService(Clock.Clock, this.clock),
       Effect.provideService(Random.Random, this.effectRandom),
-      Effect.provideService(Verify, true),
+      Effect.provideService(Verify, this.verify),
     );
   }
 

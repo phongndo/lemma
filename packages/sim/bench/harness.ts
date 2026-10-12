@@ -1,6 +1,6 @@
-// The harness benchmark: the real agent loop, sessions store, and tool registry, in simulated time, on a file system in
-// memory, with a model that answers without waiting. Simulated waits cost no wall time, so the wall time a step takes
-// is the harness's own. It records, for a session at each length in `LENGTHS`:
+// The harness benchmark: the real agent loop, sessions store, tool registry, and compaction, in simulated time, on a
+// file system in memory, with a model that answers without waiting. Simulated waits cost no wall time, so the wall time
+// a step takes is the harness's own. It records, for a session at each length in `LENGTHS`:
 //
 // - counts per step, the same on every machine (hard budgets in packages/core/bench/budgets.ts): events the agent
 //   reads back from the store, bytes and syncs written, hooks run, and events published;
@@ -15,6 +15,8 @@ import { Effect } from "effect";
 import type { Context } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { Agent, AgentContinueHook, AgentInputHook, AgentRequestHook, AssistantDelta, QueueChanged, TurnEnded, TurnStarted } from "@lemma/agent";
+import compaction from "@lemma/context-compaction";
+import type { Usage } from "@lemma/llm";
 import { SessionAppended, SessionChanged, Sessions } from "@lemma/sessions";
 import { ToolExecuted, ToolExecuteHook, ToolOutput } from "@lemma/tools";
 import { finish, record } from "../../core/bench/budgets.ts";
@@ -30,40 +32,61 @@ const LENGTHS = [100, 1_000, 10_000].filter((length) => length <= longest);
 /** Turns measured at each length: two steps each. */
 const MEASURED_TURNS = 10;
 
-/** A turn of two steps: the model calls `echo`, then answers its result in five deltas. */
+const usage = (input: number): Usage => ({
+  input,
+  output: 20,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: input + 20,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+});
+
+/** About what each of this benchmark's messages holds, in compaction's estimate (four characters a token). */
+const TOKENS_PER_MESSAGE = 8;
+const CONTEXT_WINDOW = 4_000;
+
+/** The text compaction's request ends with. */
+const SUMMARIZE = "Summarize the conversation above.";
+
+/**
+ * A turn of two steps: the model calls `echo`, then answers its result in five deltas. It reports the context a
+ * request filled as compaction estimates it (its messages are short: about 8 tokens each), in a window of 4,000 tokens,
+ * so a session compacts every few dozen turns, from a few hundred entries on, as a real one does once its context is
+ * full: the history a request carries stays within the same bounds at 1,000 entries as at 10,000. A summary request
+ * (compaction's) gets a summary.
+ */
 const answering: Answering = (request) => {
   const last = request.messages.at(-1);
   const deltas = ["Here ", "is ", "what ", "it ", "said."].map((text) => ({ text, afterMs: 20 }));
-  if (last?.role === "toolResult") return { kinds: ["reply"], latencyMs: 300, deltas, usage: usage(), ending: { kind: "done", calls: [] } };
+  if (last?.role === "user" && last.content.some((part) => part.type === "text" && part.text.endsWith(SUMMARIZE))) {
+    return { kinds: ["summary"], latencyMs: 300, deltas, usage: usage(500), ending: { kind: "done", calls: [] } };
+  }
+  const used = usage(request.messages.length * TOKENS_PER_MESSAGE);
+  if (last?.role === "toolResult") return { kinds: ["reply"], latencyMs: 300, deltas, usage: used, ending: { kind: "done", calls: [] } };
   const id = `call-${request.messages.length}`;
   return {
     kinds: ["tools"],
     latencyMs: 300,
     deltas,
-    usage: usage(),
+    usage: used,
     ending: { kind: "done", calls: [{ type: "toolCall", id, name: "echo", arguments: { text: "hello" } }] },
   };
 };
-const usage = () => ({
-  input: 1000,
-  output: 20,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 1020,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-});
 
 /** What the harness does, counted. */
 const counts = {
-  /** Events the store hands back when the agent reads a branch or a log: what each step walks. */
+  /** Steps taken: `step-start` events appended. */
+  steps: 0,
+  /** Events the store hands back when the agent reads a branch or a log: what a step walks. */
   eventsRead: 0,
   hooks: 0,
   published: 0,
+  compactions: 0,
 };
 /**
- * When each model event was emitted, oldest first, and how long an observer of `AssistantDelta` took to hear it: the
- * agent publishes every event of the stream (the model sends no `provider` event), in order, so the next one heard is
- * the oldest one emitted.
+ * When each model event of a step's call was emitted, oldest first, and how long an observer of `AssistantDelta` took
+ * to hear it: the agent publishes every event of a step's stream (the model sends no `provider` event), in order, so
+ * the next one heard is the oldest one emitted. A summary's events are not published, and are not noted.
  */
 const emitted: number[] = [];
 const heard: number[] = [];
@@ -72,6 +95,13 @@ const counting = (sessions: Context.Service.Shape<typeof Sessions>): Context.Ser
   ...sessions,
   branch: (sessionId, options) => Effect.tap(sessions.branch(sessionId, options), (events) => Effect.sync(() => void (counts.eventsRead += events.length))),
   events: (sessionId, options) => Effect.tap(sessions.events(sessionId, options), (events) => Effect.sync(() => void (counts.eventsRead += events.length))),
+  append: (sessionId, data, options) =>
+    Effect.tap(sessions.append(sessionId, data, options), () =>
+      Effect.sync(() => {
+        if (data.type === "step-start") counts.steps++;
+        if (data.type === "compaction") counts.compactions++;
+      }),
+    ),
 });
 
 /**
@@ -106,65 +136,75 @@ const meter = definePlugin({
   },
 });
 
-const sim = new Simulation({ seed: 1 });
+// `Verify` off: the checks too costly for every call stay out, as in production.
+const sim = new Simulation({ seed: 1, verify: false });
 const fs = new MemFs();
-const model = simModel(sim.random.split("model"), { answering, keep: false, emit: () => void emitted.push(performance.now()) });
+let summarizing = false;
+const model = simModel(sim.random.split("model"), {
+  answering: (request, prng) => {
+    const answer = answering(request, prng);
+    summarizing = answer.kinds.includes("summary");
+    return answer;
+  },
+  keep: false,
+  contextWindow: CONTEXT_WINDOW,
+  emit: () => void (summarizing ? undefined : emitted.push(performance.now())),
+});
 const host = await SimHost.start(
   sim,
   fs,
   1,
   {
-    plugins: [model.plugin, simTools(sim.random.split("tools")).plugin, meter],
+    plugins: [compaction, model.plugin, simTools(sim.random.split("tools")).plugin, meter],
     configs: { "agent.loop": { maxSteps: 4 } },
     wrapSessions: counting,
   },
   new Set([1]),
 );
-const sessionId = await host.run(
-  Effect.gen(function* () {
-    return (yield* (yield* Sessions).create()).id;
-  }),
-);
+
+const run = <A, E>(body: (store: Context.Service.Shape<typeof Sessions>) => Effect.Effect<A, E>) =>
+  host.run(
+    Effect.gen(function* () {
+      return yield* body(yield* Sessions);
+    }),
+  );
+const sessionId = await run((store) => Effect.map(store.create(), (info) => info.id));
 const prompt = (n: number) =>
   host.run(
     Effect.gen(function* () {
-      const agent = yield* Agent;
-      return yield* agent.prompt(sessionId, [{ type: "text", text: `prompt ${n}` }]);
+      return yield* (yield* Agent).prompt(sessionId, [{ type: "text", text: `prompt ${n}` }]);
     }),
   );
-const entries = () =>
-  host.run(
-    Effect.gen(function* () {
-      return (yield* (yield* Sessions).events(sessionId)).length;
-    }),
-  );
+/** The session's length, as its info says: read without counting, as the benchmark's own reading is not the harness's. */
+const entries = () => run((store) => Effect.map(store.get(sessionId), (info) => info.lastSeq));
 
 let turns = 0;
-const perStep: Record<number, { readonly ms: number; readonly eventsRead: number }> = {};
-for (const length of LENGTHS) {
-  // Grow the session to `length` entries, unmeasured.
-  for (let have = await entries(); have < length; have = await entries()) await prompt(turns++);
-  const before = { ...counts, ...fs.counts, steps: model.asked() };
+const perStep: Record<number, { readonly ms: number }> = {};
+for (const target of LENGTHS) {
+  // Grow the session to `target` entries, unmeasured: each turn logs about thirteen.
+  while ((await entries()) < target) await prompt(turns++);
+  const before = { ...counts, ...fs.counts };
+  emitted.length = 0;
   globalThis.gc?.();
   const heap = process.memoryUsage().heapUsed;
   const started = performance.now();
   for (let n = 0; n < MEASURED_TURNS; n++) await prompt(turns++);
   const ms = performance.now() - started;
-  const after = { ...counts, ...fs.counts, steps: model.asked() };
+  const after = { ...counts, ...fs.counts };
   const steps = after.steps - before.steps;
-  const per = (key: keyof typeof after) => Math.round(((after[key] as number) - (before[key] as number)) / steps);
-  perStep[length] = { ms: ms / steps, eventsRead: per("eventsRead") };
-  record(`Harness / ${length} entries / ms per step`, ms / steps);
-  record(`Harness / ${length} entries / events read per step`, per("eventsRead"));
-  record(`Harness / ${length} entries / bytes written per step`, per("bytesWritten"));
-  record(`Harness / ${length} entries / syncs per step`, per("syncs"));
-  record(`Harness / ${length} entries / hooks run per step`, per("hooks"));
-  record(`Harness / ${length} entries / events published per step`, per("published"));
-  record(`Harness / ${length} entries / heap MB`, heap / 1e6);
+  const per = (key: keyof typeof after) => Math.round((after[key] - before[key]) / steps);
+  perStep[target] = { ms: ms / steps };
+  record(`Harness / ${target} entries / ms per step`, ms / steps);
+  record(`Harness / ${target} entries / events read per step`, per("eventsRead"));
+  record(`Harness / ${target} entries / bytes written per step`, per("bytesWritten"));
+  record(`Harness / ${target} entries / syncs per step`, per("syncs"));
+  record(`Harness / ${target} entries / hooks run per step`, per("hooks"));
+  record(`Harness / ${target} entries / events published per step`, per("published"));
+  record(`Harness / ${target} entries / heap MB`, heap / 1e6);
 }
+record("Harness / compactions", counts.compactions);
 if (perStep[1_000] !== undefined && perStep[10_000] !== undefined) {
   record("Harness / step time 10k vs 1k entries", perStep[10_000].ms / perStep[1_000].ms);
-  record("Harness / events read 10k vs 1k entries", perStep[10_000].eventsRead / perStep[1_000].eventsRead);
 }
 if (heard.length > 0) {
   const sorted = [...heard].sort((a, b) => a - b);

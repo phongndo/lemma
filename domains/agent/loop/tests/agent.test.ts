@@ -75,8 +75,12 @@ const settle = Effect.gen(function* () {
   for (let turn = 0; turn < 100; turn++) yield* Effect.yieldNow;
 });
 
-/** The sessions store, but the next `branch` read is followed by `race.checkout`: a client moving the leaf as a turn starts. */
-const racingSessions = (race: { checkout?: { readonly sessionId: string; readonly eventId: string } }) =>
+/**
+ * The sessions store, but right after a read of where a session's branch ends (`on`: reading the branch, or the
+ * session's info and its leaf; `skip` such reads first), the checkout `race.checkout` names is made, as a client's
+ * racing the agent would be.
+ */
+const racingSessions = (race: { checkout?: { readonly sessionId: string; readonly eventId: string }; on?: "branch" | "get"; skip?: number }) =>
   definePlugin({
     id: "sessions",
     provides: [Sessions],
@@ -84,16 +88,23 @@ const racingSessions = (race: { checkout?: { readonly sessionId: string; readonl
     exclusive: true,
     layer: Layer.effect(
       Sessions,
-      Effect.map(Sessions, (store) => ({
-        ...store,
-        branch: (sessionId: string, options?: { readonly leaf?: string }) =>
-          Effect.tap(store.branch(sessionId, options), () => {
-            const move = race.checkout;
-            if (move === undefined) return Effect.void;
-            delete race.checkout;
-            return Effect.asVoid(store.checkout(move.sessionId, move.eventId));
-          }),
-      })),
+      Effect.map(Sessions, (store) => {
+        const after = (read: "branch" | "get") => () => {
+          const move = race.checkout;
+          if (move === undefined || (race.on ?? "branch") !== read) return Effect.void;
+          if ((race.skip ?? 0) > 0) {
+            race.skip = race.skip! - 1;
+            return Effect.void;
+          }
+          delete race.checkout;
+          return Effect.asVoid(store.checkout(move.sessionId, move.eventId));
+        };
+        return {
+          ...store,
+          branch: (sessionId: string, options?: { readonly leaf?: string }) => Effect.tap(store.branch(sessionId, options), after("branch")),
+          get: (sessionId: string) => Effect.tap(store.get(sessionId), after("get")),
+        };
+      }),
     ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
   });
 /**
@@ -653,7 +664,9 @@ describe("agent", () => {
   });
 
   it("starts a turn after the leaf it checked for unanswered calls, though a checkout moves the leaf meanwhile", async () => {
-    const race: Parameters<typeof racingSessions>[0] = {};
+    // The turn before left the branch, which the next starts from without reading it back, while the session's leaf is
+    // still its end: what it checks is that leaf (its second read of the session's info; the first is the turn's own).
+    const race: Parameters<typeof racingSessions>[0] = { on: "get", skip: 1 };
     await withAgent(
       { sessions: racingSessions(race), scripts: [useTools(call("c1", "echo", { text: "one" })), reply("Done"), reply("Again")] },
       ({ requests }) =>
@@ -662,7 +675,30 @@ describe("agent", () => {
           yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
           const first = yield* log(id);
           const asked = first.find((event) => event.data.type === "message" && event.data.message.role === "assistant")!;
-          // Right after the next turn reads its branch, a client checks out the answer that called the tool.
+          // Right after the next turn reads where its branch ends, a client checks out the answer that called the tool.
+          race.checkout = { sessionId: id, eventId: asked.id };
+          yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("again")));
+          expect(race.checkout).toBeUndefined();
+          const events = yield* log(id);
+          expect(events[first.length]).toMatchObject({ parent: first.at(-1)!.id, data: { type: "turn-start" } });
+          expect(requests[2]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "toolResult", "assistant", "user"]);
+          expectLogInvariant(events, id, requests);
+        }),
+    );
+  });
+
+  it("starts a turn after the leaf of the branch it read, though a checkout moves the leaf meanwhile", async () => {
+    // Something else appended since the turn before (a title), so the next reads its branch back from the store.
+    const race: Parameters<typeof racingSessions>[0] = { on: "branch" };
+    await withAgent(
+      { sessions: racingSessions(race), scripts: [useTools(call("c1", "echo", { text: "one" })), reply("Done"), reply("Again")] },
+      ({ requests }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+          yield* Effect.flatMap(Sessions, (store) => store.append(id, { type: "title", title: "renamed" }));
+          const first = yield* log(id);
+          const asked = first.find((event) => event.data.type === "message" && event.data.message.role === "assistant")!;
           race.checkout = { sessionId: id, eventId: asked.id };
           yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("again")));
           expect(race.checkout).toBeUndefined();
