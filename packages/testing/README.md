@@ -21,8 +21,10 @@ seam storage code takes instead of `node:fs` (the sessions plugin through
   Every earlier mount and handle then fails, as the process that held it is gone.
 - **Faults.** `disk.faults` gives each kind of operation (`write`, `sync`,
   `truncate`, `rename`, `open`) a probability of failing as a full or failing
-  disk does; a failed write may leave part of its bytes. `disk.injected` counts
-  what fired.
+  disk does; a failed write may leave part of its bytes. A failed sync drops
+  what it had to write, as Linux does: the bytes stay readable, but no later
+  sync writes them (it leaves zeros there) until they are written again.
+  `disk.injected` counts what fired.
 - **Other programs.** `disk.outside` appends to, rewrites, truncates, replaces,
   or removes a file, durably at once.
 

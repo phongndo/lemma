@@ -9,6 +9,7 @@ import { pathsPlugin } from "@lemma/contracts/testing";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import { seededRandom, SimDisk } from "@lemma/testing";
 import type { Faults } from "@lemma/testing";
+import type { FileSystem } from "@lemma/contracts/fs";
 import { IdBytes } from "../src/format.ts";
 import { makeSessionsPlugin } from "../src/index.ts";
 
@@ -282,7 +283,6 @@ const simulate = (seed: number, faults: Faults, initial: number, commands: reado
           // Idle past `unloadAfter`: the sweep closes every loaded session; the next use reads it again.
           yield* TestClock.adjust("11 minutes");
           yield* Effect.promise(() => new Promise((resolve) => setTimeout(resolve, 1)));
-          if (live().some((session) => session.acked.length > 0)) reached.reloadAfterUnload++;
           break;
         case "restart":
           yield* restart("no");
@@ -322,6 +322,7 @@ const simulate = (seed: number, faults: Faults, initial: number, commands: reado
             continue;
           }
           expect(read.success, `session ${session.id} after step ${step}`).toEqual(session.acked);
+          if (next.kind === "unload" && session.acked.length > 0) reached.reloadAfterUnload++;
         }
         for (const session of known) {
           if (!session.tampered || session.removed) continue;
@@ -351,16 +352,25 @@ const seededBytes = (seed: number) => {
 
 const runs = Number(process.env.LEMMA_SIM_RUNS ?? 100);
 
+/** Runs `body` against a sessions store in a process of its own over `fs`, to its end. */
+const lifetime = <A, E>(fs: FileSystem, body: (sessions: Service) => Effect.Effect<A, E>) =>
+  Effect.runPromiseExit(
+    Effect.scoped(Effect.flatMap(makeCore([paths, makeSessionsPlugin({ fs })]), (core) => Effect.flatMap(core.run(Sessions), body))).pipe(
+      Effect.provide(TestClock.layer()),
+    ),
+  );
+/** As `lifetime`, its value, or its failure thrown. */
+const lived = async <A, E>(fs: FileSystem, body: (sessions: Service) => Effect.Effect<A, E>) => {
+  const exit = await lifetime(fs, body);
+  if (Exit.isFailure(exit)) throw new Error(`the process failed: ${String(exit.cause)}`);
+  return exit.value;
+};
+
 describe("sessions directory", () => {
   test("a start that could not sync the directories above it syncs them on the next, so a crash keeps what it creates", async () => {
     for (let seed = 0; seed < 30; seed++) {
       const disk = new SimDisk(seededRandom(seed));
-      const host = <A, E>(body: (sessions: Service) => Effect.Effect<A, E>) =>
-        Effect.runPromiseExit(
-          Effect.scoped(Effect.flatMap(makeCore([paths, makeSessionsPlugin({ fs: disk.mount() })]), (core) => Effect.flatMap(core.run(Sessions), body))).pipe(
-            Effect.provide(TestClock.layer()),
-          ),
-        );
+      const host = <A, E>(body: (sessions: Service) => Effect.Effect<A, E>) => lifetime(disk.mount(), body);
       disk.faults.sync = 1;
       expect(Exit.isFailure(await host(() => Effect.void))).toBe(true);
       disk.faults.sync = 0;
@@ -372,6 +382,58 @@ describe("sessions directory", () => {
         `seed ${seed}`,
       ).toBe(true);
     }
+  });
+});
+
+describe("serving only what a crash keeps", () => {
+  test("a line left by an append whose sync and cut both failed is synced by the next process before it serves it", async () => {
+    // Seeds, so a crash drops or tears the line in some (unsynced, it would be lost), and keeps it in others.
+    for (let seed = 0; seed < 20; seed++) {
+      const disk = new SimDisk(seededRandom(seed));
+      const host = <A, E>(body: (sessions: Service) => Effect.Effect<A, E>) => lived(disk.mount(), body);
+      const note: EventData = { type: "custom", kind: "note", data: { text: "unconfirmed" } };
+      const { id } = await host((sessions) => sessions.create({ cwd: "/work/a" }));
+      // The disk fails the append's sync, then every cut of what it wrote, to the end of the process.
+      await host((sessions) =>
+        Effect.gen(function* () {
+          yield* sessions.events(id);
+          Object.assign(disk.faults, { sync: 1, truncate: 1 });
+          expect((yield* Effect.flip(sessions.append(id, note))).reason).toBe("Io");
+        }),
+      );
+      // A clean restart reads the line back (the page cache still has it): it is served only once it is written again
+      // and synced, as the failed sync dropped it from every later one.
+      Object.assign(disk.faults, { sync: 0, truncate: 0 });
+      const served = await host((sessions) => sessions.events(id));
+      expect(served.map((event) => event.data)).toEqual([note]);
+      disk.crash();
+      expect(await host((sessions) => sessions.events(id)), `seed ${seed}`).toEqual(served);
+    }
+  });
+
+  test("a session whose last line cannot be made durable is not served; a read-only one is served as it is", async () => {
+    const disk = new SimDisk(seededRandom(1));
+    const note: EventData = { type: "custom", kind: "note", data: { text: "kept" } };
+    const { id } = await lived(disk.mount(), (sessions) =>
+      Effect.flatMap(sessions.create({ cwd: "/work/a" }), (info) => Effect.as(sessions.append(info.id, note), info)),
+    );
+    /** The disk, where opening a session's file to write fails with `refuse`, or gives a handle whose sync fails. */
+    const opening = (refuse?: string): FileSystem => {
+      const fs = disk.mount();
+      return {
+        ...fs,
+        open: async (file, flags, mode) => {
+          if (flags !== "r+" || !file.endsWith(".jsonl")) return fs.open(file, flags, mode);
+          if (refuse !== undefined) throw Object.assign(new Error(`${refuse}: open '${file}'`), { code: refuse });
+          const handle = await fs.open(file, flags, mode);
+          return { ...handle, datasync: () => Promise.reject(Object.assign(new Error("EIO: i/o error, fdatasync"), { code: "EIO" })) };
+        },
+      };
+    };
+    const failing = await lifetime(opening(), (sessions) => Effect.flip(sessions.events(id)));
+    expect(Exit.isSuccess(failing) && failing.value).toMatchObject({ reason: "Io", message: expect.stringContaining("durable") });
+    const readOnly = await lived(opening("EACCES"), (sessions) => sessions.events(id));
+    expect(readOnly.map((event) => event.data)).toEqual([note]);
   });
 });
 

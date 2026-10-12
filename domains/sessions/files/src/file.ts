@@ -166,6 +166,34 @@ async function lastLineHolds(fs: FileSystem, file: string, from: Scanned): Promi
   }
 }
 
+/** What opening a file to write answers when it is read-only: archived, another user's, on a read-only mount. */
+const READ_ONLY = new Set(["EACCES", "EPERM", "EROFS"]);
+
+/**
+ * Makes a session's last line durable before it is served. Each write is one line, and one whose sync failed is cut
+ * before the next, so only the last line can be one whose sync and cut both failed (a failing disk): still readable,
+ * from the page cache, but not durable. A sync alone would not write it, as Linux marks the pages of a failed writeback
+ * clean; so it is written again, as it reads, then synced. A file that cannot be opened to write is served as it is, and
+ * a sync the platform does not support is skipped, as `syncDirectory` skips one; any other failure, such as EIO, is
+ * thrown. Due once per file per process: the sessions lock keeps any other Lemma process out meanwhile.
+ */
+export const confirmLast = async (fs: FileSystem, file: string, from: Pick<Scanned, "lastStart" | "validBytes">) => {
+  const length = from.validBytes - from.lastStart;
+  if (from.lastStart < 0 || length <= 0) return;
+  const handle = await fs.open(file, "r+").catch((cause) => {
+    if (!READ_ONLY.has(errorCode(cause) ?? "")) throw cause;
+  });
+  if (handle === undefined) return;
+  try {
+    const bytes = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, from.lastStart);
+    await handle.write(bytes, 0, bytesRead, from.lastStart);
+    await handle.datasync().catch(unsupported);
+  } finally {
+    await handle.close();
+  }
+};
+
 /** Where a session is filed: the latest value of each mark. */
 export interface FiledAs {
   readonly pinned: boolean;

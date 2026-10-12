@@ -55,7 +55,8 @@ costs re-reading the files.
   once its parent is synced; a failed directory sync fails the `create` and
   removes the file (one the platform cannot do at all is skipped). Appends to one session are serialized by
   a semaphore. The cost is one sync per event, and the agent appends only settled
-  events (never stream deltas).
+  events (never stream deltas); and a write and a sync of a session's last line
+  the first time a process opens it (below).
 - **Crash tolerance.** A write a crash cut short is a torn write: bytes after the
   last newline, or a last line that is not JSON (a power loss can keep a line's
   newline but not its bytes). It is ignored when reading, with a `Notice` when
@@ -63,7 +64,18 @@ costs re-reading the files.
   runtime (full disk, failed sync) fails the append and truncates the file back to
   the last confirmed line, at once or, failing that, before the next write, when
   the session is unloaded, or when the plugin closes; every confirmed line was
-  synced when it was written, so retrying never relies on a failed sync. Any other
+  synced when it was written, so retrying never relies on a failed sync. A line
+  that outlives a failed cut (a failing disk) stays readable, from the page cache,
+  but not durable, and no later sync writes it (Linux marks the pages of a failed
+  writeback clean). Only the last line can be one, as each write is one line and
+  cuts a failed one first; so the first time a process opens a session it writes
+  that line again, as it reads, and syncs it and the file's directory before
+  serving any event: about 2.4 ms a session on a btrfs SSD (macOS, whose sync
+  flushes the drive's cache, is not measured). A session whose line cannot be
+  made durable so is not served (`Io`, "Cannot make … durable"); one whose file
+  cannot be opened to write (read-only) is served as it is. `list` and `get` read
+  without this, so a summary (its `lastSeq`, leaf, title) can describe a line a
+  power loss then takes back. Any other
   complete line that does not decode, an unknown parent, a seq gap, or a checkout
   to nowhere makes the session `Corrupt`. Skipping such a line would silently
   change what the model saw.
@@ -150,6 +162,7 @@ the disk is healthy. Time comes from Effect's `Clock`, and ids from
 run. `LEMMA_SIM_RUNS` (default 100),
 `LEMMA_SIM_SEED`, and `LEMMA_SIM_PATH` (printed by a failure) control it; a
 failing seed becomes a regression test. It also counts the situations runs reach
-(torn tails, failed appends kept and dropped, removals undone by a crash) and
+(torn tails, failed appends kept and dropped, sessions read again after an
+unload, removals undone by a crash) and
 fails if one is never reached, so the generator cannot quietly stop covering
 them.
