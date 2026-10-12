@@ -11,7 +11,7 @@
 // iteration count; LEMMA_BENCH_ITERATIONS and LEMMA_BENCH_SAMPLES pass through. A benchmark the base does
 // not have yet is run on the head alone and left out of the comparison.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -37,14 +37,18 @@ const base = options.base ?? mergeBase();
 const baseSha = git("rev-parse", "--short", base);
 const work = mkdtempSync(join(tmpdir(), "lemma-bench-compare-"));
 const baseRoot = join(work, "base");
-/** Each benchmark: its script, the flags node runs it with, and the timings to compare (counts are the same anyway). */
+/**
+ * Each benchmark: its script, the flags node runs it with, the report it writes (`finish(report)`), and which of that
+ * report's measurements to compare: timings (counts are the same anyway).
+ */
 const benches = [
-  { script: "packages/core/bench/core.ts", node: [], compares: (_: string) => true },
+  { script: "packages/core/bench/core.ts", node: [], report: "microbench", compares: (_: string) => true },
   ...(options.harness
     ? [
         {
           script: "packages/sim/bench/harness.ts",
           node: ["--expose-gc", "--conditions=lemma-source"],
+          report: "harness",
           compares: (name: string) => name.endsWith("ms per step"),
         },
       ]
@@ -72,12 +76,9 @@ function measure(cwd: string, index: number, side: string): Map<string, number> 
   for (const bench of benches) {
     if (!existsSync(join(cwd, bench.script))) continue;
     run(process.execPath, [...bench.node, bench.script], cwd, { ...process.env, LEMMA_BENCH_OUTPUT_DIR: output, LEMMA_PERF_ENFORCE: "0" });
-  }
-  for (const file of readdirSync(output).filter((name) => name.endsWith(".json"))) {
-    const report = JSON.parse(readFileSync(join(output, file), "utf8")) as { measurements: Record<string, { value: number }> };
-    for (const [name, { value }] of Object.entries(report.measurements)) {
-      if (benches.some((bench) => bench.compares(name))) measured.set(name, value);
-    }
+    // Each benchmark's report filtered by its own `compares`.
+    const report = JSON.parse(readFileSync(join(output, `${bench.report}.json`), "utf8")) as { measurements: Record<string, { value: number }> };
+    for (const [name, { value }] of Object.entries(report.measurements)) if (bench.compares(name)) measured.set(name, value);
   }
   return measured;
 }
@@ -127,7 +128,7 @@ const rows = names.map((name) => {
     significant ? (change > 0 ? "slower" : "faster") : "~",
   ];
 });
-const header = ["benchmark (core: µs/op)", `base ${baseSha}`, "head", "change", "p", ""];
+const header = ["benchmark (core: µs/op; harness: ms)", `base ${baseSha}`, "head", "change", "p", ""];
 const widths = header.map((title, column) => Math.max(title.length, ...rows.map((row) => row[column]!.length)));
 for (const row of [header, ...rows])
   console.log(row.map((cell, column) => (column === 0 ? cell.padEnd(widths[column]!) : cell.padStart(widths[column]!))).join("  "));

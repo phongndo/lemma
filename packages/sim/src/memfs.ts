@@ -154,11 +154,6 @@ export class MemFs implements FileSystem {
     if (file !== undefined) file.mtimeMs = typeof mtime === "number" ? mtime * 1000 : mtime.getTime();
   }
 
-  /** Every file's bytes, by path: what the benchmark's run left. */
-  bytes(): ReadonlyMap<string, number> {
-    return new Map([...this.files].map(([path, file]) => [path, file.length]));
-  }
-
   private statOf(file: Contents): FileStats {
     return { size: file.length, mtimeMs: file.mtimeMs, ino: file.ino, nlink: file.nlink };
   }

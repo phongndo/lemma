@@ -24,7 +24,7 @@ describe("the harness benchmark", () => {
       bytesWritten: at100("bytes written per step"),
       hooks: at100("hooks run per step"),
       published: at100("events published per step"),
-    }).toEqual({ eventsRead: 510, syncs: 8, bytesWritten: 2348, hooks: 3, published: 22 });
+    }).toEqual({ eventsRead: 510, syncs: 8, bytesWritten: 2348, hooks: 3, published: 23 });
     expect(Number.isFinite(at100("ms per step"))).toBe(true);
   });
 });

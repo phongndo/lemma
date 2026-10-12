@@ -15,9 +15,8 @@ import { Effect } from "effect";
 import type { Context } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { Agent, AgentContinueHook, AgentInputHook, AgentRequestHook, AssistantDelta, QueueChanged, TurnEnded, TurnStarted } from "@lemma/agent";
-import { LlmRequestHook } from "@lemma/llm";
 import { SessionAppended, SessionChanged, Sessions } from "@lemma/sessions";
-import { ToolExecuteHook, ToolOutput } from "@lemma/tools";
+import { ToolExecuted, ToolExecuteHook, ToolOutput } from "@lemma/tools";
 import { finish, record } from "../../core/bench/budgets.ts";
 import { SimHost } from "../src/host.ts";
 import { MemFs } from "../src/memfs.ts";
@@ -56,7 +55,6 @@ const usage = () => ({
 
 /** What the harness does, counted. */
 const counts = {
-  branchReads: 0,
   /** Events the store hands back when the agent reads a branch or a log: what each step walks. */
   eventsRead: 0,
   hooks: 0,
@@ -72,22 +70,20 @@ const heard: number[] = [];
 
 const counting = (sessions: Context.Service.Shape<typeof Sessions>): Context.Service.Shape<typeof Sessions> => ({
   ...sessions,
-  branch: (sessionId, options) =>
-    Effect.tap(sessions.branch(sessionId, options), (events) =>
-      Effect.sync(() => {
-        counts.branchReads++;
-        counts.eventsRead += events.length;
-      }),
-    ),
+  branch: (sessionId, options) => Effect.tap(sessions.branch(sessionId, options), (events) => Effect.sync(() => void (counts.eventsRead += events.length))),
   events: (sessionId, options) => Effect.tap(sessions.events(sessionId, options), (events) => Effect.sync(() => void (counts.eventsRead += events.length))),
 });
 
-/** Counts every hook run and event published, passing each on: what a step costs in the kernel's dispatch. */
+/**
+ * Counts every hook the harness runs and every event it publishes, passing each on: what a step costs in the kernel's
+ * dispatch. The simulated model is an `Llm` of its own, so no `LlmRequestHook` runs: a provider plugin's would, one a
+ * step.
+ */
 const meter = definePlugin({
   id: "bench.meter",
   setup: function* () {
     const owner = yield* PluginContext;
-    for (const hook of [AgentInputHook, AgentRequestHook, AgentContinueHook, LlmRequestHook, ToolExecuteHook] as const) {
+    for (const hook of [AgentInputHook, AgentRequestHook, AgentContinueHook, ToolExecuteHook] as const) {
       yield* owner.on(hook as typeof AgentRequestHook, (input, next) =>
         Effect.andThen(
           Effect.sync(() => void counts.hooks++),
@@ -95,7 +91,7 @@ const meter = definePlugin({
         ),
       );
     }
-    for (const event of [SessionAppended, SessionChanged, TurnStarted, TurnEnded, QueueChanged, ToolOutput] as const) {
+    for (const event of [SessionAppended, SessionChanged, TurnStarted, TurnEnded, QueueChanged, ToolOutput, ToolExecuted] as const) {
       yield* owner.observe(event as typeof TurnStarted, () => Effect.sync(() => void counts.published++), { buffer: 1 << 16, overflow: "suspend" });
     }
     yield* owner.observe(

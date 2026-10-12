@@ -51,7 +51,7 @@ export const budgets = {
   "Harness / 1000 entries / bytes written per step": 2_600,
   "Harness / 10000 entries / bytes written per step": 2_600,
   "Harness / 100 entries / hooks run per step": 3,
-  "Harness / 100 entries / events published per step": 22,
+  "Harness / 100 entries / events published per step": 23,
   "Harness / 100 entries / ms per step": 3,
   "Harness / 10000 entries / ms per step": 10,
   "Harness / 10000 entries / heap MB": 64,

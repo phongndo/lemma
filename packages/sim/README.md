@@ -43,9 +43,10 @@ the determinism tests fail on any timer a run starts (see "Running it").
 
 ## A host
 
-`SimHost.start(sim, disk, generation, parts, alive)` starts a host process: a
-core with `sessions.files`, `agent.loop`, and `tools.registry` on a mount of a
-`SimDisk` (`@lemma/testing`), their ids drawn from the run, the sessions lock
+`SimHost.start(sim, fs, generation, parts, alive)` starts a host process: a core
+with `sessions.files`, `agent.loop`, and `tools.registry` on `fs`, a mount of a
+`SimDisk` (`@lemma/testing`) or, for the benchmark, a `MemFs`, their ids drawn
+from the run, the sessions lock
 claimed by `generation` as its pid. `alive` holds the generations still running:
 a lock an earlier one holds is stale once it is not among them, as a crashed
 process's is. `parts` adds the rest: compaction, the simulated
@@ -55,7 +56,8 @@ stalls, broken streams, malformed calls, and usage that fills the context),
 tools (`simTools`: `echo`, safe to repeat; `work`, which prints a line per
 step, may fail or run for minutes, and is unsafe to repeat), a plugin around
 the agent's operations that slows or fails them (`simHooks`), and the checker's
-observer. `digestOf(disk)` hashes every file on the disk (its doc says how it
+observer; `wrapSessions` wraps the store's service (the benchmark counts its
+reads so). `digestOf(disk)` hashes every file on the disk (its doc says how it
 counts a temporary one a crash left).
 
 ## A run: `World`
@@ -183,7 +185,9 @@ bandwidth and latency):
 At first (2026-10-12, Ryzen 9 9950X): a step reads its whole branch back about
 three times (510, 3,201, and 30,228 events at 100, 1,000, and 10,000 entries)
 and takes 1.35, 1.59, and 5.16 ms, 3.3 times as long at 10,000 entries as at
-1,000; 8 syncs and 2.3 KB written; 3 hooks run and 22 events published; a
+1,000; 8 syncs and 2.3 KB written; 3 hooks run (and a provider plugin's
+`LlmRequestHook`, which the simulated model runs none of) and 23 events
+published; a
 delta reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs
 stay as they are: each is a point the agent's resume depends on, and syncing
 two lines at once would need the store's contract to say which may share one.
