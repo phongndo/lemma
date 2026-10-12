@@ -181,6 +181,15 @@ describe("slots", () => {
     });
   });
 
+  it("takes a part's slot named before its part is declared for a part's, and refuses a default phase without phases", () => {
+    // One web half adds to another's part, by name, before the other has declared it.
+    const early = defineSlot("part.test.early-row");
+    expect(early.options.phases).toEqual(["replace", "default"]);
+    expect(definePart("test.early-row")).toBe(early);
+    expect(defineSlot("test.not-a-part").options.phases).toBeUndefined();
+    expect(() => defineSlot("test.stray-default", { defaultPhase: "b" })).toThrow("has a default phase but no phases");
+  });
+
   it("fixes what a slot shows and its phases at its first declaration, and refuses a different one", () => {
     const declared = defineSlot<{ readonly label: string }>("test.declared", { shows: "first" });
     expect(declared.options.phases).toEqual(["replace", "default"]);

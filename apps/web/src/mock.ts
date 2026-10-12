@@ -475,9 +475,9 @@ export const createMockHost = (): Host => {
 
   // Wiring as the kernel reports it, so the inspector has hooks and observers to show.
   const wiring: Record<string, Partial<PluginStatus>> = {
-    "context.compaction": { hooks: [{ name: "lemma/agent.request", order: 1000 }] },
+    "context.compaction": { hooks: [{ name: "lemma/agent.request", phase: "fit", rank: 1, order: 0 }] },
     "tools.bash": { hooks: [{ name: "lemma/tool.execute", order: 0 }] },
-    "agent.loop": { hooks: [{ name: "lemma/agent.request", order: 0 }] },
+    "agent.loop": { hooks: [{ name: "lemma/agent.request", phase: "shape", rank: 0, order: 0 }] },
     "transport.server": {
       hooks: [{ name: "lemma/interaction.request", order: 0 }],
       observes: ["lemma/notice", "lemma/plugins.changed", "lemma/web.changed"],

@@ -7,6 +7,7 @@ import {
   formatCapabilities,
   formatChannels,
   formatDiff,
+  formatHooks,
   formatPlugin,
   formatPlugins,
   formatRecords,
@@ -196,6 +197,23 @@ describe("formatPlugins", () => {
     ]);
     expect(text).toContain("left out: its config is invalid at maxSteps: Expected number");
     expect(text).toContain("needs agent, which is left out");
+  });
+});
+
+describe("a hook with phases", () => {
+  const base = { version: "1", source: "bundled" as const, enabled: true, state: "active" as const, provides: [], requires: [] };
+  // A handler late in `shape`, by its order, runs before compaction early in `fit`.
+  const plugins: PluginStatus[] = [
+    { ...base, id: "compaction", hooks: [{ name: "agent.request", phase: "fit", rank: 1, order: -5 }] },
+    { ...base, id: "zzz", hooks: [{ name: "agent.request", phase: "shape", rank: 0, order: 1000 }] },
+  ];
+
+  test("each chain names each handler's phase, in run order", () => {
+    expect(formatHooks(kernelOf(plugins, []))).toBe("agent.request\n  1.  zzz         shape · order 1000\n  2.  compaction  fit · order -5");
+  });
+
+  test("a plugin's place in a chain is by phase", () => {
+    expect(formatPlugin(plugins, plugins[0]!, [])).toContain("  agent.request  fit · order -5, 2 of 2");
   });
 });
 

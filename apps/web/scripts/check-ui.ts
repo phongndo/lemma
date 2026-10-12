@@ -1251,9 +1251,12 @@ const devtools = async () => {
   // The host's plugins too, and each hook's chain in run order.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Hooks");
   await page.click("[aria-label=Hooks] tr:has(td:text-is('lemma/agent.request'))");
-  // By order: agent.loop at 0, then context.compaction at 1000, after every other handler.
-  for (const [position, id] of ["agent.loop", "context.compaction"].entries()) {
-    await page.waitForSelector(`[aria-label='Hook details'] tr:has(td:text-is('${position + 1}')) >> button:text-is('${id}')`);
+  // By phase: agent.loop shapes the request, then context.compaction, in `fit`, sizes what every other handler made.
+  for (const [position, [id, place]] of [
+    ["agent.loop", "shape · order 0"],
+    ["context.compaction", "fit · order 0"],
+  ].entries()) {
+    await page.waitForSelector(`[aria-label='Hook details'] tr:has(td:text-is('${position + 1}')):has(td:text-is('${place}')) >> button:text-is('${id}')`);
   }
   // Registries: the web app's slots, live, with who fills each and how to add to it.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Registries");

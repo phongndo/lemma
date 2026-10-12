@@ -27,29 +27,41 @@ export const FIRST_WINS: PhaseOptions = Object.freeze({ phases: Object.freeze(["
 
 const named = new Map<string, { readonly slot: Slot<any>; readonly shows: "first" | "all"; fallback?: Component<any> }>();
 
+/** The phases a declaration gives its slot; a default phase without phases is passed on, for `Registry.make` to refuse. */
 const phasesOf = (options: SlotOptions): PhaseOptions =>
-  options.phases !== undefined
-    ? { phases: options.phases, ...(options.defaultPhase === undefined ? {} : { defaultPhase: options.defaultPhase }) }
+  options.phases !== undefined || options.defaultPhase !== undefined
+    ? {
+        ...(options.phases === undefined ? {} : { phases: options.phases }),
+        ...(options.defaultPhase === undefined ? {} : { defaultPhase: options.defaultPhase }),
+      }
     : options.shows === "first"
       ? FIRST_WINS
       : {};
 
+/** A part's slot (`definePart`) is named `part.<name>`. */
+const PART = "part.";
+
 /**
  * The slot with this name: the same token each time, so a web half loaded again after an edit, or two files naming
  * one slot, share it. The first declaration fixes what shows and the phases; naming the slot again without options
- * finds it, and with different ones throws, as a slot cannot be two things.
+ * finds it, and with different ones throws, as a slot cannot be two things. A part's slot (`part.<name>`) named
+ * without options before its part is declared (one web half adding to another's part, loaded first) is a part's.
  */
-export const defineSlot = <T>(name: string, options: SlotOptions = {}): Slot<T> => {
+export const defineSlot = <T>(name: string, given: SlotOptions = {}): Slot<T> => {
   const found = named.get(name);
+  const options: SlotOptions =
+    found === undefined && given.shows === undefined && given.phases === undefined && given.defaultPhase === undefined && name.startsWith(PART)
+      ? { shows: "first" }
+      : given;
   const declared: SlotOptions = { shows: options.shows ?? "all", ...phasesOf(options) };
   if (found === undefined) {
     const slot = Registry.make<SlotItem<any>>(name, { key: (item) => item.id, ...phasesOf(options) });
     named.set(name, { slot, shows: declared.shows! });
     return slot as Slot<T>;
   }
-  if (options.shows !== undefined || options.phases !== undefined) {
+  if (options.shows !== undefined || options.phases !== undefined || options.defaultPhase !== undefined) {
     const { phases, defaultPhase } = found.slot.options;
-    const same = declared.shows === found.shows && declared.defaultPhase === defaultPhase && `${declared.phases}` === `${phases}`;
+    const same = declared.shows === found.shows && declared.defaultPhase === defaultPhase && JSON.stringify(declared.phases) === JSON.stringify(phases);
     if (!same) throw new Error(`${name} is declared already, showing ${found.shows}${phases === undefined ? "" : ` in phases ${phases.join(", ")}`}`);
   }
   return found.slot as Slot<T>;
@@ -79,7 +91,7 @@ export interface Region<P extends Record<string, any> = {}> {
  */
 export type Part<P extends Record<string, any>> = Slot<Region<P>>;
 export const definePart = <P extends Record<string, any>>(name: string, fallback?: Component<P>): Part<P> => {
-  const part = defineSlot<Region<P>>(`part.${name}`, { shows: "first" });
+  const part = defineSlot<Region<P>>(`${PART}${name}`, { shows: "first" });
   if (fallback === undefined) return part;
   const entry = named.get(part.name)!;
   if (entry.fallback !== undefined && entry.fallback !== fallback) throw new Error(`${part.name} has a fallback from its declaration, which nothing changes`);

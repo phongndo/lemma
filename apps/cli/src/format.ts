@@ -11,6 +11,10 @@ import type { DirectoryListing, FileSearchResult, GitBranch, WorkspaceStatus } f
 import type { Target } from "./command.ts";
 import type { TurnResult } from "./run.ts";
 
+/** A handler's place in its hook's chain: its phase, when the hook declares phases, and its order (in it). */
+const placeOf = (place: { readonly phase?: string | undefined; readonly order: number }) =>
+  `${place.phase === undefined ? "" : `${place.phase} · `}order ${place.order}`;
+
 /** Human-readable output. `--json` bypasses all of this and prints the contract shapes. */
 
 const pad = (rows: readonly (readonly string[])[]): string => {
@@ -110,8 +114,8 @@ export const formatPlugin = (plugins: readonly PluginStatus[], plugin: PluginSta
     ...(plugin.hooks?.length
       ? plugin.hooks.map((hook) => {
           const chain = hookChain(plugins, hook.name);
-          const at = chain.findIndex((entry) => entry.plugin === plugin.id && entry.order === hook.order);
-          return `  ${hook.name}  order ${hook.order}, ${chain.length > 1 ? `${at + 1} of ${chain.length}` : "only handler"}`;
+          const at = chain.findIndex((entry) => entry.plugin === plugin.id && entry.phase === hook.phase && entry.order === hook.order);
+          return `  ${hook.name}  ${placeOf(hook)}, ${chain.length > 1 ? `${at + 1} of ${chain.length}` : "only handler"}`;
         })
       : ["  none"]),
     "Observes",
@@ -565,7 +569,7 @@ export const formatHooks = (kernel: KernelView): string =>
   kernel.hooks.length === 0
     ? "No hooks are intercepted."
     : kernel.hooks
-        .map((hook) => `${hook.name}\n${pad(hook.handlers.map((handler, index) => [`  ${index + 1}.`, handler.plugin, `order ${handler.order}`]))}`)
+        .map((hook) => `${hook.name}\n${pad(hook.handlers.map((handler, index) => [`  ${index + 1}.`, handler.plugin, placeOf(handler)]))}`)
         .join("\n\n");
 
 /** Each registry and who contributes to it. */

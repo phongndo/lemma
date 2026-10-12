@@ -177,7 +177,13 @@ const slotViews = (slots: SlotsService): SlotView[] =>
 const placeOf = (item: { readonly phase?: string; readonly order: number }) => `${item.phase === undefined ? "" : `${item.phase} · `}${item.order}`;
 
 const snippet = (view: SlotView): string => {
-  const target = view.contract === undefined ? `defineSlot(${JSON.stringify(view.name)})` : view.contract.name;
+  // A part not in a contract is a web half's own: another names it with `api.definePart`, which declares it as a part.
+  const target =
+    view.contract !== undefined
+      ? view.contract.name
+      : view.name.startsWith("part.")
+        ? `api.definePart(${JSON.stringify(view.name.slice("part.".length))})`
+        : `defineSlot(${JSON.stringify(view.name)})`;
   // A web half takes the contracts from its api (no build step resolves an import); the name says which contract.
   const from = view.contract === undefined ? "" : `const { ${view.contract.name} } = api.contracts; // ${view.contract.from}\n`;
   const { phases, defaultPhase } = view;

@@ -767,7 +767,7 @@ export default defineWebPlugin({
       now,
       toolView: (name) => slots.get(ToolViews, name),
     };
-    // Its own parts' defaults; any plugin replaces one by adding with a lower order.
+    // Its own parts' defaults, in the phase `default`: any plugin replaces one by adding one of its own.
     const part = <P extends Record<string, any>>(slot: Part<P>, component: Component<P>) =>
       slots.add(slot, { id: `chat.${slot.name.slice("part.chat.".length)}`, phase: "default", component });
     part(ChatUserPart, UserView);
