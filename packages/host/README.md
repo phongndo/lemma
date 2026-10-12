@@ -63,20 +63,22 @@ stops every session with it, and nothing on the loop can notice.
   - The worker's own late ticks: the machine slept, or the process was stopped.
   - A loop held at a debugger's breakpoint.
 - **Whose code it was.** The worker reads the blocked thread's stack five
-  times through the inspector. Each read pauses the thread for a few
-  milliseconds. It names the plugin whose code is innermost on most of the
-  stacks, from where each plugin's code is (`CodeOwner`):
+  times through the inspector. Each read evaluates `new Error().stack` on that
+  thread, which the inspector serves between the instructions it runs, in
+  about a millisecond, pausing nothing. It names the plugin whose code is
+  innermost on most of the stacks, from where each plugin's code is
+  (`CodeOwner`):
   - a bundled plugin's package (`domains/<domain>/<name>`);
   - a local plugin's file or folder.
 
   Code in the kernel, in Effect, or in the host counts for the plugin that
   called it.
 
-- **Why stacks, not a profile.** A CPU profile would not pause the thread.
-  But one started after the loop began misses the loop's own frame once V8
-  has optimized it, and names its caller instead, often the kernel.
-- **Where it cannot tell.** A thread blocked outside JavaScript answers a
-  pause only once it returns, so stacks read after that are left out. Where
+- **Why stacks, not a profile.** A CPU profile started after the loop began
+  misses the loop's own frame once V8 has optimized it, and names its caller
+  instead, often the kernel.
+- **Where it cannot tell.** A thread blocked outside JavaScript answers only
+  once it returns, so stacks read after that are left out. Where
   the runtime has no inspector, the stall is said without a plugin.
 - **Once the loop runs again**, the stall is logged and kept in the trace as
   a `host.stall` span over its time. The span carries `stall.ms`, and

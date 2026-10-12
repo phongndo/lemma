@@ -73,7 +73,10 @@ describe("attribute", () => {
     ];
     const notes = ["file:///plugins/notes/index.ts?v=123", "file:///repo/domains/agent/loop/src/turn.ts"];
     const nobody = ["node:internal/timers", ""];
+    // A CommonJS script is named by its path.
+    const required = ["/repo/packages/core/src/hooks.js", "/plugins/notes/vendor/inner.js"];
     expect(attribute([turn, turn, notes, nobody], owners)).toEqual({ pluginId: "agent.loop", share: 2 / 4 });
+    expect(attribute([required], owners)).toEqual({ pluginId: "inner", share: 1 });
     expect(attribute([nobody, nobody], owners)).toEqual({});
     expect(attribute([], owners)).toEqual({});
   });

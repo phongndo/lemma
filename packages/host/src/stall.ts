@@ -1,7 +1,7 @@
 import inspector from "node:inspector";
 import { Context, Exit, Option } from "effect";
 import type { Tracer } from "effect";
-import { sep } from "node:path";
+import { isAbsolute, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 
@@ -13,11 +13,12 @@ import { Worker } from "node:worker_threads";
  * thread's stack a few times through the inspector, and names the plugin whose code most of them were in, from where
  * each plugin's code lives (`CodeOwner`).
  *
- * Each read pauses the thread for a few milliseconds (`Debugger.pause`, served while it runs JavaScript) and resumes it
- * at once. A CPU profile would not pause it, but one started after the work began misses that work's own frame once
- * V8 has optimized the running loop (the profiler never saw that code made), and names its caller instead: often the
- * kernel, which called the plugin's handler. A thread blocked outside JavaScript answers no pause until it returns:
- * a stack read once the loop has run again shows other work, and is left out.
+ * A read evaluates `new Error().stack` on the blocked thread (`Runtime.evaluate`, which the inspector serves between
+ * the instructions of the JavaScript it runs, in about a millisecond): it runs nested on top of the work that blocks
+ * the thread, so that work's frames are below it, and nothing is paused. A CPU profile started after the work began
+ * would miss that work's own frame once V8 has optimized the running loop (the profiler never saw that code made),
+ * and name its caller instead: often the kernel, which called the plugin's handler. A thread blocked outside
+ * JavaScript answers only once it returns: a stack read once the loop has run again shows other work, and is left out.
  */
 
 /** Where a plugin's code lives: a directory (a bundled plugin's package, a folder plugin) or one file. */
@@ -168,7 +169,8 @@ export const ownerOfFile = (owners: readonly CodeOwner[], file: string): string 
 };
 
 /**
- * Whose code a stall ran, from stacks of the blocked thread (each a list of script URLs, innermost first): each stack
+ * Whose code a stall ran, from stacks of the blocked thread (each a list of script names, file URLs or paths, innermost
+ * first): each stack
  * goes to the plugin owning its innermost frame that is a plugin's (the kernel, Effect, and the host are no plugin's,
  * so time spent in them goes to the plugin that called them), and the plugin with the most stacks is named, with its
  * share of them all. None is named when no stack held any plugin's code.
@@ -176,7 +178,8 @@ export const ownerOfFile = (owners: readonly CodeOwner[], file: string): string 
 export function attribute(stacks: readonly (readonly string[])[], owners: readonly CodeOwner[]): { readonly pluginId?: string; readonly share?: number } {
   const byUrl = new Map<string, string | undefined>();
   const ownerOfUrl = (url: string) => {
-    if (!byUrl.has(url)) byUrl.set(url, url.startsWith("file:") ? ownerOfFile(owners, fileURLToPath(url)) : undefined);
+    if (!byUrl.has(url))
+      byUrl.set(url, url.startsWith("file:") ? ownerOfFile(owners, fileURLToPath(url)) : isAbsolute(url) ? ownerOfFile(owners, url) : undefined);
     return byUrl.get(url);
   };
   const counts = new Map<string, number>();

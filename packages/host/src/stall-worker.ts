@@ -28,39 +28,38 @@ const write = (line: string) => {
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-interface Frame {
-  readonly location: { readonly scriptId: string };
-}
+/**
+ * Evaluated on the blocked thread: the script of each frame of its stack, innermost first. It runs nested on top of
+ * the work that blocks the thread, so that work's frames are below it; `Error`'s settings are put back at once.
+ */
+const STACK = `(() => {
+  const { prepareStackTrace: prepare, stackTraceLimit: limit } = Error;
+  Error.stackTraceLimit = 64;
+  Error.prepareStackTrace = (_, sites) => sites.map((site) => site.getScriptNameOrSourceURL() ?? site.getFileName() ?? "");
+  try {
+    return new Error().stack;
+  } finally {
+    Error.prepareStackTrace = prepare;
+    Error.stackTraceLimit = limit;
+  }
+})()`;
 
 /**
  * The blocked thread's stack, read up to `snapshots` times while the loop stays blocked at `blocked` beats: each a list
- * of script URLs, innermost first. Every pause is resumed the moment it is heard, whoever's it is, and one heard after
- * the loop ran again (a thread blocked outside JavaScript answers only once it returns) is left out.
+ * of script names (file URLs, or paths), innermost first. A read answered once the loop ran again (a thread blocked
+ * outside JavaScript answers only once it returns) shows other work, and is left out.
  */
 const stacks = async (blocked: number): Promise<readonly (readonly string[])[]> => {
   if (!inspectable) return [];
   const session = new Session();
-  const scripts = new Map<string, string>();
-  const read: string[][] = [];
-  let heard: (() => void) | undefined;
-  session.on("Debugger.scriptParsed", ({ params }) => void scripts.set(params.scriptId, params.url));
-  session.on("Debugger.paused", ({ params }) => {
-    void session.post("Debugger.resume").catch(() => undefined);
-    if (Atomics.load(counters, 0) === blocked) read.push((params.callFrames as readonly Frame[]).map((frame) => scripts.get(frame.location.scriptId) ?? ""));
-    heard?.();
-  });
+  const read: (readonly string[])[] = [];
   try {
     session.connectToMainThread();
-    // Enabling reports every script already parsed, so a frame's script is known by its id.
-    await session.post("Debugger.enable");
     for (let taken = 0; taken < snapshots && Atomics.load(counters, 0) === blocked; taken++) {
-      // Waited for however long it takes: a pause asked for is always heard, and resumed, before the session ends.
-      const paused = new Promise<void>((resolve) => (heard = resolve));
-      await session.post("Debugger.pause");
-      await paused;
+      const { result } = await session.post("Runtime.evaluate", { expression: STACK, returnByValue: true });
+      if (Atomics.load(counters, 0) === blocked && Array.isArray(result.value)) read.push(result.value as readonly string[]);
       await delay(gapMs);
     }
-    await session.post("Debugger.disable");
   } catch {
     // Nothing to attribute it with; the stall is still said.
   } finally {
