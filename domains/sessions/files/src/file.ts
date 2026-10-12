@@ -70,23 +70,10 @@ const CHUNK = 1 << 20;
  * starts at, reading a chunk at a time: no string ever holds the whole file,
  * so one too big for a single string still reads. `visit` returning false
  * stops the read. Bytes after the last newline are not a line.
- *
- * `durable`: the file is synced before it is read. A line a previous process
- * wrote, whose sync then failed and which it could not cut away, is still
- * readable (from the page cache) but would be lost to a power loss: what a
- * reader is shown must not be what a crash can take back. Cheap when nothing
- * is pending; a sync that fails fails the read.
  */
-async function readLines(
-  fs: FileSystem,
-  file: string,
-  from: number,
-  visit: (text: string, start: number) => boolean,
-  durable = false,
-): Promise<Extent & Stamp> {
-  const handle = await fs.open(file, durable ? "r+" : "r");
+async function readLines(fs: FileSystem, file: string, from: number, visit: (text: string, start: number) => boolean): Promise<Extent & Stamp> {
+  const handle = await fs.open(file, "r");
   try {
-    if (durable) await handle.datasync();
     const { mtimeMs, ino, size } = await handle.stat();
     // Small files get a small buffer: a cold `list` reads many at once.
     const chunk = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1 << 16, size - from)));
@@ -128,7 +115,6 @@ async function readJson(
   file: string,
   from: { readonly validBytes: number; readonly lines: number } & Partial<LastLine>,
   visit: (json: unknown, line: number) => string | undefined,
-  durable = false,
 ): Promise<{ readonly extent: Extent & Stamp; readonly lines: number; readonly last?: LastLine; readonly failure?: string }> {
   let line = from.lines;
   let failure: string | undefined;
@@ -136,30 +122,24 @@ async function readJson(
   /** The last line taken: where it starts, and its text. */
   let lastStart = -1;
   let lastText = "";
-  const extent = await readLines(
-    fs,
-    file,
-    from.validBytes,
-    (text, start) => {
-      line++;
-      if (unreadable !== undefined) {
-        failure = `line ${unreadable.line}: not JSON`;
-        return false;
-      }
-      let json: unknown;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        unreadable = { line, start };
-        return true;
-      }
-      failure = visit(json, line);
-      lastStart = start;
-      lastText = text;
-      return failure === undefined;
-    },
-    durable,
-  );
+  const extent = await readLines(fs, file, from.validBytes, (text, start) => {
+    line++;
+    if (unreadable !== undefined) {
+      failure = `line ${unreadable.line}: not JSON`;
+      return false;
+    }
+    let json: unknown;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      unreadable = { line, start };
+      return true;
+    }
+    failure = visit(json, line);
+    lastStart = start;
+    lastText = text;
+    return failure === undefined;
+  });
   const lastLine =
     lastStart >= 0
       ? { lastStart, lastHash: lineHash(lastText) }
@@ -185,6 +165,34 @@ async function lastLineHolds(fs: FileSystem, file: string, from: Scanned): Promi
     await handle.close();
   }
 }
+
+/** What opening a file to write answers when it is read-only: archived, another user's, on a read-only mount. */
+const READ_ONLY = new Set(["EACCES", "EPERM", "EROFS"]);
+
+/**
+ * Makes a session's last line durable before it is served. Each write is one line, and one whose sync failed is cut
+ * before the next, so only the last line can be one whose sync and cut both failed (a failing disk): still readable,
+ * from the page cache, but not durable. A sync alone would not write it, as Linux marks the pages of a failed writeback
+ * clean; so it is written again, as it reads, then synced. A file that cannot be opened to write is served as it is, and
+ * a sync the platform does not support is skipped, as `syncDirectory` skips one; any other failure, such as EIO, is
+ * thrown. Due once per file per process: the sessions lock keeps any other Lemma process out meanwhile.
+ */
+export const confirmLast = async (fs: FileSystem, file: string, from: Pick<Scanned, "lastStart" | "validBytes">) => {
+  const length = from.validBytes - from.lastStart;
+  if (from.lastStart < 0 || length <= 0) return;
+  const handle = await fs.open(file, "r+").catch((cause) => {
+    if (!READ_ONLY.has(errorCode(cause) ?? "")) throw cause;
+  });
+  if (handle === undefined) return;
+  try {
+    const bytes = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, from.lastStart);
+    await handle.write(bytes, 0, bytesRead, from.lastStart);
+    await handle.datasync().catch(unsupported);
+  } finally {
+    await handle.close();
+  }
+};
 
 /** Where a session is filed: the latest value of each mark. */
 export interface FiledAs {
@@ -215,10 +223,9 @@ interface Loaded {
 }
 
 /**
- * Reads and validates a whole session, synced first (see `readLines`). Any
- * unreadable complete line but the last, an event whose parent is unknown, or
- * a checkout to nowhere is `Corrupt`: skipping one would silently change what
- * the model saw.
+ * Reads and validates a whole session. Any unreadable complete line but the
+ * last, an event whose parent is unknown, or a checkout to nowhere is
+ * `Corrupt`: skipping one would silently change what the model saw.
  */
 export function load(fs: FileSystem, file: string, sessionId: string): Effect.Effect<Loaded, SessionError> {
   return Effect.suspend(() => {
@@ -260,7 +267,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
       updatedAt = Math.max(updatedAt, line.at);
       return undefined;
     };
-    return Effect.tryPromise({ try: () => readJson(fs, file, { validBytes: 0, lines: 0 }, visit, true), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
+    return Effect.tryPromise({ try: () => readJson(fs, file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
       Effect.flatMap(({ extent, lines, last, failure }) => {
         if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
         // The header is synced before `create` returns, so a file without one was never a session.

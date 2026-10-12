@@ -11,6 +11,9 @@ import type { FileHandle, FileStats, FileSystem } from "@lemma/contracts/fs";
  *   At a crash, a file appended to since keeps its durable bytes plus some prefix
  *   of the rest, which may end mid-line and may be followed by zeros (a size
  *   that reached the disk before the data did, as ext4 can leave).
+ * - A sync that fails drops what it had to write, as Linux does: those bytes
+ *   stay readable, but no later sync writes them (their pages are clean) until
+ *   they are written again; until then a sync leaves zeros there on the disk.
  * - A name (created, renamed, or removed) is durable once its directory is
  *   synced (`open(dir, "r")` then `sync()`); otherwise a crash may undo it.
  * - `faults` makes operations fail as a full or failing disk does, with
@@ -91,6 +94,7 @@ export class SimDisk {
       if (inode.kind !== "file") continue;
       inode.data = this.survivor(inode);
       inode.durable = inode.data;
+      inode.lost = undefined;
     }
     // A name created since its directory's last sync may be gone; one removed or replaced may be back.
     const names = new Map<string, number>();
@@ -184,7 +188,7 @@ export class SimDisk {
 
   private mkInode(kind: Inode["kind"]): number {
     const ino = this.nextIno++;
-    this.files.set(ino, { ino, kind, data: new Uint8Array(), durable: new Uint8Array(), nlink: 0, mtimeMs: this.tick() });
+    this.files.set(ino, { ino, kind, data: new Uint8Array(), durable: new Uint8Array(), lost: undefined, nlink: 0, mtimeMs: this.tick() });
     return ino;
   }
 
@@ -255,6 +259,20 @@ export class SimDisk {
           buffer.set(bytes, offset);
           return { bytesRead: bytes.length };
         }),
+      write: (buffer, offset, length, position) =>
+        op(() => {
+          const bytes = buffer.subarray(offset, offset + length);
+          const end = position + bytes.length;
+          const data = new Uint8Array(Math.max(inode.data.length, end));
+          data.set(inode.data);
+          data.set(bytes, position);
+          this.change(inode, data);
+          // Written again: what a failed sync dropped is pending once more, where this write covers it.
+          const lost = inode.lost;
+          if (lost !== undefined && position <= lost.from && end > lost.from) inode.lost = end >= lost.to ? undefined : { from: end, to: lost.to };
+          else if (lost !== undefined && position < lost.to && end >= lost.to) inode.lost = { from: lost.from, to: position };
+          return { bytesWritten: bytes.length };
+        }),
       appendFile: (text) => op(() => append(encode(text))),
       writeFile: (text) =>
         op(() => {
@@ -271,13 +289,13 @@ export class SimDisk {
       datasync: () =>
         op(() => {
           // A failed sync leaves it unknown what reached the disk: nothing is promised.
-          this.fault("sync", "EIO");
-          inode.durable = inode.data;
+          this.syncFault(inode);
+          inode.durable = this.synced(inode);
         }),
       sync: () =>
         op(() => {
-          this.fault("sync", "EIO");
-          if (inode.kind === "file") inode.durable = inode.data;
+          this.syncFault(inode);
+          if (inode.kind === "file") inode.durable = this.synced(inode);
           else this.syncDirectory(name);
         }),
       close: () =>
@@ -290,6 +308,33 @@ export class SimDisk {
   private change(inode: Inode, data: Uint8Array): void {
     inode.data = data;
     inode.mtimeMs = this.tick();
+    // Cut away, what a failed sync dropped is gone with it.
+    if (inode.lost !== undefined && data.length <= inode.lost.from) inode.lost = undefined;
+    else if (inode.lost !== undefined) inode.lost = { from: inode.lost.from, to: Math.min(inode.lost.to, data.length) };
+  }
+
+  /** An injected sync failure, which drops what the file had pending from every later sync. */
+  private syncFault(inode: Inode): void {
+    try {
+      this.fault("sync", "EIO");
+    } catch (error) {
+      if (inode.kind === "file") {
+        const { data, durable } = inode;
+        let from = 0;
+        while (from < data.length && from < durable.length && data[from] === durable[from]) from++;
+        if (from < data.length) inode.lost = { from: Math.min(from, inode.lost?.from ?? from), to: Math.max(data.length, inode.lost?.to ?? 0) };
+      }
+      throw error;
+    }
+  }
+
+  /** What a sync leaves on the disk: the data, but what a failed sync dropped as the disk had it, zeros past its end. */
+  private synced(inode: Inode): Uint8Array {
+    const { data, durable, lost } = inode;
+    if (lost === undefined) return data;
+    const kept = data.slice();
+    for (let at = lost.from; at < Math.min(lost.to, kept.length); at++) kept[at] = at < durable.length ? durable[at]! : 0;
+    return kept;
   }
 
   private syncDirectory(dir: string): void {
@@ -370,6 +415,7 @@ export class SimDisk {
     const inode = this.fileAt(file, "outside");
     this.change(inode, change(inode.data));
     inode.durable = inode.data;
+    inode.lost = undefined;
   }
 }
 
@@ -377,7 +423,7 @@ export class SimDisk {
 export interface Faults {
   /** ENOSPC, after writing part of the bytes. */
   write?: number;
-  /** EIO from `datasync`/`sync`; nothing more becomes durable. */
+  /** EIO from `datasync`/`sync`; nothing more becomes durable, and what it had to write no later sync writes. */
   sync?: number;
   truncate?: number;
   rename?: number;
@@ -391,6 +437,8 @@ interface Inode {
   data: Uint8Array;
   /** What a crash keeps, at least. */
   durable: Uint8Array;
+  /** Bytes a failed sync dropped: readable, but no sync writes them until they are written again. */
+  lost: { readonly from: number; readonly to: number } | undefined;
   nlink: number;
   mtimeMs: number;
 }

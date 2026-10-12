@@ -8,7 +8,7 @@ import { SessionAppended, SessionChanged, SessionError, SessionEvent, SessionRem
 import type { SessionInfo, Sessions } from "@lemma/sessions";
 import { errorCode } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { applyMarks, CHANGED_ON_DISK, createFile, infoOf, io, lineHash, load, openFile, scan, syncDirectory, unfiled } from "./file.ts";
+import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, syncDirectory, unfiled } from "./file.ts";
 import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
 import { encodeCwd, encodeLine, eventId, idFromFileName, sessionFile, sessionId as newSessionId } from "./format.ts";
 import type { Header, Line } from "./format.ts";
@@ -104,6 +104,21 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
       required: true,
     });
     const entries = new Map<string, Entry>();
+    /**
+     * The files this process has made durable before serving them (`confirmLast`), or created, and the directories
+     * whose names it has synced: once each, as only an earlier process can have left them unsynced.
+     */
+    const confirmed = new Set<string>();
+    const syncedDirectories = new Map<string, Promise<void>>();
+    const syncOnce = (dir: string) => {
+      const synced = syncedDirectories.get(dir) ?? syncDirectory(fs, dir);
+      syncedDirectories.set(dir, synced);
+      // A failure is tried again by the next load.
+      return synced.catch((cause) => {
+        syncedDirectories.delete(dir);
+        throw cause;
+      });
+    };
     /** The listing index: each file's `Scanned`, by path under `root`. */
     const index = yield* readIndex(fs, root);
     let indexChanged = false;
@@ -221,6 +236,18 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         if (entries.get(entry.id) !== entry) return yield* notFound(entry.id, `Session ${entry.id} does not exist`);
         if (entry.open !== undefined) return entry.open;
         const { scanned, ...loaded } = yield* load(fs, entry.file, entry.id);
+        // Served only once a crash cannot take it back: its last line and its name, which an earlier process may have
+        // left unsynced on a failing disk.
+        if (!confirmed.has(entry.file)) {
+          yield* Effect.tryPromise({
+            try: async () => {
+              await confirmLast(fs, entry.file, scanned);
+              await syncOnce(path.dirname(entry.file));
+            },
+            catch: io(entry.id, `Cannot make ${entry.file} durable`),
+          });
+          confirmed.add(entry.file);
+        }
         if (loaded.size > loaded.validBytes) {
           const ignored = loaded.size - loaded.validBytes;
           yield* warn(`Session ${entry.id}: ignored the last ${ignored} bytes of ${entry.file}, a write a crash cut short; they are cut before the next write`);
@@ -289,6 +316,8 @@ export const make = ({ unloadAfter, fs }: Options): Effect.Effect<Service, Sessi
         const entry = yield* Effect.uninterruptible(
           Effect.gen(function* () {
             const writer = yield* createFile(fs, file, header);
+            // Created and synced here: nothing of it is an earlier process's.
+            confirmed.add(file);
             const open: Open = {
               header,
               events: [],

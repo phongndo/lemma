@@ -59,12 +59,17 @@ export interface FileStats {
 /** The `FileHandle` operations Lemma's storage code uses. */
 export interface FileHandle {
   read(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ readonly bytesRead: number }>;
+  /** Writes `length` bytes of `buffer` from `offset` at `position` in the file, over what is there. */
+  write(buffer: Uint8Array, offset: number, length: number, position: number): Promise<{ readonly bytesWritten: number }>;
   appendFile(data: string): Promise<void>;
   writeFile(data: string): Promise<void>;
   chmod(mode: number): Promise<void>;
   stat(): Promise<FileStats>;
   truncate(length: number): Promise<void>;
-  /** Makes the data written so far survive a crash. */
+  /**
+   * Makes the data written so far survive a crash. After one fails, bytes it did not write may stay readable yet be
+   * left out of every later sync (Linux marks such pages clean): only writing them again makes them durable.
+   */
   datasync(): Promise<void>;
   /** As `datasync`, plus metadata; on a directory, makes its entries (created, renamed, removed names) survive a crash. */
   sync(): Promise<void>;
