@@ -19,6 +19,7 @@
     "@lemma/commands-host": "workspace:*",
     "@lemma/commands-registry": "workspace:*",
     "@lemma/composition": "workspace:*",
+    "@lemma/context": "workspace:*",
     "@lemma/context-compaction": "workspace:*",
     "@lemma/context-project": "workspace:*",
     "@lemma/contracts": "workspace:*",

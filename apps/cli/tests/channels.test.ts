@@ -205,7 +205,10 @@ describe("lemma events", () => {
       if ((await settled(async () => done() || undefined)) === undefined) throw new Error(`timed out: ${JSON.stringify(lines)}`);
     };
     await until(() => activities.length === 1 && lines.some((line) => line.from === "sessions.log"));
-    activities[0]!.push({ type: "turn-started", sessionId: "s1", turnId: "t1" }, { type: "turn-started", sessionId: "s2", turnId: "t2" });
+    activities[0]!.push(
+      { type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [] },
+      { type: "turn-started", sessionId: "s2", turnId: "t2", requestIds: [] },
+    );
     activities[0]!.fail(new HostError({ code: "Withdrawn", subject: "agent.activity", message: "withdrawn" }));
     await until(() => activities.length === 2);
     activities[1]!.push({ type: "turn-ended", sessionId: "s1", turnId: "t1", usage: emptyUsage, reason: "done" });

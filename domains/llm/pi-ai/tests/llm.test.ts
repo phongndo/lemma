@@ -831,6 +831,47 @@ describe("identity", () => {
     }
   });
 
+  it("hands the headers hook the model's own headers, and says who changed which though the provider refused the request", async () => {
+    const server = createServer((_, response) => void response.writeHead(401, { "content-type": "application/json" }).end('{"error":{"message":"bad key"}}'));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as AddressInfo;
+    const providers = [
+      {
+        id: "local",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+        apiKey: { value: "sk-test" },
+        headers: { "X-Team": "agents" },
+        models: [{ id: "m" }],
+      },
+    ];
+    const handed: Record<string, string | null>[] = [];
+    const gateway = definePlugin({
+      id: "gateway",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(LlmProviderHeadersHook, (input, next) => {
+            handed.push({ ...input.headers });
+            return Effect.map(next(input), (headers) => ({ ...headers, Authorization: "Bearer gateway" }));
+          }),
+        ),
+      ),
+    });
+    const { plugins } = setup({ providers: () => [] });
+    try {
+      const events = [
+        ...(await runWith([...plugins, gateway], collect(new LlmRequest({ model: "local/m", messages: [user("hi")] })), { "llm.pi-ai": { providers } })),
+      ];
+      expect(handed).toMatchObject([{ "X-Team": "agents" }]);
+      // No status: it was refused. Who changed the headers is told all the same, before the error.
+      const told = events.findIndex((event) => event.type === "provider");
+      expect(events[told]).toEqual({ type: "provider", credit: { handlers: [{ source: "gateway", ms: expect.any(Number), changed: ["Authorization"] }] } });
+      expect(events.findIndex((event) => event.type === "error")).toBeGreaterThan(told);
+    } finally {
+      server.close();
+    }
+  });
+
   it("names Lemma, not pi, on every wire API, unless a model sends its own User-Agent", async () => {
     const agents: Record<string, string | undefined> = {};
     const server = createServer((request, response) => {

@@ -2781,6 +2781,9 @@ importers:
       '@lemma/composition':
         specifier: workspace:*
         version: link:../composition
+      '@lemma/context':
+        specifier: workspace:*
+        version: link:../../domains/context/contract
       '@lemma/context-compaction':
         specifier: workspace:*
         version: link:../../domains/context/compaction

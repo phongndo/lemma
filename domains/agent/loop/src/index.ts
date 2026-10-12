@@ -159,6 +159,9 @@ interface SessionState {
 /** A section whose plugin left, with no replacement, while the request was written: no section. */
 const GONE = Symbol("gone");
 
+/** How many prompts `AgentInputHook` handled or refused the agent remembers, for a retry to be answered the same. */
+const ANSWERS_KEPT = 1024;
+
 export default definePlugin({
   id: "agent.loop",
   version: "0.1.0",
@@ -626,7 +629,7 @@ export default definePlugin({
           .invoke(
             AgentInputHook,
             { sessionId, content, options },
-            (input): Effect.Effect<PromptDecision> => Effect.succeed({ kind: "place", content: input.content }),
+            (input): Effect.Effect<PromptDecision> => Effect.succeed({ kind: "place", content: input.content, options: input.options }),
             {
               onStep: (step) => void steps.push(step),
             },
@@ -638,25 +641,70 @@ export default definePlugin({
           );
         const ordered = inChainOrder(steps);
         if (decision.kind !== "place") {
-          // The handler that answered it: the first that returned an answer it did not get from the rest of the chain.
+          // The handler that answered it: the outermost whose answer is not the one the rest of the chain handed it.
           const by =
-            ordered.find(
-              (step) => step.output !== undefined && step.output.kind !== "place" && (step.next?.output === undefined || step.next.output.kind === "place"),
-            )?.pluginId ?? "unknown";
+            ordered.find((step) => step.output !== undefined && (step.next?.output === undefined || !isDeepStrictEqual(step.output, step.next.output)))
+              ?.pluginId ?? "unknown";
           return decision.kind === "handle"
             ? ({ kind: "handled", by, ...(decision.message === undefined ? {} : { message: decision.message }) } satisfies PromptOutcome)
             : ({ kind: "refused", by, reason: decision.reason } satisfies PromptOutcome);
         }
+        // What a handler changed: the content or the options it handed on, or those it placed instead of the rest's.
         const rewrote = (step: HandlerStep<PromptInput, PromptDecision>) => {
-          const handed = step.next?.input.content;
-          const made = step.output?.kind === "place" ? step.output.content : undefined;
-          const from = step.next?.output?.kind === "place" ? step.next.output.content : step.input.content;
-          return (handed !== undefined && !isDeepStrictEqual(handed, step.input.content)) || (made !== undefined && !isDeepStrictEqual(made, from))
-            ? ["content"]
-            : [];
+          const handed = step.next?.input;
+          const made = step.output?.kind === "place" ? step.output : undefined;
+          const from = step.next?.output?.kind === "place" ? step.next.output : step.input;
+          return (["content", "options"] as const).filter(
+            (key) =>
+              (handed !== undefined && !isDeepStrictEqual(handed[key], step.input[key])) || (made !== undefined && !isDeepStrictEqual(made[key], from[key])),
+          );
         };
         const handlers = ordered.map((step) => creditOf(step, rewrote(step)));
-        return { kind: "place" as const, content: decision.content, ...(handlers.length === 0 ? {} : { credit: { handlers } satisfies ResultCredit }) };
+        // The request id stays the caller's, whatever a handler handed on: it is what makes the prompt exactly-once.
+        const { requestId: _, ...placed } = decision.options;
+        return {
+          kind: "place" as const,
+          content: decision.content,
+          options: { ...placed, ...(options.requestId === undefined ? {} : { requestId: options.requestId }) } satisfies PromptOptions,
+          ...(handlers.length === 0 ? {} : { credit: { handlers } satisfies ResultCredit }),
+        };
+      });
+    type Decided = Effect.Success<ReturnType<typeof decideInput>>;
+
+    /**
+     * What `AgentInputHook` made of prompts, by session and request id: one being decided, which a retry waits for
+     * rather than asking again, or one it handled or refused, which a retry is answered with. One placed is forgotten
+     * once it is, as the agent knows it from then on; the oldest answers go past `ANSWERS_KEPT`. Kept while the agent
+     * runs: a retry after a restart asks again.
+     */
+    const answers = new Map<string, Deferred.Deferred<Decided, AgentError>>();
+    const answerKey = (sessionId: string, requestId: string) => `${sessionId}\u0000${requestId}`;
+    const decideOnce = (sessionId: string, content: PromptContent, options: PromptOptions): Effect.Effect<Decided, AgentError> =>
+      Effect.suspend(() => {
+        const { requestId } = options;
+        if (requestId === undefined) return decideInput(sessionId, content, options);
+        const key = answerKey(sessionId, requestId);
+        const asked = answers.get(key);
+        // The call that asked was cut off: this one asks.
+        if (asked !== undefined)
+          return Effect.flatMap(Effect.exit(Deferred.await(asked)), (exit) =>
+            Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause) ? decideOnce(sessionId, content, options) : exit,
+          );
+        const answer = Deferred.makeUnsafe<Decided, AgentError>();
+        answers.set(key, answer);
+        for (const oldest of answers.keys()) {
+          if (answers.size <= ANSWERS_KEPT) break;
+          answers.delete(oldest);
+        }
+        return decideInput(sessionId, content, options).pipe(
+          Effect.onExit((exit) =>
+            Effect.andThen(
+              Deferred.done(answer, exit),
+              // A decision that failed, or was cut off, is asked again by a retry.
+              Effect.sync(() => (Exit.isFailure(exit) && answers.get(key) === answer ? void answers.delete(key) : undefined)),
+            ),
+          ),
+        );
       });
 
     const prompt = (sessionId: string, content: PromptContent, options: PromptOptions = {}) =>
@@ -671,10 +719,12 @@ export default definePlugin({
           requestId !== undefined &&
           (requests.of(sessionId).has(requestId) ||
             state?.queue.some((item) => item.prompt.requestId === requestId) === true ||
-            state?.turn?.items.has(requestId) === true);
-        const decided = known ? { kind: "place" as const, content } : yield* decideInput(sessionId, content, options);
+            state?.turn?.items.has(requestId) === true ||
+            state?.suspended?.prompts.some((item) => item.prompt.requestId === requestId) === true);
+        const decided = known ? { kind: "place" as const, content, options } : yield* decideOnce(sessionId, content, options);
         if (decided.kind !== "place") return decided;
         const placing = decided.content;
+        const placingOptions = decided.options;
         const credit = "credit" in decided ? decided.credit : undefined;
         // Admission cannot be split by the caller's interruption, or a prompt could be queued and forgotten.
         const admitted = (prepared: Prepared | undefined) =>
@@ -708,11 +758,11 @@ export default definePlugin({
                   }
                 }
                 if (state.turn !== undefined) {
-                  const whenBusy = options.whenBusy ?? "follow-up";
+                  const whenBusy = placingOptions.whenBusy ?? "follow-up";
                   if (whenBusy === "reject") {
                     return yield* new AgentError({ sessionId, reason: "Busy", message: `Session ${sessionId} already has a turn in progress` });
                   }
-                  const item = yield* makeItem(placing, options, whenBusy, credit);
+                  const item = yield* makeItem(placing, placingOptions, whenBusy, credit);
                   setQueue(state, [...state.queue, item]);
                   yield* persist(sessionId);
                   yield* queueChanged(sessionId);
@@ -720,7 +770,7 @@ export default definePlugin({
                 }
                 const lease = yield* holdFor(sessionId);
                 // Prompts held after a failed or cancelled turn go first, then this one.
-                const item = yield* makeItem(placing, options, "follow-up", credit);
+                const item = yield* makeItem(placing, placingOptions, "follow-up", credit);
                 const prompts = [...state.queue, item];
                 if (state.queue.length > 0) setQueue(state, []);
                 yield* start(sessionId, newId(), prompts, lease);
@@ -729,7 +779,10 @@ export default definePlugin({
               }),
             ),
           );
-        const waitOn = yield* Effect.scoped(Effect.flatMap(ready(sessionId), admitted));
+        // Placed (or found placed): known by where it is from now on, so its decision is let go.
+        const waitOn = yield* Effect.scoped(Effect.flatMap(ready(sessionId), admitted)).pipe(
+          Effect.ensuring(Effect.sync(() => (requestId === undefined ? undefined : void answers.delete(answerKey(sessionId, requestId))))),
+        );
         // Awaiting, not joining: a caller that goes away leaves the turn running. A cancelled turn resolves normally.
         if (waitOn !== undefined) yield* Deferred.await(waitOn);
         return { kind: "placed" } satisfies PromptOutcome;

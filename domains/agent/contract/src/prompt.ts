@@ -37,7 +37,7 @@ export interface StartedPrompt {
   /** The submission's id: sending again with it (after a lost connection, say) cannot place the prompt twice. */
   readonly requestId: string;
   /**
-   * Resolves once the agent has taken the prompt (its turn started, or it
+   * Resolves once the agent has taken the prompt (a turn started with it, or it
    * was queued or placed in the running turn), or a plugin handled it; rejects
    * when the prompt is refused: by the agent (`Busy`, no model, the session is
    * gone, no agent), or by a plugin (`PromptRefused`). A client clears its
@@ -148,7 +148,7 @@ export function startPrompt(
           listening = true;
           stopEvents?.();
           resolve();
-        } else if (activity.type === "turn-started" && activity.sessionId === sessionId) accept();
+        } else if (activity.type === "turn-started" && activity.sessionId === sessionId && activity.requestIds.includes(requestId)) accept();
         else if (activity.type === "queue-changed" && activity.sessionId === sessionId && activity.queue.some((queued) => queued.requestId === requestId))
           accept();
       },

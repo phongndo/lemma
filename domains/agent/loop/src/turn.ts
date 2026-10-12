@@ -443,7 +443,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       let firstTokenAt: number | undefined;
       let settled: Extract<StreamEvent, { type: "done" | "error" }> | undefined;
       /** How the provider answered, before its body, and who shaped the headers: logged with what comes of the call. */
-      let answered: { readonly response: ProviderAnswer; readonly credit?: ResultCredit } | undefined;
+      let answered: { readonly response?: ProviderAnswer; readonly credit?: ResultCredit } | undefined;
       const partial = live.startStep(stepId, startedAt);
       state.partial = partial;
       state.partialStartedAt = startedAt;
@@ -453,7 +453,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             // Not model output: kept for the log, not streamed to clients.
             if (event.type === "provider") {
               answered = {
-                response: { status: event.status, ...(event.requestId === undefined ? {} : { requestId: event.requestId }) },
+                ...(event.status === undefined
+                  ? {}
+                  : { response: { status: event.status, ...(event.requestId === undefined ? {} : { requestId: event.requestId }) } }),
                 ...(event.credit === undefined ? {} : { credit: event.credit }),
               };
               return;
@@ -468,7 +470,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         Effect.catch((error) => Effect.succeed(error.message)),
       );
       const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: yield* Clock.currentTimeMillis };
-      const answer = answered === undefined ? {} : { response: answered.response, ...(answered.credit === undefined ? {} : { credit: answered.credit }) };
+      const answer = {
+        ...(answered?.response === undefined ? {} : { response: answered.response }),
+        ...(answered?.credit === undefined ? {} : { credit: answered.credit }),
+      };
       // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
       if (settled === undefined || (settled.type === "error" && settled.message.stopReason !== "aborted")) yield* unlessClosing;
       return yield* Effect.uninterruptible(
@@ -477,7 +482,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           live.endStep();
           if (settled === undefined) {
             const error = streamError ?? "The model stream ended without a result";
-            yield* append({ type: "attempt", turnId, stepId, message: partial.message(model, "error", error, timing.endedAt), timing });
+            yield* append({ type: "attempt", turnId, stepId, message: partial.message(model, "error", error, timing.endedAt), timing, ...answer });
             return { ended: { reason: "error", error } satisfies Ended };
           }
           state.usage = addUsage(state.usage, settled.message.usage);
@@ -950,7 +955,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
       });
     }
-    yield* events.publish(TurnStarted, { sessionId, turnId });
+    yield* events.publish(TurnStarted, { sessionId, turnId, requestIds: resume === undefined ? input.prompts.map((prompt) => prompt.requestId) : [] });
     const body =
       resume !== undefined
         ? resumed(resume)

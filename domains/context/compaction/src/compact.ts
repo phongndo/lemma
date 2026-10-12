@@ -56,6 +56,17 @@ export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () =>
  * prompt or a response, never between a tool call and its result, and leaves
  * at least one message to summarize. Undefined when there is no such place.
  */
+/**
+ * Whether the history may be kept from `index`: a message in the model's view after one at least (so a summary has
+ * something to stand for), and not a tool result, whose call the summary would take from it.
+ */
+export const validCut = (branch: readonly SessionEvent[], index: number): boolean => {
+  const { start } = modelView(branch);
+  const data = branch[index]?.data;
+  if (index <= start || data?.type !== "message" || data.message.role === "toolResult") return false;
+  return branch.slice(start, index).some((event) => event.data.type === "message");
+};
+
 export const chooseCut = (branch: readonly SessionEvent[], keep: number): number | undefined => {
   const { start } = modelView(branch);
   const seen: { readonly index: number; readonly message: Message }[] = [];

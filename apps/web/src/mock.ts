@@ -961,7 +961,7 @@ export const createMockHost = (): Host => {
     const turn = { turnId, output: new Map<string, string>() };
     turns.set(sessionId, turn);
     // Held when asked (`lemmaMock.holdTurnStarted`): the page has shown the turn running, but not yet seen it start.
-    const publishStarted = () => activity.publish({ type: "turn-started", sessionId, turnId });
+    const publishStarted = () => activity.publish({ type: "turn-started", sessionId, turnId, requestIds: requestId === undefined ? [] : [requestId] });
     if (heldStarts !== undefined) heldStarts.push(publishStarted);
     else publishStarted();
     const text = content.find((part) => part.type === "text")?.text ?? "(image)";

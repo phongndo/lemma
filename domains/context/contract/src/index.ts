@@ -41,8 +41,10 @@ export class CompactionError extends Data.TaggedError("CompactionError")<{ reado
 /**
  * Around every compaction `context.compaction` makes, before a model call that needs one; the terminal has a model
  * write the summary (the plugin's own). A handler writes its own (returns without `next`), skips this one (returns
- * `skip`), moves the cut (`next` with another `firstKept`), or reworks the summary `next` wrote. What it returns is
- * appended as the turn's `compaction` event, its `source` the plugin that wrote the summary.
+ * `skip`), moves the cut (`next` with another `firstKept`), or reworks the summary `next` wrote. The history is kept
+ * from a message in the model's view, after one at least, and never a tool result (whose call the summary would
+ * take): a cut elsewhere fails the compaction. What it returns is appended as the turn's `compaction` event, its
+ * `source` the outermost plugin whose summary differs from the one it was handed (the plugin's own model's when none).
  */
 export const CompactionHook = Hook.make<CompactionRequest, CompactionResult, CompactionError>("lemma/context.compaction", {
   summary: {

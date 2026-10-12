@@ -60,8 +60,8 @@ const Config = Schema.Struct({
 });
 type Config = typeof Config.Type;
 
-/** The response header a provider names its request id in, by the names providers use. */
-const REQUEST_ID_HEADERS = ["request-id", "x-request-id", "openai-request-id", "x-amzn-requestid", "cf-ray"];
+/** The response header a provider names its request id in, by the names providers use (not a CDN's trace id). */
+const REQUEST_ID_HEADERS = ["request-id", "x-request-id", "openai-request-id", "x-amzn-requestid", "x-goog-request-id"];
 const requestIdOf = (headers: Readonly<Record<string, string>>): string | undefined => {
   const lower = new Map(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
   return REQUEST_ID_HEADERS.map((name) => lower.get(name)).find((value) => value !== undefined);
@@ -305,12 +305,13 @@ export function makeLlmPlugin(options: Options = {}) {
           const provider = model === undefined ? undefined : models.getProvider(model.provider);
           if (model === undefined || provider === undefined) return yield* Effect.fail(unknownModel(request.model));
           const reasoning = reasoningFor(model, request.thinking);
-          // Plugins may add, change, or drop headers; who changed which is told back with the answer, values never.
+          // Plugins may add, change, or drop headers, over what would be sent (the model's own and Lemma's User-Agent);
+          // who changed which is told back with the answer, values never.
           const steps: HandlerStep<ProviderHeaders, Headers>[] = [];
           const headers = yield* hooks
             .invoke(
               LlmProviderHeadersHook,
-              { request, provider: model.provider, headers: identityHeaders(model) ?? {} },
+              { request, provider: model.provider, headers: { ...model.headers, ...identityHeaders(model) } },
               (input) => Effect.succeed(input.headers),
               {
                 onStep: (step) => void steps.push(step),
@@ -334,15 +335,24 @@ export function makeLlmPlugin(options: Options = {}) {
                 let closed = false;
                 /** The provider's answer, held until `start` has gone out: a stream begins with `start`. */
                 let answer: StreamEvent | undefined;
+                let told = false;
                 let started = false;
                 const send = (out: StreamEvent[]) => {
                   if (closed || out.length === 0) return;
-                  // Where in `out` what was held goes: first once the stream has started, else right after its `start`.
-                  const at = started ? 0 : out.findIndex((event) => event.type === "start") + 1;
-                  if (at > 0) started = true;
-                  if (answer !== undefined && started) {
+                  // A request that failed before the provider answered (refused before its body, or never sent) still says
+                  // who shaped its headers.
+                  if (!told && answer === undefined && handlers.length > 0 && out.some((event) => event.type === "error")) {
+                    answer = { type: "provider", credit: { handlers } };
+                  }
+                  // Where in `out` what was held goes: right after its `start`, first once the stream has started, or
+                  // before an error that came with no `start`.
+                  const startAt = out.findIndex((event) => event.type === "start");
+                  if (startAt >= 0) started = true;
+                  const at = startAt >= 0 ? startAt + 1 : started ? 0 : out.findIndex((event) => event.type === "error");
+                  if (answer !== undefined && at >= 0) {
                     out = [...out.slice(0, at), answer, ...out.slice(at)];
                     answer = undefined;
+                    told = true;
                   }
                   Queue.offerAllUnsafe(queue, out);
                 };
