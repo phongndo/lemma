@@ -1,9 +1,9 @@
 import { stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { Effect } from "effect";
 import type { WebFile } from "@lemma/contracts";
 import { projectPluginsDir } from "./config.ts";
-import { entriesOf } from "./manifest.ts";
+import { entriesOf, webPluginOf } from "./manifest.ts";
 import type { PathsService } from "./paths.ts";
 
 /** `<home>/plugins`: the user's plugins, both halves (see `manifest.ts`). */
@@ -22,19 +22,22 @@ export function listWebFiles(paths: PathsService, trusted: boolean): Effect.Effe
   return Effect.promise(async () => {
     const files: WebFile[] = [];
     for (const { dir, source } of dirs) {
-      const found = (await entriesOf(dir)).flatMap((entry): { readonly path: string; readonly kind: WebFile["kind"] }[] => {
-        if (entry.kind === "web") return [{ path: entry.path, kind: "script" }];
+      const found = (await entriesOf(dir)).flatMap((entry): { readonly path: string; readonly kind: WebFile["kind"]; readonly plugin?: string }[] => {
+        if (entry.kind === "web") return [{ path: entry.path, kind: "script", plugin: webPluginOf(entry.name) }];
         if (entry.kind === "style") return [{ path: entry.path, kind: "style" }];
         if (entry.kind !== "package") return [];
         const { web, styles = [] } = entry.manifest;
-        return [...(web === undefined ? [] : [{ path: web, kind: "script" as const }]), ...styles.map((path) => ({ path, kind: "style" as const }))];
+        return [
+          ...(web === undefined ? [] : [{ path: web, kind: "script" as const, plugin: entry.name }]),
+          ...styles.map((path) => ({ path, kind: "style" as const, plugin: entry.name })),
+        ];
       });
-      for (const { path, kind } of found) {
+      for (const { path, kind, plugin } of found) {
         const info = await stat(path).catch(() => undefined);
         if (!info?.isFile()) continue;
-        const name = relative(dir, path);
+        const name = relative(dir, path).split(sep).join("/");
         const url = `/api/web/${source}/${name.split("/").map(encodeURIComponent).join("/")}?v=${Math.round(info.mtimeMs)}`;
-        files.push({ name, source, kind, path, url });
+        files.push({ name, source, kind, path, url, ...(plugin === undefined ? {} : { plugin }) });
       }
     }
     return files;

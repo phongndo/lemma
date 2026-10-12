@@ -241,9 +241,8 @@ describe("planComposition", () => {
     expect(planned.known.find((entry) => entry.plugin.id === "llm")?.plugin).toBe(shadow);
   });
 
-  test("a row naming the other app's plugin is that app's: no warning, and its config keys are the other half's too", () => {
-    const web = new Set(["notes", "agent"]);
-    const planned = plan({ elsewhere: (id) => web.has(id), rows: { notes: { enabled: false }, agent: { config: { maxSteps: 3, shown: true } } } });
+  test("a row naming the other app's plugin is that app's: no warning", () => {
+    const planned = plan({ elsewhere: (id) => id === "notes", rows: { notes: { enabled: false } } });
     expect(planned.diagnostics).toEqual([]);
     // Without it, a row naming no plugin is a warning.
     expect(messages(plan({ rows: { notes: { enabled: false } } }), "warning")).toEqual([`The row for "notes" names no plugin; it is ignored`]);
@@ -260,6 +259,28 @@ describe("planComposition", () => {
     ]);
     const off = plan({ blocked, rows: { agent: { enabled: false } } });
     expect(off.problems.has("agent")).toBe(false);
+  });
+
+  test("names the plugin a row most likely meant, here or in the other app, when its id is a typo off", () => {
+    const suggested = (input: Parameters<typeof plan>[0]) => plan(input).diagnostics.map((diagnostic) => diagnostic.suggestion);
+    expect(suggested({ rows: { agnet: { enabled: false } } })).toEqual([`Did you mean "agent"? Rename the row, or remove it`]);
+    expect(suggested({ rows: { "frame.shel": { enabled: false } }, elsewhereIds: ["frame.shell"] })).toEqual([
+      `Did you mean "frame.shell"? Rename the row, or remove it`,
+    ]);
+    // Nothing close, two edits in a short id, or one that has a row already: no guess.
+    expect(suggested({ rows: { unrelated: {} } })).toEqual([`Remove the "unrelated" row, or add the plugin`]);
+    expect(suggested({ rows: { agnt: {} }, elsewhereIds: ["agent"] })).toEqual([`Did you mean "agent"? Rename the row, or remove it`]);
+    expect(suggested({ rows: { foo: {} }, elsewhereIds: ["todo"] })).toEqual([`Remove the "foo" row, or add the plugin`]);
+    expect(suggested({ rows: { agnet: {}, agent: {} } })).toEqual([`Remove the "agnet" row, or add the plugin`]);
+  });
+
+  test("checks a plugin's keys where its host half is, which declares them all, though the plugin has a half elsewhere", () => {
+    const rows = { agent: { config: { maxSteps: 3, steps: 5 } } };
+    const warned = [`The config for "agent" sets steps, which it does not use (renamed or removed?)`];
+    // On the host: a plugin with a web half too is still checked.
+    expect(messages(plan({ rows, elsewhere: (id) => id === "agent" }), "warning")).toEqual(warned);
+    // In the web app: a plugin with a host half is the host's to check.
+    expect(plan({ rows, elsewhere: (id) => id === "agent", keysCheckedElsewhere: (id) => id === "agent" }).diagnostics).toEqual([]);
   });
 
   test("warns about config keys a plugin does not use, such as a setting renamed in an update", () => {

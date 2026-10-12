@@ -302,6 +302,10 @@ describe("against a running host", () => {
       const rows = JSON.parse(await readFile(userConfig, "utf8")).plugins;
       expect(rows["threads.composer"]).toBeUndefined();
       expect(rows["look.appearance"]).toEqual({ config: { scale: 1.2 } });
+      // A row naming no plugin either app has is refused, naming the one meant, and nothing is written.
+      const typo = await invoke(["plugins", "disable", "threads.composr"], home);
+      expect([typo.code === ExitCode.ok, typo.err]).toEqual([false, expect.stringContaining('Did you mean "threads.composer"?')]);
+      expect(JSON.parse(await readFile(userConfig, "utf8")).plugins["threads.composr"]).toBeUndefined();
       // The host's own list stays its plugins.
       expect(await ui()).not.toContainEqual(expect.objectContaining({ id: "threads.composer" }));
 

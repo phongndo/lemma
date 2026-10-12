@@ -55,6 +55,55 @@ export const bundled: readonly Plugin[] = [
 ];
 
 /**
+ * The bundled web halves' ids: the web app runs them (`apps/web/src/bundled.ts`), and a row naming one is a plugin's,
+ * not a typo. Listed rather than read from disk, so a host built elsewhere knows them; `tests/bundled.test.ts` checks
+ * the list against the domains' manifests.
+ */
+export const bundledWeb: readonly string[] = [
+  "actions.keymap",
+  "actions.keys-page",
+  "actions.palette",
+  "commands.client",
+  "devtools.dock",
+  "devtools.trace",
+  "frame.connection",
+  "frame.dialogs",
+  "frame.pages",
+  "frame.questions",
+  "frame.reload",
+  "frame.shell",
+  "frame.sidebar",
+  "frame.toasts",
+  "frame.tooltips",
+  "llm.client",
+  "llm.model-picker",
+  "llm.providers",
+  "look.appearance",
+  "look.appearance-page",
+  "look.diagrams",
+  "look.file-icons",
+  "look.highlight",
+  "look.kit",
+  "settings.page",
+  "settings.plugins",
+  "threads.archived",
+  "threads.client",
+  "threads.composer",
+  "threads.trajectory",
+  "threads.transcript",
+  "threads.view",
+  "tools.bash",
+  "tools.edit",
+  "tools.read",
+  "tools.write",
+  "workspace.add-project",
+  "workspace.bar",
+  "workspace.client",
+  "workspace.file-mentions",
+  "workspace.projects",
+];
+
+/**
  * Config the app supplies for bundled plugins (the planner's `defaults`): it
  * stays beneath a file's `config` object key by key, so setting the
  * transport's port does not also unset the web app.

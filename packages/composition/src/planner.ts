@@ -34,9 +34,16 @@ export interface PlanInput {
   /**
    * Whether `id` is a plugin the other app runs: a plugin is one id with a host half, a web half, or both, and the
    * config's rows name either. A row naming no plugin here is the other app's when this says so, and nothing to warn
-   * of; nor are its config's keys, which the other half may read. Absent, every row names a plugin here.
+   * of. Absent, every row names a plugin here.
    */
   readonly elsewhere?: (id: string) => boolean;
+  /** The other app's plugin ids, when this app knows them: a row naming no plugin is told the one meant, when one is close. */
+  readonly elsewhereIds?: readonly string[];
+  /**
+   * Whether the other app checks `id`'s config keys: the host does, for a plugin with a host half, which declares all
+   * of the plugin's config. Absent, this app checks every plugin's it plans.
+   */
+  readonly keysCheckedElsewhere?: (id: string) => boolean;
   /**
    * Plugins left out before anything is planned, each with why, as one that cannot run is: a web half whose host
    * half is not running waits for it. What needs one waits too.
@@ -117,12 +124,17 @@ export function planComposition(input: PlanInput): Plan {
     if (plugins[id] === undefined) {
       // A plugin renamed or removed in an update leaves its row behind: nothing to run, so nothing to refuse.
       const required = row.required === true && row.enabled !== false;
+      // Not one with a row of its own: renaming this row to it would make two.
+      const meant = closestId(
+        id,
+        [...known.map(({ plugin }) => plugin.id), ...(input.elsewhereIds ?? [])].filter((candidate) => input.rows[candidate] === undefined),
+      );
       diagnostics.push(
         new Diagnostic({
           severity: required ? "error" : "warning",
           pluginId: id,
           message: required ? `"${id}" is required, but no plugin has that id` : `The row for "${id}" names no plugin; it is ignored`,
-          suggestion: `Remove the "${id}" row, or add the plugin`,
+          suggestion: meant === undefined ? `Remove the "${id}" row, or add the plugin` : `Did you mean "${meant}"? Rename the row, or remove it`,
         }),
       );
       continue;
@@ -240,7 +252,7 @@ export function planComposition(input: PlanInput): Plan {
     );
   }
   for (const { plugin } of known) {
-    if (!isRunning(resolved.composition, plugin.id) || plugin.config === undefined || input.elsewhere?.(plugin.id) === true) continue;
+    if (!isRunning(resolved.composition, plugin.id) || plugin.config === undefined || input.keysCheckedElsewhere?.(plugin.id) === true) continue;
     const unused = unusedKeys(plugin.config, resolved.composition.plugins[plugin.id]?.config);
     if (unused.length === 0) continue;
     diagnostics.push(
@@ -374,6 +386,35 @@ function rootOf(resolved: Resolved, id: string): string {
   let current = id;
   for (let next = resolved.haltedBy.get(current); next !== undefined; next = resolved.haltedBy.get(current)) current = next;
   return current;
+}
+
+/**
+ * The id in `ids` closest to `id`, when it is close enough to be the one meant: one edit in a short id, about one in
+ * five in a longer one (`tools.bahs` for `tools.bash`), so `foo` does not suggest `todo`.
+ */
+export function closestId(id: string, ids: readonly string[]): string | undefined {
+  let best: { readonly id: string; readonly distance: number } | undefined;
+  for (const candidate of new Set(ids)) {
+    const distance = editDistance(id, candidate);
+    if (distance <= Math.max(1, Math.floor(candidate.length / 5)) && (best === undefined || distance < best.distance)) best = { id: candidate, distance };
+  }
+  return best?.id;
+}
+
+/** How many insertions, deletions, substitutions, and swaps of two neighbouring letters turn `a` into `b`. */
+function editDistance(a: string, b: string): number {
+  let before: number[] = [];
+  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    for (let j = 1; j <= b.length; j++) {
+      row[j] = Math.min(previous[j]! + 1, row[j - 1]! + 1, previous[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) row[j] = Math.min(row[j]!, before[j - 2]! + 1);
+    }
+    before = previous;
+    previous = row;
+  }
+  return previous[b.length]!;
 }
 
 /** Keys `config` sets that `schema` does not read: a setting renamed or removed since the row was written. */
