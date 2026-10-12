@@ -1,10 +1,12 @@
 /**
  * Node only: `@lemma/tools/files`. What a tool that reads or writes files needs to behave as the bundled file tools
  * do: paths resolved against the session's directory (`~` expanded, a leading `@` dropped), messages for failed file
- * operations, and one write at a time per file.
+ * operations, and one write at a time per file; and for a tool with output too long to return whole, a temp file
+ * holding it (`boundOutput`).
  */
-import { realpath } from "node:fs/promises";
-import { homedir } from "node:os";
+import { randomBytes } from "node:crypto";
+import { realpath, writeFile } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import { ToolResult } from "./tools.ts";
 import { errorCode, expandHome, kindOf } from "@lemma/contracts/fs";
@@ -84,4 +86,42 @@ export async function withFileLock<T>(file: string, work: () => Promise<T>): Pro
     release();
     if (queues.get(key) === current) queues.delete(key);
   }
+}
+
+type Content = ToolResult["content"][number];
+
+/** Room `boundOutput` keeps under the registry's cap for its notes and a header of the tool's own. */
+const NOTES_CHARS = 1_000;
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Bounds a tool's output for the model. Past `budget` characters of text, or past the registry's cap
+ * (`ToolContext.maxResultChars`) less room for the notes, the text items become one that keeps the start and the end
+ * of the text, with the images after it, and the whole text goes to a temp file the model can read (`fullOutputPath`,
+ * `lemma-<name>-….txt`). Cut under the cap, the result is not cut again by the registry, which would lose its end and
+ * the note naming the file.
+ */
+export async function boundOutput(
+  content: readonly Content[],
+  options: { readonly budget: number; readonly maxResultChars?: number | undefined; readonly name: string },
+): Promise<{ readonly content: readonly Content[]; readonly fullOutputPath?: string }> {
+  const budget = Math.min(options.budget, Math.max(0, (options.maxResultChars ?? Number.POSITIVE_INFINITY) - NOTES_CHARS));
+  const combined = content.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
+  if (combined.length <= budget) return { content };
+  const headChars = Math.floor(budget / 2);
+  const tailChars = budget - headChars;
+  const removed = combined.length - budget;
+  const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
+  let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${combined.slice(0, headChars)}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
+  const file = path.join(tmpdir(), `lemma-${options.name}-${randomBytes(8).toString("hex")}.txt`);
+  let saved = true;
+  try {
+    await writeFile(file, combined);
+    text += `\n\n[Full output: ${file} (read with offset/limit)]`;
+  } catch (cause) {
+    saved = false;
+    text += `\n\n[Could not save the full output: ${cause instanceof Error ? cause.message : String(cause)}]`;
+  }
+  const bounded = [{ type: "text" as const, text }, ...content.filter((item) => item.type === "image")];
+  return saved ? { content: bounded, fullOutputPath: file } : { content: bounded };
 }

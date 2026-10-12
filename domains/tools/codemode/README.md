@@ -3,9 +3,9 @@
 The `codemode` tool: JavaScript in pi's QuickJS sandbox that calls the other
 tools. Adds it to `Tools`; requires `ToolRunner`, which its scripts call the other tools through. No config.
 
-| Input  | Behavior                                                                                                                                                                                                                                                                                                                          |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `code` | `await tools.<name>(args)` resolves to a tool's text, and an error result rejects. Output past 10,000 tokens, or past what `tools.registry`'s `maxResultChars` leaves room for, keeps its start and end, the rest in a temp file. A `// @options:` first line sets `max_output_tokens` and `timeout_ms` (300 seconds by default). |
+| Input  | Behavior                                                                                                                                                                                                                                                                                                                                                                   |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `code` | `await tools.<name>(args)` resolves to a tool's text, and an error result rejects. Output past 10,000 tokens, or past what `tools.registry`'s `maxResultChars` leaves room for, keeps its start and end, the rest in a temp file (`boundOutput`, in `@lemma/tools/files`). A `// @options:` first line sets `max_output_tokens` and `timeout_ms` (300 seconds by default). |
 
 ## Rationale
 
