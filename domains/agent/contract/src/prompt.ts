@@ -47,8 +47,8 @@ export interface StartedPrompt {
   /**
    * Settles when the turn that placed it ends, as `agent.prompt` answers, with
    * what became of it (`PromptOutcome`); resolves too, quietly, as `placed`, when
-   * the prompt was taken out of the queue (`Retracted`), since whoever withdrew
-   * it meant to.
+   * it was retracted (see `AgentError`), since whoever withdrew it or cancelled
+   * its turn meant to.
    */
   readonly done: Promise<PromptOutcome>;
 }

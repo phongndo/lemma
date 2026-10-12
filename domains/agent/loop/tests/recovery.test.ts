@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, makeCore, makeSpanCollector, PluginContext } from "@lemma/core";
@@ -575,7 +575,9 @@ describe("admission", () => {
         yield* waitFor(a.busy(second.id), (busy) => busy);
         // At once, though the first turn still holds the only slot.
         yield* a.cancel(second.id);
-        yield* Fiber.await(two);
+        // Its prompt never ran: its call hears so, as a withdrawn prompt's does (the simulation found it told "placed").
+        const cancelled = yield* Fiber.await(two);
+        expect(Exit.isFailure(cancelled) && Cause.squash(cancelled.cause)).toMatchObject({ reason: "Retracted" });
         expect(yield* a.busy(second.id)).toBe(false);
         expect(yield* log(second.id)).toEqual([]);
         // The session takes prompts again: this one starts a turn, which waits for the slot.

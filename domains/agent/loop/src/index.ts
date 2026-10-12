@@ -31,7 +31,7 @@ import { planResume } from "./resume.ts";
 import type { ResumePlan } from "./resume.ts";
 import { makeSlots } from "./slots.ts";
 import type { SlotHolder } from "./slots.ts";
-import { LIVE_INTERVAL_MS, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
+import { LIVE_INTERVAL_MS, nextInstance, readJournals, readLive, removeLive, removeState, writeJournal, writeLive } from "./state.ts";
 import type { Journal, StateFiles } from "./state.ts";
 import { makeRequestIndex } from "./requests.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
@@ -146,6 +146,10 @@ interface Prepared {
 /** The store said the session does not exist. */
 const gone = (error: AgentError): boolean => error.cause instanceof SessionError && error.cause.reason === "NotFound";
 
+const retractedError = (sessionId: string) => new AgentError({ sessionId, reason: "Retracted", message: "The prompt was withdrawn from the queue" });
+/** A prompt sent again with the id of one withdrawn: refused, as the first was. */
+const retracted = (sessionId: string) => Effect.fail(retractedError(sessionId));
+
 interface SessionState {
   turn: Running | undefined;
   /** Never set with `turn`. */
@@ -159,12 +163,14 @@ interface SessionState {
   unchecked: boolean;
   queue: Item[];
   /**
-   * Drawn from the clock, and from the journal while anything waits: what it promises is `QueueChanged`'s, and where
-   * it falls short the README's.
+   * Counts from this instance's `base`, past every revision an earlier instance could have told, so it keeps
+   * `QueueChanged`'s promise across restarts.
    */
   revision: number;
   /** The last turn failed or was cancelled: queued prompts wait for the next one rather than starting a turn. */
   held: boolean;
+  /** Request ids withdrawn from the queue, the latest last, at most `WITHDRAWN_KEPT` (journaled). */
+  withdrawn: readonly string[];
 }
 
 /** A section whose plugin left, with no replacement, while the request was written: no section. */
@@ -176,8 +182,20 @@ const ANSWERS_KEPT = 1024;
 /** Random bytes in a turn's, a step's, or an unnamed prompt's id. */
 const ID_BYTES = 6;
 
+/**
+ * Queue revisions each instance of the agent has to number with: an instance's start from its number (`nextInstance`)
+ * times this, so they pass every earlier instance's, whatever the clock says. Below 2^53 for two million starts.
+ */
+const REVISIONS_PER_INSTANCE = 2 ** 32;
+
 /** Prompts a session's queue holds at most: one past it fails `Busy`, as a turn's queue is for a person's prompts. */
 export const MAX_QUEUED = 256;
+
+/**
+ * Withdrawn request ids a session remembers, the latest: a client that never heard its prompt was withdrawn (it lost
+ * its connection) sends it again with the same id when it reconnects, and is refused rather than have it placed.
+ */
+export const WITHDRAWN_KEPT = 64;
 
 export interface AgentPluginOptions {
   /** Where its journal and live files are: the real file system by default; a simulation passes a simulated disk. */
@@ -205,8 +223,10 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const files: StateFiles = { home: paths.home, fs: options.fs ?? nodeFileSystem };
       const ids = options.ids ?? secureIds;
       const newId = () => randomId(ids, ID_BYTES);
-      /** When this instance started: queue revisions start from it (see `SessionState.revision`). */
-      const epoch = yield* Clock.currentTimeMillis;
+      /** Where this instance's queue revisions start (see `SessionState.revision`): past every earlier instance's. */
+      const instance = yield* nextInstance(files);
+      assert(instance * REVISIONS_PER_INSTANCE < Number.MAX_SAFE_INTEGER, `agent instance ${instance} has no room for its revisions`);
+      const base = instance * REVISIONS_PER_INSTANCE;
       const registries = yield* Registries;
       // Its own sections, beside any other plugin's.
       yield* owner.add(PromptSections, baseSection(config.systemPrompt), { order: SectionOrder.base });
@@ -328,7 +348,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const stateOf = (sessionId: string): SessionState => {
         let state = states.get(sessionId);
         if (state === undefined) {
-          state = { turn: undefined, suspended: undefined, restored: false, unchecked: false, queue: [], revision: epoch, held: false };
+          state = { turn: undefined, suspended: undefined, restored: false, unchecked: false, queue: [], revision: base, held: false, withdrawn: [] };
           states.set(sessionId, state);
         }
         return state;
@@ -365,7 +385,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
               }),
           queue: state.queue.map((item) => item.prompt),
           ...(state.held && state.queue.length > 0 ? { held: true } : {}),
-          revision: state.revision,
+          ...(state.withdrawn.length === 0 ? {} : { withdrawn: state.withdrawn }),
         };
       };
       /**
@@ -384,9 +404,10 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         persist(sessionId).pipe(Effect.catch((error) => Effect.logWarning(`agent: ${error.message}`)));
       /** Replaces the queue, moving its revision on with it, so a view never pairs a new queue with an old revision. */
       const setQueue = (state: SessionState, queue: Item[]): Effect.Effect<void> =>
-        Effect.map(Clock.currentTimeMillis, (now) => {
+        Effect.sync(() => {
           state.queue = queue;
-          state.revision = Math.max(state.revision + 1, now);
+          state.revision++;
+          assert(state.revision < base + REVISIONS_PER_INSTANCE, `session revisions past this instance's room`);
         });
       const queueChanged = (sessionId: string) =>
         Effect.suspend(() => {
@@ -660,9 +681,27 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
             if (state.turn === entry) state.turn = undefined;
             const interrupted = Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause);
             const answer: Exit.Exit<void, AgentError> = Exit.isSuccess(exit) || interrupted ? Exit.void : Exit.asVoid(exit);
-            const settle = Effect.forEach([...entry.items.values()], (item) => Deferred.done(item.done, answer), { discard: true }).pipe(
+            // A prompt a cancelled turn never placed (it was cancelled before it began) did not run: its call hears so, as
+            // a withdrawn one's does, rather than that it was placed.
+            const cancelled = (Exit.isSuccess(exit) && exit.value === "cancelled") || (interrupted && !suspending);
+            const answerFor = (item: Item): Exit.Exit<void, AgentError> =>
+              cancelled && requests.of(sessionId).get(item.prompt.requestId) !== entry.turnId
+                ? Exit.fail(new AgentError({ sessionId, reason: "Retracted", message: "The turn was cancelled before it placed the prompt" }))
+                : answer;
+            const settle = Effect.forEach([...entry.items.values()], (item) => Deferred.done(item.done, answerFor(item)), { discard: true }).pipe(
               Effect.andThen(Deferred.done(entry.ended, answer)),
             );
+            // Remembered as a withdrawn prompt is, before its caller hears: sent again (a client that never heard), it is
+            // refused, not placed.
+            const retractedIds = cancelled
+              ? [...entry.items.values()].filter((item) => Exit.isFailure(answerFor(item))).map((item) => item.prompt.requestId)
+              : [];
+            if (retractedIds.length > 0) {
+              state.withdrawn = [...state.withdrawn, ...retractedIds].slice(-WITHDRAWN_KEPT);
+              // Written as the turn will end it: a cancelled turn runs no queue on, which waits for the next prompt.
+              state.held = state.queue.length > 0;
+              yield* persistOrWarn(sessionId);
+            }
             if ((interrupted && suspending) || (Exit.isSuccess(exit) && exit.value === "suspended")) {
               yield* writeLive(files, sessionId, entry.live.file());
               return yield* settle;
@@ -792,9 +831,12 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           // A new prompt goes through `AgentInputHook` first, outside the lock (a handler may take its time). One placed
           // already, an exactly-once retry, answers as it did; two retries racing may both ask, and the lock places one.
           const state = states.get(sessionId);
+          // One withdrawn is known too, though not refused here: a withdrawal is final once its journal write is, which
+          // the check under the lock sees.
           const known =
             requestId !== undefined &&
             (requests.of(sessionId).has(requestId) ||
+              state?.withdrawn.includes(requestId) === true ||
               state?.queue.some((item) => item.prompt.requestId === requestId) === true ||
               state?.turn?.items.has(requestId) === true ||
               state?.suspended?.prompts.some((item) => item.prompt.requestId === requestId) === true);
@@ -812,6 +854,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
                   if (prepared !== undefined) yield* reopen(sessionId, prepared);
                   const state = stateOf(sessionId);
                   if (requestId !== undefined) {
+                    if (state.withdrawn.includes(requestId)) return yield* retracted(sessionId);
                     // Dropped meanwhile if the session went idle: read again, under the lock, so the check is complete.
                     yield* requests.load(sessionId);
                     const queued = state.queue.find((item) => item.prompt.requestId === requestId);
@@ -920,13 +963,22 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
                 // Being placed in the running turn: too late to take out.
                 if (state === undefined || item === undefined || item.placing) return false;
                 const queue = state.queue;
+                const withdrawn = state.withdrawn;
                 yield* setQueue(
                   state,
                   queue.filter((candidate) => candidate !== item),
                 );
-                // Withdrawn once the journal no longer has it, as a crash would bring it back otherwise.
-                yield* persist(sessionId).pipe(Effect.tapError(() => setQueue(state, queue)));
-                yield* Deferred.fail(item.done, new AgentError({ sessionId, reason: "Retracted", message: "The prompt was withdrawn from the queue" }));
+                state.withdrawn = [...withdrawn, requestId].slice(-WITHDRAWN_KEPT);
+                // Withdrawn once the journal no longer has it, and remembers it, as a crash would bring it back otherwise.
+                yield* persist(sessionId).pipe(
+                  Effect.tapError(() =>
+                    Effect.andThen(
+                      setQueue(state, queue),
+                      Effect.sync(() => void (state.withdrawn = withdrawn)),
+                    ),
+                  ),
+                );
+                yield* Deferred.fail(item.done, retractedError(sessionId));
                 forget(sessionId, state);
                 yield* queueChanged(sessionId);
                 return true;
@@ -1112,9 +1164,9 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const view = (sessionId: string): Effect.Effect<AgentView, AgentError> =>
         Effect.andThen(
           checked(sessionId),
-          Effect.map(Clock.currentTimeMillis, (now) => {
+          Effect.sync(() => {
             // A session never prompted here gets no state: a view keeps nothing. A suspended turn is not running: no view.
-            const state = states.get(sessionId) ?? { turn: undefined, queue: [], revision: now };
+            const state = states.get(sessionId) ?? { turn: undefined, queue: [], revision: base };
             const queue = { queue: state.queue.map((item) => item.prompt), queueRevision: state.revision };
             return state.turn === undefined ? { output: [], ...queue } : { ...state.turn.live.view(), ...queue };
           }),
@@ -1140,12 +1192,13 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const journals = yield* readJournals(files);
       for (const [sessionId, journal] of journals) {
         const state = stateOf(sessionId);
-        state.restored = true;
-        state.unchecked = true;
+        // One that keeps only what was withdrawn has nothing to take up, nor a queue to check against its log.
+        const waiting = journal.turn !== undefined || journal.queue.length > 0;
+        state.restored = waiting;
+        state.unchecked = waiting;
         state.queue = yield* Effect.forEach(journal.queue, restore);
         state.held = journal.held === true;
-        // Past what the last instance told, should the clock have gone back since.
-        state.revision = Math.max(state.revision, (journal.revision ?? 0) + 1);
+        state.withdrawn = journal.withdrawn ?? [];
         if (journal.turn !== undefined) {
           state.suspended = {
             turnId: journal.turn.turnId,
@@ -1155,7 +1208,8 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           };
         }
       }
-      // Each taken up now if it can be; one that cannot is when its session is next prompted, or at the next start.
+      // Each taken up now if it can be; one that cannot is when its session is next prompted, or at the next start. One
+      // with nothing to take up is held all the same, which finds a session deleted while no agent ran, and removes it.
       for (const sessionId of journals.keys()) yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
 
       // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the agent.

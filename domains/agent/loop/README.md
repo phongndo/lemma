@@ -37,7 +37,8 @@ Effect.gen(function* () {
    most `maxRunning` across sessions: a turn over that waits for a slot, its
    session busy, before its first event, and gives its slot up while it waits
    to ask the model again (see [Retries](#retries)). Cancelled while it waits,
-   it ends at once, having logged nothing. The model is resolved (options →
+   it ends at once, having logged nothing, and its prompts' calls fail
+   `Retracted` (`AgentError` in the contract). The model is resolved (options →
    config → first available) and checked with `Llm.model`; failure is
    `NoModel`, before anything is logged.
 2. Answers tool calls the branch left without a result (a checkout put the leaf
@@ -144,10 +145,10 @@ while no agent ran goes when the next starts.
 `Retracted`), `promote` makes a queued follow-up a steer in its place (the
 running turn places it after its current step; with no turn running it stays a
 follow-up), and `QueueChanged` reports every change with a revision (`view`
-carries it as well). The revision falls short of the contract's promise across a
-restart: it is journaled while anything waits and drawn from the clock
-otherwise, so it can go back with the clock, or repeat in an instance started in
-the same millisecond. After a turn that failed
+carries it as well), which keeps the contract's promise whatever the clock
+does: the agent counts its starts in `<Paths.home>/agent/instance`, durably,
+before it numbers anything, and each start's revisions count on from its
+number, past every earlier start's. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
 prompts first, then itself, in one turn. Each `prompt` call resolves when the
 turn that placed its prompt ends.
@@ -174,16 +175,20 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
   was started with, whether it logs `agent.started` events, and whether it is
-  being cancelled), the queue, and its revision. Written, and synced with its
-  directory, before the log is, whenever the turn or the queue changes. A change
-  the log will not record (a turn starting, a prompt queued, withdrawn, or
-  promoted) is made only once the journal has it: when the journal cannot be
-  written (a full or failing disk), the call that asked for it fails `Io` and
-  nothing changes (`AgentError` in the contract); a turn the agent starts
-  itself, for the next queued prompt once one ends, is not started, and the
-  queue waits for the next prompt. A change the log records
-  already (a steer placed, a turn ended, a cancel asked for) is made whatever
-  the write does, and checked against the log on the next start.
+  being cancelled), the queue, and the request ids retracted lately (how many,
+  and what a prompt sent again with one gets: `Retracted` in the contract).
+  Written, and synced with its directory, before the log is, whenever the turn
+  or the queue changes. A change the log will not record (a turn starting, a
+  prompt queued, withdrawn, or promoted) is made only once the journal has it:
+  when the journal cannot be written (a full or failing disk), the call that
+  asked for it fails `Io` and this instance does not make it (`AgentError` in
+  the contract); a turn the agent starts itself, for the next queued prompt once
+  one ends, is not started, and the queue waits for the next prompt. A write
+  that failed may still have landed (renamed into place, its directory not
+  synced), so an instance started after it may find the change made (what a
+  client then does: `Io` in the contract). A change the log records already (a
+  steer placed, a turn ended, a cancel asked for) is made whatever the write
+  does, and checked against the log on the next start.
 - `<session>.live.json`: the running turn's model output and tool output so
   far, rewritten at most every 250 ms while it changes, and not synced.
 

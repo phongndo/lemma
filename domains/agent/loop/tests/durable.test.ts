@@ -32,7 +32,12 @@ const userTexts = (events: readonly SessionEvent[]) =>
   );
 
 const ended = (sessionId: string, count = 1) => waitFor(log(sessionId), (events) => ofType(events, "turn-end").length >= count);
-const stateFiles = () => fs.readdir(path.join(dir, "agent")).catch(() => [] as string[]);
+/** The sessions' state files: each session's journal and live file (not the count of its starts, the agent's own). */
+const stateFiles = () =>
+  fs
+    .readdir(path.join(dir, "agent"))
+    .then((names) => names.filter((name) => name !== "instance"))
+    .catch(() => [] as string[]);
 
 /** Prints a line, then runs until its call is aborted: a long command cut off by a restart. */
 const slow: Tool<Record<string, never>> = {
@@ -443,16 +448,39 @@ describe("resume", () => {
     // As if the host stopped right after recording the turn, before logging it, and a cancel came before it resumed.
     await fs.mkdir(path.join(dir, "agent"), { recursive: true });
     const prompt = { requestId: "r", content: text("go"), mode: "follow-up", at: 1 };
-    await fs.writeFile(path.join(dir, "agent", `${id}.json`), JSON.stringify({ turn: { turnId: "t-cut", prompts: [prompt], cancelling: true }, queue: [] }));
+    // And a prompt queued behind it, which a cancelled turn leaves waiting for the next prompt.
+    const queued = { requestId: "q", content: text("after"), mode: "follow-up", at: 2 };
+    await fs.writeFile(
+      path.join(dir, "agent", `${id}.json`),
+      JSON.stringify({ turn: { turnId: "t-cut", prompts: [prompt], cancelling: true }, queue: [queued] }),
+    );
     await run({ scripts: [reply("should not run")] }, ({ requests }) =>
       Effect.gen(function* () {
-        yield* waitFor(
-          Effect.promise(() => stateFiles()),
-          (files) => files.length === 0,
+        // The turn is gone from the journal, which keeps only its prompt's id, retracted: sent again, it is refused.
+        const journal = yield* waitFor(
+          Effect.promise(() => fs.readFile(path.join(dir, "agent", `${id}.json`), "utf8").then((text) => JSON.parse(text) as Record<string, unknown>)),
+          (journal) => journal.turn === undefined,
         );
+        expect(journal).toMatchObject({ queue: [{ requestId: "q" }], held: true, withdrawn: ["r"] });
         expect(yield* log(id)).toEqual([]);
         expect(requests).toHaveLength(0);
+        const refused = yield* Effect.flip(Effect.flatMap(Agent, (agent) => agent.prompt(id, text("go"), { requestId: "r" })));
+        expect(refused.reason).toBe("Retracted");
       }),
+    );
+  });
+
+  it("removes the journal of a session deleted while no agent ran, though it keeps only retracted ids", async () => {
+    const id = await run({ scripts: [] }, () => Effect.map(newSession, (info) => info.id));
+    await run({ scripts: [] }, () => Effect.flatMap(Sessions, (store) => store.remove(id)));
+    // Left by an agent that had retracted a prompt, and found by none since the session went.
+    await fs.mkdir(path.join(dir, "agent"), { recursive: true });
+    await fs.writeFile(path.join(dir, "agent", `${id}.json`), JSON.stringify({ queue: [], withdrawn: ["r"] }));
+    await run({ scripts: [] }, () =>
+      waitFor(
+        Effect.promise(() => stateFiles()),
+        (files) => files.length === 0,
+      ),
     );
   });
 
