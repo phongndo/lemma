@@ -4,7 +4,7 @@ import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
 import { branchOf, SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { isRoute } from "@lemma/router";
-import type { AgentActivity, AgentView, PromptContent, TurnOptions } from "@lemma/agent";
+import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
 import {
   appendOutput,
@@ -19,6 +19,9 @@ import {
   logFailure,
   newerQueue,
   resolveLeaf,
+  waitingPrompts,
+  recentRequests,
+  LEAVING_MS,
   trackTurn,
   upsertSession,
   Threads,
@@ -66,10 +69,26 @@ export default defineWebPlugin({
     const [live, setLive] = createSignal<LiveState>(emptyLive);
     /** The open thread's queue as the agent last reported it, with its revision: an older report never replaces a newer. */
     const [queue, setQueue] = createSignal<KnownQueue>();
+    /**
+     * Prompts that left the open thread's queue and may not be in its log yet, which reaches the page on a channel of
+     * its own: they still wait (`waitingPrompts`) until the log has them, or for `LEAVING_MS`. Not the ones withdrawn
+     * here (`withdrawn`), which are gone.
+     */
+    const [leaving, setLeaving] = createSignal<readonly QueuedPrompt[]>([]);
+    let withdrawn = new Set<string>();
     const reportQueue = (report: KnownQueue) => {
       const known = queue();
       const next = newerQueue(known, report);
-      if (next !== known) setQueue(next);
+      if (next === known) return;
+      const left = (known?.queue ?? []).filter(
+        (prompt) => !withdrawn.has(prompt.requestId) && !next.queue.some((queued) => queued.requestId === prompt.requestId),
+      );
+      batch(() => {
+        setQueue(next);
+        if (left.length === 0) return;
+        setLeaving((all) => [...all, ...left]);
+        plugin.after(LEAVING_MS, () => setLeaving((all) => all.filter((prompt) => !left.includes(prompt))));
+      });
     };
 
     /** The last ended turn per session, so a late `turn-started` cannot mark it running again (see `trackTurn`). */
@@ -93,7 +112,15 @@ export default defineWebPlugin({
       const id = activeId();
       return id !== undefined && running().includes(id);
     });
-    const activeQueue = createMemo(() => queue()?.queue ?? []);
+    const activeQueue = createMemo<readonly QueuedPrompt[]>((previous) => waitingPrompts(queue()?.queue ?? [], leaving(), branch(), previous), []);
+    // One the log has placed leaves for good, as it arrives: `waitingPrompts` reads only the log's last turns, which
+    // move on past it.
+    createEffect(() => {
+      const left = leaving();
+      if (left.length === 0) return;
+      const placed = recentRequests(branch());
+      if (left.some((prompt) => placed.has(prompt.requestId))) setLeaving(left.filter((prompt) => !placed.has(prompt.requestId)));
+    });
 
     const updateLive = (update: (state: LiveState) => LiveState): void => {
       const current = live();
@@ -263,6 +290,8 @@ export default defineWebPlugin({
         setLog({ loaded: sessionId === undefined });
         setLive(emptyLive);
         setQueue(undefined);
+        setLeaving([]);
+        withdrawn = new Set();
       });
       if (sessionId === undefined) {
         opened = Promise.resolve();
@@ -470,6 +499,9 @@ export default defineWebPlugin({
         withdraw: async (requestId: string) => {
           const sessionId = activeId();
           if (sessionId === undefined) return;
+          // Gone once the agent has it out, not kept waiting for a log that will never have it.
+          withdrawn.add(requestId);
+          setLeaving((all) => all.filter((prompt) => prompt.requestId !== requestId));
           try {
             await client.channel.call(AgentChannels.withdraw, { sessionId, requestId });
           } catch (error) {
