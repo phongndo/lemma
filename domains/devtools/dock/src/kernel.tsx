@@ -176,14 +176,22 @@ const slotViews = (slots: SlotsService): SlotView[] =>
 /** An item's place, as the slot's items table and a plugin's contributions show it. */
 const placeOf = (item: { readonly phase?: string; readonly order: number }) => `${item.phase === undefined ? "" : `${item.phase} · `}${item.order}`;
 
+/**
+ * How a web half names a slot no contract exports: by declaring it as its own declaration does (a part with
+ * `api.definePart`), so whichever of the two runs first declares it the same way, and the other finds it.
+ */
+const declaration = (view: SlotView): string => {
+  if (view.name.startsWith("part.")) return `api.definePart(${JSON.stringify(view.name.slice("part.".length))})`;
+  const firstWins = view.shows === "first" && view.defaultPhase === "replace" && JSON.stringify(view.phases) === JSON.stringify(["replace", "default"]);
+  const options = [
+    ...(view.shows === "first" ? [`shows: "first"`] : []),
+    ...(view.phases === undefined || firstWins ? [] : [`phases: ${JSON.stringify(view.phases)}`, `defaultPhase: ${JSON.stringify(view.defaultPhase)}`]),
+  ];
+  return `defineSlot(${JSON.stringify(view.name)}${options.length === 0 ? "" : `, { ${options.join(", ")} }`})`;
+};
+
 const snippet = (view: SlotView): string => {
-  // A part not in a contract is a web half's own: another names it with `api.definePart`, which declares it as a part.
-  const target =
-    view.contract !== undefined
-      ? view.contract.name
-      : view.name.startsWith("part.")
-        ? `api.definePart(${JSON.stringify(view.name.slice("part.".length))})`
-        : `defineSlot(${JSON.stringify(view.name)})`;
+  const target = view.contract !== undefined ? view.contract.name : declaration(view);
   // A web half takes the contracts from its api (no build step resolves an import); the name says which contract.
   const from = view.contract === undefined ? "" : `const { ${view.contract.name} } = api.contracts; // ${view.contract.from}\n`;
   const { phases, defaultPhase } = view;
