@@ -10,9 +10,9 @@ import { invoke } from "./invoke.ts";
 const fixture = (name: string) => fileURLToPath(new URL(`./fixtures/check/${name}`, import.meta.url));
 const cliMain = fileURLToPath(new URL("../src/main.ts", import.meta.url));
 
-/** The pid of the spawner fixture's child, if it runs. */
-const spawned = () =>
-  promisify(execFile)("pgrep", ["-f", "^sleep 4329$"]).then(
+/** The pid of a spawner fixture's child, `sleep <seconds>`, if it runs. */
+const spawned = (seconds: number) =>
+  promisify(execFile)("pgrep", ["-f", `^sleep ${seconds}$`]).then(
     ({ stdout }) => stdout.trim(),
     () => "",
   );
@@ -63,21 +63,22 @@ describe("lemma plugins check", () => {
     expect(code).toBe(1);
     expect(JSON.parse(out).problems).toEqual([expect.stringMatching(/^The host stopped but did not exit/)]);
     // Its child went with the host's process group.
-    expect(await spawned()).toBe("");
+    expect(await spawned(4329)).toBe("");
   }, 90_000);
 
-  test("stops its host, and what the plugin started, when the check itself is killed", async () => {
+  test("stops its host, and what the plugin started, when the check itself is killed while the host starts", async () => {
     // The check's own temporary home goes in here, as it is left behind.
     const scratch = await mkdtemp(join(tmpdir(), "lemma-cli-check-killed-"));
-    const check = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "plugins", "check", fixture("spawner.js")], {
+    const check = spawn(process.execPath, ["--conditions=lemma-source", cliMain, "plugins", "check", fixture("slow-spawner.js")], {
       env: { ...process.env, LEMMA_HOME: home, TMPDIR: scratch },
       stdio: "ignore",
     });
     try {
-      // Its host is up, the plugin's child running in the host's process group, which the host leads.
+      // Its host is starting (the plugin's setup has 3 s to go), the plugin's child running in the host's process
+      // group, which the host leads.
       const host = await vi.waitFor(
         async () => {
-          const child = await spawned();
+          const child = await spawned(4331);
           expect(child).not.toBe("");
           const { stdout } = await promisify(execFile)("ps", ["-o", "pgid=", "-p", child]);
           return Number(stdout.trim());
@@ -86,7 +87,7 @@ describe("lemma plugins check", () => {
       );
       check.kill("SIGKILL");
       await vi.waitFor(() => expect(alive(-host)).toBe(false), { timeout: 30_000, interval: 100 });
-      expect(await spawned()).toBe("");
+      expect(await spawned(4331)).toBe("");
     } finally {
       check.kill("SIGKILL");
       await rm(scratch, { recursive: true, force: true });

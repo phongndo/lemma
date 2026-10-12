@@ -13,6 +13,7 @@ import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
+import { SHUTDOWN_TIMEOUT_MS } from "./limits.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { recordStall, watchStalls } from "./stall.ts";
@@ -38,8 +39,9 @@ const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
 const supervisorGone =
   process.env.LEMMA_SUPERVISED === "1"
     ? new Promise<void>((resolve) => {
-        // What it prints has no reader once its supervisor is gone: a write to the closed pipe must not fail the host.
-        for (const stream of [process.stdout, process.stderr]) stream.on("error", () => {});
+        // What it prints has no reader once its supervisor is gone: a write to the closed pipe must not fail the host,
+        // nor end it before it stops, as the CLI that launched it would (`lemma … | head`).
+        for (const stream of [process.stdout, process.stderr]) stream.removeAllListeners("error").on("error", () => {});
         process.stdin
           .on("end", resolve)
           .on("close", resolve)
@@ -236,12 +238,7 @@ const readConfigFiles = Effect.forEach([paths.userConfig, paths.projectConfig], 
   Effect.map(readConfigText(path).pipe(Effect.orElseSucceed(() => undefined)), (text) => [path, text] as const),
 );
 
-/**
- * How long stopping may take in all. The core's default (its 10 second dispose deadline) would cut it short of a
- * plugin that asks for longer to close: the agent takes up to 30 seconds, letting running turns reach a point to
- * resume from.
- */
-const SHUTDOWN_TIMEOUT = Duration.seconds(40);
+const SHUTDOWN_TIMEOUT = Duration.millis(SHUTDOWN_TIMEOUT_MS);
 
 /** What `loaded` runs, as `changedBetween` compares it. */
 const running = (loaded: Loaded): Running =>

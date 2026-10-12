@@ -8,6 +8,7 @@ import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { Deferred, Effect } from "effect";
 import type { PluginStatus } from "@lemma/contracts";
+import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { CliError, ExitCode } from "./command.ts";
 import type { Io, Output, Unattached } from "./command.ts";
 
@@ -20,11 +21,11 @@ import type { Io, Output, Unattached } from "./command.ts";
 
 const cliMain = fileURLToPath(new URL("./main.ts", import.meta.url));
 /**
- * How long a host has to start; to stop once asked (`lemma: stopped`), past its own shutdown limit (40 s); and then to
- * exit, which it does at once unless something its plugin started keeps it running.
+ * How long a host has to start; to stop once asked (`lemma: stopped`), past its own limit; and then to exit, which it
+ * does at once unless something its plugin started keeps it running.
  */
 const START_MS = 30_000;
-const STOP_MS = 45_000;
+const STOP_MS = SHUTDOWN_TIMEOUT_MS + 5_000;
 const EXIT_MS = 2_000;
 
 /** How a command runs another (`run` in cli.ts), with `io` changed: to read a host's answers as JSON. */

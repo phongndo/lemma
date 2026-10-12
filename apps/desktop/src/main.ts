@@ -7,6 +7,7 @@ import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
 import { findTarget, readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery, Target } from "@lemma/contracts/discovery";
+import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
 import { resolvePaths } from "@lemma/host/paths";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
@@ -20,8 +21,8 @@ const paths = resolvePaths({ env: process.env, cwd: project });
 /** Development: the page comes from the web app's dev server (`pnpm dev`), which proxies to the host, so edits hot-reload. */
 const webUrl = process.env.LEMMA_WEB_URL;
 const STARTUP_TIMEOUT_MS = 30_000;
-/** The host's own limit on stopping (40 seconds), and a margin: quitting sooner would cut off what it lets finish. */
-const SHUTDOWN_TIMEOUT_MS = 45_000;
+/** The host's own limit on stopping, and a margin: quitting sooner would cut off what it lets finish. */
+const SHUTDOWN_TIMEOUT_MS = HOST_SHUTDOWN_MS + 5_000;
 const REMOTE_TIMEOUT_MS = 10_000;
 /** The shared app icon (assets/brand); the dark tile reads on light and dark desktops alike. */
 const icon = fileURLToPath(new URL("../../../assets/brand/icon-dark.png", import.meta.url));
