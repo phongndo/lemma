@@ -31,7 +31,10 @@ lets the event loop run the promise callbacks that are due, as `SimDisk`'s
 operations and promise-based code settle through them), then moves the clock
 to the next timer, and again. `run(effect)` ends with the effect, fails
 `Deadlock` when nothing is left to run and no timer is set, and `TimeLimit`
-past its limit of simulated time. Every fiber it starts has `Verify` on.
+when its next timer is past its limit: a time on the simulation's clock,
+counted from when the simulation began (a day by default), not from the call.
+Every fiber it starts has `Verify` on, and Effect's `Random`, one source for
+the whole run.
 
 What it runs must not reach the event loop's timers, the wall clock, or another
 random source, or real time would decide what happens when:
@@ -40,10 +43,12 @@ determinism tests fail on any timer started during a run.
 
 ## A host
 
-`SimHost.start(sim, disk, generation, parts)` starts a host process: a core with
-`sessions.files`, `agent.loop`, and `tools.registry` on a mount of a `SimDisk`
-(`@lemma/testing`), their ids drawn from the run, the sessions lock claimed by
-`generation` as its pid. `parts` adds the model and the tools: `simModel`, which
+`SimHost.start(sim, disk, generation, parts, alive)` starts a host process: a
+core with `sessions.files`, `agent.loop`, and `tools.registry` on a mount of a
+`SimDisk` (`@lemma/testing`), their ids drawn from the run, the sessions lock
+claimed by `generation` as its pid. `alive` holds the generations still running:
+a lock an earlier one holds is stale once it is not among them, as a crashed
+process's is. `parts` adds the model and the tools: `simModel`, which
 answers each request as its `Answering` draws (text in timed deltas, and calls
 to the tools offered), and `simTools`. `digestOf(disk)` hashes every file on
 the disk.

@@ -1,5 +1,10 @@
 export { SIM_EPOCH_MS, SimClock } from "./clock.ts";
+export { digestOf, HOME, PLATFORM, SimHost } from "./host.ts";
+export type { HostParts } from "./host.ts";
+export { answerSimply, SIM_MODEL, simModel } from "./model.ts";
+export type { Answer, Answering } from "./model.ts";
 export { Prng } from "./random.ts";
 export { SimScheduler } from "./scheduler.ts";
 export { Deadlock, Simulation, TimeLimit } from "./simulation.ts";
 export type { SimulationOptions } from "./simulation.ts";
+export { simTools } from "./tools.ts";

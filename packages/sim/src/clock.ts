@@ -9,7 +9,6 @@ export const SIM_EPOCH_MS = Date.UTC(2026, 0, 1);
 
 interface Timer {
   readonly deadline: bigint;
-  readonly seq: number;
   readonly wake: () => void;
 }
 
@@ -21,7 +20,6 @@ interface Timer {
 export class SimClock implements Clock.Clock {
   private now = 0n;
   private wall: bigint;
-  private seq = 0;
   /** In the order they are due: deadline, then the order they were set. */
   private readonly timers: Timer[] = [];
 
@@ -52,11 +50,6 @@ export class SimClock implements Clock.Clock {
     });
   }
 
-  /** A promise that resolves after `millis` of simulated time: for the simulation's own fakes, written with promises. */
-  after(millis: number): Promise<void> {
-    return new Promise((resolve) => void this.set(this.now + BigInt(Math.max(0, Math.round(millis * 1e6))), resolve));
-  }
-
   /** Simulated nanoseconds since the run started. */
   get elapsed(): bigint {
     return this.now;
@@ -73,8 +66,8 @@ export class SimClock implements Clock.Clock {
   }
 
   /**
-   * Moves time on to `deadline`, waking every timer due by then in the order they are due, each at its own time, so
-   * the work it wakes reads the time it was due at. Returns how many it woke.
+   * Moves time on to `deadline`, waking every timer due by then in the order they are due, each at its own time: a
+   * sleep's fiber resumes as its timer wakes, so it reads the time it was due at. Returns how many it woke.
    */
   advanceTo(deadline: bigint): number {
     assert(deadline >= this.now, `time moves on, never back: ${deadline} is before ${this.now}`);
@@ -95,7 +88,7 @@ export class SimClock implements Clock.Clock {
   }
 
   private set(deadline: bigint, wake: () => void): Timer {
-    const timer: Timer = { deadline, seq: this.seq++, wake };
+    const timer: Timer = { deadline, wake };
     let index = this.timers.length;
     while (index > 0 && this.timers[index - 1]!.deadline > deadline) index--;
     this.timers.splice(index, 0, timer);

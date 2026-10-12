@@ -9,23 +9,33 @@ import { Deadlock, Prng, SIM_EPOCH_MS, SimClock, Simulation, TimeLimit } from ".
  */
 
 describe("SimClock", () => {
-  it("starts at the epoch, moves only when advanced, and wakes timers in order, each at its own time", async () => {
+  it("starts at the epoch, moves only when advanced, and wakes timers in order, each at its own time", () => {
     const clock = new SimClock();
     const woke: [string, number][] = [];
-    void clock.after(30).then(() => woke.push(["b", clock.currentTimeMillisUnsafe()]));
-    void clock.after(10).then(() => woke.push(["a", clock.currentTimeMillisUnsafe()]));
-    void clock.after(30).then(() => woke.push(["c", clock.currentTimeMillisUnsafe()]));
+    const sleep = (name: string, ms: number) =>
+      Effect.runFork(
+        Effect.andThen(
+          clock.sleep(Duration.millis(ms)),
+          Effect.sync(() => void woke.push([name, clock.currentTimeMillisUnsafe() - SIM_EPOCH_MS])),
+        ),
+      );
+    sleep("b", 30);
+    sleep("a", 10);
+    sleep("c", 30);
     expect(clock.currentTimeMillisUnsafe()).toBe(SIM_EPOCH_MS);
     expect(clock.nextDeadline()).toBe(10_000_000n);
-    expect(clock.advanceTo(30_000_000n)).toBe(3);
-    await Promise.resolve();
-    expect(woke.map(([name]) => name)).toEqual(["a", "b", "c"]);
-    expect(clock.monotonicTimeNanosUnsafe()).toBe(30_000_000n);
+    expect(clock.advanceTo(40_000_000n)).toBe(3);
+    expect(woke).toEqual([
+      ["a", 10],
+      ["b", 30],
+      ["c", 30],
+    ]);
+    expect(clock.monotonicTimeNanosUnsafe()).toBe(40_000_000n);
   });
 
   it("steps the wall clock back without moving monotonic time or timers", () => {
     const clock = new SimClock();
-    void clock.after(5);
+    Effect.runFork(clock.sleep(Duration.millis(5)));
     clock.stepWall(-60_000);
     expect(clock.currentTimeMillisUnsafe()).toBe(SIM_EPOCH_MS - 60_000);
     expect(clock.monotonicTimeNanosUnsafe()).toBe(0n);

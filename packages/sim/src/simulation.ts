@@ -26,7 +26,7 @@ export class Deadlock extends Error {
   override readonly name = "Deadlock";
 }
 
-/** What `run` waits for went on past its limit of simulated time. */
+/** What `run` waits for went on past its limit: a time on the simulation's clock, counted from when it began. */
 export class TimeLimit extends Error {
   override readonly name = "TimeLimit";
 }
@@ -43,6 +43,8 @@ export class Simulation {
   readonly random: Prng;
   readonly clock: SimClock;
   readonly scheduler: SimScheduler;
+  /** Effect's `Random` for every fiber of the run: one source, so each draw moves it on, wherever it is drawn. */
+  private readonly effectRandom: Random.Random;
 
   constructor(options: SimulationOptions) {
     this.seed = options.seed;
@@ -50,13 +52,14 @@ export class Simulation {
     this.clock = new SimClock(options.epochMs);
     const order = this.random.split("scheduler");
     this.scheduler = new SimScheduler(options.shuffle === true ? (count) => order.int(count) : undefined);
+    this.effectRandom = this.random.split("effect").effect();
   }
 
   /** `effect` with what every fiber of the run has: the clock, Effect's `Random`, and `Verify`. */
   provide<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
     return effect.pipe(
       Effect.provideService(Clock.Clock, this.clock),
-      Effect.provideService(Random.Random, this.random.split("effect").effect()),
+      Effect.provideService(Random.Random, this.effectRandom),
       Effect.provideService(Verify, true),
     );
   }
@@ -77,7 +80,8 @@ export class Simulation {
 
   /**
    * Settles, then moves the clock to the next timer, until `done` says to stop: `false` once it has, as no timer
-   * is set then. Fails `TimeLimit` past `limitMs` of simulated time.
+   * is set then. Fails `TimeLimit` when the next timer is past `limitMs` of simulated time since the simulation began
+   * (not since this call: a simulation is one run, and its limit one time on its clock).
    */
   async drive(done: () => boolean, limitMs = 24 * 60 * 60 * 1000): Promise<boolean> {
     const limit = BigInt(limitMs) * 1_000_000n;
@@ -86,7 +90,9 @@ export class Simulation {
       if (done()) return true;
       const next = this.clock.nextDeadline();
       if (next === undefined) return false;
-      if (next > limit) throw new TimeLimit(`still running after ${limitMs} ms of simulated time`);
+      if (next > limit) {
+        throw new TimeLimit(`still running at ${this.clock.elapsed / 1_000_000n} ms of simulated time, its next timer past the limit of ${limitMs} ms`);
+      }
       this.clock.advanceTo(next);
     }
   }
