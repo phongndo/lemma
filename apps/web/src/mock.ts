@@ -445,12 +445,24 @@ export const createMockHost = (): Host => {
     ui = { ...ui, plugins: next, enabledIn, configIn };
     emit({ type: "ui-changed", ui });
   };
+  /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
+  let heldStarts: (() => void)[] | undefined;
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
     lemmaMock: {
       setUiFiles: (files: UiComposition["files"]) => {
         ui = { ...ui, files };
         emit({ type: "ui-changed", ui });
+      },
+      /** Holds each `turn-started` back until released: what a slow connection does to a prompt's acceptance. */
+      holdTurnStarted: () => {
+        heldStarts ??= [];
+      },
+      /** Publishes the `turn-started` events held back, and holds no more. */
+      releaseTurnStarted: () => {
+        const held = heldStarts ?? [];
+        heldStarts = undefined;
+        for (const start of held) start();
       },
     },
   });
@@ -796,7 +808,10 @@ export const createMockHost = (): Host => {
     running.add(sessionId);
     const turn = { turnId, output: new Map<string, string>() };
     turns.set(sessionId, turn);
-    activity.publish({ type: "turn-started", sessionId, turnId });
+    // Held when asked (`lemmaMock.holdTurnStarted`): the page has shown the turn running, but not yet seen it start.
+    const publishStarted = () => activity.publish({ type: "turn-started", sessionId, turnId });
+    if (heldStarts !== undefined) heldStarts.push(publishStarted);
+    else publishStarted();
     const text = content.find((part) => part.type === "text")?.text ?? "(image)";
     let total = emptyUsage;
     /** Steers placed in this turn, answered when it ends. */

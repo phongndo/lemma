@@ -1,4 +1,4 @@
-import { Cause, Effect, Order, Result, Schema } from "effect";
+import { Cause, Effect, Exit, Fiber, Order, Queue, Result, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, Events, Hooks, PluginContext, Registries } from "@lemma/core";
 import { Inspectors } from "@lemma/contracts";
@@ -82,24 +82,8 @@ export const outputBatcher = (publish: (chunk: string, offset: number) => void, 
   return { update, flush };
 };
 
-/**
- * A caller's `ExecuteOptions.update` as the tool's `update`: what it returns
- * (an Effect, a promise) runs on its own, and its failure is logged rather
- * than thrown into the tool, whose output is only shown.
- */
-const listening =
-  (update: NonNullable<ExecuteOptions["update"]>, services: Context.Context<never>) =>
-  (chunk: string): void => {
-    const failed = (cause: Cause.Cause<unknown>) => void Effect.runForkWith(services)(Effect.logWarning("A tool output listener failed", cause));
-    try {
-      const result = update(chunk);
-      if (Effect.isEffect(result)) Effect.runForkWith(services)(result.pipe(Effect.catchCause((cause) => Effect.sync(() => failed(cause)))));
-      else if (typeof (result as PromiseLike<void> | undefined)?.then === "function")
-        (result as PromiseLike<void>).then(undefined, (error: unknown) => failed(Cause.die(error)));
-    } catch (error) {
-      failed(Cause.die(error));
-    }
-  };
+/** A caller's `ExecuteOptions.update` given one chunk: what it returns (an Effect, a promise) runs to its end. */
+const deliver = (update: NonNullable<ExecuteOptions["update"]>, chunk: string): Effect.Effect<void, unknown> => awaitable(() => update(chunk));
 
 /**
  * Runs a tool's `execute`, whichever shape it returns. A promise tool gets a
@@ -194,13 +178,18 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             const decision = yield* awaitable(() => candidate.item.guard(call));
             if (decision._tag === "deny") return errorResult(`Tool call denied: ${decision.reason}`, { deniedBy: candidate.pluginId });
           }
-          const services = yield* Effect.context<never>();
-          const output =
+          // The tool's output goes out through one fiber the call owns, in order: published as `ToolOutput`, batched, or
+          // handed to the caller's listener, whose failure is logged, never the tool's. A call that finishes waits for it
+          // before it returns; one cut off (cancelled, interrupted) stops it, so no listener holds a cancellation.
+          const outbox = yield* Queue.unbounded<{ readonly chunk: string; readonly offset: number }, Cause.Done>();
+          const send = ({ chunk, offset }: { readonly chunk: string; readonly offset: number }) =>
             update === undefined
-              ? outputBatcher((chunk, offset) =>
-                  Effect.runForkWith(services)(events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })),
-                )
-              : { update: listening(update, services), flush: () => {} };
+              ? events.publish(ToolOutput, { sessionId: call.sessionId, toolCallId: call.toolCallId, chunk, offset })
+              : deliver(update, chunk).pipe(Effect.catchCause((cause) => Effect.logWarning("A tool output listener failed", cause)));
+          const sender = yield* Effect.forkChild(Stream.runForEach(Stream.fromQueue(outbox), send));
+          const offer = (chunk: string, offset: number) => void Queue.offerUnsafe(outbox, { chunk, offset });
+          // A listener takes chunks as they come; only the published output is batched and counted.
+          const output = update === undefined ? outputBatcher(offer) : { update: (chunk: string) => offer(chunk, 0), flush: () => {} };
           const context = {
             sessionId: call.sessionId,
             toolCallId: call.toolCallId,
@@ -210,7 +199,15 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
             ...(call.offered === undefined ? {} : { offered: call.offered }),
             ...(call.leafId === undefined ? {} : { leafId: call.leafId }),
           };
-          return yield* runTool(entry.tool, input, context, signal).pipe(Effect.ensuring(Effect.sync(output.flush)));
+          return yield* runTool(entry.tool, input, context, signal).pipe(
+            Effect.onExit((exit) =>
+              Effect.suspend(() => {
+                output.flush();
+                Queue.endUnsafe(outbox);
+                return Exit.isSuccess(exit) ? Fiber.join(sender) : Fiber.interrupt(sender);
+              }),
+            ),
+          );
         });
 
     const execute: Service["execute"] = (invocation, signal, executeOptions) =>

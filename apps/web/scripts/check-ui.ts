@@ -1220,11 +1220,17 @@ const devtools = async () => {
     const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (await (window as any).lemma.service(Settings)).open(undefined);
   });
+  // The turn shows running before the host is seen to take the first prompt; a steer sent in between goes once it is,
+  // and is not cleared away with the first prompt's text. Held open on purpose, so the check does not depend on timing.
+  // Held until released, so the steer is typed and sent while the first prompt is still going out, every run.
+  await page.evaluate(() => (window as any).lemmaMock.holdTurnStarted());
   await page.fill("textarea", "start a turn");
   await page.keyboard.press("Enter");
   await page.waitForSelector(".send.stop");
   await page.fill("textarea", "steer it");
   await page.keyboard.press("Enter");
+  assert.equal(await page.locator(".queued:has-text('steer it')").count(), 0, "a steer went out before the prompt before it was taken");
+  await page.evaluate(() => (window as any).lemmaMock.releaseTurnStarted());
   await page
     .waitForSelector(".queued:has-text('steer it') .queued-mode >> text=Steer")
     .catch(() => assert.fail("a steer sent while a turn runs is not shown queued"));

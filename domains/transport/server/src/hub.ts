@@ -1,6 +1,6 @@
 import { Deferred, Effect, Queue, Stream } from "effect";
 import type { Context } from "effect";
-import { Channels, Notice, PluginsChanged, toPluginStatus, UiChanged } from "@lemma/contracts";
+import { changesSince, Channels, Notice, PluginsChanged, toPluginStatus, UiChanged } from "@lemma/contracts";
 import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
 import type { CoreClosed, Event, EventError, PluginContext, Registries } from "@lemma/core";
 import { answers, channelInfo } from "./channels.ts";
@@ -55,13 +55,14 @@ export const makeHub = (
     yield* forward(Notice, (notice) => ({ type: "notice", notice }));
     yield* forward(PluginsChanged, (e) => ({ type: "plugins-changed", plugins: e.plugins.map(toPluginStatus) }));
     yield* forward(UiChanged, (ui) => ({ type: "ui-changed", ui }));
-    // The channels that answer, each time a different contribution answers for any id (not at start: clients list them).
+    // The channels that answer, each time a different contribution answers for any id. Not the list at start, which
+    // clients list themselves: one that changed before this stream began is in its first list, so each is told when it
+    // differs from the last told, the start's first.
+    const same = <A>(before: readonly A[], after: readonly A[]) =>
+      before.length === after.length && before.every((contribution, index) => contribution === after[index]);
     yield* owner.background(
       "channels-changed",
-      registries.changes(Channels).pipe(
-        Stream.map(answers),
-        Stream.changesWith((before, after) => before.length === after.length && before.every((contribution, index) => contribution === after[index])),
-        Stream.drop(1),
+      changesSince(answers(yield* registries.items(Channels)), Stream.map(registries.changes(Channels), answers), same).pipe(
         Stream.runForEach((current) => feed({ type: "channels-changed", channels: current.map(channelInfo) })),
       ),
     );

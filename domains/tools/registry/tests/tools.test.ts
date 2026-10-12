@@ -142,6 +142,39 @@ describe("registry", () => {
 });
 
 describe("execute", () => {
+  it("returns a cancelled call at once, though its output's listener never ends", async () => {
+    let begin!: () => void;
+    const begun = new Promise<void>((resolve) => (begin = resolve));
+    const waits: Tool<Record<string, never>> = {
+      name: "waits",
+      description: "Prints, then waits to be cancelled.",
+      input: Schema.Struct({}),
+      execute: (_, { update, signal }) =>
+        new Promise((resolve) => {
+          update?.("started");
+          signal.addEventListener("abort", () => resolve(ok("stopped")), { once: true });
+          begin();
+        }),
+    };
+    const controller = new AbortController();
+    const exit = await run(
+      [contributor("waiter", [waits])],
+      Effect.gen(function* () {
+        const registry = yield* ToolRunner;
+        const running = yield* Effect.forkChild(
+          registry.execute(new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "waits", input: {}, cwd: "/tmp" }), controller.signal, {
+            update: () => Effect.never,
+          }),
+        );
+        yield* Effect.promise(() => begun);
+        controller.abort();
+        return yield* Fiber.await(running).pipe(Effect.timeout("2 seconds"));
+      }),
+    );
+    // Done, not timed out: the listener holds no cancellation.
+    expect(Exit.isExit(exit)).toBe(true);
+  });
+
   it("returns results, validation errors, and tool failures as results; unknown tools fail", async () => {
     const throwing: Tool<unknown> = {
       name: "throws",
@@ -408,6 +441,37 @@ describe("execute", () => {
         expect(published).toEqual([]);
       }),
     );
+  });
+
+  it("hands a slow listener every chunk, in order, before the call returns", async () => {
+    const chatty: Tool<unknown> = {
+      name: "chatty",
+      description: "",
+      input: Schema.Unknown,
+      execute: async (_input, { update }) => {
+        for (const chunk of ["a", "b", "c", "d"]) update?.(chunk);
+        return ok("done");
+      },
+    };
+    const received = await run(
+      [contributor("p", [chatty])],
+      Effect.gen(function* () {
+        const received: string[] = [];
+        const registry = yield* ToolRunner;
+        // The first chunk is the slowest, yielding to every other fiber many times: one fiber per chunk would let the later
+        // ones overtake it.
+        const slow = (chunk: string) => (chunk === "a" ? Effect.repeat(Effect.yieldNow, { times: 50 }) : Effect.void);
+        yield* registry.execute(
+          new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "chatty", input: {}, cwd: "/tmp" }),
+          new AbortController().signal,
+          {
+            update: (chunk) => slow(chunk).pipe(Effect.andThen(Effect.sync(() => void received.push(chunk)))),
+          },
+        );
+        return received;
+      }),
+    );
+    expect(received).toEqual(["a", "b", "c", "d"]);
   });
 
   it("runs a caller's update as a listener: an Effect it returns runs, and its failures never reach the tool", async () => {
