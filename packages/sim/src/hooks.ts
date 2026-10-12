@@ -23,19 +23,25 @@ export interface HookFaults {
 export const NO_HOOK_FAULTS: HookFaults = { inputSlow: 0, inputFail: 0, inputAnswer: 0, requestSlow: 0, requestFail: 0 };
 
 /** A plugin handling `AgentInputHook` and `AgentRequestHook` as `faults` draws, passing each on otherwise. */
-export const simHooks = (prng: Prng, faults: HookFaults) =>
+export const simHooks = (prng: Prng, faults: HookFaults, count: (what: string) => void = () => {}) =>
   definePlugin({
     id: "sim.hooks",
     setup: function* () {
       const owner = yield* PluginContext;
-      const pause = (chance: number) => (prng.chance(chance) ? Effect.sleep(Duration.millis(prng.between(100, 10_000))) : Effect.void);
+      const pause = (chance: number, what: string) => {
+        if (!prng.chance(chance)) return Effect.void;
+        count(what);
+        return Effect.sleep(Duration.millis(prng.between(100, 10_000)));
+      };
       yield* owner.on(AgentInputHook, (input, next) =>
         Effect.gen(function* () {
-          yield* pause(faults.inputSlow);
+          yield* pause(faults.inputSlow, "hook inputSlow");
           if (prng.chance(faults.inputFail)) {
+            count("hook inputFail");
             return yield* new AgentError({ sessionId: input.sessionId, reason: "Hook", message: "sim.hooks failed the prompt" });
           }
           if (prng.chance(faults.inputAnswer)) {
+            count("hook inputAnswer");
             return prng.chance(0.5)
               ? ({ kind: "handle", message: "Handled by sim.hooks" } as const)
               : ({ kind: "refuse", reason: "Refused by sim.hooks" } as const);
@@ -45,8 +51,9 @@ export const simHooks = (prng: Prng, faults: HookFaults) =>
       );
       yield* owner.on(AgentRequestHook, (draft, next) =>
         Effect.gen(function* () {
-          yield* pause(faults.requestSlow);
+          yield* pause(faults.requestSlow, "hook requestSlow");
           if (prng.chance(faults.requestFail)) {
+            count("hook requestFail");
             return yield* new AgentError({ sessionId: draft.sessionId, reason: "Hook", message: "sim.hooks failed the request" });
           }
           return yield* next(draft);

@@ -143,13 +143,18 @@ jobs:
       LEMMA_SIM_RUNS: "20000"
       LEMMA_CONVERSATION_SEED: ${{ github.run_number }}
       LEMMA_CONVERSATION_RUNS: "500"
+      # The harness simulation (packages/sim): a window of seeds no earlier night ran, at the runner's full length.
+      LEMMA_HARNESS_SEED: ${{ github.run_number }}00000
+      LEMMA_HARNESS_RUNS: "2000"
+      LEMMA_HARNESS_TICKS: "200"
       LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
       # Shared runner timings are advisory; correctness/resource assertions fail.
       LEMMA_PERF_ENFORCE: "0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/dev-shell
-      # The randomized tests (the core's, the session log's simulation, the agent's conversations), many more of them;
+      # The randomized tests (the core's, the session log's simulation, the agent's conversations, the harness
+      # simulation), many more of them;
       # every test runs in the jobs above.
       - run: nix develop -c pnpm test:random
       - run: nix develop -c pnpm perf:check
@@ -159,7 +164,8 @@ jobs:
           LEMMA_SEQUENCE_SEED=$LEMMA_SEQUENCE_SEED LEMMA_SEQUENCE_RUNS=$LEMMA_SEQUENCE_RUNS
           LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS
           LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS
-          nix develop -c pnpm test:random (a failing property also prints its replay path)"
+          LEMMA_HARNESS_SEED=$LEMMA_HARNESS_SEED LEMMA_HARNESS_RUNS=$LEMMA_HARNESS_RUNS LEMMA_HARNESS_TICKS=$LEMMA_HARNESS_TICKS
+          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command)"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

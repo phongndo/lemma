@@ -5,6 +5,7 @@
 //   pnpm sim --seed 7 --count 100    seeds 7 to 106
 //   pnpm sim --forever               random seeds until one fails
 //   pnpm sim --seed 7 --dump         seed 7, then every session's log as it was left
+//   pnpm sim --count 40 --coverage   then how often each kind of action, fault, and outcome happened
 //   pnpm sim --seed 1 --digest       the short determinism run's disk digest (tests/determinism.test.ts)
 //
 // `--ticks <n>` sets the safety phase's length (default 200). Exits 1 on the first failing seed.
@@ -23,6 +24,7 @@ const { values } = parseArgs({
     ticks: { type: "string", default: "200" },
     forever: { type: "boolean" },
     dump: { type: "boolean" },
+    coverage: { type: "boolean" },
     digest: { type: "boolean" },
   },
 });
@@ -69,6 +71,7 @@ const describeEvent = (event: SessionEvent): string => {
 };
 
 let failed = false;
+const reached = new Map<string, number>();
 for (let index = 0; index < count && !failed; index++) {
   const seed = values.forever === true && index > 0 ? randomSeed() : first + index;
   console.log(`seed ${seed}`);
@@ -78,6 +81,7 @@ for (let index = 0; index < count && !failed; index++) {
     await world.run();
     const simulated = Number(world.sim.clock.elapsed / 1_000_000n) / 1000;
     console.log(`  ok: ${Math.round(performance.now() - started)} ms for ${simulated} s simulated, ${world.calls.length} model calls`);
+    for (const [what, times] of world.coverage()) reached.set(what, (reached.get(what) ?? 0) + times);
   } catch (error) {
     failed = true;
     console.log(world.describe().replace(/^/gm, "  "));
@@ -91,4 +95,5 @@ for (let index = 0; index < count && !failed; index++) {
     }
   }
 }
+if (values.coverage === true) for (const [what, times] of [...reached].sort(([a], [b]) => (a < b ? -1 : 1))) console.log(`${what}: ${times}`);
 process.exit(failed ? 1 : 0);

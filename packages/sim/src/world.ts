@@ -164,7 +164,7 @@ const text = (value: string) => [{ type: "text" as const, text: value }];
 export class World {
   readonly sim: Simulation;
   readonly swarm: Swarm;
-  readonly checker = new Checker();
+  readonly checker: Checker;
   readonly calls: ModelCall[] = [];
   readonly tools = newToolRecord();
   readonly disk: SimDisk;
@@ -179,15 +179,19 @@ export class World {
   private readonly sessions: string[] = [];
   private readonly prompted: Prompted[] = [];
   private requests = 0;
+  /** Steps a turn may take: few in some runs, so turns end `max-steps`. */
+  private readonly maxSteps: number;
 
   constructor(options: WorldOptions) {
     // Shuffled scheduling in odd seeds, so half the runs reorder fibers' work.
     const shuffle = options.shuffle ?? (options.seed & 1) === 1;
     this.sim = new Simulation({ seed: options.seed, shuffle });
+    this.checker = new Checker({ ordered: !shuffle });
     this.prng = this.sim.random.split("workload");
     this.swarm = options.swarm ?? drawSwarm(this.sim.random.split("swarm"));
     this.faults = this.swarm;
     this.ticks = options.ticks ?? 200;
+    this.maxSteps = this.sim.random.split("limits").between(2, 8);
     const diskRandom = this.sim.random.split("disk");
     this.disk = new SimDisk(() => diskRandom.next());
     // A power loss kills the host as it strikes, part-way through a write too: its clients hear nothing more from it.
@@ -208,6 +212,16 @@ export class World {
     await this.settle();
     await this.audit();
     this.raise("the audit");
+  }
+
+  /**
+   * What the run did that its checks count on, by what it is (`action crash`, `model transient`, `disk sync`, `turn
+   * cancelled`…): a kind that never shows up across many seeds is a part of the space no run reaches.
+   */
+  coverage(): ReadonlyMap<string, number> {
+    const seen = new Map(this.checker.seen);
+    for (const [operation, count] of this.disk.injected) seen.set(`disk ${operation}`, (seen.get(`disk ${operation}`) ?? 0) + count);
+    return seen;
   }
 
   /** What a seed's run is: its mix and whether its scheduling is shuffled. */
@@ -247,20 +261,22 @@ export class World {
   /** The plugins a host of this run adds, drawing from the faults in force now. */
   private parts(generation: number): { readonly plugins: readonly Plugin[]; readonly configs: Readonly<Record<string, unknown>> } {
     const faults = this.faults;
+    const count = (what: string) => this.checker.count(what);
     const model = simModel(this.sim.random.split(`model ${generation}`), {
       answering: answerAsSimulated(faults.model),
       host: generation,
       calls: this.calls,
+      count,
     });
     return {
       plugins: [
         compaction,
         model.plugin,
-        simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools }).plugin,
-        simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks),
+        simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools, count }).plugin,
+        simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks, count),
         this.checker.observer(),
       ],
-      configs: { "agent.loop": { maxSteps: 8, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 } },
+      configs: { "agent.loop": { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 } },
     };
   }
 
@@ -641,12 +657,16 @@ export class World {
     this.checker.audit(served, this.fileEvents(), this.calls, this.tools);
   }
 
-  /** Each session's events as its file's bytes parse, a torn last line left out. */
+  /** Each session's events as its file's bytes parse, a torn last line (no newline) left out. */
   fileEvents(): Map<string, SessionEvent[]> {
     const sessions = new Map<string, SessionEvent[]>();
     for (const file of this.disk.list()) {
       if (!file.startsWith(`${HOME}/sessions/`) || !file.endsWith(".jsonl")) continue;
-      const lines = (this.disk.read(file) ?? "").split("\n").filter((line) => line !== "");
+      // Whole lines only: one without its newline is a write a crash tore, which the store does not serve.
+      const lines = (this.disk.read(file) ?? "")
+        .split("\n")
+        .slice(0, -1)
+        .filter((line) => line !== "");
       let id: string | undefined;
       const events: SessionEvent[] = [];
       for (const line of lines) {

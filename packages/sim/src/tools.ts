@@ -28,7 +28,8 @@ const Input = Schema.Struct({ text: Schema.String, steps: Schema.optional(Schema
  * and `work`, which prints a line per step, takes a while, may fail, and is unsafe to repeat, as a command that
  * changes something is: `record.began` counts each of its calls' starts, which a resumed turn must never repeat.
  */
-export const simTools = (prng: Prng, options: { readonly faults?: ToolFaults; readonly record?: ToolRecord } = {}) => {
+export const simTools = (prng: Prng, options: { readonly faults?: ToolFaults; readonly record?: ToolRecord; readonly count?: (what: string) => void } = {}) => {
+  const count = options.count ?? (() => {});
   const faults = options.faults ?? NO_TOOL_FAULTS;
   const record = options.record ?? newToolRecord();
   const echo: Tool<typeof Input.Type> = {
@@ -48,11 +49,15 @@ export const simTools = (prng: Prng, options: { readonly faults?: ToolFaults; re
       Effect.gen(function* () {
         record.began.set(context.toolCallId, (record.began.get(context.toolCallId) ?? 0) + 1);
         const slow = prng.chance(faults.slow);
+        if (slow) count("tool slow");
         for (let step = 1; step <= steps; step++) {
           yield* Effect.sleep(Duration.millis(slow ? prng.between(30_000, 180_000) : prng.between(10, 3_000)));
           context.update?.(`${text}: step ${step} of ${steps}\n`);
         }
-        if (prng.chance(faults.fail)) return yield* Effect.fail(new Error(`${text} failed`));
+        if (prng.chance(faults.fail)) {
+          count("tool fail");
+          return yield* Effect.fail(new Error(`${text} failed`));
+        }
         return new ToolResult({ content: [{ type: "text", text: `${text}: done` }] });
       }),
   };

@@ -76,6 +76,16 @@ interface Streamed {
  */
 export class Checker {
   readonly violations: string[] = [];
+  /**
+   * Fibers run in the order they become ready (not shuffled): the observers of two kinds of event then hear them in
+   * the order they were published, so an order between them can be checked.
+   */
+  private readonly ordered: boolean;
+
+  constructor(options: { readonly ordered?: boolean } = {}) {
+    this.ordered = options.ordered ?? true;
+  }
+
   /** Events the store reported appended (durable), by session and id, as they were then. */
   private readonly acked = new Map<string, Map<string, string>>();
   private readonly streamed = new Map<string, Streamed>();
@@ -152,10 +162,11 @@ export class Checker {
 
   /**
    * A tool's output only moves on: each chunk starts where the last ended, or at a point a batch dropped it from; and
-   * all of it comes before the call's result, as a client showing the output takes the result to end it.
+   * all of it comes before the call's result, as a client showing the output takes the result to end it (checked where
+   * the run's fibers are not shuffled, `ordered`).
    */
   private toolOutput(toolCallId: string, chunk: string, offset: number): void {
-    if (this.executed.has(toolCallId)) this.violation(`tool call ${toolCallId}: output after its result`);
+    if (this.ordered && this.executed.has(toolCallId)) this.violation(`tool call ${toolCallId}: output after its result`);
     const reached = this.output.get(toolCallId) ?? 0;
     if (offset < reached) this.violation(`tool call ${toolCallId}: output at offset ${offset} after output up to ${reached}`);
     this.output.set(toolCallId, offset + chunk.length);
