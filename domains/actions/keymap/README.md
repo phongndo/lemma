@@ -20,9 +20,10 @@ Keyboard says so). Requires `Slots`, `Dialogs` (`@lemma/frame`), and
 
 - **Dialogs and questions.** While a dialog is open (`Dialogs.current`), or
   the host waits on a question no view has claimed (`Interactions.claim`), so
-  that the question dialog shows it, only `global` actions run. A question a
-  view shows in place, as the Providers page shows its logins', holds no
-  keys back.
+  that the question dialog shows it, only `global` actions run. A view that
+  claims a question and shows it in place, outside any dialog, holds no keys
+  back; one that shows it in a dialog of its own (the Providers page's logins)
+  is a dialog like any other.
 - **A value first.** An action with `input` is not run directly: its keys run
   `ActionIds.palette` with its id, so the palette asks for the value. With no
   action at that id (`actions.palette` off), it runs with no value.

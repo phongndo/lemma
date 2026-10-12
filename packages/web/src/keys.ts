@@ -104,6 +104,8 @@ export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };
  * A search list's keys, the same in every one: ↓ and ↑, Ctrl+N and Ctrl+P, or
  * Ctrl+J and Ctrl+K move; mod+1 … mod+9 picks the item shown at that place
  * (⌘1 on macOS, Ctrl+1 elsewhere). Undefined for any other key, which stays the field's.
+ * A list that a key of its own closes takes that key first: the palette's
+ * `mod+k` closes it, where elsewhere Ctrl+K moves up.
  */
 export const listKey = (event: KeyEvent): ListKey | undefined => {
   const key = keyOf(event);

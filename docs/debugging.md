@@ -36,12 +36,14 @@ README has the rest.
   its log, with each one's pipeline: the plugin that contributed each system
   section and tool, the handlers each step passed through, and why a step
   ended or went on. `lemma inspect <session> --request <r>` prints one request
-  so, and `--rebuilt` the exact request the model was sent
-  ([threads](../domains/threads/README.md)).
+  so, and `--rebuilt` the exact request the model was sent (`lemma --help`,
+  and [the CLI](../apps/cli/README.md)).
 - **The trace** (the devtools' Trace panel) shows what ran in the host and
   the page, span by span, filtered by plugin, session, turn, step, tool, hook,
-  status, or duration. A hook's span holds what each handler was given and
-  returned, and its own time. A trajectory record's **Show in trace** opens
+  status, or duration. A hook's span holds its handler's own time, and, for a
+  hook declared with a `summary`, a few plain values of what each handler was
+  given, passed on, and returned (`hook.in.*`, `hook.next.*`, `hook.out.*`:
+  counts and names, never the payload). A trajectory record's **Show in trace** opens
   the spans of its turn or call
   ([devtools.trace](../domains/devtools/trace/README.md)).
 

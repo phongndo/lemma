@@ -970,6 +970,15 @@ const parts = async () => {
     .waitForSelector(".toast >> text=A file was not attached: only images can be.", { timeout: 5_000 })
     .catch(() => assert.fail("a dropped file that is no image was not said to be left out"));
   assert.equal(await page.locator(".attachment").count(), 0, "a dropped file that is no image was attached");
+  // So are files pasted.
+  await page.evaluate(() => {
+    const data = new DataTransfer();
+    for (const name of ["a.txt", "b.pdf"]) data.items.add(new File(["x"], name, { type: name.endsWith(".pdf") ? "application/pdf" : "text/plain" }));
+    document.querySelector("form.composer textarea")!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await page
+    .waitForSelector(".toast >> text=2 files were not attached: only images can be.", { timeout: 5_000 })
+    .catch(() => assert.fail("pasted files that are no images were not said to be left out"));
   await page.fill("textarea", "");
   assert.equal(await unloadAsks(), false, "an empty composer made leaving the page ask");
   await page.goto(`${url}/nowhere?mock`);
