@@ -147,6 +147,9 @@ jobs:
       LEMMA_HARNESS_SEED: ${{ github.run_number }}00000
       LEMMA_HARNESS_RUNS: "2000"
       LEMMA_HARNESS_TICKS: "200"
+      # The harness from the outside (scripts/torture.ts): a real host killed and stopped under a seeded workload.
+      LEMMA_TORTURE_SEED: ${{ github.run_number }}
+      LEMMA_TORTURE_SECONDS: "180"
       LEMMA_BENCH_OUTPUT_DIR: /tmp/lemma-performance
       # Shared runner timings are advisory; correctness/resource assertions fail.
       LEMMA_PERF_ENFORCE: "0"
@@ -157,6 +160,7 @@ jobs:
       # simulation), many more of them;
       # every test runs in the jobs above.
       - run: nix develop -c pnpm test:random
+      - run: nix develop -c pnpm torture
       - run: nix develop -c pnpm perf:check
       - if: failure()
         run: >-
@@ -165,7 +169,8 @@ jobs:
           LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS
           LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS
           LEMMA_HARNESS_SEED=$LEMMA_HARNESS_SEED LEMMA_HARNESS_RUNS=$LEMMA_HARNESS_RUNS LEMMA_HARNESS_TICKS=$LEMMA_HARNESS_TICKS
-          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command)"
+          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command);
+          the torture test's workload: LEMMA_TORTURE_SEED=$LEMMA_TORTURE_SEED LEMMA_TORTURE_SECONDS=$LEMMA_TORTURE_SECONDS nix develop -c pnpm torture"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:

@@ -90,5 +90,26 @@ simulated disk and the contract conformance suites.
 `scripts/mock-openai.ts` is a scripted provider for end-to-end runs without an
 API key; `scripts/e2e.ts` starts it and a host for tests.
 
+`pnpm torture` tests the harness from the outside, under process faults
+(`scripts/torture.ts`, nightly):
+
+- **Setup.** A real host, the scripted provider over HTTP, and the CLI.
+- **Workload.** A seeded workload sends, retries, cancels, and withdraws
+  prompts. Meanwhile the host is killed (`kill -9`) and restarted, or stopped
+  (`SIGSTOP`) and continued.
+- **Liveness.** Then every prompt is asked for again by its request id, and
+  must reach the end of a turn.
+- **Safety.** The logs, read back through the CLI, must show:
+  - parents in order;
+  - turns in pairs;
+  - each tool call answered once;
+  - each request placed at most once;
+  - no command unsafe to repeat run twice.
+
+`--seed` (`LEMMA_TORTURE_SEED`) replays the workload. The processes' timing is
+not replayed, so a failing run is not reproduced bit for bit, as the
+simulator's is. `--seconds` (`LEMMA_TORTURE_SECONDS`, default 30) sets how
+long the workload runs.
+
 The web app's conventions are in [its AGENTS.md](../apps/web/AGENTS.md), and
 the core's checks and benchmarks in [its README](../packages/core/README.md#develop).
