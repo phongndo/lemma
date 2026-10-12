@@ -241,6 +241,60 @@ describe("a withdrawal whose caller gives up while it is written", () => {
   });
 });
 
+describe("a turn cancelled while it logs its prompt", () => {
+  it("answers the prompt as placed, as the log has it, not as retracted", async () => {
+    const seen = await Effect.runPromise(
+      Effect.gen(function* () {
+        const disk = new SimDisk(seededRandom(1)).mount();
+        // The user message's append waits at the gate while it is shut: the turn is cancelled while it logs the prompt.
+        let shut = false;
+        let reach!: () => void;
+        let open!: () => void;
+        const reached = new Promise<void>((resolve) => (reach = resolve));
+        const opened = new Promise<void>((resolve) => (open = resolve));
+        const fs: FileSystem = {
+          ...disk,
+          open: async (path, flags, mode) => {
+            const handle = await disk.open(path, flags, mode);
+            return {
+              ...handle,
+              appendFile: async (text) => {
+                if (shut && text.includes('"role":"user"')) {
+                  reach();
+                  await opened;
+                }
+                return handle.appendFile(text);
+              },
+            };
+          },
+        };
+        const running = yield* start(fs, [hang("thinking")]);
+        const seen = yield* running.core.run(
+          Effect.gen(function* () {
+            const { id } = yield* (yield* Sessions).create();
+            const agent = yield* Agent;
+            shut = true;
+            const prompted = yield* Effect.forkChild(agent.prompt(id, text("go"), { requestId: "r" }));
+            yield* Effect.promise(() => reached);
+            // The cancel lands while the prompt is written; then the write goes on.
+            const cancelling = yield* Effect.forkChild(agent.cancel(id));
+            for (let turn = 0; turn < 10; turn++) yield* Effect.yieldNow;
+            open();
+            yield* Fiber.join(cancelling);
+            const answer = yield* Fiber.await(prompted).pipe(Effect.timeout("2 seconds"));
+            const failure = Exit.isFailure(answer) ? Option.getOrUndefined(Cause.findErrorOption(answer.cause)) : undefined;
+            const logged = (yield* (yield* Sessions).events(id)).some((event) => event.data.type === "message" && event.data.requestId === "r");
+            return { answer: Exit.isSuccess(answer) ? "answered" : (failure?.reason ?? "died"), logged };
+          }),
+        );
+        yield* Scope.close(running.scope, Exit.void);
+        return seen;
+      }),
+    );
+    expect(seen).toEqual({ answer: "answered", logged: true });
+  });
+});
+
 describe("a session's queue", () => {
   it(`holds ${MAX_QUEUED} prompts: one more fails Busy`, async () => {
     const reason = await Effect.runPromise(

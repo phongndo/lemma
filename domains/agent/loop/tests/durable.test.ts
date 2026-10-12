@@ -451,13 +451,31 @@ describe("resume", () => {
     await fs.writeFile(path.join(dir, "agent", `${id}.json`), JSON.stringify({ turn: { turnId: "t-cut", prompts: [prompt], cancelling: true }, queue: [] }));
     await run({ scripts: [reply("should not run")] }, ({ requests }) =>
       Effect.gen(function* () {
-        yield* waitFor(
-          Effect.promise(() => stateFiles()),
-          (files) => files.length === 0,
+        // The turn is gone from the journal, which keeps only its prompt's id, retracted: sent again, it is refused.
+        const journal = yield* waitFor(
+          Effect.promise(() => fs.readFile(path.join(dir, "agent", `${id}.json`), "utf8").then((text) => JSON.parse(text) as Record<string, unknown>)),
+          (journal) => journal.turn === undefined,
         );
+        expect(journal).toMatchObject({ queue: [], withdrawn: ["r"] });
         expect(yield* log(id)).toEqual([]);
         expect(requests).toHaveLength(0);
+        const refused = yield* Effect.flip(Effect.flatMap(Agent, (agent) => agent.prompt(id, text("go"), { requestId: "r" })));
+        expect(refused.reason).toBe("Retracted");
       }),
+    );
+  });
+
+  it("removes the journal of a session deleted while no agent ran, though it keeps only retracted ids", async () => {
+    const id = await run({ scripts: [] }, () => Effect.map(newSession, (info) => info.id));
+    await run({ scripts: [] }, () => Effect.flatMap(Sessions, (store) => store.remove(id)));
+    // Left by an agent that had retracted a prompt, and found by none since the session went.
+    await fs.mkdir(path.join(dir, "agent"), { recursive: true });
+    await fs.writeFile(path.join(dir, "agent", `${id}.json`), JSON.stringify({ queue: [], withdrawn: ["r"] }));
+    await run({ scripts: [] }, () =>
+      waitFor(
+        Effect.promise(() => stateFiles()),
+        (files) => files.length === 0,
+      ),
     );
   });
 

@@ -187,8 +187,11 @@ export class Checker {
   }
 
   withdrew(sessionId: string, requestId: string): void {
-    const sent = this.sent.get(`${sessionId}/${requestId}`);
-    if (sent !== undefined) sent.withdrawn = true;
+    const key = `${sessionId}/${requestId}`;
+    // Withdrawn while its call still waits, as a queued prompt's does: no outcome yet, but it must never be placed.
+    let sent = this.sent.get(key);
+    if (sent === undefined) this.sent.set(key, (sent = { sessionId, requestId, outcomes: [], withdrawn: false }));
+    sent.withdrawn = true;
     this.count("withdrawn");
   }
 

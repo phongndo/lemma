@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Exit, Fiber } from "effect";
+import { Cause, Deferred, Effect, Exit, Fiber, Stream } from "effect";
 import type { Context } from "effect";
 import { Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
@@ -308,6 +308,17 @@ export class World {
         }
       }
       Object.assign(this.disk.faults, this.faults.disk);
+      // Every fault as it is reported, an instance a restart replaced since included: a broken assertion is a bug in
+      // whichever instance broke it. (What failed a plugin is read as the host stops: `inspect`.)
+      this.sim.fork(
+        Stream.runForEach(host.core.faults, (fault) =>
+          Effect.sync(() => {
+            if (Cause.prettyErrors(fault.cause).some((error) => error.name === "AssertionError")) {
+              this.checker.violation(`plugin ${fault.pluginId} broke an assertion in host ${generation}: ${Cause.pretty(fault.cause).split("\n")[0]}`);
+            }
+          }),
+        ),
+      );
       const registries = await host.run(
         Effect.gen(function* () {
           return yield* Registries;
@@ -367,7 +378,6 @@ export class World {
     await this.start();
   }
 
-  /** Runs `effect` as a client of the current host: on its own, ending `unknown`… if the host goes first. */
   /**
    * A client's call of channel `id` on the current host, made as the transport makes it (`callServed`: a `repeatable`
    * call a reload cut off is made again), on its own; it ends `gone` if the host goes first, the client learning
@@ -384,7 +394,15 @@ export class World {
       Effect.map(Effect.exit(body((id, payload) => callServed(running.registries, id, payload))), (exit): Exit.Exit<A, unknown> | "gone" => exit),
       Effect.as(Deferred.await(running.gone), "gone" as const),
     );
-    const fiber = this.sim.fork(Effect.map(call, (ended) => onEnd(ended)));
+    const fiber = this.sim.fork(
+      Effect.map(call, (ended) => {
+        // A call ends in a result or one of its contract's errors; anything else is a bug (an assertion broken).
+        if (ended !== "gone" && Exit.isFailure(ended) && Cause.hasDies(ended.cause)) {
+          this.checker.violation(`${label} failed with a defect: ${Cause.pretty(ended.cause).split("\n")[0]}`);
+        }
+        onEnd(ended);
+      }),
+    );
     running.clients.set(fiber, label);
     fiber.addObserver(() => running.clients.delete(fiber));
   }
@@ -424,10 +442,6 @@ export class World {
                 Cause.hasInterruptsOnly(ended.cause) || error instanceof HostError
                 ? { kind: "unknown" }
                 : { kind: "failed", reason: (error as { readonly reason?: string }).reason ?? "defect" };
-        // A call ends in a result or one of its contract's errors; anything else is a bug (an assertion broken).
-        if (ended !== "gone" && Exit.isFailure(ended) && Cause.hasDies(ended.cause) && !Cause.hasInterruptsOnly(ended.cause)) {
-          this.checker.violation(`prompt ${requestId} in ${sessionId} failed with a defect: ${Cause.pretty(ended.cause).split("\n")[0]}`);
-        }
         this.checker.outcome(sessionId, requestId, outcome);
       },
     );

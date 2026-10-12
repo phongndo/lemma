@@ -691,6 +691,15 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
             const settle = Effect.forEach([...entry.items.values()], (item) => Deferred.done(item.done, answerFor(item)), { discard: true }).pipe(
               Effect.andThen(Deferred.done(entry.ended, answer)),
             );
+            // Remembered as a withdrawn prompt is, before its caller hears: sent again (a client that never heard), it is
+            // refused, not placed.
+            const retractedIds = cancelled
+              ? [...entry.items.values()].filter((item) => Exit.isFailure(answerFor(item))).map((item) => item.prompt.requestId)
+              : [];
+            if (retractedIds.length > 0) {
+              state.withdrawn = [...state.withdrawn, ...retractedIds].slice(-WITHDRAWN_KEPT);
+              yield* persistOrWarn(sessionId);
+            }
             if ((interrupted && suspending) || (Exit.isSuccess(exit) && exit.value === "suspended")) {
               yield* writeLive(files, sessionId, entry.live.file());
               return yield* settle;
@@ -820,10 +829,12 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           // A new prompt goes through `AgentInputHook` first, outside the lock (a handler may take its time). One placed
           // already, an exactly-once retry, answers as it did; two retries racing may both ask, and the lock places one.
           const state = states.get(sessionId);
-          if (requestId !== undefined && state?.withdrawn.includes(requestId) === true) return yield* retracted(sessionId);
+          // One withdrawn is known too, though not refused here: a withdrawal is final once its journal write is, which
+          // the check under the lock sees.
           const known =
             requestId !== undefined &&
             (requests.of(sessionId).has(requestId) ||
+              state?.withdrawn.includes(requestId) === true ||
               state?.queue.some((item) => item.prompt.requestId === requestId) === true ||
               state?.turn?.items.has(requestId) === true ||
               state?.suspended?.prompts.some((item) => item.prompt.requestId === requestId) === true);
@@ -1195,10 +1206,9 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           };
         }
       }
-      // Each taken up now if it can be; one that cannot is when its session is next prompted, or at the next start.
-      for (const sessionId of journals.keys()) {
-        if (stateOf(sessionId).restored) yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
-      }
+      // Each taken up now if it can be; one that cannot is when its session is next prompted, or at the next start. One
+      // with nothing to take up is held all the same, which finds a session deleted while no agent ran, and removes it.
+      for (const sessionId of journals.keys()) yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
 
       // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the agent.
       yield* owner

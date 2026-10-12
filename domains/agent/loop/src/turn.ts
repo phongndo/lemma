@@ -296,16 +296,29 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const hookError = (hook: string) => (error: { readonly message: string }) =>
     new AgentError({ sessionId, reason: "Hook", message: `${hook}: ${error.message}`, cause: error });
 
-  const userMessage = (placed: Placed) =>
-    Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
-      append({
-        type: "message",
-        message: { role: "user", content: placed.content, timestamp },
-        turnId,
-        requestId: placed.requestId,
-        ...(placed.credit === undefined ? {} : { credit: placed.credit }),
-      }),
-    ).pipe(Effect.tap(() => Effect.sync(() => input.logged(placed.requestId))));
+  /**
+   * Logs a placed prompt and records it placed (`input.logged`, and `also`) in one step a cancel cannot split: a prompt
+   * logged but not recorded would be answered as never placed.
+   */
+  const userMessage = (placed: Placed, also: () => void = () => {}) =>
+    Effect.uninterruptible(
+      Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
+        append({
+          type: "message",
+          message: { role: "user", content: placed.content, timestamp },
+          turnId,
+          requestId: placed.requestId,
+          ...(placed.credit === undefined ? {} : { credit: placed.credit }),
+        }),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            input.logged(placed.requestId);
+            also();
+          }),
+        ),
+      ),
+    );
 
   const toolResult = (call: ToolCall, text: string, timestamp: number): ToolResultMessage => ({
     role: "toolResult",
@@ -677,7 +690,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     Effect.gen(function* () {
       const steers = yield* input.inbox.steers;
       const logged: string[] = [];
-      yield* Effect.forEach(steers, (steer) => Effect.tap(userMessage(steer), () => Effect.sync(() => logged.push(steer.requestId))), {
+      yield* Effect.forEach(steers, (steer) => userMessage(steer, () => void logged.push(steer.requestId)), {
         discard: true,
       }).pipe(Effect.ensuring(Effect.suspend(() => (logged.length === 0 ? Effect.void : input.inbox.placed(logged)))));
       return steers.length;

@@ -38,7 +38,8 @@ Effect.gen(function* () {
    session busy, before its first event, and gives its slot up while it waits
    to ask the model again (see [Retries](#retries)). Cancelled while it waits,
    it ends at once, having logged nothing, and its prompts' calls fail
-   `Retracted`, as a withdrawn prompt's do. The model is resolved (options →
+   `Retracted`, as a withdrawn prompt's do, their ids remembered as a withdrawn
+   prompt's are. The model is resolved (options →
    config → first available) and checked with `Llm.model`; failure is
    `NoModel`, before anything is logged.
 2. Answers tool calls the branch left without a result (a checkout put the leaf
@@ -175,17 +176,16 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
   was started with, whether it logs `agent.started` events, and whether it is
-  being cancelled), the queue, and the request ids withdrawn from it (the
-  latest 64: a prompt sent again with one, by a client that reconnects without
-  having heard it was withdrawn, is refused `Retracted`). Written, and synced
-  with its directory, before the log is, whenever the turn or the queue
-  changes. A change the log will not record (a turn starting, a prompt queued,
-  withdrawn, or promoted) is made only once the journal has it: when the journal
-  cannot be written (a full or failing disk), the call that asked for it fails
-  `Io` and this instance does not make it (`AgentError` in the contract); a turn
-  the agent starts itself, for the next queued prompt once one ends, is not
-  started, and the queue waits for the next prompt. A
-  write that failed may still have landed (renamed into place, its directory
+  being cancelled), the queue, and the latest 64 request ids retracted (a
+  prompt sent again with one is refused: `Retracted` in the contract). Written,
+  and synced with its directory, before the log is, whenever the turn or the
+  queue changes. A change the log will not record (a turn starting, a prompt
+  queued, withdrawn, or promoted) is made only once the journal has it: when the
+  journal cannot be written (a full or failing disk), the call that asked for it
+  fails `Io` and this instance does not make it (`AgentError` in the contract);
+  a turn the agent starts itself, for the next queued prompt once one ends, is
+  not started, and the queue waits for the next prompt.
+  A write that failed may still have landed (renamed into place, its directory
   not synced), so an instance started after it may find the change made: a
   client that got `Io` sends the prompt again with the same `requestId`, which
   places it once at most. A change the log records already (a steer placed, a

@@ -13,7 +13,9 @@ import type { ToolContribution } from "@lemma/tools";
 export class AgentError extends Data.TaggedError("AgentError")<{
   readonly sessionId: string;
   /**
-   * `Retracted`: `withdraw` took the prompt out of the queue before a turn placed it. `Io`: the agent could not record
+   * `Retracted`: the prompt never ran, and never will: `withdraw` took it out of the queue before a turn placed it, or
+   * the turn it was to start or join was cancelled before it placed it. Sent again with the same `requestId`, it is
+   * refused again. `Io`: the agent could not record
    * the change the call asked for on disk (its journal), so it did not make it in this instance: the queue is as it
    * was. A write that failed may have landed part-way, so the next instance may find the change made: send the
    * prompt again with the same `requestId` to settle its fate.
@@ -378,8 +380,8 @@ export const AgentChannels = {
   /**
    * `Agent.prompt` for a client: answers when the turn that places the prompt
    * ends. Calling again with the same `requestId` waits for the turn that
-   * placed the prompt, or places it if it never was, and never places it
-   * twice. So the call is `repeatable`: when the agent reloads while it waits,
+   * placed the prompt, or places it if it never was (unless it was retracted:
+   * that is refused again), and never places it twice. So the call is `repeatable`: when the agent reloads while it waits,
    * as it does whenever its configuration or a plugin it requires changes, the
    * host makes it again on the replacement, where a prompt it took stays
    * taken, its turn resuming. A client whose connection drops calls again with
@@ -389,7 +391,8 @@ export const AgentChannels = {
    *
    * Fails as `Agent.prompt` does: `Busy`, `NoModel`, `Session`, `Hook`,
    * `Io` (see `AgentError`), or `Retracted` when `agent.withdraw`
-   * took the prompt out of the queue, each
+   * took the prompt out of the queue, or its turn was cancelled before it
+   * placed it, each
    * with the session as its subject; `Withdrawn` (its subject `agent.prompt`)
    * only when no agent answers once the change that stopped it has finished,
    * as when the agent is turned off. A client that clears
