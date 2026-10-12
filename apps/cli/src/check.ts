@@ -19,9 +19,13 @@ import type { Io, Output, Unattached } from "./command.ts";
  */
 
 const cliMain = fileURLToPath(new URL("./main.ts", import.meta.url));
-/** How long a host has to start, and to exit once asked to stop: past its plugins' dispose deadlines (10 s). */
+/**
+ * How long a host has to start; to stop once asked (`lemma: stopped`), past its own shutdown limit (40 s); and then to
+ * exit, which it does at once unless something its plugin started keeps it running.
+ */
 const START_MS = 30_000;
-const STOP_MS = 15_000;
+const STOP_MS = 45_000;
+const EXIT_MS = 2_000;
 
 /** How a command runs another (`run` in cli.ts), with `io` changed: to read a host's answers as JSON. */
 export type Runner = (argv: readonly string[], io: Io) => Promise<number>;
@@ -61,53 +65,86 @@ const readManifest = (path: string): { readonly manifest?: { readonly lemma?: { 
 const named = (lines: readonly string[]) => [...new Set(lines.flatMap((line) => /^lemma: (?:error|warning) \[([^\]]+)\]/.exec(line)?.[1] ?? []))];
 
 /**
- * Stops a host: SIGTERM, then, if it has not exited within `STOP_MS` (something the plugin started keeps it running:
- * a timer, a socket, a child process), SIGKILL. Resolves with whether it exited as asked.
+ * How a host stopped: `exited` as asked; `lingered`, done stopping but kept running by something its plugin started
+ * (a timer, a socket, a child process); `stuck`, not done stopping within `STOP_MS`; `orphaned`, exited, leaving
+ * processes its plugin started running.
  */
-const stopHost = (child: ChildProcess): Promise<boolean> =>
+type Stopped = "exited" | "lingered" | "stuck" | "orphaned";
+
+/** Kills the host's process group (it leads one of its own: `hostIn`), and so whatever its plugin started; true if any was left. */
+const killGroup = (child: ChildProcess): boolean => {
+  if (child.pid === undefined) return false;
+  try {
+    process.kill(-child.pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Stops a host: SIGTERM, then, once it says it is done (`stopped`), `EXIT_MS` to exit, else, or if it never says so
+ * within `STOP_MS`, its whole process group is killed.
+ */
+const stopHost = (child: ChildProcess, stopped: Promise<void>): Promise<Stopped> =>
   new Promise((done) => {
-    if (child.exitCode !== null || child.signalCode !== null) return done(true);
-    let forced = false;
-    const timer = setTimeout(() => {
-      forced = true;
+    if (child.exitCode !== null || child.signalCode !== null) return done(killGroup(child) ? "orphaned" : "exited");
+    let outcome: Stopped = "exited";
+    const kill = (why: Stopped) => {
+      outcome = why;
+      killGroup(child);
       child.kill("SIGKILL");
-    }, STOP_MS);
+    };
+    let exiting: ReturnType<typeof setTimeout> | undefined;
+    const stuck = setTimeout(() => kill("stuck"), STOP_MS);
+    void stopped.then(() => {
+      clearTimeout(stuck);
+      exiting = setTimeout(() => kill("lingered"), EXIT_MS);
+    });
     child.once("exit", () => {
-      clearTimeout(timer);
-      done(!forced);
+      clearTimeout(stuck);
+      clearTimeout(exiting);
+      // Exited as asked, but what its plugin started outlives it.
+      if (killGroup(child) && outcome === "exited") outcome = "orphaned";
+      done(outcome);
     });
     child.kill("SIGTERM");
   });
 
 /**
  * A host of its own in `home`, until the scope closes: what it printed, once it serves (`started`), has ended
- * (`ended`), or did neither within `START_MS`; and `stop`, which stops it, if it runs, saying whether it exited as
- * asked.
+ * (`ended`), or did neither within `START_MS`; and `stop`, which stops it, if it runs, saying how (`Stopped`). It leads
+ * a process group of its own, so stopping it stops whatever its plugin started, and the terminal's Ctrl-C reaches the
+ * check alone, which stops it.
  */
 const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>) =>
   Effect.gen(function* () {
     const ready = yield* Deferred.make<boolean>();
+    let doneStopping!: () => void;
+    const stopped = new Promise<void>((resolve) => (doneStopping = resolve));
     const lines: string[] = [];
     const child = yield* Effect.acquireRelease(
       Effect.sync(() =>
         spawn(process.execPath, ["--conditions=lemma-source", cliMain, "serve", "--no-open"], {
           env: { ...process.env, ...env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined } as NodeJS.ProcessEnv,
           stdio: ["ignore", "pipe", "pipe"],
+          detached: true,
         }),
       ),
-      (child) => Effect.promise(() => stopHost(child)),
+      (child) => Effect.promise(() => stopHost(child, stopped)),
     );
     for (const stream of [child.stdout, child.stderr]) {
       createInterface({ input: stream }).on("line", (line) => {
         lines.push(line);
-        // Printed once it serves, after its plugins have started.
+        // Printed once it serves, after its plugins have started; and once it is done stopping.
         if (line.startsWith("lemma: open ")) Deferred.doneUnsafe(ready, Effect.succeed(true));
+        if (line === "lemma: stopped") doneStopping();
       });
     }
     child.on("close", () => Deferred.doneUnsafe(ready, Effect.succeed(false)));
     const started = yield* Deferred.await(ready).pipe(Effect.timeoutOrElse({ duration: START_MS, orElse: () => Effect.succeed(false) }));
     const ended = child.exitCode !== null || child.signalCode !== null;
-    return { started, ended, lines, stop: Effect.promise(() => stopHost(child)) };
+    return { started, ended, lines, stop: Effect.promise(() => stopHost(child, stopped)) };
   });
 
 /** Runs `argv` against the host in `home` and reads its JSON answer. */
@@ -198,11 +235,13 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Unat
         ...checked.flatMap((status) =>
           status.state === "active" ? [] : [`${status.id} is ${status.state}${status.fault === undefined ? "" : `: ${status.fault}`}`],
         ),
-        ...(stopped
-          ? []
-          : [
-              `The host did not exit within ${STOP_MS / 1000} s of being asked to stop: something the plugin started (a timer, a socket, a child process) keeps it running`,
-            ]),
+        ...(stopped === "lingered"
+          ? [`The host stopped but did not exit: something the plugin started (a timer, a socket, a child process) keeps it running`]
+          : stopped === "stuck"
+            ? [`The host did not finish stopping within ${STOP_MS / 1000} s of being asked to`]
+            : stopped === "orphaned"
+              ? ["Processes the plugin started were still running once the host had exited"]
+              : []),
       ];
       const text = [
         ...checked.flatMap((status) => [

@@ -1,4 +1,6 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,7 +39,19 @@ describe("lemma plugins check", () => {
   test("reports a plugin that keeps its host from exiting, which it stops all the same", async () => {
     const { code, out } = await invoke(["plugins", "check", fixture("leaky.js"), "--json"], home);
     expect(code).toBe(1);
-    expect(JSON.parse(out).problems).toEqual([expect.stringMatching(/^The host did not exit within 15 s of being asked to stop/)]);
+    expect(JSON.parse(out).problems).toEqual([expect.stringMatching(/^The host stopped but did not exit: something the plugin started/)]);
+  }, 90_000);
+
+  test("stops what a plugin started with its host: a child process it left running", async () => {
+    const { code, out } = await invoke(["plugins", "check", fixture("spawner.js"), "--json"], home);
+    expect(code).toBe(1);
+    expect(JSON.parse(out).problems).toEqual([expect.stringMatching(/^The host stopped but did not exit/)]);
+    // Its child went with the host's process group.
+    const running = await promisify(execFile)("pgrep", ["-f", "^sleep 4329$"]).then(
+      ({ stdout }) => stdout.trim(),
+      () => "",
+    );
+    expect(running).toBe("");
   }, 90_000);
 
   test("reports a folder whose package.json cannot be read, with what the host said, rather than failing", async () => {

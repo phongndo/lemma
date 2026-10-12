@@ -659,3 +659,5 @@ if (Exit.isFailure(exit)) {
   }
   process.exit(1);
 }
+// Its own work is done: if the process does not exit now, something its plugins started keeps it running.
+console.log("lemma: stopped");
