@@ -324,6 +324,14 @@ export class Agent extends Context.Service<
      * than take out a prompt that may have been placed.
      */
     readonly withdraw: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
+    /**
+     * Makes a queued follow-up a steer, in its place in the queue: the running
+     * turn places it after its current step, as if it had been sent to steer.
+     * False when it was not a queued follow-up (placed already, withdrawn, or a
+     * steer), or no turn runs to place it (the queue held after a failed or
+     * cancelled turn, or the turn suspended). Fails as `queue` does.
+     */
+    readonly promote: (sessionId: string, requestId: string) => Effect.Effect<boolean, AgentError>;
     /** The session as a client joining now should show it (see `AgentView`). Fails as `queue` does. */
     readonly view: (sessionId: string) => Effect.Effect<AgentView, AgentError>;
   }
@@ -434,6 +442,15 @@ export const AgentChannels = {
     payload: Schema.Struct({ ...sessionField, requestId: Schema.String }),
     success: Schema.Boolean,
   }),
+  promote: defineChannel({
+    kind: "call",
+    id: "agent.promote",
+    title: "Steer with a queued prompt",
+    description:
+      "Makes a queued follow-up a steer, which the running turn places after its current step; false when it was no queued follow-up, or no turn runs",
+    payload: Schema.Struct({ ...sessionField, requestId: Schema.String }),
+    success: Schema.Boolean,
+  }),
   view: defineChannel({
     kind: "call",
     id: "agent.view",
@@ -476,6 +493,7 @@ export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: C
   serveChannel(AgentChannels.running, () => agent.running),
   serveChannel(AgentChannels.queue, ({ sessionId }) => agent.queue(sessionId)),
   serveChannel(AgentChannels.withdraw, ({ sessionId, requestId }) => agent.withdraw(sessionId, requestId)),
+  serveChannel(AgentChannels.promote, ({ sessionId, requestId }) => agent.promote(sessionId, requestId)),
   serveChannel(AgentChannels.view, ({ sessionId }) => agent.view(sessionId)),
   serveChannel(AgentChannels.activity, () =>
     eventFeed(

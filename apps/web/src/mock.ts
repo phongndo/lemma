@@ -519,6 +519,8 @@ export const createMockHost = (): Host => {
   };
   /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
   let heldStarts: (() => void)[] | undefined;
+  /** While the UI check holds them (`lemmaMock.holdSteers`), a turn waits here before placing the steers queued. */
+  let heldSteers: { readonly released: Promise<void>; readonly release: () => void } | undefined;
   /** Prompts a plugin answers instead of placing them, by their text (`lemmaMock.answerPrompts`). */
   let answers = new Map<string, PromptOutcome>();
   const mockTrace = createMockTrace(plugins.map((plugin) => plugin.id));
@@ -538,6 +540,18 @@ export const createMockHost = (): Host => {
         const held = heldStarts ?? [];
         heldStarts = undefined;
         for (const start of held) start();
+      },
+      /** Holds a turn at the step where it places steers until released, so prompts queue and change meanwhile. */
+      holdSteers: () => {
+        if (heldSteers !== undefined) return;
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => (release = resolve));
+        heldSteers = { released, release };
+      },
+      /** Lets a held turn place its steers, and holds no more. */
+      releaseSteers: () => {
+        heldSteers?.release();
+        heldSteers = undefined;
       },
       /** Answers a prompt whose text is a key as a plugin's `AgentInputHook` handler would, instead of placing it. */
       answerPrompts: (outcomes: Readonly<Record<string, PromptOutcome>>) => {
@@ -1072,6 +1086,8 @@ export const createMockHost = (): Host => {
     spanB.end();
     append(sessionId, { type: "step-end", turnId, stepId: stepB, decision: { result: "continue", why: "the model asked for tools" } });
     if (cancelled.has(sessionId)) return end("cancelled");
+    if (heldSteers !== undefined) await heldSteers.released;
+    if (cancelled.has(sessionId)) return end("cancelled");
     // Steers sent meanwhile join the turn here, between its steps.
     const steers = queueOf(sessionId).filter((queued) => queued.prompt.mode === "steer");
     if (steers.length > 0) {
@@ -1096,7 +1112,7 @@ export const createMockHost = (): Host => {
       [
         {
           type: "text",
-          text: `There are three packages: **client**, **contracts**, and **core**.\n\nYou asked: _${text.slice(0, 120)}_ — this is the mock host, so that's as far as I go. Try:\n\n1. The model picker (Ctrl+K)\n2. Esc to stop a turn\n3. Settings → Providers for the login flow, or from a shell:\n\n   \`\`\`sh\n   lemma models --all\n   \`\`\`\n\nHow they depend on each other:\n\n\`\`\`mermaid\ngraph LR\n  client --> contracts\n  core --> effect\n  contracts --> core\n\`\`\`\n\nAnd the entry point:\n\n\`\`\`ts\nimport { boot } from "./ui/boot.tsx";\n\nawait boot({ host, token, bundled, api, element, safe: false });\n\`\`\``,
+          text: `There are three packages: **client**, **contracts**, and **core**.\n\nYou asked: _${text.slice(0, 120)}_ — this is the mock host, so that's as far as I go. Try:\n\n1. The model picker (Ctrl+K)\n2. Esc twice to stop a turn\n3. Settings → Providers for the login flow, or from a shell:\n\n   \`\`\`sh\n   lemma models --all\n   \`\`\`\n\nHow they depend on each other:\n\n\`\`\`mermaid\ngraph LR\n  client --> contracts\n  core --> effect\n  contracts --> core\n\`\`\`\n\nAnd the entry point:\n\n\`\`\`ts\nimport { boot } from "./ui/boot.tsx";\n\nawait boot({ host, token, bundled, api, element, safe: false });\n\`\`\``,
         },
       ],
       usage(3300, 110, 11000),
@@ -1295,6 +1311,16 @@ export const createMockHost = (): Host => {
         queueOf(sessionId).filter((queued) => queued !== found),
       );
       found.fail(new HostError({ code: "Retracted", subject: sessionId, message: "The prompt was withdrawn from the queue" }));
+      queueChanged(sessionId);
+      return true;
+    }),
+    serveCall("agent.loop", AgentChannels.promote, async ({ sessionId, requestId }) => {
+      const found = queueOf(sessionId).find((queued) => queued.prompt.requestId === requestId);
+      if (!running.has(sessionId) || found === undefined || found.prompt.mode !== "follow-up") return false;
+      queues.set(
+        sessionId,
+        queueOf(sessionId).map((queued) => (queued === found ? { ...found, prompt: { ...found.prompt, mode: "steer" as const } } : queued)),
+      );
       queueChanged(sessionId);
       return true;
     }),

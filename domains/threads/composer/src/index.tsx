@@ -41,6 +41,8 @@ import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import { ChatIcon, ImageIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
+import { recallStep, sentPrompts } from "./history.ts";
+import type { SentPrompt } from "./history.ts";
 import styles from "./composer.css?inline";
 
 const readImage = (file: File): Promise<ImageContent> =>
@@ -61,9 +63,30 @@ const ComposerConfig = Schema.Struct({
       title: "Send with",
       description: "enter: Enter sends and Shift+Enter starts a new line. mod+enter: ⌘Enter (Ctrl+Enter) sends and Enter starts a new line.",
     }),
+  whenBusy: Schema.Literals(["queue", "steer"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "queue" as const)))
+    .annotate({
+      title: "While a turn runs",
+      description:
+        "queue: sending waits for the running turn to end, and goes as the next turn. steer: sending joins the running turn after its current step. Alt with the send key does the other.",
+    }),
+  stop: Schema.Literals(["escape-twice", "escape"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "escape-twice" as const)))
+    .annotate({
+      title: "Stop with",
+      description: "escape-twice: Escape twice within a second stops the running turn. escape: Escape once does.",
+    }),
 });
 
+/** What each setting is when its row leaves it out. */
+const CONFIG_DEFAULTS = Schema.decodeUnknownSync(ComposerConfig)({});
+
 type Send = typeof ComposerConfig.Type.send;
+type WhenBusy = typeof ComposerConfig.Type.whenBusy;
+type Stop = typeof ComposerConfig.Type.stop;
+
+/** How long a first Escape waits for the second that stops the turn (`stop: "escape-twice"`). */
+const STOP_WINDOW_MS = 1000;
 
 /** A prompt being written. */
 interface Draft {
@@ -134,12 +157,12 @@ const failed = (error: unknown): Omit<CompletionGroup, "source"> => ({
 /**
  * The completion menu's state: the trigger word at the cursor, what every
  * source with that trigger suggests for it, and which suggestion is active.
- * Escape dismisses the word until the cursor leaves it.
+ * Escape dismisses the word until the cursor leaves it. It looks for a word only while `asking`.
  */
-function createCompletion(slots: SlotsService, text: () => string, cursor: () => number, focused: () => boolean) {
+function createCompletion(slots: SlotsService, text: () => string, cursor: () => number, asking: () => boolean) {
   const sources = () => slots.list(ComposerCompletions);
   const [dismissed, setDismissed] = createSignal<number>();
-  const word = createMemo(() => (focused() ? findTrigger(text(), cursor(), [...new Set(sources().map((source) => source.trigger))]) : undefined), undefined, {
+  const word = createMemo(() => (asking() ? findTrigger(text(), cursor(), [...new Set(sources().map((source) => source.trigger))]) : undefined), undefined, {
     equals: sameWord,
   });
   createEffect(() => {
@@ -240,7 +263,13 @@ function Composer(props: { deps: Deps }) {
   const [cursor, setCursor] = createSignal(0);
   const [focused, setFocused] = createSignal(false);
   const syncCursor = () => setCursor(input.selectionStart ?? text().length);
-  const completion = createCompletion(slots, text, cursor, focused);
+  /**
+   * The prompt sent in this thread that Up or Down brought back (its place, oldest first), while the composer holds it
+   * unchanged: an edit (`edited`), a send, or another thread forgets it. Until then it is history being read, not a
+   * draft, and opens no completion menu for a word in it.
+   */
+  const [recalled, setRecalled] = createSignal<SentPrompt & { readonly at: number }>();
+  const completion = createCompletion(slots, text, cursor, () => focused() && recalled() === undefined);
   const listId = createUniqueId();
   const optionId = (index: number) => `${listId}-${index}`;
   createEffect(() => {
@@ -253,6 +282,7 @@ function Composer(props: { deps: Deps }) {
       threads.activeId,
       () => {
         const draft = drafts.get(draftKey());
+        setRecalled(undefined);
         setText(draft?.text ?? "");
         setImages(draft?.images ?? []);
         queueMicrotask(() => {
@@ -269,14 +299,16 @@ function Composer(props: { deps: Deps }) {
     on(
       [text, images],
       ([text, images]) => {
+        if (recalled() !== undefined) return void drafts.delete(draftKey());
         const requestId = drafts.get(draftKey())?.requestId;
         drafts.set(draftKey(), { text, images, ...(requestId === undefined ? {} : { requestId }) });
       },
       { defer: true },
     ),
   );
-  /** The person changed the prompt: sending it is a new submission, not a retry of the last one. */
+  /** The person changed the prompt: sending it is a new submission, not a retry of the last one, and no prompt brought back. */
   const edited = () => {
+    setRecalled(undefined);
     const draft = drafts.get(draftKey());
     if (draft?.requestId !== undefined) drafts.set(draftKey(), { text: draft.text, images: draft.images });
   };
@@ -293,21 +325,23 @@ function Composer(props: { deps: Deps }) {
   });
   onCleanup(() => props.deps.setFocus(undefined));
 
-  // While a turn runs, sending steers it (or, with Alt, queues the prompt for after it).
   const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
   const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
+  /** What sending does while a turn runs: what `whenBusy` says, or with Alt (`other`) the other. */
+  const busyMode = (other = false): "steer" | "follow-up" => ((props.deps.config.whenBusy === "steer") !== other ? "steer" : "follow-up");
 
   /**
    * A send asked for while another was still going out, with what the composer held then: it goes once that one is
    * accepted, if the composer holds the same still. What was typed after the Enter waits for one of its own.
    */
   let next: { readonly whenBusy: "steer" | "follow-up"; readonly text: string; readonly images: readonly ImageContent[] } | undefined;
-  const submit = async (whenBusy: "steer" | "follow-up" = "steer") => {
+  const submit = async (whenBusy: "steer" | "follow-up" = busyMode()) => {
     if (sending()) {
       if (unsent({ text: text(), images: images() })) next = { whenBusy, text: text(), images: images() };
       return;
     }
     if (!canSend()) return;
+    setRecalled(undefined);
     const content: PromptContent = [...(text().trim() === "" ? [] : [{ type: "text" as const, text: text() }]), ...images()];
     // Sending a new chat creates a session and switches to it, so remember which draft this was.
     const key = draftKey();
@@ -349,14 +383,67 @@ function Composer(props: { deps: Deps }) {
     next = undefined;
     if (ok && queued !== undefined && text() === queued.text && images() === queued.images) void submit(queued.whenBusy);
   };
-  const send = usePlugin().action("send the prompt", () => submit());
+  const plugin = usePlugin();
+  const send = plugin.action("send the prompt", (whenBusy?: "steer" | "follow-up") => submit(whenBusy));
+
+  /**
+   * Up or Down in an empty composer, or in one holding a sent prompt it brought back unchanged with the cursor at its
+   * start or end: the next older or newer prompt sent in the thread, or past the newest an empty composer again.
+   * False when the key is the field's (it moves the cursor).
+   */
+  const recall = (direction: "older" | "newer"): boolean => {
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? 0;
+    const from = recalled()?.at;
+    if (from === undefined && (text() !== "" || images().length > 0)) return false;
+    if (from !== undefined && (start !== end || (start !== 0 && start !== text().length))) return false;
+    // Read from the branch when asked: the branch may have changed since the last (checked out further back, say).
+    const history = sentPrompts(threads.branch());
+    const at = recallStep(history.length, from, direction);
+    if (at === from) return false;
+    const prompt = at === undefined ? { text: "", images: [] } : history[at]!;
+    batch(() => {
+      setRecalled(at === undefined ? undefined : { ...prompt, at });
+      setText(prompt.text);
+      setImages(prompt.images);
+      setCursor(prompt.text.length);
+    });
+    queueMicrotask(() => {
+      input.setSelectionRange(prompt.text.length, prompt.text.length);
+      resize();
+    });
+    return true;
+  };
+
+  /**
+   * A first Escape that asked for a second to stop the turn (`stop: "escape-twice"`), until the window closes, another
+   * thread shows, or the turn ends: a second Escape stops only the turn the first was pressed in.
+   */
+  const [stopping, setStopping] = createSignal(false);
+  let closeWindow: (() => void) | undefined;
+  const disarm = () => {
+    closeWindow?.();
+    closeWindow = undefined;
+    setStopping(false);
+  };
+  const escapeStops = () => {
+    const second = stopping();
+    disarm();
+    if (props.deps.config.stop === "escape" || second) return void threads.cancel();
+    setStopping(true);
+    closeWindow = plugin.after(STOP_WINDOW_MS, () => setStopping(false));
+  };
+  createEffect(on([threads.activeId, threads.busy], disarm, { defer: true }));
+  onCleanup(disarm);
 
   const insert = (value: string) => {
     const start = input.selectionStart ?? text().length;
     const end = input.selectionEnd ?? start;
     const next = text().slice(0, start) + value + text().slice(end);
-    edited();
-    setText(next);
+    batch(() => {
+      edited();
+      setText(next);
+    });
     queueMicrotask(() => {
       input.focus();
       input.setSelectionRange(start + value.length, start + value.length);
@@ -369,9 +456,9 @@ function Composer(props: { deps: Deps }) {
     const word = completion.match();
     if (word === undefined) return;
     const next = applySuggestion(text(), word, suggestion.insert, { space: suggestion.partial !== true });
-    edited();
     // Together, so completion never sees the new text with the old cursor (and asks for a word nobody typed).
     batch(() => {
+      edited();
       setText(next.text);
       setCursor(next.cursor);
     });
@@ -454,13 +541,16 @@ function Composer(props: { deps: Deps }) {
     }
     const sends = props.deps.config.send === "mod+enter" ? modKey(event) : !modKey(event) && !event.ctrlKey && !event.metaKey;
     if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing) {
-      // Alt queues it for after the running turn; with none running, Alt+Enter is left to the field.
+      // Alt does what `whenBusy` does not; with no turn running, Alt+Enter is left to the field.
       if (event.altKey && !threads.busy()) return;
       event.preventDefault();
-      void submit(event.altKey ? "follow-up" : "steer");
+      void submit(busyMode(event.altKey));
+    } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && plain && !event.isComposing) {
+      if (recall(event.key === "ArrowUp" ? "older" : "newer")) event.preventDefault();
     } else if (event.key === "Escape" && threads.busy()) {
       event.preventDefault();
-      threads.cancel();
+      // One held down repeats: it stops nothing, or the two presses `escape-twice` asks for would be one.
+      if (!event.repeat) escapeStops();
     }
   };
 
@@ -482,7 +572,10 @@ function Composer(props: { deps: Deps }) {
 
   const placeholder = () => {
     if (!client.connected()) return "Waiting for the host…";
-    if (threads.busy()) return `Steer it, or ${formatKeys(props.deps.config.send === "mod+enter" ? "alt+mod+enter" : "alt+enter")} to send after it`;
+    if (threads.busy()) {
+      const other = formatKeys(props.deps.config.send === "mod+enter" ? "alt+mod+enter" : "alt+enter");
+      return busyMode() === "steer" ? `Steer it, or ${other} to send after it` : `Send after it, or ${other} to steer it`;
+    }
     return threads.activeId() === undefined ? "Ask anything, or describe a task" : "Reply…";
   };
 
@@ -559,7 +652,15 @@ function Composer(props: { deps: Deps }) {
         </Show>
         <Show when={threads.queue().length > 0}>
           <ul class="composer-queue" aria-label="Queued prompts">
-            <For each={threads.queue()}>{(queued) => <ComposerQueued prompt={queued} withdraw={() => void threads.withdraw(queued.requestId)} />}</For>
+            <For each={threads.queue()}>
+              {(queued) => (
+                <ComposerQueued
+                  prompt={queued}
+                  withdraw={() => void threads.withdraw(queued.requestId)}
+                  promote={queued.mode === "follow-up" && threads.busy() ? () => void threads.promote(queued.requestId) : undefined}
+                />
+              )}
+            </For>
           </ul>
         </Show>
         <Show when={images().length > 0}>
@@ -598,10 +699,10 @@ function Composer(props: { deps: Deps }) {
           aria-activedescendant={completion.open() && completion.items().length > 0 ? optionId(completion.active()) : undefined}
           spellcheck={true}
           onInput={(event) => {
-            edited();
             const value = event.currentTarget.value;
             // Text and cursor together: completion asks for the word once, not for each half of the change.
             batch(() => {
+              edited();
               setText(value);
               syncCursor();
             });
@@ -641,9 +742,28 @@ function Composer(props: { deps: Deps }) {
               }
             >
               <Show when={canSend()}>
-                <button type="submit" class="send" aria-label="Steer" data-tip="Steer: joins the running turn after its current step">
+                {/* With Alt, the other of steering and queueing, as with the send key. */}
+                <button
+                  type="submit"
+                  class="send"
+                  aria-label={busyMode() === "steer" ? "Steer" : "Queue"}
+                  data-tip={
+                    busyMode() === "steer"
+                      ? "Steer: joins the running turn after its current step (Alt: send after it)"
+                      : "Queue: sent when the running turn ends (Alt: steer it)"
+                  }
+                  onClick={(event) => {
+                    event.preventDefault();
+                    send(busyMode(event.altKey));
+                  }}
+                >
                   <SendIcon />
                 </button>
+              </Show>
+              <Show when={stopping()}>
+                <span class="composer-hint" role="status">
+                  {formatKeys("escape")} again to stop
+                </span>
               </Show>
               <button type="button" class="send stop" aria-label="Stop" data-tip="Stop" onClick={() => threads.cancel()}>
                 <StopIcon />
@@ -657,12 +777,25 @@ function Composer(props: { deps: Deps }) {
   );
 }
 
-/** The default `composer.queued` part: the prompt's mode and text on one line, and a button to withdraw it. */
+/** The default `composer.queued` part: the prompt's mode and text on one line, and buttons to steer with it and to withdraw it. */
 function QueuedRow(props: ComposerQueuedProps) {
   return (
     <li class="queued">
       <span class="queued-mode">{props.prompt.mode === "steer" ? "Steer" : "Next"}</span>
       <span class="queued-text">{preview(props.prompt.content)}</span>
+      <Show when={props.promote}>
+        {(promote) => (
+          <button
+            type="button"
+            class="icon-button queued-promote"
+            aria-label="Steer now"
+            data-tip="Steer now: joins the running turn after its current step"
+            onClick={() => promote()()}
+          >
+            <SendIcon />
+          </button>
+        )}
+      </Show>
       <button type="button" class="icon-button queued-remove" aria-label="Withdraw" data-tip="Withdraw" onClick={() => props.withdraw()}>
         <XIcon />
       </button>
@@ -699,6 +832,46 @@ function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
         options={[
           { value: "enter", label: formatKeys("enter") },
           { value: "mod+enter", label: formatKeys("mod+enter") },
+        ]}
+        onChange={props.onChange}
+      />
+    </SettingRow>
+  );
+}
+
+/** What sending does while a turn runs, on the Keyboard page. */
+function WhenBusySetting(props: { whenBusy: WhenBusy; onChange: (whenBusy: WhenBusy) => void }) {
+  return (
+    <SettingRow
+      title="While a turn runs"
+      description="Queue: send after the turn ends. Steer: join it after its current step. Alt with the send key does the other."
+    >
+      <Segmented
+        label="Sending while a turn runs"
+        value={props.whenBusy}
+        options={[
+          { value: "queue", label: "Queue" },
+          { value: "steer", label: "Steer" },
+        ]}
+        onChange={props.onChange}
+      />
+    </SettingRow>
+  );
+}
+
+/** Which Escape stops a running turn, on the Keyboard page. */
+function StopSetting(props: { stop: Stop; onChange: (stop: Stop) => void }) {
+  return (
+    <SettingRow
+      title="Stop a turn"
+      description="In the prompt, while a turn runs. Twice: a second Escape within a second, so one meant for a menu cannot stop it."
+    >
+      <Segmented
+        label="Stop a turn with"
+        value={props.stop}
+        options={[
+          { value: "escape-twice", label: `${formatKeys("escape")} ${formatKeys("escape")}` },
+          { value: "escape", label: formatKeys("escape") },
         ]}
         onChange={props.onChange}
       />
@@ -780,11 +953,14 @@ export default defineWebPlugin({
     use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
     use.slots.add(ComposerQueuedPart, { id: "composer.queued", order: DEFAULT_PART_ORDER, component: QueuedRow });
     use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", order: DEFAULT_PART_ORDER, component: SuggestionRow });
-    // How it sends belongs with the keys, so it offers the setting on the Keyboard page.
-    const setSend = (send: Send) => {
+    // How it sends and stops belongs with the keys, so it offers those settings on the Keyboard page. A default is
+    // written as unset, so the file keeps only what was changed.
+    const setOption = <K extends keyof typeof ComposerConfig.Type>(key: K, value: (typeof ComposerConfig.Type)[K]) => {
       const self = use.webPlugins.list().find((candidate) => candidate.id === plugin.id);
       if (self === undefined) return;
-      void use.webPlugins.setConfig(self, { send: send === "enter" ? null : send }).catch((error) => use.notify.report(error, "Could not change the send key"));
+      void use.webPlugins
+        .setConfig(self, { [key]: value === CONFIG_DEFAULTS[key] ? null : value })
+        .catch((error) => use.notify.report(error, "Could not change the composer's setting"));
     };
     use.slots.add(SettingsGroups, {
       id: "composer.send",
@@ -794,7 +970,15 @@ export default defineWebPlugin({
       entries: () => [
         {
           text: "Composer: send a message with Enter or Mod+Enter; the other one, or Shift+Enter, starts a new line",
-          view: () => <SendSetting send={plugin.config.send} onChange={setSend} />,
+          view: () => <SendSetting send={plugin.config.send} onChange={(send) => setOption("send", send)} />,
+        },
+        {
+          text: "Composer: while a turn runs, sending queues the message for after it or steers it; Alt does the other",
+          view: () => <WhenBusySetting whenBusy={plugin.config.whenBusy} onChange={(whenBusy) => setOption("whenBusy", whenBusy)} />,
+        },
+        {
+          text: "Composer: stop a running turn with Escape twice, or once",
+          view: () => <StopSetting stop={plugin.config.stop} onChange={(stop) => setOption("stop", stop)} />,
         },
       ],
     });

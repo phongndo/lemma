@@ -476,6 +476,15 @@ export default defineWebPlugin({
             notify.report(error, "Could not withdraw the prompt");
           }
         },
+        promote: async (requestId: string) => {
+          const sessionId = activeId();
+          if (sessionId === undefined) return;
+          try {
+            await client.channel.call(AgentChannels.promote, { sessionId, requestId });
+          } catch (error) {
+            notify.report(error, "Could not steer with the prompt");
+          }
+        },
         cancel: () => {
           const sessionId = activeId();
           if (sessionId !== undefined) client.channel.call(AgentChannels.cancel, { sessionId }).catch((error) => notify.report(error, "Cancel failed"));

@@ -67,6 +67,11 @@ const AgentConfig = Schema.Struct({
       description:
         "Seconds a stopping agent (the host stopping, or a reload) lets running tool calls and model calls finish before cutting them off. Turns resume when it starts again.",
     }),
+  parallelTools: Schema.Int.check(Schema.isGreaterThan(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 8)))
+    .annotate({
+      description: "Calls of one response that run at once, at most, when their tools may run together (read, search); 1 runs every call in turn.",
+    }),
   maxRunning: Schema.Int.check(Schema.isGreaterThan(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 16)))
     .annotate({
@@ -238,6 +243,7 @@ export default definePlugin({
       retries: config.retries,
       retryDelay: config.retryDelay * 1000,
       maxRetryDelay: config.maxRetryDelay * 1000,
+      parallelTools: config.parallelTools,
     };
 
     // Turns belong to the plugin, not the caller: they outlive an interrupted `prompt`. They run in their own scope,
@@ -840,6 +846,28 @@ export default definePlugin({
         ),
       );
 
+    const promote = (sessionId: string, requestId: string) =>
+      Effect.andThen(
+        checked(sessionId),
+        admit.withPermits(1)(
+          Effect.gen(function* () {
+            const state = states.get(sessionId);
+            const item = state?.queue.find((candidate) => candidate.prompt.requestId === requestId);
+            // No turn runs to place it (the queue is held, or the turn suspended): it waits as a follow-up would.
+            if (state?.turn === undefined || item === undefined || item.prompt.mode !== "follow-up") return false;
+            // In its place, and with its caller's `done`: only how a turn takes it changes.
+            const steer: Item = { prompt: { ...item.prompt, mode: "steer" }, done: item.done, placing: false };
+            setQueue(
+              state,
+              state.queue.map((candidate) => (candidate === item ? steer : candidate)),
+            );
+            yield* persist(sessionId);
+            yield* queueChanged(sessionId);
+            return true;
+          }),
+        ),
+      );
+
     /**
      * A deleted session's queue, suspended turn and journal go with it. No turn runs in it: each held it (see
      * `holdFor`). It takes no lock but `writing`, whose holders wait on the disk alone, and calls nothing outside the
@@ -1063,6 +1091,7 @@ export default definePlugin({
           Effect.sync(() => (states.get(sessionId)?.queue ?? []).map((item) => item.prompt)),
         ),
       withdraw,
+      promote,
       view,
     };
     // How clients reach it: the transport serves what `Channels` holds.

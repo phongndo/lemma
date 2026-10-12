@@ -268,3 +268,14 @@
     padding: 0 10px 10px;
   }
 }
+
+/* After a first Escape while a turn runs (`stop: "escape-twice"`): the second stops it. */
+.composer-hint {
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  white-space: nowrap;
+}
+
+.queued-promote {
+  flex: none;
+}

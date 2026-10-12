@@ -42,10 +42,10 @@ interface TurnSettings {
   /** Milliseconds before the first retry; each later one waits twice as long, up to `maxRetryDelay`. */
   readonly retryDelay: number;
   readonly maxRetryDelay: number;
+  /** Calls of one response that run at once, at most, when their tools may run together. */
+  readonly parallelTools: number;
 }
 
-/** Calls of one response that run at once, at most, when their tools may run together. */
-const PARALLEL_TOOLS = 8;
 /** The longest wait a provider may ask for before a retry; a longer one is cut to this. */
 const MAX_REQUESTED_DELAY_MS = 15 * 60_000;
 
@@ -592,7 +592,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   /**
    * Runs the pending tool calls, logging each result as it arrives: in order,
    * except that a run of calls whose tools may run together (`parallel`) runs
-   * at once, up to `PARALLEL_TOOLS` of them. Before calls run, an event names
+   * at once, up to `parallelTools` of them. Before calls run, an event names
    * them (`TOOLS_STARTED`), so a restart can tell a call that began from one
    * that never did. Returns the results in call order.
    */
@@ -611,7 +611,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         const group = [first];
         if (joins(first)) {
           for (const call of rest) {
-            if (!joins(call) || group.length >= PARALLEL_TOOLS) break;
+            if (!joins(call) || group.length >= settings.parallelTools) break;
             group.push(call);
           }
         }

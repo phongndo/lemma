@@ -73,6 +73,8 @@ export interface ThreadsService {
   readonly dismissAnswer: () => void;
   /** Takes a prompt out of the active thread's queue. */
   readonly withdraw: (requestId: string) => Promise<void>;
+  /** Makes a follow-up in the active thread's queue a steer: the running turn places it after its current step. */
+  readonly promote: (requestId: string) => Promise<void>;
   readonly cancel: () => void;
   /** Moves the active session's leaf: the next prompt branches from `eventId`. */
   readonly checkout: (eventId: string) => Promise<void>;

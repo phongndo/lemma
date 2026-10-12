@@ -47,12 +47,13 @@ import { domainPlugins } from "../../../scripts/plugins.ts";
  *    host's events and its domains' streams, the channels it serves, the
  *    host's and the page's traces): a capability the runtime provides is the
  *    web app's, not a missing one.
- * 9. While a turn runs, the composer steers it or queues a prompt for after
- *    it; a queued prompt can be withdrawn (its row is a replaceable part), and
- *    a steer shows in its turn. A running turn's thread left and opened again,
- *    and the agent restarting under it, leave the turn shown to its end and its
- *    prompt placed once. A send that fails is retried with its request id,
- *    until the prompt is edited.
+ * 9. While a turn runs, the composer queues a prompt for after it, or with
+ *    Alt steers it; a queued prompt can steer it after all, or be withdrawn
+ *    (its row is a replaceable part), and a steer shows in its turn. A running
+ *    turn's thread left and opened again, and the agent restarting under it,
+ *    leave the turn shown to its end and its prompt placed once. Up brings back
+ *    prompts sent in the thread. A send that fails is retried with its request
+ *    id, until the prompt is edited. Escape twice in the prompt stops a turn.
  * 10. The prompt rail has a tick per prompt; the one pointed at, or chosen with
  *    the keys, shows its prompt in a card level with it, and a click or Enter
  *    goes there, lighting it; the previous and next buttons move a turn each.
@@ -1321,7 +1322,8 @@ const devtools = async () => {
   await page.fill("textarea", "");
   await page.evaluate(() => (window as any).lemmaMock.answerPrompts({}));
 
-  // 9. While a turn runs: Enter steers it, Alt+Enter queues a prompt for after it, and a queued one can be withdrawn.
+  // 9. While a turn runs: Enter queues a prompt for after it (`whenBusy`), Alt+Enter steers it, and a queued one can
+  // steer it after all or be withdrawn. The turn holds its steers until the queue is done with, so none depends on timing.
   await page.goto(`${url}/?mock`);
   await settled(page);
   await page.evaluate(async () => {
@@ -1332,11 +1334,12 @@ const devtools = async () => {
   // and is not cleared away with the first prompt's text. Held open on purpose, so the check does not depend on timing.
   // Held until released, so the steer is typed and sent while the first prompt is still going out, every run.
   await page.evaluate(() => (window as any).lemmaMock.holdTurnStarted());
+  await page.evaluate(() => (window as any).lemmaMock.holdSteers());
   await page.fill("textarea", "start a turn");
   await page.keyboard.press("Enter");
   await page.waitForSelector(".send.stop");
   await page.fill("textarea", "steer it");
-  await page.keyboard.press("Enter");
+  await page.keyboard.press("Alt+Enter");
   assert.equal(await page.locator(".queued:has-text('steer it')").count(), 0, "a steer went out before the prompt before it was taken");
   await page.evaluate(() => (window as any).lemmaMock.releaseTurnStarted());
   await page
@@ -1344,7 +1347,7 @@ const devtools = async () => {
     .catch(() => assert.fail("a steer sent while a turn runs is not shown queued"));
   assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
   await page.fill("textarea", "for later");
-  await page.keyboard.press("Alt+Enter");
+  await page.keyboard.press("Enter");
   await page.waitForSelector(".queued:has-text('for later') .queued-mode >> text=Next");
   // The row is a part: a plugin's own replaces it, and the default returns when that goes.
   await checkPlugin(page);
@@ -1367,15 +1370,36 @@ const devtools = async () => {
   await page.evaluate(() => (window as any).removeRow());
   await page.click(".queued:has-text('for later') .queued-remove");
   await page.waitForSelector(".queued:has-text('for later')", { state: "detached" });
+  // A follow-up promoted from its row steers the turn after all. It ends in a file mention, so the menu is open: the
+  // send button queues it as Enter would.
+  await page.fill("textarea", "steer after all @README.md");
+  await page.click(".send:not(.stop)");
+  await page.click(".queued:has-text('steer after all') .queued-promote");
+  await page
+    .waitForSelector(".queued:has-text('steer after all') .queued-mode >> text=Steer")
+    .catch(() => assert.fail("a queued prompt promoted from its row does not steer"));
+  await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
   await page.waitForSelector(".turn-footer", { timeout: 20_000 });
   await page.waitForSelector(".queued", { state: "detached" });
-  // One turn, holding both prompts: the steer where it joined.
+  // One turn, holding every prompt but the withdrawn one: the steers where they joined.
   assert.deepEqual(
     await page.locator(".turn").evaluateAll((turns) => turns.map((turn) => [...turn.querySelectorAll(".user-text")].map((user) => user.textContent))),
-    [["start a turn", "steer it"]],
-    "the steer is not shown in the turn it joined",
+    [["start a turn", "steer it", "steer after all @README.md"]],
+    "the steers are not shown in the turn they joined",
   );
   expectNoErrors("steering and queueing");
+
+  // Up in an empty prompt brings back what was sent in the thread, newest first; Down goes newer, and past the newest
+  // empties the prompt. One brought back opens no menu for the mention it ends with, which would take the next Up.
+  await page.focus("textarea");
+  await page.keyboard.press("ArrowUp");
+  assert.equal(await page.inputValue("textarea"), "steer after all @README.md", "Up in an empty prompt does not bring back the last one sent");
+  assert.equal(await page.locator(".completions").count(), 0, "a prompt brought back opens the completion menu");
+  await page.keyboard.press("ArrowUp");
+  assert.equal(await page.inputValue("textarea"), "steer it", "Up again does not bring back the prompt before");
+  await page.keyboard.press("ArrowDown");
+  await page.keyboard.press("ArrowDown");
+  assert.equal(await page.inputValue("textarea"), "", "Down past the newest prompt does not empty the composer");
 
   // A turn runs on while the page leaves its thread and comes back, asking the agent what it has streamed, and while
   // the agent restarts under it: the page follows on, and its prompt is placed once.
@@ -1457,9 +1481,30 @@ const devtools = async () => {
   await page.waitForFunction(() => (window as any).sentIds.length === 4);
   const [, , refused, edited] = await sentIds();
   assert(refused !== undefined && edited !== undefined && refused !== edited, "an edited prompt was sent with the failed one's request id");
+  // Escape in the prompt stops the running turn when pressed twice (`stop`); the first says so, and stops nothing, nor
+  // does one held down. The turn is held before its steers, so it is still running for every press. Presses that must
+  // land within the window go in one task, so none depends on how fast the page answers.
+  await page.evaluate(() => (window as any).lemmaMock.holdSteers());
+  await page.waitForSelector(".send.stop");
+  const escapes = (repeats: readonly boolean[]) =>
+    page.evaluate((repeats) => {
+      const input = document.querySelector("textarea")!;
+      for (const repeat of repeats)
+        input.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", repeat, bubbles: true, composed: true, cancelable: true }));
+      return document.querySelector(".composer-hint") !== null;
+    }, repeats);
+  await page.focus("textarea");
+  assert(await escapes([false]), "a first Escape while a turn runs does not say a second stops it");
+  // The window closes: a press after it is a first again.
+  await page.waitForSelector(".composer-hint", { state: "detached" });
+  assert(!(await escapes([true])), "Escape held down counts as presses");
+  assert(!(await escapes([false, false])), "a second Escape counts as a first");
+  // The turn ends cancelled once it goes on to its steers.
+  await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
+  await page.waitForSelector(".turn-footer .badge:text-is('cancelled')", { timeout: 20_000 }).catch(() => assert.fail("a second Escape did not stop the turn"));
   // The failed sends were reported; nothing else went wrong.
   errors.splice(0);
-  return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, inspectors, and the traces, filtered, by plugin, and their changes; a running turn takes steers and queued prompts, and outlives its thread being left and the agent restarting; a failed send is retried with its request id";
+  return "the devtools show routes, navigation, host events and streams, channels, plugins, hooks, registries, inspectors, and the traces, filtered, by plugin, and their changes; a running turn takes steers and queued prompts, promotes a queued one, and outlives its thread being left and the agent restarting; Up brings back sent prompts; a failed send is retried with its request id; Escape twice stops a turn";
 };
 
 // 10: the prompt rail.
