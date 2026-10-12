@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { definePlugin, makeCore, PluginContext } from "@lemma/core";
+import { definePlugin, makeCore, makeSpanCollector, PluginContext } from "@lemma/core";
 import { Agent, AgentRequestHook } from "@lemma/agent";
 import { branchOf, rebuildRequest } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
@@ -493,7 +493,8 @@ describe("stopping", () => {
         return id;
       }),
     );
-    await run({ scripts: [reply("done")], tools: [slow] }, ({ executed }) =>
+    const collector = makeSpanCollector();
+    await run({ scripts: [reply("done")], tools: [slow], tracer: collector.tracer }, ({ executed }) =>
       Effect.gen(function* () {
         const events = yield* ended(id);
         const [cut, later] = results(events);
@@ -503,6 +504,14 @@ describe("stopping", () => {
         expect(executed).toEqual(["later"]);
       }),
     );
+    // The resumed step's work is traced under a step of its own, as the cut-off step it finishes.
+    const spans = collector.spans();
+    const step = spans.find((span) => span.name === "agent.step" && span.attributes["step.resumed"] === true)!;
+    const tool = spans.find((span) => span.name === "tools.execute echo")!;
+    expect(tool.attributes["step.id"]).toBe(step.attributes["step.id"]);
+    const parents = new Map(spans.map((span) => [span.id, span.parentId]));
+    const ancestors = (id: string | undefined): string[] => (id === undefined ? [] : [id, ...ancestors(parents.get(id))]);
+    expect(ancestors(tool.parentId)).toContain(step.id);
   });
 });
 

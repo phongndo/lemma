@@ -4,7 +4,7 @@ import { CoreClosed, definePlugin, Events, makeCore, PluginContext, Registries }
 import type { Plugin } from "@lemma/core";
 import { Inspectors, snapshotOf } from "@lemma/contracts";
 import type { ResultCredit } from "@lemma/contracts";
-import { Guards, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, ToolRunner, Tools } from "@lemma/tools";
+import { Guards, ToolError, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolOutput, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import type { Guard, Tool } from "@lemma/tools";
 import tools, { toolParameters } from "../src/index.ts";
 import { outputBatcher } from "../src/registry.ts";
@@ -266,6 +266,36 @@ describe("execute", () => {
             { source: "p", allowed: false, ms: expect.any(Number), reason: "no rewrites" },
           ],
         });
+      }),
+    );
+  });
+
+  it("credits a guard that failed as the one that stopped the call, and a credit listener that throws fails nothing", async () => {
+    const guards: [string, Guard][] = [["echo", () => Effect.fail(new ToolError({ tool: "echo", reason: "Failed", message: "guard broke" }))]];
+    await run(
+      [contributor("p", [echo], guards)],
+      Effect.gen(function* () {
+        let credit: ResultCredit | undefined;
+        const invocation = new ToolInvocation({ sessionId: "s", toolCallId: "c1", name: "echo", input: { text: "hi" }, cwd: "/tmp" });
+        const stopped = yield* Effect.flatMap(ToolRunner, (registry) =>
+          registry.execute(invocation, new AbortController().signal, { credit: (heard) => void (credit = heard) }),
+        );
+        expect([stopped.isError, textOf(stopped)]).toEqual([true, "guard broke"]);
+        expect(credit).toEqual({ checks: [{ source: "p", allowed: false, ms: expect.any(Number), reason: "the guard failed" }] });
+      }),
+    );
+    await run(
+      [contributor("p", [echo])],
+      Effect.gen(function* () {
+        const invocation = new ToolInvocation({ sessionId: "s", toolCallId: "c2", name: "echo", input: { text: "hi" }, cwd: "/tmp" });
+        const result = yield* Effect.flatMap(ToolRunner, (registry) =>
+          registry.execute(invocation, new AbortController().signal, {
+            credit: () => {
+              throw new Error("listener broke");
+            },
+          }),
+        );
+        expect(textOf(result)).toBe("hi");
       }),
     );
   });

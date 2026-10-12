@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Layer } from "effect";
+import { Cause, Effect, Exit, Layer } from "effect";
 import { definePlugin, Hook, Hooks, makeCore, makeSpanCollector, PluginContext } from "../src/index.ts";
 import type { HandlerStep, Handler } from "../src/index.ts";
 
@@ -49,6 +49,15 @@ describe("span collector", () => {
     );
     expect(collector.spans().map((span) => span.name)).toEqual(["span 5", "span 6", "span 7"]);
   });
+
+  test("keeping a span never fails the work it traced, though its failure has no string form", async () => {
+    const collector = makeSpanCollector();
+    const exit = await Effect.runPromiseExit(Effect.fail(Object.create(null)).pipe(Effect.withSpan("odd"), Effect.withTracer(collector.tracer)));
+    // The work failed as it did, with no defect from the tracer.
+    expect(Exit.isFailure(exit) && exit.cause.reasons.map((reason) => reason._tag)).toEqual(["Fail"]);
+    expect(Exit.isFailure(exit) && Cause.hasDies(exit.cause)).toBe(false);
+    expect(collector.spans()).toMatchObject([{ name: "odd", status: "error", error: "a failure with no description" }]);
+  });
 });
 
 describe("hook steps", () => {
@@ -80,6 +89,21 @@ describe("hook steps", () => {
     // While tracing, a hook's summary describes each handler's span: what it was handed, passed on, and returned.
     const outer = collector.spans().find((span) => span.name === "core.hook" && span.attributes["plugin.id"] === "outer")!;
     expect(outer.attributes).toMatchObject({ "hook.in.value": 1, "hook.next.value": 2, "hook.out.value": 120 });
+  });
+
+  test("what a handler passed on is on its own span, though it called next inside a span of its own", async () => {
+    const collector = makeSpanCollector();
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([middleware("wraps", (input, next) => next(input + 1).pipe(Effect.withSpan("mine")))]);
+          return yield* core.run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(point, 1, (input) => Effect.succeed(input))));
+        }),
+      ).pipe(Effect.withTracer(collector.tracer)),
+    );
+    const spans = collector.spans();
+    expect(spans.find((span) => span.name === "core.hook")!.attributes).toMatchObject({ "hook.in.value": 1, "hook.next.value": 2 });
+    expect(spans.find((span) => span.name === "mine")!.attributes).not.toHaveProperty("hook.next.value");
   });
 
   test("a failing summary or step listener never fails the operation", async () => {

@@ -5,13 +5,13 @@ import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { SessionChannels } from "@lemma/sessions";
-import { matches, TraceChannels } from "@lemma/devtools";
+import { matches, selectSpans, TraceChannels } from "@lemma/devtools";
+import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { fuzzy } from "@lemma/web/match";
 import type {
   ChannelDeclaration,
   ChannelInfo,
-  CompositionChange,
   ConfigScope,
   InteractionAnswer,
   InteractionRequest,
@@ -289,7 +289,8 @@ const createMockTrace = (bundledIds: readonly string[]) => {
   const kept: SpanRecord[] = [];
   const listeners = new Set<(spans: readonly SpanRecord[]) => void>();
   let made = 0;
-  let changes: CompositionChange[] = [{ at: Date.now(), cause: "start", started: [...bundledIds], stopped: [], restarted: [], failed: [] }];
+  const history = compositionHistory();
+  history.applied("start", { started: bundledIds });
   return {
     begin: (name: string, attributes: SpanRecord["attributes"], parentId?: string): MockSpan => {
       const id = `mock-${++made}`;
@@ -317,10 +318,7 @@ const createMockTrace = (bundledIds: readonly string[]) => {
       listeners.add(listener);
       return () => void listeners.delete(listener);
     },
-    changed: (change: CompositionChange) => {
-      changes = [change, ...changes].slice(0, 50);
-    },
-    changes: (): readonly CompositionChange[] => changes,
+    history,
   };
 };
 
@@ -497,15 +495,7 @@ export const createMockHost = (): Host => {
     composition = { ...composition, plugins: next, enabledIn, configIn };
     emit({ type: "web-changed", web: composition });
     const turned = (on: boolean) => Object.keys(rows).filter((id) => rows[id]!.enabled === on);
-    mockTrace.changed({
-      at: Date.now(),
-      cause: "configure",
-      subjects: Object.keys(rows),
-      started: turned(true),
-      stopped: turned(false),
-      restarted: [],
-      failed: [],
-    });
+    mockTrace.history.applied("configure", { started: turned(true), stopped: turned(false) }, Object.keys(rows));
   };
   /** The `turn-started` events held back while the UI check holds them (`lemmaMock.holdTurnStarted`), or undefined. */
   let heldStarts: (() => void)[] | undefined;
@@ -1476,19 +1466,14 @@ export const createMockHost = (): Host => {
       send(MOCK_COMMANDS.slice());
       return () => {};
     }),
-    serveCall("devtools.trace", TraceChannels.spans, async ({ where, limit }) =>
-      mockTrace
-        .spans()
-        .filter((span) => matches(span, where))
-        .slice(-(limit ?? 2000)),
-    ),
+    serveCall("devtools.trace", TraceChannels.spans, async (query) => selectSpans(mockTrace.spans(), query)),
     serveStream("devtools.trace", TraceChannels.follow, ({ where }, send) =>
       mockTrace.subscribe((ended) => {
         const found = ended.filter((span) => matches(span, where));
         if (found.length > 0) send(found);
       }),
     ),
-    serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.changes()),
+    serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.history.get()),
   ];
   const channels = new Map(served.map((channel) => [channel.declaration.id, channel]));
   const infoOf = ({ declaration: { id, title, description }, kind, source }: Served): ChannelInfo => ({

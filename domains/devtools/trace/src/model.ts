@@ -38,24 +38,44 @@ export function createTrace(source: TraceSource) {
   const [spans, setSpans] = createSignal<readonly SpanRecord[]>([]);
   const [changes, setChanges] = createSignal<readonly CompositionChange[]>([]);
   const [error, setError] = createSignal<string>();
+  // The ids of the spans held, kept beside them, so a batch is checked against them without building a set each time.
+  let ids = new Set<string>();
+  const replace = (next: readonly SpanRecord[]) => {
+    const held = next.slice(-KEPT);
+    ids = new Set(held.map((span) => span.id));
+    setSpans(held);
+  };
+  const append = (fresh: readonly SpanRecord[]) => {
+    const held = [...spans(), ...fresh];
+    for (const span of fresh) ids.add(span.id);
+    for (const span of held.splice(0, Math.max(0, held.length - KEPT))) ids.delete(span.id);
+    setSpans(held);
+  };
+  // What the follow brings while a refresh is on its way: the answer may have been read before those spans ended.
+  const arriving = new Set<SpanRecord[]>();
   const refresh = async () => {
+    const during: SpanRecord[] = [];
+    arriving.add(during);
     try {
       const [kept, changed] = await Promise.all([source.spans(), source.changes()]);
+      const answered = new Set(kept.map((span) => span.id));
       batch(() => {
-        setSpans(kept.slice(-KEPT));
+        replace([...kept, ...during.filter((span) => !answered.has(span.id))]);
         setChanges(changed);
         setError(undefined);
       });
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      arriving.delete(during);
     }
   };
   // Spans that end from now on; what ended before is read by `refresh`, so a span may arrive twice, and is kept once.
   onCleanup(
     source.follow((ended) => {
-      const known = new Set(spans().map((span) => span.id));
-      const fresh = ended.filter((span) => !known.has(span.id));
-      if (fresh.length > 0) setSpans((held) => [...held, ...fresh].slice(-KEPT));
+      for (const during of arriving) during.push(...ended);
+      const fresh = ended.filter((span) => !ids.has(span.id));
+      if (fresh.length > 0) append(fresh);
     }),
   );
   return { source, spans, changes, error, refresh };

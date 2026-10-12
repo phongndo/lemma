@@ -2,18 +2,16 @@ import { Duration, Effect, Stream } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Channels, serveChannel, Trace } from "@lemma/contracts";
 import type { SpanRecord } from "@lemma/contracts";
-import { matches, TraceChannels } from "@lemma/devtools";
+import { matches, selectSpans, TraceChannels } from "@lemma/devtools";
 
-/** How many spans a call answers with when it names no limit. */
-const SPANS = 2000;
 /** How long the follow stream gathers spans into one batch, and how many at most. */
 const BATCH = Duration.millis(250);
 const BATCH_SIZE = 1000;
 
-/** An attribute whose value is a secret by its name: a credential, a cookie, a token. */
-const SECRET_KEY = /authorization|cookie|token|secret|password|api[-_.]?key/i;
-/** A secret in a value: a URL's query parameter that carries one (`?token=…`). */
-const SECRET_PARAM = /([?&](?:token|key|secret|password|access_token|api[-_]?key)=)[^&#\s]+/gi;
+/** An attribute whose value is a secret by its name: a credential, a cookie, a token (not a count of tokens). */
+const SECRET_KEY = /authorization|cookie|token(?![a-z])|secret|password|api[-_.]?key/i;
+/** A secret in a value: a query parameter that carries one, in a URL (`?token=…`) or a query on its own (`token=…`). */
+const SECRET_PARAM = /((?:^|[?&])(?:token|key|secret|password|access_token|api[-_]?key)=)[^&#\s]+/gi;
 
 /**
  * `span` with its secrets hidden: what the host's own HTTP server records of a request (its headers, its URL) can hold
@@ -43,22 +41,16 @@ export default definePlugin({
       [
         owner.add(
           Channels,
-          serveChannel(TraceChannels.spans, ({ where, since, limit }) =>
-            Effect.map(trace.spans, (spans) =>
-              spans
-                .filter((span) => (since === undefined || span.start + span.ms > since) && matches(span, where))
-                .slice(-(limit ?? SPANS))
-                .map(redacted),
-            ),
-          ),
+          // Matched as served, redacted, so a query cannot confirm a guessed secret.
+          serveChannel(TraceChannels.spans, (query) => Effect.map(trace.spans, (spans) => selectSpans(spans.map(redacted), query))),
         ),
         owner.add(
           Channels,
           serveChannel(TraceChannels.follow, ({ where }) =>
             trace.ended.pipe(
               Stream.flattenIterable,
-              Stream.filter((span) => matches(span, where)),
               Stream.map(redacted),
+              Stream.filter((span) => matches(span, where)),
               Stream.groupedWithin(BATCH_SIZE, BATCH),
             ),
           ),

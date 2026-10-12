@@ -431,7 +431,7 @@ const program = Effect.gen(function* () {
             state === undefined || (state === "active" && !options?.force)
               ? undefined
               : yield* deferral(restartedBy(applied.known, [pluginId], { provided }), Object.keys(pinned));
-          const restart = recorded("restart", [pluginId])(Effect.as(loader.core.restart(pluginId, options), { restarted: [pluginId] }));
+          const restart = recorded("restart", [pluginId])(loader.core.restart(pluginId, options));
           if (after === undefined) return yield* Effect.as(restart, {});
           const change = Effect.andThen(restart, log(`restarted ${pluginId}`));
           yield* applyLater(loader, after, change, `"${pluginId}" could not be restarted`);
@@ -504,6 +504,8 @@ const program = Effect.gen(function* () {
         }),
     ),
   );
+  // Recorded before a client can reach the loader, so a change it asks for comes after.
+  changes.started((yield* loader.core.inspect).plugins);
   yield* Deferred.succeed(ready, loader);
   // Heard from here on; faults from before, the sweep below records (once each, by sequence).
   yield* Effect.forkScoped(reportFaults(loader, faults), { startImmediately: true });
@@ -534,10 +536,6 @@ const program = Effect.gen(function* () {
           : [],
     ),
   );
-  changes.applied("start", {
-    started: plugins.filter((plugin) => plugin.state === "active").map((plugin) => plugin.id),
-    failed: plugins.filter((plugin) => plugin.state === "failed" || plugin.haltedBy !== undefined).map((plugin) => plugin.id),
-  });
   yield* log(
     `running ${plugins
       .filter((plugin) => plugin.state === "active")

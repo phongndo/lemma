@@ -12,16 +12,17 @@ export function createPageTrace() {
   const spans = makeSpanCollector();
   const history = compositionHistory();
   const [changes, setChanges] = createSignal<readonly CompositionChange[]>([]);
+  const recording =
+    <A extends readonly unknown[]>(record: (...args: A) => void) =>
+    (...args: A) => {
+      record(...args);
+      setChanges(history.get());
+    };
   return {
     tracer: spans.tracer,
-    applied: (...args: Parameters<typeof history.applied>) => {
-      history.applied(...args);
-      setChanges(history.get());
-    },
-    refused: (...args: Parameters<typeof history.refused>) => {
-      history.refused(...args);
-      setChanges(history.get());
-    },
+    applied: recording(history.applied),
+    refused: recording(history.refused),
+    started: recording(history.started),
     trace: { spans: spans.spans, subscribe: spans.subscribe, changes } satisfies PageTraceService,
   };
 }

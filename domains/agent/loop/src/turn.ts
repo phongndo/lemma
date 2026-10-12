@@ -793,12 +793,21 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           const interrupted = new Map(
             at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
           );
-          const ran = at.message.stopReason === "length" ? yield* answerTruncated(at.stepId) : yield* runTools(at.stepId, interrupted);
-          const results = [...at.results, ...ran];
-          const decision = yield* decide(plan.steps, { message: at.message, results });
-          yield* append({ type: "step-end", turnId, stepId: at.stepId });
-          state.step = undefined;
-          return (yield* afterStep(plan.steps, decision)) ?? (yield* steps(plan.steps + 1));
+          // The rest of the cut-off step, traced as the step it is.
+          const ended = yield* Effect.gen(function* () {
+            const ran =
+              at.message.stopReason === "length"
+                ? yield* answerTruncated(at.stepId)
+                : yield* runTools(at.stepId, interrupted).pipe(Effect.withSpan("agent.tools"));
+            const decision = yield* decide(plan.steps, { message: at.message, results: [...at.results, ...ran] });
+            yield* append({ type: "step-end", turnId, stepId: at.stepId });
+            state.step = undefined;
+            return yield* afterStep(plan.steps, decision);
+          }).pipe(
+            Effect.withSpan("agent.step", { attributes: { "step.index": plan.steps, "step.resumed": true } }),
+            Effect.annotateSpans({ "step.id": at.stepId }),
+          );
+          return ended ?? (yield* steps(plan.steps + 1));
         }
         case "between": {
           // Prompts already placed after the last step are what the model answers next.

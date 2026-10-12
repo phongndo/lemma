@@ -1,4 +1,5 @@
 import { Cause, Context, Effect, Exit, Order, References, Scope } from "effect";
+import type { Tracer } from "effect";
 import { CoreClosed, HookError } from "../errors.ts";
 import type { OwnServices } from "./own.ts";
 import { servicesOf } from "./settings.ts";
@@ -172,8 +173,8 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
           if (!registration.active) return Effect.fail(ownerClosed(hook.name, registration.owner.identity.id));
           let called = false;
           let alive = true;
-          // Whether its span is recorded (set as it starts), and, while someone hears the steps, what it handed on.
-          let traced = false;
+          // Its span, when recorded (set as it starts), and, while someone hears the steps, what it handed on.
+          let span: Tracer.Span | undefined;
           const step: { next?: { input: I; output?: O }; nextMs: number } | undefined = onStep === undefined ? undefined : { nextMs: 0 };
           const next = (nextInput: I): Effect.Effect<O, E | HookError | CoreClosed> =>
             Effect.suspend(() => {
@@ -189,8 +190,17 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
               }
               called = true;
               let rest = dispatch(index + 1, nextInput);
-              if (traced && summary?.input !== undefined)
-                rest = Effect.andThen(Effect.annotateCurrentSpan(summarize("hook.next.", summary.input, nextInput)), rest);
+              // On the handler's span, not whichever is current: a handler may call next inside a span of its own.
+              const traced = span;
+              if (traced !== undefined && summary?.input !== undefined) {
+                const handed = summarize("hook.next.", summary.input, nextInput);
+                rest = Effect.andThen(
+                  Effect.sync(() => {
+                    for (const [key, entry] of Object.entries(handed)) traced.attribute(key, entry);
+                  }),
+                  rest,
+                );
+              }
               if (step === undefined) return rest;
               const passed: { input: I; output?: O } = { input: nextInput };
               step.next = passed;
@@ -247,13 +257,17 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
           // With tracing off, no span at all: not even a no-op span's context change.
           return Effect.withFiber((fiber) => {
             if (!fiber.getRef(References.TracerEnabled)) return run;
-            traced = true;
             const attributes =
               summary?.input === undefined ? registration.attributes : { ...registration.attributes, ...summarize("hook.in.", summary.input, value) };
+            const own = Effect.currentSpan.pipe(
+              Effect.tap((current) => Effect.sync(() => void (span = current))),
+              Effect.catch(() => Effect.void),
+            );
+            const traced = Effect.andThen(own, run);
             const body =
               summary?.output === undefined
-                ? run
-                : run.pipe(Effect.tap((output) => Effect.annotateCurrentSpan(summarize("hook.out.", summary.output!, output))));
+                ? traced
+                : traced.pipe(Effect.tap((output) => Effect.annotateCurrentSpan(summarize("hook.out.", summary.output!, output))));
             return body.pipe(
               Effect.withSpan(
                 "core.hook",

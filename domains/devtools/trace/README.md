@@ -19,7 +19,9 @@ Their declarations are `TraceChannels` in [`@lemma/devtools`](../contract/src/in
 - **Secrets stay.** The host's own HTTP server records what a request
   carried (its headers, its URL), which can hold the token a client
   connected with. What this plugin serves hides any attribute named for a
-  secret (`authorization`, `cookie`, `token`, …) and a secret query parameter.
+  secret (`authorization`, `cookie`, `token`, …, not a count of tokens) and a
+  secret query parameter, in a URL or a query on its own. A query is matched
+  against what is served, so it cannot confirm a guessed secret.
 - **In memory, bounded.** The host keeps the last few thousand spans: enough
   to see what a turn or a reload did while it is fresh, and nothing to clean
   up. What has to outlast it is credited in the session's log instead

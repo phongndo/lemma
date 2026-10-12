@@ -14,6 +14,9 @@ import type { PathsService } from "./paths.ts";
  * failures are no plugin's faults: what it starts catches and logs its own.
  */
 
+/** How many batches of ended spans a trace's reader may fall behind by before the oldest are dropped. */
+const ENDED_BATCHES = 1024;
+
 export type HostControlService = Context.Service.Shape<typeof HostControl>;
 /** The loader handle main.ts builds; the runtime adds `runtime` and the `PluginsChanged` its changes publish. */
 export type HostControlHandle = Omit<HostControlService, "runtime">;
@@ -78,11 +81,14 @@ export function hostRuntime(options: {
   const { spans, changes } = options.trace;
   const trace = Layer.succeed(Trace, {
     spans: Effect.sync(spans.spans),
-    ended: Stream.callback<readonly SpanRecord[]>((queue) =>
-      Effect.acquireRelease(
-        Effect.sync(() => spans.subscribe((batch) => void Queue.offerUnsafe(queue, batch))),
-        (stop) => Effect.sync(stop),
-      ),
+    // A reader that stops pulling (a stalled socket) holds the newest batches only, not every span the host ends.
+    ended: Stream.callback<readonly SpanRecord[]>(
+      (queue) =>
+        Effect.acquireRelease(
+          Effect.sync(() => spans.subscribe((batch) => void Queue.offerUnsafe(queue, batch))),
+          (stop) => Effect.sync(stop),
+        ),
+      { bufferSize: ENDED_BATCHES, strategy: "sliding" },
     ),
     changes: Effect.sync(changes.get),
   });
