@@ -177,6 +177,18 @@ run its tool through `tools.registry` against a fake `Sessions`. A tool alone
 runs with `@lemma/tools/testing`. A folder plugin is a workspace package of
 its own when it lives in this repository, as the examples are.
 
+`lemma plugins check [path]` runs a plugin file or folder as a host would
+before you install it. It starts a host in a home of its own with the plugin
+linked in, and reports:
+
+- the plugin's state, or its fault;
+- what it provides and requires, the hooks it handles, and what it adds;
+- what the host warned of it.
+
+It fails on any problem. A plugin of yours that fails to start would keep the
+host down, so the check starts the host again with that plugin not required,
+to report its fault.
+
 When one misbehaves, [Debugging plugins](debugging.md) says where to look.
 
 ## Coming from Pi

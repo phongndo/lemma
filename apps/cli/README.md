@@ -1,8 +1,9 @@
 # @lemma/cli
 
 The `lemma` command: everything the web app can do, from a shell, for people
-and for agents. `lemma serve` runs the host in the terminal; every other
-command is a client of a running host. `lemma --help` lists the commands,
+and for agents. `lemma serve` runs the host in the terminal, and `lemma plugins
+check` runs one of its own, in a temporary home; every other command is a
+client of a running host. `lemma --help` lists the commands,
 flags, and exit codes.
 
 ```sh
@@ -24,7 +25,8 @@ so the two show the same records and accept the same queries.
 - **Attach only.** Commands go to the host `LEMMA_URL` or `remote.json` names
   ([remote access](../../docs/remote.md)), else the local one. With none, a
   command fails with `NoHost` rather than starting one: a second host would
-  break the sessions store's single writer.
+  break the sessions store's single writer. `plugins check` is the exception:
+  its host has a home of its own, which nothing else writes, and stops with it.
 - **Connections.** A command that makes a call or two does so over HTTP, and
   fails at once (exit 3) when no host answers. One that watches the host
   (`run`, `events`, `do`, `login`, `channels open`) holds `@lemma/client`'s

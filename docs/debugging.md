@@ -13,6 +13,9 @@ README has the rest.
 - **The host's output** warns of what it left out, naming the plugin
   (`lemma: warning [notes]: …`): a row naming no plugin (with the id meant,
   when one is close), or a plugin that cannot run.
+- **`lemma plugins check [path]`** runs a plugin file or folder in a host of
+  its own before it is installed. It says whether it starts, or its fault, and
+  what it takes part in ([Writing plugins](plugins.md#testing)).
 - **`--safe`** starts the host as shipped, reading no config or plugin file,
   and **`?safe`** does the same for the web app: the way back from a
   customization that breaks either ([Configuration](configuration.md)).

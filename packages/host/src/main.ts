@@ -13,6 +13,7 @@ import { compositionInfo } from "./composition.ts";
 import { changedBetween, deferral } from "./deferral.ts";
 import type { Running } from "./deferral.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
+import { SHUTDOWN_TIMEOUT_MS } from "./limits.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { recordStall, watchStalls } from "./stall.ts";
@@ -29,6 +30,45 @@ const args = new Set(process.argv.slice(2));
  * customization that keeps the host from starting.
  */
 const safe = args.has("--safe") || process.env.LEMMA_SAFE === "1";
+/**
+ * `LEMMA_SUPERVISED=1`: started, leading a process group of its own, by a process that holds the host's stdin open
+ * while it wants the host (`lemma plugins check`). However that process ends, its end of the pipe closes: the host
+ * then stops as on SIGTERM, and, once stopped or however it exits, kills its group, so that neither it nor anything
+ * its plugins started in it outlives it (a process started in a group of its own is out of its reach). Resolves when
+ * stdin ends.
+ */
+let supervisorLeft = false;
+const supervisorGone =
+  process.env.LEMMA_SUPERVISED === "1"
+    ? new Promise<void>((resolve) => {
+        // What it prints has no reader once its supervisor is gone: a write to the closed pipe must not fail the host,
+        // nor end it before it stops, as the CLI that launched it would (`lemma … | head`).
+        for (const stream of [process.stdout, process.stderr]) stream.removeAllListeners("error").on("error", () => {});
+        process.stdin
+          .on("end", resolve)
+          .on("close", resolve)
+          .on("error", () => resolve())
+          .resume();
+        // Read without keeping the host running: it exits once its work is done, as any host does.
+        (process.stdin as { unref?: () => void }).unref?.();
+      }).then(() => {
+        supervisorLeft = true;
+      })
+    : undefined;
+// Consumed here, as tools inherit this environment.
+delete process.env.LEMMA_SUPERVISED;
+/** Kills the host's process group, which a supervised host leads; false if it leads none. */
+const killOwnGroup = (): boolean => {
+  try {
+    process.kill(-process.pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
+};
+// However it exits (failing to start, a fault that ends it) once its supervisor is gone, nothing else would end what
+// its plugins started. While the supervisor runs, it does, and reports what was left.
+if (supervisorGone !== undefined) process.on("exit", () => void (supervisorLeft && killOwnGroup()));
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
 const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
@@ -185,6 +225,7 @@ const untilSignal = Effect.callback<void>((resume) => {
   const done = () => resume(Effect.void);
   process.once("SIGINT", done);
   process.once("SIGTERM", done);
+  void supervisorGone?.then(done);
   return Effect.sync(() => {
     process.off("SIGINT", done);
     process.off("SIGTERM", done);
@@ -206,12 +247,7 @@ const readConfigFiles = Effect.forEach([paths.userConfig, paths.projectConfig], 
   Effect.map(readConfigText(path).pipe(Effect.orElseSucceed(() => undefined)), (text) => [path, text] as const),
 );
 
-/**
- * How long stopping may take in all. The core's default (its 10 second dispose deadline) would cut it short of a
- * plugin that asks for longer to close: the agent takes up to 30 seconds, letting running turns reach a point to
- * resume from.
- */
-const SHUTDOWN_TIMEOUT = Duration.seconds(40);
+const SHUTDOWN_TIMEOUT = Duration.millis(SHUTDOWN_TIMEOUT_MS);
 
 /** What `loaded` runs, as `changedBetween` compares it. */
 const running = (loaded: Loaded): Running =>
@@ -659,3 +695,6 @@ if (Exit.isFailure(exit)) {
   }
   process.exit(1);
 }
+// Its own work is done: if the process does not exit now, something its plugins started keeps it running.
+console.log("lemma: stopped");
+void supervisorGone?.then(() => killOwnGroup() || process.exit(1));
