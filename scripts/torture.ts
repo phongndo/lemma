@@ -86,7 +86,10 @@ const watchHost = (host: ChildProcess) =>
 const exited = (host: ChildProcess) => host.exitCode !== null || host.signalCode !== null;
 watchHost(lemma.host);
 // Interrupted (Ctrl-C), it continues a host it stopped, so the host can stop, and removes the home.
+/** Set once interrupted: the workload stops, and no host starts again, as everything is being stopped. */
+let stopping = false;
 const interrupted = (signal: NodeJS.Signals) => {
+  stopping = true;
   killed.add(lemma.host);
   lemma.host.kill("SIGCONT");
   void lemma.stop().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
@@ -132,7 +135,7 @@ const actions = {
       await gone;
     }
     await delay(gap);
-    watchHost(await lemma.restart());
+    if (!stopping) watchHost(await lemma.restart());
   },
   pause: async () => {
     const pause = prng.between(100, 2_000);
@@ -148,7 +151,7 @@ const weights: Readonly<Record<keyof typeof actions, number>> = { prompt: 30, re
 const output = () => `${lemma.output()}\ntorture: seed ${seed}`;
 try {
   const deadline = Date.now() + seconds * 1_000;
-  while (Date.now() < deadline) {
+  while (Date.now() < deadline && !stopping) {
     const action = prng.weighted(weights)!;
     count(action);
     await actions[action]();
@@ -156,6 +159,7 @@ try {
 
   // Liveness: no more faults, and every prompt asked for again by its id reaches the end of a turn. (A host that
   // exited by itself is a violation already; one starts again, to check the rest.)
+  if (stopping) await new Promise(() => {});
   if (exited(lemma.host)) watchHost(await lemma.restart());
   const outcomes = new Map<string, "placed" | "retracted">();
   const reasons = new Map<string, string>();
@@ -173,7 +177,8 @@ try {
       // refused for good.
       const refused = (() => {
         try {
-          return (JSON.parse(result.err) as { readonly error?: { readonly code?: string } }).error?.code;
+          // The JSON error is the last line: a notice (reconnecting, say) may come before it.
+          return (JSON.parse(result.err.trim().split("\n").at(-1) ?? "") as { readonly error?: { readonly code?: string } }).error?.code;
         } catch {
           return undefined;
         }
