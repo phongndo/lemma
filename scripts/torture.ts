@@ -3,10 +3,12 @@
 // workload while the host is killed (`kill -9`) and restarted, or stopped (`SIGSTOP`) and continued. Then the faults
 // stop, every prompt is asked for again by its request id, and what clients can see is checked:
 //
-// - safety, from each session's log read through `session show`: every event's parent is the one before it; turns
-//   open and close in pairs, one at a time; each tool call is answered once; a request id is placed at most once, and
-//   once when asking for it again finds a turn; a tool call that is unsafe to repeat ran at most once (`tally.log`);
-// - liveness: asked for again, every prompt reaches the end of a turn, and then nothing runs and nothing is queued.
+// - safety, from each session's whole log read through the `sessions.events` channel: seqs in order, each event's
+//   parent an earlier one, and nothing off the session's branch but titles; on the branch, turns opening and closing
+//   in pairs, one at a time; across the log, each tool call answered once, a request id placed at most once (and once
+//   when asking for it again finds a turn), and a tool call unsafe to repeat run at most once (`tally.log`);
+// - liveness: asked for again, every prompt reaches the end of a turn, and then nothing runs and nothing is queued;
+// - and the host exits only when the torture kills it.
 //
 // The workload replays from its seed; the processes' timing does not, so unlike the simulator (packages/sim) a failing
 // run is not replayed bit for bit. It runs nightly.
@@ -14,6 +16,7 @@
 //   node --conditions=lemma-source scripts/torture.ts [--seed <n>] [--seconds <n>]
 //
 // `LEMMA_TORTURE_SEED` and `LEMMA_TORTURE_SECONDS` do the same; the default is a random seed and 30 seconds.
+import type { ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -74,9 +77,22 @@ const track = (work: Promise<unknown>) => {
 };
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** The host stopped (`SIGSTOP`) and not yet continued, or killed and not yet started again. */
-let stopped = false;
-let dead = false;
+/** Hosts the torture stopped itself: any other's exit is a violation (an error no plugin owned, a failed start). */
+const killed = new WeakSet<ChildProcess>();
+const watchHost = (host: ChildProcess) =>
+  host.once("exit", (code, signal) => {
+    if (!killed.has(host)) violations.push(`the host (pid ${host.pid}) exited by itself: ${signal ?? `code ${code}`}`);
+  });
+const exited = (host: ChildProcess) => host.exitCode !== null || host.signalCode !== null;
+watchHost(lemma.host);
+// Interrupted (Ctrl-C), it continues a host it stopped, so the host can stop, and removes the home.
+const interrupted = (signal: NodeJS.Signals) => {
+  killed.add(lemma.host);
+  lemma.host.kill("SIGCONT");
+  void lemma.stop().finally(() => process.exit(signal === "SIGINT" ? 130 : 143));
+};
+process.once("SIGINT", interrupted);
+process.once("SIGTERM", interrupted);
 
 const sessions: string[] = [];
 for (let n = 0; n < SESSIONS; n++) sessions.push((await lemmaCli("session", "new", "--cwd", lemma.home)).out);
@@ -101,27 +117,29 @@ const actions = {
   cancel: async () => void track(lemmaCli("cancel", prng.pick(sessions))),
   withdraw: async () => {
     const session = prng.pick(sessions);
+    // Drawn whatever the queue holds, which timing decides: so every later draw is the seed's, as the workload is.
+    const draw = prng.next();
     const queue = await json<readonly { readonly requestId: string }[]>("queue", session).catch(() => []);
-    if (queue.length > 0) track(lemmaCli("withdraw", session, prng.pick(queue).requestId));
+    if (queue.length > 0) track(lemmaCli("withdraw", session, queue[Math.floor(draw * queue.length)]!.requestId));
   },
   kill: async () => {
-    if (stopped) return;
     const host = lemma.host;
-    const exited = new Promise((resolve) => host.once("exit", resolve));
-    host.kill("SIGKILL");
-    await exited;
-    dead = true;
-    await delay(prng.between(0, 500));
-    await lemma.restart();
-    dead = false;
+    const gap = prng.between(0, 500);
+    killed.add(host);
+    if (!exited(host)) {
+      const gone = new Promise((resolve) => host.once("exit", resolve));
+      host.kill("SIGKILL");
+      await gone;
+    }
+    await delay(gap);
+    watchHost(await lemma.restart());
   },
   pause: async () => {
-    if (dead) return;
+    const pause = prng.between(100, 2_000);
+    if (exited(lemma.host)) return;
     lemma.host.kill("SIGSTOP");
-    stopped = true;
-    await delay(prng.between(100, 2_000));
+    await delay(pause);
     lemma.host.kill("SIGCONT");
-    stopped = false;
   },
   wait: async () => void (await delay(prng.between(20, 400))),
 };
@@ -136,10 +154,11 @@ try {
     await actions[action]();
   }
 
-  // Liveness: no more faults, and every prompt asked for again by its id reaches the end of a turn.
-  if (stopped) lemma.host.kill("SIGCONT");
-  if (lemma.host.exitCode !== null || lemma.host.signalCode !== null) await lemma.restart();
+  // Liveness: no more faults, and every prompt asked for again by its id reaches the end of a turn. (A host that
+  // exited by itself is a violation already; one starts again, to check the rest.)
+  if (exited(lemma.host)) watchHost(await lemma.restart());
   const outcomes = new Map<string, "placed" | "retracted">();
+  const reasons = new Map<string, string>();
   const asked = Promise.all(
     [...sent].map(async ([id, prompt]) => {
       const result = await lemmaCli("run", prompt.session, prompt.text, "--request-id", id, "--when-busy", "follow-up", "--json");
@@ -152,11 +171,19 @@ try {
       })();
       // A turn it was placed in answers however it ended; one withdrawn, or cancelled before its turn started, is
       // refused for good.
+      const refused = (() => {
+        try {
+          return (JSON.parse(result.err) as { readonly error?: { readonly code?: string } }).error?.code;
+        } catch {
+          return undefined;
+        }
+      })();
       if (turn?.reason !== undefined) {
         outcomes.set(id, "placed");
+        reasons.set(id, turn.reason);
         count(`turn ${turn.reason}`);
         if (turn.reason === "error") violations.push(`liveness: ${id} (${prompt.text}, in ${prompt.session}) ended in error: ${turn.error ?? result.out}`);
-      } else if (/retract|withdrawn/i.test(result.err)) outcomes.set(id, "retracted");
+      } else if (refused === "Retracted") outcomes.set(id, "retracted");
       else violations.push(`liveness: asked again, ${id} (${prompt.text}, in ${prompt.session}) failed with ${result.code}: ${result.err}${result.out}`);
     }),
   );
@@ -171,42 +198,50 @@ try {
     }
   }
 
-  // Safety, from the logs as clients read them.
+  // Safety, from the logs as clients read them: each session's whole log, in the order of its file, and its branch.
+  interface Logged {
+    readonly seq: number;
+    readonly id: string;
+    readonly parent: string | null;
+    readonly data: any;
+  }
   const placed = new Map<string, number>();
+  const calls = new Map<string, number>();
   for (const session of sessions) {
-    const { branch } = await json<{
-      readonly branch: readonly { readonly seq: number; readonly id: string; readonly parent: string | null; readonly data: any }[];
-    }>("session", "show", session);
-    let open: string | undefined;
-    let calls: Map<string, number> | undefined;
-    const answered = () => {
-      for (const [call, results] of calls ?? []) if (results !== 1) violations.push(`${session}: tool call ${call} has ${results} result(s)`);
-    };
-    branch.forEach((event, index) => {
-      const before = branch[index - 1];
-      if (event.parent !== (before?.id ?? null)) violations.push(`${session}: event ${event.seq} follows ${event.parent}, not ${before?.id ?? "nothing"}`);
-      if (before !== undefined && event.seq <= before.seq) violations.push(`${session}: seq ${event.seq} after ${before.seq}`);
+    const log = await json<readonly Logged[]>("channels", "call", "sessions.events", JSON.stringify({ sessionId: session }));
+    const { branch } = await json<{ readonly branch: readonly Logged[] }>("session", "show", session);
+    const seen = new Set<string>();
+    const onBranch = new Set(branch.map((event) => event.id));
+    log.forEach((event, index) => {
+      if (event.seq !== index + 1) violations.push(`${session}: event ${index + 1} of the log has seq ${event.seq}`);
+      if (event.parent !== null && !seen.has(event.parent)) violations.push(`${session}: event ${event.seq} follows ${event.parent}, which is not before it`);
+      seen.add(event.id);
+      // Off the branch, only what may hang off it: a title, renamed at the leaf as a turn ran.
+      if (!onBranch.has(event.id) && event.data.type !== "title")
+        violations.push(`${session}: event ${event.seq} (${event.data.type}) is off the session's branch`);
       const data = event.data;
+      if (data.type !== "message") return;
+      if (data.message.role === "assistant") for (const part of data.message.content) if (part.type === "toolCall") calls.set(part.id, calls.get(part.id) ?? 0);
+      if (data.message.role === "toolResult") {
+        const id = data.message.toolCallId;
+        if (!calls.has(id)) violations.push(`${session}: a result for ${id}, which no answer before it called`);
+        calls.set(id, (calls.get(id) ?? 0) + 1);
+      }
+      if (data.message.role === "user" && data.requestId !== undefined) placed.set(data.requestId, (placed.get(data.requestId) ?? 0) + 1);
+    });
+    let open: string | undefined;
+    for (const { data } of branch) {
       if (data.type === "turn-start") {
         if (open !== undefined) violations.push(`${session}: turn ${data.turnId} starts inside ${open}`);
         open = data.turnId;
       } else if (data.type === "turn-end") {
         if (open !== data.turnId) violations.push(`${session}: turn ${data.turnId} ends, but ${open ?? "none"} is open`);
         open = undefined;
-      } else if (data.type === "message" && data.message.role === "assistant") {
-        answered();
-        calls = new Map(data.message.content.filter((part: any) => part.type === "toolCall").map((part: any) => [part.id, 0]));
-      } else if (data.type === "message" && data.message.role === "toolResult") {
-        const id = data.message.toolCallId;
-        if (calls?.has(id) !== true) violations.push(`${session}: a result for ${id}, which the last answer did not call`);
-        else calls.set(id, calls.get(id)! + 1);
-      } else if (data.type === "message" && data.message.role === "user" && data.requestId !== undefined) {
-        placed.set(data.requestId, (placed.get(data.requestId) ?? 0) + 1);
       }
-    });
-    answered();
+    }
     if (open !== undefined) violations.push(`${session}: turn ${open} never ended`);
   }
+  for (const [call, results] of calls) if (results !== 1) violations.push(`tool call ${call} has ${results} result(s)`);
   for (const [id, times] of placed) if (times > 1) violations.push(`request ${id} was placed ${times} times`);
   for (const [id, outcome] of outcomes) {
     const times = placed.get(id) ?? 0;
@@ -216,12 +251,18 @@ try {
   // A command unsafe to repeat is never run again after a crash: each call's id is tallied once at most.
   const tallied = (await readFile(join(lemma.home, "tally.log"), "utf8").catch(() => "")).split("\n").filter(Boolean);
   for (const id of new Set(tallied)) if (tallied.filter((line) => line === id).length > 1) violations.push(`tool call ${id} ran more than once`);
+  // And it runs at all: a tally turn that ended done ran its command, so the check above saw something.
+  const tallies = [...sent].filter(([id, prompt]) => prompt.text === "tally it" && reasons.get(id) === "done");
+  if (tallies.length > 0 && tallied.length === 0) violations.push(`${tallies.length} tally turn(s) ended done, but tally.log is empty`);
   for (const outcome of outcomes.values()) count(outcome);
 } catch (error) {
   violations.push(`the run failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
 } finally {
   await Promise.race([Promise.allSettled(inFlight), delay(5_000)]);
   if (violations.length > 0) console.error(output());
+  killed.add(lemma.host);
+  // A host stopped as the run failed (a pause cut short) must go on to stop.
+  lemma.host.kill("SIGCONT");
   await lemma.stop();
 }
 console.log(`torture: ${[...counts].map(([what, times]) => `${what} ${times}`).join(", ")}`);

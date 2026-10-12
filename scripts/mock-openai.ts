@@ -21,7 +21,8 @@ import { createInterface } from "node:readline";
  * is the pause between streamed words (default 40, and 100 for a ramble), and
  * a ramble whose prompt names a gate (`gate:<name>`) stops halfway, printing
  * `waiting <name>`, until the line `open <name>` on stdin opens the gate for it
- * and every later one. `e2e.ts`, beside it, starts it so, with no pause.
+ * and every later one. `e2e.ts`, beside it, starts it with no pause unless asked
+ * for one (the torture test, `torture.ts`, asks for one).
  */
 const port = Number(process.env.PORT ?? 7499);
 const pace = (ms: number) => Number(process.env.PACE_MS ?? ms);

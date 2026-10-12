@@ -169,7 +169,8 @@ jobs:
           LEMMA_SIM_SEED=$LEMMA_SIM_SEED LEMMA_SIM_RUNS=$LEMMA_SIM_RUNS
           LEMMA_CONVERSATION_SEED=$LEMMA_CONVERSATION_SEED LEMMA_CONVERSATION_RUNS=$LEMMA_CONVERSATION_RUNS
           LEMMA_HARNESS_SEED=$LEMMA_HARNESS_SEED LEMMA_HARNESS_RUNS=$LEMMA_HARNESS_RUNS LEMMA_HARNESS_TICKS=$LEMMA_HARNESS_TICKS
-          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command)"
+          nix develop -c pnpm test:random (a failing property also prints its replay path; a failing simulation seed, its pnpm sim command);
+          the torture test's workload: LEMMA_TORTURE_SEED=$LEMMA_TORTURE_SEED LEMMA_TORTURE_SECONDS=$LEMMA_TORTURE_SECONDS nix develop -c pnpm torture"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
