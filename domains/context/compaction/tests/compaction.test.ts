@@ -2,8 +2,9 @@ import * as fs from "node:fs/promises";
 import { Effect, Layer, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
-import type { Plugin } from "@lemma/core";
+import type { Handler, Plugin } from "@lemma/core";
 import { CompactionHook } from "@lemma/context";
+import type { CompactionError } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Notice } from "@lemma/contracts";
 import { Agent } from "@lemma/agent";
@@ -161,6 +162,31 @@ describe("in a session", () => {
     const { events, requests } = await twoTurns(reply("b"), [], [mine]);
     expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, false]);
     expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ summary: "Mine.", source: "my-summary" }]);
+  });
+
+  it("credits the outermost plugin whose summary differs from what it was handed", async () => {
+    const handler = (id: string, order: number, handle: Handler<CompactionRequest, CompactionResult, CompactionError>) =>
+      definePlugin({ id, layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(CompactionHook, handle, { order }))) });
+    // The inner one skips; the outer one writes a summary over the skip.
+    const skips = handler("skips", 1, () => Effect.succeed({ kind: "skip", reason: "not now" }));
+    const writesOver = handler("writes-over", 0, (request, next) =>
+      Effect.map(next(request), (made) =>
+        made.kind === "skip" ? { kind: "summary", summary: "Over.", firstKeptId: request.branch[request.firstKept]!.id } : made,
+      ),
+    );
+    const { events } = await twoTurns(reply("b"), [], [skips, writesOver]);
+    expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ summary: "Over.", source: "writes-over" }]);
+  });
+
+  it("keeps the history only from a place it may be: a summary cut elsewhere fails, and the history stays as it is", async () => {
+    // Its first event: before anything the summary could stand for.
+    const { events, notices } = await twoTurns(
+      reply("b"),
+      [],
+      [answering("bad-cut", (request) => ({ kind: "summary", summary: "Mine.", firstKeptId: request.branch[0]!.id }))],
+    );
+    expect(events.some((event) => event.data.type === "compaction")).toBe(false);
+    expect(notices).toMatchObject([{ level: "warning", source: "context.compaction", message: expect.stringContaining("cannot be kept from") }]);
   });
 
   it("lets a plugin skip a compaction, which leaves the history as it is", async () => {

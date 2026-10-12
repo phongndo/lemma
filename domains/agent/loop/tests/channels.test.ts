@@ -49,7 +49,7 @@ describe("the agent channels, through the transport", () => {
         // Each kind keeps its own order; `turn-ended` can overtake the last delta.
         const seen = yield* collect(activity, (seen) => count(seen, "turn-ended") === 1 && count(seen, "delta") === 4);
         const turnId = seen.find((element) => element.type === "turn-started")?.turnId;
-        expect(seen.filter((element) => element.type === "turn-started")).toEqual([{ type: "turn-started", sessionId: id, turnId }]);
+        expect(seen.filter((element) => element.type === "turn-started")).toEqual([{ type: "turn-started", sessionId: id, turnId, requestIds: ["r1"] }]);
         expect(seen.filter((element) => element.type === "delta").map((element) => [element.turnId, element.seq, element.event.type])).toEqual([
           [turnId, 1, "start"],
           [turnId, 2, "text-delta"],

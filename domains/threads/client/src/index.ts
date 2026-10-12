@@ -398,10 +398,15 @@ export default defineWebPlugin({
           return false;
         },
       );
+      // A plugin's answer that came after the prompt was taken (handled, as a refusal comes first) is shown as it is.
       if (accepted)
         void prompt.done.then(
           (outcome) =>
-            outcome.kind === "handled" ? setAnswered({ sessionId: id, kind: "handled", by: outcome.by, message: outcome.message ?? "" }) : undefined,
+            outcome.kind === "handled"
+              ? setAnswered({ sessionId: id, kind: "handled", by: outcome.by, message: outcome.message ?? "" })
+              : outcome.kind === "refused"
+                ? setAnswered({ sessionId: id, kind: "refused", by: outcome.by, message: outcome.reason })
+                : undefined,
           () => {},
         );
       // Accepted, the turn is the host's. A dropped connection holds this wait until the page is back, where the host

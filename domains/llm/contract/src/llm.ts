@@ -315,13 +315,14 @@ export const StreamEvent = Schema.Union([
   Schema.Struct({ type: Schema.Literal("toolcall-end"), index: Schema.Number, toolCall: ToolCall }),
   Schema.Struct({ type: Schema.Literal("done"), message: AssistantMessage }),
   /**
-   * The provider answered with a response it streams (sent after `start`, before the body): its HTTP status, its request id when it names
-   * one, and who shaped what was sent (`LlmProviderHeadersHook`'s handlers: the headers each changed, never their
-   * values). Not model output. One that refused the request says so in the `error` event instead.
+   * How the provider answered (sent after `start`, before the body): its HTTP status and its request id, when it
+   * answered with a response it streams, and who shaped what was sent (`LlmProviderHeadersHook`'s handlers: the headers
+   * each changed, never their values), however it went. Not model output. A request it refused, or that never reached
+   * it, has no status: the `error` event after says why.
    */
   Schema.Struct({
     type: Schema.Literal("provider"),
-    status: Schema.Number,
+    status: Schema.optional(Schema.Number),
     requestId: Schema.optional(Schema.String),
     credit: Schema.optional(ResultCredit),
   }),
@@ -360,8 +361,11 @@ export interface ProviderHeaders {
 
 /**
  * Around the headers of every request a provider of `Llm` sends: a handler adds, changes, or drops headers (a
- * gateway's key, a trace id), returning what `next` gives it changed. The terminal returns them as they are. Who
- * changed which header is told back as the stream's `provider` event, and logged with the answer; values never are.
+ * gateway's key, a trace id), returning what `next` gives it changed. It is handed what would be sent (the model's own
+ * headers, and the provider's defaults); the terminal returns them as they are. Who changed which header is told back
+ * as the stream's `provider` event, and logged with the answer or the failed attempt; values never are, as headers
+ * carry credentials. So headers are the provider's transport, not part of the request the log rebuilds
+ * (`rebuildRequest`): what changes the model's behavior goes in `LlmRequest` (its `providerOptions`).
  */
 export const LlmProviderHeadersHook = Hook.make<ProviderHeaders, Readonly<Record<string, string | null>>>("lemma/llm.provider-headers", {
   summary: { input: (input) => ({ provider: input.provider, headers: Object.keys(input.headers).length }) },

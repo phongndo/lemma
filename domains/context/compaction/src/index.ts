@@ -1,5 +1,6 @@
+import { isDeepStrictEqual } from "node:util";
 import { Data, Effect, Schema, Stream } from "effect";
-import { Notice } from "@lemma/contracts";
+import { inChainOrder, Notice } from "@lemma/contracts";
 import { AgentRequestHook } from "@lemma/agent";
 import { CompactionError, CompactionHook } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
@@ -9,7 +10,7 @@ import type { RequestDraft } from "@lemma/agent";
 import type { ModelInfo, StreamEvent } from "@lemma/llm";
 import { definePlugin, Events, Hooks } from "@lemma/core";
 import type { HandlerStep } from "@lemma/core";
-import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript } from "./compact.ts";
+import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript, validCut } from "./compact.ts";
 
 export { chooseCut, estimateTokens, transcript } from "./compact.ts";
 
@@ -96,6 +97,8 @@ export default definePlugin({
       Effect.gen(function* () {
         const kept = asked.branch[asked.firstKept];
         if (kept === undefined) return { kind: "skip", reason: `no event at ${asked.firstKept} to keep from` } as const;
+        // A handler may have moved the cut (`next`): never between a tool call and its result, nor outside the view.
+        if (!validCut(asked.branch, asked.firstKept)) return yield* new SummaryFailed({ message: `the history cannot be kept from event ${asked.firstKept}` });
         const { start } = modelView(asked.branch);
         const older = asked.branch.slice(start, asked.firstKept).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
         const writer = yield* llm.model(config.model ?? asked.model);
@@ -135,8 +138,16 @@ export default definePlugin({
         const steps: HandlerStep<CompactionRequest, CompactionResult>[] = [];
         const made = yield* hooks.invoke(CompactionHook, request, write, { onStep: (step) => void steps.push(step) });
         if (made.kind === "skip") return;
-        // Written by the innermost handler that answered itself, or by this plugin's model (the terminal).
-        const writtenBy = steps.find((step) => step.next === undefined && step.output?.kind === "summary")?.pluginId ?? owner.id;
+        // What a handler wrote keeps the history from a place it may be kept from, as the terminal's does.
+        const keptAt = branch.findIndex((event) => event.id === made.firstKeptId);
+        if (!validCut(branch, keptAt))
+          return yield* new CompactionError({ message: `the summary keeps the history from ${made.firstKeptId}, which it cannot be kept from` });
+        // Written by the outermost handler whose summary is not the one the rest of the chain handed it, or by this
+        // plugin's model (the terminal).
+        const writtenBy =
+          inChainOrder(steps).find(
+            (step) => step.output?.kind === "summary" && (step.next?.output === undefined || !isDeepStrictEqual(step.output, step.next.output)),
+          )?.pluginId ?? owner.id;
         yield* draft.append({
           type: "compaction",
           summary: made.summary,

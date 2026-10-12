@@ -4,8 +4,10 @@ import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
+import type { Handler } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
 import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
+import type { PromptDecision, PromptInput } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
@@ -255,6 +257,46 @@ describe("agent", () => {
         seen.length = 0;
         expect(yield* agent.prompt(id, text("/hello world"), { requestId: "r1" })).toEqual({ kind: "placed" });
         expect(seen).toEqual([]);
+        // One a plugin handled is answered the same when retried, and the plugin, which acted already, is not asked
+        // again; nor when two calls race.
+        const twice = yield* Effect.all([agent.prompt(id, text("/ping"), { requestId: "r2" }), agent.prompt(id, text("/ping"), { requestId: "r2" })], {
+          concurrency: "unbounded",
+        });
+        expect(yield* agent.prompt(id, text("/ping"), { requestId: "r2" })).toEqual({ kind: "handled", by: "expand", message: "pong" });
+        expect([twice, seen]).toEqual([
+          [
+            { kind: "handled", by: "expand", message: "pong" },
+            { kind: "handled", by: "expand", message: "pong" },
+          ],
+          ["expand:/ping"],
+        ]);
+      }),
+    );
+  });
+
+  it("names the plugin whose answer to a prompt stands, and places one with the options a handler handed on", async () => {
+    const on = (id: string, order: number, handle: Handler<PromptInput, PromptDecision, AgentError, any>) =>
+      definePlugin({ id, layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(AgentInputHook, handle, { order }))) });
+    // The inner one refuses; the outer one handles it instead (queued for review), and is the one that answered.
+    const guard = on("guard", 2, () => Effect.succeed({ kind: "refuse", reason: "not allowed" } as const));
+    const reviewer = on("reviewer", 1, (prompt, next) =>
+      Effect.map(next(prompt), (made) => (made.kind === "refuse" ? ({ kind: "handle", message: "queued for review" } as const) : made)),
+    );
+    await withAgent({ plugins: [guard, reviewer], scripts: [] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        expect(yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("deploy")))).toEqual({ kind: "handled", by: "reviewer", message: "queued for review" });
+      }),
+    );
+    // `/fast` asks a smaller model: the turn runs on it.
+    const fast = on("fast", 0, (prompt, next) => next({ ...prompt, options: { ...prompt.options, model: "fake/small" } }));
+    await withAgent({ plugins: [fast], scripts: [reply("quick")], models: ["fake/m1", "fake/small"] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        expect(yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("/fast hi"), { requestId: "r1" }))).toEqual({ kind: "placed" });
+        expect(requests.map((request) => request.model)).toEqual(["fake/small"]);
+        const [prompt] = (yield* log(id)).filter((event) => event.data.type === "message");
+        expect(prompt!.data).toMatchObject({ requestId: "r1", credit: { handlers: [{ source: "fast", changed: ["options"] }] } });
       }),
     );
   });

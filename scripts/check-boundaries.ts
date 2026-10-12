@@ -228,7 +228,7 @@ report("Domain contract violations", contractProblems, "domain contracts: ok");
 
 // Each domain's README says what its contract offers in each of the five shapes (docs/plugins.md): an extension point
 // a contract declares (a registry, hook, event, slot, part, or capability) that its README does not name is one a
-// plugin author cannot find. Every domain has a README, one with no contract too (`context`, `transport`).
+// plugin author cannot find. Every domain has a README, one with no contract too (`transport`).
 const extensionPoint =
   /^export (?:const|class) ([A-Z]\w*)\b[^\n]*?(?:Registry\.make|Hook\.make|Event\.make|defineSlot|definePart|extends Context\.Service)\b/gm;
 const docProblems: string[] = [];

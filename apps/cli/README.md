@@ -106,7 +106,10 @@ so the two show the same records and accept the same queries.
   `run` that fails once its prompt may be placed (it gave up on the
   connection, say, or a read of the session failed) prints the id it chose
   (without `--json`; with it, the error has it as `requestId`): running it
-  again with that id, not a new one, rejoins the turn. A prompt refused
+  again with that id, not a new one, rejoins the turn. A prompt a plugin
+  handled instead of placing (`AgentInputHook`) prints what the plugin said
+  as the result (with `--json`, `{ "type": "handled", "by", "message" }`) and
+  exits 0; one a plugin refused fails `Refused` (exit 1). A prompt refused
   (`Busy`, `NoModel`, `Retracted`, ...) was never placed, and one the host
   refused as larger than its 100 MiB message limit (`TooLarge`, exit 1: an
   attached image, say) never arrived: those are reported as they are. When
