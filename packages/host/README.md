@@ -56,12 +56,14 @@ stops every session with it, and nothing on the loop can notice.
 
 - **How it tells.** The loop bumps a counter in shared memory every 100 ms.
   When the counter has not moved for a second, the worker writes a line to
-  stderr while the loop is still blocked. It writes to the file descriptor
-  directly, because the thread that prints is the one blocked:
-  `lemma: the event loop has been blocked for 1.2 s, running spinner's code (100% of its stacks)`.
+  stderr at once, and another naming the plugin once its stacks are read
+  (`lemma: the event loop has been blocked for 1.2 s, running spinner's code (100% of its stacks)`),
+  while the loop is still blocked. It writes to the file descriptor directly,
+  because the thread that prints is the one blocked.
 - **What it ignores.**
   - The worker's own late ticks: the machine slept, or the process was stopped.
-  - A loop held at a debugger's breakpoint.
+  - Any stall while an inspector is open (`--inspect`, a debugger's terminal):
+    a loop held at a breakpoint cannot be told from a stalled one.
 - **Whose code it was.** The worker reads the blocked thread's stack five
   times through the inspector. Each read evaluates `new Error().stack` on that
   thread, which the inspector serves between the instructions it runs, in
@@ -69,7 +71,10 @@ stops every session with it, and nothing on the loop can notice.
   innermost on most of the stacks, from where each plugin's code is
   (`CodeOwner`):
   - a bundled plugin's package (`domains/<domain>/<name>`);
-  - a local plugin's file or folder.
+  - a local plugin's file or folder, through any symlink (one linked into the
+    plugins directory), as stack frames name files.
+
+  The worker hears these as each load is applied, before its plugins start.
 
   Code in the kernel, in Effect, or in the host counts for the plugin that
   called it.
@@ -77,9 +82,10 @@ stops every session with it, and nothing on the loop can notice.
 - **Why stacks, not a profile.** A CPU profile started after the loop began
   misses the loop's own frame once V8 has optimized it, and names its caller
   instead, often the kernel.
-- **Where it cannot tell.** A thread blocked outside JavaScript answers only
-  once it returns, so stacks read after that are left out. Where
-  the runtime has no inspector, the stall is said without a plugin.
+- **Where it cannot tell.** A thread blocked outside JavaScript (a
+  synchronous child process, a read of a slow mount) answers a stack read only
+  once it returns: the stall is said at once all the same, without a plugin.
+  Where the runtime has no inspector, it is said without a plugin too.
 - **Once the loop runs again**, the stall is logged and kept in the trace as
   a `host.stall` span over its time. The span carries `stall.ms`, and
   `plugin.id` and `stall.share` when whose code it was could be told, so the

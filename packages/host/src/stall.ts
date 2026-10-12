@@ -1,4 +1,4 @@
-import inspector from "node:inspector";
+import { realpathSync } from "node:fs";
 import { Context, Exit, Option } from "effect";
 import type { Tracer } from "effect";
 import { isAbsolute, sep } from "node:path";
@@ -49,6 +49,8 @@ export interface StallOptions {
 export interface StallWatch {
   /** Resolves once the worker is watching. */
   readonly ready: Promise<void>;
+  /** Sends the worker where plugins' code is now, if `owners` changed: before code that may block runs (a load's). */
+  readonly refresh: () => void;
   readonly stop: () => void;
 }
 
@@ -69,7 +71,10 @@ export interface OwnersMessage {
 
 /** What the worker starts with. */
 export interface StallWorkerData {
-  /** Two counters: [0] the loop's beats, [1] 1 while a debugger is attached (a paused loop is no stall). */
+  /**
+   * Two counters: [0] the loop's beats, [1] 1 while an inspector is open (`--inspect`, a debugger's terminal), which
+   * may hold the loop at a breakpoint: no stall is said then, as one cannot be told from a pause.
+   */
   readonly shared: SharedArrayBuffer;
   readonly thresholdMs: number;
   readonly tickMs: number;
@@ -90,6 +95,8 @@ export function watchStalls(options: StallOptions): StallWatch | undefined {
   const shared = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 2);
   const counters = new Int32Array(shared);
   const debuggable = process.features.inspector;
+  // Loaded only where the runtime has one: where it has none, importing `node:inspector` throws.
+  const inspector = debuggable ? (process.getBuiltinModule("node:inspector") as typeof import("node:inspector")) : undefined;
   const data: StallWorkerData = { shared, thresholdMs, tickMs: TICK_MS, snapshots: SNAPSHOTS, gapMs: SNAPSHOT_GAP_MS, inspectable: debuggable };
   let worker: Worker;
   try {
@@ -99,14 +106,18 @@ export function watchStalls(options: StallOptions): StallWatch | undefined {
     return undefined;
   }
   let sent: readonly CodeOwner[] | undefined;
+  const refresh = () => {
+    const owners = options.owners();
+    if (owners === sent) return;
+    sent = owners;
+    // As stack frames name them: through any symlink (a plugin linked into the plugins directory, a temporary
+    // directory under one), to the file itself.
+    worker.postMessage({ owners: owners.map((owner) => ({ ...owner, path: realPath(owner.path) })) } satisfies OwnersMessage);
+  };
   const beat = () => {
     Atomics.add(counters, 0, 1);
-    Atomics.store(counters, 1, debuggable && inspector.url() !== undefined ? 1 : 0);
-    const owners = options.owners();
-    if (owners !== sent) {
-      sent = owners;
-      worker.postMessage({ owners } satisfies OwnersMessage);
-    }
+    Atomics.store(counters, 1, inspector?.url() !== undefined ? 1 : 0);
+    refresh();
   };
   beat();
   const timer = setInterval(beat, TICK_MS);
@@ -128,6 +139,7 @@ export function watchStalls(options: StallOptions): StallWatch | undefined {
   });
   return {
     ready,
+    refresh,
     stop: () => {
       clearInterval(timer);
       void worker.terminate();
@@ -159,6 +171,23 @@ export function recordStall(tracer: Tracer.Tracer, stall: Stall): void {
   span.end(nanos(stall.start + stall.ms), Exit.void);
 }
 
+const realPath = (path: string): string => {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
+};
+
+/** A file URL's path; one that names no file here (another host's) names no plugin's. */
+const pathOf = (url: string): string => {
+  try {
+    return fileURLToPath(url);
+  } catch {
+    return "";
+  }
+};
+
 /** The plugin whose code a file is: the owner whose path is the file, or the deepest directory holding it. */
 export const ownerOfFile = (owners: readonly CodeOwner[], file: string): string | undefined => {
   let found: CodeOwner | undefined;
@@ -178,8 +207,7 @@ export const ownerOfFile = (owners: readonly CodeOwner[], file: string): string 
 export function attribute(stacks: readonly (readonly string[])[], owners: readonly CodeOwner[]): { readonly pluginId?: string; readonly share?: number } {
   const byUrl = new Map<string, string | undefined>();
   const ownerOfUrl = (url: string) => {
-    if (!byUrl.has(url))
-      byUrl.set(url, url.startsWith("file:") ? ownerOfFile(owners, fileURLToPath(url)) : isAbsolute(url) ? ownerOfFile(owners, url) : undefined);
+    if (!byUrl.has(url)) byUrl.set(url, url.startsWith("file:") ? ownerOfFile(owners, pathOf(url)) : isAbsolute(url) ? ownerOfFile(owners, url) : undefined);
     return byUrl.get(url);
   };
   const counts = new Map<string, number>();

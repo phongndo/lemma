@@ -1,5 +1,4 @@
 import { writeSync } from "node:fs";
-import { Session } from "node:inspector/promises";
 import { parentPort, workerData } from "node:worker_threads";
 import { attribute } from "./stall.ts";
 import type { CodeOwner, OwnersMessage, StallWorkerData, WorkerMessage } from "./stall.ts";
@@ -51,6 +50,8 @@ const STACK = `(() => {
  */
 const stacks = async (blocked: number): Promise<readonly (readonly string[])[]> => {
   if (!inspectable) return [];
+  // Loaded only where the runtime has an inspector: where it has none, importing it throws.
+  const { Session } = await import("node:inspector/promises");
   const session = new Session();
   const read: (readonly string[])[] = [];
   try {
@@ -77,7 +78,7 @@ let stall: { readonly since: number; readonly start: number; readonly found: Pro
 // The worker's own timer keeps it running; the main thread has unref'd it, so it never keeps the process alive.
 setInterval(() => {
   const now = performance.now();
-  const late = now - looked > thresholdMs;
+  const late = now - looked > thresholdMs / 2;
   looked = now;
   const current = Atomics.load(counters, 0);
   if (current !== beats) {
@@ -95,16 +96,19 @@ setInterval(() => {
     moved = now;
     return;
   }
-  // A debugger holding the loop at a breakpoint is no stall.
+  // A loop an inspector may hold at a breakpoint cannot be told from a stall: none is said while one is open.
   if (stall !== undefined || now - moved < thresholdMs || Atomics.load(counters, 1) === 1) return;
   const since = moved;
+  // Said at once: a thread blocked outside JavaScript answers no stack read until it returns, if it ever does.
+  write(`the event loop has been blocked for ${seconds(now - since)}`);
   const found = stacks(current).then((read) => attribute(read, owners));
   stall = { since, start: performance.timeOrigin + since, found };
   void found.then(({ pluginId, share }) => {
     // Said while still blocked, when it is: once the loop runs again, `onStall` hears it.
-    if (stall?.since !== since) return;
-    const whose = pluginId === undefined ? "" : `, running ${pluginId}'s code (${Math.round((share ?? 0) * 100)}% of its stacks)`;
-    write(`the event loop has been blocked for ${seconds(performance.now() - since)}${whose}`);
+    if (stall?.since !== since || pluginId === undefined) return;
+    write(
+      `the event loop has been blocked for ${seconds(performance.now() - since)}, running ${pluginId}'s code (${Math.round((share ?? 0) * 100)}% of its stacks)`,
+    );
   });
 }, tickMs);
 parentPort!.postMessage({ type: "ready" } satisfies WorkerMessage);

@@ -7,9 +7,9 @@ import { attribute, ownerOfFile, recordStall } from "../src/stall.ts";
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("./fixtures/stall/run.ts", import.meta.url));
-/** Runs the fixture in a process of its own: the watchdog profiles the process's main thread, which a test runner may not be. */
-const blocking = async (ms: number) => {
-  const { stdout, stderr } = await run(process.execPath, ["--conditions=lemma-source", script, String(ms)], { timeout: 20_000 });
+/** Runs the fixture in a process of its own: the watchdog reads the process's main thread, which a test runner's may not be. */
+const blocking = async (ms: number, how: "busy" | "native" | "linked" = "busy") => {
+  const { stdout, stderr } = await run(process.execPath, ["--conditions=lemma-source", script, String(ms), how], { timeout: 20_000 });
   return { stall: JSON.parse(stdout.trim().split("\n").at(-1)!), stderr };
 };
 
@@ -19,7 +19,20 @@ describe("watchStalls", () => {
     expect(stall).toMatchObject({ pluginId: "test.busy" });
     expect(stall.share).toBeGreaterThan(0.5);
     expect(stall.ms).toBeGreaterThanOrEqual(1_400);
+    // Said at once, then again once whose code it is is known.
+    expect(stderr).toMatch(/^lemma: the event loop has been blocked for 1\.\d s$/m);
     expect(stderr).toMatch(/lemma: the event loop has been blocked for \d+\.\d s, running test\.busy's code \(\d+% of its stacks\)/);
+  }, 30_000);
+
+  test("names a plugin whose code it knows by a path through a symlink", async () => {
+    const { stall } = await blocking(1_500, "linked");
+    expect(stall).toMatchObject({ pluginId: "test.busy" });
+  }, 30_000);
+
+  test("says a loop blocked outside JavaScript is blocked while it is, though no stack can be read then", async () => {
+    const { stall, stderr } = await blocking(1_500, "native");
+    expect(stall.ms).toBeGreaterThanOrEqual(1_400);
+    expect(stderr).toMatch(/^lemma: the event loop has been blocked for 1\.\d s$/m);
   }, 30_000);
 
   test("hears nothing of a loop blocked for less than the threshold", async () => {
