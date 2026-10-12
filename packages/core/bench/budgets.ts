@@ -39,8 +39,7 @@ export const budgets = {
   httpP99Ms: 25,
   // The harness (packages/sim/bench/harness.ts, 2026-10-12, same machine): a session's step, in simulated time on a
   // file system in memory, against its estimate (packages/sim/README.md#the-harness-benchmark). Counts per step are
-  // the same on every machine and always fail; timings are advisory. A step reads its whole branch back, about three
-  // times: 510, 3,201, and 30,228 events at 100, 1,000, and 10,000 entries, so 1.35, 1.59, and 5.16 ms.
+  // the same on every machine and always fail; timings are advisory. What it measured: the README's "What it measures".
   "Harness / 100 entries / events read per step": 520,
   "Harness / 1000 entries / events read per step": 3_300,
   "Harness / 10000 entries / events read per step": 31_000,

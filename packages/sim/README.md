@@ -156,8 +156,8 @@ on a file system in memory (`MemFs`: an append grows its file in place, where
 entries. Simulated waits cost no wall time, so a step's wall time is the
 harness's own. What it counts per step is the same on every machine, and is a
 hard budget (`packages/core/bench/budgets.ts`); `tests/bench.test.ts` pins the
-counts on a short session in CI, on Linux and macOS. Timings are advisory, and
-`scripts/bench-compare.ts --harness` compares them between builds.
+counts on a short session in CI, on Linux and macOS. Timings are advisory;
+`scripts/bench-compare.ts --harness` compares a step's between builds.
 
 ### The estimate
 
