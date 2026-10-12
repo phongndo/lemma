@@ -39,7 +39,7 @@ the whole run.
 What it runs must not reach the event loop's timers, the wall clock, or another
 random source, or real time would decide what happens when:
 `scripts/check-boundaries.ts` keeps the plugins it runs to their seams, and
-the determinism tests check a run keeps to them (see "Running it").
+the determinism tests fail on any timer a run starts (see "Running it").
 
 ## A host
 
