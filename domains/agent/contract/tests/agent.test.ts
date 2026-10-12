@@ -26,6 +26,7 @@ describe("serveAgent", () => {
       running: Effect.succeed(["s1"]),
       queue: answer("queue", []),
       withdraw: answer("withdraw", false),
+      promote: answer("promote", false),
       view: answer("view", { output: [], queue: [], queueRevision: 1 }),
     };
     return { asked, agent };
@@ -58,10 +59,12 @@ describe("serveAgent", () => {
         yield* called(channels, "agent.prompt", { sessionId: "s1", content, requestId: "r1" });
         yield* called(channels, "agent.prompt", { sessionId: "s1", content, options: { model: "p/m", thinking: "high" }, requestId: "r2", whenBusy: "steer" });
         yield* called(channels, "agent.withdraw", { sessionId: "s1", requestId: "r2" });
+        yield* called(channels, "agent.promote", { sessionId: "s1", requestId: "r1" });
         expect(asked).toEqual([
           ["prompt", "s1", content, { requestId: "r1" }],
           ["prompt", "s1", content, { model: "p/m", thinking: "high", requestId: "r2", whenBusy: "steer" }],
           ["withdraw", "s1", "r2"],
+          ["promote", "s1", "r1"],
         ]);
       }),
     ));

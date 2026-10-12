@@ -28,6 +28,7 @@ Effect.gen(function* () {
 | `retryDelay`    | `2`                                           | Seconds before the first retry; each later one waits twice as long.                                  |
 | `maxRetryDelay` | `60`                                          | Seconds the wait between retries grows to, at most.                                                  |
 | `stopGrace`     | `5`                                           | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).         |
+| `parallelTools` | `8`                                           | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).      |
 | `maxRunning`    | `16`                                          | Turns running at once, across sessions; another waits for a slot before its first event.             |
 
 ## A turn
@@ -66,7 +67,7 @@ Effect.gen(function* () {
    (`cancelled` for an aborted stream, else `error`).
 5. Tool calls run through `Tools.execute` with the turn's signal, in order,
    except that a run of consecutive calls whose tools are `parallel: "safe"`
-   (`read` is) runs at once, eight at a time. Before calls run, a `custom`
+   (`read` is) runs at once, `parallelTools` at a time. Before calls run, a `custom`
    event (`agent.started`) names them; each result is appended as it arrives, with
    timing, `details`, and its `credit` (who shaped it: `ToolExecuteHook`'s
    handlers, the guards' decisions, the registry's cut), and the model reads the
@@ -138,7 +139,8 @@ than loss): its queued prompts fail `Session` and its journal goes. One removed
 while no agent ran goes when the next starts.
 
 `queue` lists what waits, `withdraw` takes a prompt out (its `prompt` call fails
-`Retracted`), and `QueueChanged` reports every change with a revision that only
+`Retracted`), `promote` makes a queued follow-up a steer in its place (the
+running turn places it after its current step; with no turn running it stays a follow-up), and `QueueChanged` reports every change with a revision that only
 grows, across restarts too (`view` carries it as well), so a client keeps the
 newest queue it has heard of whichever arrives first. After a turn that failed
 or was cancelled, the queue waits for the next prompt, which places the queued
@@ -215,7 +217,7 @@ warning in the log; it is taken up when it is next prompted, the prompt failing
 as the reading did if it still cannot be, or at the next start. Until then its
 turn stays suspended, and is not running: `busy`, `running` and `view` leave it
 out, and nothing holds the session for it, so the session can be deleted, which
-drops the turn. `queue`, `view` and `withdraw` see the session's queue, checking
+drops the turn. `queue`, `view`, `withdraw` and `promote` see the session's queue, checking
 it against the log first if that was not done, and fail as reading the log does
 if it still cannot be (see `Agent.queue`). `cancel` records the cancellation in
 the journal, then takes the session up at once if it can (see `Agent.cancel`

@@ -314,6 +314,29 @@ describe("tools together, many", () => {
       }),
     );
   });
+
+  it("runs at most `parallelTools` calls at once, as configured", async () => {
+    const brief: Tool<{ readonly n: number }> = {
+      name: "brief",
+      description: "Answers at once.",
+      input: Schema.Struct({ n: Schema.Number }),
+      parallel: "safe",
+      execute: async () => new ToolResult({ content: [{ type: "text", text: "ok" }] }),
+    };
+    const calls = Array.from({ length: 5 }, (_, n) => call(`c${n}`, "brief", { n }));
+    await run({ scripts: [useTools(...calls), reply("done")], tools: [brief], config: { parallelTools: 3 } }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* (yield* Agent).prompt(id, text("go"));
+        const marks = ofType(yield* log(id), "custom").filter((data) => data.kind === TOOLS_STARTED);
+        // Each mark names a group that runs at once.
+        expect(marks.map((data) => (data.data as { toolCallIds: string[] }).toolCallIds)).toEqual([
+          ["c0", "c1", "c2"],
+          ["c3", "c4"],
+        ]);
+      }),
+    );
+  });
 });
 
 describe("prompt cache", () => {

@@ -154,6 +154,30 @@ describe("queue", () => {
     );
   });
 
+  it("promotes a queued follow-up to a steer: the running turn places it after its step, and no second turn runs", async () => {
+    const gate = Effect.runSync(Deferred.make<void>());
+    await run({ scripts: [gated(gate, reply("a")), reply("answer to two")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const first = yield* Effect.forkChild(a.prompt(id, text("one")));
+        yield* waitFor(a.busy(id), (busy) => busy);
+        const second = yield* Effect.forkChild(a.prompt(id, text("two"), { requestId: "p" }));
+        yield* waitFor(a.queue(id), (queue) => queue.length === 1);
+        expect(yield* a.promote(id, "p")).toBe(true);
+        expect((yield* a.queue(id)).map((queued) => [queued.requestId, queued.mode])).toEqual([["p", "steer"]]);
+        expect(yield* a.promote(id, "p")).toBe(false);
+        expect(yield* a.promote(id, "missing")).toBe(false);
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(first);
+        yield* Fiber.join(second);
+        const events = yield* log(id);
+        expect(ofType(events, "turn-start")).toHaveLength(1);
+        expect(userTexts(events)).toEqual(["one", "two"]);
+      }),
+    );
+  });
+
   it("holds the queue after a failed turn until the next prompt, which places it first", async () => {
     const gate = Effect.runSync(Deferred.make<void>());
     await run({ scripts: [gated(gate, failWith("boom")), reply("both")] }, () =>
@@ -168,6 +192,10 @@ describe("queue", () => {
         yield* Fiber.join(first);
         yield* waitFor(a.busy(id), (busy) => !busy);
         expect(yield* a.queue(id)).toHaveLength(1);
+        // No turn runs to place it after a step: it stays a follow-up.
+        const [held] = yield* a.queue(id);
+        expect(yield* a.promote(id, held!.requestId)).toBe(false);
+        expect((yield* a.queue(id)).map((queued) => queued.mode)).toEqual(["follow-up"]);
         yield* a.prompt(id, text("three"));
         yield* Fiber.join(second);
         const events = yield* log(id);

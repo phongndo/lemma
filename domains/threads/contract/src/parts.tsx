@@ -11,9 +11,14 @@ export interface ComposerQueuedProps {
   readonly prompt: QueuedPrompt;
   /** Takes it out of the queue. */
   readonly withdraw: () => void;
+  /**
+   * Makes a follow-up a steer, which joins the running turn after its current step. Absent for a steer, and while no
+   * turn runs (the queue held after a failed or cancelled turn waits for the next prompt, and has no turn to steer).
+   */
+  readonly promote?: (() => void) | undefined;
 }
 
-/** A queued prompt above the composer: its default shows the prompt's mode and text, and a button to withdraw it. */
+/** A queued prompt above the composer: its default shows the prompt's mode and text, and buttons to steer with it and to withdraw it. */
 export const ComposerQueuedPart = definePart<ComposerQueuedProps>("composer.queued");
 
 export interface ComposerSuggestionProps {
