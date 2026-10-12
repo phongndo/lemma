@@ -9,6 +9,7 @@ import credentialsFile from "@lemma/credentials-file";
 import devtoolsTrace from "@lemma/devtools-trace";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
+import mcpServers from "@lemma/mcp-servers";
 import sessionsFiles from "@lemma/sessions-files";
 import toolsBash from "@lemma/tools-bash";
 import toolsCodemode from "@lemma/tools-codemode";
@@ -43,6 +44,7 @@ export const bundled: readonly Plugin[] = [
   toolsBash,
   toolsCodemode,
   toolsSearchFff,
+  mcpServers,
   sessionsFiles,
   agentLoop,
   contextCompaction,
