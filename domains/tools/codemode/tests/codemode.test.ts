@@ -51,6 +51,64 @@ describe("a tool only the model calls", () => {
   });
 });
 
+describe("a tool only scripts call", () => {
+  const nested = definePlugin({
+    id: "nested",
+    layer: Layer.effectDiscard(
+      Effect.flatMap(PluginContext, (owner) =>
+        owner.add(Tools, {
+          name: "mcp__docs__lookup",
+          description: "Looks a word up in the docs",
+          input: Schema.Struct({ word: Schema.String }),
+          nested: true,
+          execute: ({ word }) => new ToolResult({ content: [{ type: "text", text: `${word}: found` }] }),
+        }),
+      ),
+    ),
+  });
+
+  it("is found by searching, and called, when the request offers it", async () => {
+    const result = await run(
+      `const [found] = await searchTools("docs lookup"); text(found.name); text(await tools.mcp__docs__lookup({ word: "effect" }));`,
+      process.cwd(),
+      [nested],
+    );
+    expect(textOf(result)).toContain("mcp__docs__lookup\neffect: found");
+  });
+
+  it("is reached from the model's call, which the request held to the tools declared to it", async () => {
+    const result = await call(`return await tools.mcp__docs__lookup({ word: "effect" });`, {
+      offered: ["codemode", "mcp__docs__lookup"],
+      declared: ["codemode"],
+      extra: [nested],
+    });
+    expect(textOf(result)).toContain("effect: found");
+  });
+
+  it("cannot also be one only the model calls", async () => {
+    const both = definePlugin({
+      id: "both",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.add(Tools, {
+            name: "both",
+            description: "Both",
+            input: Schema.Struct({}),
+            direct: true,
+            nested: true,
+            execute: () => new ToolResult({ content: [] }),
+          }),
+        ),
+      ),
+    });
+    const failed = await run("text('x')", process.cwd(), [both]).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(JSON.stringify(failed)).toContain("cannot be both direct");
+  });
+});
+
 describe("codemode's registration", () => {
   it("registers under its name, with its plugin as the source and a clean schema", async () => {
     const listed = await Effect.runPromise(
@@ -62,7 +120,7 @@ describe("codemode's registration", () => {
       ),
     );
     const own = listed.find((tool) => tool.spec.name === "codemode");
-    expect([own?.spec.name, own?.source]).toEqual(["codemode", "tools.codemode"]);
+    expect([own?.spec.name, own?.source, own?.nests]).toEqual(["codemode", "tools.codemode", true]);
     expect(JSON.stringify(own)).not.toContain("$schema");
   });
 });
@@ -72,6 +130,7 @@ const call = (
   code: string,
   options: {
     readonly offered?: readonly string[];
+    readonly declared?: readonly string[];
     readonly update?: (chunk: string) => void;
     readonly origin?: string;
     readonly extra?: readonly Plugin[];
@@ -100,6 +159,7 @@ const call = (
               input: { code },
               cwd: process.cwd(),
               ...(options.offered === undefined ? {} : { offered: options.offered }),
+              ...(options.declared === undefined ? {} : { declared: options.declared }),
             });
             const result = yield* Effect.provideService(
               registry.execute(invocation, new AbortController().signal, options.update === undefined ? undefined : { update: options.update }),

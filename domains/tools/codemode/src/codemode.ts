@@ -1,14 +1,11 @@
 // Adapted from pi (MIT): packages/coding-agent/src/extensions/codemode/{tool,execute}.ts.
-import { randomBytes } from "node:crypto";
-import { writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { CodemodeSandbox, parseCodemodeSource, renderToolSample, toCodemodeIdentifier } from "@earendil-works/pi-codemode";
 import type { CodemodeCall, CodemodeError, CodemodeTool } from "@earendil-works/pi-codemode";
 import { Effect, Result, Schema } from "effect";
 import type { Context } from "effect";
 import { contentText } from "@lemma/llm";
 import { ToolInvocation, ToolResult } from "@lemma/tools";
+import { boundOutput } from "@lemma/tools/files";
 import type { Tool, ToolRunner } from "@lemma/tools";
 
 export const CodemodeInput = Schema.Struct({
@@ -34,8 +31,6 @@ const MEMORY_LIMIT_BYTES = 256 * 1024 * 1024;
 /** Output budget without a `max_output_tokens` option. */
 const DEFAULT_MAX_OUTPUT_TOKENS = 10_000;
 const CHARS_PER_TOKEN = 4;
-/** Room for the result's header and truncation notes, so output cut here still fits the registry's cap whole. */
-const RESERVED_CHARS = 1_000;
 /** What a nested call resolves to: its text, since Lemma's tools declare no output schema. */
 const TEXT_OUTPUT = { type: "string" };
 /** Results of `searchTools` without a `limit`. */
@@ -43,10 +38,12 @@ const SEARCH_LIMIT = 8;
 
 /**
  * pi's description with the tools all directly callable, as pi's default mode has them: their
- * declarations are the model's own tool list, so they are not repeated here.
+ * declarations are the model's own tool list, so they are not repeated here. Tools only scripts
+ * call (`nested`) are found by searching, so the description stays the same as they come and go.
  */
 const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw JavaScript (no code fence), run as an async function body in a QuickJS sandbox: top-level \`await\` and \`return\` work. No Node, file system, network, or timers.
 - \`await tools.<name>({ ...args })\` calls any of your other tools with the same arguments (characters not valid in identifiers become \`_\`). It resolves to the tool's text output as a string and rejects with an Error on failure. Calls still running when the script ends are cancelled.
+- Some tools are not in your tool list: only scripts call them. Find them with \`await searchTools(query)\` before calling one.
 - Optional first line: \`// @options: {"max_output_tokens": 10000, "timeout_ms": 60000}\`. Without \`timeout_ms\`, a script stops after 300 seconds.
 
 Globals:
@@ -106,31 +103,6 @@ function formatError(error: CodemodeError, calls: readonly CodemodeCall[]): stri
 }
 
 /**
- * Over the budget (in characters), the text items become one that keeps the start and end of the
- * text, with the images after it, and the whole text goes to a temp file the model can read.
- */
-async function truncateOutput(items: readonly Content[], budget: number): Promise<{ readonly content: readonly Content[]; readonly fullOutputPath?: string }> {
-  const combined = items.flatMap((item) => (item.type === "text" ? [item.text] : [])).join("\n");
-  if (combined.length <= budget) return { content: items };
-  const headChars = Math.floor(budget / 2);
-  const tailChars = budget - headChars;
-  const removed = combined.length - budget;
-  const tail = tailChars > 0 ? combined.slice(-tailChars) : "";
-  let text = `Warning: truncated output (original token count: ${Math.ceil(combined.length / CHARS_PER_TOKEN)})\nTotal output lines: ${combined.split("\n").length}\n\n${combined.slice(0, headChars)}…${Math.ceil(removed / CHARS_PER_TOKEN)} tokens truncated…${tail}`;
-  const path = join(tmpdir(), `lemma-codemode-${randomBytes(8).toString("hex")}.txt`);
-  let saved = true;
-  try {
-    await writeFile(path, combined);
-    text += `\n\n[Full output: ${path} (read with offset/limit)]`;
-  } catch (cause) {
-    saved = false;
-    text += `\n\n[Could not save the full output: ${cause instanceof Error ? cause.message : String(cause)}]`;
-  }
-  const content = [{ type: "text" as const, text }, ...items.filter((item) => item.type === "image")];
-  return saved ? { content, fullOutputPath: path } : { content };
-}
-
-/**
  * Nested calls go through the live registry, as the agent's own calls do, so hooks and guards
  * apply to them, and in this call's fiber context, so they keep its interaction origin and trace.
  * A script reaches only the tools the request offered, read per script, and never codemode. Their
@@ -140,6 +112,7 @@ export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>)
   name: "codemode",
   description: DESCRIPTION,
   input: CodemodeInput,
+  nests: true,
   // No `replay`: a script may write files or run commands, so one cut off by a host restart is not run again.
   execute: (input, { sessionId, toolCallId, cwd, signal, update, offered, maxResultChars }) =>
     Effect.gen(function* () {
@@ -186,11 +159,9 @@ export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>)
       const items: Content[] = [...result.output];
       if (result.ok && result.value !== undefined) items.push({ type: "text", text: valueText(result.value) });
       if (!result.ok) items.push({ type: "text", text: `Script error:\n${formatError(result.error, result.calls)}` });
-      const budget = Math.min(
-        (options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) * CHARS_PER_TOKEN,
-        Math.max(0, (maxResultChars ?? Number.POSITIVE_INFINITY) - RESERVED_CHARS),
-      );
-      const { content, fullOutputPath } = yield* Effect.promise(() => truncateOutput(items, budget));
+      const budget = (options.maxOutputTokens ?? DEFAULT_MAX_OUTPUT_TOKENS) * CHARS_PER_TOKEN;
+      // Under the registry's cap with room for the header, so the note naming the full output survives it.
+      const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget, maxResultChars, name: "codemode" }));
       const wallTime = ((performance.now() - started) / 1000).toFixed(1);
       const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
       const details: CodemodeDetails = { calls: result.calls, ...(fullOutputPath === undefined ? {} : { truncated: true, fullOutputPath }) };

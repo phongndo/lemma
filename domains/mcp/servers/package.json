@@ -1,0 +1,41 @@
+{
+  "name": "@lemma/mcp-servers",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Connects Model Context Protocol servers and adds their tools; Settings › MCP",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/mcp": "workspace:*",
+    "@lemma/settings": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "@modelcontextprotocol/client": "2.3.1",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@lemma/tools-registry": "workspace:*",
+    "@modelcontextprotocol/server": "2.3.1",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2",
+    "zod": "4.6.5"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
+  }
+}

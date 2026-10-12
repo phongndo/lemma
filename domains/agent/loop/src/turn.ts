@@ -7,7 +7,7 @@ import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
 import { deriveMessages, modelView, rebuildRequest, requestState } from "@lemma/sessions";
-import { ToolInvocation } from "@lemma/tools";
+import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
 import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
@@ -44,6 +44,12 @@ interface TurnSettings {
   readonly maxRetryDelay: number;
   /** Calls of one response that run at once, at most, when their tools may run together. */
   readonly parallelTools: number;
+}
+
+/** The tools, by name, a step's request offered its calls (`ToolInvocation.offered`), and declared to the model (`declared`). */
+interface Offer {
+  readonly offered: readonly string[];
+  readonly declared: readonly string[];
 }
 
 /** The longest wait a provider may ask for before a retry; a longer one is cut to this. */
@@ -392,10 +398,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         .map((section) => section.text)
         .filter((text) => text.length > 0)
         .join("\n\n");
-      const specs: ToolSpec[] = plan.tools.map((tool) => tool.spec);
+      // A nested tool is offered but not declared, when a tool that runs others is there to call it.
+      const declared = declaredTools(plan.tools);
+      const specs: ToolSpec[] = declared.map((tool) => tool.spec);
       const contributions: Contribution[] = [
         ...plan.sections.map((section): Contribution => ({ source: section.source, kind: "system", label: section.id, chars: section.text.length })),
-        ...plan.tools.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: JSON.stringify(tool.spec).length })),
+        ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: JSON.stringify(tool.spec).length })),
       ];
       const previous = requestState(branch);
       const composition = yield* host.composition;
@@ -415,7 +423,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       // Send what the log says was sent: the request is rebuilt from the branch that now ends at the request event.
       const request = rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId);
       if (request === undefined) return yield* Effect.die(new Error(`request ${logged.id} is not on its own branch`));
-      return { request, model, offered: specs.map((spec) => spec.name) };
+      const offer: Offer = { offered: plan.tools.map((tool) => tool.spec.name), declared: specs.map((spec) => spec.name) };
+      return { request, model, offer };
     });
 
   /**
@@ -522,10 +531,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
 
   /**
    * Runs one tool call and logs its result. A call in `interrupted` (cut off by a restart, and not safe to repeat) is
-   * not run: the model is told so, with the output it had printed. `offered`: the request's tools, the only ones its
-   * calls may run.
+   * not run: the model is told so, with the output it had printed. `offer`: what the request offered, which holds the
+   * call to the tools declared to the model, and the tools it runs to those offered.
    */
-  const runCall = (stepId: string, call: ToolCall, interrupted: ReadonlyMap<string, string | undefined>, offered?: readonly string[]) =>
+  const runCall = (stepId: string, call: ToolCall, interrupted: ReadonlyMap<string, string | undefined>, offer?: Offer) =>
     Effect.gen(function* () {
       const startedAt = yield* Clock.currentTimeMillis;
       const invocation = new ToolInvocation({
@@ -534,7 +543,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         name: call.name,
         input: call.arguments,
         cwd,
-        ...(offered === undefined ? {} : { offered }),
+        ...(offer === undefined ? {} : { offered: offer.offered, declared: offer.declared }),
         ...(state.lastId === undefined ? {} : { leafId: state.lastId }),
       });
       // Run as the core shuts down, the call would fail for that alone (its tool not found, its guards closed).
@@ -596,7 +605,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
    * them (`TOOLS_STARTED`), so a restart can tell a call that began from one
    * that never did. Returns the results in call order.
    */
-  const runTools = (stepId: string, interrupted: ReadonlyMap<string, string | undefined> = new Map(), offered?: readonly string[]) =>
+  const runTools = (stepId: string, interrupted: ReadonlyMap<string, string | undefined> = new Map(), offer?: Offer) =>
     Effect.gen(function* () {
       const together = new Set((yield* tools.list).flatMap((tool) => (tool.parallel === "safe" ? [tool.spec.name] : [])));
       const joins = (call: ToolCall) => together.has(call.name) && !interrupted.has(call.id);
@@ -625,7 +634,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         yield* Effect.forEach(
           group,
           (call) =>
-            Effect.map(runCall(stepId, call, interrupted, offered), (message) => {
+            Effect.map(runCall(stepId, call, interrupted, offer), (message) => {
               results.push(message);
             }),
           { concurrency: "unbounded", discard: true },
@@ -752,7 +761,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     Effect.gen(function* () {
       yield* append({ type: "step-start", turnId, stepId });
       state.step = { id: stepId, model: asking };
-      const { request, model, offered } = yield* services.trace("agent.request", prepareRequest(stepId, asking));
+      const { request, model, offer } = yield* services.trace("agent.request", prepareRequest(stepId, asking));
       state.step = { id: stepId, model };
       const outcome = yield* services.trace(
         "agent.model",
@@ -765,7 +774,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       }
       if ("ended" in outcome) return outcome.ended;
       const results =
-        outcome.message.stopReason === "length" ? yield* answerTruncated(stepId) : yield* services.trace("agent.tools", runTools(stepId, new Map(), offered));
+        outcome.message.stopReason === "length" ? yield* answerTruncated(stepId) : yield* services.trace("agent.tools", runTools(stepId, new Map(), offer));
       const decision = yield* decide(step, { message: outcome.message, results });
       yield* append({ type: "step-end", turnId, stepId, decision });
       state.step = undefined;

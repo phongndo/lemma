@@ -11,7 +11,7 @@ import type { PromptDecision, PromptInput } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
-import type { LlmRequest } from "@lemma/llm";
+import type { LlmRequest, ToolResultMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions from "@lemma/sessions-files";
@@ -320,6 +320,51 @@ describe("agent", () => {
         expect(JSON.stringify(result!.content)).toContain('Tool \\"echo\\" not found');
       }),
     );
+  });
+
+  describe("a tool only a tool calls (nested)", () => {
+    const nested: Tool = {
+      name: "nested",
+      description: "Only a tool that runs others calls it",
+      input: Schema.Struct({}),
+      nested: true,
+      execute: () => new ToolResult({ content: [{ type: "text", text: "reached" }] }),
+    };
+    const runner: Tool = {
+      name: "runner",
+      description: "Runs other tools",
+      input: Schema.Struct({}),
+      nests: true,
+      execute: (_, { offered }) => new ToolResult({ content: [{ type: "text", text: `offered: ${offered?.join(",")}` }] }),
+    };
+    const resultOf = (requests: readonly LlmRequest[], id: string) =>
+      requests.at(-1)!.messages.find((message) => message.role === "toolResult" && message.toolCallId === id) as ToolResultMessage;
+
+    it("is offered to a tool that runs others, never declared to the model, which cannot call it", async () => {
+      await withAgent({ tools: [nested, runner], scripts: [useTools(call("c1", "nested", {}), call("c2", "runner", {})), reply("ok")] }, ({ requests }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+          expect(requests[0]!.tools?.map((tool) => tool.name)).toEqual(["echo", "runner"]);
+          const refused = resultOf(requests, "c1");
+          expect(refused.isError).toBe(true);
+          // The tools named to the model are those it was sent.
+          expect(JSON.stringify(refused.content)).toContain('Tool \\"nested\\" not found. Available tools: echo, runner');
+          expect(JSON.stringify(resultOf(requests, "c2").content)).toContain("offered: echo,nested,runner");
+        }),
+      );
+    });
+
+    it("is declared to the model when no tool that runs others is offered, as nothing else would call it", async () => {
+      await withAgent({ tools: [nested], scripts: [useTools(call("c1", "nested", {})), reply("ok")] }, ({ requests }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
+          expect(requests[0]!.tools?.map((tool) => tool.name)).toEqual(["echo", "nested"]);
+          expect([resultOf(requests, "c1").isError, JSON.stringify(resultOf(requests, "c1").content)]).toEqual([false, '[{"type":"text","text":"reached"}]']);
+        }),
+      );
+    });
   });
 
   it("puts a section added without an order after the agent's base, and takes a section with nothing to say as none", async () => {

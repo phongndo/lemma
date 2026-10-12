@@ -6,6 +6,7 @@ import { CompactionError, CompactionHook } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Llm, LlmRequest } from "@lemma/llm";
 import { modelView } from "@lemma/sessions";
+import { declaredTools } from "@lemma/tools";
 import type { RequestDraft } from "@lemma/agent";
 import type { ModelInfo, StreamEvent } from "@lemma/llm";
 import { definePlugin, Events, Hooks } from "@lemma/core";
@@ -41,6 +42,10 @@ const ORDER = 1_000;
 /** Tokens set aside for the summary prompt's own text, and the characters a token is taken to be at most in what is sent. */
 const PROMPT_TOKENS = 1_000;
 const DENSE_CHARS_PER_TOKEN = 1.5;
+
+/** Characters of a request besides its messages: its system prompt, and the tools the model is sent, not those only a tool calls. */
+export const requestChars = (draft: Pick<RequestDraft, "sections" | "tools">): number =>
+  draft.sections.reduce((sum, section) => sum + section.text.length, 0) + JSON.stringify(declaredTools(draft.tools).map((tool) => tool.spec)).length;
 
 /**
  * Keeps a conversation within its model's context window: before a model
@@ -114,10 +119,7 @@ export default definePlugin({
       Effect.gen(function* () {
         const model = yield* llm.model(draft.model);
         const branch = draft.branch;
-        const tokens = estimateTokens(
-          branch,
-          () => draft.sections.reduce((sum, section) => sum + section.text.length, 0) + JSON.stringify(draft.tools.map((tool) => tool.spec)).length,
-        );
+        const tokens = estimateTokens(branch, () => requestChars(draft));
         // The previous call was refused as too long: the estimate was wrong, so summarize now.
         if (tokens < config.at * model.contextWindow && draft.overflow !== true) return;
         const first = chooseCut(branch, Math.min(config.keepRecent, Math.floor(model.contextWindow * 0.3)));

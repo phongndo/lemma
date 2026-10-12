@@ -18,7 +18,7 @@ import { call, failWith, fakeLlm, host, paths, reply, tempDir, testTools, useToo
 import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
-import compaction, { chooseCut, estimateTokens, transcript } from "../src/index.ts";
+import compaction, { chooseCut, estimateTokens, requestChars, transcript } from "../src/index.ts";
 import { SUMMARY_PROMPT } from "../src/compact.ts";
 
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
@@ -58,6 +58,21 @@ describe("the estimate", () => {
     });
     // The usage before it counted what the summary replaced: estimated instead (base, summary, kept prompt).
     expect(estimateTokens(compacted, () => 400)).toBe(100 + 10 + 10);
+  });
+});
+
+describe("the request's own size", () => {
+  it("counts the tools the model is sent, not those only a tool that runs others calls", () => {
+    const tool = (name: string, description: string, flags: { readonly nested?: true; readonly nests?: true }) => ({
+      spec: { name, description, parameters: {} },
+      source: "test",
+      ...flags,
+    });
+    const runner = tool("codemode", "Runs others", { nests: true });
+    const many = Array.from({ length: 50 }, (_, i) => tool(`mcp__docs__t${i}`, "d".repeat(2_000), { nested: true }));
+    expect(requestChars({ sections: [], tools: [runner, ...many] })).toBeLessThan(200);
+    // With nothing to call them, they are declared, and counted.
+    expect(requestChars({ sections: [], tools: many })).toBeGreaterThan(100_000);
   });
 });
 

@@ -1,0 +1,23 @@
+{
+  "name": "@lemma/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The mcp domain's contract: Model Context Protocol servers, their state, and their channels",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "effect": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  }
+}

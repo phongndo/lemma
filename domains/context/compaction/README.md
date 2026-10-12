@@ -19,7 +19,8 @@ divider. Requires `Llm`.
 - **The estimate.** The last response after the latest compaction reports the
   tokens of the context it was given and of its output; messages since then are
   estimated at four characters a token (an image as 1,200). Without such a
-  response, the system prompt, tools, and messages are all estimated.
+  response, the system prompt, the tools the model is sent (not those only a
+  tool calls), and messages are all estimated.
 - **The cut.** The kept part starts at a prompt or a response, never between a
   tool call and its result, and at least one message is summarized. It may fall
   inside the running turn, so a long turn with many tool calls stays in bounds.

@@ -90,6 +90,7 @@ in each.
 | Offer a command in the palette and `lemma do`     | Add to `Commands`                                              | [commands](../domains/commands/README.md)                                  |
 | Add a model provider                              | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
 | Change model requests or their streams            | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
+| Bring an MCP server and its tools                 | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
 | Search files another way                          | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
 | Serve your web half, or the CLI, data of your own | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
 | Show a tool's calls                               | Add to `ToolViews`                                             | [threads](../domains/threads/README.md)                                    |
@@ -196,15 +197,15 @@ do (as of Pi's docs at `c30840c`, 2026-10-05), in Lemma's shapes:
 | `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma do`                                                                                       |
 | `pi.registerShortcut()`                          | A web half's `Actions` item                                                                                                                |
 | `pi.registerProvider()`                          | `add(Providers, provider)`                                                                                                                 |
+| `pi.registerMcpServer()`                         | `add(McpServers, server)`; a tool's `exposure: "codemode"` is `nested: true`                                                               |
 | `pi.registerToolRenderer()`, `renderCall`        | A web half's `ToolViews` item, or the `ChatToolPart` part                                                                                  |
 | `ctx.ui` widgets and components                  | A web half's slots and parts: views, pages, layers, settings sections                                                                      |
 | Tool-result `details` for branch state           | The same: a result's `details` in the session log                                                                                          |
 | `pi.events` between extensions                   | A contract of your own: a capability, a registry, a hook, or an event                                                                      |
 | `~/.pi/agent/extensions/`                        | `~/.lemma/plugins/`                                                                                                                        |
 
-Lemma has nothing yet for MCP servers (`pi.registerMcpServer()`), prompt-cache
-warming (`cache_warming_decision`), or a shell command typed by the user
-(`user_bash`).
+Lemma has nothing yet for prompt-cache warming (`cache_warming_decision`), or a
+shell command typed by the user (`user_bash`).
 
 Where Pi has one extension object, Lemma has two halves of one plugin,
 because its interface is a web app the host serves. Lemma's own parts (the

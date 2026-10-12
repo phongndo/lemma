@@ -68,6 +68,15 @@ export interface Tool<Input = any> {
    * which a tool keeping its state in its results' `details` needs: a nested call's result is the outer tool's to keep.
    */
   readonly direct?: true;
+  /**
+   * `true`: only a tool that runs others (`nests`) calls it, so the model is not sent its declaration. A plugin with many
+   * tools (an MCP server's) keeps every request's tool list short and unchanged as they come and go, and a script finds
+   * them by searching. A request still offers it (`ToolInvocation.offered`), and one offering no tool that runs others
+   * declares it after all, as nothing else would call it (`declaredTools`). Not with `direct`.
+   */
+  readonly nested?: true;
+  /** `true`: it runs other tools (`codemode`), so a request offering it leaves the `nested` ones for it to call. */
+  readonly nests?: true;
   readonly execute: (input: Input, context: ToolContext) => Awaitable<ToolResult, unknown>;
 }
 
@@ -78,10 +87,16 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
   input: Schema.Unknown,
   cwd: Schema.String,
   /**
-   * The tools, by name, the model request behind this call offered (after `AgentRequestHook`); the registry refuses
-   * any other as `NotFound`. Absent: no request to hold it to, as for a call resumed after a restart.
+   * The tools, by name, the model request behind this call offered (after `AgentRequestHook`): those it declared to
+   * the model, and the `nested` ones a tool that runs others may call. The registry refuses any other as `NotFound`.
+   * Absent: no request to hold it to, as for a call resumed after a restart.
    */
   offered: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * For the model's own call: the tools, by name, the request declared to it (`declaredTools`), the only ones it may
+   * call; the rest of `offered` only a tool that runs others calls. Absent: a call a tool makes, or one resumed.
+   */
+  declared: Schema.optional(Schema.Array(Schema.String)),
   /**
    * The session event the call's turn had reached when it was made (`ToolContext.leafId`). Absent: a call made outside
    * a turn.
@@ -131,6 +146,8 @@ export const Tools = Registry.make<Tool>("lemma/tools", {
     if (typeof tool.name !== "string" || tool.name === "") return "A tool needs a name";
     if (typeof tool.description !== "string") return `Tool "${tool.name}" needs a description`;
     if (!Schema.isSchema(tool.input)) return `Tool "${tool.name}" needs an input Schema`;
+    if (tool.direct === true && tool.nested === true)
+      return `Tool "${tool.name}" cannot be both direct (only the model calls it) and nested (only tools call it)`;
     return typeof tool.execute === "function" ? undefined : `Tool "${tool.name}" needs an execute function`;
   },
 });
@@ -170,7 +187,18 @@ export interface ToolContribution {
   readonly parallel?: "safe";
   /** The tool's `direct`. */
   readonly direct?: true;
+  /** The tool's `nested`: the agent offers it to a request without declaring it to the model (`declaredTools`). */
+  readonly nested?: true;
+  /** The tool's `nests`. */
+  readonly nests?: true;
 }
+
+/**
+ * The tools of `tools`, a request's, that the model is sent the declarations of: all but the `nested` ones, unless no
+ * tool that runs others (`nests`) is among them to call those.
+ */
+export const declaredTools = (tools: readonly ToolContribution[]): readonly ToolContribution[] =>
+  tools.some((tool) => tool.nests === true && tool.nested !== true) ? tools.filter((tool) => tool.nested !== true) : tools;
 
 export interface ExecuteOptions {
   /**
