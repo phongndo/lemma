@@ -167,6 +167,23 @@ describe("a change the journal cannot record", () => {
     );
     expect(seen).toEqual({ refused: "Io", queue: ["b"], withdrawn: true });
   });
+
+  it("is not made: a promotion fails Io, and the prompt stays a follow-up", async () => {
+    const seen = await run((failing, id) =>
+      Effect.gen(function* () {
+        const agent = yield* Agent;
+        yield* Effect.forkChild(agent.prompt(id, text("first"), { requestId: "a" }));
+        yield* waitFor(agent.busy(id), (busy) => busy);
+        yield* changingQueue(id, (requestIds) => requestIds.includes("b"), agent.prompt(id, text("second"), { requestId: "b" }));
+        failing.on = true;
+        const refused = yield* Effect.flip(agent.promote(id, "b"));
+        failing.on = false;
+        const modes = (yield* agent.queue(id)).map((prompt) => prompt.mode);
+        return { refused: refused.reason, modes, promoted: yield* agent.promote(id, "b"), after: (yield* agent.queue(id)).map((prompt) => prompt.mode) };
+      }),
+    );
+    expect(seen).toEqual({ refused: "Io", modes: ["follow-up"], promoted: true, after: ["steer"] });
+  });
 });
 
 describe("a withdrawal whose caller gives up while it is written", () => {
