@@ -628,13 +628,14 @@ const tempNameCeilings: Readonly<Record<string, number>> = {
   "packages/host/tests/web.test.ts": 2,
   "domains/transport/server/tests/transport.test.ts": 2,
 };
-const fixedWaits = [
+const realWaits = [
   // A promise its own timer resolves: `new Promise((resolve) => setTimeout(resolve, 100))`.
   /new Promise(?:<[^>]*>)?\(\s*\(?\s*(\w+)\s*\)?\s*=>\s*setTimeout\(\s*\1\s*,/g,
   /\bwaitForTimeout\(/g,
-  /(?<![\w$.])sleep\(/g,
-  /\bEffect\.sleep\(/g,
 ];
+const fixedWaits = [...realWaits, /(?<![\w$.])sleep\(/g, /\bEffect\.sleep\(/g];
+/** Where a sleep is simulated time, which the simulation's driver moves on at once: only a real timer is a wait. */
+const simulated = (file: string) => file.startsWith("packages/sim/");
 // `join(tmpdir(), "name")` and the like, but not a prefix handed to mkdtemp.
 const fixedTempName = /(?<!mkdtemp(?:Sync)?\(\s*(?:\w+\.)?)\b(?:join|resolve)\(\s*(?:\w+\.)?tmpdir\(\)\s*,\s*(?:"[^"]*"|'[^']*'|`[^`$]*`)/g;
 const testProblems: string[] = [];
@@ -656,7 +657,7 @@ for (const dir of ["apps", "domains", "examples", "packages", "scripts"]) {
     // This file names the patterns it looks for.
     if (file === "scripts/check-boundaries.ts" || (!/(^|\/)(tests|scripts)\//.test(file) && !/\.test\.tsx?$/.test(file))) continue;
     const text = readFileSync(path, "utf8");
-    const waited = fixedWaits.reduce((sum, pattern) => sum + [...text.matchAll(pattern)].length, 0);
+    const waited = (simulated(file) ? realWaits : fixedWaits).reduce((sum, pattern) => sum + [...text.matchAll(pattern)].length, 0);
     const named = [...text.matchAll(fixedTempName)].length;
     if (waited > 0) waits.set(file, waited);
     if (named > 0) tempNames.set(file, named);
