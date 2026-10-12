@@ -175,11 +175,11 @@ prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
   was started with, whether it logs `agent.started` events, and whether it is
   being cancelled), the queue, and its revision. Written, and synced with its
-  directory, before the log is: when a turn starts, a prompt is queued, placed,
-  or withdrawn, and when a turn ends. A change it records is made only once it
-  is durable: a prompt that cannot be queued, or start its turn, because the
-  journal cannot be written (a full or failing disk) fails `Io`, and so does a
-  withdrawal, each leaving the queue as it was. A change the log records
+  directory, before the log is, whenever the turn or the queue changes. A change
+  the log will not record (a turn starting, a prompt queued, withdrawn, or
+  promoted) is made only once the journal has it: when the journal cannot be
+  written (a full or failing disk), the call that asked for it fails `Io` and
+  nothing changes (`AgentError` in the contract). A change the log records
   already (a steer placed, a turn ended, a cancel asked for) is made whatever
   the write does, and checked against the log on the next start.
 - `<session>.live.json`: the running turn's model output and tool output so
