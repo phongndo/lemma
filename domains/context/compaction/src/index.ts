@@ -11,7 +11,7 @@ import type { RequestDraft } from "@lemma/agent";
 import type { ModelInfo, StreamEvent } from "@lemma/llm";
 import { definePlugin, Events, Hooks } from "@lemma/core";
 import type { HandlerStep } from "@lemma/core";
-import { chooseCut, estimateTokens, SUMMARY_PROMPT, transcript, validCut } from "./compact.ts";
+import { chooseCut, estimateTokens, SUMMARY_PROMPT, summaryAsk, transcript, validCut } from "./compact.ts";
 
 export { chooseCut, estimateTokens, transcript } from "./compact.ts";
 
@@ -37,8 +37,11 @@ type Config = typeof Config.Type;
 
 class SummaryFailed extends Data.TaggedError("SummaryFailed")<{ readonly message: string }> {}
 
-/** Tokens set aside for the summary prompt's own text, and the characters a token is taken to be at most in what is sent. */
-const PROMPT_TOKENS = 1_000;
+/**
+ * Tokens set aside for the framing of what is sent beyond its text (the system prompt and the ask are counted as
+ * characters), and the characters a token is taken to be at most in what is sent.
+ */
+const PROMPT_TOKENS = 200;
 const DENSE_CHARS_PER_TOKEN = 1.5;
 
 /** Characters of a request besides its messages: its system prompt, and the tools the model is sent, not those only a tool calls. */
@@ -65,7 +68,7 @@ export default definePlugin({
     /** Per session, the turn in which writing a summary failed: not tried again until the next turn. */
     const failedIn = new Map<string, string>();
 
-    const summarize = (writer: ModelInfo, text: string, output: number, sessionId: string) =>
+    const summarize = (writer: ModelInfo, ask: string, output: number, sessionId: string) =>
       Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>
           llm
@@ -73,7 +76,7 @@ export default definePlugin({
               new LlmRequest({
                 model: writer.ref,
                 system: SUMMARY_PROMPT,
-                messages: [{ role: "user", content: [{ type: "text", text: `${text}\n\nSummarize the conversation above.` }], timestamp: now }],
+                messages: [{ role: "user", content: [{ type: "text", text: ask }], timestamp: now }],
                 maxTokens: output,
                 sessionId,
               }),
@@ -111,9 +114,11 @@ export default definePlugin({
         const writer = yield* llm.model(config.model ?? asked.model);
         // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
         const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));
-        const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN);
+        // What is sent besides the transcript, the system prompt and the ask around it, comes out of its room.
+        const around = SUMMARY_PROMPT.length + summaryAsk("", asked.previous !== undefined, undefined).length;
+        const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN) - around;
         const text = transcript(older, asked.previous, budget);
-        const written = yield* summarize(writer, text, output, asked.sessionId);
+        const written = yield* summarize(writer, summaryAsk(text, asked.previous !== undefined, undefined), output, asked.sessionId);
         return { kind: "summary", summary: written.summary, firstKeptId: kept.id, usage: written.usage } as const;
       }).pipe(Effect.mapError((error) => new CompactionError({ message: error.message, cause: error })));
 

@@ -29,11 +29,15 @@ divider. Requires `Llm`.
   plugin's model writing the summary: a handler writes its own (no model call;
   the event's `source` is that plugin), moves the cut, reworks the summary, or
   skips the compaction.
-- **The summary.** A later compaction summarizes the previous summary with the
-  messages after it. Tool output and long text are cut in what is sent, and the
-  oldest messages go first so the request, with its answer of up to 8,192
-  tokens, fits the writing model's window even for text as dense as 1.5
-  characters a token. A summary stopped at that limit is not used.
+- **The summary.** It follows a fixed outline (goal, constraints, progress,
+  decisions, next steps, critical context), which asks for exact paths and
+  errors, and for the ids and results of any other agents or background work.
+  A later compaction folds the previous summary into one with the messages
+  after it, keeping what is still true. Tool output and long text are cut in
+  what is sent, and the oldest messages go first so the request (its system
+  prompt and an answer of up to 8,192 tokens included) fits the writing model's
+  window even for text as dense as 1.5 characters a token. A summary stopped at
+  that limit is not used.
 - **Its cost.** The event records the turn it happened in and what writing the
   summary cost (`turnId`, `usage`); the turn's usage (`TurnEnded`, the
   trajectory, `lemma run`, the web app's turn footer) includes it.

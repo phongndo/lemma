@@ -19,7 +19,7 @@ import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import compaction, { chooseCut, estimateTokens, requestChars, transcript } from "../src/index.ts";
-import { SUMMARY_PROMPT } from "../src/compact.ts";
+import { SUMMARY_PROMPT, summaryAsk } from "../src/compact.ts";
 
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
 const answer = (content: AssistantMessage["content"], input = 0, output = 0): Message => ({
@@ -96,9 +96,17 @@ describe("the cut", () => {
 
   it("drops the oldest messages from what it sends to summarize, keeping the previous summary", () => {
     const text = transcript([user("a".repeat(100)), user("b".repeat(100)), result("c", "r".repeat(5000))], "before", 2_200);
-    expect(text.startsWith("[summary of the conversation before this]\nbefore")).toBe(true);
-    expect(text).toContain("[2 earlier messages omitted]");
-    expect(text).toContain("more characters)");
+    expect(text.startsWith("<previous-summary>\nbefore\n</previous-summary>\n\n<conversation>\n[2 earlier messages omitted]")).toBe(true);
+    expect(text.endsWith("more characters)\n</conversation>")).toBe(true);
+    expect(text.length).toBeLessThanOrEqual(2_200);
+  });
+
+  it("asks to fold in the previous summary and the user's focus, and always ends with the same line", () => {
+    expect(summaryAsk("T", false, undefined)).toBe("T\n\nSummarize the conversation above.");
+    const ask = summaryAsk("T", true, "the API design");
+    expect(ask).toContain("write one summary of both");
+    expect(ask).toContain("The user asked the summary to focus on: the API design");
+    expect(ask.endsWith("Summarize the conversation above.")).toBe(true);
   });
 });
 
