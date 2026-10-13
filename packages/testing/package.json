@@ -2,10 +2,11 @@
   "name": "@lemma/testing",
   "version": "0.1.0",
   "private": true,
-  "description": "Test support shared by Lemma's packages: a simulated disk for crash tests, and contract conformance suites",
+  "description": "Test support shared by Lemma's packages: a simulated disk for crash tests, contract conformance suites, and failure evidence",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./artifacts": "./src/artifacts.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",

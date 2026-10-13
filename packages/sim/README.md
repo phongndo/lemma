@@ -233,4 +233,7 @@ tenth of runs, so any 100 seeds reach them all but about once in a thousand. The
 job runs 2,000 seeds at 200 ticks from a window no earlier night ran (`pnpm
 test:random`). `tests/determinism.test.ts` checks a seed leaves the same disk
 in another process, starting no timer of the event loop's. Simulated runs name
-the date in UTC (`TZ`), so a run is the same on every machine.
+the date in UTC (`TZ`), so a run is the same on every machine. A seed that
+fails saves its evidence (its replay command, the actions it drew, the prompts
+and model calls, and its disk) as [`@lemma/testing`](../testing/README.md#failure-evidence)
+says.

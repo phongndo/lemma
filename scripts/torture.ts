@@ -23,6 +23,7 @@ import { parseArgs } from "node:util";
 import { run as cli } from "../apps/cli/src/cli.ts";
 import { Prng } from "../packages/sim/src/random.ts";
 import { startLemma } from "./e2e.ts";
+import { failureArtifact } from "../packages/testing/src/artifacts.ts";
 
 const { values } = parseArgs({ options: { seed: { type: "string" }, seconds: { type: "string" } } });
 const seed = Number(values.seed ?? process.env.LEMMA_TORTURE_SEED ?? Math.floor(Math.random() * 2 ** 31));
@@ -40,6 +41,12 @@ const prng = new Prng(seed);
 const lemma = await startLemma("lemma-torture-", { paceMs: PACE_MS, plugins: { "agent.loop": { config: { defaultModel: "mock/scripted" } } } });
 const violations: string[] = [];
 const counts = new Map<string, number>();
+/** The run's latest actions and CLI calls, for a failure's evidence: the last 500, so a long run's stay small. */
+const recent: object[] = [];
+const remember = (entry: object) => {
+  recent.push({ atMs: Date.now(), ...entry });
+  if (recent.length > 500) recent.shift();
+};
 const count = (what: string) => counts.set(what, (counts.get(what) ?? 0) + 1);
 
 /** Runs the CLI in this process against the host's home; a call the host could not answer (it was killed) fails. */
@@ -56,7 +63,9 @@ const lemmaCli = async (...argv: string[]) => {
     err.push(String(error));
     return 1;
   });
-  return { code, out: out.trim(), err: err.join("\n") };
+  const result = { code, out: out.trim(), err: err.join("\n") };
+  remember({ argv, code, out: result.out.slice(-2_000), err: result.err });
+  return result;
 };
 const json = async <A>(...argv: string[]): Promise<A> => {
   const result = await lemmaCli(...argv, "--json");
@@ -153,6 +162,7 @@ try {
   const deadline = Date.now() + seconds * 1_000;
   while (Date.now() < deadline && !stopping) {
     const action = prng.weighted(weights)!;
+    remember({ action });
     count(action);
     await actions[action]();
   }
@@ -264,7 +274,25 @@ try {
   violations.push(`the run failed: ${error instanceof Error ? (error.stack ?? error.message) : String(error)}`);
 } finally {
   await Promise.race([Promise.allSettled(inFlight), delay(5_000)]);
-  if (violations.length > 0) console.error(output());
+  if (violations.length > 0) {
+    console.error(output());
+    failureArtifact(
+      "torture",
+      {
+        seed,
+        seconds,
+        // The same actions in the same order; the processes' timing is not replayed.
+        replay: `nix develop -c pnpm torture --seed ${seed} --seconds ${seconds}`,
+        violations,
+        counts: Object.fromEntries(counts),
+        sent: [...sent],
+        recent,
+      },
+      { "processes.log": output() },
+      // The host's durable state and the mock's record of side effects; never its token or config.
+      Object.fromEntries(["sessions", "agent", "tally.log"].map((name) => [name, join(lemma.home, name)])),
+    );
+  }
   killed.add(lemma.host);
   // A host stopped as the run failed (a pause cut short) must go on to stop.
   lemma.host.kill("SIGCONT");

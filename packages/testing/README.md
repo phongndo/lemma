@@ -40,3 +40,13 @@ on a simulated and a real disk, and a plugin written to replace it can run the
 same suite. `compose` is given `Deletions`, which the provider's storage waits
 on before it deletes a session's data, so the suite can hold a deletion up, or
 fail it, as a slow or failing disk would.
+
+## Failure evidence
+
+`failureArtifact(kind, details, files, copies)`, from `@lemma/testing/artifacts`,
+saves what a failed run leaves before its temporary files go: in a new
+directory under `LEMMA_TEST_ARTIFACTS` (the OS temp directory by default),
+`failure.json` with the commit and `details` (the seed, and the command that
+replays it), each of `files`, and a copy of each path in `copies`.
+`diskFiles(disk)` gives a `SimDisk`'s files for it. A token in a URL is
+redacted; a caller copies durable state, never credentials.

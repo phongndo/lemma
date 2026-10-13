@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFailed } from "vitest";
 import { ACTIONS, digestOf, World } from "../src/index.ts";
+import { saveWorldFailure } from "../src/artifacts.ts";
 
 /*
  * The harness under a workload and faults drawn from each seed (`World`): a safety phase with the faults on, a liveness
@@ -50,11 +51,16 @@ describe("the harness simulation", () => {
     { timeout: Math.max(60_000, runs * 5_000) },
     async () => {
       const reached = new Map<string, number>();
+      let current = first;
+      // Names the seed even when it never finishes, which the error below cannot.
+      onTestFailed(() => console.error(`harness seed ${current}: pnpm --filter @lemma/sim sim --seed ${current} --ticks ${ticks} --dump`));
       for (let seed = first; seed < first + runs; seed++) {
+        current = seed;
         const world = new World({ seed, ticks });
         try {
           await world.run();
         } catch (error) {
+          saveWorldFailure(world, ticks, error);
           throw new Error(
             `${error instanceof Error ? error.message : String(error)}\n${world.describe()}\nreplay: pnpm --filter @lemma/sim sim --seed ${seed} --ticks ${ticks} --dump`,
             { cause: error },

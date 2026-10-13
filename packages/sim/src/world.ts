@@ -166,6 +166,7 @@ export class World {
   readonly swarm: Swarm;
   readonly checker: Checker;
   readonly calls: ModelCall[] = [];
+  readonly trace: { readonly tick: number; readonly atMs: number; readonly action: Action }[] = [];
   readonly tools = newToolRecord();
   readonly disk: SimDisk;
   private readonly prng: Prng;
@@ -181,7 +182,7 @@ export class World {
   private requests = 0;
   /** Steps a turn may take: few in some runs, so turns end `max-steps`. */
   private readonly maxSteps: number;
-  private readonly shuffled: boolean;
+  readonly shuffled: boolean;
 
   constructor(options: WorldOptions) {
     // Shuffled scheduling in odd seeds, so half the runs reorder fibers' work.
@@ -206,7 +207,9 @@ export class World {
   async run(): Promise<void> {
     await this.start();
     for (let tick = 0; tick < this.ticks; tick++) {
-      await this.act(this.prng.weighted(this.swarm.actions) ?? "wait");
+      const action = this.prng.weighted(this.swarm.actions) ?? "wait";
+      this.trace.push({ tick, atMs: Number(this.sim.clock.elapsed / 1_000_000n), action });
+      await this.act(action);
       await this.advance(this.prng.between(0, 3_000));
       await this.noticeCrash();
       this.raise(`tick ${tick}`);
