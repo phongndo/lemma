@@ -1459,6 +1459,9 @@ importers:
       '@lemma/client':
         specifier: workspace:*
         version: link:../../../packages/client
+      '@lemma/testing':
+        specifier: workspace:*
+        version: link:../../../packages/testing
       '@lemma/transport-server':
         specifier: workspace:*
         version: link:../../transport/server
@@ -2424,6 +2427,9 @@ importers:
         specifier: 4.0.4
         version: 4.0.4
     devDependencies:
+      '@lemma/testing':
+        specifier: workspace:*
+        version: link:../../../packages/testing
       '@lemma/tools-bash':
         specifier: workspace:*
         version: link:../bash
@@ -3215,9 +3221,15 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../domains/llm/contract
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../domains/sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
       effect:
         specifier: 4.0.4
         version: 4.0.4

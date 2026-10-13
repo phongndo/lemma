@@ -15,7 +15,9 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
+    "@lemma/tools": "workspace:*",
     "effect": "4.0.4"
   },
   "devDependencies": {

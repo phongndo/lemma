@@ -31,8 +31,8 @@ too, with plain Node.js and pnpm. The `passed` job succeeds only when every
 other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its
 bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
 every job on main, unchanged, so a failure there is a flake to fix, and runs the
-tests with fresh seeds and many more random cases, and the performance checks;
-a failure prints the command that repeats it.
+tests with fresh seeds and many more random cases, the mutation checks, and the
+performance checks; a failure prints the command that repeats it.
 `.github/workflows/bench.yml` compares the core's and the harness's benchmarks with a base
 revision (by hand, or on a pull request labelled `performance`); locally,
 `node scripts/bench-compare.ts` (see [the core's README](../packages/core/README.md#develop)).
@@ -116,6 +116,12 @@ before its temporary files go: the seed and the command that replays it, what
 the run did last, and the disk or home it left, never credentials. It goes
 under `LEMMA_TEST_ARTIFACTS` (the OS temp directory by default), which CI
 uploads when a job fails ([`@lemma/testing`](../packages/testing/README.md#failure-evidence)).
+
+`nix develop -c pnpm test:mutations` checks that the tests still catch what
+they are for: in a copy of the working tree, it puts back faults the harness
+has had, and faults a replacement provider could have, one at a time, and
+fails when a fault's focused test no longer fails with an assertion
+(`scripts/test-mutations.ts` lists them).
 
 The web app's conventions are in [its AGENTS.md](../apps/web/AGENTS.md), and
 the core's checks and benchmarks in [its README](../packages/core/README.md#develop).

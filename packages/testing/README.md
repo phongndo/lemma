@@ -44,6 +44,20 @@ same suite. `compose` is given `Deletions`, which the provider's storage waits
 on before it deletes a session's data, so the suite can hold a deletion up, or
 fail it, as a slow or failing disk would.
 
+`llmConformance(name, compose)` does the same for the `Llm` contract. `compose`
+is asked for a provider in one of three cases, each answering a request as the
+suite expects (its doc comment says how): a reply with text and a tool call, a
+failure with a partial response, and a stream that stays open to be
+interrupted. The suite checks the catalog, the stream's shape (`streamProblems`:
+one start, one terminal last, deltas that make up the final text, no tool call
+id twice), `LlmRequestHook`, and that closing the stream aborts the request.
+`toolsConformance(name, compose)` checks a `ToolRunner`, with tools of its own:
+attribution, input validation, errors as results, unknown tools, every chunk
+of a tool's output reaching the caller before its result, and cancellation
+while the caller's listener never returns. The bundled `llm.pi-ai` and
+`tools.registry` run these, as does a replacement for each written from the
+contracts alone, in `tests/providers.test.ts`.
+
 ## Failure evidence
 
 `failureArtifact(kind, details, files, copies)`, from `@lemma/testing/artifacts`,

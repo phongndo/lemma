@@ -19,6 +19,7 @@
     "effect": "4.0.4"
   },
   "devDependencies": {
+    "@lemma/testing": "workspace:*",
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-read": "workspace:*",

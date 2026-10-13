@@ -73,3 +73,7 @@ const greet = definePlugin({
   and its reason is the result text (`details.deniedBy` names the guarding
   plugin).
 - `ToolExecuted` is published for every result, with its duration.
+
+## Testing
+
+The registry runs the `ToolRunner` contract's suite, [`toolsConformance`](../../../packages/testing/README.md#conformance-suites), beside its own tests.

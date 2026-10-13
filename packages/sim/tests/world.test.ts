@@ -1,5 +1,8 @@
 import { describe, expect, it, onTestFailed } from "vitest";
-import { ACTIONS, digestOf, World } from "../src/index.ts";
+import { emptyUsage } from "@lemma/llm";
+import type { Message } from "@lemma/llm";
+import { ACTIONS, Checker, digestOf, malformed, transcriptProblems, World } from "../src/index.ts";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 import { saveWorldFailure } from "../src/artifacts.ts";
 
 /*
@@ -48,6 +51,77 @@ const REACHED = [
 ];
 
 describe("the harness simulation", () => {
+  it("rejects duplicate tool calls and results, without rejecting reused ids in another response", () => {
+    const assistant: Message = {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "a", name: "echo", arguments: {} }],
+      api: "sim",
+      provider: "sim",
+      model: "model",
+      usage: emptyUsage,
+      stopReason: "toolUse",
+      timestamp: 0,
+    };
+    const result: Message = { role: "toolResult", toolCallId: "a", toolName: "echo", content: [], isError: false, timestamp: 0 };
+    expect(malformed([{ ...assistant, content: [...assistant.content, ...assistant.content] }, result])).toEqual(["message 0: duplicate tool call a"]);
+    expect(malformed([assistant, result, result])).toEqual(["message 2: a result for a, which no pending call made"]);
+    expect(malformed([assistant, result, assistant, result])).toEqual([]);
+    expect(malformed([assistant])).toEqual(["calls a have no result at the end"]);
+    expect(
+      malformed([
+        { ...assistant, stopReason: "error" },
+        { ...result, isError: true, content: [{ type: "text", text: "interrupted" }] },
+      ]),
+    ).toEqual([]);
+  });
+
+  it("rejects an acknowledged event that disappears or changes during recovery", () => {
+    const event: SessionEvent = {
+      seq: 1,
+      id: "e",
+      parent: null,
+      at: 1,
+      data: { type: "message", message: { role: "user", content: [{ type: "text", text: "original" }], timestamp: 1 } },
+    };
+    for (const recovered of [[], [{ ...event, at: 2 }]]) {
+      const checker = new Checker();
+      checker.served("s", [event]);
+      checker.survived("s", recovered);
+      expect(checker.violations).toHaveLength(1);
+      expect(checker.violations[0]).toMatch(/is gone|changed since/);
+    }
+  });
+
+  it("rejects a log out of order, an event before its parent, and a request whose parts it cannot attribute", () => {
+    const event = (seq: number, parent: string | null, data: EventData): SessionEvent => ({ id: `e${seq}`, seq, parent, at: seq, data });
+    const user = event(1, null, { type: "message", message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 } });
+    const request = {
+      type: "request" as const,
+      turnId: "t",
+      stepId: "s",
+      model: "sim/model",
+      composition: "test",
+      system: "base\n\nskills",
+      tools: [{ name: "echo", description: "Echo", parameters: {} }],
+      contributions: [
+        { source: "agent.loop", kind: "system" as const, label: "base", chars: 4 },
+        { source: "skills", kind: "system" as const, label: "skills", chars: 6 },
+        { source: "tools.echo", kind: "tool" as const, label: "echo", chars: 50 },
+      ],
+    };
+    expect(transcriptProblems([user, event(2, "e1", request)])).toEqual([]);
+    // A later request that leaves its unchanged system prompt and tools out is attributed against the ones in effect.
+    expect(transcriptProblems([user, event(2, "e1", request), event(3, "e2", { ...request, system: undefined, tools: undefined })])).toEqual([]);
+    expect(transcriptProblems([user, event(3, "e1", request)])).toEqual(["event e3: seq 3 at position 2"]);
+    expect(transcriptProblems([event(2, "e1", request), { ...user, seq: 2 }].map((logged, index) => ({ ...logged, seq: index + 1 })))).toContain(
+      "event e2: its parent e1 is not before it",
+    );
+    const attributed = (contributions: typeof request.contributions) => transcriptProblems([user, event(2, "e1", { ...request, contributions })]);
+    expect(attributed(request.contributions.slice(1))).toEqual(["request e2: its system sections do not make up its system prompt"]);
+    expect(attributed(request.contributions.slice(0, 2))).toEqual(["request e2: tool echo is not attributed"]);
+    expect(attributed([{ ...request.contributions[0]!, source: "" }, ...request.contributions.slice(1)])).toEqual(["request e2: base names no source"]);
+  });
+
   it(
     `keeps every invariant for seeds ${first} to ${first + runs - 1}, and reaches every kind of action, fault, and outcome`,
     { timeout: Math.max(60_000, runs * 5_000) },

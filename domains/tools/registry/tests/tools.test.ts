@@ -8,6 +8,9 @@ import { Guards, ToolError, ToolExecuted, ToolExecuteHook, ToolInvocation, ToolO
 import type { Guard, Tool } from "@lemma/tools";
 import tools, { toolParameters } from "../src/index.ts";
 import { outputBatcher } from "../src/registry.ts";
+import { toolsConformance } from "@lemma/testing";
+
+toolsConformance("the registry", () => [tools]);
 
 const ok = (text: string) => new ToolResult({ content: [{ type: "text", text }] });
 const textOf = (result: ToolResult) => result.content.map((part) => (part.type === "text" ? part.text : "<image>")).join("");

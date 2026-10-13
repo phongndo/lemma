@@ -178,6 +178,7 @@ jobs:
       # every test runs in the jobs above.
       - run: nix develop -c pnpm test:random
       - run: nix develop -c pnpm torture
+      - run: nix develop -c pnpm test:mutations
       - run: nix develop -c pnpm perf:check
       - if: failure()
         run: >-
