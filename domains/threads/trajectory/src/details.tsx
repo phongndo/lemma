@@ -2,11 +2,12 @@ import { For, Match, Show, Switch, createMemo } from "solid-js";
 import type { JSX } from "solid-js";
 import { formatDuration, formatTokens } from "@lemma/client/format";
 import { contentText } from "@lemma/llm";
+import type { AssistantMessage } from "@lemma/llm";
 import { RECORD_KIND_LABEL, promptDiff, rebuildRequest, recordRequest } from "@lemma/sessions";
 import type { AssistantRecord, LedgerRecord, SystemRecord, Timing, TrajectoryRequest } from "@lemma/sessions";
 import { inputTokens } from "./scale.ts";
 import { clockTime } from "@lemma/web/format";
-import { ToolViews, TrajectoryTabs } from "@lemma/threads";
+import { ToolViews, TrajectoryTabs, formatThroughput, throughput } from "@lemma/threads";
 import { CopyIcon, Markdown, XIcon } from "@lemma/look";
 import { Contained, usePlugin } from "@lemma/web";
 import { createPipeline } from "./pipeline.tsx";
@@ -213,9 +214,10 @@ export function createDetails(view: View) {
 
   const { StepPipeline, ToolPipeline } = createPipeline({ Section, Facts });
 
-  function TimingFacts(props: { timing: Timing; output?: number | undefined }) {
+  function TimingFacts(props: { timing: Timing; message?: AssistantMessage | undefined }) {
     const t = () => props.timing;
     const decoding = () => (t().firstTokenAt === undefined ? undefined : t().endedAt - t().firstTokenAt!);
+    const rate = () => (props.message === undefined ? undefined : throughput([{ message: props.message, timing: t() }]));
     return (
       <Facts
         rows={[
@@ -227,10 +229,7 @@ export function createDetails(view: View) {
           ["Ended", clockTime(t().endedAt)],
           ["Duration", formatDuration(t().endedAt - t().startedAt)],
           ["Decoding", decoding() === undefined ? undefined : formatDuration(decoding()!)],
-          [
-            "Throughput",
-            decoding() !== undefined && decoding()! > 0 && props.output ? `${(props.output / (decoding()! / 1000)).toFixed(1)} tokens/s` : undefined,
-          ],
+          ["Throughput", rate() === undefined ? undefined : formatThroughput(rate()!)],
         ]}
       />
     );
@@ -291,7 +290,7 @@ export function createDetails(view: View) {
               ),
             },
           ]),
-      ...(timing === undefined ? [] : [{ id: "timing", label: "Timing", render: () => <TimingFacts timing={timing} output={usage?.output} /> }]),
+      ...(timing === undefined ? [] : [{ id: "timing", label: "Timing", render: () => <TimingFacts timing={timing} message={assistant?.message} /> }]),
     ];
   }
 
@@ -376,9 +375,7 @@ export function createDetails(view: View) {
             ),
           },
           { id: "raw", label: "Raw", render: () => <Pre text={json(message)} /> },
-          ...(record.timing === undefined
-            ? []
-            : [{ id: "timing", label: "Timing", render: () => <TimingFacts timing={record.timing!} output={message.usage.output} /> }]),
+          ...(record.timing === undefined ? [] : [{ id: "timing", label: "Timing", render: () => <TimingFacts timing={record.timing!} message={message} /> }]),
         ];
       }
       case "tool": {
