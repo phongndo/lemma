@@ -37,6 +37,10 @@ export class SimDisk {
   private generation = 0;
   /** Operations left before a crash `crashAfter` scheduled. */
   private countdown: number | undefined;
+  /** A failure `faultAfter` scheduled: the operations left before it, and whether it goes on failing from then. */
+  private scheduledFault: { remaining: number; readonly persistent: boolean } | undefined;
+  /** Operations that could fail, by kind, so far. */
+  readonly operations = new Map<keyof Faults, number>();
   private clock = 1_700_000_000_000;
   private readonly random: () => number;
   /** Told of every crash as it strikes, before anything else runs: a process on the disk dies with it. */
@@ -78,6 +82,22 @@ export class SimDisk {
    */
   crashAfter(operations: number): void {
     this.countdown = operations;
+  }
+
+  /**
+   * Fails the operation after the next `operations` that could fail (of any kind `faults` names), as that kind fails;
+   * with `persistent`, every one from then on, until `clearFaults`. A crash leaves it scheduled: a test chooses when
+   * the disk heals. `faults` still applies beside it.
+   */
+  faultAfter(operations: number, options: { readonly persistent?: boolean } = {}): void {
+    if (!Number.isSafeInteger(operations) || operations < 0) throw new Error("faultAfter requires a non-negative operation count");
+    this.scheduledFault = { remaining: operations, persistent: options.persistent ?? false };
+  }
+
+  /** Clears what `faultAfter` scheduled, and every probability in `faults`. */
+  clearFaults(): void {
+    this.scheduledFault = undefined;
+    for (const kind of Object.keys(this.faults) as (keyof Faults)[]) this.faults[kind] = 0;
   }
 
   /** Whether a crash `crashAfter` scheduled is still to come. */
@@ -187,11 +207,26 @@ export class SimDisk {
   }
 
   private fault(operation: keyof Faults, code: string): void {
-    const probability = this.faults[operation] ?? 0;
-    if (probability > 0 && this.random() < probability) {
-      this.injected.set(operation, (this.injected.get(operation) ?? 0) + 1);
-      throw errno(code, `injected ${operation} fault`);
+    if (this.shouldFail(operation)) throw errno(code, `injected ${operation} fault`);
+  }
+
+  private shouldFail(operation: keyof Faults): boolean {
+    this.operations.set(operation, (this.operations.get(operation) ?? 0) + 1);
+    let scheduled = false;
+    const fault = this.scheduledFault;
+    if (fault !== undefined) {
+      if (fault.remaining > 0) fault.remaining--;
+      else {
+        scheduled = true;
+        if (!fault.persistent) this.scheduledFault = undefined;
+      }
     }
+    const probability = this.faults[operation] ?? 0;
+    if (scheduled || (probability > 0 && this.random() < probability)) {
+      this.injected.set(operation, (this.injected.get(operation) ?? 0) + 1);
+      return true;
+    }
+    return false;
   }
 
   private mkInode(kind: Inode["kind"]): number {
@@ -253,8 +288,7 @@ export class SimDisk {
     const op = <A>(operation: () => A): Promise<A> => Promise.resolve().then(() => (live(), operation()));
     const append = (bytes: Uint8Array) => {
       // A full disk can take part of a write before failing.
-      if ((this.faults.write ?? 0) > 0 && this.random() < this.faults.write!) {
-        this.injected.set("write", (this.injected.get("write") ?? 0) + 1);
+      if (this.shouldFail("write")) {
         this.change(inode, concat(inode.data, bytes.slice(0, Math.floor(this.random() * bytes.length))));
         throw errno("ENOSPC", "injected write fault");
       }
@@ -269,6 +303,7 @@ export class SimDisk {
         }),
       write: (buffer, offset, length, position) =>
         op(() => {
+          this.fault("write", "ENOSPC");
           const bytes = buffer.subarray(offset, offset + length);
           const end = position + bytes.length;
           const data = new Uint8Array(Math.max(inode.data.length, end));

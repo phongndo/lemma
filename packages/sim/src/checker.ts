@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { AssistantDelta, QueueChanged } from "@lemma/agent";
 import type { PromptOutcome, QueuedPrompt } from "@lemma/agent";
-import { branchOf, deriveMessages, rebuildRequest, SessionAppended } from "@lemma/sessions";
+import { branchOf, deriveMessages, rebuildRequest, requestState, SessionAppended, splitSystem } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import type { Message } from "@lemma/llm";
 import { ToolExecuted, ToolOutput } from "@lemma/tools";
@@ -17,7 +17,7 @@ export const canonical = (value: unknown): string =>
       : inner,
   );
 
-/** Problems with a request a provider would reject or repair: calls without results, results without calls. */
+/** Problems with a request a provider would reject or repair: calls without results, results without calls, a call twice. */
 export function malformed(messages: readonly Message[]): string[] {
   const problems: string[] = [];
   let open = new Set<string>();
@@ -28,9 +28,41 @@ export function malformed(messages: readonly Message[]): string[] {
     }
     if (open.size > 0) problems.push(`message ${index} (${message.role}): calls ${[...open].join(", ")} have no result`);
     open = new Set();
-    if (message.role === "assistant") for (const block of message.content) if (block.type === "toolCall") open.add(block.id);
+    if (message.role === "assistant") {
+      for (const block of message.content) {
+        if (block.type !== "toolCall") continue;
+        if (open.has(block.id)) problems.push(`message ${index}: duplicate tool call ${block.id}`);
+        open.add(block.id);
+      }
+    }
   }
   if (open.size > 0) problems.push(`calls ${[...open].join(", ")} have no result at the end`);
+  return problems;
+}
+
+/**
+ * Problems with a session's log as served: its `seq`s must run 1, 2, … in file order, each event's parent come before
+ * it, and each request say who contributed its parts (`Contribution`): its system sections' sizes must split its
+ * system prompt (`splitSystem`), and each of its tools must be attributed.
+ */
+export function transcriptProblems(events: readonly SessionEvent[]): string[] {
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  for (const [index, event] of events.entries()) {
+    if (event.seq !== index + 1) problems.push(`event ${event.id}: seq ${event.seq} at position ${index + 1}`);
+    if (seen.has(event.id)) problems.push(`event ${event.id} appears twice`);
+    if (event.parent !== null && !seen.has(event.parent)) problems.push(`event ${event.id}: its parent ${event.parent} is not before it`);
+    seen.add(event.id);
+    const data = event.data;
+    if (data.type === "compaction" && data.source.trim() === "") problems.push(`compaction ${event.id} names no source`);
+    if (data.type !== "request") continue;
+    for (const part of data.contributions) if (part.source.trim() === "") problems.push(`request ${event.id}: ${part.label} names no source`);
+    const { system, tools } = requestState(branchOf(events, event.id));
+    if (splitSystem(system, data.contributions) === undefined) problems.push(`request ${event.id}: its system sections do not make up its system prompt`);
+    for (const tool of tools ?? [])
+      if (!data.contributions.some((part) => part.kind === "tool" && part.label === tool.name))
+        problems.push(`request ${event.id}: tool ${tool.name} is not attributed`);
+  }
   return problems;
 }
 
@@ -239,6 +271,7 @@ export class Checker {
     tools: ToolRecord,
   ): void {
     for (const [sessionId, events] of served) {
+      for (const problem of transcriptProblems(events)) this.violation(`session ${sessionId}: ${problem}`);
       const bytes = file.get(sessionId);
       if (bytes === undefined) this.violation(`session ${sessionId} is served but has no file`);
       else if (canonical(bytes) !== canonical(events))

@@ -23,6 +23,56 @@ const withFile = async (disk: SimDisk, file: string, synced: string, unsynced: s
 };
 
 describe("SimDisk", () => {
+  test("fails an atomic write and a delete at each of their operations, once and from then on, and recovers", async () => {
+    const reached = new Set<string>();
+    for (const persistent of [false, true]) {
+      // Each boundary in turn, until the write completes before the fault is due: then every one of its operations failed once.
+      for (let at = 0; ; at++) {
+        expect(at, "an atomic write takes a bounded number of operations").toBeLessThan(100);
+        const disk = new SimDisk(seededRandom(1));
+        let fs = disk.mount();
+        await writeFileAtomic("/state/journal", "old", { fs, sync: true });
+        disk.faultAfter(at, { persistent });
+        const before = new Map(disk.injected);
+        let acknowledged = false;
+        await writeFileAtomic("/state/journal", "new", { fs, sync: true }).then(
+          () => (acknowledged = true),
+          () => {},
+        );
+        const injected = [...disk.injected].filter(([kind, count]) => count > (before.get(kind) ?? 0));
+        for (const [kind] of injected) reached.add(kind);
+        disk.clearFaults();
+        disk.crash();
+        expect(["old", "new"]).toContain(disk.read("/state/journal"));
+        if (acknowledged) expect(disk.read("/state/journal")).toBe("new");
+        fs = disk.mount();
+        await writeFileAtomic("/state/journal", "recovered", { fs, sync: true });
+        disk.crash();
+        expect(disk.read("/state/journal")).toBe("recovered");
+        if (injected.length === 0) break;
+      }
+      for (let at = 0; ; at++) {
+        expect(at, "a delete takes a bounded number of operations").toBeLessThan(100);
+        const disk = new SimDisk(seededRandom(2));
+        const fs = disk.mount();
+        await writeFileAtomic("/state/journal", "old", { fs, sync: true });
+        disk.faultAfter(at, { persistent });
+        let acknowledged = false;
+        await removeFile("/state/journal", { fs, sync: true }).then(
+          () => (acknowledged = true),
+          () => {},
+        );
+        const fired = disk.injected.size > 0;
+        disk.clearFaults();
+        disk.crash();
+        if (acknowledged) expect(disk.read("/state/journal")).toBeUndefined();
+        else expect([undefined, "old"]).toContain(disk.read("/state/journal"));
+        if (!fired) break;
+      }
+    }
+    expect([...reached].sort()).toEqual(["open", "rename", "sync", "write"]);
+  });
+
   test("synced bytes survive a crash; unsynced appended bytes survive as some prefix, maybe torn, maybe followed by zeros", async () => {
     const outcomes = new Set<string>();
     for (let seed = 0; seed < 200; seed++) {

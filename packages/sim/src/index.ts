@@ -1,4 +1,4 @@
-export { canonical, Checker, malformed } from "./checker.ts";
+export { canonical, Checker, malformed, transcriptProblems } from "./checker.ts";
 export type { Outcome, Sent } from "./checker.ts";
 export { SIM_EPOCH_MS, SimClock } from "./clock.ts";
 export { NO_HOOK_FAULTS, simHooks } from "./hooks.ts";

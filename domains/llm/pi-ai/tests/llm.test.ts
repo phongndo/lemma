@@ -16,10 +16,28 @@ import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
 import { envContext, fakeCredentials, fakeHost, fakeInteraction, noticeRecorder, offline, runWith } from "./helpers.ts";
+import { llmConformance } from "@lemma/testing";
 
 const decodeEvent = Schema.decodeUnknownSync(StreamEvent, { onExcessProperty: "error" });
 
 const user = (text: string) => ({ role: "user" as const, content: [{ type: "text" as const, text }], timestamp: 1 });
+
+llmConformance("pi-ai", (scenario) => {
+  const faux = fauxProvider({ provider: "conformance", ...(scenario === "abort" ? { tokensPerSecond: 20 } : {}) });
+  let signal: AbortSignal | undefined;
+  faux.setResponses([
+    (_, options) => {
+      signal = options?.signal;
+      return scenario === "failure"
+        ? fauxAssistantMessage([fauxText("partial")], { stopReason: "error", errorMessage: "Invalid request" })
+        : scenario === "abort"
+          ? fauxAssistantMessage("a long answer ".repeat(50))
+          : fauxAssistantMessage([fauxText("Hello there"), fauxToolCall("echo", { text: "x" }, { id: "call-1" })], { stopReason: "toolUse" });
+    },
+  ]);
+  const { plugins } = setup({ providers: () => [faux.provider] });
+  return { plugins: [...plugins, fakeHost().plugin], model: `conformance/${faux.getModel().id}`, aborted: () => signal?.aborted ?? false };
+});
 
 function setup(options: { providers?: () => readonly Provider[]; env?: Record<string, string> } = {}) {
   const faux = fauxProvider({

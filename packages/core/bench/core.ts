@@ -1,7 +1,20 @@
 import { cpus } from "node:os";
 import { Context, Effect, Layer } from "effect";
 import { finish, record } from "./budgets.ts";
-import { definePlugin, Event, Events, Hook, Hooks, makeCore, makeLoader, makeSpanCollector, PluginContext, Registries, Registry } from "../src/index.ts";
+import {
+  assert,
+  definePlugin,
+  Event,
+  Events,
+  Hook,
+  Hooks,
+  makeCore,
+  makeLoader,
+  makeSpanCollector,
+  PluginContext,
+  Registries,
+  Registry,
+} from "../src/index.ts";
 import type { Plugin } from "../src/index.ts";
 import { definePlugin as definePlainPlugin } from "../src/plain/index.ts";
 
@@ -52,7 +65,7 @@ async function measure<E>(name: string, count: number, effect: Effect.Effect<voi
     values.push(((performance.now() - start) * 1_000) / count);
   }
   values.sort((a, b) => a - b);
-  record(name, values[Math.floor(samples / 2)]!);
+  record(name, values[Math.floor(samples / 2)]!, "us/op", values);
   console.log(`${name.padEnd(33)} ${values[Math.floor(samples / 2)]!.toFixed(3).padStart(9)} µs/op  [${values[0]!.toFixed(3)}, ${values.at(-1)!.toFixed(3)}]`);
 }
 
@@ -109,6 +122,8 @@ for (const count of [0, 1, 8, 32]) {
             ),
           );
         }
+        const result = yield* core.run(hooks.invoke(point, 1, terminal));
+        assert(result === 2, "benchmark hook changed its answer");
       }),
     ),
   );
@@ -133,6 +148,8 @@ for (const kind of ["in place", "async"] as const) {
         const rounds = kind === "async" ? Math.max(1, Math.floor(iterations / 10)) : iterations;
         const batch = core.run(repeat(hooks.invoke(point, 1, terminal), rounds));
         yield* Effect.promise(() => measure(`Hook / ${count} plain handlers, ${kind} / spans off`, rounds, batch.pipe(Effect.withTracerEnabled(false))));
+        const result = yield* core.run(hooks.invoke(point, 1, terminal));
+        assert(result === 2, "benchmark plain hook changed its answer");
       }),
     ),
   );
@@ -273,4 +290,4 @@ for (const count of [8, 32, 128]) {
   );
 }
 if (sink === 0) throw new Error("Unobserved capability result");
-finish("microbench");
+finish("microbench", { samples, iterations });

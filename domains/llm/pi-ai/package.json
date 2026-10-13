@@ -21,6 +21,7 @@
   },
   "devDependencies": {
     "@lemma/client": "workspace:*",
+    "@lemma/testing": "workspace:*",
     "@lemma/transport-server": "workspace:*",
     "@types/node": "24.19.2",
     "typescript": "7.0.2",

@@ -118,8 +118,8 @@ await Effect.runPromise(
         if (n >= 5) latencies.push(performance.now() - started);
       }
       latencies.sort((a, b) => a - b);
-      record("httpP99Ms", latencies[98]!);
-      record("httpRequestsPerSecond", 100_000 / latencies.reduce((sum, value) => sum + value, 0));
+      record("httpP99Ms", latencies[98]!, "ms", latencies);
+      record("httpRequestsPerSecond", 100_000 / latencies.reduce((sum, value) => sum + value, 0), "count/s");
     }),
   ),
 );

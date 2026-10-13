@@ -1,11 +1,14 @@
 // The harness benchmark: the real agent loop, sessions store, tool registry, and compaction, in simulated time, on a
-// file system in memory, with a model that answers without waiting. Simulated waits cost no wall time, so the wall time
-// a step takes is the harness's own. It records, for a session at each length in `LENGTHS`:
+// file system in memory, with a model that answers without waiting. Simulated waits cost no wall time, so a step's wall
+// time is the harness's, with the driver, the scripted model and tools, the file system, and `meter` beside it. It
+// records, for a session at each length in `LENGTHS`:
 //
 // - counts per step, the same on every machine (hard budgets in packages/core/bench/budgets.ts): events the agent
-//   reads back from the store, bytes and syncs written, hooks run, and events published;
-// - timings per step, advisory: the time a step takes, and how much longer it takes at 10,000 entries than at 1,000;
-//   the time from the model's delta to an observer's hearing it; and the heap.
+//   reads back from the store, bytes and syncs written, hooks run, and events published; and the most of each a turn
+//   took, so one costly turn cannot hide in the average;
+// - timings per step, advisory: the time a step takes (a tool step's and an answer step's apart), and how much longer
+//   it takes at 10,000 entries than at 1,000; the time from the model's text delta to an observer's hearing it; and
+//   the heap.
 //
 // The estimate it is held to is in README.md#the-harness-benchmark. Run: `pnpm harness:bench`.
 // `LEMMA_HARNESS_BENCH_ENTRIES` sets the longest session (default 10,000); `pnpm test` runs it at 300.
@@ -13,13 +16,14 @@ process.env.TZ = "UTC";
 
 import { Effect } from "effect";
 import type { Context } from "effect";
-import { definePlugin, PluginContext } from "@lemma/core";
+import { assert, definePlugin, PluginContext } from "@lemma/core";
 import { Agent, AgentContinueHook, AgentInputHook, AgentRequestHook, AssistantDelta, QueueChanged, TurnEnded, TurnStarted } from "@lemma/agent";
 import compaction from "@lemma/context-compaction";
 import type { Usage } from "@lemma/llm";
 import { SessionAppended, SessionChanged, Sessions } from "@lemma/sessions";
 import { ToolExecuted, ToolExecuteHook, ToolOutput } from "@lemma/tools";
-import { finish, record } from "../../core/bench/budgets.ts";
+import { finish, record, recordAverage } from "../../core/bench/budgets.ts";
+import type { Unit } from "../../core/bench/report.ts";
 import { SimHost } from "../src/host.ts";
 import { MemFs } from "../src/memfs.ts";
 import { simModel } from "../src/model.ts";
@@ -84,12 +88,15 @@ const counts = {
   compactions: 0,
 };
 /**
- * When each model event of a step's call was emitted, oldest first, and how long an observer of `AssistantDelta` took
- * to hear it: the agent publishes every event of a step's stream (the model sends no `provider` event), in order, so
- * the next one heard is the oldest one emitted. A summary's events are not published, and are not noted.
+ * When each text delta of a measured turn was emitted, oldest first, and how long an observer of `AssistantDelta` took
+ * to hear it: one call runs at a time, and the agent publishes its deltas in order, so the next one heard is the oldest
+ * one emitted. The turns that grow the session, and a summary's deltas (which are not published), are not noted.
  */
 const emitted: number[] = [];
 const heard: number[] = [];
+let measuring = false;
+let step: { start: number; tool: boolean } | undefined;
+const stepSamples = { tool: [] as number[], answer: [] as number[] };
 
 const counting = (sessions: Context.Service.Shape<typeof Sessions>): Context.Service.Shape<typeof Sessions> => ({
   ...sessions,
@@ -100,6 +107,14 @@ const counting = (sessions: Context.Service.Shape<typeof Sessions>): Context.Ser
       Effect.sync(() => {
         if (data.type === "step-start") counts.steps++;
         if (data.type === "compaction") counts.compactions++;
+        if (!measuring) return;
+        if (data.type === "step-start") step = { start: performance.now(), tool: false };
+        if (data.type === "message" && data.message.role === "assistant" && data.message.content.some((part) => part.type === "toolCall") && step !== undefined)
+          step.tool = true;
+        if (data.type === "step-end" && step !== undefined) {
+          stepSamples[step.tool ? "tool" : "answer"].push(performance.now() - step.start);
+          step = undefined;
+        }
       }),
     ),
 });
@@ -125,11 +140,13 @@ const meter = definePlugin({
     }
     yield* owner.observe(
       AssistantDelta,
-      () =>
+      ({ event }) =>
         Effect.sync(() => {
           counts.published++;
+          if (!measuring || event.type !== "text-delta") return;
           const at = emitted.shift();
-          if (at !== undefined) heard.push(performance.now() - at);
+          assert(at !== undefined, "a measured text delta was heard without its emission");
+          heard.push(performance.now() - at);
         }),
       { buffer: 1 << 16, overflow: "suspend" },
     );
@@ -148,7 +165,9 @@ const model = simModel(sim.random.split("model"), {
   },
   keep: false,
   contextWindow: CONTEXT_WINDOW,
-  emit: () => void (summarizing ? undefined : emitted.push(performance.now())),
+  emit: (event) => {
+    if (measuring && !summarizing && event.type === "text-delta") emitted.push(performance.now());
+  },
 });
 const host = await SimHost.start(
   sim,
@@ -183,33 +202,66 @@ const perStep: Record<number, { readonly ms: number }> = {};
 for (const target of LENGTHS) {
   // Grow the session to `target` entries, unmeasured: each turn logs about thirteen.
   while ((await entries()) < target) await prompt(turns++);
+  await sim.settle();
   const before = { ...counts, ...fs.counts };
   emitted.length = 0;
+  heard.length = 0;
+  stepSamples.tool.length = 0;
+  stepSamples.answer.length = 0;
   globalThis.gc?.();
   const heap = process.memoryUsage().heapUsed;
+  measuring = true;
   const started = performance.now();
-  for (let n = 0; n < MEASURED_TURNS; n++) await prompt(turns++);
+  const turnMs: number[] = [];
+  const maxima = { syncs: 0, bytes: 0, hooks: 0, events: 0 };
+  for (let n = 0; n < MEASURED_TURNS; n++) {
+    const previous = { ...counts, ...fs.counts };
+    const turnStart = performance.now();
+    await prompt(turns++);
+    await sim.settle();
+    turnMs.push((performance.now() - turnStart) / 2);
+    maxima.syncs = Math.max(maxima.syncs, fs.counts.syncs - previous.syncs);
+    maxima.bytes = Math.max(maxima.bytes, fs.counts.bytesWritten - previous.bytesWritten);
+    maxima.hooks = Math.max(maxima.hooks, counts.hooks - previous.hooks);
+    maxima.events = Math.max(maxima.events, counts.published - previous.published);
+  }
+  await sim.settle();
   const ms = performance.now() - started;
+  measuring = false;
   const after = { ...counts, ...fs.counts };
   const steps = after.steps - before.steps;
-  const per = (key: keyof typeof after) => Math.round((after[key] - before[key]) / steps);
+  assert(steps === MEASURED_TURNS * 2, `the benchmark measured ${steps} steps instead of ${MEASURED_TURNS * 2}`);
+  assert(emitted.length === 0 && heard.length === steps * 5, `the benchmark heard ${heard.length} text deltas and left ${emitted.length} undelivered`);
+  const per = (name: string, key: keyof typeof after, unit: Unit) =>
+    recordAverage(`Harness / ${target} entries / ${name} per step`, after[key] - before[key], steps, unit);
   perStep[target] = { ms: ms / steps };
-  record(`Harness / ${target} entries / ms per step`, ms / steps);
-  record(`Harness / ${target} entries / events read per step`, per("eventsRead"));
-  record(`Harness / ${target} entries / bytes written per step`, per("bytesWritten"));
-  record(`Harness / ${target} entries / syncs per step`, per("syncs"));
-  record(`Harness / ${target} entries / hooks run per step`, per("hooks"));
-  record(`Harness / ${target} entries / events published per step`, per("published"));
-  record(`Harness / ${target} entries / heap MB`, heap / 1e6);
+  record(`Harness / ${target} entries / ms per step`, ms / steps, "ms/step", turnMs);
+  for (const [kind, samples] of Object.entries(stepSamples)) {
+    assert(samples.length === MEASURED_TURNS, `the benchmark timed ${samples.length} ${kind} steps instead of ${MEASURED_TURNS}`);
+    record(`Harness / ${target} entries / ${kind} ms per step`, samples.reduce((sum, value) => sum + value, 0) / samples.length, "ms/step", samples);
+  }
+  per("events read", "eventsRead", "count/step");
+  per("bytes written", "bytesWritten", "bytes/step");
+  per("syncs", "syncs", "count/step");
+  per("hooks run", "hooks", "count/step");
+  per("events published", "published", "count/step");
+  for (const [what, value] of Object.entries(maxima))
+    record(`Harness / ${target} entries / max ${what} per turn`, value, what === "bytes" ? "bytes/turn" : "count/turn");
+  record(`Harness / ${target} entries / heap MB`, heap / 1e6, "MB");
+  heard.sort((a, b) => a - b);
+  record(`Harness / ${target} entries / delta to observer ms p50`, heard[Math.floor(heard.length * 0.5)]!, "ms", heard);
+  record(`Harness / ${target} entries / delta to observer ms p99`, heard[Math.min(heard.length - 1, Math.floor(heard.length * 0.99))]!, "ms", heard);
 }
-record("Harness / compactions", counts.compactions);
+record("Harness / compactions", counts.compactions, "count");
 if (perStep[1_000] !== undefined && perStep[10_000] !== undefined) {
-  record("Harness / step time 10k vs 1k entries", perStep[10_000].ms / perStep[1_000].ms);
+  record("Harness / step time 10k vs 1k entries", perStep[10_000].ms / perStep[1_000].ms, "ratio");
 }
-if (heard.length > 0) {
-  const sorted = [...heard].sort((a, b) => a - b);
-  record("Harness / delta to observer ms p50", sorted[Math.floor(sorted.length * 0.5)]!);
-  record("Harness / delta to observer ms p99", sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * 0.99))]!);
+// The scripted model and tools answered as they always do: the benchmark measured the work it means to.
+const messages = (await run((store) => store.events(sessionId))).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
+for (const message of messages) {
+  const written = message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("");
+  if (message.role === "assistant") assert(written === "Here is what it said.", "benchmark changed the scripted model's answer");
+  if (message.role === "toolResult") assert(!message.isError && written === "echo: hello", "benchmark changed the tool's result");
 }
 await host.stop();
-finish("harness");
+finish("harness", { lengths: LENGTHS, measuredTurns: MEASURED_TURNS });

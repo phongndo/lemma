@@ -9,6 +9,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
+    "rewriteRelativeImportExtensions": true,
     "rootDir": ".",
     "outDir": "dist"
   },

@@ -166,6 +166,7 @@ export class World {
   readonly swarm: Swarm;
   readonly checker: Checker;
   readonly calls: ModelCall[] = [];
+  readonly trace: { readonly tick: number; readonly atMs: number; readonly action: Action }[] = [];
   readonly tools = newToolRecord();
   readonly disk: SimDisk;
   private readonly prng: Prng;
@@ -176,12 +177,14 @@ export class World {
   private generation = 0;
   private readonly alive = new Set<number>();
   private crashesSeen = 0;
+  /** Write faults injected before the running host started: one more means a write failed while it ran. */
+  private writesAtStart = 0;
   private readonly sessions: string[] = [];
   private readonly prompted: Prompted[] = [];
   private requests = 0;
   /** Steps a turn may take: few in some runs, so turns end `max-steps`. */
   private readonly maxSteps: number;
-  private readonly shuffled: boolean;
+  readonly shuffled: boolean;
 
   constructor(options: WorldOptions) {
     // Shuffled scheduling in odd seeds, so half the runs reorder fibers' work.
@@ -206,9 +209,15 @@ export class World {
   async run(): Promise<void> {
     await this.start();
     for (let tick = 0; tick < this.ticks; tick++) {
-      await this.act(this.prng.weighted(this.swarm.actions) ?? "wait");
+      const action = this.prng.weighted(this.swarm.actions) ?? "wait";
+      this.trace.push({ tick, atMs: Number(this.sim.clock.elapsed / 1_000_000n), action });
+      const failedWrite = (this.disk.injected.get("write") ?? 0) > this.writesAtStart;
+      const crashes = this.disk.crashes;
+      await this.act(action);
       await this.advance(this.prng.between(0, 3_000));
       await this.noticeCrash();
+      // Recovery then starts from whatever the failed write left.
+      if (failedWrite && this.disk.crashes > crashes) this.checker.count("crash after a failed write");
       this.raise(`tick ${tick}`);
     }
     await this.settle();
@@ -344,6 +353,7 @@ export class World {
       );
       this.running = { host, registries, gone: await this.sim.value(Deferred.make<void>()), clients: new Map() };
       this.crashesSeen = this.disk.crashes;
+      this.writesAtStart = this.disk.injected.get("write") ?? 0;
       return;
     }
   }

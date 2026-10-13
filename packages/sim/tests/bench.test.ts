@@ -16,15 +16,23 @@ describe("the harness benchmark", () => {
       encoding: "utf8",
       env: { ...process.env, LEMMA_HARNESS_BENCH_ENTRIES: "300", LEMMA_PERF_ENFORCE: "0", LEMMA_BENCH_OUTPUT_DIR: "" },
     });
-    const { measurements } = JSON.parse(output.trim().split("\n").at(-1)!) as { measurements: Record<string, { value: number }> };
-    const at100 = (what: string) => measurements[`Harness / 100 entries / ${what}`]?.value;
-    expect({
-      eventsRead: at100("events read per step"),
-      syncs: at100("syncs per step"),
-      bytesWritten: at100("bytes written per step"),
-      hooks: at100("hooks run per step"),
-      published: at100("events published per step"),
-    }).toEqual({ eventsRead: 0, syncs: 8, bytesWritten: 2385, hooks: 3, published: 23 });
-    expect(Number.isFinite(at100("ms per step"))).toBe(true);
+    const { measurements } = JSON.parse(output.trim().split("\n").at(-1)!) as {
+      measurements: Record<string, { value: number; values?: number[]; total?: number; samples?: number; enforced?: boolean }>;
+    };
+    const at100 = (what: string) => measurements[`Harness / 100 entries / ${what}`];
+    // Exact totals over the twenty measured steps, not their averages, which could round a change away.
+    for (const [what, total] of [
+      ["events read", 0],
+      ["syncs", 160],
+      ["bytes written", 47_697],
+      ["hooks run", 60],
+      ["events published", 450],
+    ] as const) {
+      expect(at100(`${what} per step`)).toMatchObject({ total, samples: 20, enforced: true });
+    }
+    expect(Number.isFinite(at100("ms per step")?.value)).toBe(true);
+    // Ten measured turns, two steps each, five text deltas per step: growing the session adds no latency samples.
+    expect(at100("delta to observer ms p50")?.values).toHaveLength(100);
+    expect(at100("delta to observer ms p99")!.value).toBeGreaterThanOrEqual(at100("delta to observer ms p50")!.value);
   });
 });

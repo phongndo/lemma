@@ -51,21 +51,23 @@ const boom: Tool<{ readonly text: string }> = {
   },
 };
 
-/** Problems with a request a provider would reject or repair: calls without results, results without calls. */
+/** Problems with a request a provider would reject or repair: calls without results, results without calls, a call twice. */
 export function malformed(messages: readonly Message[]): string[] {
   const problems: string[] = [];
   let open = new Set<string>();
-  const answered = new Set<string>();
   for (const [index, message] of messages.entries()) {
     if (message.role === "toolResult") {
       if (!open.delete(message.toolCallId)) problems.push(`message ${index}: result for ${message.toolCallId}, which no pending call made`);
-      answered.add(message.toolCallId);
       continue;
     }
     if (open.size > 0) problems.push(`message ${index} (${message.role}): calls ${[...open].join(", ")} have no result`);
     open = new Set();
     if (message.role === "assistant") {
-      for (const block of message.content) if (block.type === "toolCall") open.add(block.id);
+      for (const block of message.content) {
+        if (block.type !== "toolCall") continue;
+        if (open.has(block.id)) problems.push(`message ${index}: duplicate tool call ${block.id}`);
+        open.add(block.id);
+      }
     }
   }
   if (open.size > 0) problems.push(`calls ${[...open].join(", ")} have no result at the end`);
@@ -148,7 +150,7 @@ describe("conversations", () => {
     );
   }, 300_000);
 
-  test("malformed finds calls without results and results without calls", () => {
+  test("malformed finds missing results, unexpected results, and duplicate calls", () => {
     const user: Message = { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 0 };
     const callBlock = call("a", "echo", {});
     const assistantWith: Message = {
@@ -165,5 +167,8 @@ describe("conversations", () => {
     expect(malformed([user, assistantWith, result, user])).toEqual([]);
     expect(malformed([user, assistantWith, user])).toEqual(["message 2 (user): calls a have no result"]);
     expect(malformed([user, result])).toEqual(["message 1: result for a, which no pending call made"]);
+    expect(malformed([{ ...assistantWith, content: [callBlock, callBlock] }, result])).toEqual(["message 0: duplicate tool call a"]);
+    expect(malformed([assistantWith, result, result])).toEqual(["message 2: result for a, which no pending call made"]);
+    expect(malformed([assistantWith, result, assistantWith, result])).toEqual([]);
   });
 });

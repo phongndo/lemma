@@ -16,6 +16,7 @@ import { Cause } from "effect";
 import type { SessionEvent } from "@lemma/sessions";
 import { digestRun } from "./run.ts";
 import { World } from "./world.ts";
+import { saveWorldFailure } from "./artifacts.ts";
 
 const { values } = parseArgs({
   options: {
@@ -84,6 +85,7 @@ for (let index = 0; index < count && !failed; index++) {
     for (const [what, times] of world.coverage()) reached.set(what, (reached.get(what) ?? 0) + times);
   } catch (error) {
     failed = true;
+    saveWorldFailure(world, ticks, error);
     console.log(world.describe().replace(/^/gm, "  "));
     for (const line of explain(error)) console.log(`  ${line}`);
     console.log(`  replay: pnpm --filter @lemma/sim sim --seed ${seed} --ticks ${ticks} --dump`);

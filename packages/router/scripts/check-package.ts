@@ -49,8 +49,8 @@ async function checkBrowser() {
       assert.equal(await page.getAttribute("body", "data-status"), "passed", await page.locator("output").innerText());
       assert.deepEqual(errors, []);
       console.log(`Browser consumer: browser history, links, blockers, and back and forward passed (${browser.version()}).`);
-      record("browserBundleBytes", script.byteLength);
-      record("browserBundleGzipBytes", gzipSync(script).byteLength);
+      record("browserBundleBytes", script.byteLength, "bytes");
+      record("browserBundleGzipBytes", gzipSync(script).byteLength, "bytes");
       finish("browser");
     } finally {
       await browser.close();
