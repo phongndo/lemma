@@ -1,6 +1,6 @@
 import { ProviderSpec } from "@lemma/llm";
 import type { CustomProviderSpec, ProviderModelSpec } from "@lemma/llm";
-import { createProvider } from "@earendil-works/pi-ai";
+import { createProvider, isModelType } from "@earendil-works/pi-ai";
 import type { Api, ApiKeyAuth, Model, Provider, ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { azureOpenAIResponsesApi } from "@earendil-works/pi-ai/api/azure-openai-responses.lazy";
@@ -61,6 +61,24 @@ export function customEntry(spec: CustomProviderSpec, taken: ReadonlySet<string>
   };
 }
 export type CustomProvider = typeof CustomProvider.Type;
+
+/** Azure's public id predates pi-ai's rename: credentials, filters, and logged model refs keep it. */
+export function withBuiltinIdentity(provider: Provider): Provider {
+  if (provider.id !== "azure") return provider;
+  const id = "azure-openai-responses";
+  return {
+    ...provider,
+    id,
+    name: "Azure OpenAI",
+    getModels: () => provider.getModels().map((model) => ({ ...model, provider: id })),
+    // pi-ai prefers this view: its chat entries must include the live catalog's additions and retirements.
+    getAllModels: () =>
+      [...provider.getModels(), ...(provider.getAllModels?.().filter((model) => !isModelType(model, "chat")) ?? [])].map((model) => ({
+        ...model,
+        provider: id,
+      })),
+  };
+}
 
 /**
  * Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy; the

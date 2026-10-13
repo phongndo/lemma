@@ -14,12 +14,12 @@
     "@lemma/actions": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.1"
+    "effect": "4.0.4"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   },
   "lemma": {
     "web": "./src/index.ts"

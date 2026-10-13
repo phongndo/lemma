@@ -50,12 +50,12 @@
     "@lemma/workspace-commands": "workspace:*",
     "@lemma/workspace-local": "workspace:*",
     "@lemma/workspace-search-fff": "workspace:*",
-    "effect": "4.0.1",
+    "effect": "4.0.4",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   }
 }

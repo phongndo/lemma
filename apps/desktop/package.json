@@ -12,11 +12,11 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
-    "effect": "4.0.1"
+    "effect": "4.0.4"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
-    "electron": "44.5.1",
+    "@types/node": "24.19.2",
+    "electron": "44.7.0",
     "typescript": "7.0.2"
   }
 }

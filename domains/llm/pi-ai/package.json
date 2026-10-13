@@ -12,19 +12,19 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "1.0.2",
+    "@earendil-works/pi-ai": "1.2.0",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/credentials": "workspace:*",
     "@lemma/llm": "workspace:*",
-    "effect": "4.0.1"
+    "effect": "4.0.4"
   },
   "devDependencies": {
     "@lemma/client": "workspace:*",
     "@lemma/transport-server": "workspace:*",
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   },
   "lemma": {
     "host": "./src/index.ts"

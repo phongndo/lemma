@@ -30,12 +30,12 @@ README has the rest.
   panel ([the web app](../apps/web/README.md)).
 - **`lemma inspectors`** lists what host plugins let you look into (the
   tools registered, the turns running, the commands), and `lemma inspectors
-<id>` prints one.
+  <id>` prints one.
 
 ## What did it do?
 
 - **The trajectory** (a thread's Trajectory view, or `lemma inspect
-<session>`) shows every request, response, and tool call of a session, from
+  <session>`) shows every request, response, and tool call of a session, from
   its log, with each one's pipeline: the plugin that contributed each system
   section and tool, the handlers each step passed through, and why a step
   ended or went on. `lemma inspect <session> --request <r>` prints one request

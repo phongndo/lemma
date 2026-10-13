@@ -14,14 +14,14 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/web": "workspace:*",
-    "dompurify": "3.4.16",
-    "effect": "4.0.1",
-    "marked": "18.0.14",
-    "solid-js": "1.9.15"
+    "dompurify": "3.4.17",
+    "effect": "4.0.4",
+    "marked": "18.1.1",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   }
 }

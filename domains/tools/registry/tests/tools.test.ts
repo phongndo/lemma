@@ -91,7 +91,7 @@ describe("registry", () => {
       type: "object",
       required: ["points"],
       properties: {
-        count: { type: "integer", description: "How many", exclusiveMinimum: 0 },
+        count: { type: "integer", description: "How many", exclusiveMinimum: 0, maximum: Number.MAX_SAFE_INTEGER },
         points: { type: "array", items: { type: "object", required: ["x"], properties: { x: { type: "number" } }, additionalProperties: false } },
       },
       additionalProperties: false,

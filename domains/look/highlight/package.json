@@ -14,12 +14,12 @@
   "dependencies": {
     "@lemma/look": "workspace:*",
     "@lemma/web": "workspace:*",
-    "shiki": "4.4.3"
+    "shiki": "4.5.0"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   },
   "lemma": {
     "web": "./src/index.ts"

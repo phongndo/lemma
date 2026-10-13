@@ -25,7 +25,7 @@ import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
-import { CustomProvider, customEntry, customProvider, knownApi, selectProviders, withoutAnthropicOAuth } from "./providers.ts";
+import { CustomProvider, customEntry, customProvider, knownApi, selectProviders, withBuiltinIdentity, withoutAnthropicOAuth } from "./providers.ts";
 
 const Config = Schema.Struct({
   include: Schema.optional(Schema.Array(Schema.String)).annotate({ description: "Built-in provider ids to register; default all." }),
@@ -159,7 +159,6 @@ export function makeLlmPlugin(options: Options = {}) {
         credentials: credentialStore(credentials, run),
         ...(options.authContext === undefined ? {} : { authContext: options.authContext }),
       });
-      const builtins = selectProviders((options.providers ?? builtinProviders)(), config).map(withoutAnthropicOAuth);
       // A missing model may be described already by another built-in provider's catalog.
       const siblings = () => builtins.flatMap((provider) => provider.getModels());
       const sources = networkSources(options.fetch ?? fetch, siblings);
@@ -169,7 +168,12 @@ export function makeLlmPlugin(options: Options = {}) {
         const caught = withLiveCatalog(provider, sources);
         return provider.id === "openai" ? withPlanCatalog(caught, plan) : caught;
       };
-      for (const provider of builtins) models.setProvider(config.liveCatalogs ? live(provider) : provider);
+      // Live catalogs use the upstream id; filters and every public model ref use Lemma's stable identity.
+      const builtins = selectProviders(
+        (options.providers ?? builtinProviders)().map((provider) => withBuiltinIdentity(config.liveCatalogs ? live(provider) : provider)),
+        config,
+      ).map(withoutAnthropicOAuth);
+      for (const provider of builtins) models.setProvider(provider);
       for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
       const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
       /**

@@ -13,13 +13,13 @@
     "@lemma/core": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.1"
+    "effect": "4.0.4"
   },
   "devDependencies": {
     "@lemma/tools-registry": "workspace:*",
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   },
   "lemma": {
     "host": "./todo.ts",

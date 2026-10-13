@@ -14,13 +14,13 @@
   "dependencies": {
     "@lemma/look": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.1",
-    "solid-js": "1.9.15"
+    "effect": "4.0.4",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   },
   "lemma": {
     "web": "./src/index.tsx"

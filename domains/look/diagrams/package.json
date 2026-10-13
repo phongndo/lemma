@@ -15,13 +15,13 @@
     "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/web": "workspace:*",
-    "mermaid": "12.0.0",
-    "solid-js": "1.9.15"
+    "mermaid": "12.1.0",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
-    "@types/node": "24.19.0",
+    "@types/node": "24.19.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.2"
+    "vitest": "5.0.4"
   },
   "lemma": {
     "web": "./src/index.tsx"

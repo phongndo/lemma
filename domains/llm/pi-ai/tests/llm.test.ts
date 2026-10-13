@@ -347,6 +347,69 @@ describe("catalog", () => {
     expect(providers.find((p) => p.id === "github-copilot")?.auth.map((a) => a.type)).toContain("oauth");
   });
 
+  it("keeps Azure credentials, model refs, and provider filters under their existing id", async () => {
+    const id = "azure-openai-responses";
+    const credentials = fakeCredentials({ [id]: { type: "api_key", key: "sk-existing-azure" } });
+    const llm = makeLlmPlugin({ fetch: offline, authContext: envContext() });
+    const plugins = [credentials.plugin, fakeInteraction(() => Effect.succeed("sk-new-azure")).plugin, llm];
+    const result = await runWith(
+      plugins,
+      Effect.flatMap(Llm, (service) =>
+        Effect.gen(function* () {
+          const providers = yield* service.providers;
+          const available = yield* service.models({ available: true });
+          const model = yield* service.model(`${id}/gpt-4o`);
+          yield* service.logout(id);
+          const loggedOut = yield* service.models({ available: true });
+          yield* service.login(id, "api_key");
+          const loggedIn = yield* service.models({ available: true });
+          return { providers, available, model, loggedOut, loggedIn };
+        }),
+      ),
+      { "llm.pi-ai": { include: [id], liveCatalogs: false } },
+    );
+    expect(result.providers).toMatchObject([{ id, name: "Azure OpenAI", configured: true, source: "stored credential" }]);
+    expect(result.available.length).toBeGreaterThan(0);
+    expect(result.available.every((model) => model.provider === id)).toBe(true);
+    expect(result.model).toMatchObject({ ref: `${id}/gpt-4o`, provider: id });
+    expect(result.loggedOut).toEqual([]);
+    expect(result.loggedIn.map((model) => model.ref)).toEqual(result.available.map((model) => model.ref));
+    expect([...credentials.store]).toEqual([[id, { type: "api_key", key: "sk-new-azure" }]]);
+
+    const excluded = await runWith(
+      plugins,
+      Effect.flatMap(Llm, (service) => service.providers),
+      { "llm.pi-ai": { exclude: [id], liveCatalogs: false } },
+    );
+    expect(excluded.some((provider) => provider.id === id || provider.id === "azure")).toBe(false);
+  });
+
+  it("reads Azure's current catalog while keeping its discovered model refs stable", async () => {
+    const id = "azure-openai-responses";
+    const llm = makeLlmPlugin({
+      authContext: envContext(),
+      fetch: async () =>
+        Response.json({
+          azure: { npm: "@ai-sdk/openai-compatible", models: { "gpt-4o": {}, "gpt-4o-lemma": { name: "New Azure model" } } },
+        }),
+    });
+    const models = await runWith(
+      [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("sk-azure")).plugin, llm],
+      Effect.gen(function* () {
+        const events = yield* Events;
+        const service = yield* Llm;
+        const changed = yield* Effect.forkChild(Stream.runCollect(events.stream(ModelsChanged).pipe(Stream.take(1))));
+        yield* Effect.yieldNow;
+        yield* service.login(id, "api_key");
+        yield* Fiber.join(changed);
+        return yield* service.models();
+      }),
+      { "llm.pi-ai": { include: [id] } },
+    );
+    expect(models.map((model) => model.ref)).toEqual([`${id}/gpt-4o`, `${id}/gpt-4o-lemma`]);
+    expect(models[1]).toMatchObject({ provider: id, name: "New Azure model" });
+  });
+
   it("filters built-ins with include and exclude", async () => {
     const { plugins } = setup({ providers: () => [anthropicProvider(), fauxProvider({ provider: "faux" }).provider] });
     const ids = await runWith(
