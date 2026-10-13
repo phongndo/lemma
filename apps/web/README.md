@@ -13,8 +13,8 @@ nix develop -c pnpm --filter @lemma/web-app dev    # http://127.0.0.1:5173/?mock
 nix develop -c pnpm --filter @lemma/web-app test
 ```
 
-While a turn runs, sending queues the prompt for after the turn, Alt with the
-send key steers the turn instead (the prompt joins after its current step), and
+While a turn runs, sending steers it (the prompt joins after its current
+step), Alt with the send key queues the prompt for after the turn instead, and
 Escape twice stops it; the [composer](../../domains/threads/composer/README.md)
 has the settings for both.
 

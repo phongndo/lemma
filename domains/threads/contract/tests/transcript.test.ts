@@ -85,6 +85,19 @@ describe("transcript", () => {
     );
     expect(t.turns).toHaveLength(1);
     expect(t.turns[0]!.items.map((item) => item.kind)).toEqual(["user", "assistant", "user", "assistant"]);
+    expect(t.turns[0]!.items.map((item) => item.kind === "user" && item.steer === true)).toEqual([false, false, true, false]);
+  });
+
+  it("marks no prompt placed before the work began as a steer: what a stopped turn left goes in with the next", () => {
+    const t = transcriptOf(
+      branch({ type: "turn-start", turnId: "t1" }, user("held", "t1"), user("next", "t1"), {
+        type: "message",
+        turnId: "t1",
+        stepId: "s1",
+        message: assistant([{ type: "text", text: "both" }]),
+      }),
+    );
+    expect(t.turns[0]!.items.filter((item) => item.kind === "user").map((item) => item.steer)).toEqual([undefined, undefined]);
   });
 
   it("shows attempts distinctly and counts their usage but not as steps", () => {

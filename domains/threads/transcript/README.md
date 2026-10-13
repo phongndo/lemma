@@ -8,9 +8,9 @@ composer under it), and the defaults of the chat's parts in the phase
 `default`: `ChatUserPart`, `ChatThinkingPart`, `ChatToolPart`,
 `ChatWorkPart`, `ChatWorkGroupPart`, `ChatWorkingPart`, and `ChatTurnFooterPart`
 ([`@lemma/threads`](../contract/src/parts.tsx)). A tool's calls show as its
-`ToolViews` item says. It reads `Threads.branch` and `Threads.live` through the
+`ToolViews` item says. It reads `Threads.branch`, `Threads.live`, and `Threads.queue`, the first two through the
 contract's projections (`createProjector`, `foldTurn`, `foldRunning`,
-`draftEntries`), which another view can share. Requires `Threads` and the
+`draftEntries`, `queuePlaces`), which another view can share. Requires `Threads` and the
 runtime's `Client`, `Router`, and `Slots`.
 
 | Config        | Default | What it does                                                                                                                               |
@@ -24,6 +24,14 @@ runtime's `Client`, `Router`, and `Slots`.
 - **Following the output.** The view keeps to the newest output while the
   reader is at the bottom, and stops once they scroll up. Its scroll position
   is kept with each history entry, so back and forward return to it.
+- **Steers.** A steer sent while a turn runs shows at once at the end of the
+  turn, where it will join, as it will look once the turn places it after its
+  current step: the prompt as sent under a quiet "Steer" mark
+  (`ChatUserPart`'s `steer`), which is not part of what was sent. Until the
+  turn takes it, a button beside it withdraws it. A running turn's steers show
+  after its live fold, never inside it, where they stay once placed and once
+  the turn ends. Which waiting prompts show here is `queuePlaces`' `joining`:
+  the composer shows the rest, what a stopped turn left among them.
 - **Open and closed.** What the reader opens or closes stays so across thread
   switches, for as long as the plugin runs.
 - **Tool results.** A call with no result once its turn has ended, or with no

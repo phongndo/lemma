@@ -63,7 +63,12 @@ export interface ThreadsService {
       readonly whenBusy?: "steer" | "follow-up" | undefined;
     },
   ) => Promise<boolean>;
-  /** The active thread's queue: prompts sent while a turn ran, waiting to steer it or to follow it. */
+  /**
+   * The active thread's prompts waiting to be placed: sent while a turn ran, to steer it or to follow it, in the
+   * agent's order. The log is the truth: a prompt it has placed is not here, and one that just left the agent's queue
+   * stays until the log shows it (`waitingPrompts`), as the two reach the page apart. A prompt keeps its object while
+   * it waits. `queuePlaces` splits it between the conversation and the composer.
+   */
   readonly queue: Accessor<readonly QueuedPrompt[]>;
   /**
    * The active thread's last prompt that a plugin answered instead of placing it (`AgentInputHook`): handled (and

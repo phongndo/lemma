@@ -286,6 +286,12 @@ const ArrowLeftIcon = (props: GlyphProps) => (
     <path d="M13 8H3.5M7.5 4L3.5 8l4 4" />
   </Icon>
 );
+/** An arrow that turns back on itself: a prompt sent into a turn already under way. */
+const RedoIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M10 3.5l3 3-3 3M13 6.5H6.5a3.5 3.5 0 000 7H8" />
+  </Icon>
+);
 
 /** The default icons by name. */
 export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
@@ -333,6 +339,7 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   sliders: SlidersIcon,
   palette: PaletteIcon,
   "arrow-left": ArrowLeftIcon,
+  redo: RedoIcon,
   spinner: Spinner,
 };
 

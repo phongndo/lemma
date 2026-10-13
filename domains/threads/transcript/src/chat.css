@@ -368,6 +368,66 @@
   overflow-wrap: anywhere;
 }
 
+/* A steer sent and not yet placed, where it will join, with a button beside it to withdraw it while it waits. */
+.steer-pending {
+  position: relative;
+  align-self: flex-end;
+  display: flex;
+  flex-direction: column;
+  max-width: 88%;
+}
+
+.steer-pending .user-message {
+  max-width: 100%;
+}
+
+.steer-withdraw {
+  position: absolute;
+  right: 100%;
+  bottom: 6px;
+  margin-right: 6px;
+  opacity: 0;
+  transition: opacity 0.1s;
+}
+
+.steer-pending:hover .steer-withdraw,
+.steer-withdraw:focus-visible {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .steer-withdraw {
+    opacity: 1;
+  }
+}
+
+/* A steer: its prompt, under a quiet mark that it went into a running turn. The mark is not part of what was sent. */
+.user-steer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.steer-mark {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 4px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1;
+}
+
+.steer-mark .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.transcript > .steer-pending {
+  margin-top: 10px;
+}
+
 .images {
   display: flex;
   flex-wrap: wrap;

@@ -7,18 +7,21 @@ import type { ComposerSuggestion, ThreadAction, ToolBodyProps } from "./threads.
 import type { TurnView } from "./transcript.ts";
 
 export interface ComposerQueuedProps {
-  /** A prompt sent while a turn ran: it steers that turn, or (`follow-up`) waits for it to end. */
+  /**
+   * A prompt waiting for the next turn: a follow-up, or with no turn running, any prompt the last one left queued (a
+   * steer too). A steer for a running turn has no row: the transcript shows it.
+   */
   readonly prompt: QueuedPrompt;
   /** Takes it out of the queue. */
   readonly withdraw: () => void;
   /**
-   * Makes a follow-up a steer, which joins the running turn after its current step. Absent for a steer, and while no
-   * turn runs (the queue held after a failed or cancelled turn waits for the next prompt, and has no turn to steer).
+   * Makes it a steer, which joins the running turn after its current step. Absent while no turn runs (the queue held
+   * after a failed or cancelled turn waits for the next prompt, and has no turn to steer).
    */
   readonly promote?: (() => void) | undefined;
 }
 
-/** A queued prompt above the composer: its default shows the prompt's mode and text, and buttons to steer with it and to withdraw it. */
+/** A queued prompt above the composer: its default shows the prompt's text, and buttons to steer with it and to withdraw it. */
 export const ComposerQueuedPart = definePart<ComposerQueuedProps>("composer.queued");
 
 export interface ComposerSuggestionProps {
@@ -36,6 +39,8 @@ export const ComposerSuggestionPart = definePart<ComposerSuggestionProps>("compo
 
 export interface ChatUserProps {
   readonly content: readonly (TextContent | ImageContent)[];
+  /** A steer: sent into the running turn, which places it (or will) after its current step. */
+  readonly steer?: boolean | undefined;
 }
 
 /** A prompt in the transcript. */

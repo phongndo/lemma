@@ -1,4 +1,5 @@
 import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
+import type { Accessor } from "solid-js";
 import { Effect, Schema } from "effect";
 import { newRequestId } from "@lemma/agent/prompt";
 import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/llm";
@@ -22,6 +23,7 @@ import {
   ThreadsActionIds,
   ComposerQueued,
   ComposerSuggestionView,
+  queuePlaces,
 } from "@lemma/threads";
 import type {
   TriggerMatch,
@@ -41,7 +43,7 @@ import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { ChatIcon, ImageIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
+import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
 import { recallStep, sentPrompts } from "./history.ts";
 import type { SentPrompt } from "./history.ts";
 import styles from "./composer.css?inline";
@@ -64,12 +66,12 @@ const ComposerConfig = Schema.Struct({
       title: "Send with",
       description: "enter: Enter sends and Shift+Enter starts a new line. mod+enter: ⌘Enter (Ctrl+Enter) sends and Enter starts a new line.",
     }),
-  whenBusy: Schema.Literals(["queue", "steer"])
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "queue" as const)))
+  whenBusy: Schema.Literals(["steer", "queue"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "steer" as const)))
     .annotate({
       title: "While a turn runs",
       description:
-        "queue: sending waits for the running turn to end, and goes as the next turn. steer: sending joins the running turn after its current step. Alt with the send key does the other.",
+        "steer: sending joins the running turn after its current step. queue: sending waits for the running turn to end, and goes as the next turn. Alt with the send key does the other.",
     }),
   stop: Schema.Literals(["escape-twice", "escape"])
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "escape-twice" as const)))
@@ -127,6 +129,9 @@ interface Deps {
   /** Prompts on their way to the host, not yet taken: the composer has cleared, so they are in no draft. */
   readonly outgoing: Set<Draft>;
   readonly setFocus: (focus: (() => void) | undefined) => void;
+  /** The queue above the box shows its prompts, or only its header: one choice for every thread, while the plugin runs. */
+  readonly queueOpen: Accessor<boolean>;
+  readonly setQueueOpen: (open: boolean) => void;
 }
 
 /** What one completion source has for the word: its suggestions and note, or why it has none. */
@@ -362,6 +367,16 @@ function Composer(props: { deps: Deps }) {
     resize();
   });
   onCleanup(() => props.deps.setFocus(undefined));
+
+  /**
+   * The prompts waiting for a turn of their own, shown over the box (`queuePlaces`' `next`): a steer for the running
+   * turn has no row, as the conversation shows it where it will join, but with no turn running, what a stopped one left
+   * waits here for the next prompt, steers too.
+   */
+  const places = createMemo(() => queuePlaces(threads));
+  const queued = () => places().next;
+  const { queueOpen, setQueueOpen } = props.deps;
+  const queueId = createUniqueId();
 
   const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
   const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
@@ -632,7 +647,7 @@ function Composer(props: { deps: Deps }) {
     if (!client.connected()) return "Waiting for the host…";
     if (threads.busy()) {
       const other = formatKeys(props.deps.config.send === "mod+enter" ? "alt+mod+enter" : "alt+enter");
-      return busyMode() === "steer" ? `Steer it, or ${other} to send after it` : `Send after it, or ${other} to steer it`;
+      return busyMode() === "steer" ? `Steer it, or ${other} to queue for after it` : `Queue for after it, or ${other} to steer it`;
     }
     return threads.activeId() === undefined ? "Ask anything, or describe a task" : "Reply…";
   };
@@ -640,6 +655,38 @@ function Composer(props: { deps: Deps }) {
   return (
     <div class="composer-wrap">
       <Each slot={ComposerNotices} />
+      {/* Above the box, in the page's flow so it covers nothing: what is queued, which the completion menu covers while open. */}
+      <Show when={queued().length > 0}>
+        <div class="composer-queue">
+          {/* A thin header that opens and closes the list; pressing it leaves the focus, and the cursor, in the prompt. */}
+          <button
+            type="button"
+            class="queue-head"
+            aria-expanded={queueOpen()}
+            aria-controls={queueId}
+            aria-label={`${queueOpen() ? "Hide" : "Show"} ${queued().length} queued ${queued().length === 1 ? "prompt" : "prompts"}`}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => setQueueOpen(!queueOpen())}
+          >
+            <LogIcon />
+            <span class="queue-title">Queued</span>
+            <span class="queue-count">{queued().length}</span>
+            <ChevronDownIcon />
+          </button>
+          {/* Closed, it stays, hidden, for the header to name. */}
+          <ul id={queueId} aria-label="Queued prompts" hidden={!queueOpen()}>
+            <For each={queued()}>
+              {(prompt) => (
+                <ComposerQueued
+                  prompt={prompt}
+                  withdraw={() => void threads.withdraw(prompt.requestId)}
+                  promote={places().running ? () => void threads.promote(prompt.requestId) : undefined}
+                />
+              )}
+            </For>
+          </ul>
+        </div>
+      </Show>
       <Show when={taken() === undefined ? holder() : undefined} keyed>
         {(item) => <Contained slot={ComposerTakeovers} item={item} component={item.waiting} props={{ take }} />}
       </Show>
@@ -713,19 +760,6 @@ function Composer(props: { deps: Deps }) {
               </Show>
             </div>
           </div>
-        </Show>
-        <Show when={threads.queue().length > 0}>
-          <ul class="composer-queue" aria-label="Queued prompts">
-            <For each={threads.queue()}>
-              {(queued) => (
-                <ComposerQueued
-                  prompt={queued}
-                  withdraw={() => void threads.withdraw(queued.requestId)}
-                  promote={queued.mode === "follow-up" && threads.busy() ? () => void threads.promote(queued.requestId) : undefined}
-                />
-              )}
-            </For>
-          </ul>
         </Show>
         <Show when={images().length > 0 && taken() === undefined}>
           <div class="attachments">
@@ -858,11 +892,11 @@ function Composer(props: { deps: Deps }) {
   );
 }
 
-/** The default `composer.queued` part: the prompt's mode and text on one line, and buttons to steer with it and to withdraw it. */
+/** The default `composer.queued` part: the prompt on one line, as a menu item, and buttons to steer with it and to withdraw it. */
 function QueuedRow(props: ComposerQueuedProps) {
   return (
-    <li class="queued">
-      <span class="queued-mode">{props.prompt.mode === "steer" ? "Steer" : "Next"}</span>
+    <li class="menu-item queued">
+      <ChatIcon />
       <span class="queued-text">{preview(props.prompt.content)}</span>
       <Show when={props.promote}>
         {(promote) => (
@@ -925,14 +959,14 @@ function WhenBusySetting(props: { whenBusy: WhenBusy; onChange: (whenBusy: WhenB
   return (
     <SettingRow
       title="While a turn runs"
-      description="Queue: send after the turn ends. Steer: join it after its current step. Alt with the send key does the other."
+      description="Steer: join it after its current step. Queue: send after the turn ends. Alt with the send key does the other."
     >
       <Segmented
         label="Sending while a turn runs"
         value={props.whenBusy}
         options={[
-          { value: "queue", label: "Queue" },
           { value: "steer", label: "Steer" },
+          { value: "queue", label: "Queue" },
         ]}
         onChange={props.onChange}
       />
@@ -1018,9 +1052,10 @@ export default defineWebPlugin({
   requires: { client: Client, threads: Threads, models: Models, workspace: Workspace, notify: Notify, slots: Slots, router: Router, webPlugins: WebPlugins },
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
+    const [queueOpen, setQueueOpen] = createSignal(true);
     const drafts = new Map<string, Draft>();
     const outgoing = new Set<Draft>();
-    const deps: Deps = { ...use, config: plugin.config, drafts, outgoing, setFocus: (next) => setFocus(() => next) };
+    const deps: Deps = { ...use, config: plugin.config, drafts, outgoing, setFocus: (next) => setFocus(() => next), queueOpen, setQueueOpen };
     // An unsent prompt in any thread, shown or not, or one still going out: closing or reloading the tab asks first.
     // Switching threads keeps drafts, so only an unload does.
     plugin.onCleanup(
@@ -1054,7 +1089,7 @@ export default defineWebPlugin({
           view: () => <SendSetting send={plugin.config.send} onChange={(send) => setOption("send", send)} />,
         },
         {
-          text: "Composer: while a turn runs, sending queues the message for after it or steers it; Alt does the other",
+          text: "Composer: while a turn runs, sending steers it or queues the message for after it; Alt does the other",
           view: () => <WhenBusySetting whenBusy={plugin.config.whenBusy} onChange={(whenBusy) => setOption("whenBusy", whenBusy)} />,
         },
         {

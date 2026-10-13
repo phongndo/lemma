@@ -66,22 +66,28 @@ const tally = (items: readonly Item[]) => {
 
 /**
  * A running turn: its prompt, then all its work so far as one live fold,
- * which its streaming step joins at the end; undefined once it has ended.
- * A steer or a compaction after the work began stays where it happened,
- * inside the fold, so what answers it comes after it. The fold has the
- * finished turn's key, so it is the same fold, opened or closed, once the
- * turn ends. Only the turn that is running is folded this way: a branch
- * that stops inside a turn has no end either, and is not running.
+ * which its streaming step joins at the end, then the prompts that joined it
+ * (steers) and any compaction, as a finished turn shows them: never inside
+ * the fold, so a steer stays in sight once placed, where it showed while it
+ * waited (after the fold), and where it stays once the turn ends. The fold has
+ * the finished turn's key, so it is the same fold, opened or closed, once the
+ * turn ends. Only the turn that is running is folded this way: a branch that
+ * stops inside a turn has no end either, and is not running.
  */
 export const foldRunning = (turn: TurnView): readonly TurnEntry[] | undefined => {
   if (turn.end !== undefined) return undefined;
   const entries: TurnEntry[] = [];
   const work: Item[] = [];
+  let workAt = -1;
   for (const item of turn.items) {
-    if (work.length === 0 && (item.kind === "user" || item.kind === "compaction")) entries.push({ kind: "item", item, note: true });
-    else work.push(item);
+    if (item.kind === "user" || item.kind === "compaction") {
+      entries.push({ kind: "item", item, note: true });
+      continue;
+    }
+    if (workAt === -1) workAt = entries.length;
+    work.push(item);
   }
-  entries.push({ kind: "work", key: `${turn.key}:work`, items: work, ...tally(work), live: true });
+  entries.splice(workAt === -1 ? entries.length : workAt, 0, { kind: "work", key: `${turn.key}:work`, items: work, ...tally(work), live: true });
   return entries;
 };
 

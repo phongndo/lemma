@@ -21,21 +21,31 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
 | Config     | Default          | What it does                                                                                                                                                                                   |
 | ---------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `send`     | `"enter"`        | `"enter"`: Enter sends and Shift+Enter starts a new line. `"mod+enter"`: ⌘Enter on macOS (Ctrl+Enter elsewhere) sends and Enter starts a new line                                              |
-| `whenBusy` | `"queue"`        | What sending does while a turn runs. `"queue"`: the prompt waits, and goes as the next turn. `"steer"`: it joins the running turn after its current step. Alt with the send key does the other |
+| `whenBusy` | `"steer"`        | What sending does while a turn runs. `"steer"`: it joins the running turn after its current step. `"queue"`: the prompt waits, and goes as the next turn. Alt with the send key does the other |
 | `stop`     | `"escape-twice"` | `"escape-twice"`: Escape in the prompt twice within a second stops the running turn. `"escape"`: once does                                                                                     |
 
 ## Behavior
 
-- **While a turn runs**, sending queues the prompt to go as the next turn, or
-  with `whenBusy: "steer"` steers it, joining the turn after its current step;
-  Alt with the send key, or on the send button, does the other. A queued
-  prompt waiting to follow the turn can still steer it (`Threads.promote`),
-  from its row's button. Escape in the prompt, twice within a second
-  (`stop`), stops the turn: the first says so, and a single Escape meant for
-  the completion menu never does, nor does one held down. Switching threads,
-  or the turn ending, forgets a first Escape. Queueing is the default because a steer
-  lands between steps and can redirect what the model was in the middle of,
-  while a queued prompt can still be promoted.
+- **While a turn runs**, sending steers it: the prompt joins the turn after
+  its current step, and shows nowhere in the composer, only in the transcript
+  where it will join (`Threads.queue`'s steers). Alt with the send key, or on
+  the send button, queues it instead, to go as the next turn, and
+  `whenBusy: "queue"` swaps the two. Queued prompts show just above the box,
+  in the completion menu's look (the menu covers them while open), under a
+  thin header with their count that opens and closes them (closed, the
+  queue is that one line, for every thread until it is opened again). Each is
+  one line, the next first, and can still steer the turn (`Threads.promote`)
+  or be withdrawn, from its row's buttons. A stopped or failed turn leaves what
+  it held queued for the next prompt, steers too: with no turn running they
+  show above the box with the rest, where they can be withdrawn. Which waiting
+  prompts show here is `queuePlaces`' `next`. The queue is in the page's flow:
+  the conversation makes room for it rather than going under it. Escape in the
+  prompt, twice within a second (`stop`), stops the turn: the first says so,
+  and a single Escape meant for the completion menu never does, nor does one
+  held down. Switching threads, or the turn ending, forgets a first Escape.
+  Steering is the default because a prompt sent mid-turn is most often about
+  the work under way, and the sooner the model reads it the less it does that
+  the prompt would change.
 - **Taken** (`ComposerTakeovers`: the agent's questions, say). The first
   item holding the open thread draws its banner in the box, above the text
   box, and the text box, Enter, and the send button (labelled as the item says)
