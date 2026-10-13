@@ -1,0 +1,235 @@
+diff --git a/dist/rpc/RpcClient.d.ts b/dist/rpc/RpcClient.d.ts
+index 053512a11ffdf8f8a688e165244723aa3f93d706..bf04a06f1d8be8c4c9962f46e795b3f8f06a270b 100644
+--- a/dist/rpc/RpcClient.d.ts
++++ b/dist/rpc/RpcClient.d.ts
+@@ -231,8 +231,11 @@ export declare const layerProtocolHttp: (options: {
+  * **Details**
+  *
+  * `pingInterval` defaults to 5 seconds. `pingTimeout` defaults to the interval
+- * and measures time since the last decoded server frame, not the last pong.
+- * The timeout is checked on each ping tick; any decoded frame counts as liveness.
++ * and measures time since the last decoded server frame, checked on each ping
++ * tick; any decoded frame counts as liveness. The connection fails only while a
++ * written ping is unanswered, so a tick that fires late does not fail one that
++ * answered. A tick held back past the interval and the timeout (the machine
++ * slept) sends a ping and checks again within a second.
+  *
+  * @stability unstable
+  * @category protocols
+@@ -266,8 +269,11 @@ export declare const makeProtocolSocket: (options?: {
+  * **Details**
+  *
+  * `pingInterval` defaults to 5 seconds. `pingTimeout` defaults to the interval
+- * and measures time since the last decoded server frame, not the last pong.
+- * The timeout is checked on each ping tick; any decoded frame counts as liveness.
++ * and measures time since the last decoded server frame, checked on each ping
++ * tick; any decoded frame counts as liveness. The connection fails only while a
++ * written ping is unanswered, so a tick that fires late does not fail one that
++ * answered. A tick held back past the interval and the timeout (the machine
++ * slept) sends a ping and checks again within a second.
+  * `retryPolicy` configures retries after socket errors.
+  *
+  * @stability unstable
+diff --git a/dist/rpc/RpcClient.js b/dist/rpc/RpcClient.js
+index e11b4f13e92a57a5bb823c372c055d0c6242298d..ad13aaea307fdbb980de2b21d5dd1b1f26656496 100644
+--- a/dist/rpc/RpcClient.js
++++ b/dist/rpc/RpcClient.js
+@@ -607,8 +607,11 @@ export const layerProtocolHttp = options => Layer.effect(Protocol)(Effect.flatMa
+  * **Details**
+  *
+  * `pingInterval` defaults to 5 seconds. `pingTimeout` defaults to the interval
+- * and measures time since the last decoded server frame, not the last pong.
+- * The timeout is checked on each ping tick; any decoded frame counts as liveness.
++ * and measures time since the last decoded server frame, checked on each ping
++ * tick; any decoded frame counts as liveness. The connection fails only while a
++ * written ping is unanswered, so a tick that fires late does not fail one that
++ * answered. A tick held back past the interval and the timeout (the machine
++ * slept) sends a ping and checks again within a second.
+  *
+  * @stability unstable
+  * @category protocols
+@@ -646,7 +649,10 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+         while: () => i < responses.length,
+         body: () => {
+           const response = responses[i++];
+-          if (response._tag === "Pong") return Effect.void;
++          if (response._tag === "Pong") {
++            pinger.onPong();
++            return Effect.void;
++          }
+           if (Object.hasOwn(response, "requestId")) {
+             const requestId = response.requestId;
+             const clientId = requestClientMap.get(requestId);
+@@ -742,25 +748,48 @@ export const makeProtocolSocket = options => Protocol.make(Effect.fnUntraced(fun
+ const defaultRetryPolicy = /*#__PURE__*/Schedule.min([/*#__PURE__*/Schedule.exponential(500, 1.5), /*#__PURE__*/Schedule.spaced(5000)]);
+ const makePinger = /*#__PURE__*/Effect.fnUntraced(function* (writePing, options) {
+   const clock = yield* Clock.Clock;
+-  const interval = options?.pingInterval ?? "5 seconds";
+-  const timeoutMillis = Duration.toMillis(options?.pingTimeout ?? interval);
++  const intervalMillis = Duration.toMillis(options?.pingInterval ?? "5 seconds");
++  const timeoutMillis = Duration.toMillis(options?.pingTimeout ?? intervalMillis);
++  // How soon a ping sent after the ticks were held back (sleep) is checked.
++  const probeMillis = Math.min(timeoutMillis, 1000);
+   let lastSeen = clock.currentTimeMillisUnsafe();
++  // Pings written and pongs read on this connection: the server answers pings in order.
++  let pings = 0;
++  let pongs = 0;
++  let next = intervalMillis;
+   const latch = Latch.makeUnsafe();
+   const onFrame = () => {
+     lastSeen = clock.currentTimeMillisUnsafe();
+   };
++  const onPong = () => {
++    pongs++;
++  };
+   const reset = () => {
+     onFrame();
++    pings = 0;
++    pongs = 0;
++    next = intervalMillis;
+     latch.closeUnsafe();
+   };
+-  yield* Effect.suspend(() => {
+-    if (clock.currentTimeMillisUnsafe() - lastSeen > timeoutMillis) return latch.open;
+-    return writePing;
+-  }).pipe(Effect.delay(interval), Effect.ignore, Effect.forever, Effect.interruptible, Effect.forkScoped);
++  const tick = Effect.suspend(() => {
++    const silent = clock.currentTimeMillisUnsafe() - lastSeen;
++    // Dead only while a ping is unanswered: a tick that fires late (a busy or
++    // throttled page) does not fail a connection that answered.
++    if (pings > pongs && silent > timeoutMillis) return latch.open;
++    // Answered, but silent past the interval and the timeout: the ticks were
++    // held back (sleep), so check the ping this sends soon.
++    next = silent > intervalMillis + timeoutMillis ? probeMillis : intervalMillis;
++    // Counted once written, so a ping that waited behind other writes, or failed, is not awaited early.
++    return Effect.andThen(writePing, Effect.sync(() => {
++      pings++;
++    }));
++  });
++  yield* Effect.suspend(() => Effect.sleep(next)).pipe(Effect.andThen(tick), Effect.ignore, Effect.forever, Effect.interruptible, Effect.forkScoped);
+   return {
+     timeout: latch.await,
+     reset,
+-    onFrame
++    onFrame,
++    onPong
+   };
+ });
+ /**
+@@ -770,8 +799,11 @@ const makePinger = /*#__PURE__*/Effect.fnUntraced(function* (writePing, options)
+  * **Details**
+  *
+  * `pingInterval` defaults to 5 seconds. `pingTimeout` defaults to the interval
+- * and measures time since the last decoded server frame, not the last pong.
+- * The timeout is checked on each ping tick; any decoded frame counts as liveness.
++ * and measures time since the last decoded server frame, checked on each ping
++ * tick; any decoded frame counts as liveness. The connection fails only while a
++ * written ping is unanswered, so a tick that fires late does not fail one that
++ * answered. A tick held back past the interval and the timeout (the machine
++ * slept) sends a ping and checks again within a second.
+  * `retryPolicy` configures retries after socket errors.
+  *
+  * @stability unstable
+diff --git a/src/rpc/RpcClient.ts b/src/rpc/RpcClient.ts
+index 2f92d9bd43b0082b77ca9f34a11721d99ea0f21a..2c0d93036f583cb61ffdd08bce28e2a738dc265b 100644
+--- a/src/rpc/RpcClient.ts
++++ b/src/rpc/RpcClient.ts
+@@ -1052,8 +1052,11 @@ export const layerProtocolHttp = (options: {
+  * **Details**
+  *
+  * `pingInterval` defaults to 5 seconds. `pingTimeout` defaults to the interval
+- * and measures time since the last decoded server frame, not the last pong.
+- * The timeout is checked on each ping tick; any decoded frame counts as liveness.
++ * and measures time since the last decoded server frame, checked on each ping
++ * tick; any decoded frame counts as liveness. The connection fails only while a
++ * written ping is unanswered, so a tick that fires late does not fail one that
++ * answered. A tick held back past the interval and the timeout (the machine
++ * slept) sends a ping and checks again within a second.
+  *
+  * @stability unstable
+  * @category protocols
+@@ -1122,7 +1125,10 @@ export const makeProtocolSocket = (options?: {
+           while: () => i < responses.length,
+           body: () => {
+             const response = responses[i++]
+-            if (response._tag === "Pong") return Effect.void
++            if (response._tag === "Pong") {
++              pinger.onPong()
++              return Effect.void
++            }
+             if (Object.hasOwn(response, "requestId")) {
+               const requestId = (response as FromServerEncoded & { readonly requestId: string | number }).requestId
+               const clientId = requestClientMap.get(requestId)
+@@ -1246,28 +1252,50 @@ const makePinger = Effect.fnUntraced(function*<A, E, R>(writePing: Effect.Effect
+   readonly pingTimeout?: Duration.Input | undefined
+ }) {
+   const clock = yield* Clock.Clock
+-  const interval = options?.pingInterval ?? "5 seconds"
+-  const timeoutMillis = Duration.toMillis(options?.pingTimeout ?? interval)
++  const intervalMillis = Duration.toMillis(options?.pingInterval ?? "5 seconds")
++  const timeoutMillis = Duration.toMillis(options?.pingTimeout ?? intervalMillis)
++  // How soon a ping sent after the ticks were held back (sleep) is checked.
++  const probeMillis = Math.min(timeoutMillis, 1000)
+   let lastSeen = clock.currentTimeMillisUnsafe()
++  // Pings written and pongs read on this connection: the server answers pings in order.
++  let pings = 0
++  let pongs = 0
++  let next = intervalMillis
+   const latch = Latch.makeUnsafe()
+   const onFrame = () => {
+     lastSeen = clock.currentTimeMillisUnsafe()
+   }
++  const onPong = () => {
++    pongs++
++  }
+   const reset = () => {
+     onFrame()
++    pings = 0
++    pongs = 0
++    next = intervalMillis
+     latch.closeUnsafe()
+   }
+-  yield* Effect.suspend((): Effect.Effect<void, E, R> => {
+-    if (clock.currentTimeMillisUnsafe() - lastSeen > timeoutMillis) return latch.open
+-    return writePing
+-  }).pipe(
+-    Effect.delay(interval),
++  const tick = Effect.suspend((): Effect.Effect<unknown, E, R> => {
++    const silent = clock.currentTimeMillisUnsafe() - lastSeen
++    // Dead only while a ping is unanswered: a tick that fires late (a busy or
++    // throttled page) does not fail a connection that answered.
++    if (pings > pongs && silent > timeoutMillis) return latch.open
++    // Answered, but silent past the interval and the timeout: the ticks were
++    // held back (sleep), so check the ping this sends soon.
++    next = silent > intervalMillis + timeoutMillis ? probeMillis : intervalMillis
++    // Counted once written, so a ping that waited behind other writes, or failed, is not awaited early.
++    return Effect.andThen(writePing, Effect.sync(() => {
++      pings++
++    }))
++  })
++  yield* Effect.suspend(() => Effect.sleep(next)).pipe(
++    Effect.andThen(tick),
+     Effect.ignore,
+     Effect.forever,
+     Effect.interruptible,
+     Effect.forkScoped
+   )
+-  return { timeout: latch.await, reset, onFrame } as const
++  return { timeout: latch.await, reset, onFrame, onPong } as const
+ })
+ 
+ /**
+@@ -1277,8 +1305,11 @@ const makePinger = Effect.fnUntraced(function*<A, E, R>(writePing: Effect.Effect
+  * **Details**
+  *
+  * `pingInterval` defaults to 5 seconds. `pingTimeout` defaults to the interval
+- * and measures time since the last decoded server frame, not the last pong.
+- * The timeout is checked on each ping tick; any decoded frame counts as liveness.
++ * and measures time since the last decoded server frame, checked on each ping
++ * tick; any decoded frame counts as liveness. The connection fails only while a
++ * written ping is unanswered, so a tick that fires late does not fail one that
++ * answered. A tick held back past the interval and the timeout (the machine
++ * slept) sends a ping and checks again within a second.
+  * `retryPolicy` configures retries after socket errors.
+  *
+  * @stability unstable

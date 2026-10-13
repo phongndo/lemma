@@ -24,3 +24,5 @@ minimumReleaseAgeExclude:
   - marked@18.1.1
   - vitest@5.0.4
   - zod@4.6.7
+patchedDependencies:
+  effect@4.0.4: patches/effect@4.0.4.patch
