@@ -32,7 +32,10 @@ The `grep` and `find` tools, searching with [fff](https://github.com/dmtrKovalen
   pattern as filters too (`schema.rs parse` greps `parse` in `schema.rs`).
 - **Ranking.** Files changed recently come first, and files git sees changed
   are tagged. No frecency database is opened, so what you open in an editor
-  does not count.
+  does not count. fff reads git on a thread of its own after the scan, so a
+  new index's first answers can come without git's order and tags; waiting
+  for them would need fff's synchronous refresh, which would hold the host's
+  thread for as long as git takes.
 - **Paging.** A cursor is a number, a grep's next file or a find's count
   shown, so a call with one replays after a restart.
 - **Indexes** are one per directory searched, opened by the first call, which

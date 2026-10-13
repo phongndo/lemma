@@ -62,9 +62,13 @@ describe("grep", () => {
     await write("src/new.ts", "export const needle = 6;\n");
     const result = await grep({ pattern: "needle" });
     expect(files(textOf(result))).toEqual(["Makefile", "app/[id]/page.tsx", "pkg/src/other.ts", "src/app.ts", "src/composer.ts", "src/new.ts"]);
-    expect(textOf(result)).toContain("src/new.ts  [untracked in git]\n 1: export const needle = 6;");
     expect(textOf(result)).toContain(" 2: // needle in a method");
     expect((result.details as SearchDetails).root).toBe(dir);
+    // fff reads git's status on a thread of its own once the scan ends, so the first answers can come before the tags.
+    await vi.waitFor(async () => expect(textOf(await grep({ pattern: "needle" }))).toContain("src/new.ts  [untracked in git]\n 1: export const needle = 6;"), {
+      timeout: 5_000,
+      interval: 10,
+    });
   });
 
   it("keeps to an existing folder or file exactly, a missing name anywhere, and drops excludes", async () => {
