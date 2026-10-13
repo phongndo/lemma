@@ -17,6 +17,7 @@ import {
   ComposerQueuedPart,
   ComposerRegion,
   ComposerSuggestionPart,
+  ComposerTakeovers,
   Threads,
   ThreadsActionIds,
   ComposerQueued,
@@ -35,7 +36,7 @@ import type {
 import { Actions } from "@lemma/actions";
 import { Models } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
+import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
@@ -106,7 +107,9 @@ const preview = (content: QueuedPrompt["content"]): string => {
   const images = content.filter((part) => part.type === "image").length;
   return text || (images === 1 ? "An image" : `${images} images`);
 };
-const unsent = (draft: Draft) => draft.text.trim() !== "" || draft.images.length > 0;
+const unsent = (draft: Pick<Draft, "text" | "images">) => draft.text.trim() !== "" || draft.images.length > 0;
+const adding = (key: string) => (keys: ReadonlySet<string>) => new Set(keys).add(key);
+const removing = (key: string) => (keys: ReadonlySet<string>) => new Set([...keys].filter((other) => other !== key));
 
 interface Deps {
   readonly config: typeof ComposerConfig.Type;
@@ -262,14 +265,47 @@ function Composer(props: { deps: Deps }) {
   let suggestionList: HTMLDivElement | undefined;
   const [cursor, setCursor] = createSignal(0);
   const [focused, setFocused] = createSignal(false);
-  const syncCursor = () => setCursor(input.selectionStart ?? text().length);
+  const plugin = usePlugin();
+  /** The takeover holding the open thread (`ComposerTakeovers`), whether or not the person keeps the box for now. */
+  const holder = createMemo(() => {
+    const id = threads.activeId();
+    return id === undefined ? undefined : slots.list(ComposerTakeovers).find((item) => item.sessionId() === id);
+  });
+  /** By `key`: takeovers the person let go, and ones they took while a prompt of their own was unsent. */
+  const [released, setReleased] = createSignal<ReadonlySet<string>>(new Set());
+  const [claimed, setClaimed] = createSignal<ReadonlySet<string>>(new Set());
+  /**
+   * The takeover the text box and the send button are given to. Not while the person has a prompt of their own unsent
+   * (written, or going out), so the box never changes under their keys, unless they take it; nor once they let it go.
+   */
+  const taken = createMemo(() => {
+    const item = holder();
+    if (item === undefined) return undefined;
+    const key = item.key();
+    if (released().has(key)) return undefined;
+    return (unsent({ text: text(), images: images() }) || sending()) && !claimed().has(key) ? undefined : item;
+  });
+  const release = () => {
+    const item = holder();
+    if (item !== undefined) setReleased(adding(item.key()));
+  };
+  const take = () => {
+    const item = holder();
+    if (item === undefined) return;
+    const key = item.key();
+    setReleased(removing(key));
+    setClaimed(adding(key));
+  };
+  /** What the text box shows: the takeover's text while there is one, else the thread's draft. */
+  const boxText = () => taken()?.text() ?? text();
+  const syncCursor = () => setCursor(input.selectionStart ?? boxText().length);
   /**
    * The prompt sent in this thread that Up or Down brought back (its place, oldest first), while the composer holds it
    * unchanged: an edit (`edited`), a send, or another thread forgets it. Until then it is history being read, not a
    * draft, and opens no completion menu for a word in it.
    */
   const [recalled, setRecalled] = createSignal<SentPrompt & { readonly at: number }>();
-  const completion = createCompletion(slots, text, cursor, () => focused() && recalled() === undefined);
+  const completion = createCompletion(slots, boxText, cursor, () => focused() && recalled() === undefined && taken()?.readOnly?.() !== true);
   const listId = createUniqueId();
   const optionId = (index: number) => `${listId}-${index}`;
   createEffect(() => {
@@ -306,6 +342,8 @@ function Composer(props: { deps: Deps }) {
       { defer: true },
     ),
   );
+  // Taken or let go, or the takeover's text changed (another of its questions): the box fits what it now shows.
+  createEffect(on([taken, boxText], () => queueMicrotask(resize), { defer: true }));
   /** The person changed the prompt: sending it is a new submission, not a retry of the last one, and no prompt brought back. */
   const edited = () => {
     setRecalled(undefined);
@@ -335,13 +373,22 @@ function Composer(props: { deps: Deps }) {
    * accepted, if the composer holds the same still. What was typed after the Enter waits for one of its own.
    */
   let next: { readonly whenBusy: "steer" | "follow-up"; readonly text: string; readonly images: readonly ImageContent[] } | undefined;
+  /** Enter, or the send button: the takeover's, while the box is given to one, else the person's prompt goes. */
   const submit = async (whenBusy: "steer" | "follow-up" = busyMode()) => {
+    const item = taken();
+    if (item === undefined) return sendPrompt(whenBusy);
+    if (item.canSubmit?.() !== false) item.submit();
+  };
+  const sendPrompt = async (whenBusy: "steer" | "follow-up") => {
     if (sending()) {
       if (unsent({ text: text(), images: images() })) next = { whenBusy, text: text(), images: images() };
       return;
     }
     if (!canSend()) return;
     setRecalled(undefined);
+    // Sent while a takeover waits, the person's own prompt answers in its place: it lets the takeover go.
+    const waiting = holder();
+    if (waiting !== undefined) setReleased(adding(waiting.key()));
     const content: PromptContent = [...(text().trim() === "" ? [] : [{ type: "text" as const, text: text() }]), ...images()];
     // Sending a new chat creates a session and switches to it, so remember which draft this was.
     const key = draftKey();
@@ -381,9 +428,8 @@ function Composer(props: { deps: Deps }) {
     queueMicrotask(resize);
     const queued = next;
     next = undefined;
-    if (ok && queued !== undefined && text() === queued.text && images() === queued.images) void submit(queued.whenBusy);
+    if (ok && queued !== undefined && text() === queued.text && images() === queued.images) void sendPrompt(queued.whenBusy);
   };
-  const plugin = usePlugin();
   const send = plugin.action("send the prompt", (whenBusy?: "steer" | "follow-up") => submit(whenBusy));
 
   /**
@@ -436,14 +482,18 @@ function Composer(props: { deps: Deps }) {
   createEffect(on([threads.activeId, threads.busy], disarm, { defer: true }));
   onCleanup(disarm);
 
+  /** Writes what the box shows: the takeover's text, or the thread's draft. */
+  const write = (next: string) => {
+    const item = taken();
+    if (item !== undefined) return item.setText(next);
+    edited();
+    setText(next);
+  };
   const insert = (value: string) => {
-    const start = input.selectionStart ?? text().length;
+    const start = input.selectionStart ?? boxText().length;
     const end = input.selectionEnd ?? start;
-    const next = text().slice(0, start) + value + text().slice(end);
-    batch(() => {
-      edited();
-      setText(next);
-    });
+    const next = boxText().slice(0, start) + value + boxText().slice(end);
+    batch(() => write(next));
     queueMicrotask(() => {
       input.focus();
       input.setSelectionRange(start + value.length, start + value.length);
@@ -455,11 +505,10 @@ function Composer(props: { deps: Deps }) {
   const pick = (suggestion: ComposerSuggestion) => {
     const word = completion.match();
     if (word === undefined) return;
-    const next = applySuggestion(text(), word, suggestion.insert, { space: suggestion.partial !== true });
+    const next = applySuggestion(boxText(), word, suggestion.insert, { space: suggestion.partial !== true });
     // Together, so completion never sees the new text with the old cursor (and asks for a word nobody typed).
     batch(() => {
-      edited();
-      setText(next.text);
+      write(next.text);
       setCursor(next.cursor);
     });
     queueMicrotask(() => {
@@ -545,8 +594,12 @@ function Composer(props: { deps: Deps }) {
       if (event.altKey && !threads.busy()) return;
       event.preventDefault();
       void submit(busyMode(event.altKey));
-    } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && plain && !event.isComposing) {
+    } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && plain && !event.isComposing && taken() === undefined) {
       if (recall(event.key === "ArrowUp" ? "older" : "newer")) event.preventDefault();
+    } else if (event.key === "Escape" && taken() !== undefined) {
+      // While taken, Escape gives the box back to the person; the stop button still stops the turn.
+      event.preventDefault();
+      release();
     } else if (event.key === "Escape" && threads.busy()) {
       event.preventDefault();
       // One held down repeats: it stops nothing, or the two presses `escape-twice` asks for would be one.
@@ -554,11 +607,14 @@ function Composer(props: { deps: Deps }) {
     }
   };
 
+  /** A takeover's text box takes text only: images go with a prompt of the person's own. */
+  const refuseFiles = () => notify.toast({ level: "warning", message: "Only text goes here now: let the box go (Escape) to attach images to a prompt." });
   // Files pasted or dropped attach, or are told why not (`addFiles`); text is the field's, pasted or dropped as it is.
   const onPaste = (event: ClipboardEvent) => {
     const files = [...(event.clipboardData?.files ?? [])];
     if (files.length === 0) return;
     event.preventDefault();
+    if (taken() !== undefined) return refuseFiles();
     void addFiles(files);
   };
 
@@ -566,7 +622,9 @@ function Composer(props: { deps: Deps }) {
     setDragging(false);
     const files = [...(event.dataTransfer?.files ?? [])];
     if (files.length === 0) return;
+    // Taken too, or the browser would open the file in place of the app.
     event.preventDefault();
+    if (taken() !== undefined) return refuseFiles();
     void addFiles(files);
   };
 
@@ -582,9 +640,12 @@ function Composer(props: { deps: Deps }) {
   return (
     <div class="composer-wrap">
       <Each slot={ComposerNotices} />
+      <Show when={taken() === undefined ? holder() : undefined} keyed>
+        {(item) => <Contained slot={ComposerTakeovers} item={item} component={item.waiting} props={{ take }} />}
+      </Show>
       <form
         class="composer"
-        classList={{ dragging: dragging(), busy: threads.busy() }}
+        classList={{ dragging: dragging(), busy: threads.busy(), taken: taken() !== undefined }}
         onSubmit={(event) => {
           event.preventDefault();
           send();
@@ -592,7 +653,7 @@ function Composer(props: { deps: Deps }) {
         onDragOver={(event) => {
           if (event.dataTransfer?.types.includes("Files")) {
             event.preventDefault();
-            setDragging(true);
+            if (taken() === undefined) setDragging(true);
           }
         }}
         onDragLeave={(event) => {
@@ -600,6 +661,9 @@ function Composer(props: { deps: Deps }) {
         }}
         onDrop={onDrop}
       >
+        <Show when={taken()} keyed>
+          {(item) => <Contained slot={ComposerTakeovers} item={item} component={item.banner} props={{ release }} />}
+        </Show>
         <Show when={completion.open()}>
           {/* A press anywhere in it keeps the focus, and so the cursor and the menu, in the prompt. */}
           <div class="completions" ref={suggestionList} onMouseDown={(event) => event.preventDefault()}>
@@ -663,7 +727,7 @@ function Composer(props: { deps: Deps }) {
             </For>
           </ul>
         </Show>
-        <Show when={images().length > 0}>
+        <Show when={images().length > 0 && taken() === undefined}>
           <div class="attachments">
             <For each={images()}>
               {(image, index) => (
@@ -691,8 +755,9 @@ function Composer(props: { deps: Deps }) {
         <textarea
           ref={input}
           rows={1}
-          value={text()}
-          placeholder={placeholder()}
+          value={boxText()}
+          placeholder={taken()?.placeholder() ?? placeholder()}
+          readOnly={taken()?.readOnly?.() === true}
           aria-label="Message"
           aria-autocomplete="list"
           aria-controls={completion.open() && completion.items().length > 0 ? listId : undefined}
@@ -702,8 +767,12 @@ function Composer(props: { deps: Deps }) {
             const value = event.currentTarget.value;
             // Text and cursor together: completion asks for the word once, not for each half of the change.
             batch(() => {
-              edited();
-              setText(value);
+              const item = taken();
+              if (item !== undefined) item.setText(value);
+              else {
+                edited();
+                setText(value);
+              }
               syncCursor();
             });
             resize();
@@ -732,16 +801,28 @@ function Composer(props: { deps: Deps }) {
             <Each slot={ComposerControls} />
           </div>
           <div class="composer-actions">
-            <Each slot={ComposerActions} props={{ addFiles, insert }} />
+            <Show when={taken() === undefined}>
+              <Each slot={ComposerActions} props={{ addFiles, insert }} />
+            </Show>
+            <Show when={taken()}>
+              {(item) => (
+                <button type="submit" class="send send-labeled" disabled={item().canSubmit?.() === false}>
+                  {item().submitLabel()}
+                  <SendIcon />
+                </button>
+              )}
+            </Show>
             <Show
               when={threads.busy()}
               fallback={
-                <button type="submit" class="send" disabled={!canSend()} aria-label="Send" data-tip="Send">
-                  <SendIcon />
-                </button>
+                <Show when={taken() === undefined}>
+                  <button type="submit" class="send" disabled={!canSend()} aria-label="Send" data-tip="Send">
+                    <SendIcon />
+                  </button>
+                </Show>
               }
             >
-              <Show when={canSend()}>
+              <Show when={canSend() && taken() === undefined}>
                 {/* With Alt, the other of steering and queueing, as with the send key. */}
                 <button
                   type="submit"

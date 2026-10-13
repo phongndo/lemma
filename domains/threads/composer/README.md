@@ -4,8 +4,10 @@ Where prompts are written: text, images pasted, dropped, or attached,
 completions for the word being typed, and the buttons to send, steer, and
 stop. Adds the composer to `ComposerRegion`, and draws what plugins add to
 `ComposerNotices` (above the box), `ComposerControls` and `ComposerActions`
-(its toolbar), `ComposerFooter` (under it), and `ComposerCompletions` (the
-completion menu), all in [`@lemma/threads`](../contract/src/threads.ts). Its own
+(its toolbar), `ComposerFooter` (under it), `ComposerCompletions` (the
+completion menu), and `ComposerTakeovers` (a plugin's banner in the box, which
+then takes the text box and the send button, or its line above the box), all
+in [`@lemma/threads`](../contract/src/threads.ts). Its own
 pieces go through the same slots and parts: `composer.attach` in
 `ComposerActions`, `composer.answer` in `ComposerNotices` (what a plugin that
 handled or refused the last prompt said: `Threads.answer`), and the defaults of
@@ -34,6 +36,20 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   or the turn ending, forgets a first Escape. Queueing is the default because a steer
   lands between steps and can redirect what the model was in the middle of,
   while a queued prompt can still be promoted.
+- **Taken** (`ComposerTakeovers`: the agent's questions, say). The first
+  item holding the open thread draws its banner in the box, above the text
+  box, and the text box, Enter, and the send button (labelled as the item says)
+  are its own; the thread's draft waits, and comes back when it lets go. It
+  never takes the box while the person has a prompt of their own unsent
+  (written, or going out), nor after they let it go (Escape in the box, or
+  the banner's own control) until what it holds the box for changes: then its
+  line shows above the box, whose control takes the box, the prompt kept. A
+  prompt sent instead lets it go. While taken, Escape lets go rather than
+  stopping the turn (the stop button still stops it), Up and Down bring back
+  no sent prompt, and `ComposerActions` are left out; images pasted or
+  dropped are refused, as what is written is text only. A box that changed
+  under someone's keys would send their words to the wrong place, which is why
+  their own prompt keeps it rather than a pause in their typing.
 - **Every prompt** goes with `Models.turnOptions()`. A new thread's first
   prompt creates it in the directory `Workspace.newChatDir` gives: a fresh
   worktree named from the prompt, when one is chosen.
