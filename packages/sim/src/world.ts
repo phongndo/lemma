@@ -177,6 +177,8 @@ export class World {
   private generation = 0;
   private readonly alive = new Set<number>();
   private crashesSeen = 0;
+  /** Write faults injected before the running host started: one more means a write failed while it ran. */
+  private writesAtStart = 0;
   private readonly sessions: string[] = [];
   private readonly prompted: Prompted[] = [];
   private requests = 0;
@@ -209,9 +211,13 @@ export class World {
     for (let tick = 0; tick < this.ticks; tick++) {
       const action = this.prng.weighted(this.swarm.actions) ?? "wait";
       this.trace.push({ tick, atMs: Number(this.sim.clock.elapsed / 1_000_000n), action });
+      const failedWrite = (this.disk.injected.get("write") ?? 0) > this.writesAtStart;
+      const crashes = this.disk.crashes;
       await this.act(action);
       await this.advance(this.prng.between(0, 3_000));
       await this.noticeCrash();
+      // Recovery then starts from whatever the failed write left.
+      if (failedWrite && this.disk.crashes > crashes) this.checker.count("crash after a failed write");
       this.raise(`tick ${tick}`);
     }
     await this.settle();
@@ -347,6 +353,7 @@ export class World {
       );
       this.running = { host, registries, gone: await this.sim.value(Deferred.make<void>()), clients: new Map() };
       this.crashesSeen = this.disk.crashes;
+      this.writesAtStart = this.disk.injected.get("write") ?? 0;
       return;
     }
   }

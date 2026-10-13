@@ -237,3 +237,8 @@ the date in UTC (`TZ`), so a run is the same on every machine. A seed that
 fails saves its evidence (its replay command, the actions it drew, the prompts
 and model calls, and its disk) as [`@lemma/testing`](../testing/README.md#failure-evidence)
 says.
+
+`tests/failpoints.test.ts` fails a session append and a queue withdrawal at
+each of their disk operations in turn, once and from then on
+(`SimDisk.faultAfter`), then crashes and restarts the host: what was
+acknowledged must be there, and new work must complete.

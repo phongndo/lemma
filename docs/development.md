@@ -111,8 +111,8 @@ not replayed, so a failing run is not reproduced bit for bit, as the
 simulator's is. `--seconds` (`LEMMA_TORTURE_SECONDS`, default 30) sets how
 long the workload runs.
 
-A failing simulation seed or torture run saves its evidence before its
-temporary files go: the seed and the command that replays it, what
+A failing simulation seed, fault-point test, or torture run saves its evidence
+before its temporary files go: the seed and the command that replays it, what
 the run did last, and the disk or home it left, never credentials. It goes
 under `LEMMA_TEST_ARTIFACTS` (the OS temp directory by default), which CI
 uploads when a job fails ([`@lemma/testing`](../packages/testing/README.md#failure-evidence)).

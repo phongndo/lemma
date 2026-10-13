@@ -24,7 +24,10 @@ seam storage code takes instead of `node:fs` (the sessions plugin through
   disk does; a failed write may leave part of its bytes. A failed sync drops
   what it had to write, as Linux does: the bytes stay readable, but no later
   sync writes them (it leaves zeros there) until they are written again.
-  `disk.injected` counts what fired.
+  `disk.injected` counts what fired. `disk.faultAfter(n)` fails the operation
+  after the next `n` instead, and with `{ persistent: true }` every one after
+  it, so a test can fail each of an operation's steps in turn, until one
+  completes before its fault is due; `clearFaults()` heals the disk.
 - **Other programs.** `disk.outside` appends to, rewrites, truncates, replaces,
   or removes a file, durably at once.
 

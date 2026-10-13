@@ -33,6 +33,8 @@ const REACHED = [
   "crash",
   "crash mid-write",
   "crash while starting",
+  // A host saw a write fail, then crashed: recovery starts from what the failed write left.
+  "crash after a failed write",
   "stop",
   // What actions did, not that they were drawn: a generator whose calls all fail would otherwise go on looking busy.
   "retried",
