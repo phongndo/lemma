@@ -192,6 +192,44 @@ export const ThreadHeader = defineSlot<ThreadHeaderItem>("thread.header");
 /** Above the composer box: the connection notice, the provider callout. */
 export const ComposerNotices = defineSlot<Region>("composer.notices");
 
+/**
+ * The composer, taken for a while by a plugin that needs the person's words for one thread (the agent's questions do):
+ * its banner draws inside the composer, above the text box, and the text box, Enter, and the send button are its own.
+ * The thread's draft stays as it was and comes back when it lets go. The composer shows the first item, by order,
+ * holding the open thread.
+ *
+ * The person keeps the box while they have a prompt of their own unsent (text or images in it, or one going out), so
+ * it never changes under their keys, and when they let it go (Escape in it, or the banner's `release`) until what it
+ * is held for (`key`) changes. Meanwhile the composer draws the item's `waiting` above the box, whose `take` takes it
+ * now, their prompt kept for after; a prompt they send instead lets it go. While taken, the composer offers no
+ * `ComposerActions` and takes no images (what is written is text only), Up and Down bring back no sent prompt, and
+ * Escape lets go rather than stopping the turn (the stop button still stops it).
+ */
+export interface ComposerTakeover {
+  /** The thread it holds the composer for now, or none. */
+  readonly sessionId: Accessor<string | undefined>;
+  /** What it holds the composer for (one call's questions): one the person let go takes the box again when this changes. */
+  readonly key: Accessor<string>;
+  /** Drawn inside the composer, above the text box; `release` gives the box back to the person. */
+  readonly banner: Component<{ readonly release: () => void }>;
+  /** Drawn above the composer while the person keeps the box; `take` takes it now. */
+  readonly waiting: Component<{ readonly take: () => void }>;
+  /** What the text box holds while taken: the plugin's own, apart from the thread's draft. */
+  readonly text: Accessor<string>;
+  readonly setText: (text: string) => void;
+  readonly placeholder: Accessor<string>;
+  /** The text box takes nothing (there is nothing to write now); the send button still works. */
+  readonly readOnly?: Accessor<boolean>;
+  /** Enter in the text box, or the send button, while `canSubmit`. */
+  readonly submit: () => void;
+  /** What the send button does, shown on it: `Next question`, `Submit answers`. */
+  readonly submitLabel: Accessor<string>;
+  /** Whether submitting does anything now; the send button is disabled, and Enter does nothing, while it does not. Default: it does. */
+  readonly canSubmit?: Accessor<boolean>;
+}
+
+export const ComposerTakeovers = defineSlot<ComposerTakeover>("composer.takeovers");
+
 /** The composer's toolbar, left of its buttons: the model and reasoning pickers. */
 export const ComposerControls = defineSlot<Region>("composer.controls");
 

@@ -12,6 +12,7 @@ import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
 import mcpServers from "@lemma/mcp-servers";
 import sessionsFiles from "@lemma/sessions-files";
+import toolsAsk from "@lemma/tools-ask";
 import toolsBash from "@lemma/tools-bash";
 import toolsCodemode from "@lemma/tools-codemode";
 import toolsEdit from "@lemma/tools-edit";
@@ -45,6 +46,7 @@ export const bundled: readonly Plugin[] = [
   toolsBash,
   toolsCodemode,
   toolsSearchFff,
+  toolsAsk,
   mcpServers,
   sessionsFiles,
   agentLoop,
@@ -107,6 +109,7 @@ export const bundledWeb: readonly string[] = [
   "threads.trajectory",
   "threads.transcript",
   "threads.view",
+  "tools.ask",
   "tools.bash",
   "tools.edit",
   "tools.read",

@@ -11,6 +11,7 @@ What the model can call, and how calls run. Its contract is [`@lemma/tools`](con
 | [`tools.bash`](bash/README.md)             | host + web | The `bash` tool, and how its calls show                                             |
 | [`tools.codemode`](codemode/README.md)     | host       | The `codemode` tool: JavaScript in a sandbox that calls the other tools             |
 | [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show           |
+| [`tools.ask`](ask/README.md)               | host + web | The `ask_user` tool: questions for the user, answered above the composer            |
 
 ## Extending it
 

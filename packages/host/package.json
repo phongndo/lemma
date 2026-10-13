@@ -37,6 +37,7 @@
     "@lemma/sessions": "workspace:*",
     "@lemma/sessions-files": "workspace:*",
     "@lemma/tools": "workspace:*",
+    "@lemma/tools-ask": "workspace:*",
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-codemode": "workspace:*",
     "@lemma/tools-edit": "workspace:*",

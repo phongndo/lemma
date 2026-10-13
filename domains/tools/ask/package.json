@@ -1,0 +1,37 @@
+{
+  "name": "@lemma/tools-ask",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `ask_user` tool: questions for the user, answered above the composer",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/actions": "workspace:*",
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.1",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.2"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
+  }
+}

@@ -28,6 +28,7 @@ import projectsPage from "@lemma/workspace-projects";
 import providers from "@lemma/llm-providers";
 import reload from "@lemma/frame-reload";
 import threadView from "@lemma/threads-view";
+import ask from "@lemma/tools-ask/web";
 import bash from "@lemma/tools-bash/web";
 import edit from "@lemma/tools-edit/web";
 import read from "@lemma/tools-read/web";
@@ -76,6 +77,7 @@ export const bundled: readonly Plugin[] = [
   edit,
   bash,
   search,
+  ask,
   composer,
   fileMentions,
   modelPicker,
