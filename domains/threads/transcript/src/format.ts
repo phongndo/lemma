@@ -1,4 +1,5 @@
 import { formatCost, formatTokens } from "@lemma/client/format";
+import { cacheHitRate } from "@lemma/llm";
 import type { Usage } from "@lemma/llm";
 
 interface UsageSummary {
@@ -15,7 +16,7 @@ export const summarizeUsage = (usage: Usage): UsageSummary => {
   const lines = [
     `Input ${(usage.input + cached).toLocaleString()} tokens`,
     `Output ${usage.output.toLocaleString()} tokens${usage.reasoning ? ` (${usage.reasoning.toLocaleString()} reasoning)` : ""}`,
-    `Cache read ${usage.cacheRead.toLocaleString()}, write ${usage.cacheWrite.toLocaleString()}`,
+    `Cache read ${usage.cacheRead.toLocaleString()}, write ${usage.cacheWrite.toLocaleString()}${usage.cacheRead === 0 ? "" : ` (${percent(cacheHitRate(usage)!)} of input)`}`,
     `Cost ${formatCost(usage.cost.total)} (in ${formatCost(usage.cost.input)}, out ${formatCost(usage.cost.output)}, cache ${formatCost(usage.cost.cacheRead + usage.cost.cacheWrite)})`,
   ];
   return {
@@ -26,6 +27,8 @@ export const summarizeUsage = (usage: Usage): UsageSummary => {
     title: lines.join("\n"),
   };
 };
+
+const percent = (share: number): string => `${Math.round(share * 100)}%`;
 
 /** Whole seconds, then minutes: a label that ticks without jumping in width every tenth. */
 export const formatElapsed = (ms: number): string => {

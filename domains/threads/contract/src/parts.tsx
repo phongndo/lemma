@@ -120,7 +120,7 @@ export interface ChatTurnFooterProps {
   readonly answer: string;
 }
 
-/** Under a finished turn: model, tokens, cost, time, copy. */
+/** Under a finished turn: model, tokens, speed, cost, time, copy. */
 export const ChatTurnFooterPart = definePart<ChatTurnFooterProps>("chat.turn-footer");
 
 export interface SidebarRowProps {
