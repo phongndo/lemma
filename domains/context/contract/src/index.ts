@@ -17,14 +17,19 @@ export interface CompactionRequest {
   readonly contextWindow: number;
   /** The request's size as estimated, in tokens. */
   readonly tokens: number;
-  /** `threshold`: it would fill more of the window than the plugin's `at`; `overflow`: the model refused the last request as too long. */
-  readonly reason: "threshold" | "overflow";
+  /**
+   * `threshold`: it would fill more of the window than the plugin's `at`; `overflow`: the model refused the last request
+   * as too long; `requested`: the user asked for one (`/compact`).
+   */
+  readonly reason: "threshold" | "overflow" | "requested";
   /** The turn's branch, root to its last event. */
   readonly branch: readonly SessionEvent[];
   /** Index in `branch` of the first event kept word for word: the summary stands for what the model saw before it. */
   readonly firstKept: number;
   /** The summary a compaction before wrote, which this one's replaces. */
   readonly previous?: string;
+  /** What the user asked the summary to focus on (`/compact <instructions>`). */
+  readonly instructions?: string;
 }
 
 /**

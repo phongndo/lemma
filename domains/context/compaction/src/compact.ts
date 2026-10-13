@@ -67,6 +67,10 @@ export const validCut = (branch: readonly SessionEvent[], index: number): boolea
   return branch.slice(start, index).some((event) => event.data.type === "message");
 };
 
+/** The tokens of the messages in the model's view, about (what a cut divides). */
+export const viewTokens = (branch: readonly SessionEvent[]): number =>
+  branch.slice(modelView(branch).start).reduce((sum, event) => sum + (event.data.type === "message" ? tokensOf(messageChars(event.data.message)) : 0), 0);
+
 export const chooseCut = (branch: readonly SessionEvent[], keep: number): number | undefined => {
   const { start } = modelView(branch);
   const seen: { readonly index: number; readonly message: Message }[] = [];

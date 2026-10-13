@@ -1,5 +1,5 @@
 import * as fs from "node:fs/promises";
-import { Effect, Layer, Stream } from "effect";
+import { Effect, Fiber, Layer, Option, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, Events, makeCore, PluginContext } from "@lemma/core";
 import type { Handler, Plugin } from "@lemma/core";
@@ -18,7 +18,7 @@ import { call, failWith, fakeLlm, host, paths, reply, tempDir, testTools, useToo
 import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
-import compaction, { chooseCut, estimateTokens, requestChars, transcript } from "../src/index.ts";
+import compaction, { chooseCut, compactAsked, estimateTokens, requestChars, transcript } from "../src/index.ts";
 import { SUMMARY_PROMPT, summaryAsk } from "../src/compact.ts";
 
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
@@ -107,6 +107,21 @@ describe("the cut", () => {
     expect(ask).toContain("write one summary of both");
     expect(ask).toContain("The user asked the summary to focus on: the API design");
     expect(ask.endsWith("Summarize the conversation above.")).toBe(true);
+  });
+});
+
+describe("asking for a compaction", () => {
+  const text = (value: string) => [{ type: "text" as const, text: value }];
+  it("is /compact alone or with what to focus on, and nothing else", () => {
+    expect(compactAsked(text("/compact"))).toEqual({});
+    expect(compactAsked(text("  /compact  \n"))).toEqual({});
+    expect(compactAsked(text("/compact keep the\nAPI design "))).toEqual({ instructions: "keep the\nAPI design" });
+    expect(compactAsked(text("/compaction"))).toBeUndefined();
+    expect(compactAsked(text("please /compact"))).toBeUndefined();
+    expect(compactAsked([...text("/compact"), { type: "image", data: "", mimeType: "image/png" }])).toBeUndefined();
+    // Parts are lines of one prompt: a command split across them is not one, and its focus may follow it.
+    expect(compactAsked([...text("/compact"), ...text("keep API")])).toEqual({ instructions: "keep API" });
+    expect(compactAsked([...text("/comp"), ...text("act")])).toBeUndefined();
   });
 });
 
@@ -288,6 +303,74 @@ describe("in a session", () => {
     const { events, notices } = await twoTurns(cutOff);
     expect(events.some((event) => event.data.type === "compaction")).toBe(false);
     expect(notices[0]!.message).toContain("the summary ran past");
+  });
+
+  /**
+   * A turn, `/compact the x question`, then two more turns, the model answering `script` in turn; with `others`. The
+   * first notice published is the compaction's outcome.
+   */
+  const asking = (script: readonly Script[], others: readonly Plugin[] = []) => {
+    const llm = fakeLlm(script);
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          // The default threshold and recent share: these turns are far from both.
+          const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, testTools().plugin, llm.plugin, agent, compaction, ...others]);
+          return yield* core.run(
+            Effect.gen(function* () {
+              const store = yield* Sessions;
+              const firstNotice = yield* Effect.forkScoped(Stream.runHead((yield* Events).stream(Notice)));
+              yield* Effect.yieldNow;
+              const { id } = yield* store.create();
+              const turns = yield* Agent;
+              yield* turns.prompt(id, long("x"));
+              const outcome = yield* turns.prompt(id, [{ type: "text", text: "/compact the x question" }]);
+              yield* turns.prompt(id, long("y"));
+              yield* turns.prompt(id, long("z"));
+              return { events: yield* store.events(id), outcome, notice: Option.getOrUndefined(yield* Fiber.join(firstNotice)), requests: llm.requests };
+            }),
+          );
+        }),
+      ),
+    );
+  };
+
+  it("summarizes when the user asks with /compact, before the next model call, whatever its estimate, and only once", async () => {
+    const seen: CompactionRequest[] = [];
+    const watching = definePlugin({
+      id: "watching",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(CompactionHook, (request, next) =>
+            Effect.andThen(
+              Effect.sync(() => seen.push(request)),
+              next(request),
+            ),
+          ),
+        ),
+      ),
+    });
+    const { events, notice, outcome, requests } = await asking([reply("a"), reply("They asked about x."), reply("b"), reply("c")], [watching]);
+    expect(outcome).toMatchObject({ kind: "handled", by: "context.compaction" });
+    // The first turn's request, the summary, then the next two turns' requests: no second summary.
+    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, true, false, false]);
+    expect(JSON.stringify(requests[1]!.messages)).toContain("The user asked the summary to focus on: the x question");
+    expect(seen).toMatchObject([{ reason: "requested", instructions: "the x question" }]);
+    // Far shorter than what is kept by default, the conversation is summarized but for its last quarter: the new prompt.
+    const prompt = events.find((event) => event.data.type === "message" && JSON.stringify(event.data.message).includes("y".repeat(400)))!;
+    expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ firstKeptId: prompt.id }]);
+    expect(notice).toMatchObject({ level: "info", message: expect.stringContaining("Summarized the earlier conversation") });
+    // The command itself is not logged.
+    expect(JSON.stringify(events)).not.toContain("/compact");
+  });
+
+  it("says so when a handler skips a compaction the user asked for", async () => {
+    const { events, notice } = await asking(
+      [reply("a"), reply("b"), reply("c")],
+      [answering("keeps-all", () => ({ kind: "skip", reason: "keeps everything" }))],
+    );
+    expect(events.some((event) => event.data.type === "compaction")).toBe(false);
+    expect(notice).toEqual({ level: "info", source: "context.compaction", message: "The earlier conversation was not summarized: keeps everything" });
   });
 
   it("sizes the request after every other handler has added to it", async () => {
