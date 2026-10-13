@@ -41,6 +41,15 @@ export const rpcUrl = (base: string, token: string | undefined): string => {
  * that died across sleep or a network change) must fail the `Host.Events`
  * subscription, or it would wait forever on a stream the server has dropped.
  *
+ * Effect's pinger is patched (`patches/effect@4.0.4.patch`). As released, it
+ * fails a connection when a ping tick fires late, even though every ping was
+ * answered, so a busy or backgrounded page dropped a live host every few
+ * seconds. Patched, it fails one only while a ping is unanswered, and after
+ * the machine sleeps it checks within a second of waking. The late-timer
+ * tests in `tests/rpc.test.ts` hold it. An Effect upgrade fails to install
+ * until the patch is rebased onto it or dropped: drop it once a release
+ * passes those tests without it.
+ *
  * What `connect` holds. Its streams (`Host.Events`, `Channel.Open`) are read
  * only through this package, which hands each element to a callback at
  * once: the `Host`'s `onEvent` and `channel.open`, which `follow` uses.
