@@ -33,7 +33,7 @@ bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
 every job on main, unchanged, so a failure there is a flake to fix, and runs the
 tests with fresh seeds and many more random cases, and the performance checks;
 a failure prints the command that repeats it.
-`.github/workflows/bench.yml` compares the core's benchmarks with a base
+`.github/workflows/bench.yml` compares the core's and the harness's benchmarks with a base
 revision (by hand, or on a pull request labelled `performance`); locally,
 `node scripts/bench-compare.ts` (see [the core's README](../packages/core/README.md#develop)).
 `pnpm harness:bench` measures what the harness does per step, in simulated

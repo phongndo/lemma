@@ -1,6 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { cpus } from "node:os";
-import { join } from "node:path";
+import { writeReport } from "./report.ts";
+import type { Measurement, Unit } from "./report.ts";
 
 // Engineering guardrails, not application SLAs. Reference: Linux x64, Ryzen 9
 // 9950X, Node 24.20.0, Effect 4.0.1, 2026-10-05. Warm baseline: core.run
@@ -51,14 +50,32 @@ export const budgets = {
   "Harness / 1000 entries / bytes written per step": 2_600,
   "Harness / 10000 entries / bytes written per step": 2_600,
   "Harness / 100 entries / hooks run per step": 3,
+  "Harness / 1000 entries / hooks run per step": 3,
+  "Harness / 10000 entries / hooks run per step": 3,
   "Harness / 100 entries / events published per step": 23,
+  "Harness / 1000 entries / events published per step": 23,
+  "Harness / 10000 entries / events published per step": 23,
+  // A measured turn is a tool step and an answer step: its maxima, twice a step's, keep one costly turn from hiding in
+  // the average.
+  "Harness / 100 entries / max syncs per turn": 16,
+  "Harness / 1000 entries / max syncs per turn": 16,
+  "Harness / 10000 entries / max syncs per turn": 16,
+  "Harness / 100 entries / max bytes per turn": 5200,
+  "Harness / 1000 entries / max bytes per turn": 5200,
+  "Harness / 10000 entries / max bytes per turn": 5200,
+  "Harness / 100 entries / max hooks per turn": 6,
+  "Harness / 1000 entries / max hooks per turn": 6,
+  "Harness / 10000 entries / max hooks per turn": 6,
+  "Harness / 100 entries / max events per turn": 46,
+  "Harness / 1000 entries / max events per turn": 46,
+  "Harness / 10000 entries / max events per turn": 46,
   "Harness / 100 entries / ms per step": 3,
   "Harness / 10000 entries / ms per step": 3,
   "Harness / 10000 entries / heap MB": 64,
   "Harness / step time 10k vs 1k entries": 1.5,
 } as const;
 
-const measurements: Record<string, { value: number; limit?: number; passed?: boolean }> = {};
+const measurements: Record<string, Measurement> = {};
 /** Timings vary with the machine, so their budgets fail only when asked to (on an idle, comparable machine). */
 export const enforced = process.env.LEMMA_PERF_ENFORCE === "1";
 /** Sizes, and counts of what a simulated run does, are the same on every machine, so their budgets always fail. */
@@ -69,30 +86,39 @@ const deterministic = new Set<string>([
   ...Object.keys(budgets).filter((name) => name.startsWith("Harness / ") && !/ ms per step$| heap MB$|^Harness \/ step time /.test(name)),
 ]);
 
-export function record(name: string, value: number) {
+function check(name: string, measurement: Measurement, exceeds: (limit: number) => boolean) {
+  if (!Number.isFinite(measurement.value)) throw new Error(`Invalid measurement: ${name}`);
   const limit = budgets[name as keyof typeof budgets];
-  if (!Number.isFinite(value)) throw new Error(`Invalid measurement: ${name}`);
-  measurements[name] = { value, ...(limit === undefined ? {} : { limit, passed: value <= limit }) };
-  if (limit !== undefined && value > limit) {
-    const fails = enforced || deterministic.has(name);
-    console.warn(`${fails ? "FAIL" : "ADVISORY"}: ${name} ${value.toFixed(3)} > ${limit}`);
+  if (limit === undefined) {
+    measurements[name] = measurement;
+    return;
+  }
+  const passed = !exceeds(limit);
+  const fails = enforced || deterministic.has(name);
+  measurements[name] = { ...measurement, limit, passed, enforced: fails };
+  if (!passed) {
+    console.warn(`${fails ? "FAIL" : "ADVISORY"}: ${name} ${measurement.value.toFixed(3)} > ${limit}`);
     if (fails) process.exitCode = 1;
   }
 }
 
-export function finish(name: string) {
-  const report = {
-    measuredAt: new Date().toISOString(),
-    runtime: `Node ${process.version}`,
-    platform: `${process.platform}/${process.arch}`,
-    cpu: cpus()[0]?.model,
-    enforced,
-    measurements,
-  };
-  console.log(JSON.stringify(report));
-  const directory = process.env.LEMMA_BENCH_OUTPUT_DIR;
-  if (directory) {
-    mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, `${name}.json`), JSON.stringify(report, null, 2) + "\n");
-  }
+/** A measurement, with the samples it summarizes when there are several. */
+export function record(name: string, value: number, unit: Unit, values?: readonly number[]) {
+  check(name, { value, unit, ...(values === undefined ? {} : { values }) }, (limit) => value > limit);
+}
+
+/**
+ * A budgeted average count: its exact `total` over `samples` is compared with the limit, so one extra sync in twenty
+ * steps fails a budget its rounded average would meet.
+ */
+export function recordAverage(name: string, total: number, samples: number, unit: Unit) {
+  if (!Number.isSafeInteger(total) || total < 0) throw new Error(`Invalid total: ${name}`);
+  if (!Number.isSafeInteger(samples) || samples < 1) throw new Error(`Invalid samples: ${name}`);
+  if (budgets[name as keyof typeof budgets] === undefined) throw new Error(`Missing budget: ${name}`);
+  check(name, { value: total / samples, unit, total, samples }, (limit) => total > limit * samples);
+}
+
+/** Reports what was recorded: see `writeReport`. */
+export function finish(name: string, parameters?: Readonly<Record<string, unknown>>) {
+  return writeReport(name, measurements, enforced, parameters);
 }

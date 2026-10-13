@@ -523,7 +523,10 @@ The budgets and their reference environment are in
 [`bench/budgets.ts`](bench/budgets.ts). Timing budgets are advisory:
 `LEMMA_PERF_ENFORCE=1` turns a miss into a failure (measure on an idle,
 comparable machine). Size budgets (the browser bundle) are the same on every
-machine and always fail. `LEMMA_BENCH_OUTPUT_DIR` writes dated JSON artifacts.
+machine and always fail. Each measurement names its unit and keeps the samples
+it summarizes; an average count keeps its exact total and number of samples,
+which its budget is held to. `LEMMA_BENCH_OUTPUT_DIR` writes the reports as
+JSON, each with the commit it measured and its workload's sizes.
 `core:test` runs both benchmarks with tiny counts (`LEMMA_BENCH_ITERATIONS`,
 `LEMMA_BENCH_SAMPLES`, `LEMMA_STRESS_CYCLES`), so they cannot rot unnoticed.
 
@@ -532,7 +535,10 @@ side by side does. `node scripts/bench-compare.ts [--base <ref>] [--runs <n>]`
 checks the base revision (default: the merge base with `origin/main`) out
 beside the working tree, alternates the microbenchmarks of the two, and reports
 a change only when a Mann-Whitney U test finds it significant across `--runs`
-pairs (default 10), corrected for the number of benchmarks, and it is beyond
-`--threshold` (default 10%), as Go's benchstat does. `--fail` exits non-zero on
-a slowdown. In the Lemma repository, `--harness` compares the harness
-benchmark's step timings too.
+pairs (default 10, at least 8), corrected for the number of benchmarks, and it is beyond
+`--threshold` (default 10%), as Go's benchstat does; a change beyond the
+threshold that the test cannot tell from noise is reported `unclear`, and each
+median shows its 95% interval. `--fail` exits non-zero on a slowdown. Every
+run's reports, and `comparison.json` with each benchmark's samples, are kept in
+`--output` (or `LEMMA_BENCH_OUTPUT_DIR`). In the Lemma repository, `--harness`
+compares the harness benchmark's step timings too.

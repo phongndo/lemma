@@ -81,7 +81,7 @@ for (let sample = 0; sample < 5; sample++) {
   cold.push(performance.now() - start);
 }
 cold.sort((a, b) => a - b);
-record("coldStartupMs", cold[2]!);
+record("coldStartupMs", cold[2]!, "ms", cold);
 for (let n = 0; n < 20; n++) await cycle(false);
 gc();
 const initial = process.memoryUsage();
@@ -97,10 +97,10 @@ for (let n = 1; n <= cycles; n++) {
 }
 const elapsed = performance.now() - started;
 latency.sort((a, b) => a - b);
-record("operationP95Us", latency[Math.ceil(latency.length * 0.95) - 1]!);
-record("operationP99Us", latency[Math.ceil(latency.length * 0.99) - 1]!);
-record("heapGrowthBytes", Math.max(0, memory.at(-1)!.heap - initial.heapUsed));
-record("rssGrowthBytes", Math.max(0, memory.at(-1)!.rss - initial.rss));
-record("lifecycleCyclesPerSecond", (cycles * 1000) / elapsed);
+record("operationP95Us", latency[Math.ceil(latency.length * 0.95) - 1]!, "us", latency);
+record("operationP99Us", latency[Math.ceil(latency.length * 0.99) - 1]!, "us", latency);
+record("heapGrowthBytes", Math.max(0, memory.at(-1)!.heap - initial.heapUsed), "bytes");
+record("rssGrowthBytes", Math.max(0, memory.at(-1)!.rss - initial.rss), "bytes");
+record("lifecycleCyclesPerSecond", (cycles * 1000) / elapsed, "count/s");
 console.log(JSON.stringify({ cycles, warmupCycles: 20, faultsPerCycle: 300, reloadsPerCycle: 3, gcEveryCycles: 20, coldStartupSamplesMs: cold, memory }));
-finish("workload");
+finish("workload", { cycles });

@@ -26,7 +26,7 @@ function measure(name: string, count: number, run: () => void) {
   }
   values.sort((a, b) => a - b);
   const median = values[Math.floor(samples / 2)]!;
-  record(name, median);
+  record(name, median, "us/op", values);
   console.log(`${name.padEnd(40)} ${median.toFixed(3).padStart(10)} µs/op  [${values[0]!.toFixed(3)}, ${values.at(-1)!.toFixed(3)}]`);
 }
 
@@ -156,10 +156,10 @@ for (const count of [100, 1000]) {
     }
     rounds.sort((a, b) => a - b);
     const bytes = rounds[2]!;
-    record("Navigator heap bytes", bytes);
+    record("Navigator heap bytes", bytes, "bytes");
     console.log(`${"Navigator heap bytes".padEnd(40)} ${bytes.toFixed(0).padStart(10)} bytes  [${rounds[0]!.toFixed(0)}, ${rounds.at(-1)!.toFixed(0)}]`);
   }
 }
 
 if (sink === 0) throw new Error("Unobserved benchmark result");
-finish("microbench");
+finish("microbench", { samples, iterations });

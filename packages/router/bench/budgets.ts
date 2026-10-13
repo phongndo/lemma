@@ -1,6 +1,5 @@
-import { mkdirSync, writeFileSync } from "node:fs";
-import { cpus } from "node:os";
-import { join } from "node:path";
+import { writeReport } from "../../core/bench/report.ts";
+import type { Measurement, Unit } from "../../core/bench/report.ts";
 
 // Engineering guardrails, not application SLAs. Values are microseconds per
 // operation unless named otherwise; reference and headroom are recorded beside
@@ -36,34 +35,28 @@ export const budgets: Record<string, number> = {
   browserBundleGzipBytes: 94_000,
 };
 
-const measurements: Record<string, { value: number; limit?: number; passed?: boolean }> = {};
+const measurements: Record<string, Measurement> = {};
 export const enforced = process.env.LEMMA_PERF_ENFORCE === "1";
 const deterministic = new Set<string>(["browserBundleBytes", "browserBundleGzipBytes"]);
 
-export function record(name: string, value: number) {
+/** A measurement, with the samples it summarizes when there are several. */
+export function record(name: string, value: number, unit: Unit, values?: readonly number[]) {
   const limit = budgets[name];
   if (!Number.isFinite(value)) throw new Error(`Invalid measurement: ${name}`);
-  measurements[name] = { value, ...(limit === undefined ? {} : { limit, passed: value <= limit }) };
+  const fails = enforced || deterministic.has(name);
+  measurements[name] = {
+    value,
+    unit,
+    ...(values === undefined ? {} : { values }),
+    ...(limit === undefined ? {} : { limit, passed: value <= limit, enforced: fails }),
+  };
   if (limit !== undefined && value > limit) {
-    const fails = enforced || deterministic.has(name);
     console.warn(`${fails ? "FAIL" : "ADVISORY"}: ${name} ${value.toFixed(3)} > ${limit}`);
     if (fails) process.exitCode = 1;
   }
 }
 
-export function finish(name: string) {
-  const report = {
-    measuredAt: new Date().toISOString(),
-    runtime: `Node ${process.version}`,
-    platform: `${process.platform}/${process.arch}`,
-    cpu: cpus()[0]?.model,
-    enforced,
-    measurements,
-  };
-  console.log(JSON.stringify(report));
-  const directory = process.env.LEMMA_BENCH_OUTPUT_DIR;
-  if (directory) {
-    mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, `router-${name}.json`), JSON.stringify(report, null, 2) + "\n");
-  }
+/** Reports what was recorded, as `router-<name>`: see `writeReport`. */
+export function finish(name: string, parameters?: Readonly<Record<string, unknown>>) {
+  return writeReport(`router-${name}`, measurements, enforced, parameters);
 }

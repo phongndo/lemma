@@ -13,7 +13,7 @@ try {
   // Pack invokes prepack, building exactly what a separate application receives.
   run("pnpm", ["pack", "--out", join(consumer, "lemma-core.tgz")], core);
   cpSync(join(core, "scripts/consumer"), consumer, { recursive: true });
-  cpSync(join(core, "bench/budgets.ts"), join(consumer, "budgets.ts"));
+  for (const file of ["budgets.ts", "report.ts"]) cpSync(join(core, "bench", file), join(consumer, file));
   writeFileSync(
     join(consumer, "package.json"),
     JSON.stringify(

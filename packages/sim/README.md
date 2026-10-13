@@ -158,10 +158,16 @@ few dozen turns as a real one does once its context is full, and a request's
 history stays within the same bounds at 1,000 entries as at 10,000. It
 measures each step at 100, 1,000, and 10,000 entries, with `Verify` off, as in
 production. Simulated waits cost no wall time, so a step's wall time is the
-harness's own. What it counts per step is the same on every machine, and is a
-hard budget (`packages/core/bench/budgets.ts`); `tests/bench.test.ts` pins the
-counts on a short session in CI, on Linux and macOS. Timings are advisory;
-`scripts/bench-compare.ts --harness` compares a step's between builds.
+harness's, with the simulation's driver, the scripted model and tools, `MemFs`,
+and the plugin counting hooks and events beside it. What it counts per step is
+the same on every machine, and is a hard budget
+(`packages/core/bench/budgets.ts`), held against the exact total over the
+measured steps, so one sync more in twenty steps fails it; the most a single
+turn takes has a budget too, so a costly turn cannot hide in the average.
+`tests/bench.test.ts` pins the totals on a short session in CI, on Linux and
+macOS. Timings are advisory: a step's (a tool step's and an answer step's
+apart), and a text delta's to an observer, over the measured turns alone;
+`scripts/bench-compare.ts --harness` compares steps' between builds.
 
 ### The estimate
 
@@ -191,11 +197,12 @@ the store about twice (422, 2,664, and 25,159 events at 100, 1,000, and
 10,000 entries) and took 1.38, 1.54, and 2.29 ms: 1.5 times as long at 10,000
 entries as at 1,000. Now a turn keeps its branch as it appends, and a new turn
 starts from the one the last left while the session's leaf is still its end
-(`agent.loop`'s README): a step reads nothing back, and takes 1.34, 1.41, and
-1.21 ms. Building the request no longer checks its history's messages again
-(`requestFrom`), as they were checked as they were logged. Each step writes 8
-syncs and 2.4 KB, runs 3 public hooks, and publishes 23 events; a delta
-reaches an observer in 0.014 ms (p50), 1.2 ms (p99). The disk's syncs stay
+(`agent.loop`'s README): a step reads nothing back, and takes 1.39, 1.47, and
+1.25 ms (2026-10-13). Building the request no longer checks its history's
+messages again (`requestFrom`), as they were checked as they were logged. Each
+step writes 8 syncs and 2.4 KB, runs 3 public hooks, and publishes 22.5 events
+(45 a turn); a text delta reaches an observer in 0.01 ms (p50), and 0.4 to 2.4
+ms (p99). The disk's syncs stay
 as they are: each is a point the agent's resume depends on, and syncing two
 lines at once would need the store's contract to say which may share one.
 

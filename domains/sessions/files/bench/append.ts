@@ -34,9 +34,9 @@ try {
     }),
   );
   const total = latencies.reduce((sum, value) => sum + value, 0);
-  record("sessionAppendsPerSecond", (appends * 1000) / total);
-  record("sessionAppendP50Ms", percentile(latencies, 0.5));
-  record("sessionAppendP99Ms", percentile(latencies, 0.99));
+  record("sessionAppendsPerSecond", (appends * 1000) / total, "count/s");
+  record("sessionAppendP50Ms", percentile(latencies, 0.5), "ms", latencies);
+  record("sessionAppendP99Ms", percentile(latencies, 0.99), "ms", latencies);
 
   // A restarted host listing many sessions: the first list reads them, the next is served by the index.
   await host(
@@ -52,13 +52,13 @@ try {
   const listing = () => host(Effect.flatMap(Sessions, (store) => Effect.map(Effect.timed(store.list()), ([taken]) => Duration.toMillis(taken))));
   const cold = await listing();
   const warm = await listing();
-  record("sessionListColdMs", cold);
-  record("sessionListWarmMs", warm);
+  record("sessionListColdMs", cold, "ms");
+  record("sessionListWarmMs", warm, "ms");
   console.log(
     `${appends} appends: ${((appends * 1000) / total).toFixed(0)}/s, p50 ${percentile(latencies, 0.5).toFixed(2)} ms, p99 ${percentile(latencies, 0.99).toFixed(2)} ms; ` +
       `list of ${listed + 1}: cold ${cold.toFixed(1)} ms, warm ${warm.toFixed(1)} ms`,
   );
-  finish("sessions");
+  finish("sessions", { appends, listed });
 } finally {
   await fs.rm(dir, { recursive: true, force: true });
 }
