@@ -282,6 +282,9 @@ importers:
       '@lemma/composition':
         specifier: workspace:*
         version: link:../../packages/composition
+      '@lemma/context-compaction':
+        specifier: workspace:*
+        version: link:../../domains/context/compaction
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
@@ -791,6 +794,9 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../agent/contract
+      '@lemma/client':
+        specifier: workspace:*
+        version: link:../../../packages/client
       '@lemma/context':
         specifier: workspace:*
         version: link:../contract
@@ -806,12 +812,21 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../../tools/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
     devDependencies:
       '@lemma/agent-loop':
         specifier: workspace:*

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { Clock, Data, Effect, Schema, Stream } from "effect";
+import { Clock, Data, Effect, Stream } from "effect";
 import { inChainOrder, Notice } from "@lemma/contracts";
 import { AgentInputHook, AgentRequestHook } from "@lemma/agent";
 import { CompactionError, CompactionHook } from "@lemma/context";
@@ -12,28 +12,9 @@ import type { ModelInfo, StreamEvent } from "@lemma/llm";
 import { definePlugin, Events, Hooks } from "@lemma/core";
 import type { HandlerStep } from "@lemma/core";
 import { chooseCut, estimateTokens, SUMMARY_PROMPT, summaryAsk, transcript, validCut, viewTokens } from "./compact.ts";
+import { Config } from "./config.ts";
 
-export { chooseCut, estimateTokens, transcript } from "./compact.ts";
-
-const Config = Schema.Struct({
-  at: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThan(1))
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 0.8)))
-    .annotate({
-      title: "Summarize at",
-      description: "Share of the model's context window the conversation may fill before its older part is summarized (0.8 is 80%).",
-    }),
-  keepRecent: Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0))
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 20_000)))
-    .annotate({
-      title: "Keep recent",
-      description: "Tokens of the latest conversation kept word for word, at most 30% of the window.",
-    }),
-  model: Schema.optional(Schema.String).annotate({
-    title: "Summary model",
-    description: "The model that writes summaries, as provider/model; the turn's model when unset.",
-  }),
-});
-type Config = typeof Config.Type;
+export { chooseCut, estimateTokens, measuredTokens, transcript } from "./compact.ts";
 
 class SummaryFailed extends Data.TaggedError("SummaryFailed")<{ readonly message: string }> {}
 

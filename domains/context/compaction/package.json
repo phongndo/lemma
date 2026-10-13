@@ -5,7 +5,8 @@
   "description": "Keeps a conversation within its model's context window",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -13,13 +14,17 @@
   },
   "dependencies": {
     "@lemma/agent": "workspace:*",
+    "@lemma/client": "workspace:*",
     "@lemma/context": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
+    "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.4",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",
@@ -30,6 +35,7 @@
     "vitest": "5.0.4"
   },
   "lemma": {
-    "host": "./src/index.ts"
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
   }
 }

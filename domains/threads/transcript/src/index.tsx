@@ -6,6 +6,8 @@ import type { TextContent } from "@lemma/llm";
 import { formatElapsed, summarizeUsage } from "./format.ts";
 import {
   answerText,
+  formatThroughput,
+  throughput,
   entryKey,
   foldRunning,
   foldTurn,
@@ -265,6 +267,11 @@ function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: bo
 /** The default `chat.turn-footer` part. */
 function TurnFooter(props: ChatTurnFooterProps) {
   const usage = createMemo(() => summarizeUsage(props.turn.usage));
+  const speed = createMemo(() => {
+    const rate = throughput(props.turn.items.flatMap((item) => (item.kind === "assistant" ? [item] : [])));
+    return rate === undefined ? undefined : formatThroughput(rate);
+  });
+  const title = () => (speed() === undefined ? usage().title : `${usage().title}\nSpeed ${speed()} while streaming`);
   const duration = () => (props.turn.endedAt === undefined ? undefined : props.turn.endedAt - props.turn.startedAt);
   const model = () => props.turn.models.map((ref) => parseModelRef(ref)?.model ?? ref).join(", ");
   const reason = () => props.turn.end?.reason;
@@ -282,7 +289,7 @@ function TurnFooter(props: ChatTurnFooterProps) {
         <span class="badge badge-error">error</span>
       </Show>
       {/* Focusable, so the tokens in its tooltip reach a keyboard too; read out whole, and shown where nothing hovers. */}
-      <span class="turn-usage" tabIndex={0} data-tip={usage().title}>
+      <span class="turn-usage" tabIndex={0} data-tip={title()}>
         <Show when={model()}>
           <span>{model()}</span>
         </Show>
@@ -291,13 +298,16 @@ function TurnFooter(props: ChatTurnFooterProps) {
             ↑{usage().input} ↓{usage().output}
           </span>
         </Show>
+        <Show when={speed()}>
+          <span aria-hidden="true">{speed()}</span>
+        </Show>
         <Show when={usage().cost}>
           <span>{usage().cost}</span>
         </Show>
         <Show when={duration() !== undefined}>
           <span>{formatDuration(duration()!)}</span>
         </Show>
-        <span class="sr-only">{usage().title}</span>
+        <span class="sr-only">{title()}</span>
       </span>
     </footer>
   );

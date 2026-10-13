@@ -80,6 +80,7 @@ export const bundledWeb: readonly string[] = [
   "actions.keys-page",
   "actions.palette",
   "commands.client",
+  "context.compaction",
   "devtools.dock",
   "devtools.trace",
   "frame.connection",

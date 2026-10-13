@@ -7,6 +7,7 @@ import chat from "@lemma/threads-transcript";
 import commands from "@lemma/commands-client";
 import composer from "@lemma/threads-composer";
 import connection from "@lemma/frame-connection";
+import compaction from "@lemma/context-compaction/web";
 import diagrams from "@lemma/look-diagrams";
 import dialogs from "@lemma/frame-dialogs";
 import devtools from "@lemma/devtools-dock";
@@ -81,6 +82,7 @@ export const bundled: readonly Plugin[] = [
   composer,
   fileMentions,
   modelPicker,
+  compaction,
   workspaceBar,
   connection,
   reload,

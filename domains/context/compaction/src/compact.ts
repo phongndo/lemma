@@ -22,32 +22,41 @@ const messageChars = (message: Message): number => {
 const tokensOf = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
 
 /**
- * How many tokens the next request's context holds, about. The last response
- * after the latest compaction reports the context it was given and its own
- * output; later messages (tool results, a new prompt) are estimated from
- * their length. Without such a response, everything is estimated, with
- * `baseChars()` for the system prompt and tools (only then worked out).
+ * How many tokens the next request's context holds, as measured: the last
+ * response after the latest compaction reports the context it was given and
+ * its own output, and later messages (tool results, a new prompt) are
+ * estimated from their length. Undefined without such a response.
  */
-export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () => number): number => {
-  const { start, compaction } = modelView(branch);
-  let tokens: number | undefined;
-  let from = start;
+export const measuredTokens = (branch: readonly SessionEvent[]): number | undefined => {
+  const { compaction } = modelView(branch);
   for (let i = branch.length - 1; i > (compaction ?? -1); i--) {
     const data = branch[i]!.data;
     if (data.type !== "message" || data.message.role !== "assistant") continue;
     const usage = data.message.usage;
     const reported = usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
     if (reported === 0) continue;
-    tokens = reported;
-    from = i + 1;
-    break;
+    return reported + messagesTokens(branch.slice(i + 1));
   }
-  if (tokens === undefined) {
-    const summary = compaction === undefined ? undefined : branch[compaction]!.data;
-    tokens = tokensOf(baseChars() + (summary?.type === "compaction" ? summary.summary.length : 0));
-  }
-  for (const event of branch.slice(from)) if (event.data.type === "message") tokens += tokensOf(messageChars(event.data.message));
+  return undefined;
+};
+
+const messagesTokens = (events: readonly SessionEvent[]): number => {
+  let tokens = 0;
+  for (const event of events) if (event.data.type === "message") tokens += tokensOf(messageChars(event.data.message));
   return tokens;
+};
+
+/**
+ * How many tokens the next request's context holds, about: `measuredTokens`,
+ * or without a response to measure from, everything estimated, with
+ * `baseChars()` for the system prompt and tools (only then worked out).
+ */
+export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () => number): number => {
+  const measured = measuredTokens(branch);
+  if (measured !== undefined) return measured;
+  const { start, compaction } = modelView(branch);
+  const summary = compaction === undefined ? undefined : branch[compaction]!.data;
+  return tokensOf(baseChars() + (summary?.type === "compaction" ? summary.summary.length : 0)) + messagesTokens(branch.slice(start));
 };
 
 /**

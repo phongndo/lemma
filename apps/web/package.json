@@ -20,6 +20,7 @@
     "@lemma/commands": "workspace:*",
     "@lemma/commands-client": "workspace:*",
     "@lemma/composition": "workspace:*",
+    "@lemma/context-compaction": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/devtools": "workspace:*",

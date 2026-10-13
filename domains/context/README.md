@@ -2,10 +2,10 @@
 
 What the model is told beyond the conversation, and how a conversation is kept within its model's window. Its contract is [`@lemma/context`](contract/src/index.ts): the hook around a compaction. Its plugins otherwise add to the agent's ([`@lemma/agent`](../agent/contract/src/agent.ts)), as a plugin of your own would.
 
-| Plugin                                       | Halves | What it does                                                                                                                    |
-| -------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| [`context.project`](project/README.md)       | host   | The AGENTS.md (or CLAUDE.md) instructions from home down to the session's directory, as a `PromptSections` section              |
-| [`context.compaction`](compaction/README.md) | host   | Keeps a conversation within its model's window: an `AgentRequestHook` handler that summarizes older history into a `compaction` |
+| Plugin                                       | Halves    | What it does                                                                                                                                                                                   |
+| -------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`context.project`](project/README.md)       | host      | The AGENTS.md (or CLAUDE.md) instructions from home down to the session's directory, as a `PromptSections` section                                                                             |
+| [`context.compaction`](compaction/README.md) | host, web | Keeps a conversation within its model's window: an `AgentRequestHook` handler that summarizes older history into a `compaction`; in the web app, a context and cache-hit meter in the composer |
 
 ## Extending it
 

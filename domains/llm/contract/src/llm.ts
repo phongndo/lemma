@@ -94,6 +94,12 @@ export const addUsage = (a: Usage, b: Usage): Usage => ({
   },
 });
 
+/** The share of a call's input the provider's cache served, 0 to 1; undefined for a call with no input. */
+export const cacheHitRate = (usage: Usage): number | undefined => {
+  const input = usage.input + usage.cacheRead + usage.cacheWrite;
+  return input === 0 ? undefined : usage.cacheRead / input;
+};
+
 export const StopReason = Schema.Literals(["stop", "length", "toolUse", "error", "aborted"]);
 export type StopReason = typeof StopReason.Type;
 
