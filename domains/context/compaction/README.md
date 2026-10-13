@@ -29,18 +29,29 @@ divider. Requires `Llm`.
   plugin's model writing the summary: a handler writes its own (no model call;
   the event's `source` is that plugin), moves the cut, reworks the summary, or
   skips the compaction.
-- **The summary.** A later compaction summarizes the previous summary with the
-  messages after it. Tool output and long text are cut in what is sent, and the
-  oldest messages go first so the request, with its answer of up to 8,192
-  tokens, fits the writing model's window even for text as dense as 1.5
-  characters a token. A summary stopped at that limit is not used.
+- **Asking for one.** A prompt of `/compact`, alone or followed by what the
+  summary should focus on (`/compact keep the API decisions`), is handled
+  rather than sent (`AgentInputHook`): the session's next model call, in the
+  running turn or the next one, summarizes whatever the estimate says, once,
+  keeping at most a quarter of the conversation word for word. A notice says
+  when there is nothing to summarize or a handler skipped it. The request is
+  held in memory, so a restart before that call forgets it.
+- **The summary.** It follows a fixed outline (goal, constraints, progress,
+  decisions, next steps, critical context), which asks for exact paths and
+  errors, and for the ids and results of any other agents or background work.
+  A later compaction folds the previous summary into one with the messages
+  after it, keeping what is still true. Tool output and long text are cut in
+  what is sent, and the oldest messages go first so the request (its system
+  prompt, the user's focus, and an answer of up to 8,192 tokens included) fits
+  the writing model's window even for text as dense as 1.5 characters a token.
+  A summary stopped at that limit is not used.
 - **Its cost.** The event records the turn it happened in and what writing the
   summary cost (`turnId`, `usage`); the turn's usage (`TurnEnded`, the
   trajectory, `lemma run`, the web app's turn footer) includes it.
 - **When the model refuses a request as too long** (the agent asks again with
   `RequestDraft.overflow`), it summarizes whatever its estimate says, even in a
-  turn where summarizing failed before: four characters a token can misjudge
-  dense text.
+  turn where summarizing failed before (a `/compact` waiting then is made by
+  the call after): four characters a token can misjudge dense text.
 - **When it fails** (the model errors, stops at its limit, or writes nothing),
   a warning `Notice` says so, the call goes ahead as it would have without this
   plugin, and the turn is not summarized again; the next turn tries once more.

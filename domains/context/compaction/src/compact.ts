@@ -67,6 +67,10 @@ export const validCut = (branch: readonly SessionEvent[], index: number): boolea
   return branch.slice(start, index).some((event) => event.data.type === "message");
 };
 
+/** The tokens of the messages in the model's view, about (what a cut divides). */
+export const viewTokens = (branch: readonly SessionEvent[]): number =>
+  branch.slice(modelView(branch).start).reduce((sum, event) => sum + (event.data.type === "message" ? tokensOf(messageChars(event.data.message)) : 0), 0);
+
 export const chooseCut = (branch: readonly SessionEvent[], keep: number): number | undefined => {
   const { start } = modelView(branch);
   const seen: { readonly index: number; readonly message: Message }[] = [];
@@ -90,6 +94,10 @@ export const chooseCut = (branch: readonly SessionEvent[], keep: number): number
 const RESULT_CHARS = 2_000;
 const TEXT_CHARS = 8_000;
 
+/** What wraps the messages in what is sent for summarizing. */
+const OPEN = "<conversation>\n";
+const CLOSE = "\n</conversation>";
+
 const cut = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max)} … (${text.length - max} more characters)`);
 
 const render = (message: Message): string => {
@@ -108,26 +116,57 @@ const render = (message: Message): string => {
 
 /**
  * The conversation to summarize, as text: the previous summary, then each
- * message, with long tool output and text cut. Over `maxChars`, the oldest
- * messages go (the previous summary stays).
+ * message in a `<conversation>`, with long tool output and text cut. Over
+ * `maxChars`, the oldest messages go (the previous summary stays).
  */
 export const transcript = (messages: readonly Message[], previous: string | undefined, maxChars: number): string => {
-  const head = previous === undefined ? "" : `[summary of the conversation before this]\n${previous}\n\n`;
+  const head = previous === undefined ? "" : `<previous-summary>\n${previous}\n</previous-summary>\n\n`;
   const rendered = messages.map(render);
-  let total = head.length;
+  let total = head.length + OPEN.length + CLOSE.length;
   let first = rendered.length;
   while (first > 0 && total + rendered[first - 1]!.length + 2 <= maxChars) total += rendered[--first]!.length + 2;
   const omitted = first === 0 ? "" : `[${first} earlier message${first === 1 ? "" : "s"} omitted]\n\n`;
-  return `${head}${omitted}${rendered.slice(first).join("\n\n")}`;
+  return `${head}${OPEN}${omitted}${rendered.slice(first).join("\n\n")}${CLOSE}`;
 };
 
-export const SUMMARY_PROMPT = `You summarize a coding session so that a model continuing it, with only your summary and the most recent messages, can carry on the work without losing anything that matters.
+/**
+ * What the writing model is asked, after the transcript: to fold in the previous summary when there is one, with the
+ * user's focus when they gave one (`/compact <instructions>`, cut as a tool result is). It ends with the same line whatever comes before it.
+ */
+export const summaryAsk = (text: string, previous: boolean, instructions: string | undefined): string =>
+  [
+    text,
+    ...(previous
+      ? [
+          "<previous-summary> summarizes the conversation before this one: write one summary of both. Keep what is still true from it, move work now finished to Done, and drop only what the conversation has superseded.",
+        ]
+      : []),
+    ...(instructions === undefined ? [] : [`The user asked the summary to focus on: ${cut(instructions, RESULT_CHARS)}`]),
+    "Summarize the conversation above.",
+  ].join("\n\n");
 
-Write a concise, specific summary in the user's language. Keep:
-- the user's goals, requests, and constraints, in their own terms;
-- decisions made and why;
-- files read, created, or changed (with paths), and commands run with the results that matter;
-- errors hit and how they were resolved;
-- where the work stands and what remains to do.
+export const SUMMARY_PROMPT = `You write a checkpoint of a coding session for another model, which will continue the work with only your summary and the most recent messages. You are not taking part in the conversation: do not continue it, answer its questions, or call tools.
 
-Leave out pleasantries and anything already superseded. Write the summary only, with no preamble.`;
+Write the summary in the user's language, in this form, leaving out a section with nothing in it:
+
+## Goal
+What the user wants, in their own terms.
+
+## Constraints and preferences
+Requirements, conventions, and preferences the user stated.
+
+## Progress
+### Done
+### In progress
+### Blocked
+
+## Key decisions
+Decisions made, and why.
+
+## Next steps
+What remains to do, in order.
+
+## Critical context
+What the work depends on: files read, created, or changed (with paths); commands run and the results that matter; errors hit and how they were resolved; and any background work or other agents started, with their ids, their status, and where their results are.
+
+Preserve exact file paths, identifiers, commands, and error messages. Leave out pleasantries and anything superseded. Write the summary only, with no preamble.`;
