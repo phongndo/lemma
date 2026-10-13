@@ -60,6 +60,7 @@
     "@lemma/threads-trajectory": "workspace:*",
     "@lemma/threads-transcript": "workspace:*",
     "@lemma/threads-view": "workspace:*",
+    "@lemma/tools-ask": "workspace:*",
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-read": "workspace:*",

@@ -1,0 +1,286 @@
+/* The agent's questions, inside the composer above its text box (`ComposerTakeovers`): as tight as a list. */
+.ask {
+  padding: 6px 10px 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* Hidden, to write a message instead: a line above the composer. */
+.ask-hidden {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 3px 4px 3px 12px;
+  border-radius: calc(12px * var(--radius-scale));
+  background: var(--bg-raised);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.ask-hidden .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.ask-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  padding-left: 6px;
+}
+
+.ask-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.ask-title .icon {
+  width: 13px;
+  height: 13px;
+}
+
+.ask-tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.ask-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 22px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  white-space: nowrap;
+}
+
+.ask-tab:hover {
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+
+.ask-tab[data-done="true"] {
+  color: var(--text-2);
+}
+
+.ask-tab[aria-selected="true"] {
+  background: var(--bg-active);
+  color: var(--text);
+}
+
+.ask-tab .icon {
+  width: 11px;
+  height: 11px;
+  color: var(--ok);
+}
+
+.ask-skip {
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+}
+
+.ask-head .ask-hide {
+  width: 24px;
+  height: 24px;
+}
+
+/* Long questions scroll here, so the conversation keeps its room. */
+.ask-body {
+  display: grid;
+  gap: 10px;
+  max-height: min(24rem, 40vh);
+  padding-top: 2px;
+  overflow-y: auto;
+}
+
+.ask-with-preview {
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+}
+
+.ask-main {
+  min-width: 0;
+}
+
+.ask-question {
+  margin: 2px 6px 4px;
+  color: var(--text);
+  font-size: calc(13.5px * var(--text-scale));
+  line-height: 1.4;
+  text-wrap: pretty;
+}
+
+.ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ask-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 5px 8px 5px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.ask-option:hover,
+.ask-option:focus-visible {
+  background: var(--bg-hover);
+  outline: none;
+}
+
+.ask-option[data-picked="true"] {
+  background: var(--bg-active);
+}
+
+.ask-option-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ask-label {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.ask-recommended {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.ask-description {
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.35;
+}
+
+/* The option's shortcut digit, or a check once it is picked. */
+.ask-end {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 18px;
+  color: var(--accent-text);
+}
+
+.ask-key {
+  min-width: 16px;
+  border: 0;
+  background: none;
+  color: var(--text-3);
+  text-align: center;
+}
+
+.ask-end .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* As tall as the options beside it, never taller: what does not fit scrolls. */
+.ask-preview {
+  min-width: 0;
+  height: 0;
+  min-height: 100%;
+  overflow: auto;
+  font-size: calc(12px * var(--text-scale));
+}
+
+.ask-preview pre {
+  margin: 0;
+  white-space: pre;
+}
+
+.ask-review {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  margin: 0;
+  padding: 2px 0 0;
+  list-style: none;
+}
+
+.ask-review-row {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  gap: 10px;
+  width: 100%;
+  padding: 5px 8px 5px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+}
+
+.ask-review-row:hover {
+  background: var(--bg-hover);
+}
+
+.ask-review-question {
+  color: var(--text-2);
+}
+
+.ask-review-answer {
+  font-weight: 500;
+}
+
+.ask-review-answer[data-empty="true"] {
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+/* A call opened in the chat: each question and its answer. */
+.ask-record ol {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.ask-record-question {
+  display: block;
+  color: var(--text-2);
+}
+
+.ask-record-answer {
+  display: block;
+  font-weight: 500;
+}
+
+@media (max-width: 640px) {
+  .ask-with-preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ask-preview {
+    height: auto;
+    max-height: 10rem;
+  }
+}
