@@ -34,6 +34,21 @@ export const toggling = async (): Promise<string> => {
       .sort(),
     "the bundled web halves are not those the domains' manifests list (src/bundled.ts, scripts/plugins.ts)",
   );
+  // The mock host's plugins are the host halves they list, as a real host bundles them.
+  const hostPlugins: string[] = await page.evaluate(async () => {
+    const { HostPlugins } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const host = await (window as any).lemma.service(HostPlugins);
+    await host.refresh();
+    return host.list().map((plugin: any) => plugin.id);
+  });
+  assert.deepEqual(
+    [...hostPlugins].sort(),
+    [...domainPlugins()]
+      .filter(([, plugin]) => plugin.host !== undefined)
+      .map(([id]) => id)
+      .sort(),
+    "the mock host's plugins are not the host halves the domains' manifests list (src/mock.ts, scripts/plugins.ts)",
+  );
   const toggled: string[] = [];
   const locked: string[] = [];
   for (const { id, locked: isLocked } of plugins) {

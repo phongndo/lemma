@@ -11,7 +11,8 @@ import { toggling } from "./check-ui/toggling.ts";
  * invariant in apps/web/AGENTS.md at runtime, where `check-boundaries` holds
  * it in the imports:
  *
- * 1. The app boots without errors.
+ * 1. The app boots without errors, with the plugins the domains' manifests
+ *    list: their web halves bundled, and their host halves on the mock host.
  * 2. Every part declared in `ui/contracts.ts` has a provider.
  * 3. Every plugin that is not pinned turns off and back on, as the Plugins
  *    page does it, and the page stays up and error-free either way; only the

@@ -37,6 +37,17 @@ import type { EventData, SessionEvent, SessionInfo, SessionsChange } from "@lemm
  * its login flow only pretends. Not shipped: `main.tsx` imports it only in dev.
  */
 
+/**
+ * The host plugins a real host bundles: every package in domains/ whose `lemma` manifest names a host half, by the id
+ * its folder names (`domains/tools/bash` is `tools.bash`), as scripts/plugins.ts reads them.
+ */
+const HOST_PLUGINS = Object.entries(
+  import.meta.glob<{ readonly lemma?: { readonly host?: string } }>("../../../domains/*/*/package.json", { eager: true, import: "default" }),
+)
+  .filter(([, manifest]) => manifest.lemma?.host !== undefined)
+  .map(([path]) => path.split("/").slice(-3, -1).join("."))
+  .sort();
+
 const HOME = "/home/dev";
 const CWD = `${HOME}/code/lemma`;
 /** What the mock host's plugins let you look into, as a real host's `Inspectors` would. */
@@ -447,46 +458,65 @@ export const createMockHost = (): Host => {
   };
   // What the host provides itself (`HostInfo.runtime`): no plugin, so no row.
   const runtime = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/Trace", `lemma/api@${HOST_API}`];
-  const plugins: PluginStatus[] = [
-    bundled("credentials.file", { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] }),
-    bundled("llm.pi-ai", { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] }),
-    bundled("llm.commands", {
+  // Each host plugin as the real one reports itself: what it provides, requires, and adds. The plugins are the domains'
+  // (`HOST_PLUGINS`); one not described here is a plugin that provides, requires, and adds nothing.
+  const described: Readonly<Record<string, Partial<PluginStatus>>> = {
+    "credentials.file": { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] },
+    "llm.pi-ai": { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] },
+    "llm.commands": {
       requires: ["lemma/Interaction", "lemma/Llm"],
       contributes: [{ name: "lemma/commands", items: 1, keys: ["llm.logout"] }],
-    }),
-    bundled("tools.registry", { provides: ["lemma/ToolRunner"] }),
-    bundled("tools.read", { contributes: [{ name: "lemma/tools", items: 1, keys: ["read"] }] }),
-    bundled("tools.write", { contributes: [{ name: "lemma/tools", items: 1, keys: ["write"] }] }),
-    bundled("tools.edit", { contributes: [{ name: "lemma/tools", items: 1, keys: ["edit"] }] }),
-    bundled("tools.bash", { contributes: [{ name: "lemma/tools", items: 1, keys: ["bash"] }] }),
-    bundled("tools.codemode", { requires: ["lemma/ToolRunner"], contributes: [{ name: "lemma/tools", items: 1, keys: ["codemode"] }] }),
-    bundled("sessions.files", { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] }),
-    bundled("agent.loop", {
+    },
+    "tools.registry": { provides: ["lemma/ToolRunner"] },
+    "tools.read": { contributes: [{ name: "lemma/tools", items: 1, keys: ["read"] }] },
+    "tools.write": { contributes: [{ name: "lemma/tools", items: 1, keys: ["write"] }] },
+    "tools.edit": { contributes: [{ name: "lemma/tools", items: 1, keys: ["edit"] }] },
+    "tools.bash": { contributes: [{ name: "lemma/tools", items: 1, keys: ["bash"] }] },
+    "tools.codemode": { requires: ["lemma/ToolRunner"], contributes: [{ name: "lemma/tools", items: 1, keys: ["codemode"] }] },
+    "sessions.files": { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] },
+    "agent.loop": {
       provides: ["lemma/Agent"],
       requires: ["lemma/Sessions", "lemma/Llm", "lemma/ToolRunner", "lemma/HostControl"],
       contributes: [{ name: "lemma/agent.sections", items: 2, keys: ["agent.base", "agent.environment"] }],
-    }),
-    bundled("mcp.servers", { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] }),
-    bundled("context.compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
-    bundled("context.project", { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] }),
-    bundled("workspace.local", { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] }),
-    bundled("workspace.search-fff", { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] }),
-    bundled("workspace.commands", {
+    },
+    "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
+    "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
+    "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
+    "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
+    "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
+    "workspace.commands": {
       requires: ["lemma/Interaction", "lemma/Workspace"],
       contributes: [{ name: "lemma/commands", items: 2, keys: ["workspace.checkout", "workspace.new-branch"] }],
-    }),
-    bundled("commands.registry", { provides: ["lemma/CommandRunner"] }),
-    bundled("commands.host", {
+    },
+    "commands.registry": { provides: ["lemma/CommandRunner"] },
+    "commands.host": {
       requires: ["lemma/Interaction", "lemma/HostControl"],
       contributes: [{ name: "lemma/commands", items: 3, keys: ["host.reload", "host.restart-plugin", "host.toggle-plugin"] }],
-    }),
-    bundled("devtools.trace", { requires: ["lemma/Trace"] }),
+    },
+    "devtools.trace": { requires: ["lemma/Trace"] },
+    "tools.ask": { requires: ["lemma/Interaction"], contributes: [{ name: "lemma/tools", items: 1, keys: ["ask_user"] }] },
+    "tools.search-fff": { contributes: [{ name: "lemma/tools", items: 2, keys: ["grep", "find"] }] },
+    // The `lemma` command's: the commands each domain adds reach it through its channels, so they require nothing.
+    "cli.registry": { provides: ["lemma/CliRunner"] },
+    "agent.cli": { contributes: [{ name: "lemma/cli-commands", items: 4 }] },
+    "commands.cli": { contributes: [{ name: "lemma/cli-commands", items: 2 }] },
+    "llm.cli": {
+      contributes: [
+        { name: "lemma/cli-commands", items: 4 },
+        { name: "lemma/cli-checks", items: 1 },
+      ],
+    },
+    "sessions.cli": { contributes: [{ name: "lemma/cli-commands", items: 6 }] },
+    "workspace.cli": { contributes: [{ name: "lemma/cli-commands", items: 7 }] },
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
-    bundled("transport.server", {
+    "transport.server": {
       requires: ["lemma/Paths", "lemma/HostControl"],
       locked: "Serves the web app and the CLI; replace it with another transport plugin instead of turning it off",
-    }),
-  ];
+    },
+  };
+  const strays = Object.keys(described).filter((id) => !HOST_PLUGINS.includes(id));
+  if (strays.length > 0) throw new Error(`The mock host describes plugins no domain has: ${strays.join(", ")}`);
+  const plugins: PluginStatus[] = HOST_PLUGINS.map((id) => bundled(id, described[id]));
 
   // Wiring as the kernel reports it, so the inspector has hooks and observers to show.
   const wiring: Record<string, Partial<PluginStatus>> = {
