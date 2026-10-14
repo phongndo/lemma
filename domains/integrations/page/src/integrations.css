@@ -37,27 +37,6 @@
   padding: 2px 4px 4px 8px;
 }
 
-/* A kind with nothing yet: one row that adds the first. */
-.integrations-empty {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 7px 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-2);
-  font: inherit;
-  font-size: calc(12.5px * var(--text-scale));
-  text-align: left;
-  cursor: pointer;
-}
-
-.integrations-empty:hover {
-  background: var(--bg-hover);
-  color: var(--text);
-}
-
 .integrations-note {
   margin: 2px 8px;
 }

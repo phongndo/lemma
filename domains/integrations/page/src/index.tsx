@@ -326,7 +326,8 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
       <aside class="integrations-list" aria-label="Integrations">
         <div class="integrations-list-head">
           <SearchField value={query()} onInput={setQuery} placeholder="Filter" label="Filter integrations">
-            <Show when={kinds().some(addable)}>
+            {/* With nothing open, the overview beside the list has the add button. */}
+            <Show when={kinds().some(addable) && openItem() !== undefined}>
               <button type="button" class="icon-button" aria-label="Add an integration" data-tip="Add an integration" onClick={() => add(ALL)}>
                 <PlusIcon />
               </button>
@@ -362,15 +363,7 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
                       )}
                     </For>
                     <Show when={shown().length === 0}>
-                      <Show
-                        when={query().trim() === "" && addable(kind)}
-                        fallback={<p class="muted small integrations-note">{query().trim() === "" ? "None yet." : "None match."}</p>}
-                      >
-                        <button type="button" class="integrations-empty" onClick={() => add(kind.id)}>
-                          <PlusIcon />
-                          <span>No {quiet(kind.title)} yet. Add one</span>
-                        </button>
-                      </Show>
+                      <p class="muted small integrations-note">{query().trim() === "" ? "None yet." : "None match."}</p>
                     </Show>
                   </Show>
                 </section>
