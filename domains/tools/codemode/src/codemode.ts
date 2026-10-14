@@ -3,7 +3,8 @@ import { CodemodeSandbox, parseCodemodeSource, renderToolSample, toCodemodeIdent
 import type { CodemodeCall, CodemodeError, CodemodeTool } from "@earendil-works/pi-codemode";
 import { Effect, Result, Schema } from "effect";
 import type { Context } from "effect";
-import { contentText } from "@lemma/llm";
+import { addUsage, ClassifierContext, contentText } from "@lemma/llm";
+import type { Llm, Usage } from "@lemma/llm";
 import { ToolInvocation, ToolResult } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
 import type { Tool, ToolRunner } from "@lemma/tools";
@@ -19,6 +20,8 @@ export interface CodemodeDetails {
   readonly truncated?: true;
   /** The complete text output, when it was truncated. */
   readonly fullOutputPath?: string;
+  /** What the script's `models.classify` calls used, when their services reported it. */
+  readonly usage?: Usage;
 }
 
 type Content = ToolResult["content"][number];
@@ -35,6 +38,8 @@ const CHARS_PER_TOKEN = 4;
 const TEXT_OUTPUT = { type: "string" };
 /** Results of `searchTools` without a `limit`. */
 const SEARCH_LIMIT = 8;
+/** `models.classify` calls one script has in flight; `Promise.all` over many items queues the rest. */
+const MAX_MODEL_CALLS = 4;
 
 /**
  * pi's description with the tools all directly callable, as pi's default mode has them: their
@@ -49,6 +54,7 @@ const DESCRIPTION = `Run JavaScript that calls other tools. The code is raw Java
 Globals:
 - \`text(value)\`, \`image(dataUrlOrImageBlock)\`, \`console.log(...)\`, and top-level \`return\` add output; \`exit()\` ends the script.
 - \`ALL_TOOLS\` and \`searchTools(query, { limit? })\` list \`{ name, description }\` of callable tools, each description ending in the tool's TypeScript declaration.
+- \`await models.classifiers({ available: true })\` lists classifier models (\`{ ref, name, input, ... }\`): not chat models, but ones that answer typed questions about JSON state with probabilities, cheaply and in parallel, such as \`typesafe/jev-latest\`. \`await models.classify(ref, { state, images?, questions })\` asks one: \`questions\` maps ids to \`{ type: "choice", instructions, criteria: { <label>: <meaning> } }\`, \`{ type: "score", instructions, criteria: [<lowest level>, ..., <highest level>] }\`, or \`{ type: "bool", instructions, criteria: { true: <meaning>, false: <meaning> } }\`. It resolves to \`{ answers, stopReason, errorMessage? }\`, answers by id: \`{ choice, probabilities, confidence }\`, \`{ score, confidence }\` (the expected level index), or \`{ probability }\` (of true). It does not throw on a provider's failure: check \`stopReason === "stop"\`. Classify many items with one call each.
 
 Use codemode to batch independent tool calls (Promise.allSettled), chain them, or filter large output, instead of many separate calls.`;
 
@@ -86,6 +92,66 @@ const searchTools = (tools: readonly CodemodeTool[]): CodemodeTool => ({
   },
 });
 
+const decodeClassifierContext = Schema.decodeUnknownResult(ClassifierContext);
+
+/** Runs at most `limit` calls at once, in call order. */
+const limiter = (limit: number) => {
+  let active = 0;
+  const waiting: (() => void)[] = [];
+  return async <T>(run: () => Promise<T>): Promise<T> => {
+    if (active >= limit) await new Promise<void>((resolve) => waiting.push(resolve));
+    active++;
+    try {
+      return await run();
+    } finally {
+      active--;
+      waiting.shift()?.();
+    }
+  };
+};
+
+/**
+ * `models.*`: the classifier models `Llm` lists, and `classify` through it with the session's credentials. A script
+ * names a model by ref (or passes a listed entry), and a context it gets wrong fails with the shape expected, not a
+ * provider's error. What the calls used goes to `addUsage`.
+ */
+const modelGlobals = (
+  llm: Context.Service.Shape<typeof Llm>,
+  run: <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => Promise<A>,
+  addUsage: (usage: Usage) => void,
+): CodemodeTool[] => {
+  const limit = limiter(MAX_MODEL_CALLS);
+  return [
+    {
+      name: "models.classifiers",
+      spread: true,
+      execute: (args) => {
+        const [options] = args as [{ readonly available?: unknown } | null | undefined];
+        return run(llm.classifiers({ available: options?.available === true }));
+      },
+    },
+    {
+      name: "models.classify",
+      spread: true,
+      execute: async (args, call) => {
+        const [model, context] = args as [unknown, unknown];
+        const ref = typeof model === "string" ? model : (model as { readonly ref?: unknown } | null)?.ref;
+        if (typeof ref !== "string") {
+          throw new Error(
+            'models.classify() expects a classifier ref such as "typesafe/jev-latest" first; list them with models.classifiers({ available: true })',
+          );
+        }
+        const decoded = decodeClassifierContext(context);
+        if (Result.isFailure(decoded)) throw new Error(`models.classify() got a context it cannot use: ${decoded.failure.message}`);
+        // The sandbox aborts the call's signal when the script ends, times out, or is aborted; that interrupts the request.
+        const result = await limit(() => run(llm.classify(ref, decoded.success), call.signal));
+        if (result.usage !== undefined) addUsage(result.usage);
+        return result;
+      },
+    },
+  ];
+};
+
 function formatError(error: CodemodeError, calls: readonly CodemodeCall[]): string {
   const head =
     error.kind === "script"
@@ -108,7 +174,7 @@ function formatError(error: CodemodeError, calls: readonly CodemodeCall[]): stri
  * A script reaches only the tools the request offered, read per script, and never codemode. Their
  * live output is this call's own.
  */
-export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>): Tool<CodemodeInput> => ({
+export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>, llm: Context.Service.Shape<typeof Llm>): Tool<CodemodeInput> => ({
   name: "codemode",
   description: DESCRIPTION,
   input: CodemodeInput,
@@ -145,9 +211,17 @@ export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>)
             return text;
           },
         }));
+      let usage: Usage | undefined;
       const sandbox = new CodemodeSandbox({
         tools,
-        globals: [searchTools(tools)],
+        globals: [
+          searchTools(tools),
+          ...modelGlobals(
+            llm,
+            (effect, signal) => Effect.runPromiseWith(services)(effect, signal === undefined ? undefined : { signal }),
+            (used) => (usage = usage === undefined ? used : addUsage(usage, used)),
+          ),
+        ],
         // Without `timeout_ms`, the sandbox's own deadline.
         ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
         memoryLimitBytes: MEMORY_LIMIT_BYTES,
@@ -164,7 +238,11 @@ export const codemodeTool = (registry: Context.Service.Shape<typeof ToolRunner>)
       const { content, fullOutputPath } = yield* Effect.promise(() => boundOutput(items, { budget, maxResultChars, name: "codemode" }));
       const wallTime = ((performance.now() - started) / 1000).toFixed(1);
       const header = `${result.ok ? "Script completed" : "Script failed"}\nWall time ${wallTime} seconds\nOutput:\n`;
-      const details: CodemodeDetails = { calls: result.calls, ...(fullOutputPath === undefined ? {} : { truncated: true, fullOutputPath }) };
+      const details: CodemodeDetails = {
+        calls: result.calls,
+        ...(fullOutputPath === undefined ? {} : { truncated: true, fullOutputPath }),
+        ...(usage === undefined ? {} : { usage }),
+      };
       return new ToolResult({ content: [{ type: "text", text: header }, ...content], ...(result.ok ? {} : { isError: true }), details });
     }),
 });

@@ -21,7 +21,7 @@ import {
 import type { NoticePayload } from "@lemma/contracts";
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
-import { makeEventMapper, reasoningFor, toContext, toModelInfo } from "./convert.ts";
+import { makeEventMapper, reasoningFor, toClassifierContext, toClassifierInfo, toClassifierResult, toContext, toModelInfo } from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
@@ -463,6 +463,29 @@ export function makeLlmPlugin(options: Options = {}) {
         },
 
         stream: (request) => streamThroughHook(hooks, request, terminal),
+
+        classifiers: (query) =>
+          query?.available === true
+            ? Effect.forEach(
+                models.getProviders(),
+                (provider) =>
+                  Effect.tryPromise((signal) => models.getAvailableOfType("classifier", provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
+                { concurrency: "unbounded" },
+              ).pipe(Effect.map((lists) => lists.flat().map(toClassifierInfo)))
+            : Effect.sync(() => models.getModelsOfType("classifier").map(toClassifierInfo)),
+
+        classify: (ref, context) =>
+          Effect.gen(function* () {
+            const parsed = parseModelRef(ref);
+            const model = parsed === undefined ? undefined : models.getModelOfType("classifier", parsed.provider, parsed.model);
+            if (model === undefined) return yield* Effect.fail(unknownModel(ref));
+            const headers = identityHeaders(model);
+            // pi-ai's classify never rejects: a provider's failure, or missing auth, is the result's error.
+            const result = yield* Effect.promise((signal) =>
+              models.classify(model, toClassifierContext(context), { signal, ...(headers === undefined ? {} : { headers }) }),
+            );
+            return toClassifierResult(result);
+          }),
 
         login: (providerId: string, type: AuthType) =>
           Effect.gen(function* () {

@@ -5,9 +5,9 @@ import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
-import { createProvider, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
+import { createProvider, envApiKeyAuth, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
-import type { Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { ClassifierContext, ClassifierOptions, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
 import { InteractionError, InteractionOrigin } from "@lemma/contracts";
@@ -481,6 +481,119 @@ describe("catalog", () => {
       },
     );
     expect(ids).toEqual(["anthropic"]);
+  });
+});
+
+describe("classifiers", () => {
+  /** A provider with only a classifier, as TypeSafe's is, keyed by `JUDGE_API_KEY`; it records what it was asked. */
+  const judge = () => {
+    const asked: { context: ClassifierContext; options: ClassifierOptions | undefined }[] = [];
+    const provider = createProvider({
+      id: "judges",
+      name: "Judges",
+      auth: { apiKey: envApiKeyAuth("Judges API key", ["JUDGE_API_KEY"]) },
+      models: [
+        {
+          type: "classifier",
+          id: "jev",
+          name: "Jev",
+          api: "judge-api",
+          provider: "judges",
+          baseUrl: "https://judge.test",
+          input: ["text"],
+          cost: { input: 0.1, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 32000,
+        },
+      ],
+      classifiers: {
+        "judge-api": {
+          classify: async (model, context, options) => {
+            asked.push({ context, options });
+            return {
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              answers: { urgent: { type: "bool", probability: 0.75 } },
+              usage: {
+                input: 20,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 21,
+                cost: { input: 0.000002, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.000002 },
+              },
+              stopReason: "stop",
+              timestamp: 1,
+            };
+          },
+        },
+      },
+    });
+    return { asked, provider };
+  };
+  const context = {
+    state: { message: "The site is down" },
+    questions: { urgent: { type: "bool" as const, instructions: "Urgent?", criteria: { true: "Yes", false: "No" } } },
+  };
+
+  it("are listed apart from chat models, and available once their provider is configured", async () => {
+    const { provider } = judge();
+    const list = (env: Record<string, string>) =>
+      runWith(
+        setup({ providers: () => [provider], env }).plugins,
+        Effect.flatMap(Llm, (llm) => Effect.all({ models: llm.models(), all: llm.classifiers(), available: llm.classifiers({ available: true }) })),
+      );
+    const keyless = await list({});
+    expect(keyless.models).toEqual([]);
+    expect(keyless.all).toEqual([
+      {
+        ref: "judges/jev",
+        provider: "judges",
+        id: "jev",
+        name: "Jev",
+        api: "judge-api",
+        input: ["text"],
+        contextWindow: 32000,
+        cost: { input: 0.1, output: 0 },
+      },
+    ]);
+    expect(keyless.available).toEqual([]);
+    expect((await list({ JUDGE_API_KEY: "k" })).available.map((model) => model.ref)).toEqual(["judges/jev"]);
+  });
+
+  it("classify through the model's provider with its key, as Lemma, answering without pi's fields", async () => {
+    const { asked, provider } = judge();
+    const result = await runWith(
+      setup({ providers: () => [provider], env: { JUDGE_API_KEY: "k" } }).plugins,
+      Effect.flatMap(Llm, (llm) => llm.classify("judges/jev", context)),
+    );
+    expect(result).toEqual({
+      provider: "judges",
+      model: "jev",
+      answers: { urgent: { type: "bool", probability: 0.75 } },
+      usage: {
+        input: 20,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 21,
+        cost: { input: 0.000002, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.000002 },
+      },
+      stopReason: "stop",
+    });
+    expect(asked[0]!.context).toEqual(context);
+    expect(asked[0]!.options).toMatchObject({ apiKey: "k", headers: { "User-Agent": `lemma (${platform()} ${release()}; ${arch()})` } });
+  });
+
+  it("fail an unknown ref, and a chat model's, UnknownModel before asking", async () => {
+    const { asked, provider } = judge();
+    const { faux, plugins } = setup();
+    const errors = await runWith(
+      [...plugins.slice(0, 2), makeLlmPlugin({ fetch: offline, providers: () => [provider, faux.provider], authContext: envContext({ JUDGE_API_KEY: "k" }) })],
+      Effect.flatMap(Llm, (llm) => Effect.all(["judges/nope", "faux/plain"].map((ref) => Effect.flip(llm.classify(ref, context))))),
+    );
+    expect(errors.map((error) => error.reason)).toEqual(["UnknownModel", "UnknownModel"]);
+    expect(asked).toEqual([]);
   });
 });
 

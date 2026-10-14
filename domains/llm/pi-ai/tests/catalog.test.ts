@@ -123,6 +123,18 @@ describe("withLiveCatalog", () => {
     expect(offline.getModels()).toEqual(known);
   });
 
+  it("does not add a model pi-ai knows as another type, such as a classifier, as a chat model", async () => {
+    const jev = { ...model("jev"), type: "classifier" };
+    const withJev = { ...provider, getAllModels: () => [...known, jev] } as unknown as Provider;
+    const live = withLiveCatalog(withJev, {
+      dev: async () => ({ go: { ...dev, models: { ...dev.models, jev: {} } } }),
+      list: async () => ["glm-5", "jev"],
+      siblings: () => [],
+    });
+    await live.refreshModels!(context());
+    expect(live.getModels().map((m) => m.id)).toEqual(["glm-5.1", "minimax-m3", "glm-5"]);
+  });
+
   it("leaves a provider with its own refresh alone", () => {
     const radius = { ...provider, refreshModels: async () => {} } as Provider;
     expect(withLiveCatalog(radius, { dev: async () => undefined, list: async () => undefined, siblings: () => [] })).toBe(radius);

@@ -402,6 +402,7 @@ export const createMockHost = (): Host => {
     ["qwen-token-plan", "Qwen Token Plan", [key]],
     ["radius", "Radius", [oauth("Radius"), key]],
     ["together", "Together", [key]],
+    ["typesafe", "TypeSafe", [key]],
     ["vercel-ai-gateway", "Vercel AI Gateway", [key]],
     ["xai", "xAI", [oauth("xAI (Grok/X subscription)"), key]],
     ["xiaomi", "Xiaomi", [key]],
