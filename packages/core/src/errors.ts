@@ -136,6 +136,8 @@ export class Diagnostic extends Schema.Class<Diagnostic>("@lemma/core/Diagnostic
   path: Schema.optional(Schema.Array(Schema.Union([Schema.String, Schema.Number]))),
   message: Schema.String,
   suggestion: Schema.optional(Schema.String),
+  /** What kind of problem it is, named by whoever reports it, for a program to match: `message` is for people and may change. */
+  code: Schema.optional(Schema.String),
 }) {}
 
 /** Diagnostics for a failed change. Planning failures preserve the composition; exclusive activation failures may not. */
