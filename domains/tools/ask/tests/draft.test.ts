@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { answerOf, answersOf, describeAnswer, emptyDraft, pick, picksSubmit } from "../src/draft.ts";
+import { answerOf, answersOf, describeAnswer, emptyDraft, pick } from "../src/draft.ts";
 import { answerProblem, displayLabel, inputProblem } from "../src/questions.ts";
 import { askView } from "../src/view.tsx";
 import { KEEP_MS, dropped, makeAsking } from "../src/asking.ts";
@@ -8,8 +8,9 @@ const one = { header: "Storage", question: "Where?", options: [{ label: "SQLite 
 const many = { header: "Tests", question: "Which tests?", options: [{ label: "Unit" }, { label: "E2E" }, { label: "Fuzz" }], multiSelect: true };
 
 describe("a question's draft", () => {
-  it("picks one option, or toggles several in the order offered", () => {
+  it("picks one option, or toggles several in the order offered; picking a picked one unpicks it", () => {
     expect(pick(one, pick(one, emptyDraft, "JSON files"), "SQLite (Recommended)").picked).toEqual(["SQLite (Recommended)"]);
+    expect(pick(one, { ...emptyDraft, picked: ["JSON files"], text: "note" }, "JSON files")).toEqual({ ...emptyDraft, text: "note" });
     const both = pick(many, pick(many, emptyDraft, "Fuzz"), "Unit");
     expect(both.picked).toEqual(["Unit", "Fuzz"]);
     expect(pick(many, both, "Fuzz").picked).toEqual(["Unit"]);
@@ -23,13 +24,6 @@ describe("a question's draft", () => {
     expect(answerOf({ ...emptyDraft, text: " Redis " })).toEqual({ kind: "answered", selected: [], text: "Redis" });
     expect(answerOf({ ...emptyDraft, picked: ["Unit"], text: "only fast ones" })).toEqual({ kind: "answered", selected: ["Unit"], text: "only fast ones" });
     expect(answersOf([emptyDraft, { ...emptyDraft, skipped: true }])).toEqual([{ kind: "skipped" }, { kind: "skipped" }]);
-  });
-
-  it("sends on a pick only for a lone one-choice question with nothing written", () => {
-    expect(picksSubmit([one], emptyDraft)).toBe(true);
-    expect(picksSubmit([one], { ...emptyDraft, text: "note" })).toBe(false);
-    expect(picksSubmit([many], emptyDraft)).toBe(false);
-    expect(picksSubmit([one, many], emptyDraft)).toBe(false);
   });
 
   it("describes an answer for the review and the transcript", () => {
@@ -73,12 +67,8 @@ describe("answering a call", () => {
   const open = (questions: readonly (typeof one | typeof many)[]) => ({ sessionId: "s", toolCallId: "c1", questions, at: 0 });
   const make = (questions: readonly (typeof one | typeof many)[]) => {
     const sent: (readonly unknown[])[] = [];
-    const timers: (() => void)[] = [];
-    const asking = makeAsking(open(questions), {
-      submit: async (answers) => void sent.push(answers),
-      after: (_, fn) => void timers.push(fn),
-    });
-    return { asking, sent, timers };
+    const asking = makeAsking(open(questions), { submit: async (answers) => void sent.push(answers) });
+    return { asking, sent };
   };
 
   it("keeps each question's own text, steps through them to a review, and sends from it", async () => {
@@ -99,18 +89,62 @@ describe("answering a call", () => {
     expect(sent).toEqual([[{ kind: "answered", selected: [], text: "Redis" }, { kind: "skipped" }]]);
   });
 
-  it("moves on a moment after a pick, and a lone one-choice question sends on it", async () => {
+  it("takes a menu's keys from the empty text box: move, pick by digit or Enter, change question", async () => {
+    const { asking, sent } = make([many, one]);
+    expect(asking.active()).toBeUndefined();
+    expect(asking.boxKey("Enter")).toBe(false);
+    expect(asking.boxKey("ArrowUp")).toBe(true);
+    expect(asking.active()).toBe(2);
+    expect(asking.boxKey("ArrowDown")).toBe(true);
+    expect(asking.active()).toBe(0);
+    expect(asking.boxKey("Enter")).toBe(true);
+    expect(asking.boxKey("3")).toBe(true);
+    expect(asking.draft().picked).toEqual(["Unit", "Fuzz"]);
+    // The highlighted option is picked now: Enter is the send button's, to go on.
+    expect(asking.boxKey("Enter")).toBe(false);
+    expect(asking.boxKey("9")).toBe(false);
+    expect(asking.boxKey("ArrowRight")).toBe(true);
+    expect(asking.tab()).toBe(1);
+    asking.setText("Redis");
+    expect(asking.boxKey("ArrowLeft")).toBe(false);
+    expect(asking.boxKey("1")).toBe(false);
+    asking.setText("");
+    expect(asking.boxKey("ArrowLeft")).toBe(true);
+    // Back on a question, its first pick is highlighted.
+    expect(asking.active()).toBe(0);
+    asking.goTo(1);
+    expect(asking.boxKey("2")).toBe(true);
+    expect(asking.boxKey("Enter")).toBe(false);
+    expect(sent).toEqual([]);
+  });
+
+  it("stays on a question after a pick, for a note, and a lone one sends only on Enter", async () => {
     const several = make([one, many]);
     several.asking.choose(1);
+    several.asking.setText("for now");
     expect(several.asking.tab()).toBe(0);
-    several.timers.forEach((fire) => fire());
-    expect(several.asking.tab()).toBe(1);
+    several.asking.choose(1);
+    expect(several.asking.draft()).toEqual({ picked: [], text: "for now", skipped: false });
 
     const lone = make([one]);
     expect(lone.asking.submitLabel()).toBe("Submit answer");
     lone.asking.choose(0);
+    lone.asking.setText("keep it local");
     await Promise.resolve();
-    expect(lone.sent).toEqual([[{ kind: "answered", selected: ["SQLite (Recommended)"] }]]);
+    expect(lone.sent).toEqual([]);
+    lone.asking.next();
+    await Promise.resolve();
+    expect(lone.sent).toEqual([[{ kind: "answered", selected: ["SQLite (Recommended)"], text: "keep it local" }]]);
+  });
+
+  it("dismisses every question as skipped, whatever was picked or written", async () => {
+    const { asking, sent } = make([one, many]);
+    asking.choose(0);
+    asking.setText("maybe");
+    asking.dismiss();
+    asking.dismiss();
+    await Promise.resolve();
+    expect(sent).toEqual([[{ kind: "skipped" }, { kind: "skipped" }]]);
   });
 
   it("asks for a note once something is picked, and a skip keeps what was written", () => {
@@ -118,7 +152,7 @@ describe("answering a call", () => {
     expect(asking.placeholder()).toBe("Type your own answer, or pick an option above");
     asking.setText("not sure yet");
     asking.choose(0);
-    expect(asking.placeholder()).toBe("Add a note to your answer, or leave this blank");
+    expect(asking.placeholder()).toBe("Add a note to “SQLite”, or leave this blank");
     asking.skip();
     asking.goTo(0);
     expect(asking.draft()).toEqual({ picked: [], text: "not sure yet", skipped: true });
@@ -130,7 +164,7 @@ describe("a call's answers, once asked", () => {
 
   it("are not sent for a lone question before it has an answer, and are sent once", async () => {
     let sent = 0;
-    const asking = makeAsking(open([one]), { submit: async () => void sent++, after: () => {} });
+    const asking = makeAsking(open([one]), { submit: async () => void sent++ });
     expect(asking.canSubmit()).toBe(false);
     asking.next();
     await Promise.resolve();

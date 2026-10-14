@@ -297,6 +297,11 @@ const RedoIcon = (props: GlyphProps) => (
     <path d="M10 3.5l3 3-3 3M13 6.5H6.5a3.5 3.5 0 000 7H8" />
   </Icon>
 );
+const SkipIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M4 3.5l6 4.5-6 4.5zM12.5 3.5v9" />
+  </Icon>
+);
 
 /** The default icons by name. */
 export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
@@ -346,6 +351,7 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   palette: PaletteIcon,
   "arrow-left": ArrowLeftIcon,
   redo: RedoIcon,
+  skip: SkipIcon,
   spinner: Spinner,
 };
 

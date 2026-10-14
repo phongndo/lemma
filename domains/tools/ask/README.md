@@ -3,7 +3,7 @@
 The `ask_user` tool: one to four multiple-choice questions for the user, asked
 together, which the agent waits on. Adds it to `Tools` and serves the questions
 to clients as the `ask.*` channels; its web half (`./web`) shows the open
-thread's questions inside the composer, and a call in the chat as its questions
+thread's questions above the composer's text box, and a call in the chat as its questions
 and answers.
 
 | Input                                                                                                                | Limits                                |
@@ -60,21 +60,29 @@ lemma channels call ask.answer '{"sessionId":"<session>","toolCallId":"call_1","
   the turn's current tool calls. So a follow-up sent then is made a steer
   (`AgentInputHook`), and a steer answers the questions: the model reads that
   the user replied, then the message, in the same turn.
-- **The composer is the answer box.** As in T3 Code, the questions draw as a
-  banner inside the composer (`ComposerTakeovers`), its text box takes the
-  answer to the question shown (the person's own words, or a note on their
-  pick), and its send button and Enter go to the next question, the review, and
-  sending; a lone question takes no Enter before it has an answer. The thread's
+- **The composer is the answer box.** The questions draw just above the text
+  box (`ComposerTakeovers`) as the completion menu does, an option a menu row
+  with its description beside it (whole in its tip) and the digit that picks
+  it, so `/`, `@`, and a question read alike, and it takes the menu's keys
+  from the text box while that holds nothing: Up and Down move, a digit picks,
+  Enter picks the highlighted option (or, with it picked, goes on), and Left
+  and Right change question. The text box takes the
+  answer to the question shown (the person's own words, or a note on what they
+  picked, which the placeholder names). A pick selects and stays, as in Codex,
+  so the note can follow it, and picking it again unselects it; the send button
+  and Enter go to the next question, the review, and sending; a lone question takes no Enter before it has an answer. The thread's
   draft waits, and comes back when the questions close or are let go. They do
   not take the box while the person has a prompt of their own unsent, nor once
   they let it go (Escape, or the chevron): a line above the composer says they
-  wait, and brings them back; a message sent meanwhile answers them as a reply.
+  wait, and its chevron brings them back; a message sent meanwhile answers them as a reply.
   Each question keeps its own text, so moving between them loses nothing, and
   the web half keeps it by session, call, and questions while the call is open
   (and for a while after a reconnect, as a host restart asks the call again).
-- **No dismiss.** Skipping a question leaves it to the agent; sending a message
-  replies; the turn's stop button stops. Escape only hides the questions, so a
-  stray key discards nothing. A call a stop cuts off has no result, and the
+- **Dismissing answers.** The × sends every question as skipped, whatever was
+  picked or written, so the agent decides them all and the turn goes on;
+  skipping leaves one question to the agent; sending a message replies; the
+  turn's stop button stops. Escape only hides the questions, so a stray key
+  discards nothing. A call a stop cuts off has no result, and the
   model's provider reports it as one without a result.
 - **Asked again after a restart.** It is `replay: "safe"`: a call a host
   restart cut off asks the same questions again, under the same call id, so the

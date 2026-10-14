@@ -603,6 +603,10 @@ function Composer(props: { deps: Deps }) {
         return;
       }
     }
+    if (!event.isComposing && taken()?.keyDown?.(event) === true) {
+      event.preventDefault();
+      return;
+    }
     const sends = props.deps.config.send === "mod+enter" ? modKey(event) : !modKey(event) && !event.ctrlKey && !event.metaKey;
     if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing) {
       // Alt does what `whenBusy` does not; with no turn running, Alt+Enter is left to the field.
@@ -690,6 +694,14 @@ function Composer(props: { deps: Deps }) {
       <Show when={taken() === undefined ? holder() : undefined} keyed>
         {(item) => <Contained slot={ComposerTakeovers} item={item} component={item.waiting} props={{ take }} />}
       </Show>
+      {/* A taker's banner, in the completion menu's look and the page's flow, as the queue; the menu covers it while open. */}
+      <Show when={taken()} keyed>
+        {(item) => (
+          <div class="composer-takeover">
+            <Contained slot={ComposerTakeovers} item={item} component={item.banner} props={{ release }} />
+          </div>
+        )}
+      </Show>
       <form
         class="composer"
         classList={{ dragging: dragging(), busy: threads.busy(), taken: taken() !== undefined }}
@@ -708,9 +720,6 @@ function Composer(props: { deps: Deps }) {
         }}
         onDrop={onDrop}
       >
-        <Show when={taken()} keyed>
-          {(item) => <Contained slot={ComposerTakeovers} item={item} component={item.banner} props={{ release }} />}
-        </Show>
         <Show when={completion.open()}>
           {/* A press anywhere in it keeps the focus, and so the cursor and the menu, in the prompt. */}
           <div class="completions" ref={suggestionList} onMouseDown={(event) => event.preventDefault()}>
@@ -840,8 +849,7 @@ function Composer(props: { deps: Deps }) {
             </Show>
             <Show when={taken()}>
               {(item) => (
-                <button type="submit" class="send send-labeled" disabled={item().canSubmit?.() === false}>
-                  {item().submitLabel()}
+                <button type="submit" class="send" disabled={item().canSubmit?.() === false} aria-label={item().submitLabel()} data-tip={item().submitLabel()}>
                   <SendIcon />
                 </button>
               )}

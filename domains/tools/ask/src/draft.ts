@@ -12,10 +12,13 @@ export interface QuestionDraft {
 
 export const emptyDraft: QuestionDraft = { picked: [], text: "", skipped: false };
 
-/** `label` picked or unpicked: one question takes one option, so picking replaces; one with `multiSelect` toggles. */
+/**
+ * `label` picked or unpicked: picking a picked option unpicks it; otherwise one question takes one option, so picking
+ * replaces, and one with `multiSelect` adds.
+ */
 export const pick = (question: AskQuestion, draft: QuestionDraft, label: string): QuestionDraft => {
   const order = (labels: readonly string[]) => question.options.map((option) => option.label).filter((candidate) => labels.includes(candidate));
-  if (question.multiSelect !== true) return { ...draft, picked: [label], skipped: false };
+  if (question.multiSelect !== true) return { ...draft, picked: draft.picked.includes(label) ? [] : [label], skipped: false };
   return {
     ...draft,
     picked: draft.picked.includes(label) ? draft.picked.filter((candidate) => candidate !== label) : order([...draft.picked, label]),
@@ -33,10 +36,6 @@ export const answerOf = (draft: QuestionDraft): QuestionAnswer | undefined => {
 
 /** Every question's answer, in order: one left unanswered is sent as skipped, as the review says it will be. */
 export const answersOf = (drafts: readonly QuestionDraft[]): readonly QuestionAnswer[] => drafts.map((draft) => answerOf(draft) ?? { kind: "skipped" });
-
-/** Whether picking an option answers everything at once: a single one-choice question, with nothing written to go with it. */
-export const picksSubmit = (questions: readonly AskQuestion[], draft: QuestionDraft): boolean =>
-  questions.length === 1 && questions[0]!.multiSelect !== true && draft.text.trim() === "";
 
 /** An answer in a few words, for the review and the transcript. */
 export const describeAnswer = (answer: QuestionAnswer | undefined): string => {

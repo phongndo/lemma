@@ -1,7 +1,7 @@
 import { Show, createMemo, createSignal, untrack } from "solid-js";
 import { Actions } from "@lemma/actions";
 import { ComposerTakeovers, Threads, ThreadsActionIds, ToolViews } from "@lemma/threads";
-import { ChatIcon } from "@lemma/look";
+import { ChatIcon, ChevronDownIcon, XIcon } from "@lemma/look";
 import { Client, Notify, Slots, defineWebPlugin } from "@lemma/web";
 import { dropped, makeAsking } from "./asking.ts";
 import type { Asking } from "./asking.ts";
@@ -44,7 +44,6 @@ export default defineWebPlugin({
             }
             focusComposer();
           },
-          after: (ms, fn) => void plugin.after(ms, fn),
         });
         askings.set(key, asking);
       }
@@ -106,8 +105,24 @@ export default defineWebPlugin({
                 <span class="muted"> · a message you send answers it as a reply</span>
               </span>
               <span class="spacer" />
-              <button type="button" class="button small" onClick={() => props.take()}>
-                Answer
+              <button
+                type="button"
+                class="icon-button ask-head-button ask-show"
+                aria-label="Show the questions"
+                data-tip="Show the questions"
+                onClick={() => props.take()}
+              >
+                <ChevronDownIcon />
+              </button>
+              <button
+                type="button"
+                class="icon-button ask-head-button"
+                aria-label="Dismiss the questions"
+                data-tip="Dismiss: answer none, leave them all to the agent"
+                disabled={current().closed()}
+                onClick={() => current().dismiss()}
+              >
+                <XIcon />
               </button>
             </div>
           )}
@@ -118,6 +133,7 @@ export default defineWebPlugin({
         return current?.question() === undefined ? "" : current.draft().text;
       },
       setText: (text) => asking()?.setText(text),
+      keyDown: (event) => !event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && asking()?.boxKey(event.key) === true,
       placeholder: () => asking()?.placeholder() ?? "",
       readOnly: () => asking()?.question() === undefined,
       submit: () => asking()?.next(),

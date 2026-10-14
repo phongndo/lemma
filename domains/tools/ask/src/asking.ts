@@ -1,8 +1,9 @@
 import { createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { OpenQuestions } from "./channels.ts";
-import { answerOf, answersOf, emptyDraft, pick, picksSubmit } from "./draft.ts";
+import { answerOf, answersOf, emptyDraft, pick } from "./draft.ts";
 import type { QuestionDraft } from "./draft.ts";
+import { displayLabel } from "./questions.ts";
 import type { AskQuestion, QuestionAnswer } from "./questions.ts";
 
 /**
@@ -18,8 +19,15 @@ export interface Asking {
   readonly tab: Accessor<number>;
   readonly question: () => AskQuestion | undefined;
   readonly draft: () => QuestionDraft;
-  /** The text box's text for the question shown: the person's own answer, or a note on their pick. */
+  /** The text box's text for the question shown: the person's own answer, or a note on what they picked. */
   readonly setText: (text: string) => void;
+  /** The option highlighted, by keys or the pointer, as a menu's active row: none until the person moves to one, or picks one. */
+  readonly active: Accessor<number | undefined>;
+  readonly setActive: (index: number | undefined) => void;
+  /**
+   * Picks an option, or unpicks it when picked. It stays on the question, so the text box can add a note to the pick;
+   * Enter or the send button goes on.
+   */
   readonly choose: (index: number) => void;
   readonly goTo: (index: number) => void;
   /**
@@ -32,8 +40,16 @@ export interface Asking {
   /** Enter or the send button: the next question, the review, or sending the answers. */
   readonly next: () => void;
   readonly skip: () => void;
+  /** Sends every question as skipped, whatever was picked or written: the agent decides them all. */
+  readonly dismiss: () => void;
   readonly submitLabel: () => string;
   readonly placeholder: () => string;
+  /**
+   * A key in the composer's text box while it holds nothing, as a completion menu takes it: Up and Down move the
+   * highlight, a digit picks, Enter picks the highlighted option when it is not picked yet, and Left and Right move
+   * between questions. Whether it was taken; Enter otherwise goes on (`next`), as the send button does.
+   */
+  readonly boxKey: (key: string) => boolean;
 }
 
 export const makeAsking = (
@@ -41,8 +57,6 @@ export const makeAsking = (
   deps: {
     /** Sends the answers; rejects when they were not taken, having said why. */
     readonly submit: (answers: readonly QuestionAnswer[]) => Promise<void>;
-    /** Runs `fn` after `ms`, as the plugin's own timer. */
-    readonly after: (ms: number, fn: () => void) => void;
   },
 ): Asking => {
   const questions = open.questions;
@@ -58,13 +72,24 @@ export const makeAsking = (
     const at = tab();
     if (at < questions.length) setDrafts((all) => all.map((draft, index) => (index === at ? change(draft) : draft)));
   };
-  const goTo = (index: number) => setTab(Math.max(0, Math.min(index, several ? questions.length : 0)));
+  const [active, setActive] = createSignal<number | undefined>(undefined);
+  /** Where a question shows from: its picked option highlighted, else none. */
+  const landing = (at: number) => {
+    const shown = questions[at];
+    const picked = shown?.options.findIndex((option) => (drafts()[at] ?? emptyDraft).picked.includes(option.label)) ?? -1;
+    return picked < 0 ? undefined : picked;
+  };
+  const goTo = (index: number) => {
+    const at = Math.max(0, Math.min(index, several ? questions.length : 0));
+    setActive(landing(at));
+    setTab(at);
+  };
   const canSubmit = () => !sending() && !sent() && (several || answerOf(draft()) !== undefined);
-  const send = async () => {
+  const send = async (answers = answersOf(drafts())) => {
     if (sending() || sent()) return;
     setSending(true);
     try {
-      await deps.submit(answersOf(drafts()));
+      await deps.submit(answers);
       setSent(true);
     } catch {
       // `submit` told the person why.
@@ -77,6 +102,38 @@ export const makeAsking = (
     if (!several || tab() === questions.length) return void send();
     goTo(tab() + 1);
   };
+  const choose = (index: number) => {
+    const current = question();
+    const option = current?.options[index];
+    if (current === undefined || option === undefined || sent()) return;
+    setActive(index);
+    update((draft) => pick(current, draft, option.label));
+  };
+  const boxKey = (key: string): boolean => {
+    if (draft().text !== "") return false;
+    const current = question();
+    const count = current?.options.length ?? 0;
+    const digit = /^[1-9]$/.test(key) ? Number(key) - 1 : undefined;
+    if (current !== undefined && (key === "ArrowDown" || key === "ArrowUp")) {
+      const at = active();
+      setActive(key === "ArrowDown" ? (at === undefined ? 0 : (at + 1) % count) : at === undefined ? count - 1 : (at + count - 1) % count);
+      return true;
+    }
+    if (current !== undefined && digit !== undefined && digit < count) {
+      choose(digit);
+      return true;
+    }
+    const at = active();
+    if (current !== undefined && key === "Enter" && at !== undefined && !draft().picked.includes(current.options[at]?.label ?? "")) {
+      choose(at);
+      return true;
+    }
+    if (several && (key === "ArrowRight" || key === "ArrowLeft")) {
+      goTo(tab() + (key === "ArrowRight" ? 1 : -1));
+      return true;
+    }
+    return false;
+  };
   return {
     open,
     drafts,
@@ -84,22 +141,14 @@ export const makeAsking = (
     question,
     draft,
     setText: (text) => update((draft) => ({ ...draft, text, skipped: false })),
-    choose: (index) => {
-      const current = question();
-      const option = current?.options[index];
-      if (current === undefined || option === undefined || sent()) return;
-      const before = draft();
-      update((draft) => pick(current, draft, option.label));
-      if (current.multiSelect === true) return;
-      if (picksSubmit(questions, before)) return void send();
-      // A moment to see the pick land before the next question shows.
-      const from = tab();
-      if (several) deps.after(160, () => tab() === from && goTo(from + 1));
-    },
+    active,
+    setActive,
+    choose,
     goTo,
     canSubmit,
     closed: () => sending() || sent(),
     next,
+    dismiss: () => void send(questions.map(() => ({ kind: "skipped" }))),
     skip: () => {
       if (sending() || sent()) return;
       update((draft) => ({ ...draft, picked: [], skipped: true }));
@@ -113,8 +162,11 @@ export const makeAsking = (
     },
     placeholder: () => {
       if (tab() === questions.length) return "Submit your answers, or pick a question above to change its answer";
-      return draft().picked.length > 0 ? "Add a note to your answer, or leave this blank" : "Type your own answer, or pick an option above";
+      const picked = draft().picked;
+      if (picked.length === 0) return "Type your own answer, or pick an option above";
+      return `Add a note to “${picked.map((label) => displayLabel(label).text).join(", ")}”, or leave this blank`;
     },
+    boxKey,
   };
 };
 
