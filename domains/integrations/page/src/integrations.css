@@ -14,16 +14,7 @@
 }
 
 .integrations-list-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   padding: 0 10px 6px 0;
-}
-
-.integrations-list-head .search-box,
-.integrations-list-head > :first-child {
-  flex: 1;
-  min-width: 0;
 }
 
 .integrations-groups {
@@ -44,10 +35,6 @@
 
 .integrations-group-title {
   padding: 2px 4px 4px 8px;
-}
-
-.integrations-add-button {
-  flex: none;
 }
 
 /* A kind with nothing yet: one row that adds the first. */

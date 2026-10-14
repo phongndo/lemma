@@ -325,18 +325,13 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
     <div class="integrations">
       <aside class="integrations-list" aria-label="Integrations">
         <div class="integrations-list-head">
-          <SearchField value={query()} onInput={setQuery} placeholder="Filter" label="Filter integrations" />
-          <Show when={kinds().some(addable)}>
-            <button
-              type="button"
-              class="icon-button integrations-add-button"
-              aria-label="Add an integration"
-              data-tip="Add an integration"
-              onClick={() => add(ALL)}
-            >
-              <PlusIcon />
-            </button>
-          </Show>
+          <SearchField value={query()} onInput={setQuery} placeholder="Filter" label="Filter integrations">
+            <Show when={kinds().some(addable)}>
+              <button type="button" class="icon-button" aria-label="Add an integration" data-tip="Add an integration" onClick={() => add(ALL)}>
+                <PlusIcon />
+              </button>
+            </Show>
+          </SearchField>
         </div>
         <div class="integrations-groups">
           <For each={kinds()}>
