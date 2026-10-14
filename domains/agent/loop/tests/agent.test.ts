@@ -398,7 +398,7 @@ describe("agent", () => {
         yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go")));
         const system = requests[0]!.system ?? "";
         // The base opens the prompt, whatever the id of a plugin adding a section without an order.
-        expect(system.startsWith("You are an expert coding assistant")).toBe(true);
+        expect(system.startsWith("# Harness")).toBe(true);
         expect(system.indexOf("Mind the rules.")).toBeGreaterThan(0);
       }),
     );
@@ -479,7 +479,7 @@ describe("agent", () => {
           expect(logged[0]!.composition).toBe("comp-1");
           // Who changed the request, and how long it took on its own, is logged with it.
           expect(logged[0]!.handlers).toEqual([{ source: "project-notes", ms: expect.any(Number), changed: ["+section notes"] }]);
-          expect(logged[0]!.system).toContain("You are an expert coding assistant");
+          expect(logged[0]!.system).toContain("# Harness");
           expect(logged[0]!.system).toContain(`Current working directory: ${dir}`);
           expect(logged[0]!.system!.endsWith("Notes v1")).toBe(true);
           expect(logged[0]!.tools!.map((tool) => tool.name)).toEqual(["echo"]);

@@ -12,7 +12,8 @@ export type WriteInput = typeof WriteInput.Type;
 
 export const writeTool: Tool<WriteInput> = {
   name: "write",
-  description: "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+  description:
+    "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories. Use it for new files or complete rewrites; change part of an existing file with a targeted edit.",
   input: WriteInput,
   execute: async ({ path, content }, { cwd, signal }) => {
     const absolute = resolveToCwd(path, cwd);

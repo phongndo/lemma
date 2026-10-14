@@ -108,7 +108,7 @@ function waitForExit(child: ChildProcess): Promise<number | null> {
 /** The `bash` tool; a command without a timeout of its own stops after `defaultTimeout` seconds (0: never). */
 export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Tool<BashInput> => ({
   name: "bash",
-  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds${
+  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Prefer the dedicated tools for reading, searching, and editing files when they are offered. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds${
     defaultTimeout > 0
       ? `; without one, the command is stopped after ${defaultTimeout} seconds. Run long-lived processes such as servers in the background (with nohup and &, redirecting their output to a file)`
       : ""
