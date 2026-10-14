@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 import { Schema } from "effect";
 import { McpServerConfig, SERVER_NAME } from "@lemma/mcp";
 import type { Exposure, McpServer, McpServerChange } from "@lemma/mcp";
+import { normalize } from "./form.ts";
 
 /**
  * A server as the plugin runs it: its entry, merged, and where it came from: the file, or a plugin (with the server as
@@ -30,23 +31,6 @@ const decodeEntry = Schema.decodeUnknownResult(McpServerConfig);
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 
 /** pi's names for exposures it has and this plugin runs as code mode: `deferred` loads by search, which code mode's `searchTools` does. */
-const EXPOSURE_ALIASES: Readonly<Record<string, Exposure>> = { deferred: "codemode", "codemode-deferred": "codemode" };
-const exposureAlias = (value: unknown): unknown => (typeof value === "string" ? (EXPOSURE_ALIASES[value] ?? value) : value);
-
-/**
- * An entry as another client may have written it, in this plugin's terms: `disabled: true` (Cline's, OpenCode's) is
- * `enabled: false`, and pi's other exposure names are code mode.
- */
-const normalize = (entry: Record<string, unknown>): Record<string, unknown> => {
-  const { disabled, ...rest } = entry;
-  const out: Record<string, unknown> = { ...rest };
-  if (disabled === true && out["enabled"] === undefined) out["enabled"] = false;
-  if (out["exposure"] !== undefined) out["exposure"] = exposureAlias(out["exposure"]);
-  if (isObject(out["toolExposure"]))
-    out["toolExposure"] = Object.fromEntries(Object.entries(out["toolExposure"]).map(([tool, value]) => [tool, exposureAlias(value)]));
-  return out;
-};
-
 /** One entry of `mcpServers`, decoded; anything another client keeps beside it (`alwaysAllow`, say) is ignored. */
 export function decodeServer(name: string, raw: unknown): { readonly config: McpServerConfig } | { readonly error: string } {
   if (!SERVER_NAME.test(name)) return { error: `"${name}" is not a server name: use letters, digits, _, and -` };
@@ -217,6 +201,49 @@ export const connectionKey = (config: McpServerConfig): string =>
  * and an entry left with nothing to say is removed. A file that is a link is written where it links to.
  */
 export async function writeChange(path: string, name: string, change: McpServerChange, base: McpServerConfig = {}): Promise<void> {
+  await updateServers(path, (servers) => {
+    const entry: Record<string, unknown> = isObject(servers[name]) ? { ...servers[name] } : {};
+    if (change.enabled !== undefined) {
+      delete entry["disabled"];
+      if (change.enabled === (base.enabled ?? true)) delete entry["enabled"];
+      else entry["enabled"] = change.enabled;
+    }
+    if (change.exposure !== undefined) {
+      if (change.exposure === (base.exposure ?? "codemode")) delete entry["exposure"];
+      else entry["exposure"] = change.exposure;
+    }
+    if (change.tools !== undefined) {
+      const tools: Record<string, unknown> = isObject(entry["toolExposure"]) ? { ...entry["toolExposure"] } : {};
+      for (const [tool, exposure] of Object.entries(change.tools)) {
+        if (exposure === null) delete tools[tool];
+        else tools[tool] = exposure;
+      }
+      if (Object.keys(tools).length === 0) delete entry["toolExposure"];
+      else entry["toolExposure"] = tools;
+    }
+    if (Object.keys(entry).length === 0) delete servers[name];
+    else servers[name] = entry;
+  });
+}
+
+/**
+ * Writes the server's whole entry, or removes it (`null`), keeping the rest of the file and the keys another client
+ * keeps in the entry beside the ones this plugin reads (`alwaysAllow`, say).
+ */
+export async function writeEntry(path: string, name: string, entry: McpServerConfig | null): Promise<void> {
+  await updateServers(path, (servers) => {
+    if (entry === null) {
+      delete servers[name];
+      return;
+    }
+    const known = new Set(Object.keys(McpServerConfig.fields));
+    const kept = isObject(servers[name]) ? Object.fromEntries(Object.entries(servers[name]).filter(([key]) => !known.has(key) && key !== "disabled")) : {};
+    servers[name] = { ...kept, ...entry };
+  });
+}
+
+/** Changes the file's `mcpServers` with `change`, written atomically; a file that is a link is written where it links to. */
+async function updateServers(path: string, change: (servers: Record<string, unknown>) => void): Promise<void> {
   // Through a link (one home-manager keeps, say) rather than over it.
   const target = await realpath(path).catch(() => path);
   let json: Record<string, unknown> = {};
@@ -229,27 +256,7 @@ export async function writeChange(path: string, name: string, change: McpServerC
     if ((cause as NodeJS.ErrnoException).code !== "ENOENT") throw new Error(`Could not update ${path}: ${(cause as Error).message}`);
   }
   const servers = isObject(json["mcpServers"]) ? { ...json["mcpServers"] } : {};
-  const entry: Record<string, unknown> = isObject(servers[name]) ? { ...servers[name] } : {};
-  if (change.enabled !== undefined) {
-    delete entry["disabled"];
-    if (change.enabled === (base.enabled ?? true)) delete entry["enabled"];
-    else entry["enabled"] = change.enabled;
-  }
-  if (change.exposure !== undefined) {
-    if (change.exposure === (base.exposure ?? "codemode")) delete entry["exposure"];
-    else entry["exposure"] = change.exposure;
-  }
-  if (change.tools !== undefined) {
-    const tools: Record<string, unknown> = isObject(entry["toolExposure"]) ? { ...entry["toolExposure"] } : {};
-    for (const [tool, exposure] of Object.entries(change.tools)) {
-      if (exposure === null) delete tools[tool];
-      else tools[tool] = exposure;
-    }
-    if (Object.keys(tools).length === 0) delete entry["toolExposure"];
-    else entry["toolExposure"] = tools;
-  }
-  if (Object.keys(entry).length === 0) delete servers[name];
-  else servers[name] = entry;
+  change(servers);
   json = { ...json, mcpServers: servers };
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.${randomBytes(6).toString("hex")}.tmp`;

@@ -270,6 +270,12 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../domains/agent/contract
+      '@lemma/agent-acp':
+        specifier: workspace:*
+        version: link:../../domains/agent/acp
+      '@lemma/agent-harness-picker':
+        specifier: workspace:*
+        version: link:../../domains/agent/harness-picker
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -330,6 +336,9 @@ importers:
       '@lemma/frame-tooltips':
         specifier: workspace:*
         version: link:../../domains/frame/tooltips
+      '@lemma/integrations-page':
+        specifier: workspace:*
+        version: link:../../domains/integrations/page
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../domains/llm/contract
@@ -363,6 +372,9 @@ importers:
       '@lemma/look-kit':
         specifier: workspace:*
         version: link:../../domains/look/kit
+      '@lemma/mcp':
+        specifier: workspace:*
+        version: link:../../domains/mcp/contract
       '@lemma/mcp-servers':
         specifier: workspace:*
         version: link:../../domains/mcp/servers
@@ -603,6 +615,70 @@ importers:
         specifier: 5.0.4
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/agent/acp:
+    dependencies:
+      '@agentclientprotocol/sdk':
+        specifier: 1.8.0
+        version: 1.8.0(zod@4.6.7)
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../actions/contract
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/integrations':
+        specifier: workspace:*
+        version: link:../../integrations/contract
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/mcp':
+        specifier: workspace:*
+        version: link:../../mcp/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@lemma/agent-loop':
+        specifier: workspace:*
+        version: link:../loop
+      '@lemma/sessions-files':
+        specifier: workspace:*
+        version: link:../../sessions/files
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../../tools/registry
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   domains/agent/cli:
     dependencies:
       '@lemma/agent':
@@ -663,6 +739,46 @@ importers:
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/agent/harness-picker:
+    dependencies:
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../actions/contract
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/integrations':
+        specifier: workspace:*
+        version: link:../../integrations/contract
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1456,6 +1572,53 @@ importers:
         specifier: 5.0.4
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/integrations/contract:
+    dependencies:
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/integrations/page:
+    dependencies:
+      '@lemma/integrations':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   domains/llm/cli:
     dependencies:
       '@lemma/cli':
@@ -1899,6 +2062,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/integrations':
+        specifier: workspace:*
+        version: link:../../integrations/contract
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
@@ -1908,9 +2074,6 @@ importers:
       '@lemma/mcp':
         specifier: workspace:*
         version: link:../contract
-      '@lemma/settings':
-        specifier: workspace:*
-        version: link:../../settings/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../../tools/contract
@@ -3230,6 +3393,9 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../domains/agent/contract
+      '@lemma/agent-acp':
+        specifier: workspace:*
+        version: link:../../domains/agent/acp
       '@lemma/agent-cli':
         specifier: workspace:*
         version: link:../../domains/agent/cli
@@ -3523,6 +3689,11 @@ importers:
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
 packages:
+
+  '@agentclientprotocol/sdk@1.8.0':
+    resolution: {integrity: sha512-fbP7qHZsFyTJVT0/RPrcWJ8An26qLXHEuGCHHEKDyxD1xpXV+Ejyh2LAE6vBAFePkpVjZeeohnbgvuEhZ7wLMg==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
 
   '@antfu/install-pkg@2.1.0':
     resolution: {integrity: sha512-sdg9NxU3zR4Mnawfbc/x6GB5Wf17WYud5qOuEuxXjaKpYpMkISSJEjItGebXJ2bQ4DIcly4NYH23mtkGJjvKUw==}
@@ -6108,6 +6279,10 @@ packages:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
 snapshots:
+
+  '@agentclientprotocol/sdk@1.8.0(zod@4.6.7)':
+    dependencies:
+      zod: 4.6.7
 
   '@antfu/install-pkg@2.1.0':
     dependencies:

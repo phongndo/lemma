@@ -3,7 +3,17 @@ import { Cause, Clock, Effect, Exit, Option, Random, Semaphore, Stream } from "e
 import type { Context } from "effect";
 import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
-import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
+import {
+  AgentContinueHook,
+  AgentError,
+  AgentRequestHook,
+  AssistantDelta,
+  NATIVE_HARNESS,
+  transcript,
+  TurnEnded,
+  TurnStarted,
+  viewHasOtherHarness,
+} from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
 import { deriveMessages, modelView, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
 import { declaredTools, ToolInvocation } from "@lemma/tools";
@@ -34,6 +44,8 @@ interface TurnServices {
   readonly trace: Context.Service.Shape<typeof PluginContext>["trace"];
   /** A new id for a step, from the agent's `IdSource`. */
   readonly newId: () => string;
+  /** The agent's plugin id, which events it writes for itself name (a handoff's `compaction`). */
+  readonly source: string;
 }
 
 interface TurnSettings {
@@ -394,6 +406,28 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       });
     }
   });
+
+  /**
+   * When turns before this one ran on another harness, the model is given the conversation as text: another agent's
+   * tool calls are not this loop's to send as its own. Logged as a `compaction` keeping the turn's prompts, so every
+   * reader of the log sees what the model sees.
+   */
+  const handoff = (firstKeptId: string) =>
+    Effect.gen(function* () {
+      const branch = yield* branchNow;
+      const start = branch.findIndex((event) => event.data.type === "turn-start" && event.data.turnId === turnId);
+      const before = start === -1 ? [] : branch.slice(0, start);
+      if (!viewHasOtherHarness(before, NATIVE_HARNESS)) return;
+      const messages = deriveMessages(before);
+      yield* append({
+        type: "compaction",
+        summary: `Earlier turns ran on another coding agent; this is the conversation so far.\n\n${transcript(messages)}`,
+        firstKeptId,
+        tokensBefore: Math.ceil(JSON.stringify(messages).length / 4),
+        source: services.source,
+        turnId,
+      });
+    });
 
   /** The model a turn that runs steps asks: it has one (see `TurnInput.model`). */
   const asked = Effect.suspend(() => (input.model === undefined ? Effect.die(new Error(`Turn ${turnId} has no model to ask`)) : Effect.succeed(input.model)));
@@ -1078,10 +1112,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       resume !== undefined
         ? resumed(resume)
         : Effect.gen(function* () {
-            for (const prompt of input.prompts) yield* userMessage(prompt);
+            let firstId: string | undefined;
+            for (const prompt of input.prompts) {
+              const logged = yield* userMessage(prompt);
+              firstId ??= logged.id;
+            }
             const first = input.prompts[0];
             const title = input.title === undefined && first !== undefined ? titleFrom(first.content) : undefined;
             if (title !== undefined) yield* append({ type: "title", title });
+            if (firstId !== undefined) yield* handoff(firstId);
             return yield* steps(1);
           });
     return yield* body.pipe(

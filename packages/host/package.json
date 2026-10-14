@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "@lemma/agent": "workspace:*",
+    "@lemma/agent-acp": "workspace:*",
     "@lemma/agent-cli": "workspace:*",
     "@lemma/agent-loop": "workspace:*",
     "@lemma/cli": "workspace:*",

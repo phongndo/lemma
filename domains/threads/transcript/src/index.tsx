@@ -273,7 +273,12 @@ function TurnFooter(props: ChatTurnFooterProps) {
   });
   const title = () => (speed() === undefined ? usage().title : `${usage().title}\nSpeed ${speed()} while streaming`);
   const duration = () => (props.turn.endedAt === undefined ? undefined : props.turn.endedAt - props.turn.startedAt);
-  const model = () => props.turn.models.map((ref) => parseModelRef(ref)?.model ?? ref).join(", ");
+  // Another agent's turn names the agent, and its model when it reported one.
+  const model = () =>
+    [
+      ...(props.turn.harness === undefined ? [] : [props.turn.harness]),
+      ...props.turn.models.map((ref) => parseModelRef(ref)?.model ?? ref).filter((model) => model !== props.turn.harness),
+    ].join(" · ");
   const reason = () => props.turn.end?.reason;
   const answer = () => props.answer;
   return (

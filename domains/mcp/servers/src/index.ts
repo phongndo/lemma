@@ -6,7 +6,7 @@ import type { Context } from "effect";
 import { definePlugin, Events, Registries } from "@lemma/core";
 import { Channels, Paths } from "@lemma/contracts";
 import { PromptSections } from "@lemma/agent";
-import { Mcp, McpChanged, McpError, McpServers, serveMcp } from "@lemma/mcp";
+import { Mcp, McpChanged, McpError, McpLaunches, McpServers, serveMcp } from "@lemma/mcp";
 import { Tools } from "@lemma/tools";
 import { Servers } from "./servers.ts";
 
@@ -51,13 +51,39 @@ export default definePlugin({
     const run = Effect.runPromiseWith(yield* Effect.context<never>());
     const file = join(paths.home, "mcp.json");
 
+    /**
+     * The servers other coding agents are handed, kept in line with the running ones: each launch by name, with what
+     * it was added as, so an unchanged one stays.
+     */
+    const launched = new Map<string, { readonly key: string; readonly remove: Effect.Effect<void> }>();
+    let launching = Promise.resolve();
+    const syncLaunches = () => {
+      launching = launching
+        .then(async () => {
+          const next = new Map(servers.launches().map((launch) => [launch.name, launch]));
+          for (const [name, { key, remove }] of launched) {
+            if (next.get(name) !== undefined && JSON.stringify(next.get(name)) === key) continue;
+            launched.delete(name);
+            await run(remove);
+          }
+          for (const [name, launch] of next) {
+            if (launched.has(name)) continue;
+            launched.set(name, { key: JSON.stringify(launch), remove: await run(owner.add(McpLaunches, launch)) });
+          }
+        })
+        .catch((cause: unknown) => void run(Effect.logWarning(`mcp: the servers for other agents: ${String(cause)}`)).catch(() => {}));
+    };
+
     const servers = new Servers(
       {
         addTool: async (tool) => {
           const remove = await run(owner.add(Tools, tool));
           return () => run(remove);
         },
-        changed: (state) => void run(events.publish(McpChanged, state)).catch(() => {}),
+        changed: (state) => {
+          void run(events.publish(McpChanged, state)).catch(() => {});
+          syncLaunches();
+        },
         warn: (message) => void run(Effect.logWarning(`mcp: ${message}`)).catch(() => {}),
       },
       { file, maxOutputChars: owner.config.maxOutputChars, version: VERSION, env: process.env },
@@ -103,6 +129,7 @@ export default definePlugin({
       state: Effect.sync(() => servers.state()),
       reconnect: (name) => Effect.tryPromise({ try: () => servers.reconnect(name), catch: toMcpError }),
       configure: (name, change) => Effect.tryPromise({ try: () => servers.configure(name, change), catch: toMcpError }),
+      put: (name, entry) => Effect.tryPromise({ try: () => servers.put(name, entry), catch: toMcpError }),
     };
     for (const channel of serveMcp(mcp, events)) yield* owner.add(Channels, channel);
     return { mcp };

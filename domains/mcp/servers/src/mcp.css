@@ -1,48 +1,9 @@
-.mcp-server {
+.mcp-detail {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px 0;
-}
-
-.mcp-server-head {
-  display: flex;
-  align-items: center;
   gap: 10px;
 }
 
-.mcp-state {
-  flex: none;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--text-3);
-}
-
-.mcp-server[data-state="connected"] .mcp-state {
-  background: var(--ok);
-}
-
-.mcp-server[data-state="connecting"] .mcp-state {
-  background: var(--warn);
-}
-
-.mcp-server[data-state="failed"] .mcp-state {
-  background: var(--err);
-}
-
-.mcp-server-info {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.mcp-server-name {
-  font-weight: 600;
-}
-
-.mcp-server-meta,
 .mcp-server-description,
 .mcp-tool-description,
 .mcp-tool-rule {
@@ -50,28 +11,13 @@
   font-size: calc(12px * var(--text-scale));
 }
 
-.mcp-server-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.mcp-server-description {
+  margin: 0;
 }
 
-.mcp-server-meta code,
 .mcp-tool-rule code,
 .mcp-tool-name {
   font-size: calc(12px * var(--text-scale));
-}
-
-.mcp-server-description,
-.mcp-source {
-  margin: 0 0 0 18px;
-}
-
-.mcp-error,
-.mcp-stderr,
-.mcp-server-controls,
-.mcp-tools {
-  margin-left: 18px;
 }
 
 .mcp-stderr summary {
@@ -80,8 +26,7 @@
   font-size: calc(12px * var(--text-scale));
 }
 
-.mcp-stderr pre,
-.mcp-example pre {
+.mcp-stderr pre {
   overflow: auto;
   max-height: 200px;
   margin: 6px 0 0;
@@ -92,10 +37,24 @@
   font-size: calc(12px * var(--text-scale));
 }
 
-.mcp-server-controls {
+.mcp-target,
+.mcp-share {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.mcp-target .integration-code {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-share .integration-hint {
+  flex: 1;
+}
+
+.mcp-danger {
+  color: var(--err);
 }
 
 .mcp-tools-toggle[aria-expanded="true"] .icon {
@@ -106,6 +65,7 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  margin: 0;
   padding: 0;
   list-style: none;
 }
@@ -129,12 +89,30 @@
   white-space: nowrap;
 }
 
-.mcp-example {
-  position: relative;
+.mcp-add,
+.mcp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-.mcp-example .copy-button {
-  position: absolute;
-  top: 6px;
-  right: 6px;
+.mcp-form > .segmented,
+.mcp-add > .segmented {
+  align-self: flex-start;
+}
+
+.mcp-form textarea.field {
+  min-height: 180px;
+}
+
+/* An icon's address, the icon it draws on its left. */
+.mcp-icon-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mcp-icon-field .field {
+  flex: 1;
+  min-width: 0;
 }

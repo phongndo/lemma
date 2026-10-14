@@ -100,6 +100,7 @@ in each.
 | Add a model provider                                               | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
 | Change model requests or their streams                             | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
 | Bring an MCP server and its tools                                  | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
+| Run turns on another coding agent                                  | Add to `Harnesses`                                             | [agent](../domains/agent/README.md)                                        |
 | Search files another way                                           | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
 | Serve your web half, or the CLI, data of your own                  | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
 | Add a command to the `lemma` command, or a check to `lemma doctor` | Add to `CliCommands`, `CliChecks`                              | [cli](../domains/cli/README.md)                                            |
@@ -108,6 +109,7 @@ in each.
 | Add a view of a thread                                             | Add to `Views` ([todo](../examples/todo/README.md))            | [threads](../domains/threads/README.md)                                    |
 | Add a page at an address                                           | Add to `Pages`, with a `defineRoute` route                     | the runtime's `Pages`                                                      |
 | Add a settings section                                             | Add to `SettingsSections`                                      | [settings](../domains/settings/README.md)                                  |
+| List a kind of thing in Settings › Integrations                    | Add to `IntegrationKinds`                                      | [integrations](../domains/integrations/README.md)                          |
 | Add a theme, an accent, or a font                                  | Add to `Themes`, `Accents`, `Fonts`                            | [look](../domains/look/README.md)                                          |
 | Add a key or a palette list                                        | Add to `Actions`, `PaletteSources`                             | [actions](../domains/actions/README.md)                                    |
 | Draw a shared piece differently everywhere                         | Intercept its part (`IconPart`, `ChatToolPart`, …)             | [look](../domains/look/README.md), [threads](../domains/threads/README.md) |

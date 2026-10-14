@@ -1,14 +1,29 @@
 import { createHash } from "node:crypto";
-import { McpError } from "@lemma/mcp";
-import type { McpServer, McpServerChange, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
+import { McpError, SERVER_NAME } from "@lemma/mcp";
+import type { McpLaunch, McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
-import { connectionKey, definitions, expandConfig, exposureOf, MissingVariable, readServersFile, ruleOf, writeChange } from "./config.ts";
+import {
+  connectionKey,
+  decodeServer,
+  definitions,
+  expandConfig,
+  exposureOf,
+  MissingVariable,
+  readServersFile,
+  ruleOf,
+  writeChange,
+  writeEntry,
+} from "./config.ts";
 import type { Definition, ServersFile } from "./config.ts";
 import { Connection } from "./connection.ts";
 import type { McpTool } from "./connection.ts";
+import { isImageAddress } from "./form.ts";
 import { inputOf, toContent, toolNames } from "./tools.ts";
+
+/** A server's icon: its entry's, when it can be one, else the one it declares. */
+const iconOf = (own: string | undefined, declared: string | undefined): string | undefined => (own !== undefined && isImageAddress(own) ? own : declared);
 
 /** What the manager needs of the kernel: adding a tool (the returned function removes it), and telling of a change. */
 export interface Kernel {
@@ -117,6 +132,24 @@ export class Servers {
       try {
         // A plugin's server has the plugin's values without the entry: one differing from them is written.
         await writeChange(this.options.file, name, change, definition.source.kind === "plugin" ? definition.source.config : {});
+      } catch (cause) {
+        throw new McpError({ reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause });
+      }
+      this.file = await readServersFile(this.options.file);
+      await this.apply();
+    });
+  }
+
+  /** Writes the server's whole entry (or removes it), and applies the file. */
+  put(name: string, entry: McpServerConfig | null): Promise<void> {
+    return this.serially(async () => {
+      if (entry !== null) {
+        const decoded = decodeServer(name, entry);
+        if ("error" in decoded) throw new McpError({ reason: "Invalid", message: decoded.error });
+      } else if (!SERVER_NAME.test(name)) throw new McpError({ reason: "Invalid", message: `"${name}" is not a server name` });
+      if (this.file.error !== undefined) throw new McpError({ reason: "Failed", message: `Fix ${this.options.file} first: ${this.file.error}` });
+      try {
+        await writeEntry(this.options.file, name, entry);
       } catch (cause) {
         throw new McpError({ reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause });
       }
@@ -341,9 +374,37 @@ export class Servers {
       ...(connection === undefined || connection.stderr === "" ? {} : { stderr: connection.stderr }),
       ...(connection?.server === undefined ? {} : { server: connection.server }),
       ...(connection?.protocolVersion === undefined ? {} : { protocolVersion: connection.protocolVersion }),
+      ...(iconOf(config.icon, connection?.icon) === undefined ? {} : { icon: iconOf(config.icon, connection?.icon)! }),
       ...(connection?.instructions === undefined ? {} : { instructions: connection.instructions }),
       tools,
+      ...(definition.source.kind === "file" && definition.file !== undefined ? { entry: definition.file } : {}),
+      harnesses: config.harnesses !== false,
     };
+  }
+
+  /** The enabled servers other coding agents are handed (`McpLaunches`), their variables read; one missing a variable is left out. */
+  launches(): McpLaunch[] {
+    return [...this.entries.values()].flatMap(({ definition }) => {
+      if (!enabled(definition) || definition.config.harnesses === false) return [];
+      let config;
+      try {
+        config = expandConfig(definition.config, this.options.env);
+      } catch {
+        return [];
+      }
+      return [
+        {
+          name: definition.name,
+          transport: config.url === undefined ? ("stdio" as const) : ("http" as const),
+          ...(config.command === undefined ? {} : { command: config.command }),
+          args: config.args ?? [],
+          env: config.env ?? {},
+          ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
+          ...(config.url === undefined ? {} : { url: config.url }),
+          headers: config.headers ?? {},
+        },
+      ];
+    });
   }
 
   private publish(): void {

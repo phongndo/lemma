@@ -5,7 +5,21 @@ import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
 
 const make = () => {
-  const server = new McpServer({ name: "fixture", version: "1.2.3" }, { instructions: "Tools for the tests.", capabilities: { tools: { listChanged: true } } });
+  const server = new McpServer(
+    {
+      name: "fixture",
+      version: "1.2.3",
+      // An insecure one, one for a theme, and one for any: the last is its icon.
+      icons: [
+        { src: "http://example.com/icon.png" },
+        { src: "https://example.com/dark.svg", theme: "dark" },
+        {
+          src: "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHZpZXdCb3g9JzAgMCAyNCAyNCc+PGNpcmNsZSBjeD0nMTInIGN5PScxMicgcj0nMTAnIGZpbGw9JyMxMGEzN2YnLz48L3N2Zz4=",
+        },
+      ],
+    },
+    { instructions: "Tools for the tests.", capabilities: { tools: { listChanged: true } } },
+  );
 
   server.registerTool("echo", { title: "Echo", description: "Says its text back", inputSchema: z.object({ text: z.string() }) }, async ({ text }) => ({
     content: [{ type: "text", text }],

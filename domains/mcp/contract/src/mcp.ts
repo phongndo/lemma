@@ -39,6 +39,13 @@ export const McpServerConfig = Schema.Struct({
   toolExposure: Schema.optional(Schema.Record(Schema.String, Exposure)),
   /** Seconds a request may take; 60 when absent, and at most about 24 days. Progress the server reports restarts it. */
   timeout: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
+  /**
+   * `false` keeps it from the other coding agents a turn may run on (the agent's harnesses, such as Claude Code over
+   * ACP), which are handed every other enabled server (`McpLaunches`).
+   */
+  harnesses: Schema.optional(Schema.Boolean),
+  /** Lemma's own: an image's address (`https:`, or a `data:image/` URL) for its icon, over the one the server declares. */
+  icon: Schema.optional(Schema.String),
 });
 export type McpServerConfig = typeof McpServerConfig.Type;
 
@@ -105,10 +112,16 @@ export const McpServerStatus = Schema.Struct({
   /** What the server says it is, once connected. */
   server: Schema.optional(Schema.Struct({ name: Schema.String, version: Schema.optional(Schema.String), title: Schema.optional(Schema.String) })),
   protocolVersion: Schema.optional(Schema.String),
+  /** Its icon's address: the entry's `icon`, else the one the server declares about itself once connected. */
+  icon: Schema.optional(Schema.String),
   /** The server's own instructions for using it, once connected. */
   instructions: Schema.optional(Schema.String),
   /** What it offered when it last connected. */
   tools: Schema.Array(McpToolInfo),
+  /** The file's entry for it, as written (`${VAR}` references and all): what a client edits and `put` writes back. */
+  entry: Schema.optional(McpServerConfig),
+  /** It is handed to other coding agents' turns (`McpServerConfig.harnesses`). */
+  harnesses: Schema.Boolean,
 });
 export type McpServerStatus = typeof McpServerStatus.Type;
 
@@ -123,9 +136,9 @@ export const McpServerChange = Schema.Struct({
 });
 export type McpServerChange = typeof McpServerChange.Type;
 
-/** `NotFound`: no server has that name; `Failed`: the file could not be written. */
+/** `NotFound`: no server has that name; `Invalid`: an entry `put` was given cannot run (`message` says why); `Failed`: the file could not be written. */
 export class McpError extends Data.TaggedError("McpError")<{
-  readonly reason: "NotFound" | "Failed";
+  readonly reason: "NotFound" | "Invalid" | "Failed";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -157,8 +170,32 @@ export class Mcp extends Context.Service<
      * name for a server a plugin adds, which then changes only what it names (its `toolExposure` added to the plugin's).
      */
     readonly configure: (server: string, change: McpServerChange) => Effect.Effect<void, McpError>;
+    /**
+     * Writes the server's whole entry to the user's `mcp.json` (adding it, or replacing what is there), or removes it
+     * (`null`), keeping the rest of the file, and applies it. Fails `Invalid` for a name or an entry that cannot run.
+     */
+    readonly put: (server: string, entry: McpServerConfig | null) => Effect.Effect<void, McpError>;
   }
 >()("lemma/Mcp") {}
+
+/** An enabled server as another coding agent launches it: its entry with `${VAR}` references read. */
+export interface McpLaunch {
+  readonly name: string;
+  readonly transport: "stdio" | "http";
+  readonly command?: string;
+  readonly args: readonly string[];
+  readonly env: Readonly<Record<string, string>>;
+  readonly cwd?: string;
+  readonly url?: string;
+  readonly headers: Readonly<Record<string, string>>;
+}
+
+/**
+ * The servers other coding agents are handed: `mcp.servers` adds one for each enabled server not kept from them
+ * (`McpServerConfig.harnesses`), and a harness plugin reads them as it starts one of its sessions. A server whose
+ * variables are not set is left out.
+ */
+export const McpLaunches = Registry.make<McpLaunch>("lemma/mcp.launches", { key: (launch) => launch.name, unique: true });
 
 const serverField = { server: Schema.String };
 
@@ -198,6 +235,14 @@ export const McpChannels = {
     payload: Schema.Struct({ ...serverField, change: McpServerChange }),
     success: Schema.Void,
   }),
+  put: defineChannel({
+    kind: "call",
+    id: "mcp.put",
+    title: "Add, replace, or remove an MCP server",
+    description: "Writes a server's whole entry to the user's mcp.json, or removes it with null",
+    payload: Schema.Struct({ ...serverField, entry: Schema.NullOr(McpServerConfig) }),
+    success: Schema.Void,
+  }),
 } as const;
 
 /** `McpChannels` served from `mcp`: what a provider of `Mcp` adds to `Channels`. */
@@ -207,4 +252,5 @@ export const serveMcp = (mcp: Context.Service.Shape<typeof Mcp>, events: Context
   serveChannel(McpChannels.changes, () => eventFeed(mcp.state, [events.stream(McpChanged, { buffer: 1 })], 1)),
   serveChannel(McpChannels.reconnect, ({ server }) => mcp.reconnect(server)),
   serveChannel(McpChannels.configure, ({ server, change }) => mcp.configure(server, change)),
+  serveChannel(McpChannels.put, ({ server, entry }) => mcp.put(server, entry)),
 ];
