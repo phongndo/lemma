@@ -1,0 +1,32 @@
+{
+  "name": "@lemma/agent-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The agent's commands for the lemma command: run a prompt, and see and steer what is running and queued",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/cli": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@lemma/cli-registry": "workspace:*",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./src/index.ts"
+  }
+}

@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@lemma/agent": "workspace:*",
+    "@lemma/cli": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",

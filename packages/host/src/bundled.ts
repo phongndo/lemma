@@ -1,16 +1,21 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
+import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
+import cliRegistry from "@lemma/cli-registry";
+import commandsCli from "@lemma/commands-cli";
 import commandsHost from "@lemma/commands-host";
 import commandsRegistry from "@lemma/commands-registry";
 import contextCompaction from "@lemma/context-compaction";
 import contextProject from "@lemma/context-project";
 import credentialsFile from "@lemma/credentials-file";
 import devtoolsTrace from "@lemma/devtools-trace";
+import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
 import llmPiAi from "@lemma/llm-pi-ai";
 import mcpServers from "@lemma/mcp-servers";
+import sessionsCli from "@lemma/sessions-cli";
 import sessionsFiles from "@lemma/sessions-files";
 import toolsAsk from "@lemma/tools-ask";
 import toolsBash from "@lemma/tools-bash";
@@ -21,6 +26,7 @@ import toolsRegistry from "@lemma/tools-registry";
 import toolsSearchFff from "@lemma/tools-search-fff";
 import toolsWrite from "@lemma/tools-write";
 import transportServer from "@lemma/transport-server";
+import workspaceCli from "@lemma/workspace-cli";
 import workspaceCommands from "@lemma/workspace-commands";
 import workspaceLocal from "@lemma/workspace-local";
 import workspaceSearchFff from "@lemma/workspace-search-fff";
@@ -58,6 +64,13 @@ export const bundled: readonly Plugin[] = [
   commandsRegistry,
   commandsHost,
   devtoolsTrace,
+  // The lemma command's: the commands and checks plugins add, then each domain's.
+  cliRegistry,
+  llmCli,
+  sessionsCli,
+  agentCli,
+  workspaceCli,
+  commandsCli,
   transportServer,
 ];
 
