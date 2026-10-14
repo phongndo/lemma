@@ -32,3 +32,32 @@ export const recallStep = (count: number, at: number | undefined, direction: "ol
   if (direction === "older") return count === 0 ? undefined : from === undefined ? count - 1 : Math.max(0, from - 1);
   return from === undefined || from >= count - 1 ? undefined : from + 1;
 };
+
+/** The composer as Up or Down finds it: what it holds, the sent prompt it brought back (`recalledAt`), and the selection. */
+export interface RecallFrom {
+  readonly text: string;
+  readonly images: readonly unknown[];
+  readonly recalledAt: number | undefined;
+  readonly selectionStart: number;
+  readonly selectionEnd: number;
+}
+
+/**
+ * What Up (`older`) or Down (`newer`) brings into the composer: the sent prompt at `at`, or past the newest (`at`
+ * undefined) an empty composer. Undefined when the key is the field's, to move the cursor: the composer holds a prompt
+ * of its own, or one brought back with the selection anywhere but collapsed at its start or end, or there is nowhere
+ * further to go. `history` is read only when the key is the composer's, as the branch may have changed since.
+ */
+export const recallTarget = (
+  history: () => readonly SentPrompt[],
+  from: RecallFrom,
+  direction: "older" | "newer",
+): { readonly at: number | undefined; readonly prompt: SentPrompt } | undefined => {
+  const { recalledAt, selectionStart: start, selectionEnd: end } = from;
+  if (recalledAt === undefined && (from.text !== "" || from.images.length > 0)) return undefined;
+  if (recalledAt !== undefined && (start !== end || (start !== 0 && start !== from.text.length))) return undefined;
+  const sent = history();
+  const at = recallStep(sent.length, recalledAt, direction);
+  if (at === recalledAt) return undefined;
+  return { at, prompt: at === undefined ? { text: "", images: [] } : sent[at]! };
+};

@@ -1,23 +1,15 @@
-import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount, untrack } from "solid-js";
+import { For, Show, batch, createEffect, createMemo, createSignal, createUniqueId, on, onCleanup, onMount } from "solid-js";
 import type { Accessor } from "solid-js";
 import { Effect, Schema } from "effect";
 import { newRequestId } from "@lemma/agent/prompt";
-import { IMAGE_TYPES, MAX_IMAGE_BYTES } from "@lemma/llm";
-import type { PromptContent, QueuedPrompt } from "@lemma/agent";
+import { IMAGE_TYPES } from "@lemma/llm";
+import type { QueuedPrompt } from "@lemma/agent";
 import type { ImageContent } from "@lemma/llm";
 import { formatKeys, listKey, modKey, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
 import {
   applySuggestion,
-  commandInvocation,
-  commandNodes,
-  commandProblem,
-  findCommandLine,
-  findTrigger,
-  PromptCommands,
-  runsHere,
   ComposerActions,
-  ComposerCompletions,
   ComposerControls,
   ComposerFooter,
   ComposerNotices,
@@ -25,45 +17,35 @@ import {
   ComposerRegion,
   ComposerSuggestionPart,
   ComposerTakeovers,
+  PromptCommands,
   Threads,
   ThreadsActionIds,
   ComposerQueued,
   ComposerSuggestionView,
   queuePlaces,
 } from "@lemma/threads";
-import type {
-  TriggerMatch,
-  ComposerActionProps,
-  ComposerCompletion,
-  ComposerCompletionAnswer,
-  ComposerQueuedProps,
-  ComposerSuggestion,
-  ComposerSuggestionProps,
-  ThreadsService,
-} from "@lemma/threads";
+import type { ComposerActionProps, ComposerQueuedProps, ComposerSuggestion, ComposerSuggestionProps, ThreadsService } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Models } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
-import type { ClientService, NotifyService, SlotItem, SlotsService } from "@lemma/web";
+import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
-import { recallStep, sentPrompts } from "./history.ts";
+import { commandTurn } from "./command.ts";
+import { createCompletion, ghostText } from "./completion.ts";
+import { dropRetry, keepDraft, unsent } from "./drafts.ts";
+import type { Draft, Drafts } from "./drafts.ts";
+import { recallTarget, sentPrompts } from "./history.ts";
 import type { SentPrompt } from "./history.ts";
+import { leftOutWarnings, readImage, sortFiles, unreadWarning } from "./images.ts";
+import { createSender } from "./sender.ts";
+import type { WhenBusy as SendWhenBusy } from "./sender.ts";
+import { createStopKey } from "./stop.ts";
+import { holds, noChoices, release as releasing, take as taking } from "./takeover.ts";
 import styles from "./composer.css?inline";
-
-const readImage = (file: File): Promise<ImageContent> =>
-  new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const url = String(reader.result);
-      resolve({ type: "image", mimeType: file.type, data: url.slice(url.indexOf(",") + 1) });
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read the image"));
-    reader.readAsDataURL(file);
-  });
 
 const ComposerConfig = Schema.Struct({
   send: Schema.Literals(["enter", "mod+enter"])
@@ -94,17 +76,6 @@ type Send = typeof ComposerConfig.Type.send;
 type WhenBusy = typeof ComposerConfig.Type.whenBusy;
 type Stop = typeof ComposerConfig.Type.stop;
 
-/** How long a first Escape waits for the second that stops the turn (`stop: "escape-twice"`). */
-const STOP_WINDOW_MS = 1000;
-
-/** A prompt being written. */
-interface Draft {
-  readonly text: string;
-  readonly images: readonly ImageContent[];
-  /** Kept from a send that did not get through, so sending it again unchanged cannot place it twice; an edit drops it. */
-  readonly requestId?: string;
-}
-
 /** A queued prompt in a line: its text, whitespace collapsed, or what it attaches. */
 const preview = (content: QueuedPrompt["content"]): string => {
   const text = content
@@ -115,9 +86,6 @@ const preview = (content: QueuedPrompt["content"]): string => {
   const images = content.filter((part) => part.type === "image").length;
   return text || (images === 1 ? "An image" : `${images} images`);
 };
-const unsent = (draft: Pick<Draft, "text" | "images">) => draft.text.trim() !== "" || draft.images.length > 0;
-const adding = (key: string) => (keys: ReadonlySet<string>) => new Set(keys).add(key);
-const removing = (key: string) => (keys: ReadonlySet<string>) => new Set([...keys].filter((other) => other !== key));
 
 interface Deps {
   readonly config: typeof ComposerConfig.Type;
@@ -127,161 +95,13 @@ interface Deps {
   readonly workspace: WorkspaceService;
   readonly notify: NotifyService;
   readonly slots: SlotsService;
-  /**
-   * Unsent prompts per thread (and for a new thread): they survive switching threads and the composer leaving the
-   * page, as it does while settings show.
-   */
-  readonly drafts: Map<string, Draft>;
+  readonly drafts: Drafts;
   /** Prompts on their way to the host, not yet taken: the composer has cleared, so they are in no draft. */
   readonly outgoing: Set<Draft>;
   readonly setFocus: (focus: (() => void) | undefined) => void;
   /** The queue above the box shows its prompts, or only its header: one choice for every thread, while the plugin runs. */
   readonly queueOpen: Accessor<boolean>;
   readonly setQueueOpen: (open: boolean) => void;
-}
-
-/** What one completion source has for the word: its suggestions and note, or why it has none. */
-interface CompletionGroup {
-  readonly source: SlotItem<ComposerCompletion>;
-  readonly suggestions: readonly ComposerSuggestion[];
-  readonly loading: boolean;
-  readonly note?: string | undefined;
-  readonly hint?: string | undefined;
-  readonly error?: string;
-}
-
-/** A suggestion in the menu: its group, its place across all groups, and a key that stays with it as answers arrive. */
-interface CompletionItem {
-  readonly group: CompletionGroup;
-  readonly suggestion: ComposerSuggestion;
-  readonly index: number;
-  readonly key: string;
-}
-
-const sameWord = (a: TriggerMatch | undefined, b: TriggerMatch | undefined) =>
-  a?.trigger === b?.trigger && a?.query === b?.query && a?.start === b?.start && a?.end === b?.end;
-
-const settled = (answer: ComposerCompletionAnswer): Omit<CompletionGroup, "source"> =>
-  "suggestions" in answer ? { suggestions: answer.suggestions, note: answer.note, hint: answer.hint, loading: false } : { suggestions: answer, loading: false };
-const failed = (error: unknown): Omit<CompletionGroup, "source"> => ({
-  suggestions: [],
-  loading: false,
-  error: error instanceof Error ? error.message : String(error),
-});
-
-/**
- * The completion menu's state: the trigger word at the cursor, what every
- * source with that trigger suggests for it, and which suggestion is active.
- * Escape dismisses the word until the cursor leaves it. It looks for a word only while `asking`.
- */
-function createCompletion(slots: SlotsService, text: () => string, cursor: () => number, asking: () => boolean) {
-  const sources = () => slots.list(ComposerCompletions);
-  const spanOf = (source: ComposerCompletion) => source.span ?? "word";
-  const triggers = (span: "word" | "line") => [...new Set(sources().flatMap((source) => (spanOf(source) === span ? [source.trigger] : [])))];
-  const [dismissed, setDismissed] = createSignal<number>();
-  // A command line (`/thinking hi`): its trigger starts the prompt, and it runs across spaces.
-  const word = createMemo(
-    (): (TriggerMatch & { readonly span: "word" | "line" }) | undefined => {
-      if (!asking()) return undefined;
-      // A word trigger past the line's own (`/compact keep @src/a`) completes that word, as anywhere else.
-      const found = findTrigger(text(), cursor(), triggers("word"));
-      if (found !== undefined && found.start > 0) return { ...found, span: "word" };
-      const line = findCommandLine(text(), cursor(), triggers("line"));
-      if (line !== undefined) return { ...line, span: "line" };
-      return found === undefined ? undefined : { ...found, span: "word" };
-    },
-    undefined,
-    { equals: (a, b) => a?.span === b?.span && sameWord(a, b) },
-  );
-  createEffect(() => {
-    if (dismissed() !== undefined && word()?.start !== dismissed()) setDismissed(undefined);
-  });
-  const match = createMemo(() => {
-    const current = word();
-    return current === undefined || current.start === dismissed() ? undefined : current;
-  });
-
-  const [groups, setGroups] = createSignal<readonly CompletionGroup[]>([]);
-  let shown: TriggerMatch | undefined;
-  createEffect(() => {
-    const current = match();
-    const answering = current === undefined ? [] : sources().filter((source) => source.trigger === current.trigger && spanOf(source) === current.span);
-    // Typing on in a word keeps what shows until the next answers arrive. Another word starts empty, and so does the
-    // same word asked again because what a source read changed (another project): its old answer is not this one.
-    const kept =
-      current !== undefined && shown !== undefined && !sameWord(current, shown) && shown.trigger === current.trigger && shown.start === current.start;
-    shown = current;
-    if (current === undefined) return void setGroups([]);
-    const controller = new AbortController();
-    onCleanup(() => controller.abort());
-    const before = untrack(groups);
-    setGroups(
-      answering.map((source) => ({
-        source,
-        suggestions: kept ? (before.find((group) => group.source.id === source.id)?.suggestions ?? []) : [],
-        loading: true,
-      })),
-    );
-    const settle = (id: string, group: Omit<CompletionGroup, "source">) => {
-      if (!controller.signal.aborted) setGroups((all) => all.map((existing) => (existing.source.id === id ? { source: existing.source, ...group } : existing)));
-    };
-    for (const source of answering) {
-      // Asked here, inside the effect, so the reactive values it reads before its first await are tracked.
-      let answer: ReturnType<ComposerCompletion["suggest"]>;
-      try {
-        answer = source.suggest(current.query, { signal: controller.signal });
-      } catch (error) {
-        settle(source.id, failed(error));
-        continue;
-      }
-      Promise.resolve(answer).then(
-        (result) => settle(source.id, settled(result)),
-        (error: unknown) => settle(source.id, failed(error)),
-      );
-    }
-  });
-
-  const items = createMemo(() => {
-    let index = 0;
-    return groups().flatMap((group) =>
-      group.suggestions.map((suggestion): CompletionItem => ({ group, suggestion, index: index++, key: `${group.source.id}\u0000${suggestion.key}` })),
-    );
-  });
-  /** The groups with suggestions, each with its items: what the listbox shows. */
-  const sections = createMemo(() =>
-    groups()
-      .filter((group) => group.suggestions.length > 0)
-      .map((group) => ({ group, items: items().filter((item) => item.group.source.id === group.source.id) })),
-  );
-  // The active suggestion by its key, so it stays put while answers arrive; a new word starts at the first.
-  const [chosen, setChosen] = createSignal<string>();
-  createEffect(on(match, () => setChosen(undefined)));
-  const active = () => {
-    const key = chosen();
-    return Math.max(0, key === undefined ? 0 : items().findIndex((item) => item.key === key));
-  };
-  return {
-    match,
-    groups,
-    items,
-    sections,
-    active,
-    /** Some source has yet to answer this word. */
-    loading: () => groups().some((group) => group.loading),
-    setActive: (index: number) => setChosen(items()[index]?.key),
-    open: () => {
-      const current = match();
-      if (current === undefined || groups().length === 0) return false;
-      // Past a command's name, a line no source has anything for is just a prompt that starts with `/` (a path).
-      const quiet = groups().every((group) => !group.loading && group.suggestions.length === 0 && group.note === undefined && group.error === undefined);
-      return !(current.span === "line" && /\s/.test(current.query) && quiet);
-    },
-    move: (by: number) => {
-      const all = items();
-      if (all.length > 0) setChosen(all[(active() + by + all.length) % all.length]!.key);
-    },
-    dismiss: () => setDismissed(match()?.start),
-  };
 }
 
 function Composer(props: { deps: Deps }) {
@@ -302,30 +122,19 @@ function Composer(props: { deps: Deps }) {
     const id = threads.activeId();
     return id === undefined ? undefined : slots.list(ComposerTakeovers).find((item) => item.sessionId() === id);
   });
-  /** By `key`: takeovers the person let go, and ones they took while a prompt of their own was unsent. */
-  const [released, setReleased] = createSignal<ReadonlySet<string>>(new Set());
-  const [claimed, setClaimed] = createSignal<ReadonlySet<string>>(new Set());
-  /**
-   * The takeover the text box and the send button are given to. Not while the person has a prompt of their own unsent
-   * (written, or going out), so the box never changes under their keys, unless they take it; nor once they let it go.
-   */
+  const [choices, setChoices] = createSignal(noChoices);
+  /** The takeover the text box and the send button are given to (`holds`). */
   const taken = createMemo(() => {
     const item = holder();
-    if (item === undefined) return undefined;
-    const key = item.key();
-    if (released().has(key)) return undefined;
-    return (unsent({ text: text(), images: images() }) || sending()) && !claimed().has(key) ? undefined : item;
+    return item !== undefined && holds(choices(), item.key(), unsent({ text: text(), images: images() }) || sending()) ? item : undefined;
   });
   const release = () => {
     const item = holder();
-    if (item !== undefined) setReleased(adding(item.key()));
+    if (item !== undefined) setChoices((current) => releasing(current, item.key()));
   };
   const take = () => {
     const item = holder();
-    if (item === undefined) return;
-    const key = item.key();
-    setReleased(removing(key));
-    setClaimed(adding(key));
+    if (item !== undefined) setChoices((current) => taking(current, item.key()));
   };
   /** What the text box shows: the takeover's text while there is one, else the thread's draft. */
   const boxText = () => taken()?.text() ?? text();
@@ -337,24 +146,14 @@ function Composer(props: { deps: Deps }) {
    */
   const [recalled, setRecalled] = createSignal<SentPrompt & { readonly at: number }>();
   const completion = createCompletion(slots, boxText, cursor, () => focused() && recalled() === undefined && taken()?.readOnly?.() !== true);
-  /**
-   * Muted after the cursor while it ends the prompt: the rest of the active suggestion, when what is typed begins it,
-   * and what follows it (`/mcp rec` → `onnect <server>`); with none active, what the word takes (`<server>`). Tab
-   * takes the suggestion.
-   */
   /** The box is at its tallest and scrolls: the ghost, drawn over it unscrolled, would be out of place, so none shows. */
   const [scrolls, setScrolls] = createSignal(false);
+  /** Muted after the cursor while it ends the prompt (`ghostText`); Tab takes the suggestion. */
   const ghost = createMemo(() => {
     const word = completion.match();
-    const value = boxText();
-    if (word === undefined || taken() !== undefined || scrolls() || cursor() !== value.length) return "";
-    const item = completion.open() ? completion.items()[completion.active()] : undefined;
-    if (item === undefined) return completion.groups().find((group) => group.hint !== undefined)?.hint ?? "";
-    const typed = value.slice(word.start, cursor());
-    const { insert, hint } = item.suggestion;
-    if (!insert.toLowerCase().startsWith(typed.toLowerCase())) return "";
-    const rest = insert.slice(typed.length);
-    return hint === undefined ? rest : `${rest} ${hint}`;
+    if (word === undefined || taken() !== undefined || scrolls()) return "";
+    const active = completion.open() ? completion.items()[completion.active()]?.suggestion : undefined;
+    return ghostText(boxText(), word, cursor(), active, completion.groups());
   });
   const listId = createUniqueId();
   const optionId = (index: number) => `${listId}-${index}`;
@@ -381,24 +180,13 @@ function Composer(props: { deps: Deps }) {
     ),
   );
   // Every change is kept with its thread, for when the composer shows it again; a retry id stays until the person edits.
-  createEffect(
-    on(
-      [text, images],
-      ([text, images]) => {
-        if (recalled() !== undefined) return void drafts.delete(draftKey());
-        const requestId = drafts.get(draftKey())?.requestId;
-        drafts.set(draftKey(), { text, images, ...(requestId === undefined ? {} : { requestId }) });
-      },
-      { defer: true },
-    ),
-  );
+  createEffect(on([text, images], ([text, images]) => keepDraft(drafts, draftKey(), { text, images }, recalled() !== undefined), { defer: true }));
   // Taken or let go, or the takeover's text changed (another of its questions): the box fits what it now shows.
   createEffect(on([taken, boxText], () => queueMicrotask(resize), { defer: true }));
   /** The person changed the prompt: sending it is a new submission, not a retry of the last one, and no prompt brought back. */
   const edited = () => {
     setRecalled(undefined);
-    const draft = drafts.get(draftKey());
-    if (draft?.requestId !== undefined) drafts.set(draftKey(), { text: draft.text, images: draft.images });
+    dropRetry(drafts, draftKey());
   };
 
   const resize = () => {
@@ -424,36 +212,53 @@ function Composer(props: { deps: Deps }) {
   const { queueOpen, setQueueOpen } = props.deps;
   const queueId = createUniqueId();
 
-  const canSend = () => client.connected() && !sending() && (text().trim() !== "" || images().length > 0);
   const acceptsImages = () => models.selected()?.input.includes("image") ?? true;
   /** What sending does while a turn runs: what `whenBusy` says, or with Alt (`other`) the other. */
-  const busyMode = (other = false): "steer" | "follow-up" => ((props.deps.config.whenBusy === "steer") !== other ? "steer" : "follow-up");
+  const busyMode = (other = false): SendWhenBusy => ((props.deps.config.whenBusy === "steer") !== other ? "steer" : "follow-up");
 
-  /**
-   * A send asked for while another was still going out, with what the composer held then: it goes once that one is
-   * accepted, if the composer holds the same still. What was typed after the Enter waits for one of its own.
-   */
-  let next: { readonly whenBusy: "steer" | "follow-up"; readonly text: string; readonly images: readonly ImageContent[] } | undefined;
+  const sender = createSender({
+    drafts,
+    outgoing,
+    key: draftKey,
+    read: () => ({ text: text(), images: images() }),
+    write: (prompt) => {
+      setText(prompt.text);
+      setImages(prompt.images);
+    },
+    sending,
+    setSending,
+    connected: client.connected,
+    newRequestId,
+    starting: () => {
+      setRecalled(undefined);
+      // Sent while a takeover waits, the person's own prompt answers in its place: it lets the takeover go.
+      const waiting = holder();
+      if (waiting !== undefined) setChoices((current) => releasing(current, waiting.key()));
+    },
+    place: async (sent, content, whenBusy) => {
+      // A new chat may start in its own worktree, named from the prompt.
+      const cwd = threads.activeId() === undefined ? await workspace.newChatDir(sent.text) : undefined;
+      return threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy });
+    },
+    report: (error) => notify.report(error, "Could not create a session"),
+    settled: () => queueMicrotask(resize),
+  });
+  const canSend = sender.canSend;
   /** Enter, or the send button: the takeover's, while the box is given to one, else the person's prompt goes. */
-  const submit = async (whenBusy: "steer" | "follow-up" = busyMode()) => {
+  const submit = async (whenBusy: SendWhenBusy = busyMode()) => {
     const item = taken();
-    if (item === undefined) return (await runCommand()) ? undefined : sendPrompt(whenBusy);
+    if (item === undefined) return (await runCommand()) ? undefined : sender.send(whenBusy);
     if (item.canSubmit?.() !== false) item.submit();
   };
   /**
-   * A prompt that is a command running here (a `PromptCommands` tree with a `run`: `/new`, `/mcp reconnect github`)
-   * runs instead of going out: the box clears first, as the command may go to another thread, and gets the prompt
-   * back if it fails. One missing a subcommand or an argument says what it takes, and stays. A command whose tree runs
-   * nothing here is the host's, and goes out as typed.
+   * A prompt that is a command running here runs instead of going out (`commandTurn`): the box clears first, as the
+   * command may go to another thread, and gets the prompt back if it fails. True when the prompt was a command.
    */
   const runCommand = async (): Promise<boolean> => {
-    const typed = commandInvocation(text(), commandNodes(slots.list(PromptCommands)));
-    if (typed === undefined || !runsHere(typed.root)) return false;
-    const name = `/${typed.path.join(" ")}`;
-    // Never sent to the model in its place: what is wrong with it is said, and the prompt stays to be fixed.
-    const problem = images().length > 0 ? `${name} runs here, and takes no images: remove them first` : commandProblem(typed);
-    if (problem !== undefined) {
-      notify.toast({ level: "warning", message: problem });
+    const turn = commandTurn(text(), slots.list(PromptCommands), images().length);
+    if (turn.kind === "send") return false;
+    if (turn.kind === "refuse") {
+      notify.toast({ level: "warning", message: turn.problem });
       return true;
     }
     const before = text();
@@ -461,10 +266,11 @@ function Composer(props: { deps: Deps }) {
     edited();
     setText("");
     queueMicrotask(resize);
+    const { command } = turn;
     try {
-      await typed.node.run!({ path: typed.path, args: typed.args, text: typed.text });
+      await command.node.run!({ path: command.path, args: command.args, text: command.text });
     } catch (error) {
-      notify.report(error, `${name} did not run`);
+      notify.report(error, `${turn.name} did not run`);
       if (draftKey() === key && text() === "") {
         setText(before);
         queueMicrotask(resize);
@@ -472,75 +278,18 @@ function Composer(props: { deps: Deps }) {
     }
     return true;
   };
-  const sendPrompt = async (whenBusy: "steer" | "follow-up") => {
-    if (sending()) {
-      if (unsent({ text: text(), images: images() })) next = { whenBusy, text: text(), images: images() };
-      return;
-    }
-    if (!canSend()) return;
-    setRecalled(undefined);
-    // Sent while a takeover waits, the person's own prompt answers in its place: it lets the takeover go.
-    const waiting = holder();
-    if (waiting !== undefined) setReleased(adding(waiting.key()));
-    const content: PromptContent = [...(text().trim() === "" ? [] : [{ type: "text" as const, text: text() }]), ...images()];
-    // Sending a new chat creates a session and switches to it, so remember which draft this was.
-    const key = draftKey();
-    const sent: Draft = { text: text(), images: images(), requestId: drafts.get(key)?.requestId ?? newRequestId() };
-    // The composer clears as the prompt goes out: what is typed meanwhile is the next prompt, never this one. Until the
-    // host takes it, it is outgoing (closing the tab asks first), and if refused it comes back.
-    outgoing.add(sent);
-    drafts.delete(key);
-    setText("");
-    setImages([]);
-    setSending(true);
-    let ok = false;
-    try {
-      // A new chat may start in its own worktree, named from the prompt.
-      const cwd = threads.activeId() === undefined ? await workspace.newChatDir(sent.text) : undefined;
-      ok = await threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy });
-    } catch (error) {
-      notify.report(error, "Could not create a session");
-    }
-    setSending(false);
-    outgoing.delete(sent);
-    if (!ok) {
-      // Refused: back to the thread it was written in (a new chat's, to the session `send` created, which the composer
-      // shows now), before whatever was typed there since, so nothing is lost. Unchanged, it keeps its request id.
-      const home = key === "" ? draftKey() : key;
-      const since = drafts.get(home);
-      const back: Draft =
-        since === undefined || !unsent(since)
-          ? sent
-          : { text: [sent.text, since.text].filter((part) => part.trim() !== "").join("\n\n"), images: [...sent.images, ...since.images] };
-      drafts.set(home, back);
-      if (home === draftKey()) {
-        setText(back.text);
-        setImages(back.images);
-      }
-    }
-    queueMicrotask(resize);
-    const queued = next;
-    next = undefined;
-    if (ok && queued !== undefined && text() === queued.text && images() === queued.images) void sendPrompt(queued.whenBusy);
-  };
-  const send = plugin.action("send the prompt", (whenBusy?: "steer" | "follow-up") => submit(whenBusy));
+  const send = plugin.action("send the prompt", (whenBusy?: SendWhenBusy) => submit(whenBusy));
 
-  /**
-   * Up or Down in an empty composer, or in one holding a sent prompt it brought back unchanged with the cursor at its
-   * start or end: the next older or newer prompt sent in the thread, or past the newest an empty composer again.
-   * False when the key is the field's (it moves the cursor).
-   */
+  /** Up or Down (`recallTarget`): false when the key is the field's (it moves the cursor). */
   const recall = (direction: "older" | "newer"): boolean => {
-    const start = input.selectionStart ?? 0;
-    const end = input.selectionEnd ?? 0;
-    const from = recalled()?.at;
-    if (from === undefined && (text() !== "" || images().length > 0)) return false;
-    if (from !== undefined && (start !== end || (start !== 0 && start !== text().length))) return false;
-    // Read from the branch when asked: the branch may have changed since the last (checked out further back, say).
-    const history = sentPrompts(threads.branch());
-    const at = recallStep(history.length, from, direction);
-    if (at === from) return false;
-    const prompt = at === undefined ? { text: "", images: [] } : history[at]!;
+    const target = recallTarget(
+      // Read from the branch when asked: the branch may have changed since the last (checked out further back, say).
+      () => sentPrompts(threads.branch()),
+      { text: text(), images: images(), recalledAt: recalled()?.at, selectionStart: input.selectionStart ?? 0, selectionEnd: input.selectionEnd ?? 0 },
+      direction,
+    );
+    if (target === undefined) return false;
+    const { at, prompt } = target;
     batch(() => {
       setRecalled(at === undefined ? undefined : { ...prompt, at });
       setText(prompt.text);
@@ -554,26 +303,17 @@ function Composer(props: { deps: Deps }) {
     return true;
   };
 
-  /**
-   * A first Escape that asked for a second to stop the turn (`stop: "escape-twice"`), until the window closes, another
-   * thread shows, or the turn ends: a second Escape stops only the turn the first was pressed in.
-   */
+  /** A first Escape waiting for its second (`createStopKey`): another thread showing, or the turn ending, forgets it. */
   const [stopping, setStopping] = createSignal(false);
-  let closeWindow: (() => void) | undefined;
-  const disarm = () => {
-    closeWindow?.();
-    closeWindow = undefined;
-    setStopping(false);
-  };
-  const escapeStops = () => {
-    const second = stopping();
-    disarm();
-    if (props.deps.config.stop === "escape" || second) return void threads.cancel();
-    setStopping(true);
-    closeWindow = plugin.after(STOP_WINDOW_MS, () => setStopping(false));
-  };
-  createEffect(on([threads.activeId, threads.busy], disarm, { defer: true }));
-  onCleanup(disarm);
+  const stopKey = createStopKey({
+    mode: () => props.deps.config.stop,
+    cancel: () => void threads.cancel(),
+    after: (ms, fn) => plugin.after(ms, fn),
+    armed: stopping,
+    setArmed: setStopping,
+  });
+  createEffect(on([threads.activeId, threads.busy], stopKey.disarm, { defer: true }));
+  onCleanup(stopKey.disarm);
 
   /** Writes what the box shows: the takeover's text, or the thread's draft. */
   const write = (next: string) => {
@@ -594,6 +334,7 @@ function Composer(props: { deps: Deps }) {
       resize();
     });
   };
+  /** Puts a suggestion in place of the word being completed. */
   /** Puts a suggestion in place of the word being completed; with `complete`, Tab's, only that, never sending. */
   const pick = (suggestion: ComposerSuggestion, how: "pick" | "complete" = "pick") => {
     const word = completion.match();
@@ -613,34 +354,14 @@ function Composer(props: { deps: Deps }) {
     if (suggestion.submit === true && how === "pick") void submit();
   };
   const addFiles = async (files: Iterable<File>) => {
-    const given = [...files];
-    // A file of no type the browser knows (an image with an unusual extension, say) is told it is not a format taken,
-    // not that it is no image.
-    const others = given.filter((file) => file.type !== "" && !file.type.startsWith("image/")).length;
-    const supported = given.filter((file) => IMAGE_TYPES.has(file.type));
-    const accepted = supported.filter((file) => file.size <= MAX_IMAGE_BYTES);
-    const unsupported = given.length - others - supported.length;
-    const tooLarge = supported.length - accepted.length;
-    if (others > 0) notify.toast({ level: "warning", message: `${others === 1 ? "A file was" : `${others} files were`} not attached: only images can be.` });
-    if (unsupported > 0)
-      notify.toast({
-        level: "warning",
-        message: `${unsupported === 1 ? "An image was" : `${unsupported} images were`} not attached: use PNG, JPEG, GIF, or WebP.`,
-      });
-    if (tooLarge > 0)
-      notify.toast({
-        level: "warning",
-        message: `${tooLarge === 1 ? "An image was" : `${tooLarge} images were`} not attached: over the 3.75 MB limit providers accept.`,
-      });
+    const sorted = sortFiles([...files]);
+    for (const message of leftOutWarnings(sorted)) notify.toast({ level: "warning", message });
+    const accepted = sorted.accepted;
     if (accepted.length === 0) return;
     // One that cannot be read (gone from a network share, say) is told of; the rest attach.
     const read = await Promise.allSettled(accepted.map(readImage));
     const unread = read.filter((result) => result.status === "rejected").length;
-    if (unread > 0)
-      notify.toast({
-        level: "warning",
-        message: `${unread === 1 ? "An image" : `${unread} images`} could not be read, and ${unread === 1 ? "was" : "were"} not attached.`,
-      });
+    if (unread > 0) notify.toast({ level: "warning", message: unreadWarning(unread) });
     const attached = read.flatMap((result) => (result.status === "fulfilled" ? [result.value] : []));
     if (attached.length === 0) return;
     edited();
@@ -701,8 +422,7 @@ function Composer(props: { deps: Deps }) {
       release();
     } else if (event.key === "Escape" && threads.busy()) {
       event.preventDefault();
-      // One held down repeats: it stops nothing, or the two presses `escape-twice` asks for would be one.
-      if (!event.repeat) escapeStops();
+      stopKey.press(event.repeat);
     }
   };
 
