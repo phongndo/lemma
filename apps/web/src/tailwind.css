@@ -65,8 +65,13 @@
   --text-base: calc(14px * var(--text-scale));
 
   --radius-*: initial;
-  --radius: var(--radius);
+  --radius-2xs: var(--radius-2xs);
+  --radius-xs: var(--radius-xs);
   --radius-sm: var(--radius-sm);
+  --radius: var(--radius);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-full: var(--radius-full);
 
   --shadow-*: initial;
   --shadow: var(--shadow);

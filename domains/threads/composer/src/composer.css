@@ -18,15 +18,33 @@
   pointer-events: auto;
 }
 
-/* A notice's own margin falls outside it, so the background is the notice's shape. */
+/*
+ * A notice docks to the composer: inset as the workspace bar under it is, its
+ * bottom tucked behind the box, so the two read as one shape. Its background
+ * is the page's, so what passes under does not show through its tint.
+ */
 .composer-notice {
-  border-radius: var(--radius);
+  margin: 0 20px -16px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background: var(--bg);
+}
+
+.composer-notice > .composer-callout {
+  margin: 0;
+  padding-bottom: calc(9px + 16px);
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  border-radius: inherit;
+}
+
+/* One whose plugin draws nothing now takes no room, so it pulls nothing under the box. */
+.composer-notice:not(:has(> *)) {
+  display: none;
 }
 
 .composer {
   position: relative;
-  border-radius: calc(24px * var(--radius-scale));
+  border-radius: var(--radius-xl);
   background: color-mix(in srgb, var(--bg-raised) 80%, transparent);
   -webkit-backdrop-filter: blur(12px) saturate(1.4);
   backdrop-filter: blur(12px) saturate(1.4);
@@ -155,7 +173,7 @@
 .composer-takeover {
   padding: 4px;
   border: 1px solid var(--border-strong);
-  border-radius: calc(14px * var(--radius-scale));
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   box-shadow: var(--composer-menu-shadow);
   animation: menu-in 0.12s cubic-bezier(0.2, 0.9, 0.3, 1);
@@ -232,7 +250,7 @@
   height: 20px;
   padding: 0 10px;
   border: 0;
-  border-radius: calc(6px * var(--radius-scale));
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
   font-size: calc(11px * var(--text-scale));

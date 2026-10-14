@@ -14,7 +14,7 @@
 .toast {
   pointer-events: auto;
   padding: 10px 10px 10px 14px;
-  border-radius: calc(10px * var(--radius-scale));
+  border-radius: var(--radius);
   border: 1px solid var(--border-strong);
   background: var(--bg-raised);
   box-shadow: var(--shadow-lg);

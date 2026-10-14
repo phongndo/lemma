@@ -517,7 +517,8 @@ for (const pkg of pluginPackages.filter((pkg) => webPackages.includes(pkg.dir)))
 }
 // What covers the page stacks by the `--z-*` tokens, so a layer from a web half can slot in between. And the look is
 // tokens all through, so a theme or a setting reaches every plugin: a color is written only where a token is declared
-// (its default), and a font size or a corner's radius is scaled by `--text-scale` or `--radius-scale`.
+// (its default), a font size is scaled by `--text-scale`, and a corner is one of the `--radius-*` tokens (scaled by
+// `--radius-scale`).
 const COLOR_LITERAL = /#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?|hwb|oklch|oklab|lab|lch|color)\(/i;
 // CSS's named colors, which count as literals in a declaration's value (not in a selector or a property's name).
 const NAMED_COLOR = new RegExp(
@@ -588,8 +589,9 @@ for (const file of [web, ...webPackages].flatMap((dir) => walk(dir)).filter((pat
     if (/^(?:font|font-size|line-height)$/.test(property) && /\b[\d.]+px/.test(bare.replace(/calc\([\d.]+px \* var\(--text-scale\)\)/g, ""))) {
       uiProblems.push(`${where}: a font size in px (scale it: calc(12px * var(--text-scale)))`);
     }
-    if (property.endsWith("radius") && /\b[\d.]+px/.test(bare.replace(/calc\([\d.]+px \* var\(--radius-scale\)\)/g, ""))) {
-      uiProblems.push(`${where}: a radius in px (scale it: calc(6px * var(--radius-scale)))`);
+    // A corner is one of the foundation's radii, by what it rounds, so shapes of a kind match across plugins.
+    if (property.endsWith("radius") && bare.replace(/var\(--radius(?:-[\w-]+)?\)|\b(?:0|50%|inherit)(?![\w%.-])/g, "").trim() !== "") {
+      uiProblems.push(`${where}: a radius outside the --radius-* tokens (use var(--radius-sm) and the like, 50%, 0, or inherit)`);
     }
   }
 }

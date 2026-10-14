@@ -73,8 +73,19 @@
     --backdrop: rgba(0, 0, 0, 0.32);
     --backdrop-strong: rgba(0, 0, 0, 0.45);
     --shadow-palette: 0 24px 60px -16px rgba(0, 0, 0, 0.6);
-    --radius: calc(8px * var(--radius-scale));
-    --radius-sm: calc(6px * var(--radius-scale));
+    /*
+     * Corners, by what they round, so shapes of a kind match across plugins.
+     * A shape inside another, near its edge, takes the outer radius less the
+     * gap between them (a menu's rows, 4px inside a 14px overlay, are 10px),
+     * and shapes that touch are one shape (a notice docked to the composer).
+     */
+    --radius-2xs: calc(2px * var(--radius-scale)); /* marks: bars, ticks, the devtools' dense chrome */
+    --radius-xs: calc(4px * var(--radius-scale)); /* inline: kbd, tags, inline code, the focus ring */
+    --radius-sm: calc(6px * var(--radius-scale)); /* controls: buttons, fields, a list's rows */
+    --radius: calc(10px * var(--radius-scale)); /* blocks: callouts, code, toasts; an overlay's rows */
+    --radius-lg: calc(14px * var(--radius-scale)); /* overlays and cards: dialogs, menus, the palette, a prompt */
+    --radius-xl: calc(24px * var(--radius-scale)); /* the composer */
+    --radius-full: calc(999px * var(--radius-scale)); /* pills: badges, chips, switches */
     --sidebar: 264px;
     /* Stacking of what covers the page, lowest first. A layer from a web half slots in between by picking a value. */
     --z-drawer: 40;
@@ -174,7 +185,7 @@
   :focus-visible {
     outline: 2px solid var(--text-3);
     outline-offset: 1px;
-    border-radius: calc(4px * var(--radius-scale));
+    border-radius: var(--radius-xs);
   }
 
   ::selection {
@@ -208,7 +219,7 @@
   kbd {
     font-size: calc(11px * var(--text-scale));
     padding: 0 4px;
-    border-radius: calc(4px * var(--radius-scale));
+    border-radius: var(--radius-xs);
     border: 1px solid var(--border);
     background: var(--bg-raised);
     color: var(--text-2);
@@ -220,28 +231,42 @@
     }
   }
 
+  /*
+   * Buttons are flush: text on whatever they sit on, highlighted only under
+   * the pointer, while pressed, or while what they open is open. Variants
+   * change the text, not the shape: `button-primary` is the action that
+   * commits (full-strength and heavier, its highlight the accent's tint),
+   * `button-danger` one that destroys (in the error color). `small` fits a
+   * row or a notice.
+   */
   .button {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
     height: 30px;
-    padding: 0 12px;
+    padding: 0 10px;
+    border: 0;
     border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--bg-raised);
-    color: var(--text);
+    background: transparent;
+    color: var(--text-2);
     font-size: calc(13px * var(--text-scale));
     font-weight: 500;
     white-space: nowrap;
     text-decoration: none;
     transition:
       background 0.1s,
-      border-color 0.1s;
+      color 0.1s;
   }
 
-  .button:hover:not(:disabled) {
+  .button:hover:not(:disabled),
+  .button[aria-expanded="true"] {
     background: var(--bg-hover);
-    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .button:active:not(:disabled) {
+    background: var(--bg-active);
   }
 
   .button:disabled {
@@ -250,20 +275,28 @@
 
   .button.small {
     height: 26px;
-    padding: 0 9px;
+    padding: 0 8px;
     font-size: calc(12px * var(--text-scale));
   }
 
   .button-primary {
-    background: var(--accent);
-    border-color: transparent;
-    color: var(--accent-fg);
+    color: var(--accent-text);
+    font-weight: 600;
   }
 
-  .button-primary:hover:not(:disabled) {
-    background: var(--accent);
-    filter: brightness(1.08);
-    border-color: transparent;
+  .button-primary:hover:not(:disabled),
+  .button-primary[aria-expanded="true"] {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+
+  .button-danger,
+  .button-danger:hover:not(:disabled) {
+    color: var(--err);
+  }
+
+  .button-danger:hover:not(:disabled) {
+    background: var(--err-soft);
   }
 
   .icon-button {
@@ -322,7 +355,7 @@
   .tag {
     font-size: calc(10.5px * var(--text-scale));
     padding: 0 5px;
-    border-radius: calc(4px * var(--radius-scale));
+    border-radius: var(--radius-xs);
     background: var(--bg-active);
     color: var(--text-2);
   }
@@ -485,7 +518,7 @@
     padding: 0 10px;
     flex: none;
     border: 0;
-    border-radius: calc(8px * var(--radius-scale));
+    border-radius: var(--radius);
     background: transparent;
     text-align: left;
     font-size: calc(13px * var(--text-scale));
@@ -583,7 +616,7 @@
     flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--border-strong);
-    border-radius: calc(14px * var(--radius-scale));
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
     box-shadow: var(--shadow-palette);
     animation: menu-in 0.14s cubic-bezier(0.2, 0.9, 0.3, 1);
@@ -628,7 +661,7 @@
     gap: 10px;
     min-height: 36px;
     padding: 0 6px 0 12px;
-    border-radius: calc(8px * var(--radius-scale));
+    border-radius: var(--radius);
     color: var(--text-2);
     font-size: calc(13.5px * var(--text-scale));
     cursor: default;
@@ -712,7 +745,7 @@
 
   ::-webkit-scrollbar-thumb {
     background: var(--border-strong);
-    border-radius: calc(10px * var(--radius-scale));
+    border-radius: var(--radius-full);
     border: 3px solid transparent;
     background-clip: padding-box;
   }
@@ -912,7 +945,7 @@
     width: 300px;
     max-width: 40%;
     padding: 0 6px;
-    border-radius: calc(2px * var(--radius-scale));
+    border-radius: var(--radius-2xs);
     background: var(--bg-raised);
     box-shadow: inset 0 0 0 1px var(--dt-line);
     color: var(--text-3);
@@ -950,7 +983,7 @@
     height: 20px;
     padding: 0 7px;
     border: 0;
-    border-radius: calc(10px * var(--radius-scale));
+    border-radius: var(--radius-full);
     background: transparent;
     color: var(--text-2);
     font-size: calc(12px * var(--text-scale));
@@ -1236,7 +1269,7 @@
   .dt-pre {
     margin: 0;
     padding: 6px 8px;
-    border-radius: calc(2px * var(--radius-scale));
+    border-radius: var(--radius-2xs);
     background: var(--bg-sunk);
     font-family: var(--font-mono);
     font-size: calc(11.5px * var(--text-scale));

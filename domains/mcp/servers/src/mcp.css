@@ -31,7 +31,7 @@
   max-height: 200px;
   margin: 6px 0 0;
   padding: 8px;
-  border-radius: calc(6px * var(--radius-scale));
+  border-radius: var(--radius);
   background: var(--bg-sunk);
   font-family: var(--font-mono);
   font-size: calc(12px * var(--text-scale));
@@ -46,10 +46,6 @@
 .mcp-target .integration-code {
   flex: 1;
   min-width: 0;
-}
-
-.mcp-danger {
-  color: var(--err);
 }
 
 .mcp-tools-toggle[aria-expanded="true"] .icon {

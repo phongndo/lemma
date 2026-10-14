@@ -36,7 +36,7 @@
   top: 30%;
   height: 40%;
   min-width: 1px;
-  border-radius: calc(2px * var(--radius-scale));
+  border-radius: var(--radius-2xs);
   background: var(--trc-bar);
 }
 

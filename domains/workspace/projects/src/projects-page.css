@@ -32,21 +32,6 @@
   white-space: nowrap;
 }
 
-.button.button-danger {
-  background: var(--err);
-  border-color: transparent;
-  color: var(--err-fg);
-}
-
-.button.button-danger:hover:not(:disabled) {
-  background: var(--err);
-  filter: brightness(1.08);
-}
-
-.button.button-danger:disabled {
-  opacity: 0.45;
-}
-
 .delete-project-dialog code {
   font-size: calc(12px * var(--text-scale));
 }

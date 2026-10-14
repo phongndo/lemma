@@ -32,7 +32,7 @@ function ArchivedRow(props: { client: ClientService; threads: ThreadsService; se
         <button class="button small" onClick={plugin.action("unarchive thread", () => props.threads.mark(props.session.id, { archived: false }))}>
           Unarchive
         </button>
-        <button class="button small archived-delete" onClick={plugin.action("delete thread", () => props.threads.remove(props.session.id))}>
+        <button class="button small button-danger" onClick={plugin.action("delete thread", () => props.threads.remove(props.session.id))}>
           Delete
         </button>
       </div>

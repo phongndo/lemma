@@ -131,7 +131,7 @@ export const separate = async (): Promise<string> => {
     });
   assert.deepEqual(
     await look(),
-    { left: "16px", top: "2px", radius: "8px", background: await accentNow() },
+    { left: "16px", top: "2px", radius: "10px", background: await accentNow() },
     "a web half's utilities are not compiled in order, or not from the tokens",
   );
   await styled.evaluate(() => document.documentElement.style.setProperty("--accent", "rgb(1, 2, 3)"));
