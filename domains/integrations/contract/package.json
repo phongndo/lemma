@@ -1,0 +1,22 @@
+{
+  "name": "@lemma/integrations",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The integrations domain's contract: the kinds of thing Settings › Integrations lists (agents, MCP servers), each one's items, details, and how to add one",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/web": "workspace:*",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}
