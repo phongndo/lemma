@@ -39,6 +39,8 @@ import xiaomi from "./assets/simpleicons-xiaomi.svg?url";
 import earendil from "./assets/earendil.svg?raw";
 import zai from "./assets/lobehub-zai.svg?raw";
 import baseten from "./assets/lobehub-baseten.svg?raw";
+import typesafe from "./assets/typesafe-ai-light.svg?url";
+import typesafeDark from "./assets/typesafe-ai-dark.svg?url";
 
 /**
  * How the Providers page presents the host's providers: each brand's logo, a
@@ -80,6 +82,7 @@ const brands: Readonly<Record<string, ProviderBrand>> = {
   baseten: { logo: { mono: baseten } },
   cerebras: { logo: { light: cerebras, dark: cerebrasDark } },
   fireworks: { logo: { light: fireworks }, keyUrl: "https://fireworks.ai/account/api-keys" },
+  typesafe: { logo: { light: typesafe, dark: typesafeDark }, keywords: "jev classifier", blurb: "Jev, a classifier codemode scripts can ask" },
   together: { logo: { light: together }, keyUrl: "https://api.together.ai/settings/api-keys" },
   deepseek: { logo: { light: deepseek }, keyUrl: "https://platform.deepseek.com/api_keys" },
   mistral: { logo: { light: mistral }, keyUrl: "https://console.mistral.ai/api-keys" },
