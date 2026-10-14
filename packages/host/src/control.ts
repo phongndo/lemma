@@ -139,7 +139,6 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
   Effect.gen(function* () {
     const { paths, pinned, safe, changes, log, printDiagnostics } = options;
     const deferral = options.deferral ?? deferralOf;
-    const serving = Object.keys(pinned);
     const programScope = yield* Effect.scope;
     const ready = yield* Deferred.make<Loader>();
     const reloading = yield* Semaphore.make(1);
@@ -351,7 +350,7 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
           const touched = yield* affected(loader, next);
           // A change that restarts the plugin asking for it (the transport serving the call, or one whose channel call
           // or command asks) applies once that work is over.
-          const after = yield* deferral(touched, serving);
+          const after = yield* deferral(touched);
           if (after === undefined) return yield* apply(loader, next);
           yield* checkConfigs(next, touched);
           const change = Effect.flatMap(reloadNow(loader, "configure", Object.keys(rows)), (report) => log(`applied a config change: ${describe(report)}`));
@@ -387,7 +386,7 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
           // One that restarts the plugin asking for it (`commands.host` running `host.reload`, or `commands.registry` serving that
           // run), or the transport serving the request, is checked now and applied once that work is over.
           const touched = yield* affected(loader, next);
-          const after = yield* deferral(touched, serving);
+          const after = yield* deferral(touched);
           if (after === undefined) return yield* apply(loader, next);
           yield* checkConfigs(next, touched);
           const change = Effect.flatMap(reloadNow(loader, "reload"), (report) => log(`reloaded: ${describe(report)}`));
@@ -437,7 +436,7 @@ export const makeHostChanges = (options: ChangesOptions): Effect.Effect<HostChan
               state === undefined || (state === "active" && !restartOptions?.force)
                 ? undefined
                 : yield* loader.affected(yield* loader.composition, { restart: [pluginId] }).pipe(Effect.orElseSucceed(() => undefined));
-            const after = touched === undefined ? undefined : yield* deferral(touched, serving);
+            const after = touched === undefined ? undefined : yield* deferral(touched);
             const restart = recorded("restart", [pluginId])(loader.core.restart(pluginId, restartOptions));
             if (after === undefined) return yield* Effect.as(restart, {});
             const change = Effect.andThen(restart, log(`restarted ${pluginId}`));

@@ -642,7 +642,7 @@ describe("channels", () => {
     );
   }, 30_000);
 
-  test("a call runs as its plugin's admitted work, which a change restarting that plugin waits for; a stream, which ends as its plugin leaves, does not", () => {
+  test("a call runs as its plugin's admitted work, within the transport's, which a change restarting either waits for; a stream, which ends as its plugin leaves, is neither", () => {
     const whose = Effect.map(Admitted, (admitted) => admitted.map((work) => work.pluginId));
     const probe = serving(
       "probe",
@@ -653,7 +653,7 @@ describe("channels", () => {
       (host) =>
         Effect.gen(function* () {
           const client = yield* host.connect("websocket");
-          expect(yield* client["Channel.Call"]({ id: "probe.call" })).toEqual(["probe"]);
+          expect(yield* client["Channel.Call"]({ id: "probe.call" })).toEqual(["transport.server", "probe"]);
           expect(yield* Stream.runCollect(client["Channel.Open"]({ id: "probe.stream" }))).toEqual([[]]);
         }),
       {},

@@ -25,9 +25,8 @@ describe("deferral", () => {
           const core = yield* makeCore([contributor("outer"), contributor("inner")]);
           const registries = yield* core.run(Registries);
           const [inner, outer] = yield* registries.items(Items);
-          // Asked by no plugin's work: at once, unless it restarts the transport serving the request.
-          expect(yield* deferral(new Set(["outer"]), ["transport"])).toBeUndefined();
-          expect(yield* deferral(new Set(["transport"]), ["transport"])).toBeDefined();
+          // Asked by no plugin's work: at once.
+          expect(yield* deferral(new Set(["outer"]))).toBeUndefined();
 
           const releaseInner = yield* Deferred.make<void>();
           const releaseOuter = yield* Deferred.make<void>();
@@ -39,7 +38,7 @@ describe("deferral", () => {
                 registries.run(inner!, () =>
                   Effect.andThen(
                     Effect.flatMap(
-                      Effect.all([deferral(new Set(["elsewhere"]), []), deferral(new Set(["inner"]), []), deferral(new Set(["inner", "outer"]), [])]),
+                      Effect.all([deferral(new Set(["elsewhere"])), deferral(new Set(["inner"])), deferral(new Set(["inner", "outer"]))]),
                       (answers) => Deferred.succeed(asked, answers),
                     ),
                     Deferred.await(releaseInner),
@@ -86,7 +85,7 @@ describe("deferral", () => {
           // As the host's: this reload restarts commands.host, and asks whether that plugin's work is making it.
           const control = {
             reload: Effect.gen(function* () {
-              const after = yield* deferral(new Set(["commands.host"]), []);
+              const after = yield* deferral(new Set(["commands.host"]));
               if (after === undefined) return yield* Effect.as(restart, report);
               yield* Effect.forkIn(Effect.andThen(after, restart), scope);
               return { ...report, restarted: [], deferred: true };

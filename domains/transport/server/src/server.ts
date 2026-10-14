@@ -2,10 +2,10 @@ import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { join, resolve } from "node:path";
-import { Effect, Layer, Scope } from "effect";
+import { Deferred, Effect, Layer, Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpServerError } from "effect/http";
-import { NodeHttpServer } from "@effect/platform-node";
+import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
 import { HOST_PROTOCOL } from "@lemma/contracts";
@@ -13,9 +13,11 @@ import type { WebComposition } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 import { ServedRpcs } from "./channels.ts";
 import type { ChannelLifetime } from "./channels.ts";
+import { ReplySent } from "./replies.ts";
+import type { Replies } from "./replies.ts";
 import type { Startup } from "./startup.ts";
 
-type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof ServedRpcs>> | ChannelLifetime | Startup>;
+type HostHandlers = Layer.Layer<Rpc.ToHandler<RpcGroup.Rpcs<typeof ServedRpcs>> | ChannelLifetime | Startup | Replies>;
 
 /** Where the server listens: the bound address as Node reports it (`0.0.0.0`, `::1`), and the port. */
 interface TcpAddress {
@@ -122,7 +124,12 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
           return HttpServerResponse.jsonUnsafe({ error: "Unauthorized" }, { status: 401 });
         }
         if (path === "/rpc") return yield* websocket;
-        if (path === "/rpc/http" && request.method === "POST") return yield* http;
+        if (path === "/rpc/http" && request.method === "POST") {
+          // The exchange's replies have left once its response has: until then they wait in the response body's queue.
+          const closed = Deferred.makeUnsafe<void>();
+          NodeHttpServerRequest.toServerResponse(request).once("close", () => Deferred.doneUnsafe(closed, Effect.void));
+          return yield* Effect.provideService(http, ReplySent, Deferred.await(closed));
+        }
         if (path === "/api/health") return HttpServerResponse.jsonUnsafe({ ok: true, version: options.version, protocol: HOST_PROTOCOL });
         if (under(path, "/api/web") && options.web !== undefined && (request.method === "GET" || request.method === "HEAD")) {
           const listed = (yield* options.web).files.find((file) => file.url.slice(0, file.url.indexOf("?")) === path);

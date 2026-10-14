@@ -7,6 +7,7 @@ import { makeHub } from "./hub.ts";
 import type { Hub } from "./hub.ts";
 import { makeInteractions } from "./interactions.ts";
 import { publishDiscovery } from "./discovery.ts";
+import { replies, Replies, Serving } from "./replies.ts";
 import { startServer } from "./server.ts";
 import { Startup, startupGate } from "./startup.ts";
 import { loadToken } from "./token.ts";
@@ -72,10 +73,13 @@ export default definePlugin({
 
     const token = config.token ?? (yield* loadToken(paths.home));
     const startup = yield* startupGate(owner, control.composition, Duration.millis(config.startupTimeoutMs));
+    // Each request runs with this item, as the transport's work, until its reply has left (`Replies`).
+    yield* owner.add(Serving, "requests");
     const handlers = Layer.mergeAll(
       ServedRpcs.toLayer(makeHandlers({ version: VERSION, hub, interactions, paths, control, registries })),
       Layer.succeed(ChannelLifetime, channelLifetime(registries)),
       Layer.succeed(Startup, startup),
+      Layer.succeed(Replies, replies(registries, owner.id)),
     );
     const address = yield* startServer(
       { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, web: control.web },
