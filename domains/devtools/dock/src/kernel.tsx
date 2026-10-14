@@ -2,20 +2,10 @@ import { For, Show, createEffect, createMemo, createResource, createSignal, on, 
 import type { Accessor, JSX } from "solid-js";
 import { kernelOf, tablesOf } from "@lemma/contracts";
 import type { InspectorInfo, KernelView, PluginStatus, Table } from "@lemma/contracts";
-import * as actions from "@lemma/actions";
-import * as commands from "@lemma/commands/web";
-import * as devtools from "@lemma/devtools/web";
-import * as frame from "@lemma/frame";
-import * as llm from "@lemma/llm/web";
-import * as look from "@lemma/look";
-import * as settings from "@lemma/settings";
-import * as threads from "@lemma/threads";
-import * as webRuntime from "@lemma/web";
-import * as workspace from "@lemma/workspace/web";
 import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
-import type { DevtoolsService } from "@lemma/devtools/web";
+import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
 import { definedSlots, usePlugin } from "@lemma/web";
 
 type Kind = "web" | "host";
@@ -34,6 +24,8 @@ interface Deps {
   readonly lists: Readonly<Record<Kind, Accessor<readonly PluginStatus[]>>>;
   /** What each kernel's app provides itself, its runtime (`PluginsService.runtime`). */
   readonly runtime: Readonly<Record<Kind, Accessor<readonly string[]>>>;
+  /** Every contract a web half receives, by the module it is imported from (`WebPluginsService.contracts`). */
+  readonly contracts: Readonly<Record<string, object>>;
 }
 
 /** The kernel view of `kind`, its runtime marked (`kernelOf`). */
@@ -133,23 +125,11 @@ const followSubject = (deps: Deps, panel: string, apply: (subject: string) => vo
     ),
   );
 
-/** The bundled contracts, by the package each is imported from. */
-const contracts: Readonly<Record<string, object>> = {
-  "@lemma/web": webRuntime,
-  "@lemma/frame": frame,
-  "@lemma/look": look,
-  "@lemma/settings": settings,
-  "@lemma/actions": actions,
-  "@lemma/devtools/web": devtools,
-  "@lemma/threads": threads,
-  "@lemma/llm/web": llm,
-  "@lemma/workspace/web": workspace,
-  "@lemma/commands/web": commands,
-};
 /** Where each contract slot is exported (`MainRegion` from `@lemma/frame`), for the snippet that adds to it. */
-const exportNames = new Map<unknown, { readonly name: string; readonly from: string }>(
-  Object.entries(contracts).flatMap(([from, module]) => Object.entries(module).map(([name, value]) => [value, { name, from }] as const)),
-);
+const exportNamesOf = (contracts: Readonly<Record<string, object>>) =>
+  new Map<unknown, { readonly name: string; readonly from: string }>(
+    Object.entries(contracts).flatMap(([from, module]) => Object.entries(module).map(([name, value]) => [value, { name, from }] as const)),
+  );
 
 interface SlotView {
   readonly name: string;
@@ -160,18 +140,20 @@ interface SlotView {
   readonly defaultPhase?: string;
   readonly items: readonly { readonly id: string; readonly plugin: string; readonly phase?: string; readonly order: number }[];
 }
-const slotViews = (slots: SlotsService): SlotView[] =>
-  definedSlots()
+const slotViews = (deps: Deps): SlotView[] => {
+  const exportNames = exportNamesOf(deps.contracts);
+  return definedSlots()
     .map(({ slot, shows }: { slot: Slot<unknown>; shows: "first" | "all" }) => ({
       name: slot.name,
       contract: exportNames.get(slot),
       shows,
       ...(slot.options.phases === undefined ? {} : { phases: slot.options.phases, defaultPhase: slot.options.defaultPhase! }),
-      items: slots
+      items: deps.slots
         .contributions(slot)
         .map(({ item, pluginId, phase, order }) => ({ id: item.id, plugin: pluginId, ...(phase === undefined ? {} : { phase }), order })),
     }))
     .sort((a, b) => (a.name < b.name ? -1 : 1));
+};
 
 /** An item's place, as the slot's items table and a plugin's contributions show it. */
 const placeOf = (item: { readonly phase?: string; readonly order: number }) => `${item.phase === undefined ? "" : `${item.phase} · `}${item.order}`;
@@ -231,7 +213,7 @@ function PluginView(props: {
   const chainOf = (name: string) => props.kernel.hooks.find((hook) => hook.name === name)?.handlers ?? [];
   const items = () =>
     props.kind === "web"
-      ? slotViews(deps.slots).flatMap((view) => view.items.filter((item) => item.plugin === plugin().id).map((item) => ({ slot: view.name, ...item })))
+      ? slotViews(deps).flatMap((view) => view.items.filter((item) => item.plugin === plugin().id).map((item) => ({ slot: view.name, ...item })))
       : [];
   const own = () => props.inspectors.filter((inspector) => inspector.source === plugin().id);
   return (
@@ -685,7 +667,7 @@ function RegistriesPanel(props: { deps: Deps }) {
   const [kind, setKind] = createSignal<Kind>("web");
   const [filter, setFilter] = createSignal("");
   const [selected, setSelected] = createSignal<string>();
-  const web = createMemo(() => slotViews(deps.slots));
+  const web = createMemo(() => slotViews(deps));
   const host = createMemo(() => kernelOf(deps.lists.host(), deps.runtime.host()).registries);
   const rows = () => {
     const all =
@@ -945,7 +927,7 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
  * registry, and what host plugins let you look into. A plugin's name anywhere
  * in the devtools opens it here.
  */
-export function kernelPanels(deps: Deps): readonly SlotItem<devtools.DevtoolsPanel>[] {
+export function kernelPanels(deps: Deps): readonly SlotItem<DevtoolsPanel>[] {
   // Read again whenever the host's plugins change: inspectors come and go with them.
   const [inspectors] = createResource(
     () => deps.lists.host(),
@@ -972,7 +954,7 @@ export function kernelPanels(deps: Deps): readonly SlotItem<devtools.DevtoolsPan
       order: 40,
       title: "Registries",
       component: () => <RegistriesPanel deps={deps} />,
-      snapshot: () => ({ web: slotViews(deps.slots), host: kernelOf(deps.lists.host(), deps.runtime.host()).registries }),
+      snapshot: () => ({ web: slotViews(deps), host: kernelOf(deps.lists.host(), deps.runtime.host()).registries }),
     },
     {
       id: INSPECTORS_PANEL,

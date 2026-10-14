@@ -146,6 +146,7 @@ export default defineWebPlugin({
         client,
         lists: { web: webPlugins.list, host: host.list },
         runtime: { web: webPlugins.runtime, host: host.runtime },
+        contracts: webPlugins.contracts,
       }),
     ];
     for (const item of panelsMade) slots.add(DevtoolsPanels, item);

@@ -8,7 +8,8 @@ export const rail = async (): Promise<string> => {
   // The api a web half receives: its contracts merge with no name exported by two of them (one would hide the other),
   // with no maker of slots and parts but the api's own, and with the thread routes.
   const contracts = await page.evaluate(async () => {
-    const { api, contractModules } = await import("/src/ui/api.ts" as string);
+    const { api } = await import("/src/ui/api.ts" as string);
+    const { contractModules } = await import("/src/ui/contracts.ts" as string);
     const owners: Record<string, string[]> = {};
     for (const [module, exports] of Object.entries(contractModules as Record<string, object>)) {
       for (const name of Object.keys(exports)) (owners[name] ??= []).push(module);

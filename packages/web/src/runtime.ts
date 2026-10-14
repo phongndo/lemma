@@ -194,6 +194,12 @@ export interface WebPluginsService extends PluginsService {
   readonly problems: Accessor<readonly string[]>;
   /** Opened with `?safe`: the rows and the plugin directories are ignored. */
   readonly safe: boolean;
+  /**
+   * Every contract a web half receives (`api.contracts`), by the module it is imported from (`@lemma/frame`,
+   * `@lemma/llm/web`): for a plugin that shows the contracts, as the devtools name where each slot is declared. The boot
+   * hands the list over as data, so the runtime reaches no domain.
+   */
+  readonly contracts: Readonly<Record<string, object>>;
 }
 /** The web app's own plugins, which this page runs; its `runtime` lists the capabilities this file declares. */
 export class WebPlugins extends Context.Service<WebPlugins, WebPluginsService>()("lemma-web/WebPlugins") {}

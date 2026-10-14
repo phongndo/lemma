@@ -104,6 +104,11 @@ export const devtools = async (): Promise<string> => {
   await page.fill("[aria-label='Filter registries']", "pages");
   await page.click("[aria-label=Registries] tr:has(td:first-child:text-is('pages'))");
   await page.waitForSelector("[aria-label='Registry items'] tr:has(td:text-is('thread-view.new')):has(button:text-is('threads.view'))");
+  // A slot names the contract declaring it, from the contracts the runtime lists (`WebPlugins.contracts`).
+  await page.waitForSelector("[aria-label='Registry details'] .dt-details-title >> text=Pages from @lemma/web");
+  await page.fill("[aria-label='Filter registries']", "integrations.kinds");
+  await page.click("[aria-label=Registries] tr:has(td:first-child:text-is('integrations.kinds'))");
+  await page.waitForSelector("[aria-label='Registry details'] .dt-details-title >> text=IntegrationKinds from @lemma/integrations");
   // Inspectors: what host plugins let you look into, as tables.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Inspectors");
   await page.click("[aria-label=Inspectors] tr:has-text('Tools')");

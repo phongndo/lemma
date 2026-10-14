@@ -330,6 +330,9 @@ importers:
       '@lemma/frame-tooltips':
         specifier: workspace:*
         version: link:../../domains/frame/tooltips
+      '@lemma/integrations':
+        specifier: workspace:*
+        version: link:../../domains/integrations/contract
       '@lemma/integrations-page':
         specifier: workspace:*
         version: link:../../domains/integrations/page
@@ -1137,15 +1140,9 @@ importers:
       '@lemma/settings':
         specifier: workspace:*
         version: link:../../settings/contract
-      '@lemma/threads':
-        specifier: workspace:*
-        version: link:../../threads/contract
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
-      '@lemma/workspace':
-        specifier: workspace:*
-        version: link:../../workspace/contract
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
