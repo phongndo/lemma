@@ -49,7 +49,7 @@ export class CommandError extends Data.TaggedError("CommandError")<{
 }> {}
 
 /**
- * An action a person can run from any client: the web app's palette, `lemma do`.
+ * An action a person can run from any client: the web app's palette, `lemma commands run`.
  * A command that needs input asks for it with `Interaction`, so every client
  * that can answer questions can run it.
  */

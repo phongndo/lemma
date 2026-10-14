@@ -7,7 +7,7 @@ import { Threads } from "@lemma/threads";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 
-/** What host plugins offer to run: the palette's host commands, `lemma do`. */
+/** What host plugins offer to run: the palette's host commands, `lemma commands run`. */
 export default defineWebPlugin({
   id: "commands.client",
   requires: { client: Client, notify: Notify, threads: Threads, workspace: Workspace },

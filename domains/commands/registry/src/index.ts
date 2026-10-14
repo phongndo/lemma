@@ -89,7 +89,7 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
       ),
     );
 
-  // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the commands.
+  // What the devtools and `lemma inspectors` show of it. Only a view: failing to add it never stops the commands.
   yield* owner
     .add(Inspectors, {
       id: "commands.registered",

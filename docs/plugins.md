@@ -87,29 +87,31 @@ in each.
 
 ## What to plug into
 
-| To                                                | Use                                                            | Domain                                                                     |
-| ------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Give the model a tool                             | Add to `Tools`                                                 | [tools](../domains/tools/README.md)                                        |
-| Check, and maybe refuse, a tool call              | Add to `Guards` ([approvals](../examples/approvals/README.md)) | [tools](../domains/tools/README.md)                                        |
-| Rewrite, time, or answer tool calls               | Intercept `ToolExecuteHook`                                    | [tools](../domains/tools/README.md)                                        |
-| Tell the model something with every request       | Add to `PromptSections` ([todo](../examples/todo/README.md))   | [agent](../domains/agent/README.md)                                        |
-| Change a request before it is sent                | Intercept `AgentRequestHook`                                   | [agent](../domains/agent/README.md)                                        |
-| Decide whether a turn takes another step          | Intercept `AgentContinueHook`                                  | [agent](../domains/agent/README.md)                                        |
-| Act when a turn starts or ends                    | Observe `TurnStarted`, `TurnEnded`                             | [agent](../domains/agent/README.md)                                        |
-| Offer a command in the palette and `lemma do`     | Add to `Commands`                                              | [commands](../domains/commands/README.md)                                  |
-| Add a model provider                              | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
-| Change model requests or their streams            | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
-| Bring an MCP server and its tools                 | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
-| Search files another way                          | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
-| Serve your web half, or the CLI, data of your own | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
-| Show a tool's calls                               | Add to `ToolViews`                                             | [threads](../domains/threads/README.md)                                    |
-| Add a view of a thread                            | Add to `Views` ([todo](../examples/todo/README.md))            | [threads](../domains/threads/README.md)                                    |
-| Add a page at an address                          | Add to `Pages`, with a `defineRoute` route                     | the runtime's `Pages`                                                      |
-| Add a settings section                            | Add to `SettingsSections`                                      | [settings](../domains/settings/README.md)                                  |
-| Add a theme, an accent, or a font                 | Add to `Themes`, `Accents`, `Fonts`                            | [look](../domains/look/README.md)                                          |
-| Add a key or a palette list                       | Add to `Actions`, `PaletteSources`                             | [actions](../domains/actions/README.md)                                    |
-| Draw a shared piece differently everywhere        | Intercept its part (`IconPart`, `ChatToolPart`, …)             | [look](../domains/look/README.md), [threads](../domains/threads/README.md) |
-| Replace a bundled plugin                          | Give yours its id (below)                                      |                                                                            |
+| To                                                                 | Use                                                            | Domain                                                                     |
+| ------------------------------------------------------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Give the model a tool                                              | Add to `Tools`                                                 | [tools](../domains/tools/README.md)                                        |
+| Check, and maybe refuse, a tool call                               | Add to `Guards` ([approvals](../examples/approvals/README.md)) | [tools](../domains/tools/README.md)                                        |
+| Rewrite, time, or answer tool calls                                | Intercept `ToolExecuteHook`                                    | [tools](../domains/tools/README.md)                                        |
+| Tell the model something with every request                        | Add to `PromptSections` ([todo](../examples/todo/README.md))   | [agent](../domains/agent/README.md)                                        |
+| Change a request before it is sent                                 | Intercept `AgentRequestHook`                                   | [agent](../domains/agent/README.md)                                        |
+| Decide whether a turn takes another step                           | Intercept `AgentContinueHook`                                  | [agent](../domains/agent/README.md)                                        |
+| Act when a turn starts or ends                                     | Observe `TurnStarted`, `TurnEnded`                             | [agent](../domains/agent/README.md)                                        |
+| Offer a command in the palette and `lemma commands run`            | Add to `Commands`                                              | [commands](../domains/commands/README.md)                                  |
+| Add a model provider                                               | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
+| Change model requests or their streams                             | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
+| Bring an MCP server and its tools                                  | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
+| Search files another way                                           | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
+| Serve your web half, or the CLI, data of your own                  | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
+| Add a command to the `lemma` command, or a check to `lemma doctor` | Add to `CliCommands`, `CliChecks`                              | [cli](../domains/cli/README.md)                                            |
+| Say what stopping the host would cut off                           | Add to `InProgress`                                            | [cli](../domains/cli/README.md)                                            |
+| Show a tool's calls                                                | Add to `ToolViews`                                             | [threads](../domains/threads/README.md)                                    |
+| Add a view of a thread                                             | Add to `Views` ([todo](../examples/todo/README.md))            | [threads](../domains/threads/README.md)                                    |
+| Add a page at an address                                           | Add to `Pages`, with a `defineRoute` route                     | the runtime's `Pages`                                                      |
+| Add a settings section                                             | Add to `SettingsSections`                                      | [settings](../domains/settings/README.md)                                  |
+| Add a theme, an accent, or a font                                  | Add to `Themes`, `Accents`, `Fonts`                            | [look](../domains/look/README.md)                                          |
+| Add a key or a palette list                                        | Add to `Actions`, `PaletteSources`                             | [actions](../domains/actions/README.md)                                    |
+| Draw a shared piece differently everywhere                         | Intercept its part (`IconPart`, `ChatToolPart`, …)             | [look](../domains/look/README.md), [threads](../domains/threads/README.md) |
+| Replace a bundled plugin                                           | Give yours its id (below)                                      |                                                                            |
 
 ## Two halves, and state
 
@@ -215,7 +217,7 @@ do (as of Pi's docs at `c30840c`, 2026-10-05), in Lemma's shapes:
 | `session_start`, `session_shutdown`              | Setup and `onCleanup`: a plugin runs once per host, keying what it does for a session by its id until `SessionRemoved`                     |
 | Session replacement, tree navigation             | Intercept `SessionCheckoutHook`; observe `SessionCheckedOut`                                                                               |
 | `ctx.ui.notify()`                                | Publish a `Notice` from the host, or call `Notify` in a web half                                                                           |
-| `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma do`                                                                                       |
+| `pi.registerCommand()`                           | `add(Commands, command)`: the palette and `lemma commands run`                                                                             |
 | `pi.registerShortcut()`                          | A web half's `Actions` item                                                                                                                |
 | `pi.registerProvider()`                          | `add(Providers, provider)`                                                                                                                 |
 | `pi.registerMcpServer()`                         | `add(McpServers, server)`; a tool's `exposure: "codemode"` is `nested: true`                                                               |

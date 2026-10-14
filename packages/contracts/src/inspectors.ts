@@ -4,7 +4,7 @@ import type { Awaitable } from "@lemma/core";
 
 /**
  * A look into a host plugin as it runs (its tools, its running turns): what
- * the devtools' Host inspectors panel and `lemma inspect` show. A plugin adds
+ * the devtools' Host inspectors panel and `lemma inspectors` show. A plugin adds
  * one to `Inspectors` with `PluginContext.add`; it belongs to that plugin and
  * leaves with it. Nothing has to provide anything for it to be added.
  */

@@ -34,11 +34,11 @@ README has the rest.
 
 ## What did it do?
 
-- **The trajectory** (a thread's Trajectory view, or `lemma inspect
+- **The trajectory** (a thread's Trajectory view, or `lemma sessions inspect
   <session>`) shows every request, response, and tool call of a session, from
   its log, with each one's pipeline: the plugin that contributed each system
   section and tool, the handlers each step passed through, and why a step
-  ended or went on. `lemma inspect <session> --request <r>` prints one request
+  ended or went on. `lemma sessions inspect <session> --request <r>` prints one request
   so, and `--rebuilt` the exact request the model was sent (`lemma --help`,
   and [the CLI](../apps/cli/README.md)).
 - **The trace** (the devtools' Trace panel) shows what ran in the host and

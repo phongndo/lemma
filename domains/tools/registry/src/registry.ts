@@ -304,7 +304,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
         }),
       );
 
-    // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the tools.
+    // What the devtools and `lemma inspectors` show of it. Only a view: failing to add it never stops the tools.
     yield* owner
       .add(Inspectors, {
         id: "tools.registered",

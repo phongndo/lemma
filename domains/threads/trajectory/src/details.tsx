@@ -129,7 +129,7 @@ export function createDetails(view: View) {
     );
   }
 
-  /** How a request's system prompt differs from the request before it (`lemma inspect --request N --diff`). */
+  /** How a request's system prompt differs from the request before it (`lemma sessions inspect --request N --diff`). */
   function Diff(props: { previous: TrajectoryRequest | undefined; request: TrajectoryRequest }) {
     const sections = createMemo(() => promptDiff(props.previous, props.request));
     return (
