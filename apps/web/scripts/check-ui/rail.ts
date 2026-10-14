@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { boot, settled, url } from "./shared.ts";
+import { boot, drawn, settled, url } from "./shared.ts";
 
 // 10: the prompt rail.
 export const rail = async (): Promise<string> => {
@@ -47,6 +47,23 @@ export const rail = async (): Promise<string> => {
     return Math.abs(strip.top + strip.height / 2 - (head.bottom + main.bottom) / 2);
   });
   assert.ok(offCenter <= 1, "the prompt rail is not level with the middle of the pane");
+  // The transcript and the composer share the pane's middle, its scrollbar notwithstanding, with the sidebar open or closed.
+  const middles = () =>
+    page.evaluate(() =>
+      [".main", ".turn", ".composer"].map((selector) => {
+        const box = document.querySelector(selector)!.getBoundingClientRect();
+        return (box.left + box.right) / 2;
+      }),
+    );
+  for (const sidebar of ["open", "closed"]) {
+    const [pane, turn, composer] = await middles();
+    assert.ok(
+      Math.abs(turn! - pane!) <= 1 && Math.abs(composer! - pane!) <= 1,
+      `with the sidebar ${sidebar}, the transcript or composer is off the pane's middle`,
+    );
+    await page.keyboard.press("Control+b");
+    await drawn(page);
+  }
   // The transcript passes under the composer, and at its end, however tall the composer grows, the last turn clears it.
   const clearance = () =>
     page.evaluate(() => {

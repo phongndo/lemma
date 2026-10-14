@@ -104,7 +104,9 @@
   padding: 20px 24px calc(32px + var(--composer-height, 0px));
 }
 
+/* A scrollbar that takes room (not an overlay) gets a matching gutter on the left, so the transcript stays centered in the pane, under the composer. */
 .chat-view > .scroller {
+  scrollbar-gutter: stable both-edges;
   scroll-padding-bottom: calc(24px + var(--composer-height, 0px));
 }
 

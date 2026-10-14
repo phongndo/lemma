@@ -684,7 +684,10 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
 
   onMount(() => {
     // The text moves with the view's width and with the content's (the width setting, the narrow layout's padding).
-    const measure = new ResizeObserver(() => setRoom(content.offsetLeft + parseFloat(getComputedStyle(content).paddingLeft)));
+    // From the view's edge, so the scroller's left gutter counts.
+    const measure = new ResizeObserver(() =>
+      setRoom(content.getBoundingClientRect().left - scroller.getBoundingClientRect().left + parseFloat(getComputedStyle(content).paddingLeft)),
+    );
     measure.observe(scroller);
     measure.observe(content);
     onCleanup(() => measure.disconnect());
