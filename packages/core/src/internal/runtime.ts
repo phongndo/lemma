@@ -626,11 +626,13 @@ function assemble<E>(
                 if (instance.state !== "failed") yield* dispose(instance, outcome, "closed");
               }
               const fault = Option.getOrNull(Cause.findErrorOption(outcome.cause));
-              // The explicit gap cannot be undone here: stopped exclusive plugins stay down, attributed to this failure.
+              // The explicit gap cannot be undone here: stopped exclusive plugins stay down. One whose own replacement
+              // failed keeps that fault, already reported; each other gets one of its own, caused by this failure.
               for (const id of gapped) {
                 const instance = instances.get(id)!;
                 instance.state = "failed";
-                instance.fault = fault ?? new PluginFault({ pluginId: id, phase: "activate", cause: outcome.cause });
+                if (fault?.pluginId === id) instance.fault = fault;
+                else yield* report(instance, new PluginFault({ pluginId: id, phase: "activate", cause: outcome.cause }));
               }
               if (gapped.size) yield* publishRevision;
               return yield* Effect.failCause(outcome.cause);
