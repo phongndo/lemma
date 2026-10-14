@@ -3,7 +3,7 @@ import { Cause, Context, Effect, Layer, Schema } from "effect";
 import { secret } from "@lemma/contracts";
 import { definePlugin, PluginFault } from "@lemma/core";
 import type { Composition, PluginSnapshot } from "@lemma/core";
-import { catalog, faultHistory, resolveComposition, restartedBy, withReplacements } from "../src/catalog.ts";
+import { catalog, faultHistory, resolveComposition, withReplacements } from "../src/catalog.ts";
 import type { KnownPlugin } from "../src/catalog.ts";
 
 class Llm extends Context.Service<Llm, string>()("test/Llm") {}
@@ -229,19 +229,5 @@ describe("wiring and faults", () => {
       [2, 20, 'Plugin "agent" failed during observe lemma/turn.ended: two'],
     ]);
     expect(entries.find((entry) => entry.id === "llm")).not.toHaveProperty("hooks");
-  });
-});
-
-describe("restartedBy", () => {
-  test("follows provided capabilities to every dependent, transitively", () => {
-    expect([...restartedBy(known, ["tools"])].sort()).toEqual(["agent", "bash", "gateway", "tools"]);
-    expect([...restartedBy(known, ["bash"])]).toEqual(["bash"]);
-    // A second provider of the same capability counts too: turning it on replaces the first.
-    expect(restartedBy(known, ["my-llm"]).has("gateway")).toBe(true);
-  });
-
-  test("a plugin offering what the app provides restarts nothing through it", () => {
-    expect([...restartedBy([pages, stray], ["stray"])].sort()).toEqual(["pages", "stray"]);
-    expect([...restartedBy([pages, stray], ["stray"], { provided: [Slots] })]).toEqual(["stray"]);
   });
 });

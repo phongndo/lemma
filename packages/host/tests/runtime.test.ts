@@ -1,14 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Duration, Effect, Fiber, Layer, Schedule, Stream } from "effect";
+import { Deferred, Duration, Effect, Fiber, Layer, Schedule, Schema, Stream } from "effect";
+import { parse as parseJsonc } from "jsonc-parser";
 import { HOST_API, HostApi, HostControl, Notice, Paths, PluginsChanged, Trace } from "@lemma/contracts";
-import type { CompositionInfo, NoticePayload, PluginInfo, WebComposition } from "@lemma/contracts";
+import type { CompositionInfo, NoticePayload, PluginInfo, PluginRow } from "@lemma/contracts";
 import { definePlugin, Diagnostic, makeLoader, makeSpanCollector, PluginContext } from "@lemma/core";
-import type { Composition, Loader, Plugin, PluginSource } from "@lemma/core";
-import { compositionHistory, faultHistory } from "@lemma/composition";
-import { compositionInfo } from "../src/composition.ts";
+import type { Plugin } from "@lemma/core";
+import { compositionHistory, faultHistory, planComposition } from "@lemma/composition";
+import { patchConfig } from "../src/config.ts";
+import { makeHostChanges } from "../src/control.ts";
+import type { ChangesOptions } from "../src/control.ts";
 import { resolvePaths } from "../src/paths.ts";
-import { hostRuntime, reportFaults } from "../src/runtime.ts";
-import type { HostControlHandle } from "../src/runtime.ts";
+import { hostRuntime, reportFaults, runtimeCapabilities } from "../src/runtime.ts";
 
 const paths = resolvePaths({ env: { HOME: "/home/me" }, cwd: "/work" });
 
@@ -35,58 +37,106 @@ function recorder() {
   return { notices, changes, plugin };
 }
 
+/**
+ * A plugin with a numbered config, recording each start's number: 13 fails to start, and 2, given `held`, says it has
+ * begun and waits for `held.gate`.
+ */
+function numbered(id: string, held?: { readonly entered: Deferred.Deferred<void>; readonly gate: Deferred.Deferred<void> }) {
+  const started: number[] = [];
+  const plugin = definePlugin({
+    id,
+    config: Schema.Struct({ n: Schema.optional(Schema.Number) }),
+    layer: ({ n }) =>
+      Layer.effectDiscard(
+        Effect.gen(function* () {
+          if (n === 13) return yield* Effect.die("unlucky");
+          if (n === 2 && held !== undefined) yield* Effect.andThen(Deferred.succeed(held.entered, undefined), Deferred.await(held.gate));
+          started.push(n ?? 0);
+        }),
+      ),
+  });
+  return { plugin, started };
+}
+
 const until = (condition: () => boolean) =>
   Effect.repeat(Effect.sync(condition), { until: (done) => done, schedule: Schedule.spaced(Duration.millis(2)) }).pipe(Effect.timeout(Duration.seconds(5)));
 
 /**
- * Mirrors main.ts: the runtime is built inside makeLoader, so the handle binds to the loader through a Deferred. A
- * reload runs `reloading` before it applies.
+ * The host's changes over a loader, as main.ts makes them, with the user config file in memory (`disk`) and the plugins
+ * given: a read plans its rows. `reading` runs before each read; `restoreFails` makes putting the file back fail.
  */
 const start = (
   plugins: readonly Plugin[],
-  composition: Composition,
-  reloading: Effect.Effect<void> = Effect.void,
-  trace = { spans: makeSpanCollector(), changes: compositionHistory() },
+  rows: Readonly<Record<string, PluginRow>> = {},
+  options: {
+    readonly reading?: Effect.Effect<void>;
+    readonly trace?: { readonly spans: ReturnType<typeof makeSpanCollector>; readonly changes: ReturnType<typeof compositionHistory> };
+    readonly deferral?: ChangesOptions["deferral"];
+  } = {},
 ) =>
   Effect.gen(function* () {
-    const ready = yield* Deferred.make<Loader>();
-    const withLoader = <A, E>(f: (loader: Loader) => Effect.Effect<A, E>) => Effect.flatMap(Deferred.await(ready), f);
-    const history = faultHistory();
-    const configured: Record<string, unknown>[] = [];
-    const ui: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
-    const handle: HostControlHandle = {
-      process: { pid: process.pid, startedAt: 0 },
-      // Each plugin with its recorded faults, as the catalog lists them.
-      plugins: withLoader((loader) =>
-        Effect.map(loader.core.inspect, (snapshot) =>
-          snapshot.plugins.map((plugin) => ({ ...plugin, source: "bundled" as const, enabled: true, faults: history.get().get(plugin.id) ?? [] })),
-        ),
-      ),
-      composition: withLoader((loader) =>
-        Effect.zipWith(loader.composition, loader.core.inspect, (composition, snapshot) => compositionInfo(composition, snapshot.plugins)),
-      ),
-      restart: (id, options) => withLoader((loader) => Effect.as(loader.core.restart(id, options), {})),
-      reload: withLoader((loader) => Effect.andThen(reloading, loader.apply(composition))),
-      configure: (rows) =>
-        withLoader((loader) => {
-          configured.push(rows);
-          return loader.apply(composition);
+    const disk = new Map<string, string>([[paths.userConfig, JSON.stringify({ plugins: rows })]]);
+    const said: Diagnostic[] = [];
+    const io = { restoreFails: false };
+    const trace = options.trace ?? { spans: makeSpanCollector(), changes: compositionHistory() };
+    const faults = faultHistory();
+    const host = yield* makeHostChanges({
+      paths,
+      read: Effect.gen(function* () {
+        yield* options.reading ?? Effect.void;
+        const text = disk.get(paths.userConfig);
+        const fileRows: Record<string, PluginRow> = text === undefined ? {} : (parseJsonc(text)?.plugins ?? {});
+        const planned = planComposition({ bundled: plugins, local: [], rows: fileRows, provided: runtimeCapabilities });
+        return {
+          ...planned,
+          enabledIn: {},
+          configIn: {},
+          trusted: true,
+          web: { plugins: fileRows, enabledIn: {}, configIn: {}, files: [] },
+          webIds: [],
+          code: [],
+        };
+      }),
+      readConfig: (path) => Effect.sync(() => disk.get(path)),
+      updateConfig: (path, change, scope) =>
+        Effect.sync(() => {
+          const previous = disk.get(path);
+          const text = patchConfig(previous ?? "", change, scope);
+          disk.set(path, text);
+          return {
+            text,
+            previous,
+            restore: Effect.suspend(() => {
+              if (io.restoreFails) return Effect.fail(new Diagnostic({ severity: "error", message: `${path}: cannot put the config back` }));
+              if (previous === undefined) disk.delete(path);
+              else disk.set(path, previous);
+              return Effect.void;
+            }),
+          };
         }),
-      web: Effect.sync(() => ui),
-    };
-    const byId = new Map(plugins.map((plugin) => [plugin.id, plugin]));
-    const source: PluginSource = {
-      resolve: (id) => {
-        const plugin = byId.get(id);
-        return plugin ? Effect.succeed(plugin) : Effect.fail(new Diagnostic({ severity: "error", message: `No plugin "${id}"` }));
-      },
-    };
-    const loader = yield* makeLoader({ source, composition, provide: hostRuntime({ paths, control: handle, trace }) });
-    yield* Deferred.succeed(ready, loader);
+      webFiles: () => Effect.succeed([]),
+      pinned: {},
+      safe: false,
+      process: { pid: process.pid, startedAt: 0 },
+      changes: trace.changes,
+      faults,
+      log: () => Effect.void,
+      printDiagnostics: (diagnostics) => Effect.sync(() => void said.push(...diagnostics)),
+      ...(options.deferral === undefined ? {} : { deferral: options.deferral }),
+    });
+    const loader = yield* makeLoader({
+      source: host.source,
+      composition: host.applied().resolved.composition,
+      provide: hostRuntime({ paths, control: host.handle, trace }),
+    });
+    yield* host.bind(loader);
     // A change drains in-flight core.run work before swapping, so the handle is used outside core.run, as the app does.
     const control = yield* loader.core.run(HostControl);
-    return { loader, control, history, configured };
+    return { loader, control, host, disk, said, io, faults, changes: trace.changes };
   });
+
+/** The rows of the user config file held in `disk`. */
+const rowsIn = (disk: ReadonlyMap<string, string>) => parseJsonc(disk.get(paths.userConfig) ?? "{}")?.plugins;
 
 describe("host runtime", () => {
   test("provides the paths, the host API version, and the keys of what it provides", async () => {
@@ -94,7 +144,7 @@ describe("host runtime", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const quiet = definePlugin({ id: "quiet", layer: Layer.empty });
-          const { loader, control } = yield* start([quiet], { plugins: { quiet: {} } });
+          const { loader, control } = yield* start([quiet]);
           expect(yield* loader.core.run(Paths)).toEqual(paths);
           expect(yield* loader.core.run(HostApi(HOST_API))).toBe(HOST_API);
           const keys = ["lemma/Paths", "lemma/HostControl", "lemma/Interaction", "lemma/Trace", `lemma/api@${HOST_API}`];
@@ -113,7 +163,7 @@ describe("host runtime", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const quiet = definePlugin({ id: "quiet", layer: Layer.empty });
-          const { loader } = yield* start([quiet], { plugins: { quiet: {} } }, Effect.void, trace);
+          const { loader } = yield* start([quiet], {}, { trace });
           const reader = yield* loader.core.run(Trace);
           // Activation ran under the collector: the host's program is traced with it.
           expect((yield* reader.spans).some((span) => span.name === "core.activate" && span.attributes["plugin.id"] === "quiet")).toBe(true);
@@ -133,21 +183,25 @@ describe("host runtime", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const heard = recorder();
-          const { control, configured } = yield* start([heard.plugin], { plugins: { recorder: {} } });
+          const counted = numbered("counted");
+          const { control, disk } = yield* start([heard.plugin, counted.plugin]);
           const report = yield* control.reload;
-          expect(report.unchanged).toEqual(["recorder"]);
+          expect([...report.unchanged].sort()).toEqual(["counted", "recorder"]);
           yield* until(() => heard.changes.length === 1);
-          yield* control.configure({ flaky: { enabled: false } }, { scope: "project" });
-          expect(configured).toEqual([{ flaky: { enabled: false } }]);
+          const configured = yield* control.configure({ counted: { config: { n: 1 } } });
+          expect(configured.restarted).toEqual(["counted"]);
+          expect(rowsIn(disk)).toEqual({ counted: { config: { n: 1 } } });
+          expect(counted.started).toEqual([0, 1]);
           yield* until(() => heard.changes.length === 2);
           // A restart that fails still publishes: it can leave dependents failed.
           expect((yield* Effect.flip(control.restart("missing")))._tag).toBe("ReloadError");
           yield* until(() => heard.changes.length === 3);
-          expect(heard.changes.map((plugins) => plugins.map((plugin) => [plugin.id, plugin.state]))).toEqual([
-            [["recorder", "active"]],
-            [["recorder", "active"]],
-            [["recorder", "active"]],
-          ]);
+          expect(heard.changes.map((plugins) => plugins.map((plugin) => [plugin.id, plugin.state]))).toEqual(
+            Array.from({ length: 3 }, () => [
+              ["recorder", "active"],
+              ["counted", "active"],
+            ]),
+          );
         }),
       ),
     );
@@ -160,11 +214,10 @@ describe("host runtime", () => {
           const heard = recorder();
           const entered = yield* Deferred.make<void>();
           const gate = yield* Deferred.make<void>();
-          const { control } = yield* start(
-            [heard.plugin],
-            { plugins: { recorder: {} } },
-            Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(gate)),
-          );
+          let reads = 0;
+          // The first read is the start's; the reload's waits.
+          const reading = Effect.suspend(() => (reads++ === 0 ? Effect.void : Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(gate))));
+          const { control } = yield* start([heard.plugin], {}, { reading });
           // Interrupted midway, as a stream is when the reload it asked for restarts its plugin.
           const caller = yield* Effect.forkScoped(control.reload);
           yield* Deferred.await(entered);
@@ -192,7 +245,7 @@ describe("host runtime", () => {
               );
             },
           });
-          yield* start([early], { plugins: { early: {} } });
+          yield* start([early]);
           expect((yield* Deferred.await(seen)).plugins).toEqual([{ id: "early" }]);
         }),
       ),
@@ -204,9 +257,9 @@ describe("host runtime", () => {
       Effect.scoped(
         Effect.gen(function* () {
           const heard = recorder();
-          const { loader, history } = yield* start([heard.plugin, flaky], { plugins: { recorder: {} } });
+          const { loader, faults } = yield* start([heard.plugin, flaky], { flaky: { enabled: false } });
           // Forked as main.ts forks it, it has subscribed by the time the fork returns: flaky's first fault is heard.
-          yield* Effect.forkScoped(reportFaults(loader, history), { startImmediately: true });
+          yield* Effect.forkScoped(reportFaults(loader, faults), { startImmediately: true });
           // Applied directly, not through HostControl, so what is published comes from the fault.
           yield* loader.apply({ plugins: { recorder: {}, flaky: {} } });
           yield* until(() => heard.notices.length > 0);
@@ -216,7 +269,162 @@ describe("host runtime", () => {
           yield* until(() => heard.changes.length > 0);
           // The list published after the Notice already has the fault in its history.
           expect(heard.changes[0]?.find((plugin) => plugin.id === "flaky")?.faults?.length).toBeGreaterThan(0);
-          expect(history.get().get("flaky")?.length).toBeGreaterThan(0);
+          expect(faults.get().get("flaky")?.length).toBeGreaterThan(0);
+        }),
+      ),
+    );
+  });
+});
+
+describe("host changes", () => {
+  test("a reload that would leave out a plugin not left out already is refused; one already left out blocks nothing", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const left = numbered("left");
+          const kept = numbered("kept");
+          // `left`'s config does not decode, so it is left out from the start, with a warning.
+          const { control, disk, host, said } = yield* start([left.plugin, kept.plugin], { left: { config: { n: "x" } } });
+          expect(host.applied().problems.has("left")).toBe(true);
+          expect(said.some((diagnostic) => diagnostic.pluginId === "left" && diagnostic.severity === "warning")).toBe(true);
+          expect((yield* control.reload).unchanged).toEqual(["kept"]);
+          // Breaking `kept` too would leave it out: refused, with why, and it keeps running.
+          disk.set(paths.userConfig, JSON.stringify({ plugins: { left: { config: { n: "x" } }, kept: { config: { n: "y" } } } }));
+          const refused = yield* Effect.flip(control.reload);
+          expect(refused.diagnostics.map((diagnostic) => [diagnostic.pluginId, diagnostic.message.split(":")[0]])).toEqual([["kept", `"kept" cannot run`]]);
+          expect(kept.started).toEqual([0]);
+          expect(host.applied().problems.has("kept")).toBe(false);
+        }),
+      ),
+    );
+  });
+
+  test("a load is the applied one only once the loader accepts it", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const held = { entered: yield* Deferred.make<void>(), gate: yield* Deferred.make<void>() };
+          const slow = numbered("slow", held);
+          const { control, host } = yield* start([slow.plugin]);
+          // Starting with n: 2 waits on the gate: meanwhile the catalog and the web rows are still the running load's.
+          const configuring = yield* Effect.forkScoped(control.configure({ slow: { config: { n: 2 } } }));
+          yield* Deferred.await(held.entered);
+          expect((yield* control.web).plugins).toEqual({});
+          expect(host.applied().composition.plugins.slow?.config).toBeUndefined();
+          yield* Deferred.succeed(held.gate, undefined);
+          yield* Fiber.join(configuring);
+          expect((yield* control.web).plugins).toEqual({ slow: { config: { n: 2 } } });
+          // A load the loader refuses never becomes the applied one.
+          const refused = yield* Effect.flip(control.configure({ slow: { config: { n: 13 } } }));
+          expect(refused.diagnostics[0]?.message).toContain("unlucky");
+          expect((yield* control.web).plugins).toEqual({ slow: { config: { n: 2 } } });
+        }),
+      ),
+    );
+  });
+
+  test("the host's own write is no change on disk, its undo neither; a hand edit is", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const counted = numbered("counted");
+          const { control, disk, host, changes } = yield* start([counted.plugin]);
+          yield* control.configure({ counted: { config: { n: 1 } } });
+          const recorded = changes.get().length;
+          yield* host.configChanged;
+          expect(changes.get()).toHaveLength(recorded);
+          // A configure the host refuses is put back, and that is no change either.
+          yield* Effect.flip(control.configure({ counted: { config: { n: 13 } } }));
+          expect(rowsIn(disk)).toEqual({ counted: { config: { n: 1 } } });
+          yield* host.configChanged;
+          expect(changes.get()).toHaveLength(recorded + 1);
+          disk.set(paths.userConfig, JSON.stringify({ plugins: { counted: { config: { n: 3 } } } }));
+          yield* host.configChanged;
+          expect(changes.get()[0]).toMatchObject({ cause: "reload", restarted: ["counted"] });
+          expect(counted.started).toEqual([0, 1, 3]);
+        }),
+      ),
+    );
+  });
+
+  test("a refused configure whose file cannot be put back says so, and the file is not taken for put back", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const counted = numbered("counted");
+          const { control, disk, host, io, said, changes } = yield* start([counted.plugin]);
+          io.restoreFails = true;
+          const refused = yield* Effect.flip(control.configure({ counted: { config: { n: 13 } } }));
+          expect(refused.diagnostics.map((diagnostic) => diagnostic.message)).toContainEqual(`${paths.userConfig}: cannot put the config back`);
+          expect(said.some((diagnostic) => diagnostic.message.includes("cannot put the config back"))).toBe(true);
+          expect(rowsIn(disk)).toEqual({ counted: { config: { n: 13 } } });
+          // What the host remembers of the file is what it holds: still the change, so no reload of it is taken for new.
+          const recorded = changes.get().length;
+          yield* host.configChanged;
+          expect(changes.get()).toHaveLength(recorded);
+        }),
+      ),
+    );
+  });
+
+  test("a change restarting the work that asks for it is checked, answered deferred, and applied once that work ends", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const heard = recorder();
+          const counted = numbered("counted");
+          const over = yield* Deferred.make<void>();
+          const asked: (readonly string[])[] = [];
+          // As if the work asking were `counted`'s: whatever restarts it waits for `over`.
+          const deferral: ChangesOptions["deferral"] = (restarts) =>
+            Effect.sync(() => {
+              asked.push([...restarts].sort());
+              return restarts.has("counted") ? Deferred.await(over) : undefined;
+            });
+          const { control, disk } = yield* start([heard.plugin, counted.plugin], {}, { deferral });
+          // A config the loader would refuse is refused at once, and the file put back.
+          const invalid = yield* Effect.flip(control.configure({ counted: { config: { n: "x" as unknown as number } } }));
+          expect(invalid.diagnostics[0]?.pluginId).toBe("counted");
+          expect(rowsIn(disk)).toEqual({});
+          const report = yield* control.configure({ counted: { config: { n: 1 } } });
+          expect(report.deferred).toBe(true);
+          // What it restarts is the loader's answer.
+          expect(asked.at(-1)).toEqual(["counted"]);
+          expect(rowsIn(disk)).toEqual({ counted: { config: { n: 1 } } });
+          expect(counted.started).toEqual([0]);
+          yield* Deferred.succeed(over, undefined);
+          yield* until(() => counted.started.length === 2);
+          // One that fails once applied is put back in the file, and clients hear why.
+          const failing = yield* control.configure({ counted: { config: { n: 13 } } });
+          expect(failing.deferred).toBe(true);
+          yield* until(() => heard.notices.length === 1);
+          expect(heard.notices[0]?.message).toMatch(/^The config change could not be applied: .*unlucky.*; \/home\/me\/.* was put back$/s);
+          expect(rowsIn(disk)).toEqual({ counted: { config: { n: 1 } } });
+        }),
+      ),
+    );
+  });
+
+  test("a restart does not wait for a change under way, whose lock its plugin's work may be waiting on", async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const counted = numbered("counted");
+          const entered = yield* Deferred.make<void>();
+          const gate = yield* Deferred.make<void>();
+          let reads = 0;
+          const reading = Effect.suspend(() => (reads++ === 0 ? Effect.void : Effect.andThen(Deferred.succeed(entered, undefined), Deferred.await(gate))));
+          const { control, disk } = yield* start([counted.plugin], {}, { reading });
+          // The reload, once it has read the file, restarts `counted` with 5; until then it holds the change lock.
+          disk.set(paths.userConfig, JSON.stringify({ plugins: { counted: { config: { n: 5 } } } }));
+          const reloading = yield* Effect.forkScoped(control.reload);
+          yield* Deferred.await(entered);
+          // Were `counted`'s own work waiting on that lock, a restart taking it would wait on its own disposal.
+          yield* control.restart("counted", { force: true });
+          expect(counted.started).toEqual([0, 0]);
+          yield* Deferred.succeed(gate, undefined);
+          yield* Fiber.join(reloading);
+          expect(counted.started).toEqual([0, 0, 5]);
         }),
       ),
     );

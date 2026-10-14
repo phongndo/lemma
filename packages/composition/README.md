@@ -21,14 +21,16 @@ merge, and what happens to a plugin that cannot run. Each export's doc comment
 gives its contract: `planComposition` turns plugins and rows into what runs,
 leaving out what cannot and saying why, with `required` naming what must start;
 `resolveComposition` and `withReplacements` decide what turning a plugin on or
-off does to the plugins around it; `restartedBy` is what a change restarts;
-`catalog` joins each known plugin with its row and core snapshot for the
-Plugins page and the CLI, with the recent faults `faultHistory` keeps.
+off does to the plugins around it; `catalog` joins each known plugin with its
+row and core snapshot for the Plugins page and the CLI, with the recent faults
+`faultHistory` keeps. What a change restarts is the loader's to say
+(`Loader.affected` in the [core README](../core/README.md#loader-and-reload)),
+so an app asks it rather than predicting it here.
 
 An app that provides capabilities itself (`provide` on `makeCore` or
 `makeLoader`, in the [core README](../core/README.md#capabilities-the-application-provides))
-passes the same list as `provided` to `planComposition`, `resolveComposition`
-and `restartedBy`. Like the core's own capabilities, what it provides needs no
-plugin. A plugin offering it too is refused by the core, so it is left out like
+passes the same list as `provided` to `planComposition` and
+`resolveComposition`. Like the core's own capabilities, what it provides needs
+no plugin. A plugin offering it too is refused by the core, so it is left out like
 any plugin that cannot run, and it neither keeps on nor halts the plugins that
 require it.

@@ -195,13 +195,13 @@ export const readConfigText = (path: string): Effect.Effect<string | undefined, 
     ),
   );
 
-interface ConfigUpdate {
+export interface ConfigUpdate {
   /** What the file holds now. */
   readonly text: string;
   /** What it held before; undefined when it did not exist. */
   readonly previous: string | undefined;
-  /** Puts the file back as it was (removing it if it did not exist). Never fails; a file that cannot be restored is left as written. */
-  readonly restore: Effect.Effect<void>;
+  /** Puts the file back as it was (removing it if it did not exist); fails, naming the file, when it cannot, leaving it as written. */
+  readonly restore: Effect.Effect<void, Diagnostic>;
 }
 
 /**
@@ -253,9 +253,15 @@ export function updateConfig(path: string, rows: Readonly<Record<string, PluginC
       text,
       previous,
       // A file this made goes again (through a link, the file it points to, so the link stays); one it changed is put back.
-      restore: Effect.tryPromise(async () => (previous === undefined ? unlink((await destination(path)).file) : writeConfig(path, previous))).pipe(
-        Effect.ignore,
-      ),
+      restore: Effect.tryPromise({
+        try: async () => (previous === undefined ? unlink((await destination(path)).file) : writeConfig(path, previous)),
+        catch: (cause) =>
+          new Diagnostic({
+            severity: "error",
+            message: `${path}: cannot put the config back: ${cause instanceof Error ? cause.message : String(cause)}; it still holds the change`,
+            suggestion: "Undo the change in the file by hand",
+          }),
+      }),
     };
   });
 }

@@ -38,18 +38,24 @@ host keeps of its own running: main.ts runs its program under a span
 collector (`makeSpanCollector`), so every span its plugins' work ends is kept,
 in memory and bounded, and records each composition change (a reload, a
 configure, a restart) with what it did or why it was refused. Their contracts are
-documented where `@lemma/contracts` declares them. The runtime is built inside
+documented where `@lemma/contracts` declares them. `makeHostChanges`
+(`src/control.ts`) makes every change to the composition, one at a time, and
+serves `HostControl`; main.ts gives it the files and the loader, and
+`tests/runtime.test.ts` gives it its own. The runtime is built inside
 `makeLoader`, before the loader value exists, so the `HostControl` handle
-main.ts builds reaches the loader through a `Deferred<Loader>`, and its methods
-wait until the composition is up (see `tests/runtime.test.ts`).
+reaches the loader through a `Deferred<Loader>`, and its methods wait until
+the composition is up. A load becomes the one the catalog and `configure`
+reason about only once the loader has accepted it; while it is applied, the
+plugin source resolves its plugins.
 `reportFaults` logs each plugin fault and publishes it as an error `Notice`
 from that plugin and `PluginsChanged`, recording it in the fault history first
 so the list it publishes has it. The runtime is not a plugin, so its own
-failures are no `PluginFault`: what it starts logs them. Three kernel facts shape
+failures are no `PluginFault`: what it starts logs them. These shape
 the rest:
 
+- A change that is refused leaves the config file as it was: a configure that wrote it puts it back. When the file cannot be put back, the change's error says so, the host logs it, and the host remembers the file as holding the change, so it does not take the file for put back.
 - `Loader.apply` retires the current revision and drains in-flight `core.run` work before swapping. A `HostControl.reload` executed _inside_ `core.run` therefore waits on itself until the dispose deadline. Call it from plugin code (a transport's handler runs in its plugin scope); the app's own reload, when a config file changes, applies outside `core.run` and outside any plugin's work.
-- A plugin's disposal waits for the work run with its registry items, such as a channel call it serves or a command it registered, and that work knows it is the plugin's (`Admitted`). `HostControl.configure`, `reload`, and `restart` ask `deferral` (`src/deferral.ts`) whether the change restarts a plugin whose work is making it, the transport serving the request included: if so, each checks the change (a configure writes it too), answers `deferred`, and applies it once that work has ended, rather than wait on the work that waits on it. A reload knows what it restarts by comparing what it would run with what runs (`changedBetween`). A channel stream is no such work: the transport runs it outside `Admitted`, since it ends as soon as its plugin leaves. So a change a stream asks for interrupts the stream midway, and `hostRuntime` runs each change on a fiber of its own: the change, and the `PluginsChanged` and `WebChanged` it publishes, finish without their caller.
+- A plugin's disposal waits for the work run with its registry items, such as a channel call it serves or a command it registered, and that work knows it is the plugin's (`Admitted`). `HostControl.configure`, `reload`, and `restart` ask `deferral` (`src/deferral.ts`) whether the change restarts a plugin whose work is making it, the transport serving the request included: if so, each checks the change (a configure writes it too), answers `deferred`, and applies it once that work has ended, rather than wait on the work that waits on it. Each knows what the change restarts by asking the loader (`Loader.affected`), which decides it as applying the change would. The transport serving the request runs no such work, so a change restarting it waits a fixed moment for its reply to leave, a guess `deferral` explains. A channel stream is no such work: the transport runs it outside `Admitted`, since it ends as soon as its plugin leaves. So a change a stream asks for interrupts the stream midway, and `hostRuntime` runs each change on a fiber of its own: the change, and the `PluginsChanged` and `WebChanged` it publishes, finish without their caller.
 - A fault raised while a plugin is still staging (activation inside a reload) is published with the pre-swap snapshot; the reload's own `PluginsChanged` follows with the final state. Events are losable by design: the app's log and `core.inspect` remain the source of truth.
 
 ## A blocked event loop
