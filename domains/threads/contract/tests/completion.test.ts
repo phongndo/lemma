@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySuggestion, findTrigger } from "../src/completion.ts";
+import { applySuggestion, findCommandLine, findTrigger } from "../src/completion.ts";
 
 describe("findTrigger", () => {
   const at = (text: string, triggers: readonly string[] = ["@"]) => findTrigger(text.replace("|", ""), text.indexOf("|"), triggers);
@@ -48,5 +48,22 @@ describe("applySuggestion", () => {
 
   it("leaves a partial word open for typing on", () => {
     expect(applySuggestion("@sr", { start: 0, end: 3 }, "@src/", { space: false })).toEqual({ text: "@src/", cursor: 5 });
+  });
+});
+
+describe("findCommandLine", () => {
+  const at = (text: string) => findCommandLine(text.replace("|", ""), text.indexOf("|"), ["/"]);
+
+  it("reads the first line from the trigger to the cursor, across spaces, and replaces up to the word's end", () => {
+    expect(at("/|")).toEqual({ trigger: "/", query: "", quoted: false, start: 0, end: 1 });
+    expect(at("/thinking hi|")).toEqual({ trigger: "/", query: "thinking hi", quoted: false, start: 0, end: 12 });
+    expect(at("/thin|king high")).toMatchObject({ query: "thin", end: 9 });
+  });
+
+  it("is only at the start of the prompt, before a word, and on its first line", () => {
+    expect(at("see /new|")).toBeUndefined();
+    expect(at("/ new|")).toBeUndefined();
+    expect(at("/compact\nmore|")).toBeUndefined();
+    expect(at("|/new")).toBeUndefined();
   });
 });

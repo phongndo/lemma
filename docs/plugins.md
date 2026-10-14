@@ -97,6 +97,9 @@ in each.
 | Decide whether a turn takes another step                           | Intercept `AgentContinueHook`                                  | [agent](../domains/agent/README.md)                                        |
 | Act when a turn starts or ends                                     | Observe `TurnStarted`, `TurnEnded`                             | [agent](../domains/agent/README.md)                                        |
 | Offer a command in the palette and `lemma commands run`            | Add to `Commands`                                              | [commands](../domains/commands/README.md)                                  |
+| Offer a `/` command in the prompt, with subcommands and arguments  | Add to `PromptCommands`                                        | [threads](../domains/threads/README.md)                                    |
+| Complete a word typed after a trigger (`@`, `$`)                   | Add to `ComposerCompletions`                                   | [threads](../domains/threads/README.md)                                    |
+| Give the agent instructions for a kind of task                     | A skill: `~/.lemma/skills/<name>/SKILL.md`                     | [skills](../domains/skills/README.md)                                      |
 | Add a model provider                                               | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
 | Change model requests or their streams                             | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
 | Bring an MCP server and its tools                                  | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |

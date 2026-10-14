@@ -32,7 +32,7 @@ export interface ComposerSuggestionProps {
 
 /**
  * The inside of a row in the composer's completion menu: its default shows the
- * icon, the label with matched letters marked, then the detail. The composer
+ * icon, the label with matched letters marked, its hint (what it takes), then the detail. The composer
  * owns the row itself (its selection, clicks, and keys).
  */
 export const ComposerSuggestionPart = definePart<ComposerSuggestionProps>("composer.suggestion");

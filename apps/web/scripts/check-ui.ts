@@ -688,6 +688,77 @@ const parts = async () => {
   );
   assert.deepEqual(outside, [], "inside a picked folder, the menu offers what is outside it");
   await page.fill("textarea", "");
+  // `/` completes a command, then its arguments, across the space: Tab only completes, and Enter on the last runs it.
+  // A plugin's command (`PromptCommands`) shows beside the bundled ones; it runs here rather than being sent.
+  await page.evaluate(async () => {
+    const { PromptCommands } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    ((window as any).removals ??= []).push(
+      (window as any).checkSlots.add(PromptCommands, {
+        id: "checkpick",
+        order: 1_000,
+        description: "Checks a command's argument",
+        args: [{ name: "speed", values: () => [{ value: "slow" }, { value: "high" }] }],
+        run: ({ args }: { args: readonly string[] }) => void ((window as any).ranCommand = args.join(" ")),
+      }),
+    );
+  });
+  await page.keyboard.type("/");
+  // By the whole label: the letters typed are marked, which splits its text.
+  const menuRow = (label: string) => page.locator(".completion .menu-label", { hasText: new RegExp(`^${label.replace(/[$/]/g, "\\$&")}$`) }).first();
+  for (const name of ["/new", "/compact", "/thinking", "/checkpick"]) {
+    await menuRow(name)
+      .waitFor({ timeout: 5_000 })
+      .catch(() => assert.fail(`the / menu does not offer ${name}`));
+  }
+  await page.keyboard.type("checkp");
+  await menuRow("/checkpick").waitFor({ timeout: 5_000 });
+  // The ghost after the cursor: the rest of the active command, and what it takes.
+  assert.equal(
+    await page.locator(".composer-ghost-text").textContent({ timeout: 5_000 }),
+    "ick <speed>",
+    "the prompt does not hint at the rest of the command",
+  );
+  await page.keyboard.press("Tab");
+  assert.equal(await page.inputValue("textarea"), "/checkpick ", "Tab does not complete a command's name");
+  await menuRow("high")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("the / menu does not go on to the argument"));
+  await page.keyboard.type("hi");
+  await page.keyboard.press("Enter");
+  await page
+    .waitForFunction(() => (window as any).ranCommand === "high", undefined, { timeout: 5_000 })
+    .catch(() => assert.fail("Enter on the last argument does not run the command"));
+  assert.equal(await page.inputValue("textarea"), "", "a command that ran stays in the prompt");
+  // Words a command does not take are refused, not dropped: the prompt stays, and says why.
+  await page.evaluate(() => ((window as any).ranCommand = undefined));
+  await page.keyboard.type("/checkpick high and more");
+  await page.keyboard.press("Enter");
+  await page
+    .waitForSelector(".toast-text >> text=/checkpick takes <speed>", { timeout: 5_000 })
+    .catch(() => assert.fail("a command with words too many does not say so"));
+  assert.equal(await page.inputValue("textarea"), "/checkpick high and more", "a command with words too many lost the prompt");
+  assert.equal(await page.evaluate(() => (window as any).ranCommand), undefined, "a command with words too many ran");
+  await page.fill("textarea", "");
+  // A word trigger inside a command line completes as anywhere: `@` past `/compact`.
+  await page.keyboard.type("/compact keep @READ");
+  await menuRow("README.md")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("@ does not complete inside a command line"));
+  await page.fill("textarea", "");
+  // A path at the start of a prompt is no command: past its first word the menu closes.
+  await page.keyboard.type("/usr/bin/env node");
+  await page
+    .waitForSelector(".completions", { state: "detached", timeout: 5_000 })
+    .catch(() => assert.fail("the / menu stays open over a prompt that is no command"));
+  await page.fill("textarea", "");
+  // `$` offers the skills, and a pick writes its name.
+  await page.keyboard.type("use $rev");
+  await menuRow("review")
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("the $ menu does not offer the skills"));
+  await page.keyboard.press("Enter");
+  assert.equal(await page.inputValue("textarea"), "use $review ", "picking a skill does not write its name");
+  await page.fill("textarea", "");
   expectNoErrors("completing in the composer");
   // An inspector tab: it lists for the selected plugin.
   await page.evaluate(async () => {
@@ -1158,7 +1229,7 @@ const parts = async () => {
     "examples/todo added no view of its tool's calls",
   );
   expectNoErrors("an example's web half");
-  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
+  return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
 };
 
 // 8–9: the devtools, and a turn while it runs.

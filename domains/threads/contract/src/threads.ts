@@ -147,12 +147,24 @@ export interface ComposerSuggestion {
   readonly insert: string;
   /** The start of a longer word (a directory, to look inside): no space follows, and completing goes on. */
   readonly partial?: boolean | undefined;
+  /** Picking it also sends the prompt, as Enter would: a command needing nothing more (`/new`). */
+  readonly submit?: boolean | undefined;
+  /** What follows it once picked, muted after the cursor while it is the active one: a command's arguments (`<server>`). */
+  readonly hint?: string | undefined;
 }
 
-/** What a completion source answers: its suggestions, and optionally a line to show under them (`Still reading…`). */
+/**
+ * What a completion source answers: its suggestions, and optionally a line to show under them (`Still reading…`) and a
+ * hint for the cursor.
+ */
 export type ComposerCompletionAnswer =
   | readonly ComposerSuggestion[]
-  | { readonly suggestions: readonly ComposerSuggestion[]; readonly note?: string | undefined };
+  | {
+      readonly suggestions: readonly ComposerSuggestion[];
+      readonly note?: string | undefined;
+      /** What the word at the cursor takes, muted after the cursor while no suggestion is active (`<server> <uri>`). */
+      readonly hint?: string | undefined;
+    };
 
 /**
  * A source of completions: while the word at the cursor starts with its
@@ -166,6 +178,12 @@ export type ComposerCompletionAnswer =
 export interface ComposerCompletion {
   /** What starts a word to complete: `@`, `#`, `$`. */
   readonly trigger: string;
+  /**
+   * `word` (the default): the trigger starts any word, and the word is completed. `line`: the trigger starts the
+   * prompt, and what follows it on the first line is completed, spaces and all (`findCommandLine`): a command and its
+   * arguments (`/thinking high`). A line source answers only a line's trigger, a word source only a word's.
+   */
+  readonly span?: "word" | "line" | undefined;
   /** What it suggests (`Files`): the menu's heading for its group when several sources answer. */
   readonly label: string;
   /**
@@ -180,6 +198,87 @@ export interface ComposerCompletion {
 }
 
 export const ComposerCompletions = defineSlot<ComposerCompletion>("composer.completions");
+
+/** A value a command's argument may take, as the menu offers it. */
+export interface PromptCommandValue {
+  readonly value: string;
+  /** Muted after the value: `current`, a server's state. */
+  readonly detail?: string | undefined;
+}
+
+/** Where a command's argument is being typed: the command's path, and the arguments before it. */
+export interface PromptCommandContext {
+  /** The names from the command down to the subcommand the argument is of: `["mcp", "tool"]`. */
+  readonly path: readonly string[];
+  readonly args: readonly string[];
+  /** The word being typed, so far. */
+  readonly query: string;
+  readonly signal: AbortSignal;
+}
+
+/** One of a command's arguments, in order. */
+export interface PromptCommandArgument {
+  /** Shown in its usage: `<server>`, `[focus]` when optional, `<tags...>` when it repeats. */
+  readonly name: string;
+  readonly optional?: boolean | undefined;
+  /** Takes the rest of the line, spaces and all (`/compact keep the API`): it is last, and offers values for its first word only. */
+  readonly rest?: boolean | undefined;
+  /** Takes this word and every one after it, each offered its values (`[args...]`): it is last. */
+  readonly repeats?: boolean | undefined;
+  /**
+   * What it may be, best first; the menu narrows them to what is typed, unless `ranked`. A value with spaces is
+   * written quoted (`"my server"`). Read reactive values (the selected model, the servers) before any `await`, so the
+   * menu asks again when they change.
+   */
+  readonly values?: ((context: PromptCommandContext) => readonly PromptCommandValue[] | Promise<readonly PromptCommandValue[]>) | undefined;
+  /**
+   * `values` are already those `query` finds, best first, as the command's `run` would choose among them (a search,
+   * as `/model` does): the menu keeps them in their order, and Enter picks the first.
+   */
+  readonly ranked?: boolean | undefined;
+}
+
+/** What a command is run with. */
+export interface PromptCommandInput {
+  /** Its names from the command to the subcommand run, canonical (an alias typed is its command's name). */
+  readonly path: readonly string[];
+  /** The words after the path. */
+  readonly args: readonly string[];
+  /** The text after the path, trimmed: what a `rest` argument takes, newlines and all. */
+  readonly text: string;
+}
+
+/** What a command and each of its subcommands are. */
+export interface PromptCommandShape {
+  readonly description: string;
+  readonly icon?: Component | undefined;
+  /** Other names it is typed by: `clear` for `new`. */
+  readonly aliases?: readonly string[] | undefined;
+  /** Commands under it, typed after its name (`/mcp tool …`), each with its own arguments and subcommands. */
+  readonly subcommands?: readonly PromptSubcommand[] | undefined;
+  /** Its arguments, after its subcommand's name when it has subcommands and none is typed. */
+  readonly args?: readonly PromptCommandArgument[] | undefined;
+  /**
+   * Runs it in the web app when the prompt is sent, once its required arguments are there; the prompt clears. A
+   * rejection's message is shown, and the prompt stays.
+   */
+  readonly run?: ((input: PromptCommandInput) => void | Promise<void>) | undefined;
+}
+
+export interface PromptSubcommand extends PromptCommandShape {
+  readonly name: string;
+}
+
+/**
+ * A command typed at the start of the prompt: `/`, its id, and maybe subcommands and arguments (`/new`,
+ * `/thinking high`, `/mcp tool github create_issue hidden`). The `/` menu offers each word in turn and hints at what
+ * the rest of the line takes. A command whose tree has a `run` runs in the web app; one with none is sent as typed,
+ * for a host plugin to answer (`AgentInputHook`, as `/compact` is).
+ */
+export interface PromptCommand extends PromptCommandShape {}
+
+/** The commands the `/` menu offers and the composer runs, by id: the word typed after `/`. */
+export const PromptCommands = defineSlot<PromptCommand>("composer.commands");
 
 /** An item in the session's header bar, at its start (after the sidebar toggle) or its end. */
 export interface ThreadHeaderItem extends Region {

@@ -24,6 +24,7 @@ requires: a plugin providing `Settings` takes its place. No config.
   when that entry is still behind, else to its address, else to a new thread.
   Each settings history entry keeps the way out, so a reload, or back and
   forward into settings, still finds it.
+- **`/settings [section]`** in the prompt (`PromptCommands`) opens a section, by id or title, offered among those plugins add; without one, General.
 - **The settings button** opens the first section with a `badge`, showing its
   count, and otherwise General.
 - **A section no plugin adds** (its plugin off, say) shows the first section in
