@@ -162,6 +162,7 @@ const GLYPHS: Readonly<Record<IconName, string>> = {
   palette: "◐",
   "arrow-left": "←",
   redo: "↷",
+  skip: "⏭",
   spinner: "…",
 };
 

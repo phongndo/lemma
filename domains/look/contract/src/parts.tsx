@@ -182,6 +182,7 @@ export type IconName =
   | "palette"
   | "arrow-left"
   | "redo"
+  | "skip"
   | "spinner";
 
 export interface IconProps {
@@ -333,5 +334,7 @@ export const PaletteIcon = () => <Icon name="palette" />;
 export const ArrowLeftIcon = () => <Icon name="arrow-left" />;
 
 export const RedoIcon = () => <Icon name="redo" />;
+
+export const SkipIcon = () => <Icon name="skip" />;
 
 export const Spinner = () => <Icon name="spinner" />;

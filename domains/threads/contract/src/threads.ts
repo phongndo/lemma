@@ -194,7 +194,8 @@ export const ComposerNotices = defineSlot<Region>("composer.notices");
 
 /**
  * The composer, taken for a while by a plugin that needs the person's words for one thread (the agent's questions do):
- * its banner draws inside the composer, above the text box, and the text box, Enter, and the send button are its own.
+ * its banner draws just above the box, in a panel in the completion menu's look, and the text box, Enter, and the send
+ * button are its own.
  * The thread's draft stays as it was and comes back when it lets go. The composer shows the first item, by order,
  * holding the open thread.
  *
@@ -210,7 +211,7 @@ export interface ComposerTakeover {
   readonly sessionId: Accessor<string | undefined>;
   /** What it holds the composer for (one call's questions): one the person let go takes the box again when this changes. */
   readonly key: Accessor<string>;
-  /** Drawn inside the composer, above the text box; `release` gives the box back to the person. */
+  /** Drawn in a panel just above the box, in the completion menu's look; `release` gives the box back to the person. */
   readonly banner: Component<{ readonly release: () => void }>;
   /** Drawn above the composer while the person keeps the box; `take` takes it now. */
   readonly waiting: Component<{ readonly take: () => void }>;
@@ -220,9 +221,14 @@ export interface ComposerTakeover {
   readonly placeholder: Accessor<string>;
   /** The text box takes nothing (there is nothing to write now); the send button still works. */
   readonly readOnly?: Accessor<boolean>;
+  /**
+   * A key in the text box, offered first (after the completion menu, which takes its own keys while open): whether the
+   * taker took it, which the composer then does nothing more with. The agent's questions take the menu's keys here.
+   */
+  readonly keyDown?: (event: KeyboardEvent) => boolean;
   /** Enter in the text box, or the send button, while `canSubmit`. */
   readonly submit: () => void;
-  /** What the send button does, shown on it: `Next question`, `Submit answers`. */
+  /** What the send button does, as its label and tip: `Next question`, `Submit answers`. */
   readonly submitLabel: Accessor<string>;
   /** Whether submitting does anything now; the send button is disabled, and Enter does nothing, while it does not. Default: it does. */
   readonly canSubmit?: Accessor<boolean>;

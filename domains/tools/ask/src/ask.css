@@ -1,7 +1,8 @@
-/* The agent's questions, inside the composer above its text box (`ComposerTakeovers`): as tight as a list. */
+/*
+ * The agent's questions, in the panel the composer draws just above its text box (`ComposerTakeovers`): the
+ * completion menu's look, its options the shared `.menu-item` rows.
+ */
 .ask {
-  padding: 6px 10px 4px;
-  border-bottom: 1px solid var(--border);
   font-size: calc(13px * var(--text-scale));
 }
 
@@ -11,40 +12,40 @@
   align-items: center;
   gap: 8px;
   margin-bottom: 6px;
-  padding: 3px 4px 3px 12px;
-  border-radius: calc(12px * var(--radius-scale));
+  padding: 2px 4px 2px 12px;
+  border-radius: calc(14px * var(--radius-scale));
   background: var(--bg-raised);
   box-shadow: inset 0 0 0 1px var(--border-strong);
   color: var(--text-2);
   font-size: calc(12.5px * var(--text-scale));
 }
 
-.ask-hidden .icon {
+.ask-hidden > .icon {
   width: 13px;
   height: 13px;
 }
 
+/* Closed, the chevron points up, the way the questions open. */
+.ask-show .icon {
+  transform: rotate(180deg);
+}
+
+/* As a menu section: the tabs' text lines up with the rows'. */
 .ask-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
-  padding-left: 6px;
+  min-height: 26px;
+  padding: 2px 0 0 4px;
 }
 
 .ask-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
+  padding-left: 6px;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: calc(11px * var(--text-scale));
   font-weight: 500;
+  letter-spacing: 0.01em;
   white-space: nowrap;
-}
-
-.ask-title .icon {
-  width: 13px;
-  height: 13px;
 }
 
 .ask-tabs {
@@ -59,13 +60,14 @@
   display: inline-flex;
   align-items: center;
   gap: 3px;
-  height: 22px;
-  padding: 0 7px;
+  height: 20px;
+  padding: 0 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
+  font-size: calc(11.5px * var(--text-scale));
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -89,14 +91,21 @@
   color: var(--ok);
 }
 
-.ask-skip {
-  color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
-}
-
-.ask-head .ask-hide {
+/* Skip, hide or show, and dismiss: small icons, as quiet as the tabs. */
+.ask-head-button {
+  flex: none;
   width: 24px;
   height: 24px;
+  color: var(--text-3);
+}
+
+.ask-head-button .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.ask-head-button:hover:not(:disabled) {
+  color: var(--text);
 }
 
 /* Long questions scroll here, so the conversation keeps its room. */
@@ -104,7 +113,6 @@
   display: grid;
   gap: 10px;
   max-height: min(24rem, 40vh);
-  padding-top: 2px;
   overflow-y: auto;
 }
 
@@ -117,7 +125,7 @@
 }
 
 .ask-question {
-  margin: 2px 6px 4px;
+  margin: 4px 10px 6px;
   color: var(--text);
   font-size: calc(13.5px * var(--text-scale));
   line-height: 1.4;
@@ -127,79 +135,63 @@
 .ask-options {
   display: flex;
   flex-direction: column;
-  gap: 1px;
 }
 
-.ask-option {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  padding: 5px 8px 5px 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  text-align: left;
+/* As a completion: the description beside the label, the digit that picks it at the row's end. */
+.ask-option .menu-label {
+  flex: none;
+  max-width: 60%;
 }
 
-.ask-option:hover,
-.ask-option:focus-visible {
-  background: var(--bg-hover);
-  outline: none;
+.ask-option .menu-hint {
+  margin-left: 0;
+  padding-left: 0;
 }
 
-.ask-option[data-picked="true"] {
-  background: var(--bg-active);
+.ask-option[data-quick-key]::after {
+  margin-left: auto;
 }
 
-.ask-option-text {
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.ask-label {
-  display: inline-flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  font-weight: 500;
-  line-height: 1.35;
-}
-
-.ask-recommended {
-  background: var(--accent-soft);
-  color: var(--accent-text);
-}
-
-.ask-description {
-  color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
-  line-height: 1.35;
-}
-
-/* The option's shortcut digit, or a check once it is picked. */
-.ask-end {
+/* Where a completion has its icon: a radio, or a checkbox when several may be picked. */
+.ask-mark {
   display: grid;
   flex: none;
   place-items: center;
-  width: 18px;
+  width: 13px;
+  height: 13px;
+  margin: 0 1px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1.5px var(--text-3);
+  color: var(--bg-raised);
+}
+
+.ask-mark[data-multi="true"] {
+  border-radius: calc(3px * var(--radius-scale));
+}
+
+.ask-option[data-active="true"] .ask-mark {
+  box-shadow: inset 0 0 0 1.5px var(--text-2);
+}
+
+.ask-option[aria-checked="true"] .ask-mark {
+  box-shadow: inset 0 0 0 4px var(--text);
+}
+
+.ask-option[aria-checked="true"] .ask-mark[data-multi="true"] {
+  background: var(--text);
+  box-shadow: none;
+}
+
+.ask-mark .icon {
+  width: 11px;
+  height: 11px;
+  stroke-width: 2.4;
+}
+
+.ask-recommended {
+  flex: none;
+  background: var(--accent-soft);
   color: var(--accent-text);
-}
-
-.ask-key {
-  min-width: 16px;
-  border: 0;
-  background: none;
-  color: var(--text-3);
-  text-align: center;
-}
-
-.ask-end .icon {
-  width: 14px;
-  height: 14px;
 }
 
 /* As tall as the options beside it, never taller: what does not fit scrolls. */
@@ -219,7 +211,6 @@
 .ask-review {
   display: flex;
   flex-direction: column;
-  gap: 1px;
   margin: 0;
   padding: 2px 0 0;
   list-style: none;
@@ -229,24 +220,22 @@
   display: grid;
   grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 10px;
-  width: 100%;
-  padding: 5px 8px 5px 6px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: transparent;
-  color: var(--text);
-  text-align: left;
 }
 
-.ask-review-row:hover {
+.ask-review-row:hover,
+.ask-review-row:focus-visible {
   background: var(--bg-hover);
+  color: var(--text);
 }
 
-.ask-review-question {
-  color: var(--text-2);
+.ask-review-question,
+.ask-review-answer {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .ask-review-answer {
+  color: var(--text);
   font-weight: 500;
 }
 

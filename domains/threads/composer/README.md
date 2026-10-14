@@ -5,7 +5,7 @@ completions for the word being typed, and the buttons to send, steer, and
 stop. Adds the composer to `ComposerRegion`, and draws what plugins add to
 `ComposerNotices` (above the box), `ComposerControls` and `ComposerActions`
 (its toolbar), `ComposerFooter` (under it), `ComposerCompletions` (the
-completion menu), and `ComposerTakeovers` (a plugin's banner in the box, which
+completion menu), and `ComposerTakeovers` (a plugin's banner just above the box, which
 then takes the text box and the send button, or its line above the box), all
 in [`@lemma/threads`](../contract/src/threads.ts). Its own
 pieces go through the same slots and parts: `composer.attach` in
@@ -47,9 +47,11 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   the work under way, and the sooner the model reads it the less it does that
   the prompt would change.
 - **Taken** (`ComposerTakeovers`: the agent's questions, say). The first
-  item holding the open thread draws its banner in the box, above the text
-  box, and the text box, Enter, and the send button (labelled as the item says)
-  are its own; the thread's draft waits, and comes back when it lets go. It
+  item holding the open thread draws its banner just above the box, in a
+  panel in the completion menu's look and the page's flow, as the queue (the
+  menu covers it while open), and the text box, Enter, and the send button
+  (its tip says what it does, as the item does) are its own, the item offered
+  each key in the text box first (`keyDown`); the thread's draft waits, and comes back when it lets go. It
   never takes the box while the person has a prompt of their own unsent
   (written, or going out), nor after they let it go (Escape in the box, or
   the banner's own control) until what it holds the box for changes: then its

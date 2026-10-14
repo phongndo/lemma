@@ -121,18 +121,6 @@
   box-shadow: none;
 }
 
-/* A takeover's send button (`ComposerTakeovers`): what it does, in words. */
-.send.send-labeled {
-  display: inline-flex;
-  gap: 6px;
-  width: auto;
-  padding: 0 12px 0 14px;
-  border-radius: calc(16px * var(--radius-scale));
-  font-size: calc(13px * var(--text-scale));
-  font-weight: 500;
-  white-space: nowrap;
-}
-
 .send.stop {
   background: color-mix(in srgb, var(--err) 90%, transparent);
   color: var(--err-fg);
@@ -146,11 +134,13 @@
 
 /*
  * Just above the box and as wide as it, one look: what the word at the cursor could become (`ComposerCompletions`),
- * over the conversation while it is asked for, and the prompts queued for after the turn, in the page's flow, so the
- * conversation makes room for them rather than going under them. The menu, while open, covers the queue.
+ * over the conversation while it is asked for, and the prompts queued for after the turn and a taker's banner
+ * (`ComposerTakeovers`), in the page's flow, so the conversation makes room for them rather than going under them. The
+ * menu, while open, covers them.
  */
 .completions,
-.composer-queue {
+.composer-queue,
+.composer-takeover {
   padding: 4px;
   border: 1px solid var(--border-strong);
   border-radius: calc(14px * var(--radius-scale));
@@ -167,7 +157,8 @@
   bottom: calc(100% + 6px);
 }
 
-.composer-queue {
+.composer-queue,
+.composer-takeover {
   margin-bottom: 6px;
 }
 
