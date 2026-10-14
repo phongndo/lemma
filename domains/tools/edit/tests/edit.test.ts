@@ -13,6 +13,7 @@ afterEach(async () => {
   await fs.rm(dir, { recursive: true, force: true });
 });
 
+const asRoot = process.getuid?.() === 0;
 const put = (name: string, content: string | Buffer) => fs.writeFile(path.join(dir, name), content);
 const get = (name: string) => fs.readFile(path.join(dir, name), "utf8");
 
@@ -92,5 +93,67 @@ describe("edit", () => {
     expect(await attempt(editTool, { path: "none.txt", edits: [{ oldText: "a", newText: "b" }] }, context(dir))).toBe(
       "error: Could not edit file: File not found: none.txt",
     );
+  });
+
+  it("reports a directory, a missing parent, no edits, and an unwritable file", async () => {
+    await fs.mkdir(path.join(dir, "sub"));
+    expect(await attempt(editTool, { path: "sub", edits: [{ oldText: "a", newText: "b" }] }, context(dir))).toBe(
+      "error: Could not edit file: sub is a directory, not a file. Use bash (ls) to list it.",
+    );
+    expect(await attempt(editTool, { path: "gone/f.txt", edits: [{ oldText: "a", newText: "b" }] }, context(dir))).toBe(
+      "error: Could not edit file: File not found: gone/f.txt",
+    );
+    expect(await attempt(editTool, { path: "f.txt", edits: [] }, context(dir))).toContain("edits must contain at least one replacement");
+    if (asRoot) return;
+    await put("ro.txt", "a");
+    await fs.chmod(path.join(dir, "ro.txt"), 0o444);
+    expect(await attempt(editTool, { path: "ro.txt", edits: [{ oldText: "a", newText: "b" }] }, context(dir))).toBe(
+      "error: Could not edit file: Permission denied: ro.txt",
+    );
+    expect(await get("ro.txt")).toBe("a");
+  });
+
+  it("keeps the file's mode and edits a symlink's target, leaving the link", async () => {
+    await put("run.sh", "echo old\n");
+    await fs.chmod(path.join(dir, "run.sh"), 0o755);
+    await fs.symlink("run.sh", path.join(dir, "link.sh"));
+    await call(editTool, { path: "link.sh", edits: [{ oldText: "old", newText: "new" }] }, context(dir));
+    expect(await get("run.sh")).toBe("echo new\n");
+    expect((await fs.lstat(path.join(dir, "link.sh"))).isSymbolicLink()).toBe(true);
+    expect((await fs.stat(path.join(dir, "run.sh"))).mode & 0o777).toBe(0o755);
+  });
+
+  it.skipIf(asRoot)("edits a file in place when its directory takes no new name", async () => {
+    await fs.mkdir(path.join(dir, "locked"));
+    await put("locked/f.txt", "keep me");
+    // The file is writable but its directory takes no new name, so no replacement can be made beside it.
+    await fs.chmod(path.join(dir, "locked"), 0o500);
+    try {
+      expect(await attempt(editTool, { path: "locked/f.txt", edits: [{ oldText: "keep", newText: "lose" }] }, context(dir))).toBe(
+        "ok: Successfully replaced 1 block(s) in locked/f.txt.",
+      );
+      expect(await get("locked/f.txt")).toBe("lose me");
+      expect(await fs.readdir(path.join(dir, "locked"))).toEqual(["f.txt"]);
+    } finally {
+      await fs.chmod(path.join(dir, "locked"), 0o700);
+    }
+  });
+
+  it("runs concurrent edits to one file one at a time, each against the file the last one left", async () => {
+    await put("f.txt", "alpha\nbeta\ngamma\n");
+    // Disjoint edits all land: none reads the file before the one ahead of it has written.
+    await Promise.all(
+      ["alpha", "beta", "gamma"].map((word) => call(editTool, { path: "f.txt", edits: [{ oldText: word, newText: word.toUpperCase() }] }, context(dir))),
+    );
+    expect(await get("f.txt")).toBe("ALPHA\nBETA\nGAMMA\n");
+
+    // The same edit through two names: whichever runs second sees the first's result, finds nothing, and changes nothing.
+    await fs.symlink("f.txt", path.join(dir, "alias.txt"));
+    const results = await Promise.all(
+      ["f.txt", "alias.txt"].map((name) => attempt(editTool, { path: name, edits: [{ oldText: "BETA", newText: `beta via ${name}` }] }, context(dir))),
+    );
+    expect(results.filter((result) => result.startsWith("ok:"))).toHaveLength(1);
+    expect(results.filter((result) => result.startsWith("error: Could not find the exact text"))).toHaveLength(1);
+    expect(await get("f.txt")).toMatch(/^ALPHA\nbeta via (f|alias)\.txt\nGAMMA\n$/);
   });
 });

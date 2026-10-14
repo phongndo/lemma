@@ -107,6 +107,36 @@ describe("bash", () => {
     await fs.rm(details.fullOutputPath!);
   });
 
+  it("saves the full output where only this user can read it", async () => {
+    const result = await call(bashTool, { command: "seq 1 3000" }, context(dir));
+    const file = (result.details as BashDetails).fullOutputPath!;
+    expect((await fs.stat(file)).mode & 0o777).toBe(0o600);
+    expect((await fs.stat(path.dirname(file))).mode & 0o777).toBe(0o700);
+    expect(path.basename(file)).toMatch(/^lemma-bash-[0-9a-f]{16}\.log$/);
+  });
+
+  it("cuts output past 50KB by bytes, and one long line to its end", async () => {
+    // 1000 lines of 100 bytes: under the line limit, over the byte limit.
+    const lines = await call(bashTool, { command: "for i in $(seq 1 1000); do printf '%099d\\n' $i; done" }, context(dir));
+    const linesDetails = lines.details as BashDetails;
+    expect(linesDetails.truncation).toMatchObject({ truncated: true, truncatedBy: "bytes", totalLines: 1000 });
+    expect(textOf(lines)).toContain(`(50.0KB limit). Full output: ${linesDetails.fullOutputPath}]`);
+    expect(textOf(lines).split("\n")[0]).toBe(String(1000 - linesDetails.truncation!.outputLines + 1).padStart(99, "0"));
+    expect((await fs.readFile(linesDetails.fullOutputPath!, "utf8")).length).toBe(100_000);
+
+    const line = await call(bashTool, { command: "head -c 60000 /dev/zero | tr '\\0' a; echo b" }, context(dir));
+    const lineDetails = line.details as BashDetails;
+    expect(lineDetails.truncation).toMatchObject({ truncated: true, lastLinePartial: true, totalLines: 1 });
+    expect(textOf(line)).toMatch(/^a+b\n\n\[Showing last 50\.0KB of line 1 \(line is 58\.6KB\)\. Full output: /);
+  });
+
+  it("reports a failed command's exit code after truncated output", async () => {
+    const result = await call(bashTool, { command: "seq 1 3000; exit 7" }, context(dir));
+    expect(result.isError).toBe(true);
+    expect(textOf(result)).toMatch(/Full output: [^\]]+\]\n\nCommand exited with code 7$/);
+    expect(result.details).toMatchObject({ exitCode: 7, truncation: { truncated: true } });
+  });
+
   it("rejects an invalid timeout and a missing cwd", async () => {
     await expect(call(bashTool, { command: "true", timeout: -1 }, context(dir))).rejects.toThrow("Invalid timeout");
     await expect(call(bashTool, { command: "true" }, context(path.join(dir, "gone")))).rejects.toThrow("Working directory does not exist");

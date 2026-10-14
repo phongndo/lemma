@@ -3,9 +3,9 @@
 The `bash` tool: a shell command in the session's directory. Adds it to `Tools`.
 Its web half (`./web`) shows a call as its command, as a shell line.
 
-| Input                           | Behavior                                                                                                                                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `command`, `timeout?` (seconds) | `bash -c` in the session cwd, stdout+stderr combined, tail-truncated to 2000 lines or 50KB; the full output goes to a temp file named in the result. Without a `timeout`, the plugin's default applies. Non-zero exit, timeout, and abort are error results; `details.exitCode` carries the code. |
+| Input                           | Behavior                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `command`, `timeout?` (seconds) | `bash -c` in the session cwd, stdout+stderr combined, tail-truncated to 2000 lines or 50KB; the full output goes to a temp file named in the result (`outputFile`: only the user can read it, and the host keeps it while it runs). Without a `timeout`, the plugin's default applies. Non-zero exit, timeout, and abort are error results; `details.exitCode` carries the code. |
 
 `makeBashTool(timeout)` makes one with another default timeout, for a plugin
 that registers its own `bash`.

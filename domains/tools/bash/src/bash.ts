@@ -167,15 +167,16 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
 
     const { truncation, fullOutputPath } = snapshot;
     let body = snapshot.content;
+    const full = fullOutputPath === undefined ? "Full output could not be saved" : `Full output: ${fullOutputPath}`;
     if (truncation.truncated) {
       const startLine = truncation.totalLines - truncation.outputLines + 1;
       const endLine = truncation.totalLines;
       if (truncation.lastLinePartial) {
-        body += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${formatSize(output.lastLineBytes)}). Full output: ${fullOutputPath}]`;
+        body += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${formatSize(output.lastLineBytes)}). ${full}]`;
       } else if (truncation.truncatedBy === "lines") {
-        body += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. Full output: ${fullOutputPath}]`;
+        body += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. ${full}]`;
       } else {
-        body += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). Full output: ${fullOutputPath}]`;
+        body += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). ${full}]`;
       }
     }
     const status = aborted

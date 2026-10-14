@@ -1,9 +1,9 @@
 import { constants } from "node:fs";
-import { access, readFile, writeFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import { Schema, SchemaTransformation } from "effect";
 import type { Tool } from "@lemma/tools";
 import { unifiedPatch } from "./diff.ts";
-import { fsMessage, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
+import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
 
 const Replacement = Schema.Struct({
   oldText: Schema.String.annotate({
@@ -151,12 +151,13 @@ export const editTool: Tool<EditInput> = {
     const absolute = resolveToCwd(path, cwd);
     return withFileLock(absolute, async () => {
       throwIfAborted(signal);
+      let raw: string;
       try {
         await access(absolute, constants.R_OK | constants.W_OK);
+        raw = (await readFile(absolute)).toString("utf8");
       } catch (cause) {
         throw new Error(`Could not edit file: ${fsMessage(cause, path)}`);
       }
-      const raw = (await readFile(absolute)).toString("utf8");
       throwIfAborted(signal);
       // The model never includes an invisible BOM in oldText; keep it out of matching and put it back.
       const bom = raw.startsWith("﻿") ? "﻿" : "";
@@ -164,7 +165,11 @@ export const editTool: Tool<EditInput> = {
       const ending = detectLineEnding(content);
       const before = normalizeToLF(content);
       const after = applyEdits(before, edits, path);
-      await writeFile(absolute, bom + restoreLineEndings(after, ending), "utf8");
+      try {
+        await replaceFile(absolute, bom + restoreLineEndings(after, ending));
+      } catch (cause) {
+        throw new Error(`Could not edit file: ${fsMessage(cause, path)}`);
+      }
       const { patch, firstChangedLine } = unifiedPatch(path, before, after);
       const details: EditDetails = { path: absolute, patch, ...(firstChangedLine === undefined ? {} : { firstChangedLine }) };
       return text(`Successfully replaced ${edits.length} block(s) in ${path}.`, details);
