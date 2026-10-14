@@ -1,7 +1,18 @@
 import { clampThinkingLevel, getSupportedThinkingLevels, isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai";
 import type * as Pi from "@earendil-works/pi-ai";
 import { ThinkingLevel } from "@lemma/llm";
-import type { AssistantMessage, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ToolCall } from "@lemma/llm";
+import type {
+  AssistantMessage,
+  ClassifierContext,
+  ClassifierInfo,
+  ClassifierResult,
+  LlmFailure,
+  LlmRequest,
+  ModelInfo,
+  StreamEvent,
+  ToolCall,
+  Usage,
+} from "@lemma/llm";
 
 // Pure mappings between pi-ai values and the contract shapes. Contract messages
 // are pi-ai-shaped, so requests pass through; results are rebuilt field by field
@@ -27,6 +38,42 @@ export function toModelInfo(model: Pi.Model<Pi.Api>): ModelInfo {
     cost: { input: model.cost.input, output: model.cost.output, cacheRead: model.cost.cacheRead, cacheWrite: model.cost.cacheWrite },
   };
 }
+
+export function toClassifierInfo(model: Pi.ClassifierModel<Pi.ClassifierApi>): ClassifierInfo {
+  return {
+    ref: `${model.provider}/${model.id}`,
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    api: model.api,
+    input: [...model.input],
+    contextWindow: model.contextWindow,
+    cost: { input: model.cost.input, output: model.cost.output },
+  };
+}
+
+const toUsage = (usage: Pi.Usage): Usage => ({
+  input: usage.input,
+  output: usage.output,
+  cacheRead: usage.cacheRead,
+  cacheWrite: usage.cacheWrite,
+  ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
+  totalTokens: usage.totalTokens,
+  cost: { ...usage.cost },
+});
+
+/** The contract's context as pi-ai's: `state` is JSON, as a script or tool gave it. */
+export const toClassifierContext = (context: ClassifierContext): Pi.ClassifierContext => context as AsPi<ClassifierContext> as Pi.ClassifierContext;
+
+/** Rebuilt field by field, so pi-only fields (`api`, `timestamp`) stay out. */
+export const toClassifierResult = (result: Pi.ClassifierResult): ClassifierResult => ({
+  provider: result.provider,
+  model: result.model,
+  answers: result.answers,
+  ...(result.usage === undefined ? {} : { usage: toUsage(result.usage) }),
+  stopReason: result.stopReason,
+  ...(result.errorMessage === undefined ? {} : { errorMessage: result.errorMessage }),
+});
 
 /**
  * A contract value as pi-ai types it, for what pi-ai only reads: its arrays and properties writable, all the way down;
@@ -127,15 +174,7 @@ function toAssistantMessage(message: Pi.AssistantMessage, errorMessage?: string)
     provider: message.provider,
     model: message.model,
     ...(message.responseId === undefined ? {} : { responseId: message.responseId }),
-    usage: {
-      input: usage.input,
-      output: usage.output,
-      cacheRead: usage.cacheRead,
-      cacheWrite: usage.cacheWrite,
-      ...(usage.reasoning === undefined ? {} : { reasoning: usage.reasoning }),
-      totalTokens: usage.totalTokens,
-      cost: { ...usage.cost },
-    },
+    usage: toUsage(usage),
     stopReason,
     ...(error === undefined ? {} : { errorMessage: error }),
     timestamp: message.timestamp,

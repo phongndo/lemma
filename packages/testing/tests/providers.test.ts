@@ -68,6 +68,8 @@ llmConformance("independent replacement", (scenario) => {
         addCustom: () => Effect.succeed("reference"),
         removeCustom: () => Effect.void,
         setLogo: () => Effect.void,
+        classifiers: () => Effect.succeed([]),
+        classify: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
       })),
     ),
   });

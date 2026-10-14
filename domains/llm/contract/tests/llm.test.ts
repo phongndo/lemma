@@ -20,6 +20,8 @@ const provider = (login: (provider: string, type: AuthType) => Effect.Effect<voi
         models: () => Effect.succeed([]),
         model: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: ref })),
         stream: () => Stream.empty,
+        classifiers: () => Effect.succeed([]),
+        classify: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: ref })),
         login,
         logout: () => Effect.void,
         addCustom: (spec) => Effect.succeed(spec.name),

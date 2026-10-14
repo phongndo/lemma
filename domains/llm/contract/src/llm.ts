@@ -182,6 +182,70 @@ export const ModelInfo = Schema.Struct({
 });
 export type ModelInfo = typeof ModelInfo.Type;
 
+/**
+ * A classifier model: not one to chat with, but one that answers typed questions about JSON state (and, where `input`
+ * includes `"image"`, images) with probabilities, such as TypeSafe's Jev. `Llm.classify` runs it.
+ */
+export const ClassifierInfo = Schema.Struct({
+  /** `<provider>/<model>` */
+  ref: ModelRef,
+  provider: Schema.String,
+  id: Schema.String,
+  name: Schema.String,
+  api: Schema.String,
+  input: Schema.Array(Schema.Literals(["text", "image"])),
+  contextWindow: Schema.Number,
+  /** USD per million tokens. */
+  cost: Schema.Struct({ input: Schema.Number, output: Schema.Number }),
+});
+export type ClassifierInfo = typeof ClassifierInfo.Type;
+
+export const ClassifierQuestion = Schema.Union([
+  /** Pick one label; `criteria` maps each label to what it means. */
+  Schema.Struct({ type: Schema.Literal("choice"), instructions: Schema.String, criteria: Schema.Record(Schema.String, Schema.String) }),
+  /** Score on an ordered scale; `criteria` describes each level, lowest first. */
+  Schema.Struct({ type: Schema.Literal("score"), instructions: Schema.String, criteria: Schema.Array(Schema.String) }),
+  /** Yes or no. */
+  Schema.Struct({ type: Schema.Literal("bool"), instructions: Schema.String, criteria: Schema.Struct({ true: Schema.String, false: Schema.String }) }),
+]);
+export type ClassifierQuestion = typeof ClassifierQuestion.Type;
+
+/** What `Llm.classify` is asked: questions by id, all answered in one call, about `state`. */
+export const ClassifierContext = Schema.Struct({
+  /** The data to classify, as JSON. */
+  state: Schema.Record(Schema.String, Schema.Unknown),
+  /** Judged with `state`; only a model whose `input` includes `"image"` accepts them. */
+  images: Schema.optional(Schema.Array(ImageContent)),
+  questions: Schema.Record(Schema.String, ClassifierQuestion),
+});
+export type ClassifierContext = typeof ClassifierContext.Type;
+
+export const ClassifierAnswer = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("choice"),
+    choice: Schema.String,
+    probabilities: Schema.Record(Schema.String, Schema.Number),
+    confidence: Schema.Number,
+  }),
+  /** `score` is the expected level index, from 0 to `criteria.length - 1`. */
+  Schema.Struct({ type: Schema.Literal("score"), score: Schema.Number, confidence: Schema.Number }),
+  /** The probability of `true`. */
+  Schema.Struct({ type: Schema.Literal("bool"), probability: Schema.Number }),
+]);
+export type ClassifierAnswer = typeof ClassifierAnswer.Type;
+
+/** A classifier's answers by question id. A provider's failure is `stopReason: "error"` with its `errorMessage`. */
+export const ClassifierResult = Schema.Struct({
+  provider: Schema.String,
+  model: Schema.String,
+  answers: Schema.Record(Schema.String, ClassifierAnswer),
+  /** When the service reports token counts, priced from the model's catalog entry. */
+  usage: Schema.optional(Usage),
+  stopReason: Schema.Literals(["stop", "error", "aborted"]),
+  errorMessage: Schema.optional(Schema.String),
+});
+export type ClassifierResult = typeof ClassifierResult.Type;
+
 export const AuthType = Schema.Literals(["api_key", "oauth"]);
 export type AuthType = typeof AuthType.Type;
 
@@ -456,6 +520,14 @@ export class Llm extends Context.Service<
     readonly model: (ref: ModelRef) => Effect.Effect<ModelInfo, LlmError>;
     /** Runs `LlmRequestHook` (`streamThroughHook`); interrupting the stream aborts the provider request. */
     readonly stream: (request: LlmRequest) => Stream.Stream<StreamEvent, LlmError>;
+    /** Every known classifier model, or only those whose provider is configured. `models` lists chat models only. */
+    readonly classifiers: (options?: { readonly available?: boolean }) => Effect.Effect<readonly ClassifierInfo[]>;
+    /**
+     * Answers `context.questions` with the classifier `ref` names; an unknown one fails `UnknownModel`. A provider's
+     * failure, missing auth included, is the result's `error`. Interrupting it aborts the provider request. Not a
+     * model request: it is not logged as one, and `LlmRequestHook` does not run around it.
+     */
+    readonly classify: (ref: ModelRef, context: ClassifierContext) => Effect.Effect<ClassifierResult, LlmError>;
     /** Runs the provider's login flow through `Interaction` and stores the credential. */
     readonly login: (provider: string, type: AuthType) => Effect.Effect<void, LlmError>;
     readonly logout: (provider: string) => Effect.Effect<void, LlmError>;

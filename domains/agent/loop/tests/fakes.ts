@@ -131,6 +131,8 @@ export function fakeLlm(scripts: readonly (Script | ((request: LlmRequest) => Sc
         addCustom: () => Effect.succeed("custom"),
         removeCustom: () => Effect.void,
         setLogo: () => Effect.void,
+        classifiers: () => Effect.succeed([]),
+        classify: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
       })),
     ),
   });

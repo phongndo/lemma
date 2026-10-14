@@ -15,7 +15,8 @@ import { USER_AGENT } from "./identity.ts";
  *   OpenAI-style `/models` lists, or all of models.dev's when it has no such
  *   list. models.dev describes them (limits, prices, inputs, reasoning, wire
  *   API); pi-ai's own entries always win, as they carry request settings tuned
- *   per model.
+ *   per model, and a model pi-ai knows as another type (a classifier) is not
+ *   added as a chat model.
  */
 
 /** The parts of a models.dev model this reads. */
@@ -156,7 +157,9 @@ export function withLiveCatalog(provider: Provider, sources: CatalogSources): Pr
       const listed = dev.api === undefined ? undefined : await sources.list(dev.api, key, context.signal);
       if (context.signal.aborted) return;
       const current = (id: string) => dev.models[id] !== undefined;
-      const ids = (listed ?? Object.keys(dev.models)).filter(current);
+      // A model pi-ai knows as another type (OpenRouter's Jev, a classifier) is not one to chat with.
+      const typed = new Set((provider.getAllModels?.() ?? []).map((model) => model.id));
+      const ids = (listed ?? Object.keys(dev.models)).filter((id) => current(id) && !typed.has(id));
       const known = provider.getModels();
       const next = discoveredModels(provider.id, known, ids, dev, sources.siblings());
       const gone = new Set(known.filter((model) => !current(model.id)).map((model) => model.id));

@@ -5,6 +5,8 @@ import { describe, expect, it } from "vitest";
 import { Events, definePlugin, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { InteractionOrigin } from "@lemma/contracts";
+import { Llm, LlmError } from "@lemma/llm";
+import type { ClassifierAnswer, ClassifierContext, ClassifierResult } from "@lemma/llm";
 import { Guards, ToolInvocation, ToolOutput, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import { tempDir, textOf } from "@lemma/tools/testing";
 import tools from "@lemma/tools-registry";
@@ -13,8 +15,70 @@ import edit from "@lemma/tools-edit";
 import read from "@lemma/tools-read";
 import write from "@lemma/tools-write";
 import codemode from "../src/index.ts";
+import type { CodemodeDetails } from "../src/index.ts";
 
-const builtin = [read, write, edit, bash, codemode];
+/** What the fake classifier was asked, by ref. */
+const asked: { ref: string; context: ClassifierContext }[] = [];
+
+/**
+ * An `Llm` with one classifier, `faux/judge`, that answers every question as its first label (or `true`), costing a
+ * cent a call; `faux/broken` answers with a provider's error.
+ */
+const llm = definePlugin({
+  id: "llm",
+  provides: [Llm],
+  layer: Layer.sync(Llm, () => {
+    const usage = {
+      input: 10,
+      output: 1,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 11,
+      cost: { input: 0.01, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.01 },
+    };
+    const judge = {
+      ref: "faux/judge",
+      provider: "faux",
+      id: "judge",
+      name: "Judge",
+      api: "faux",
+      input: ["text"] as const,
+      contextWindow: 8192,
+      cost: { input: 1, output: 0 },
+    };
+    return Llm.of({
+      providers: Effect.succeed([]),
+      models: () => Effect.succeed([]),
+      model: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: ref })),
+      stream: () => Stream.empty,
+      classifiers: () => Effect.succeed([judge]),
+      classify: (ref, context) =>
+        Effect.gen(function* (): Effect.fn.Return<ClassifierResult, LlmError> {
+          asked.push({ ref, context });
+          if (ref === "faux/broken") return { provider: "faux", model: "broken", answers: {}, stopReason: "error", errorMessage: "No key" };
+          if (ref !== judge.ref) return yield* new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}` });
+          const answers = Object.fromEntries(
+            Object.entries(context.questions).map(([id, question]): [string, ClassifierAnswer] => [
+              id,
+              question.type === "choice"
+                ? { type: "choice", choice: Object.keys(question.criteria)[0]!, probabilities: {}, confidence: 0.9 }
+                : question.type === "score"
+                  ? { type: "score", score: 0, confidence: 0.9 }
+                  : { type: "bool", probability: 0.8 },
+            ]),
+          );
+          return { provider: "faux", model: "judge", answers, usage, stopReason: "stop" };
+        }),
+      login: () => Effect.void,
+      logout: () => Effect.void,
+      addCustom: (spec) => Effect.succeed(spec.name),
+      removeCustom: () => Effect.void,
+      setLogo: () => Effect.void,
+    });
+  }),
+});
+
+const builtin = [llm, read, write, edit, bash, codemode];
 
 const run = (code: string, cwd = process.cwd(), extra: readonly Plugin[] = [], signal = new AbortController().signal) =>
   Effect.runPromise(
@@ -336,5 +400,48 @@ describe("pi codemode", () => {
   it("finds tools by words in their name and description", async () => {
     const result = await call(`return (await searchTools("shell command")).map((t) => t.name);`);
     expect(textOf(result)).toContain("bash");
+  });
+});
+
+describe("classifier models", () => {
+  const sentiment = {
+    type: "choice",
+    instructions: "How does the user feel?",
+    criteria: { positive: "Happy", negative: "Unhappy" },
+  };
+
+  it("are listed, and asked through Llm, with what each call used in the details", async () => {
+    asked.length = 0;
+    const result = await run(`
+      const [judge] = await models.classifiers({ available: true });
+      const results = await Promise.all(["great", "awful"].map((message) =>
+        models.classify(judge, { state: { message }, questions: { sentiment: ${JSON.stringify(sentiment)}, urgent: { type: "bool", instructions: "Urgent?", criteria: { true: "Yes", false: "No" } } } })));
+      return results.map((r) => [r.stopReason, r.answers.sentiment.choice, r.answers.urgent.probability]);
+    `);
+    expect(result.isError).toBeUndefined();
+    expect(textOf(result)).toContain('[["stop","positive",0.8],["stop","positive",0.8]]');
+    expect(asked.map(({ ref, context }) => [ref, context.state])).toEqual([
+      ["faux/judge", { message: "great" }],
+      ["faux/judge", { message: "awful" }],
+    ]);
+    expect((result.details as CodemodeDetails).usage?.cost.total).toBeCloseTo(0.02);
+  });
+
+  it("report a provider's failure in the result, which the script checks", async () => {
+    const result = await run(
+      `const r = await models.classify("faux/broken", { state: {}, questions: { s: ${JSON.stringify(sentiment)} } }); return [r.stopReason, r.errorMessage];`,
+    );
+    expect(textOf(result)).toContain('["error","No key"]');
+  });
+
+  it("fail the script on an unknown ref or a context they cannot use, before asking", async () => {
+    asked.length = 0;
+    const unknown = await run(`await models.classify("faux/nope", { state: {}, questions: { s: ${JSON.stringify(sentiment)} } });`);
+    expect(unknown.isError).toBe(true);
+    expect(textOf(unknown)).toContain("Unknown model: faux/nope");
+    const shapeless = await run(`await models.classify("faux/judge", { state: {}, questions: { s: { type: "choice", criteria: ["a", "b"] } } });`);
+    expect(shapeless.isError).toBe(true);
+    expect(textOf(shapeless)).toContain("models.classify() got a context it cannot use");
+    expect(asked.map(({ ref }) => ref)).toEqual(["faux/nope"]);
   });
 });
