@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { capabilityName, hookChain, kernelOf, providerOf, recoverable, tablesOf, usersOf } from "../src/kernel.ts";
+import { capabilityName, hookChain, kernelOf, pluginWiring, providerOf, recoverable, tablesOf, usersOf } from "../src/kernel.ts";
 import type { PluginStatus } from "../src/status.ts";
 
 const plugin = (id: string, fields: Partial<PluginStatus> = {}): PluginStatus => ({
@@ -49,6 +49,50 @@ describe("plugin wiring", () => {
       { plugin: "compaction", phase: "fit", rank: 1, order: -1_000 },
     ]);
     expect(kernelOf(phased, []).hooks[0]?.handlers.map((handler) => handler.plugin)).toEqual(["skills", "compaction"]);
+  });
+
+  test("a plugin's wiring in the five shapes: parts and channels apart from what it adds, each hook's place, each call's provider", () => {
+    const wired = plugin("agent", {
+      requires: ["lemma/Llm", "lemma/Paths"],
+      provides: ["lemma/Agent"],
+      hooks: [
+        { name: "turn.before", order: 10 },
+        { name: "turn.before", order: -5 },
+      ],
+      observes: ["turn.ended"],
+      contributes: [
+        { name: "lemma/tools", items: 1, keys: ["ask"] },
+        { name: "part.chat.tool", items: 1, keys: ["agent.tool"] },
+        { name: "lemma/channels", items: 2, keys: ["agent.prompt", "agent.events"] },
+      ],
+    });
+    const all = [...plugins.filter((other) => other.id !== "agent"), wired, plugin("ui", { requires: ["lemma/Agent"] })];
+    expect(pluginWiring(all, wired, ["lemma/Paths"])).toEqual({
+      adds: [{ name: "lemma/tools", items: 1, keys: ["ask"] }],
+      parts: [{ name: "part.chat.tool", items: 1, keys: ["agent.tool"] }],
+      hooks: [
+        { name: "turn.before", order: 10, position: 3, of: 3 },
+        { name: "turn.before", order: -5, position: 1, of: 3 },
+      ],
+      observes: ["turn.ended"],
+      calls: [
+        { key: "lemma/Llm", providers: [all[1], all[0]], runtime: false },
+        { key: "lemma/Paths", providers: [], runtime: true },
+      ],
+      serves: [{ key: "lemma/Agent", users: ["ui"] }],
+      channels: ["agent.prompt", "agent.events"],
+    });
+  });
+
+  test("each of a plugin's handlers of one hook at one phase and order has its own place", () => {
+    const twice = plugin("twice", {
+      hooks: [
+        { name: "turn.before", order: 0 },
+        { name: "turn.before", order: 0 },
+      ],
+    });
+    const all = [plugin("alpha", { hooks: [{ name: "turn.before", order: 0 }] }), twice, plugin("zulu", { hooks: [{ name: "turn.before", order: 0 }] })];
+    expect(pluginWiring(all, twice, []).hooks.map(({ position, of }) => `${position} of ${of}`)).toEqual(["2 of 4", "3 of 4"]);
   });
 
   test("a restart helps a failed plugin or one a failure halted", () => {

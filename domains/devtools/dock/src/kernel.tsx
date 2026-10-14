@@ -1,17 +1,15 @@
 import { For, Show, createEffect, createMemo, createResource, createSignal, on, onCleanup } from "solid-js";
 import type { Accessor, JSX } from "solid-js";
-import { kernelOf, tablesOf } from "@lemma/contracts";
-import type { InspectorInfo, KernelView, PluginStatus, Table } from "@lemma/contracts";
+import { KERNEL_LABEL, RUNTIME_LABEL, kernelOf, pluginWiring, tablesOf } from "@lemma/contracts";
+import type { InspectorInfo, KernelKind as Kind, PluginStatus, Table } from "@lemma/contracts";
 import { DevtoolsPanels, PLUGIN_PANEL, TRACE_PANEL } from "@lemma/devtools/web";
 import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
 import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
 import { definedSlots, usePlugin } from "@lemma/web";
 
-type Kind = "web" | "host";
-const KIND_LABEL: Readonly<Record<Kind, string>> = { web: "Web app", host: "Host" };
-/** Who provides a runtime capability: the app itself, not a plugin. */
-const RUNTIME_LABEL: Readonly<Record<Kind, string>> = { web: "the web app", host: "the host" };
+/** A kernel's name as a chip shows it: "Web app", "Host". */
+const kindLabel = (kind: Kind) => `${KERNEL_LABEL[kind].charAt(0).toUpperCase()}${KERNEL_LABEL[kind].slice(1)}`;
 const INSPECTORS_PANEL = "devtools.inspectors";
 
 /** What the kernel's panels read. */
@@ -64,7 +62,7 @@ function KindChips(props: { kind: Accessor<Kind>; setKind: (kind: Kind) => void 
     <For each={["web", "host"] as const}>
       {(option) => (
         <button class="dt-chip" aria-pressed={props.kind() === option} onClick={() => props.setKind(option)}>
-          {KIND_LABEL[option]}
+          {kindLabel(option)}
         </button>
       )}
     </For>
@@ -198,19 +196,10 @@ const snippet = (view: SlotView): string => {
  * contributes (in the web app: each slot item; on the host: its inspectors),
  * its settings, and its recent faults.
  */
-function PluginView(props: {
-  deps: Deps;
-  kind: Kind;
-  plugin: PluginStatus;
-  plugins: readonly PluginStatus[];
-  kernel: KernelView;
-  inspectors: readonly InspectorInfo[];
-}) {
+function PluginView(props: { deps: Deps; kind: Kind; plugin: PluginStatus; plugins: readonly PluginStatus[]; inspectors: readonly InspectorInfo[] }) {
   const { deps } = props;
   const plugin = () => props.plugin;
-  const users = (key: string) => props.plugins.filter((other) => other.requires.includes(key)).map((other) => other.id);
-  const providers = (key: string) => props.plugins.filter((other) => other.provides.includes(key));
-  const chainOf = (name: string) => props.kernel.hooks.find((hook) => hook.name === name)?.handlers ?? [];
+  const wiring = createMemo(() => pluginWiring(props.plugins, props.plugin, deps.runtime[props.kind]()));
   const items = () =>
     props.kind === "web"
       ? slotViews(deps).flatMap((view) => view.items.filter((item) => item.plugin === plugin().id).map((item) => ({ slot: view.name, ...item })))
@@ -274,15 +263,15 @@ function PluginView(props: {
           </Show>
         </dl>
         <Section title="Provides" aside="replacing it restarts what requires it">
-          <Show when={plugin().provides.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
+          <Show when={wiring().serves.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
             <table class="dt-table">
               <tbody>
-                <For each={plugin().provides}>
-                  {(key) => (
+                <For each={wiring().serves}>
+                  {(serve) => (
                     <tr data-row>
-                      <td class="dt-code">{key}</td>
+                      <td class="dt-code">{serve.key}</td>
                       <td class="dt-wrap">
-                        used by <Names deps={deps} kind={props.kind} ids={users(key)} />
+                        used by <Names deps={deps} kind={props.kind} ids={serve.users} />
                       </td>
                     </tr>
                   )}
@@ -292,25 +281,19 @@ function PluginView(props: {
           </Show>
         </Section>
         <Section title="Requires">
-          <Show when={plugin().requires.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
+          <Show when={wiring().calls.length > 0} fallback={<p class="dt-muted">Nothing.</p>}>
             <table class="dt-table">
               <tbody>
-                <For each={plugin().requires}>
-                  {(key) => (
+                <For each={wiring().calls}>
+                  {(call) => (
                     <tr data-row>
-                      <td class="dt-code">{key}</td>
+                      <td class="dt-code">{call.key}</td>
                       <td class="dt-wrap">
                         <Show
-                          when={providers(key).length > 0}
-                          fallback={
-                            props.kernel.capabilities.find((capability) => capability.key === key)?.runtime ? (
-                              <span class="dt-muted">{RUNTIME_LABEL[props.kind]}</span>
-                            ) : (
-                              <span class="dt-err">nothing provides it</span>
-                            )
-                          }
+                          when={call.providers.length > 0}
+                          fallback={call.runtime ? <span class="dt-muted">{RUNTIME_LABEL[props.kind]}</span> : <span class="dt-err">nothing provides it</span>}
                         >
-                          <For each={providers(key)}>
+                          <For each={call.providers}>
                             {(provider) => (
                               <span>
                                 <PluginName deps={deps} kind={props.kind} id={provider.id} />{" "}
@@ -327,33 +310,30 @@ function PluginView(props: {
             </table>
           </Show>
         </Section>
-        <Show when={(plugin().hooks ?? []).length > 0}>
+        <Show when={wiring().hooks.length > 0}>
           <Section title="Hooks" aside="its place in each chain">
             <table class="dt-table">
               <tbody>
-                <For each={plugin().hooks}>
-                  {(hook) => {
-                    const chain = () => chainOf(hook.name);
-                    return (
-                      <tr data-row>
-                        <td class="dt-code">{hook.name}</td>
-                        <td class="dt-num dt-muted">
-                          {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order}
-                        </td>
-                        <td class="dt-muted">
-                          {chain().findIndex((handler) => handler.plugin === plugin().id) + 1} of {chain().length}
-                        </td>
-                      </tr>
-                    );
-                  }}
+                <For each={wiring().hooks}>
+                  {(hook) => (
+                    <tr data-row>
+                      <td class="dt-code">{hook.name}</td>
+                      <td class="dt-num dt-muted">
+                        {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order}
+                      </td>
+                      <td class="dt-muted">
+                        {hook.position} of {hook.of}
+                      </td>
+                    </tr>
+                  )}
                 </For>
               </tbody>
             </table>
           </Section>
         </Show>
-        <Show when={(plugin().observes ?? []).length > 0}>
+        <Show when={wiring().observes.length > 0}>
           <Section title="Observes">
-            <p class="dt-code">{plugin().observes!.join(", ")}</p>
+            <p class="dt-code">{wiring().observes.join(", ")}</p>
           </Section>
         </Show>
         <Show when={props.kind === "web" ? items().length > 0 : (plugin().contributes ?? []).length > 0}>
@@ -541,7 +521,7 @@ function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly Inspect
           </table>
         </div>
         <Show when={current()} keyed>
-          {(plugin) => <PluginView deps={deps} kind={kind()} plugin={plugin} plugins={plugins()} kernel={kernel()} inspectors={props.inspectors()} />}
+          {(plugin) => <PluginView deps={deps} kind={kind()} plugin={plugin} plugins={plugins()} inspectors={props.inspectors()} />}
         </Show>
       </div>
       <div class="dt-status" role="status">

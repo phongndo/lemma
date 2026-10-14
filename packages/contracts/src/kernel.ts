@@ -1,5 +1,6 @@
 import { Order, Predicate } from "effect";
-import type { HookUse } from "./host.ts";
+import { Channels } from "./channels.ts";
+import type { HookUse, RegistryUse } from "./host.ts";
 import type { PluginStatus } from "./status.ts";
 
 /*
@@ -8,7 +9,8 @@ import type { PluginStatus } from "./status.ts";
  * per-thing views: each hook's chain in run order, each registry's
  * contributors, each event's observers, each capability's provider and
  * dependents. The same for the host and the web app: both run the core. What
- * the devtools' kernel panels and `lemma kernel` show.
+ * the devtools' kernel panels and `lemma kernel` show, and one plugin's wiring
+ * (`pluginWiring`), as the Plugins page and the devtools show it.
  */
 
 /** A handler's place in its hook's chain: its phase, when the hook declares phases, and its order within it. */
@@ -77,6 +79,77 @@ export const providerOf = (plugins: readonly PluginStatus[], key: string): Plugi
 /** Every plugin's handlers of hook `name`, in run order (`HookChain.handlers`). */
 export const hookChain = (plugins: readonly PluginStatus[], name: string): HookChain["handlers"] =>
   plugins.flatMap((plugin) => plugin.hooks?.filter((hook) => hook.name === name).map((hook) => placeOf(plugin.id, hook)) ?? []).sort(runOrder);
+
+/** Which kernel a plugin runs on: the host's, or the web app's. */
+export type KernelKind = "host" | "web";
+
+/** Each kernel as a sentence names it: a "host" plugin, a "web app" plugin. */
+export const KERNEL_LABEL: Readonly<Record<KernelKind, string>> = { host: "host", web: "web app" };
+
+/** Who provides a runtime capability on each kernel: its app itself, which no plugin replaces. */
+export const RUNTIME_LABEL: Readonly<Record<KernelKind, string>> = { host: "the host", web: "the web app" };
+
+/** A hook a plugin intercepts, and where its handler runs among every plugin's handlers of it. */
+export interface WiredHook extends HookUse {
+  /** Its place in the hook's chain, from 1 (`hookChain`). */
+  readonly position: number;
+  /** How many handlers the chain has. */
+  readonly of: number;
+}
+
+/**
+ * How one plugin meets the others, in the five shapes every domain's contract offers (docs/plugins.md): what it adds,
+ * intercepts, observes, calls, and serves.
+ */
+export interface PluginWiring {
+  /** Add: the registries and slots it adds items to, but for parts and the channels it serves. */
+  readonly adds: readonly RegistryUse[];
+  /** Intercept: the parts it draws (the `part.*` slots it adds to), which is how a web half takes over a piece. */
+  readonly parts: readonly RegistryUse[];
+  /** Intercept: the hooks it handles. */
+  readonly hooks: readonly WiredHook[];
+  /** Observe: the events it hears. */
+  readonly observes: readonly string[];
+  /** Call: each capability it requires, with the plugins providing it (the enabled one first), or its app providing it itself. */
+  readonly calls: readonly { readonly key: string; readonly providers: readonly PluginStatus[]; readonly runtime: boolean }[];
+  /** Serve: each capability it provides, with the plugins requiring it. */
+  readonly serves: readonly { readonly key: string; readonly users: readonly string[] }[];
+  /** Serve: the channels it serves to clients (`Channels`), by id. */
+  readonly channels: readonly string[];
+}
+
+/** A part's slot (`part.*`): a web half adding to one draws that part. */
+const isPart = (name: string) => name.startsWith("part.");
+
+/** How `plugin` meets the rest of `plugins` (`PluginWiring`); `runtime` is what their app provides itself, by capability key. */
+export const pluginWiring = (plugins: readonly PluginStatus[], plugin: PluginStatus, runtime: readonly string[]): PluginWiring => {
+  const contributes = plugin.contributes ?? [];
+  // A plugin may handle one hook more than once at one phase and order: its nth such handler is the nth in the chain.
+  const seen = new Map<string, number>();
+  return {
+    adds: contributes.filter((registry) => registry.name !== Channels.name && !isPart(registry.name)),
+    parts: contributes.filter((registry) => isPart(registry.name)),
+    hooks: (plugin.hooks ?? []).map((hook) => {
+      const chain = hookChain(plugins, hook.name);
+      const key = JSON.stringify([hook.name, hook.phase, hook.order]);
+      const nth = seen.get(key) ?? 0;
+      seen.set(key, nth + 1);
+      const places = chain.flatMap((entry, index) => (entry.plugin === plugin.id && entry.phase === hook.phase && entry.order === hook.order ? [index] : []));
+      return { ...hook, position: (places[nth] ?? -1) + 1, of: chain.length };
+    }),
+    observes: plugin.observes ?? [],
+    calls: plugin.requires.map((key) => {
+      const providing = plugins.filter((other) => other.provides.includes(key));
+      return {
+        key,
+        providers: [...providing.filter((other) => other.enabled), ...providing.filter((other) => !other.enabled)],
+        runtime: runtime.includes(key),
+      };
+    }),
+    serves: plugin.provides.map((key) => ({ key, users: usersOf(plugins, key) })),
+    channels: contributes.find((registry) => registry.name === Channels.name)?.keys ?? [],
+  };
+};
 
 /** Whether a restart would do anything without `force`: the plugin failed, or a failed dependency halted it. */
 export const recoverable = (plugin: { readonly state?: string | undefined; readonly haltedBy?: string | undefined }): boolean =>
