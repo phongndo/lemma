@@ -1,0 +1,173 @@
+.acp-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.acp-description {
+  margin: 0;
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.acp-command,
+.acp-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.acp-command .integration-code,
+.acp-switch-row .integration-hint {
+  flex: 1;
+  min-width: 0;
+}
+
+.acp-danger {
+  color: var(--err);
+}
+
+.acp-add,
+.acp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.harness-logo {
+  flex: none;
+}
+
+.harness-logo-mask {
+  display: inline-block;
+  flex: none;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+
+.acp-access {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+/* A permission request, in place of the composer's text box. */
+.approval {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px 6px;
+}
+
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-2);
+}
+
+.approval-head .icon {
+  color: var(--warn);
+}
+
+.approval-label {
+  font-weight: 600;
+  color: var(--warn);
+}
+
+.approval-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.approval-title {
+  font-weight: 500;
+}
+
+.approval-detail {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  white-space: pre;
+}
+
+.approval-prompt {
+  color: var(--text-3);
+}
+
+.approval-path {
+  margin-bottom: 4px;
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-2);
+}
+
+.approval-line[data-kind="added"] {
+  color: var(--add);
+  background: var(--add-bg);
+}
+
+.approval-line[data-kind="removed"] {
+  color: var(--del);
+  background: var(--del-bg);
+}
+
+.approval-line[data-kind="skipped"] {
+  color: var(--text-3);
+}
+
+.approval-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.approval-hint {
+  margin-left: auto;
+  font-size: calc(11.5px * var(--text-scale));
+  color: var(--text-3);
+}
+
+.approval-waiting {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.approval-waiting .icon {
+  color: var(--warn);
+}
+
+/* The check icon turns while the agent starts. */
+.spinning .icon {
+  animation: acp-spin 0.9s linear infinite;
+}
+
+@keyframes acp-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* An icon's address, the icon it draws on its left. */
+.acp-icon-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.acp-icon-field .field {
+  flex: 1;
+  min-width: 0;
+}
