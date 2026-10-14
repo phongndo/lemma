@@ -10,7 +10,8 @@
     "./testing": "./src/testing.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemma/contracts": "workspace:*",

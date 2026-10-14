@@ -47,6 +47,8 @@ export interface BootOptions {
   readonly appRoutes: readonly AnyRoute[];
   /** Loads the object web halves receive (see `createFileLoader`). */
   readonly api: () => Promise<unknown>;
+  /** The contracts in it, by the module each is imported from (`WebPlugins.contracts`). */
+  readonly contracts: Readonly<Record<string, object>>;
   readonly element: HTMLElement;
   /** `?safe`: ignore the rows and the plugin directories' files, running the app as shipped. */
   readonly safe: boolean;
@@ -119,6 +121,7 @@ export async function boot(options: BootOptions): Promise<void> {
     routes,
     problems,
     safe,
+    contracts: options.contracts,
     refresh,
     restart: async (plugin, restartOptions) => {
       await runPromise(

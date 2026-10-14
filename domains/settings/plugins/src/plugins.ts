@@ -1,5 +1,5 @@
 import { capabilityName } from "@lemma/contracts";
-import type { PluginStatus } from "@lemma/contracts";
+import type { KernelKind, PluginStatus } from "@lemma/contracts";
 
 /** What a search over plugins matches. */
 export const pluginText = (plugin: PluginStatus): string =>
@@ -85,7 +85,7 @@ export const replaces = (plugins: readonly PluginStatus[], id: string): string[]
 };
 
 /** Which composition a plugin's half belongs to: the host's, or the web app's. */
-export type PluginKind = "host" | "web";
+export type PluginKind = KernelKind;
 
 /**
  * A plugin as the table lists it: one id, with a host half, a web half, or both. `kind` and `plugin` are the half it

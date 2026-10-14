@@ -9,11 +9,11 @@ import { HOST_PROTOCOL, Inspectors, Interaction, InteractionError, InteractionOr
 import { Commands } from "@lemma/commands";
 import type { CommandInfo } from "@lemma/commands";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { definePlugin, PluginContext } from "@lemma/core";
+import { Admitted, definePlugin, PluginContext } from "@lemma/core";
 import { runtimeCapabilities } from "../../../../packages/host/src/runtime.ts";
 import transport from "../src/index.ts";
 import { loadToken } from "../src/token.ts";
-import { failure, hostError, subscribe, waitFor, withHost } from "./harness.ts";
+import { connect, failure, hostError, subscribe, waitFor, withHost } from "./harness.ts";
 import type { HostEvent } from "./harness.ts";
 
 const interactionError = (exit: Exit.Exit<unknown, unknown>): InteractionError => {
@@ -144,6 +144,37 @@ describe("transport", () => {
           expect(afterConfigure.find((plugin) => plugin.id === "greeter")).toMatchObject({ enabled: false, state: "disabled", scope: "project" });
           const pinnedOff = hostError(yield* Effect.exit(client["Host.Configure"]({ plugins: { "transport.server": { enabled: false } } })));
           expect(pinnedOff).toMatchObject({ code: "ReloadError", subject: "transport.server" });
+        }),
+      ),
+    30_000,
+  );
+
+  test.each(["websocket", "http"] as const)(
+    "a change a request asks for that restarts the transport applies once the reply has reached the client (%s)",
+    (kind) =>
+      withHost((host) =>
+        Effect.gen(function* () {
+          const scope = yield* Effect.scope;
+          // A stream open meanwhile holds nothing: the restart does not wait for its client to close it.
+          yield* subscribe(yield* host.connect("websocket"));
+          const client = yield* host.connect(kind);
+          const restarted = yield* Deferred.make<void>();
+          // As the host's `deferral` and `applyLater`: the reload restarts the transport, so it waits for the transport's
+          // work asking for it, the request, to end, and restarts it then, cutting off every connection.
+          host.holder.reload = Effect.gen(function* () {
+            const work = (yield* Admitted).find((entry) => entry.pluginId === "transport.server");
+            if (work === undefined) return yield* Effect.die(new Error("The request is not the transport's work"));
+            const restart = Effect.andThen(Effect.orDie(host.core.restart("transport.server", { force: true })), Deferred.succeed(restarted, undefined));
+            yield* Effect.forkIn(Effect.andThen(work.ended, restart), scope);
+            return { started: [], restarted: [], stopped: [], unchanged: [], failed: [], interrupted: 0, faults: [], deferred: true };
+          });
+          expect(yield* client["Host.Reload"]()).toEqual({ started: [], restarted: [], stopped: [], deferred: true });
+          yield* Deferred.await(restarted);
+          // The new instance serves, on a port of its own.
+          const found = yield* readDiscovery(host.home);
+          expect(found?.url).not.toBe(host.url);
+          const again = yield* connect(found!.url, host.token, kind);
+          expect((yield* again["Host.Info"]()).version).toBe("0.1.0");
         }),
       ),
     30_000,

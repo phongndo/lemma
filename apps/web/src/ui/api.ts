@@ -5,64 +5,16 @@ import * as web from "solid-js/web";
 import { AgentChannels } from "@lemma/agent";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels } from "@lemma/llm";
-import { NewThreadRoute, SessionChannels, ThreadRoute } from "@lemma/sessions";
+import { SessionChannels } from "@lemma/sessions";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { defineRoute, isRoute } from "@lemma/router";
 import * as defaults from "@lemma/look-kit/defaults";
 import { copyText } from "@lemma/web/clipboard";
 import { currentTheme, currentToken, onLookChange, onThemeChange, paint, tokenColor, unpaint } from "@lemma/web/paint";
-import * as actions from "@lemma/actions";
-import * as commands from "@lemma/commands/web";
-import * as devtools from "@lemma/devtools/web";
-import * as frame from "@lemma/frame";
-import * as llm from "@lemma/llm/web";
-import * as look from "@lemma/look";
-import * as settings from "@lemma/settings";
-import * as threads from "@lemma/threads";
 import { defineSlot, defineWebPlugin, definePart, extendWebPlugin, WebSchema, usePlugin } from "@lemma/web";
-import * as webRuntime from "@lemma/web";
 import type { Part } from "@lemma/web";
-import * as workspace from "@lemma/workspace/web";
 import { bundled } from "../bundled.ts";
-
-/** `value` without `keys`, typed so. */
-const omit = <T extends object, K extends keyof T>(value: T, keys: readonly K[]): Omit<T, K> =>
-  Object.fromEntries(Object.entries(value).filter(([key]) => !(keys as readonly PropertyKey[]).includes(key))) as Omit<T, K>;
-
-/**
- * Every bundled contract as one namespace: the web runtime's (`@lemma/web`: `Client`, `Slots`, `Router`, …) and each
- * domain's (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …), with the views that draw each part, and the thread
- * routes (`@lemma/sessions`). Not what makes slots and parts: a web half makes those with `api.defineSlot` and
- * `api.definePart`, which gives a part no fallback, since a fallback belongs to no plugin and outlives the half.
- */
-export const contractModules = {
-  "@lemma/web": omit(webRuntime, ["definePart", "createSlots"]),
-  "@lemma/frame": frame,
-  "@lemma/look": look,
-  "@lemma/settings": settings,
-  "@lemma/actions": actions,
-  "@lemma/devtools": devtools,
-  "@lemma/threads": threads,
-  "@lemma/llm/web": llm,
-  "@lemma/workspace/web": workspace,
-  "@lemma/commands/web": commands,
-  "@lemma/sessions": { NewThreadRoute, ThreadRoute },
-};
-// One namespace of them all: a name two of them export would be one's, silently (tests/api.test.ts fails that).
-const contracts = {
-  ...contractModules["@lemma/web"],
-  ...frame,
-  ...look,
-  ...settings,
-  ...actions,
-  ...devtools,
-  ...threads,
-  ...llm,
-  ...workspace,
-  ...commands,
-  NewThreadRoute,
-  ThreadRoute,
-};
+import { contracts } from "./contracts.ts";
 
 /**
  * What a web half's default export receives when it is a function: the page's
@@ -101,6 +53,7 @@ export const api = {
   isRoute,
   /** A new part, for a plugin's own replaceable pieces; `parts.partView` draws one. It has no fallback: the plugin provides it. */
   definePart: <P extends Record<string, any>>(name: string): Part<P> => definePart<P>(name),
+  /** Every contract by its name: the runtime's and each domain's web contract, as `ui/contracts.ts` lists them by module. */
   contracts,
   /**
    * The page's look (see "the look" in the contracts): `paint` applies a scheme and tokens for an owner, as the

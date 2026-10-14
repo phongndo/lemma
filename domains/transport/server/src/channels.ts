@@ -6,6 +6,7 @@ import type { Contribution, Registries } from "@lemma/core";
 import { answering, Channels, elementsOf, HostError, resultOf, RuntimeRpcs, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
+import { Replies } from "./replies.ts";
 import { Startup } from "./startup.ts";
 
 type Reader = Context.Service.Shape<typeof Registries>;
@@ -124,10 +125,13 @@ const channelRpcs = ["Channel.List", "Channel.Call", "Channel.Open"] as const;
 /** The other RPCs that answer from a registry, which shows what a starting composition contributes only once it is up. */
 const registryReaders = ["Host.Inspectors", "Host.Inspect"] as const;
 
-/** What the transport serves: `RuntimeRpcs`, the channels and the registry readers held at the `Startup` gate first. */
-export const ServedRpcs = RuntimeRpcs.omit(...channelRpcs, ...registryReaders).merge(
-  pick(RuntimeRpcs, registryReaders).merge(pick(RuntimeRpcs, channelRpcs).middleware(ChannelLifetime)).middleware(Startup),
-);
+/**
+ * What the transport serves: `RuntimeRpcs`, the channels and the registry readers held at the `Startup` gate first, and
+ * every request but a stream run as the transport's work until its reply has left (`Replies`, the outermost).
+ */
+export const ServedRpcs = RuntimeRpcs.omit(...channelRpcs, ...registryReaders)
+  .merge(pick(RuntimeRpcs, registryReaders).merge(pick(RuntimeRpcs, channelRpcs).middleware(ChannelLifetime)).middleware(Startup))
+  .middleware(Replies);
 
 export const channelLifetime =
   (registries: Reader): Context.Service.Shape<typeof ChannelLifetime> =>

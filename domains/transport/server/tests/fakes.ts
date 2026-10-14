@@ -2,7 +2,7 @@ import { Deferred, Effect, Layer } from "effect";
 import { HostControl, Interaction, InteractionError, InteractionHook, Paths, PluginsChanged, WebChanged } from "@lemma/contracts";
 import { Commands } from "@lemma/commands";
 import { pathsPlugin } from "@lemma/contracts/testing";
-import type { ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, WebComposition } from "@lemma/contracts";
+import type { ChangeReport, ConfigScope, InteractionAnswer, InteractionRequest, PluginInfo, WebComposition } from "@lemma/contracts";
 import { definePlugin, Diagnostic, Events, Hooks, PluginContext, ReloadError } from "@lemma/core";
 import type { Core } from "@lemma/core";
 
@@ -56,6 +56,8 @@ export interface ControlHolder {
   readonly off: Record<string, ConfigScope>;
   /** What the web app plans from: the rows (`configure` merges its rows in and publishes it, as the host app does) and files. */
   web: WebComposition;
+  /** What `reload` does instead of reporting a fixed change, when a test sets it. */
+  reload?: Effect.Effect<ChangeReport, ReloadError>;
 }
 
 /** Delegates to the test's core, waiting until it exists, as the host app does with its loader. */
@@ -99,7 +101,9 @@ export const fakeHostControl = (holder: ControlHolder) =>
               yield* changed;
               return {};
             }),
-          reload: Effect.succeed({ started: ["x"], stopped: [], restarted: [], unchanged: [], failed: [], interrupted: 0, faults: [] }),
+          reload: Effect.suspend(
+            () => holder.reload ?? Effect.succeed({ started: ["x"], stopped: [], restarted: [], unchanged: [], failed: [], interrupted: 0, faults: [] }),
+          ),
           configure: (rows, options) =>
             Effect.gen(function* () {
               if (rows["transport.server"]?.enabled === false) {

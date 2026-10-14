@@ -62,9 +62,15 @@ export interface Plan {
   readonly required: readonly string[];
   /** Enabled plugins left out because they cannot run, each with why. */
   readonly problems: ReadonlyMap<string, string>;
-  /** Errors: the plan must not run (a required plugin cannot). Warnings: what was left out or ignored, and why. */
+  /**
+   * Errors: the plan must not run (a required plugin cannot). Warnings: what was left out or ignored, and why; the one
+   * for each plugin in `problems` has `code` `LEFT_OUT`.
+   */
   readonly diagnostics: readonly Diagnostic[];
 }
+
+/** The `code` of the warning saying an enabled plugin is left out (`Plan.problems` has why). */
+export const LEFT_OUT = "composition/left-out";
 
 const keys = (plugin: Plugin) => new Set(plugin.provides.map((tag) => tag.key));
 
@@ -207,7 +213,9 @@ export function planComposition(input: PlanInput): Plan {
     );
   }
   for (const [id, problem] of problems) {
-    diagnostics.push(new Diagnostic({ severity: "warning", pluginId: id, message: `"${id}" is left out: ${problem}`, suggestion: suggestions.get(id)! }));
+    diagnostics.push(
+      new Diagnostic({ severity: "warning", code: LEFT_OUT, pluginId: id, message: `"${id}" is left out: ${problem}`, suggestion: suggestions.get(id)! }),
+    );
   }
   // What must run and does not, though nothing failed to plan: a row turned off what it needs.
   const absent = [...requested].filter((id) => byId.has(id) && !fatal.has(id) && !isRunning(resolved.composition, id));

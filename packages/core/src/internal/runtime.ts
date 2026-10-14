@@ -1,26 +1,7 @@
-import {
-  Cause,
-  Context,
-  Data,
-  Deferred,
-  Duration,
-  Effect,
-  Exit,
-  Fiber,
-  Layer,
-  Option,
-  PubSub,
-  Result,
-  Schedule,
-  Scope,
-  Semaphore,
-  Stream,
-  Tracer,
-} from "effect";
+import { Cause, Context, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Result, Schedule, Scope, Semaphore, Tracer } from "effect";
 import type { Pull } from "effect";
 import type { ApplicationServices, Core, CoreOptions, CoreSnapshot, PluginSnapshot, PluginState } from "../core.ts";
 import { CapabilityMismatch, CompositionError, CoreClosed, DeadlineExceeded, Diagnostic, PluginFault, ReloadError, ShutdownTimeout } from "../errors.ts";
-import type { ReportedFault } from "../errors.ts";
 import { Events } from "../events.ts";
 import { Hooks, PluginContext } from "../hooks.ts";
 import { Registries } from "../registries.ts";
@@ -29,20 +10,18 @@ import type { ReloadReport } from "../loader.ts";
 import type { Capability, Plugin } from "../plugin.ts";
 import { EventBus } from "./events.ts";
 import type { ObserverHandle } from "./events.ts";
-import { applicationProblems, plan } from "./graph.ts";
+import { planChange } from "./change.ts";
+import type { Member } from "./change.ts";
+import { applicationProblems } from "./graph.ts";
 import { attributes, HookRegistry } from "./hooks.ts";
 import type { OwnerHandle } from "./hooks.ts";
 import { makeOwnServices } from "./own.ts";
 import type { OwnServices } from "./own.ts";
+import { makeFaultLog } from "./faults.ts";
 import { RegistryStore } from "./registries.ts";
 import { runtimeSettings } from "./settings.ts";
+import { TrackedServices } from "./tracked.ts";
 import type { ContributorHandle } from "./registries.ts";
-
-/** A plugin and its raw (undecoded) config. */
-export interface Member {
-  readonly plugin: Plugin;
-  readonly config?: unknown;
-}
 
 /** Planning found problems; nothing was activated. */
 export class PlanError extends Data.TaggedError("PlanError")<{
@@ -64,6 +43,12 @@ interface Runtime {
    * it is required or something required needs it.
    */
   readonly apply: (members: readonly Member[], onApplied?: () => void, partial?: PartialStart) => Effect.Effect<ReloadReport, ApplyError>;
+  /**
+   * What `apply(members)` would start, restart, or stop, decided as it decides
+   * (`planChange`) against what runs now, with `force` restarted as a forced
+   * restart would. Changes nothing, and waits for no change under way.
+   */
+  readonly affected: (members: readonly Member[], force: ReadonlySet<string>) => Effect.Effect<ReadonlySet<string>, ApplyError>;
   /** Begin shutdown now and wait within the closing-caller deadline. */
   readonly shutdown: Effect.Effect<void>;
 }
@@ -101,34 +86,6 @@ interface Revision {
   retired: boolean;
 }
 
-/** Track resolved services; copying a whole context conservatively leases all of it. */
-class TrackedServices extends Map<string, unknown> {
-  readonly read = new Set<string>();
-  override get(key: string): unknown {
-    this.read.add(key);
-    return super.get(key);
-  }
-  private all(): void {
-    for (const key of super.keys()) this.read.add(key);
-  }
-  override entries() {
-    this.all();
-    return super.entries();
-  }
-  override values() {
-    this.all();
-    return super.values();
-  }
-  override [Symbol.iterator]() {
-    this.all();
-    return super[Symbol.iterator]();
-  }
-  override forEach(callback: (value: unknown, key: string, map: Map<string, unknown>) => void, thisArg?: unknown): void {
-    this.all();
-    super.forEach(callback, thisArg);
-  }
-}
-
 type RuntimeOptions<E> = Pick<CoreOptions<readonly Capability[], E>, "deadlines" | "shutdownTimeout" | "provide">;
 
 /**
@@ -155,17 +112,11 @@ function assemble<E>(
     // Merged over the built-ins below, an application key such as Hooks would replace the core's own.
     const refused = applicationProblems(providedKeys);
     if (refused.length) return yield* new PlanError({ errors: refused as [CompositionError, ...CompositionError[]] });
-    const faults = yield* PubSub.sliding<ReportedFault>(256);
+    const faults = yield* makeFaultLog;
+    const report = faults.report;
     const shutdownLimit = Duration.fromInputUnsafe(options.shutdownTimeout ?? defaults.dispose);
     let shutdownFault: ShutdownTimeout | undefined;
     const pendingDisposals = new Set<Deferred.Deferred<void>>();
-    let faultSequence = 0;
-    const report = (instance: Instance, fault: PluginFault): Effect.Effect<void> =>
-      Effect.suspend(() => {
-        const reported = Object.assign(fault, { sequence: ++faultSequence });
-        instance.fault = reported;
-        return PubSub.isShutdown(faults).pipe(Effect.flatMap((closed) => (closed ? Effect.void : PubSub.publish(faults, reported).pipe(Effect.asVoid))));
-      });
     /** Held by each change to the composition, so they run one at a time. */
     const lock = yield* Semaphore.make(1);
     const registry = new HookRegistry();
@@ -520,51 +471,13 @@ function assemble<E>(
       lock.withPermits(1)(
         Effect.uninterruptibleMask((restore) =>
           Effect.gen(function* () {
-            if (state !== "active") {
-              return yield* new PlanError({
-                errors: [new CompositionError({ reason: "CoreClosed", message: "The core is closing or has closed", plugins: [] })],
-              });
-            }
+            if (state !== "active") return yield* closedPlan();
             if (stillNeeded && !stillNeeded()) return { started: [], restarted: [], failed: [], stopped: [], unchanged: order, interrupted: 0, faults: [] };
-            const raw = new Map(members.map((member) => [member.plugin.id, member.config]));
-            const planned = plan(
-              members.map((member) => member.plugin),
-              (id) => raw.get(id),
-              providedKeys,
-            );
+            const planned = planChange(members, { instances, order }, force, providedKeys);
             if (Result.isFailure(planned)) return yield* new PlanError({ errors: planned.failure });
-            const { ordered, configs, providers: nextProviders } = planned.success;
+            const { ordered, configs, providers: nextProviders, raw, changed, stops } = planned.success;
             const required = partial === undefined ? undefined : requiredClosure(ordered, nextProviders, partial.required);
-
-            // Changed: new, different definition or config, forced, or depending on a changed provider.
-            const changed = new Set<string>();
-            const errors: CompositionError[] = [];
-            for (const plugin of ordered) {
-              const instance = instances.get(plugin.id);
-              const dependsOnChanged = plugin.requires.some((tag) => {
-                const provider = nextProviders.get(tag.key);
-                return provider !== undefined && changed.has(provider);
-              });
-              if (!instance || instance.plugin !== plugin || !deepEqual(instance.rawConfig, raw.get(plugin.id)) || force.has(plugin.id) || dependsOnChanged) {
-                changed.add(plugin.id);
-                for (const tag of plugin.requires) {
-                  const provider = nextProviders.get(tag.key);
-                  if (provider !== undefined && !changed.has(provider) && instances.get(provider)?.state !== "active") {
-                    errors.push(
-                      new CompositionError({
-                        reason: "InactiveDependency",
-                        capability: tag.key,
-                        plugins: [plugin.id, provider],
-                        message: `Plugin "${plugin.id}" requires "${tag.key}" from "${provider}", which is not active; restart "${provider}" first`,
-                      }),
-                    );
-                  }
-                }
-              }
-            }
-            if (errors.length) return yield* new PlanError({ errors: errors as [CompositionError, ...CompositionError[]] });
             const nextIds = ordered.map((plugin) => plugin.id);
-            const stops = order.filter((id) => !raw.has(id));
             const previousOrder = order;
             let interrupted = 0;
             const reloadFaults: PluginFault[] = [];
@@ -626,11 +539,13 @@ function assemble<E>(
                 if (instance.state !== "failed") yield* dispose(instance, outcome, "closed");
               }
               const fault = Option.getOrNull(Cause.findErrorOption(outcome.cause));
-              // The explicit gap cannot be undone here: stopped exclusive plugins stay down, attributed to this failure.
+              // The explicit gap cannot be undone here: stopped exclusive plugins stay down. One whose own replacement
+              // failed keeps that fault, already reported; each other gets one of its own, caused by this failure.
               for (const id of gapped) {
                 const instance = instances.get(id)!;
                 instance.state = "failed";
-                instance.fault = fault ?? new PluginFault({ pluginId: id, phase: "activate", cause: outcome.cause });
+                if (fault?.pluginId === id) instance.fault = fault;
+                else yield* report(instance, new PluginFault({ pluginId: id, phase: "activate", cause: outcome.cause }));
               }
               if (gapped.size) yield* publishRevision;
               return yield* Effect.failCause(outcome.cause);
@@ -739,7 +654,7 @@ function assemble<E>(
                 yield* Deferred.await(released);
               }
             }
-            yield* PubSub.shutdown(faults);
+            yield* faults.close;
             state = "closed";
             if (cause) return yield* Effect.failCause(cause);
           });
@@ -788,7 +703,7 @@ function assemble<E>(
         ),
       inspect: Effect.sync((): CoreSnapshot => ({
         state,
-        faultSequence,
+        faultSequence: faults.sequence(),
         ...(shutdownFault === undefined ? {} : { shutdownFault }),
         provided: [...providedKeys],
         plugins: order.map((id) => snapshot(instances.get(id)!)),
@@ -796,7 +711,7 @@ function assemble<E>(
         events: bus.inspect(),
         registries: store.inspect(),
       })),
-      faults: Stream.fromPubSub(faults),
+      faults: faults.stream,
       restart: (id, options) =>
         Effect.suspend((): Effect.Effect<ReloadReport, ReloadError | CoreClosed> => {
           if (state !== "active") return Effect.fail(new CoreClosed());
@@ -815,6 +730,13 @@ function assemble<E>(
 
     return {
       core,
+      affected: (members, force) =>
+        Effect.suspend(() => {
+          if (state !== "active") return Effect.fail(closedPlan());
+          const planned = planChange(members, { instances, order }, force, providedKeys);
+          if (Result.isFailure(planned)) return Effect.fail(new PlanError({ errors: planned.failure }));
+          return Effect.succeed(new Set([...planned.success.changed, ...planned.success.stops]));
+        }),
       apply: (members, onApplied, partial) =>
         supervised((operation) => applyLocked(members, new Set(), partial, operation).pipe(Effect.tap(() => Effect.sync(() => onApplied?.())))),
       shutdown,
@@ -866,6 +788,10 @@ function requiredClosure(ordered: readonly Plugin[], providers: ReadonlyMap<stri
     }
   }
   return found;
+}
+
+function closedPlan(): PlanError {
+  return new PlanError({ errors: [new CompositionError({ reason: "CoreClosed", message: "The core is closing or has closed", plugins: [] })] });
 }
 
 /** Run `effect` on its own fiber: interrupting the caller interrupts it without waiting for it to stop. */
@@ -955,15 +881,4 @@ function snapshot(instance: Instance): PluginSnapshot {
     ...(instance.fault === undefined ? {} : { fault: instance.fault }),
     ...(instance.haltedBy === undefined ? {} : { haltedBy: instance.haltedBy }),
   };
-}
-
-/** Structural equality for config data (JSON-like values); other objects compare by reference. */
-function deepEqual(a: unknown, b: unknown): boolean {
-  if (Object.is(a, b)) return true;
-  if (typeof a !== "object" || typeof b !== "object" || a === null || b === null) return false;
-  if (Array.isArray(a) !== Array.isArray(b)) return false;
-  if (Array.isArray(a)) return a.length === (b as unknown[]).length && a.every((value, index) => deepEqual(value, (b as unknown[])[index]));
-  if (Object.getPrototypeOf(a) !== Object.prototype || Object.getPrototypeOf(b) !== Object.prototype) return false;
-  const keys = Object.keys(a);
-  return keys.length === Object.keys(b).length && keys.every((key) => deepEqual((a as Record<string, unknown>)[key], (b as Record<string, unknown>)[key]));
 }

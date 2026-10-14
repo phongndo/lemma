@@ -361,7 +361,8 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
   const eventListeners = new Set<(event: RuntimeEvent) => void>(options.onEvent === undefined ? [] : [options.onEvent]);
   const setStatus = (next: ConnectionStatus) => {
     status = next;
-    for (const listener of statusListeners) listener(next);
+    // A listener that throws must not end the loop that sets the status, and with it every reconnect.
+    for (const listener of statusListeners) safely(listener, next, "Host status listener failed");
   };
   const emit = (event: RuntimeEvent) => {
     for (const listener of eventListeners) safely(listener, event, "Host event listener failed");
@@ -437,7 +438,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       for (;;) {
         const { generation } = status;
         try {
-          return await channels.call(target as string, payload);
+          return await runPromise(callOver(rpc, target, payload));
         } catch (error) {
           if (typeof target === "string" || target.repeatable !== true || !dropped(error) || tooLarge(error)) throw error;
           await connectedAfter(generation);

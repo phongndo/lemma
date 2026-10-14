@@ -1,7 +1,7 @@
 import { Cause, Effect, Layer, Schema, Stream } from "effect";
 import { expect, test } from "vitest";
 import { awaitable, definePlugin, Hooks, Registries } from "@lemma/core";
-import { emptyUsage, Llm, LlmError, LlmRequestHook } from "@lemma/llm";
+import { emptyUsage, Llm, LlmError, streamThroughHook } from "@lemma/llm";
 import type { AssistantMessage, ModelInfo, StreamEvent } from "@lemma/llm";
 import { ToolError, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import { llmConformance, streamProblems, toolsConformance } from "../src/providers.ts";
@@ -52,20 +52,16 @@ llmConformance("independent replacement", (scenario) => {
         models: () => Effect.succeed([info]),
         model: (ref) => (ref === info.ref ? Effect.succeed(info) : Effect.fail(new LlmError({ reason: "UnknownModel", message: ref }))),
         stream: (request) =>
-          Stream.unwrap(
-            hooks
-              .invoke(LlmRequestHook, request, () =>
-                Effect.succeed(
-                  (scenario === "abort" ? Stream.concat(Stream.fromIterable(events), Stream.never) : Stream.fromIterable(events)).pipe(
-                    Stream.ensuring(
-                      Effect.sync(() => {
-                        if (scenario === "abort") aborted = true;
-                      }),
-                    ),
-                  ),
+          streamThroughHook(hooks, request, () =>
+            Effect.succeed(
+              (scenario === "abort" ? Stream.concat(Stream.fromIterable(events), Stream.never) : Stream.fromIterable(events)).pipe(
+                Stream.ensuring(
+                  Effect.sync(() => {
+                    if (scenario === "abort") aborted = true;
+                  }),
                 ),
-              )
-              .pipe(Effect.mapError((error) => (error instanceof LlmError ? error : new LlmError({ reason: "UnknownProvider", message: String(error) })))),
+              ),
+            ),
           ),
         login: () => Effect.void,
         logout: () => Effect.void,

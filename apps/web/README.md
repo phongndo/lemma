@@ -140,7 +140,8 @@ shapes they meet the others in; this is the web half. A plugin requires and
 provides capabilities, and adds items to slots.
 The contracts declare them all: the runtime's in [`@lemma/web`](../../packages/web/src/index.ts), and each
 domain's in its own package (`@lemma/frame`, `@lemma/threads`, `@lemma/look`, …; a web half gets them all
-as `api.contracts`). The bundled plugins use nothing else:
+as `api.contracts`, and [`src/ui/contracts.ts`](src/ui/contracts.ts) lists them by module, which a plugin reads
+as `WebPlugins.contracts`). The bundled plugins use nothing else:
 
 - **Capabilities** are services with one provider, such as `Threads` or
   `Models`. The runtime's ([`@lemma/web`](../../packages/web/src/runtime.ts): `Client`,

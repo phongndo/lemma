@@ -75,9 +75,17 @@ const versionOf = async (file: string, folder: string | undefined): Promise<stri
 /**
  * What each file version made, by its versioned URL: a function export runs
  * once per version, so a reload sees the same definitions and leaves them
- * running, as it does a plain export (the module cache keeps that one).
+ * running, as it does a plain export (the module cache keeps that one). Each
+ * file keeps its few latest versions (`recent`), not only its newest: a reload
+ * the host refuses leaves an older one running, and the file put back to it
+ * (a copy keeping its time) must find the definitions running, not make new
+ * ones and restart it.
  */
 const made = new Map<string, unknown>();
+/** The versions of a file `made` keeps. */
+const KEPT_VERSIONS = 8;
+/** Each file's versioned URLs in `made`, the most recently loaded last. */
+const recent = new Map<string, string[]>();
 
 const isPlugin = (value: unknown): value is Plugin =>
   typeof value === "object" && value !== null && typeof (value as Plugin).id === "string" && typeof (value as Plugin).layer === "function";
@@ -129,6 +137,10 @@ export function loadLocalPlugins(dirs: readonly string[], context: LocalContext)
           const url = `${pathToFileURL(file).href}?${VERSION}=${await versionOf(file, folder)}`;
           const module = await import(url);
           if (!made.has(url)) made.set(url, typeof module.default === "function" && !isPlugin(module.default) ? module.default(context) : module.default);
+          const versions = (recent.get(file) ?? []).filter((version) => version !== url);
+          versions.push(url);
+          while (versions.length > KEPT_VERSIONS) made.delete(versions.shift()!);
+          recent.set(file, versions);
           const result = made.get(url);
           const exported: unknown[] = Array.isArray(result) ? result : [result];
           const found = exported.filter(isPlugin);

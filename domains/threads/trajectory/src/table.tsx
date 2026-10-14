@@ -197,11 +197,12 @@ export function createTable(view: View) {
                         if (!next.delete(turn().turnId)) next.add(turn().turnId);
                         return next;
                       });
+                    // A button fills the row, so the keyboard opens and closes the turn as the mouse does, and says which it is.
                     return (
-                      <tr class="trj-group" onClick={toggle}>
+                      <tr class="trj-group">
                         <td colSpan={columns().length}>
-                          <div class="trj-group-row">
-                            <span class="trj-caret" data-open={open()}>
+                          <button type="button" class="trj-group-row" aria-expanded={open()} onClick={toggle}>
+                            <span class="trj-caret" data-open={open()} aria-hidden="true">
                               ▶
                             </span>
                             <span class="trj-group-label">Turn {turn().index}</span>
@@ -211,7 +212,7 @@ export function createTable(view: View) {
                               {turn().endedAt === undefined ? " · running" : ` · ${formatDuration(turn().endedAt! - turn().startedAt)}`}
                               {turn().end !== undefined && turn().end!.reason !== "done" ? ` · ${turn().end!.reason}` : ""}
                             </span>
-                          </div>
+                          </button>
                         </td>
                       </tr>
                     );

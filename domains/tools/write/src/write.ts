@@ -1,8 +1,6 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
 import { Schema } from "effect";
 import type { Tool } from "@lemma/tools";
-import { fsMessage, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
+import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
 
 export const WriteInput = Schema.Struct({
   path: Schema.String.annotate({ description: "Path to the file to write (relative or absolute)" }),
@@ -21,9 +19,7 @@ export const writeTool: Tool<WriteInput> = {
       // Checked between steps rather than rejecting from a listener, so the lock is held until the write settles.
       throwIfAborted(signal);
       try {
-        await mkdir(dirname(absolute), { recursive: true });
-        throwIfAborted(signal);
-        await writeFile(absolute, content, "utf8");
+        await replaceFile(absolute, content);
       } catch (cause) {
         if (signal.aborted) throw cause;
         throw new Error(`Could not write ${path}: ${fsMessage(cause, path)}`);

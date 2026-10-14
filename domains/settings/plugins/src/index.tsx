@@ -1,6 +1,6 @@
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
-import { capabilityName, describeReload, hookChain, providerOf, recoverable, usersOf } from "@lemma/contracts";
+import { KERNEL_LABEL, RUNTIME_LABEL, capabilityName, describeReload, pluginWiring, recoverable, usersOf } from "@lemma/contracts";
 import type { PluginStatus } from "@lemma/contracts";
 import { tildePath } from "@lemma/web/format";
 import {
@@ -29,9 +29,6 @@ import styles from "./plugins-page.css?inline";
 
 const SECTION = SectionIds.plugins;
 const DEFAULT_TAB = "plugins.overview";
-const KIND_LABEL: Readonly<Record<PluginKind, string>> = { host: "host", web: "web app" };
-/** Who provides a runtime capability: the app itself, which no plugin replaces. */
-const RUNTIME_LABEL: Readonly<Record<PluginKind, string>> = { web: "the web app", host: "the host" };
 
 /** A tab's id in the `plugins.tabs` slot. */
 type Tab = string;
@@ -245,7 +242,7 @@ function Row(props: { inspector: Inspector; entry: KindedPlugin; nested?: boolea
           <Show when={sourceLabel(plugin())}>{(label) => <span class="tag">{label()}</span>}</Show>
         </span>
         <span class="inspector-kind muted" role="cell">
-          {props.entry.pair === undefined ? KIND_LABEL[kind()] : "host + web"}
+          {props.entry.pair === undefined ? KERNEL_LABEL[kind()] : "host + web"}
         </span>
         <span class={`inspector-state state-text-${shownState().state}`} role="cell">
           {describeState(shownState())}
@@ -370,9 +367,6 @@ function Overview(props: { inspector: Inspector; kind: PluginKind; plugin: Plugi
   );
 }
 
-/** The channels registry: what a plugin adds there it serves to clients, so it shows under Serves. */
-const CHANNELS = "lemma/channels";
-
 /**
  * How a plugin meets the others, in the five shapes every domain's contract offers: what it adds to registries and
  * slots, the hooks it intercepts, the events it observes, the capabilities it calls, and what it serves (capabilities,
@@ -380,26 +374,17 @@ const CHANNELS = "lemma/channels";
  */
 function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginStatus }) {
   const { inspector } = props;
-  const all = () => inspector.services[props.kind].list();
-  const plugin = () => props.plugin;
-  /** Where its handler runs among every plugin's handlers of that hook. */
-  const position = (hook: { readonly name: string; readonly phase?: string | undefined; readonly order: number }) => {
-    const chain = hookChain(all(), hook.name);
-    const index = chain.findIndex((entry) => entry.plugin === plugin().id && entry.phase === hook.phase && entry.order === hook.order);
-    return chain.length > 1 ? `${index + 1} of ${chain.length}` : "only handler";
-  };
-  // A part's slot (`part.*`) is how a web half takes over drawing a piece: an intercept, in the guide's shapes.
-  const isPart = (name: string) => name.startsWith("part.");
-  const added = () => (plugin().contributes ?? []).filter((registry) => registry.name !== CHANNELS && !isPart(registry.name));
-  const parts = () => (plugin().contributes ?? []).filter((registry) => isPart(registry.name));
-  const channels = () => (plugin().contributes ?? []).find((registry) => registry.name === CHANNELS)?.keys ?? [];
+  const wiring = createMemo(() => {
+    const service = inspector.services[props.kind];
+    return pluginWiring(service.list(), props.plugin, service.runtime());
+  });
   return (
     <div class="inspector-wiring">
       <section>
         <h3>Adds</h3>
-        <Show when={added().length > 0} fallback={<p class="muted small">Nothing to a registry or slot.</p>}>
+        <Show when={wiring().adds.length > 0} fallback={<p class="muted small">Nothing to a registry or slot.</p>}>
           <ul>
-            <For each={added()}>
+            <For each={wiring().adds}>
               {(registry) => (
                 <li>
                   <span class="capability">{registry.name}</span>
@@ -412,9 +397,9 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
       </section>
       <section>
         <h3>Intercepts</h3>
-        <Show when={plugin().hooks?.length || parts().length > 0} fallback={<p class="muted small">No hook or part.</p>}>
+        <Show when={wiring().hooks.length > 0 || wiring().parts.length > 0} fallback={<p class="muted small">No hook or part.</p>}>
           <ul>
-            <For each={parts()}>
+            <For each={wiring().parts}>
               {(part) => (
                 <li>
                   <span class="capability">{part.name}</span>
@@ -422,13 +407,13 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
                 </li>
               )}
             </For>
-            <For each={plugin().hooks}>
+            <For each={wiring().hooks}>
               {(hook) => (
                 <li>
                   <span class="capability">{hook.name}</span>
                   <span class="muted">
                     {" "}
-                    {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order} · {position(hook)}
+                    {hook.phase === undefined ? "" : `${hook.phase} · `}order {hook.order} · {hook.of > 1 ? `${hook.position} of ${hook.of}` : "only handler"}
                   </span>
                 </li>
               )}
@@ -438,27 +423,24 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
       </section>
       <section>
         <h3>Observes</h3>
-        <Show when={plugin().observes?.length} fallback={<p class="muted small">No event.</p>}>
+        <Show when={wiring().observes.length > 0} fallback={<p class="muted small">No event.</p>}>
           <ul>
-            <For each={plugin().observes}>{(event) => <li class="capability">{event}</li>}</For>
+            <For each={wiring().observes}>{(event) => <li class="capability">{event}</li>}</For>
           </ul>
         </Show>
       </section>
       <section>
         <h3>Calls</h3>
-        <Show when={plugin().requires.length > 0} fallback={<p class="muted small">No capability.</p>}>
+        <Show when={wiring().calls.length > 0} fallback={<p class="muted small">No capability.</p>}>
           <ul>
-            <For each={plugin().requires}>
-              {(key) => (
+            <For each={wiring().calls}>
+              {(call) => (
                 <li>
-                  <span class="capability" data-tip={key}>
-                    {capabilityName(key)}
+                  <span class="capability" data-tip={call.key}>
+                    {capabilityName(call.key)}
                   </span>
                   <span class="muted"> from </span>
-                  <Show
-                    when={providerOf(all(), key)}
-                    fallback={<span class="muted">{inspector.services[props.kind].runtime().includes(key) ? RUNTIME_LABEL[props.kind] : "no plugin"}</span>}
-                  >
+                  <Show when={call.providers[0]} fallback={<span class="muted">{call.runtime ? RUNTIME_LABEL[props.kind] : "no plugin"}</span>}>
                     {(provider) => <PluginLink inspector={inspector} kind={props.kind} id={provider().id} />}
                   </Show>
                 </li>
@@ -469,23 +451,23 @@ function Wiring(props: { inspector: Inspector; kind: PluginKind; plugin: PluginS
       </section>
       <section>
         <h3>Serves</h3>
-        <Show when={plugin().provides.length > 0 || channels().length > 0} fallback={<p class="muted small">Nothing; other plugins do not call it.</p>}>
+        <Show when={wiring().serves.length > 0 || wiring().channels.length > 0} fallback={<p class="muted small">Nothing; other plugins do not call it.</p>}>
           <ul>
-            <For each={plugin().provides}>
-              {(key) => (
+            <For each={wiring().serves}>
+              {(serve) => (
                 <li>
-                  <span class="capability" data-tip={key}>
-                    {capabilityName(key)}
+                  <span class="capability" data-tip={serve.key}>
+                    {capabilityName(serve.key)}
                   </span>
                   <span class="muted"> used by </span>
-                  <Links inspector={inspector} kind={props.kind} ids={usersOf(all(), key)} none="no plugin" />
+                  <Links inspector={inspector} kind={props.kind} ids={serve.users} none="no plugin" />
                 </li>
               )}
             </For>
-            <Show when={channels().length > 0}>
+            <Show when={wiring().channels.length > 0}>
               <li>
                 <span class="capability">channels</span>
-                <span class="muted"> {channels().join(", ")}</span>
+                <span class="muted"> {wiring().channels.join(", ")}</span>
               </li>
             </Show>
           </ul>
@@ -677,7 +659,7 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
           when={props.entry.pair !== undefined}
           fallback={
             <span class="muted small">
-              {KIND_LABEL[kind()]}
+              {KERNEL_LABEL[kind()]}
               {plugin().version === undefined ? "" : ` · ${plugin().version}`}
             </span>
           }
@@ -685,7 +667,7 @@ function Detail(props: { inspector: Inspector; entry: KindedPlugin }) {
           <Segmented
             label="Half"
             value={kind()}
-            options={halvesOf(props.entry).map((candidate) => ({ value: candidate.kind, label: KIND_LABEL[candidate.kind] }))}
+            options={halvesOf(props.entry).map((candidate) => ({ value: candidate.kind, label: KERNEL_LABEL[candidate.kind] }))}
             onChange={(next) => inspector.select({ kind: next, id: plugin().id })}
           />
         </Show>
@@ -778,11 +760,13 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
       if (selection !== undefined && narrow && selection.id !== previous?.id) split.scrollTop = 0;
       const shownFor = selection ?? (narrow ? previous : undefined);
       const entry = shownFor === undefined ? undefined : entries().find((candidate) => candidate.plugin.id === shownFor.id);
-      // Once drawn: its domain may open in this same change.
-      if (entry !== undefined)
-        requestAnimationFrame(() =>
-          table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" }),
-        );
+      if (entry === undefined) return;
+      // Once drawn: its domain may open in this same change. A frame not yet come when the selection moves again, or
+      // the table goes, is cancelled.
+      const frame = requestAnimationFrame(() =>
+        table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" }),
+      );
+      onCleanup(() => cancelAnimationFrame(frame));
     }),
   );
   // The keys move through every row that shows, a domain's too (which Enter or → opens), and select a plugin's.
@@ -1029,7 +1013,7 @@ export default defineWebPlugin({
               <button class="setting-row inspector-result" onClick={() => settings.open(SECTION, { plugin: target.id, kind })}>
                 <span class={`state-dot state-${target.state}`} />
                 <span class="plugin-id">{target.id}</span>
-                <span class="muted small">{KIND_LABEL[kind]}</span>
+                <span class="muted small">{KERNEL_LABEL[kind]}</span>
                 <span class="spacer" />
                 <span class={`status-pill state-${target.state}`}>{describeState(target)}</span>
               </button>

@@ -2,6 +2,15 @@
 
 What the model can call, and how calls run. Its contract is [`@lemma/tools`](contract/src/tools.ts), with helpers for tools that bound their output, touch files (`/files`), and test themselves (`/testing`).
 
+The file tools reach any path the host's user can, not only the project's:
+confining them is a policy, and `Guards` is where a plugin sets one
+([approvals](../../examples/approvals/README.md)). Writes replace a file whole
+or not at all, keeping its mode and writing through symlinks (`replaceFile`);
+a file another user owns, or in a directory the user cannot add to, is written
+in place. Output too long for a result goes to a temp file only the user can
+read, which the host keeps while it is written and then among its newest 100
+while it runs (`outputFile`).
+
 | Plugin                                     | Halves     | What it does                                                                        |
 | ------------------------------------------ | ---------- | ----------------------------------------------------------------------------------- |
 | [`tools.registry`](registry/README.md)     | host       | Lists and runs the tools: provides `ToolRunner`, checking each call with the guards |

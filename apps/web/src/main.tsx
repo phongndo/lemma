@@ -6,6 +6,7 @@ import { preloadPaint } from "@lemma/web/paint";
 import { takeToken } from "./lib/token.ts";
 import { bundled } from "./bundled.ts";
 import { boot } from "./ui/boot.tsx";
+import { contractModules } from "./ui/contracts.ts";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { SettingsRoute } from "@lemma/settings";
 import "./styles.css";
@@ -31,7 +32,7 @@ const start = async () => {
   const api = () => import("./ui/api.ts").then((module) => module.api);
   // The addresses links from outside the page name: the thread routes `lemma open` and deep links use, and settings.
   const appRoutes = [NewThreadRoute, ThreadRoute, SettingsRoute];
-  await boot({ host, token, bundled, appRoutes, api, element: document.getElementById("root")!, safe: params.has("safe") });
+  await boot({ host, token, bundled, appRoutes, api, contracts: contractModules, element: document.getElementById("root")!, safe: params.has("safe") });
 };
 
 start().catch((error) => {

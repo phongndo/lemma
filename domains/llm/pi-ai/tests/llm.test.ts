@@ -210,23 +210,63 @@ describe("stream", () => {
     expect(byRef.reason).toBe("UnknownModel");
   });
 
-  it("runs LlmRequestHook around the provider", async () => {
+  it("runs LlmRequestHook around the provider, which is asked the request as its caller made it", async () => {
+    const { faux, plugins } = setup();
+    let wrapped = 0;
+    const timer = definePlugin({
+      id: "timer",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (context) =>
+          context.on(LlmRequestHook, (request, next) =>
+            Effect.map(
+              next(request),
+              Stream.tap(() => Effect.sync(() => wrapped++)),
+            ),
+          ),
+        ),
+      ),
+    });
+    const contexts: string[] = [];
+    faux.setResponses([
+      (context) => {
+        contexts.push(JSON.stringify(context.messages));
+        return fauxAssistantMessage("answered");
+      },
+    ]);
+    const events = await runWith([...plugins, timer], collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })));
+    expect(events.at(-1)).toMatchObject({ type: "done", message: { content: [{ type: "text", text: "answered" }] } });
+    expect(wrapped).toBe(events.length);
+    expect(contexts).toEqual([JSON.stringify([user("hi")])]);
+  });
+
+  it("refuses a request a handler of LlmRequestHook changed, naming it, and sends nothing", async () => {
     const { faux, plugins } = setup();
     const router = definePlugin({
       id: "router",
       layer: Layer.effectDiscard(
-        Effect.gen(function* () {
-          const context = yield* PluginContext;
-          yield* context.on(LlmRequestHook, (request, next) =>
-            request.model === "alias/default" ? next(new LlmRequest({ ...request, model: "faux/plain" })) : next(request),
-          );
-        }),
+        Effect.flatMap(PluginContext, (context) => context.on(LlmRequestHook, (request, next) => next(new LlmRequest({ ...request, model: "faux/thinker" })))),
       ),
     });
-    faux.setResponses([fauxAssistantMessage("routed")]);
-    const events = await runWith([...plugins, router], collect(new LlmRequest({ model: "alias/default", messages: [user("hi")] })));
-    const last = events.at(-1)!;
-    expect(last.type === "done" && last.message.content).toEqual([{ type: "text", text: "routed" }]);
+    // Handing on an equal request is not a change.
+    const copier = definePlugin({
+      id: "copier",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (context) => context.on(LlmRequestHook, (request, next) => next(new LlmRequest(request))))),
+    });
+    let asked = 0;
+    faux.setResponses([
+      () => {
+        asked++;
+        return fauxAssistantMessage("routed");
+      },
+    ]);
+    const error = await runWith([...plugins, copier, router], Effect.flip(collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] }))));
+    expect(error).toBeInstanceOf(LlmError);
+    expect(error).toMatchObject({ reason: "Hook" });
+    expect(error.message).toContain("router changed the request");
+    expect(asked).toBe(0);
+    const events = await runWith([...plugins, copier], collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })));
+    expect(events.at(-1)).toMatchObject({ type: "done" });
+    expect(asked).toBe(1);
   });
 
   it("tells the user to log in when a provider has no credentials", async () => {

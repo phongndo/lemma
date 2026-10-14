@@ -53,7 +53,12 @@ export interface LlmFixture {
  */
 export function llmConformance(name: string, compose: (scenario: "reply" | "failure" | "abort") => LlmFixture | Promise<LlmFixture>): void {
   describe(`Llm contract: ${name}`, () => {
-    const run = async <A>(scenario: "reply" | "failure" | "abort", body: (service: typeof Llm.Service, request: LlmRequest) => Effect.Effect<A, unknown>) => {
+    const run = async <A>(
+      scenario: "reply" | "failure" | "abort",
+      body: (service: typeof Llm.Service, request: LlmRequest) => Effect.Effect<A, unknown>,
+      /** The suite's handler of `LlmRequestHook` hands `next` another model's request, as the contract forbids. */
+      changes = false,
+    ) => {
       const fixture = await compose(scenario);
       let hooked = 0;
       const observer = definePlugin({
@@ -62,7 +67,7 @@ export function llmConformance(name: string, compose: (scenario: "reply" | "fail
           yield* (yield* PluginContext).on(LlmRequestHook, (request, next) =>
             Effect.andThen(
               Effect.sync(() => hooked++),
-              next(request),
+              next(changes ? new LlmRequest({ ...request, model: "conformance/other" }) : request),
             ),
           );
         },
@@ -108,6 +113,11 @@ export function llmConformance(name: string, compose: (scenario: "reply" | "fail
       ).toBe("Hello there");
       expect(value.find((event) => event.type === "toolcall-end")).toMatchObject({ toolCall: { id: "call-1", name: "echo", arguments: { text: "x" } } });
       expect(hooked).toBe(1);
+    });
+    test("a request a handler of the request hook changed fails the stream Hook, naming the handler", async () => {
+      const { value, hooked } = await run("reply", (llm, request) => Effect.result(Stream.runCollect(llm.stream(request))), true);
+      expect(hooked).toBe(1);
+      expect(Result.isFailure(value) && value.failure).toMatchObject({ _tag: "LlmError", reason: "Hook", message: expect.stringContaining("llm.conformance") });
     });
     test("a provider failure is a terminal event with the partial response", async () => {
       const { value } = await run("failure", (llm, request) => Stream.runCollect(llm.stream(request)));

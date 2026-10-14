@@ -3,7 +3,7 @@ import { Context, Effect, Layer, Schema } from "effect";
 import { HOST_API, HostApi } from "@lemma/contracts";
 import { definePlugin } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { planComposition } from "../src/planner.ts";
+import { LEFT_OUT, planComposition } from "../src/planner.ts";
 import type { Plan, PlanInput } from "../src/planner.ts";
 
 class Llm extends Context.Service<Llm, string>()("test/Llm") {}
@@ -127,6 +127,8 @@ describe("planComposition", () => {
       expect.stringMatching(/^"agent" is left out: its config is invalid at maxSteps/),
       `"compaction" is not loaded: it needs "agent", and "agent" is left out`,
     ]);
+    // The warning for what is left out says so in its code, which a program matches rather than its message.
+    expect(planned.diagnostics.filter((diagnostic) => diagnostic.code === LEFT_OUT).map((diagnostic) => diagnostic.pluginId)).toEqual(["agent"]);
     expect(messages(planned, "error")).toEqual([]);
   });
 

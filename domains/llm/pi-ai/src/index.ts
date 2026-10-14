@@ -12,11 +12,11 @@ import {
   LlmProviderHeadersHook,
   LlmProviderResponse,
   LlmProviderStreamEvent,
-  LlmRequestHook,
   ModelsChanged,
   Providers,
   parseModelRef,
   serveLlm,
+  streamThroughHook,
 } from "@lemma/llm";
 import type { NoticePayload } from "@lemma/contracts";
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
@@ -462,13 +462,7 @@ export function makeLlmPlugin(options: Options = {}) {
           return model === undefined ? Effect.fail(unknownModel(ref)) : Effect.succeed(toModelInfo(model));
         },
 
-        stream: (request) =>
-          Stream.unwrap(
-            hooks.invoke(LlmRequestHook, request, terminal).pipe(
-              // Hook misuse and a closing core are defects here: the contract's error channel is LlmError.
-              Effect.catch((error) => (error._tag === "LlmError" ? Effect.fail(error) : Effect.die(error))),
-            ),
-          ),
+        stream: (request) => streamThroughHook(hooks, request, terminal),
 
         login: (providerId: string, type: AuthType) =>
           Effect.gen(function* () {

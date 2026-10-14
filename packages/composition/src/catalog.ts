@@ -94,33 +94,6 @@ export function resolveComposition(
   return { composition: { plugins }, haltedBy, locked, overridden };
 }
 
-/**
- * What a change to `ids` restarts: those plugins and, transitively, every
- * known plugin requiring a capability one of them provides, since the loader
- * reconstructs dependents along with what they depend on. A plugin offering
- * what the app provides (`provided`) restarts nothing through it: the app's
- * own service is what its dependents get.
- */
-export function restartedBy(
-  known: readonly KnownPlugin[],
-  ids: readonly string[],
-  { provided = [] }: { readonly provided?: readonly Capability[] } = {},
-): Set<string> {
-  const reserved = reservedKeys(provided);
-  const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));
-  const found = new Set(ids);
-  const queue = [...ids];
-  while (queue.length) {
-    const provides = new Set(byId.get(queue.shift()!)?.provides.flatMap((tag) => (reserved.has(tag.key) ? [] : [tag.key])) ?? []);
-    for (const { plugin } of known) {
-      if (found.has(plugin.id) || !plugin.requires.some((tag) => provides.has(tag.key))) continue;
-      found.add(plugin.id);
-      queue.push(plugin.id);
-    }
-  }
-  return found;
-}
-
 /** Each pinned plugin (to itself) and every plugin it needs, directly or through other plugins, to the pinned plugin's id. */
 function lockedBy(known: readonly KnownPlugin[], composition: Composition, pinned: readonly string[], reserved: ReadonlySet<string>): Map<string, string> {
   const byId = new Map(known.map((entry) => [entry.plugin.id, entry.plugin]));

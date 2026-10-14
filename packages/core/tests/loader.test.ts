@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
+import { Cause, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import { checkComposition, definePlugin, Diagnostic, Hook, Hooks, makeLoader, PluginContext } from "../src/index.ts";
-import type { Composition, LoaderOptions, Plugin, PluginSource } from "../src/index.ts";
+import type { Composition, LoaderOptions, Plugin, PluginSource, ReportedFault } from "../src/index.ts";
 import { run, waitFor } from "./support.ts";
 
 class Db extends Context.Service<Db, { readonly name: string; readonly generation: number }>()("test/Db") {}
@@ -113,6 +113,30 @@ describe("loader", () => {
         );
         expect(disabled.stopped).toEqual(["greeter"]);
         expect(yield* loader.core.run(Effect.flatMap(Hooks, (hooks) => hooks.invoke(Greet, "hi", Effect.succeed)))).toBe("hi");
+      }),
+    );
+  });
+
+  test("affected says what a change would start, restart, or stop, changing nothing", async () => {
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const { source } = fixtures(log);
+        const running = composition({ db: { config: { name: "main" } }, api: {}, bystander: {} });
+        const loader = yield* makeLoader({ source, composition: running });
+        const affected = (next: Composition, restart?: readonly string[]) =>
+          Effect.map(loader.affected(next, restart === undefined ? undefined : { restart }), (ids) => [...ids].sort());
+        // An equal config read again is no change; one that differs restarts its plugin's dependents too.
+        expect(yield* affected(composition({ db: { config: { name: "main" } }, api: {}, bystander: {} }))).toEqual([]);
+        expect(yield* affected(composition({ db: { config: { name: "replica" } }, api: {}, bystander: {} }))).toEqual(["api", "db"]);
+        expect(yield* affected(composition({ db: { config: { name: "main" } }, api: {}, greeter: { config: { suffix: "!" } } }))).toEqual([
+          "bystander",
+          "greeter",
+        ]);
+        expect(yield* affected(running, ["db"])).toEqual(["api", "db"]);
+        // It fails as applying would.
+        expect((yield* Effect.flip(affected(composition({ db: { config: { name: 5 } }, api: {} })))).diagnostics[0]?.pluginId).toBe("db");
+        expect(log).toEqual(["db+1", "api+1", "bystander+"]);
       }),
     );
   });
@@ -252,6 +276,42 @@ describe("loader", () => {
         const loader = yield* makeLoader({ source, composition: composition({ port: { config: { name: "a" } }, api: {} }) });
         yield* loader.apply(composition({ port: { config: { name: "b" } }, api: {} }));
         expect(log).toEqual(["port+1", "api+1", "api-1", "port-1", "port+2", "api+2"]);
+      }),
+    );
+  });
+
+  test("plugins an exclusive gap left down when the change failed each report a fault of their own", async () => {
+    await run(
+      Effect.gen(function* () {
+        const port = definePlugin({
+          id: "port",
+          provides: [Db],
+          exclusive: true,
+          config: Schema.Struct({ name: Schema.String }),
+          layer: (config) => Layer.effect(Db, config.name === "broken" ? Effect.die("cannot bind") : Effect.succeed({ name: config.name, generation: 1 })),
+        });
+        const { all } = fixtures([]);
+        const source: PluginSource = { resolve: (id) => Effect.succeed(id === "port" ? port : all[id]!) };
+        const loader = yield* makeLoader({ source, composition: composition({ port: { config: { name: "a" } }, api: {} }) });
+        const heard: ReportedFault[] = [];
+        yield* Effect.forkScoped(
+          Stream.runForEach(loader.core.faults, (fault) => Effect.sync(() => void heard.push(fault))),
+          { startImmediately: true },
+        );
+        yield* Effect.flip(loader.apply(composition({ port: { config: { name: "broken" } }, api: {} })));
+        const { plugins } = yield* loader.core.inspect;
+        expect(plugins.map((plugin) => [plugin.id, plugin.state, plugin.fault?.pluginId])).toEqual([
+          ["port", "failed", "port"],
+          ["api", "failed", "api"],
+        ]);
+        // Each fault is heard once, as its plugin's: api's is caused by port's failed replacement.
+        yield* waitFor(
+          Effect.sync(() => heard.length),
+          (length) => length === 2,
+        );
+        expect(heard.map((fault) => fault.pluginId)).toEqual(["port", "api"]);
+        expect(heard[1]).toBe(plugins[1]?.fault);
+        expect(Cause.pretty(heard[1]!.cause)).toContain("cannot bind");
       }),
     );
   });

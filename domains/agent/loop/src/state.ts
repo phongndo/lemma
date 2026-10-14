@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { Data, Effect, Option, Schema } from "effect";
 import { QueuedPrompt } from "@lemma/agent";
 import { AssistantMessage } from "@lemma/llm";
+import { TurnEndReason } from "@lemma/sessions";
 import { errorCode, readJsonFile, removeFile, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 
@@ -24,6 +25,8 @@ export const Journal = Schema.Struct({
       prompts: Schema.Array(QueuedPrompt),
       /** `cancel` was asked for: a resumed turn closes as cancelled instead of continuing. */
       cancelling: Schema.optional(Schema.Boolean),
+      /** It ended so, but its `turn-end` did not reach the log: a resumed turn closes so instead of continuing. */
+      closing: Schema.optional(Schema.Struct({ reason: TurnEndReason, error: Schema.optional(Schema.String) })),
       /**
        * The turn logs an `agent.started` event before it runs tool calls, so a call none names never ran. Absent for a
        * turn an older agent started, which did not: any of its cut-off calls may have run.

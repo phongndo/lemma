@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { chmod, lstat, mkdtemp, mkdir, readFile, readdir, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Effect } from "effect";
 import { parse as parseJsonc } from "jsonc-parser";
 import { isTrusted, loadComposition, patchConfig, projectPluginsDir, updateConfig } from "../src/config.ts";
@@ -306,6 +306,20 @@ describe("updateConfig", () => {
       await Effect.runPromise(update.restore);
       expect((await lstat(paths.userConfig)).isSymbolicLink()).toBe(true);
       await expect(stat(kept)).rejects.toThrow();
+    }));
+
+  test("restore fails, naming the file, when it cannot put the file back", () =>
+    withPaths(async (paths) => {
+      const update = await Effect.runPromise(updateConfig(paths.userConfig, { bash: { enabled: false } }));
+      // A file it made goes again, which its directory, made read-only, refuses.
+      await chmod(dirname(paths.userConfig), 0o500);
+      try {
+        const failed = await Effect.runPromise(Effect.flip(update.restore));
+        expect(failed.message.startsWith(`${paths.userConfig}: cannot put the config back`)).toBe(true);
+        expect(await readFile(paths.userConfig, "utf8")).toBe(update.text);
+      } finally {
+        await chmod(dirname(paths.userConfig), 0o700);
+      }
     }));
 
   test("refuses to patch a file it cannot parse", () =>

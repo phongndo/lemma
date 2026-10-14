@@ -1,16 +1,14 @@
 // Adapted from pi (MIT): packages/coding-agent/src/core/tools/output-accumulator.ts.
-import { randomBytes } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import type { WriteStream } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, tailBytes, truncateTail } from "@lemma/tools";
 import type { Truncation } from "@lemma/tools";
+import { outputFile } from "@lemma/tools/files";
 
 interface OutputSnapshot {
   readonly content: string;
   readonly truncation: Truncation;
-  /** Set once the output exceeded the limits: the complete raw output. */
+  /** Set once the output exceeded the limits, unless no file could be made: the complete raw output. */
   readonly fullOutputPath?: string;
 }
 
@@ -19,7 +17,7 @@ const bytes = (text: string) => Buffer.byteLength(text, "utf8");
 /**
  * Streaming command output in bounded memory. Keeps a decoded tail for the
  * model and, once the output exceeds the limits, spills everything to a temp
- * file the model can read or grep.
+ * file the model can read or grep (`outputFile`).
  */
 export class OutputAccumulator {
   private readonly maxLines = DEFAULT_MAX_LINES;
@@ -35,8 +33,12 @@ export class OutputAccumulator {
   private completedLines = 0;
   private lineOpen = false;
   private currentLineBytes = 0;
+  /** The size of the last line a newline ended. */
+  private endedLineBytes = 0;
   private finished = false;
   private file: string | undefined;
+  private release: (() => void) | undefined;
+  private spillFailed = false;
   private stream: WriteStream | undefined;
 
   private readonly prefix: string;
@@ -53,8 +55,9 @@ export class OutputAccumulator {
     return this.rawBytes > this.maxBytes || this.decodedBytes > this.maxBytes || this.totalLines > this.maxLines;
   }
 
+  /** The size of the last line, open or ended by a newline. */
   get lastLineBytes(): number {
-    return this.currentLineBytes;
+    return this.lineOpen ? this.currentLineBytes : this.endedLineBytes;
   }
 
   append(data: Buffer): void {
@@ -95,10 +98,14 @@ export class OutputAccumulator {
     const stream = this.stream;
     if (stream === undefined) return;
     this.stream = undefined;
-    await new Promise<void>((resolve, reject) => {
-      stream.once("error", reject);
-      stream.end(() => resolve());
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        stream.once("error", reject);
+        stream.end(() => resolve());
+      });
+    } finally {
+      this.release?.();
+    }
   }
 
   private decoded(text: string): void {
@@ -115,6 +122,9 @@ export class OutputAccumulator {
       return;
     }
     for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) this.completedLines++;
+    const previousNewline = lastNewline === 0 ? -1 : text.lastIndexOf("\n", lastNewline - 1);
+    this.endedLineBytes =
+      previousNewline === -1 ? this.currentLineBytes + bytes(text.slice(0, lastNewline)) : bytes(text.slice(previousNewline + 1, lastNewline));
     const rest = text.slice(lastNewline + 1);
     this.currentLineBytes = bytes(rest);
     this.lineOpen = rest.length > 0;
@@ -128,8 +138,15 @@ export class OutputAccumulator {
   }
 
   private spill(): void {
-    if (this.file !== undefined) return;
-    this.file = join(tmpdir(), `${this.prefix}-${randomBytes(8).toString("hex")}.log`);
+    if (this.file !== undefined || this.spillFailed) return;
+    try {
+      ({ path: this.file, release: this.release } = outputFile(this.prefix, "log"));
+    } catch {
+      // The tail is still returned; only the full output is lost.
+      this.spillFailed = true;
+      this.raw = [];
+      return;
+    }
     this.stream = createWriteStream(this.file);
     this.stream.on("error", () => undefined);
     for (const chunk of this.raw) this.stream.write(chunk);

@@ -1,8 +1,8 @@
-import { Cause, Context, Data, Deferred, Effect, Exit, Fiber, Result, Schema, Stream } from "effect";
+import { Cause, Context, Data, Deferred, Effect, Equal, Exit, Fiber, Result, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import { Event, Hook, Registry } from "@lemma/core";
-import type { Events } from "@lemma/core";
-import { defineChannel, eventFeed, ResultCredit, serveChannel } from "@lemma/contracts";
+import type { Events, HandlerStep, Hooks } from "@lemma/core";
+import { defineChannel, eventFeed, inChainOrder, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { InteractionOrigin } from "@lemma/contracts";
 
@@ -342,20 +342,61 @@ export type StreamEvent = typeof StreamEvent.Type;
 
 /**
  * Why an `Llm` operation failed: a request that cannot start (an unknown model
- * or provider), or a login, logout, or custom provider change that did not
+ * or provider, or one a handler of `LlmRequestHook` changed), or a login, logout, or custom provider change that did not
  * happen. A provider's failure to answer a request arrives as an `error` event
  * instead. Clients see `reason` as the error's code and `provider`, when it
  * names one, as its subject.
  */
 export class LlmError extends Data.TaggedError("LlmError")<{
-  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "Busy" | "InvalidProvider" | "SaveFailed";
+  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "Busy" | "InvalidProvider" | "SaveFailed" | "Hook";
   readonly message: string;
   readonly provider?: string;
   readonly cause?: unknown;
 }> {}
 
-/** Wraps every model request: logging, retries, routing, and gates can be plugins. The terminal is the provider. */
+/**
+ * Around every model request and its stream: a handler times or gates it, answers it itself, or wraps its stream
+ * (retries, logging), handing `next` the request it was given. It cannot change the request: what the model is asked
+ * is what its caller logged (the agent's `request` event, which `rebuildRequest` rebuilds), so a provider of `Llm`
+ * fails one a handler changed, sending nothing (`streamThroughHook`). A change to the request, routing it to another
+ * model among them, belongs where it is logged and credited: `AgentRequestHook` (`@lemma/agent`). The terminal is the
+ * provider.
+ */
 export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, LlmError>, LlmError>("lemma/llm.request");
+
+/**
+ * `LlmRequestHook` around `terminal`, as a provider of `Llm` runs it in `stream`: `terminal` gets the request as it was
+ * asked, and a handler that hands `next` another (one not `Equal`) fails the stream `Hook`, naming it. Hook misuse and a
+ * closing core are defects: the stream's error is `LlmError`.
+ */
+export const streamThroughHook = (
+  hooks: Context.Service.Shape<typeof Hooks>,
+  request: LlmRequest,
+  terminal: (request: LlmRequest) => Effect.Effect<Stream.Stream<StreamEvent, LlmError>, LlmError>,
+): Stream.Stream<StreamEvent, LlmError> =>
+  Stream.unwrap(
+    Effect.suspend(() => {
+      const steps: HandlerStep<LlmRequest, Stream.Stream<StreamEvent, LlmError>>[] = [];
+      const same = (a: LlmRequest, b: LlmRequest) => a === b || Equal.equals(a, b);
+      const changed = new LlmError({ reason: "Hook", message: "A handler of LlmRequestHook changed the request" });
+      return hooks
+        .invoke(LlmRequestHook, request, (handed) => (same(handed, request) ? terminal(request) : Effect.fail(changed)), {
+          onStep: (step) => void steps.push(step),
+        })
+        .pipe(
+          Effect.catch((error) => {
+            if (error !== changed) return error._tag === "LlmError" ? Effect.fail(error) : Effect.die(error);
+            const by = inChainOrder(steps).find((step) => step.next !== undefined && !same(step.next.input, step.input))?.pluginId ?? "unknown";
+            return Effect.fail(
+              new LlmError({
+                reason: "Hook",
+                message: `${by} changed the request in LlmRequestHook, which sends a request as its caller logged it: change it in AgentRequestHook`,
+              }),
+            );
+          }),
+        );
+    }),
+  );
 
 /** The HTTP headers a provider is about to send a request with (a `null` value drops a default one), and for what. */
 export interface ProviderHeaders {
@@ -413,7 +454,7 @@ export class Llm extends Context.Service<
     /** Every known model, or only those whose provider is configured. */
     readonly models: (options?: { readonly available?: boolean }) => Effect.Effect<readonly ModelInfo[]>;
     readonly model: (ref: ModelRef) => Effect.Effect<ModelInfo, LlmError>;
-    /** Runs `LlmRequestHook`; interrupting the stream aborts the provider request. */
+    /** Runs `LlmRequestHook` (`streamThroughHook`); interrupting the stream aborts the provider request. */
     readonly stream: (request: LlmRequest) => Stream.Stream<StreamEvent, LlmError>;
     /** Runs the provider's login flow through `Interaction` and stores the credential. */
     readonly login: (provider: string, type: AuthType) => Effect.Effect<void, LlmError>;
