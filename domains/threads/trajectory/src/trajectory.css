@@ -144,7 +144,7 @@
   position: absolute;
   height: 7px;
   min-width: 2px;
-  border-radius: calc(1px * var(--radius-scale));
+  border-radius: var(--radius-2xs);
   cursor: pointer;
   background: var(--text-3);
 }
@@ -228,7 +228,7 @@
   display: flex;
   flex-direction: column;
   padding: 4px 8px;
-  border-radius: calc(3px * var(--radius-scale));
+  border-radius: var(--radius-sm);
   white-space: nowrap;
   background: var(--bg-raised);
   box-shadow:
@@ -331,7 +331,7 @@
   flex: none;
   width: 8px;
   height: 8px;
-  border-radius: calc(2px * var(--radius-scale));
+  border-radius: var(--radius-2xs);
   display: inline-block;
 }
 
@@ -382,7 +382,7 @@
   position: absolute;
   top: 6px;
   height: 9px;
-  border-radius: calc(1px * var(--radius-scale));
+  border-radius: var(--radius-2xs);
   min-width: 2px;
   background: var(--text-3);
 }
@@ -462,7 +462,7 @@
   z-index: var(--z-menu);
   min-width: 200px;
   padding: 4px 0;
-  border-radius: calc(6px * var(--radius-scale));
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   box-shadow:
     var(--shadow-lg),
@@ -556,7 +556,7 @@
   width: 20px;
   height: 20px;
   border: 0;
-  border-radius: calc(3px * var(--radius-scale));
+  border-radius: var(--radius-xs);
   background: var(--bg);
   color: var(--text-3);
   opacity: 0;
@@ -688,7 +688,7 @@
   display: inline-block;
   margin: 0 4px 2px 0;
   padding: 0 5px;
-  border-radius: calc(4px * var(--radius-scale));
+  border-radius: var(--radius-xs);
   background: var(--bg-raised);
   color: var(--text);
   font-family: var(--font-mono);

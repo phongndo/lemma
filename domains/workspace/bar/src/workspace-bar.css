@@ -12,7 +12,7 @@
   padding: 20px 6px 4px;
   border: 1px solid var(--border);
   border-top: 0;
-  border-radius: 0 0 calc(16px * var(--radius-scale)) calc(16px * var(--radius-scale));
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
   background: var(--bg-sunk);
 }
 
@@ -24,7 +24,7 @@
   padding: 0 8px;
   max-width: 280px;
   border: 0;
-  border-radius: calc(7px * var(--radius-scale));
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
   font-size: calc(12.5px * var(--text-scale));
@@ -59,7 +59,7 @@ button.strip-chip:hover:not(:disabled),
   min-width: 16px;
   height: 16px;
   padding: 0 4px;
-  border-radius: calc(8px * var(--radius-scale));
+  border-radius: var(--radius-full);
   background: var(--warn-soft);
   color: var(--warn);
   font-size: calc(10.5px * var(--text-scale));

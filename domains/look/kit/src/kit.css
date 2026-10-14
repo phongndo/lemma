@@ -87,7 +87,7 @@
   .md code {
     font-size: 0.88em;
     padding: 0.1em 0.35em;
-    border-radius: calc(4px * var(--radius-scale));
+    border-radius: var(--radius-xs);
     background: var(--bg-active);
   }
 
@@ -167,7 +167,7 @@
     width: 24px;
     height: 24px;
     padding: 0;
-    border-radius: calc(5px * var(--radius-scale));
+    border-radius: var(--radius-sm);
     border: 1px solid var(--border);
     background: var(--bg-raised);
     color: var(--text-2);
@@ -222,7 +222,7 @@
     max-height: 76vh;
     display: flex;
     flex-direction: column;
-    border-radius: calc(12px * var(--radius-scale));
+    border-radius: var(--radius-lg);
     border: 1px solid var(--border-strong);
     background: var(--bg-raised);
     box-shadow: var(--shadow-lg);
@@ -337,7 +337,7 @@
     position: fixed;
     z-index: var(--z-menu);
     border: 1px solid var(--border-strong);
-    border-radius: calc(12px * var(--radius-scale));
+    border-radius: var(--radius-lg);
     background: var(--bg-raised);
     box-shadow: var(--shadow-popover);
     outline: none;
@@ -394,7 +394,7 @@
     height: 24px;
     padding: 0 10px;
     border: 0;
-    border-radius: calc(4px * var(--radius-scale));
+    border-radius: var(--radius-xs);
     background: transparent;
     color: var(--text-2);
     font-size: calc(12.5px * var(--text-scale));
@@ -418,7 +418,7 @@
     flex: none;
     padding: 0;
     border: 0;
-    border-radius: calc(10px * var(--radius-scale));
+    border-radius: var(--radius-full);
     background: var(--border-strong);
     transition: background-color 0.12s;
   }

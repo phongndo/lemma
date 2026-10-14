@@ -15,7 +15,7 @@
   z-index: var(--z-tooltip);
   max-width: 320px;
   padding: 5px 8px;
-  border-radius: calc(7px * var(--radius-scale));
+  border-radius: var(--radius-sm);
   pointer-events: none;
   background: var(--tooltip-bg);
   color: var(--tooltip-fg);

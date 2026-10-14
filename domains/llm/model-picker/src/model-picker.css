@@ -20,7 +20,7 @@
   padding: 0 10px;
   flex: none;
   border: 0;
-  border-radius: calc(8px * var(--radius-scale));
+  border-radius: var(--radius-full);
   background: transparent;
   color: var(--text-2);
   font-size: calc(13px * var(--text-scale));
@@ -121,7 +121,7 @@
   padding: 0;
   flex: none;
   border: 0;
-  border-radius: calc(7px * var(--radius-scale));
+  border-radius: var(--radius);
   background: transparent;
   color: var(--text-3);
   font-size: calc(12.5px * var(--text-scale));
@@ -255,7 +255,7 @@
   place-items: center;
   flex: none;
   border: 0;
-  border-radius: calc(7px * var(--radius-scale));
+  border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-3);
   opacity: 0;
