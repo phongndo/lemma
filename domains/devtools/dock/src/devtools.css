@@ -165,3 +165,9 @@
 .devtools-chain-place {
   width: 28px;
 }
+
+/* A table whose rows select by keys too (rows.ts): the selected row's colour shows where the focus is, so it needs no
+   ring of its own; a row focused but not selected keeps one. */
+.dt-table[role="grid"] tbody tr[aria-selected="true"]:focus-visible {
+  outline: none;
+}

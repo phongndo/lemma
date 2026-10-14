@@ -7,6 +7,7 @@ import { SectionIds, SettingsRoute } from "@lemma/settings";
 import type { ClientService, RouterService, Slot, SlotItem, SlotsService } from "@lemma/web";
 import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
 import { definedSlots, usePlugin } from "@lemma/web";
+import { rowKeys } from "./rows.ts";
 
 /** A kernel's name as a chip shows it: "Web app", "Host". */
 const kindLabel = (kind: Kind) => `${KERNEL_LABEL[kind].charAt(0).toUpperCase()}${KERNEL_LABEL[kind].slice(1)}`;
@@ -480,7 +481,7 @@ function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly Inspect
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Plugins">
+          <table class="dt-table" aria-label="Plugins" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
             <thead>
               <tr>
                 <th>Plugin</th>
@@ -503,7 +504,14 @@ function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly Inspect
                 }
               >
                 {(plugin) => (
-                  <tr data-row data-selected={current()?.id === plugin.id} onClick={() => setSelected(plugin.id)}>
+                  <tr
+                    data-row
+                    data-key={plugin.id}
+                    data-selected={current()?.id === plugin.id}
+                    aria-selected={current()?.id === plugin.id}
+                    tabindex="-1"
+                    onClick={() => setSelected(plugin.id)}
+                  >
                     <td class="dt-code">{plugin.id}</td>
                     <td class={stateClass(plugin.state, plugin.enabled)}>{stateLabel(plugin)}</td>
                     <td class="dt-muted">{plugin.source}</td>
@@ -565,7 +573,7 @@ function HooksPanel(props: { deps: Deps }) {
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label={what() === "hooks" ? "Hooks" : "Events"}>
+          <table class="dt-table" aria-label={what() === "hooks" ? "Hooks" : "Events"} role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
             <thead>
               <tr>
                 <th>{what() === "hooks" ? "Hook" : "Event"}</th>
@@ -585,7 +593,14 @@ function HooksPanel(props: { deps: Deps }) {
                 }
               >
                 {(row) => (
-                  <tr data-row data-selected={current()?.name === row.name} onClick={() => setSelected(row.name)}>
+                  <tr
+                    data-row
+                    data-key={row.name}
+                    data-selected={current()?.name === row.name}
+                    aria-selected={current()?.name === row.name}
+                    tabindex="-1"
+                    onClick={() => setSelected(row.name)}
+                  >
                     <td class="dt-code">{row.name}</td>
                     <td class="dt-num">{row.plugins.length}</td>
                     <td class="dt-muted">{row.plugins.join(what() === "hooks" ? " → " : ", ")}</td>
@@ -668,7 +683,7 @@ function RegistriesPanel(props: { deps: Deps }) {
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Registries">
+          <table class="dt-table" aria-label="Registries" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
             <thead>
               <tr>
                 <th>{kind() === "web" ? "Slot" : "Registry"}</th>
@@ -688,7 +703,14 @@ function RegistriesPanel(props: { deps: Deps }) {
                 }
               >
                 {(row) => (
-                  <tr data-row data-selected={current()?.name === row.name} onClick={() => setSelected(row.name)}>
+                  <tr
+                    data-row
+                    data-key={row.name}
+                    data-selected={current()?.name === row.name}
+                    aria-selected={current()?.name === row.name}
+                    tabindex="-1"
+                    onClick={() => setSelected(row.name)}
+                  >
                     <td class="dt-code">{row.name}</td>
                     <td class="dt-num">{row.items}</td>
                     <td class="dt-muted">{row.plugins.join(", ")}</td>
@@ -831,7 +853,7 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
       </div>
       <div class="dt-split">
         <div class="dt-main devtools-inspectors-list" tabindex="-1">
-          <table class="dt-table" aria-label="Inspectors">
+          <table class="dt-table" aria-label="Inspectors" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
             <thead>
               <tr>
                 <th>Inspector</th>
@@ -850,7 +872,14 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
                 }
               >
                 {(inspector) => (
-                  <tr data-row data-selected={current()?.id === inspector.id} onClick={() => setSelected(inspector.id)}>
+                  <tr
+                    data-row
+                    data-key={inspector.id}
+                    data-selected={current()?.id === inspector.id}
+                    aria-selected={current()?.id === inspector.id}
+                    tabindex="-1"
+                    onClick={() => setSelected(inspector.id)}
+                  >
                     <td>{inspector.title}</td>
                     <td>
                       <PluginName deps={deps} kind="host" id={inspector.source} />

@@ -14,6 +14,7 @@ import { clockTime } from "@lemma/web/format";
 import type { ClientService, RouterService, SlotItem } from "@lemma/web";
 import type { DevtoolsPanel } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
+import { rowKeys } from "./rows.ts";
 
 export const EVENTS_PANEL = "devtools.events";
 /** Lines kept, newest last; older ones drop off the top. */
@@ -234,7 +235,16 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
       </div>
       <div class="dt-split">
         <div class="dt-main" ref={scroller} onScroll={onScroll} tabindex="-1" role="log" aria-live="off">
-          <table class="dt-table log-table" aria-label="Events">
+          <table
+            class="dt-table log-table"
+            aria-label="Events"
+            role="grid"
+            tabindex="0"
+            onKeyDown={rowKeys(
+              (key) => setSelected(Number(key)),
+              () => setSelected(undefined),
+            )}
+          >
             <thead>
               <tr>
                 <th class="devtools-log-time">Time</th>
@@ -260,7 +270,14 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
                 {(line, index) => {
                   const before = () => shown()[index() - 1];
                   return (
-                    <tr data-row data-selected={selected() === line.seq} onClick={() => setSelected(selected() === line.seq ? undefined : line.seq)}>
+                    <tr
+                      data-row
+                      data-key={line.seq}
+                      data-selected={selected() === line.seq}
+                      aria-selected={selected() === line.seq}
+                      tabindex="-1"
+                      onClick={() => setSelected(selected() === line.seq ? undefined : line.seq)}
+                    >
                       <td class="dt-code dt-muted">{clockTime(line.at)}</td>
                       <td class="dt-code dt-muted dt-num">{before() === undefined ? "" : gap(line.at - before()!.at)}</td>
                       <td class="dt-code dt-muted">{streamOf(line)}</td>

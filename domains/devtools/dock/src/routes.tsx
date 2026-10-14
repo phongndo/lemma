@@ -5,6 +5,7 @@ import { PLUGIN_PANEL } from "@lemma/devtools/web";
 import { Pages } from "@lemma/web";
 import type { RouterService, SlotItem, SlotsService } from "@lemma/web";
 import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
+import { rowKeys } from "./rows.ts";
 
 const VERDICT_CLASS: Readonly<Record<RouteVerdict["outcome"], string>> = {
   shown: "dt-ok",
@@ -102,7 +103,7 @@ function Routes(props: { router: RouterService; slots: SlotsService; devtools: D
       <For each={snapshot().issues}>{(issue) => <div class="dt-banner">{issue.message}</div>}</For>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Routes">
+          <table class="dt-table" aria-label="Routes" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected)}>
             <thead>
               <tr>
                 <th>Path</th>
@@ -117,7 +118,14 @@ function Routes(props: { router: RouterService; slots: SlotsService; devtools: D
                 {(route) => {
                   const verdict = () => verdictOf(route.id);
                   return (
-                    <tr data-row data-selected={current()?.id === route.id} onClick={() => setSelected(route.id)}>
+                    <tr
+                      data-row
+                      data-key={route.id}
+                      data-selected={current()?.id === route.id}
+                      aria-selected={current()?.id === route.id}
+                      tabindex="-1"
+                      onClick={() => setSelected(route.id)}
+                    >
                       <td class="dt-code">{route.path}</td>
                       <td>{route.id}</td>
                       <td class={VERDICT_CLASS[verdict()?.outcome ?? "no-match"]}>{verdict()?.outcome ?? ""}</td>
@@ -239,7 +247,16 @@ function Navigation(props: { router: RouterService }) {
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Router journal">
+          <table
+            class="dt-table"
+            aria-label="Router journal"
+            role="grid"
+            tabindex="0"
+            onKeyDown={rowKeys(
+              (key) => setSelected(Number(key)),
+              () => setSelected(undefined),
+            )}
+          >
             <thead>
               <tr>
                 <th class="devtools-journal-time">Time</th>
@@ -261,7 +278,14 @@ function Navigation(props: { router: RouterService }) {
                 }
               >
                 {(event) => (
-                  <tr data-row data-selected={selected() === event.seq} onClick={() => setSelected(selected() === event.seq ? undefined : event.seq)}>
+                  <tr
+                    data-row
+                    data-key={event.seq}
+                    data-selected={selected() === event.seq}
+                    aria-selected={selected() === event.seq}
+                    tabindex="-1"
+                    onClick={() => setSelected(selected() === event.seq ? undefined : event.seq)}
+                  >
                     <td class="dt-code dt-muted">{clockTime(event.at)}</td>
                     <td class="dt-num dt-muted">{event.index}</td>
                     <td class={KIND_CLASS[event.kind]}>{event.kind}</td>

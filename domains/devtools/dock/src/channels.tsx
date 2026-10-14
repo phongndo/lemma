@@ -5,6 +5,7 @@ import type { ClientService, SlotItem } from "@lemma/web";
 import { PLUGIN_PANEL } from "@lemma/devtools/web";
 import type { DevtoolsPanel, DevtoolsService } from "@lemma/devtools/web";
 import { XIcon } from "@lemma/look";
+import { rowKeys } from "./rows.ts";
 
 /**
  * What host plugins serve (`Channels`): each call and stream, and the plugin
@@ -38,7 +39,7 @@ function ChannelsView(props: { devtools: DevtoolsService; channels: Accessor<rea
       </div>
       <div class="dt-split">
         <div class="dt-main" tabindex="-1">
-          <table class="dt-table" aria-label="Channels">
+          <table class="dt-table" aria-label="Channels" role="grid" tabindex="0" onKeyDown={rowKeys(setSelected, () => setSelected(undefined))}>
             <thead>
               <tr>
                 <th>Channel</th>
@@ -59,7 +60,14 @@ function ChannelsView(props: { devtools: DevtoolsService; channels: Accessor<rea
                 }
               >
                 {(channel) => (
-                  <tr data-row data-selected={selected() === channel.id} onClick={() => setSelected(selected() === channel.id ? undefined : channel.id)}>
+                  <tr
+                    data-row
+                    data-key={channel.id}
+                    data-selected={selected() === channel.id}
+                    aria-selected={selected() === channel.id}
+                    tabindex="-1"
+                    onClick={() => setSelected(selected() === channel.id ? undefined : channel.id)}
+                  >
                     <td class="dt-code">{channel.id}</td>
                     <td class="dt-muted">{channel.kind}</td>
                     <td>

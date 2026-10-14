@@ -78,6 +78,20 @@ export const devtools = async (): Promise<string> => {
   await page.click("[aria-label=Channels] td:text-is('sessions.log')");
   await page.waitForSelector("[aria-label='Channel details'] >> text=Session log");
   await page.waitForSelector("[aria-label=Channels] tr:has(td:text-is('agent.prompt')) button:text-is('agent.loop')");
+  // The keys work a panel's rows as the pointer does: ↓ selects the next, Escape closes the details, and from the
+  // table ↓ selects the first.
+  const channelKeys = await page.evaluate(() =>
+    [...document.querySelectorAll<HTMLElement>("[aria-label=Channels] tbody tr[data-key]")].map((row) => row.dataset.key!),
+  );
+  const afterLog = channelKeys[channelKeys.indexOf("sessions.log") + 1];
+  assert(afterLog !== undefined, "no channel follows sessions.log");
+  await page.press("[aria-label=Channels] tr[data-key='sessions.log']", "ArrowDown");
+  await page.waitForSelector(`[aria-label=Channels] tr[data-key='${afterLog}'][aria-selected=true]`);
+  await page.keyboard.press("Escape");
+  await page.waitForSelector("[aria-label='Channel details']", { state: "detached" });
+  await page.keyboard.press("ArrowDown");
+  await page.waitForSelector(`[aria-label=Channels] tr[data-key='${channelKeys[0]}'][aria-selected=true]`);
+  await page.waitForSelector("[aria-label='Channel details']");
   // A plugin's name anywhere opens it in the Plugins panel: everything it does, and what depends on it.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Routes");
   await page.click("[aria-label=Routes] tr:has(td:text-is('/threads/:id/:view?')) button:text-is('threads.view')");
