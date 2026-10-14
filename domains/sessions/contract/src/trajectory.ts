@@ -236,7 +236,6 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         if (turn === undefined) return;
         turn.endedAt = event.at;
         turn.end = { reason: data.reason, ...(data.error === undefined ? {} : { error: data.error }) };
-        if (data.usage !== undefined) turn.usage = addUsage(turn.usage, data.usage);
         const last = turn.steps.at(-1);
         if (last !== undefined) last.after = { kind: "end", reason: data.reason };
         return;

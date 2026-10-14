@@ -37,8 +37,7 @@
   font-size: calc(12px * var(--text-scale));
 }
 
-.mcp-target,
-.mcp-share {
+.mcp-target {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -47,10 +46,6 @@
 .mcp-target .integration-code {
   flex: 1;
   min-width: 0;
-}
-
-.mcp-share .integration-hint {
-  flex: 1;
 }
 
 .mcp-danger {

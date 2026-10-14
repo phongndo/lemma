@@ -2,8 +2,8 @@ import { defineSlot } from "@lemma/web";
 import type { Accessor, Component } from "solid-js";
 
 /*
- * Settings › Integrations lists what Lemma works with besides its own models: the coding agents a turn can run on
- * (the agent's harnesses) and the MCP servers that give it tools. Each kind of thing is an item of `IntegrationKinds`,
+ * Settings › Integrations lists what Lemma works with besides its own models, such as the MCP servers that give
+ * it tools. Each kind of thing is an item of `IntegrationKinds`,
  * added by the plugin that runs it, which draws its own details and its own way to add one; the page only lays them
  * out, one list beside the open item.
  */
@@ -48,7 +48,7 @@ export interface IntegrationAddProps {
   readonly cancel: () => void;
 }
 
-/** Something a kind offers to add in one pick: an agent Lemma knows, one from a registry. */
+/** Something a kind offers to add in one pick: a server Lemma knows, one from a registry. */
 export interface IntegrationOffer {
   /** Unique among the kind's offers. */
   readonly id: string;
@@ -96,7 +96,7 @@ export interface IntegrationKind {
    */
   readonly catalog?: () => IntegrationCatalog;
   /**
-   * Adding one it does not offer, after its offers in the Add dialog: the row's label (`Custom agent`), a few words
+   * Adding one it does not offer, after its offers in the Add dialog: the row's label (`Custom MCP server`), a few words
    * under it, and the form it opens.
    */
   readonly add?: { readonly label: string; readonly description?: string; readonly component: Component<IntegrationAddProps> };
@@ -124,7 +124,7 @@ export const DetailClasses = [
   "integration-buttons",
 ] as const;
 
-/** The kinds Settings › Integrations lists, in order: the agents' (order 10), the MCP servers' (20). The item's id is the kind's. */
+/** The kinds Settings › Integrations lists, in order: the MCP servers' (order 20) among them. The item's id is the kind's. */
 export const IntegrationKinds = defineSlot<IntegrationKind>("integrations.kinds");
 
 /**

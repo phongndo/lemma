@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { McpError, SERVER_NAME } from "@lemma/mcp";
-import type { McpLaunch, McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
+import type { McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
@@ -378,33 +378,7 @@ export class Servers {
       ...(connection?.instructions === undefined ? {} : { instructions: connection.instructions }),
       tools,
       ...(definition.source.kind === "file" && definition.file !== undefined ? { entry: definition.file } : {}),
-      harnesses: config.harnesses !== false,
     };
-  }
-
-  /** The enabled servers other coding agents are handed (`McpLaunches`), their variables read; one missing a variable is left out. */
-  launches(): McpLaunch[] {
-    return [...this.entries.values()].flatMap(({ definition }) => {
-      if (!enabled(definition) || definition.config.harnesses === false) return [];
-      let config;
-      try {
-        config = expandConfig(definition.config, this.options.env);
-      } catch {
-        return [];
-      }
-      return [
-        {
-          name: definition.name,
-          transport: config.url === undefined ? ("stdio" as const) : ("http" as const),
-          ...(config.command === undefined ? {} : { command: config.command }),
-          args: config.args ?? [],
-          env: config.env ?? {},
-          ...(config.cwd === undefined ? {} : { cwd: config.cwd }),
-          ...(config.url === undefined ? {} : { url: config.url }),
-          headers: config.headers ?? {},
-        },
-      ];
-    });
   }
 
   private publish(): void {

@@ -48,24 +48,13 @@ export const TurnEndReason = Schema.Literals(["done", "cancelled", "error", "max
 export type TurnEndReason = typeof TurnEndReason.Type;
 
 export const EventData = Schema.Union([
-  /**
-   * `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them.
-   * `harness` ran it (another coding agent: see the agent's `Harnesses`); absent, the agent's own loop.
-   */
-  Schema.Struct({
-    type: Schema.Literal("turn-start"),
-    turnId: Schema.String,
-    model: Schema.optional(Schema.String),
-    thinking: Schema.optional(ThinkingLevel),
-    harness: Schema.optional(Schema.String),
-  }),
+  /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
+  Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
   Schema.Struct({
     type: Schema.Literal("turn-end"),
     turnId: Schema.String,
     reason: TurnEndReason,
     error: Schema.optional(Schema.String),
-    /** What the turn cost that none of its messages carries: another harness's, which reports a turn's cost in all. */
-    usage: Schema.optional(Usage),
   }),
   Schema.Struct({ type: Schema.Literal("step-start"), turnId: Schema.String, stepId: Schema.String }),
   Schema.Struct({

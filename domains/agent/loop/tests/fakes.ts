@@ -5,7 +5,7 @@ import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
 import type { Tracer } from "effect";
 import { TestClock } from "effect/testing";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
-import type { Events, Plugin, Registries } from "@lemma/core";
+import type { Events, Plugin } from "@lemma/core";
 import { HostControl } from "@lemma/contracts";
 import { AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
 import { emptyUsage, Llm, LlmError } from "@lemma/llm";
@@ -241,7 +241,7 @@ export const runAgent = <A, E>(
     readonly requests: LlmRequest[];
     readonly rec: ReturnType<typeof recorder>;
     readonly executed: string[];
-  }) => Effect.Effect<A, E, Agent | Sessions | Events | Registries>,
+  }) => Effect.Effect<A, E, Agent | Sessions | Events>,
 ) => {
   const llm = fakeLlm(setup.scripts, setup.models);
   const rec = recorder();

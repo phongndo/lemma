@@ -1,34 +1,20 @@
 import * as os from "node:os";
 import { isDeepStrictEqual } from "node:util";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore, Stream } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
 import type { Context } from "effect";
 import { assert, awaitable, definePlugin, Events, Hooks, Registries } from "@lemma/core";
-import type { Contribution, HandlerStep } from "@lemma/core";
+import type { HandlerStep } from "@lemma/core";
 import { Channels, creditOf, HostControl, inChainOrder, Inspectors, InteractionOrigin, Paths, randomId, secureIds, withContribution } from "@lemma/contracts";
 import type { IdSource, ResultCredit } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { InProgress } from "@lemma/cli";
-import {
-  Agent,
-  AgentError,
-  AgentInputHook,
-  Harnesses,
-  HarnessStatusChanged,
-  NATIVE_HARNESS,
-  PromptSections,
-  QueueChanged,
-  serveAgent,
-  serveHarnesses,
-} from "@lemma/agent";
-import { Llm, ModelsChanged } from "@lemma/llm";
+import { Agent, AgentError, AgentInputHook, PromptSections, QueueChanged, serveAgent } from "@lemma/agent";
+import { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
 import { ToolOutput, ToolRunner } from "@lemma/tools";
 import type {
   AgentView,
-  Harness,
-  HarnessLogo,
-  HarnessStatus,
   PromptContent,
   PromptDecision,
   PromptInput,
@@ -51,17 +37,7 @@ import type { Journal, StateFiles } from "./state.ts";
 import { makeRequestIndex } from "./requests.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, runTurn } from "./turn.ts";
-import { closeHarnessTurn, runHarnessTurn } from "./harness.ts";
 import type { TurnOutcome, TurnResume } from "./turn.ts";
-
-/** Lemma's mark (`apps/web/public/favicon.svg`): an L and a square that together make a square. */
-const LEMMA_LOGO: HarnessLogo = {
-  viewBox: "-16 -16 664 664",
-  paths: [
-    { d: "M42 0H242A42 42 0 0 1 284 42V321A27 27 0 0 0 311 348H590A42 42 0 0 1 632 390V590A42 42 0 0 1 590 632H42A42 42 0 0 1 0 590V42A42 42 0 0 1 42 0Z" },
-    { d: "M356 0H590A42 42 0 0 1 632 42V276A42 42 0 0 1 590 318H356A42 42 0 0 1 314 276V42A42 42 0 0 1 356 0Z" },
-  ],
-};
 
 const AgentConfig = Schema.Struct({
   defaultModel: Schema.optional(Schema.String).annotate({ description: "<provider>/<model> for turns that name none. Absent: the first available model." }),
@@ -105,9 +81,6 @@ const AgentConfig = Schema.Struct({
     .annotate({
       description: "Turns running at once, across sessions; another waits for one to end.",
     }),
-  defaultHarness: Schema.optional(Schema.String).annotate({
-    description: `The harness for turns that name none (see Settings › Integrations). Absent: "${NATIVE_HARNESS}", the agent's own loop.`,
-  }),
 });
 type AgentConfig = typeof AgentConfig.Type;
 
@@ -161,13 +134,8 @@ interface Suspended {
  */
 type Resumption =
   | { readonly kind: "ended"; readonly reason: TurnEndReason }
-  /** Another harness ran it: it closes, as harnesses do not resume turns. */
-  | { readonly kind: "harness"; readonly harness: string }
-  | { readonly kind: "not-started"; readonly runner: Runner | undefined }
+  | { readonly kind: "not-started"; readonly model: ModelInfo | undefined }
   | { readonly kind: "open"; readonly plan: ResumePlan; readonly model: ModelInfo | undefined };
-
-/** What runs a turn: the agent's own loop on a model, or another harness. */
-type Runner = { readonly kind: "native"; readonly model: ModelInfo } | { readonly kind: "harness"; readonly harness: Contribution<Harness> };
 
 /** What taking up a restored session needs from the store and the models, read once (`prepare`). */
 interface Prepared {
@@ -267,18 +235,6 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       assert(instance * REVISIONS_PER_INSTANCE < Number.MAX_SAFE_INTEGER, `agent instance ${instance} has no room for its revisions`);
       const base = instance * REVISIONS_PER_INSTANCE;
       const registries = yield* Registries;
-      // Its own loop, listed among the harnesses; it runs its turns itself, so `run` is never asked.
-      yield* owner.add(Harnesses, {
-        id: NATIVE_HARNESS,
-        title: "Lemma",
-        description: "Lemma's own agent, on the model you pick",
-        logo: LEMMA_LOGO,
-        status: Effect.map(
-          Effect.suspend(() => llm.models({ available: true })),
-          (models): HarnessStatus => (models.length > 0 ? { state: "ready" } : { state: "unavailable", detail: "No model is available: connect a provider." }),
-        ),
-        run: () => Stream.die(new Error("The agent runs its own loop itself")),
-      });
       // Its own sections, beside any other plugin's.
       yield* owner.add(PromptSections, baseSection(config.systemPrompt), { phase: "base" });
       yield* owner.add(PromptSections, environmentSection(config.cli, options.platform ?? `${os.platform()} (${os.arch()})`), { phase: "environment" });
@@ -335,7 +291,6 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         sections,
         trace: owner.trace,
         newId,
-        source: owner.id,
       };
       const { events, hooks } = services;
       const settings = {
@@ -500,8 +455,6 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           const turnOptions = {
             ...(options.model === undefined ? {} : { model: options.model }),
             ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
-            ...(options.harness === undefined ? {} : { harness: options.harness }),
-            ...(options.access === undefined ? {} : { access: options.access }),
           };
           const item: Item = {
             prompt: {
@@ -596,69 +549,21 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         ...(info.title === undefined ? {} : { title: info.title }),
       });
 
-      /**
-       * What runs a new turn: the harness the last prompt names, else the configured default, else the agent's own
-       * loop on its model. Fails `NoHarness` or `NoModel` before anything is logged.
-       */
-      const runnerFor = (sessionId: string, options: TurnOptions | undefined): Effect.Effect<Runner, AgentError> =>
-        Effect.gen(function* () {
-          const id = options?.harness ?? config.defaultHarness ?? NATIVE_HARNESS;
-          if (id === NATIVE_HARNESS) return { kind: "native", model: yield* resolveModel(sessionId, options) };
-          const harness = (yield* registries.items(Harnesses)).find((contribution) => contribution.item.id === id);
-          if (harness === undefined) {
-            return yield* new AgentError({ sessionId, reason: "NoHarness", message: `No harness "${id}" is set up. Add it in Settings › Integrations.` });
-          }
-          const status = yield* harness.item.status.pipe(
-            Effect.catchCause((cause) => Effect.succeed<HarnessStatus>({ state: "unavailable", detail: Cause.pretty(cause) })),
-          );
-          if (status.state !== "ready") {
-            return yield* new AgentError({
-              sessionId,
-              reason: "NoHarness",
-              message: `${harness.item.title} cannot run turns now${status.detail === undefined ? "." : `: ${status.detail}`}`,
-            });
-          }
-          return { kind: "harness", harness };
-        });
-
-      /** A new turn: the prompts it starts with, the last one's options choosing what runs it. */
+      /** A new turn: the prompts it starts with, the last one's options choosing the model. */
       const fresh = (sessionId: string, entry: Running) =>
         Effect.gen(function* () {
           // Cancelled while it waited for a slot, it never runs, as a queued prompt withdrawn.
           if (yield* begin(entry)) return "cancelled" as const;
           const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
-          return yield* begun(sessionId, entry, info, yield* runnerFor(sessionId, entry.prompts.at(-1)?.options));
+          return yield* begun(sessionId, entry, info, yield* resolveModel(sessionId, entry.prompts.at(-1)?.options));
         });
-      /** A new turn, begun, on `runner`. */
-      const begun = (sessionId: string, entry: Running, info: SessionInfo, runner: Runner) => {
-        const prompts = entry.prompts.map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) }));
-        if (runner.kind === "harness") {
-          const access = entry.prompts.at(-1)?.options?.access;
-          const model = entry.prompts.at(-1)?.options?.model;
-          return runHarnessTurn(
-            { sessions, events, registries, newId },
-            {
-              sessionId,
-              turnId: entry.turnId,
-              cwd: info.cwd,
-              harness: runner.harness,
-              prompts,
-              ...(access === undefined ? {} : { access }),
-              ...(model === undefined ? {} : { model }),
-              signal: entry.controller.signal,
-              live: entry.live,
-              logged: loggedIn(sessionId, entry.turnId),
-              suspended: () => suspending,
-              kept: kept(sessionId),
-              ...(info.title === undefined ? {} : { title: info.title }),
-            },
-          );
-        }
+      /** A new turn, begun, on `model`. */
+      const begun = (sessionId: string, entry: Running, info: SessionInfo, model: ModelInfo) => {
         const thinking = entry.prompts.at(-1)?.options?.thinking;
         return runTurn(services, settings, {
           ...turnInput(sessionId, entry, info),
-          model: runner.model,
-          prompts,
+          model,
+          prompts: entry.prompts.map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
           ...(thinking === undefined ? {} : { thinking }),
         });
       };
@@ -679,11 +584,9 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           const cancelling = yield* begin(entry);
           // Cut off before its first event: cancelled meanwhile, it never runs. (It has no model only if cancelled.)
           if (resumption.kind === "not-started") {
-            return cancelling || resumption.runner === undefined ? ("cancelled" as const) : yield* begun(sessionId, entry, info, resumption.runner);
+            return cancelling || resumption.model === undefined ? ("cancelled" as const) : yield* begun(sessionId, entry, info, resumption.model);
           }
           if (resumption.kind === "ended") return resumption.reason;
-          if (resumption.kind === "harness")
-            return yield* closeHarnessTurn({ sessions, events }, { sessionId, turnId: entry.turnId, harness: resumption.harness, cancelling });
           const { plan, model } = resumption;
           const restored = yield* readLive(files, sessionId);
           const turnResume: TurnResume = {
@@ -1198,19 +1101,11 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           if (suspended === undefined) return { info };
           const resume = planResume(log, suspended.turnId, suspended.marked);
           if (resume.kind === "ended") return { info, turn: { suspended, resumption: resume } };
-          const begun = log.find((event) => event.data.type === "turn-start" && event.data.turnId === suspended.turnId);
-          const harness = begun?.data.type === "turn-start" ? begun.data.harness : undefined;
-          if (harness !== undefined && harness !== NATIVE_HARNESS) return { info, turn: { suspended, resumption: { kind: "harness", harness } } };
           // Being cancelled, it only closes, so no model need resolve.
-          if (suspended.cancelling) {
-            return {
-              info,
-              turn: { suspended, resumption: resume.kind === "not-started" ? { kind: "not-started", runner: undefined } : { ...resume, model: undefined } },
-            };
-          }
+          if (suspended.cancelling) return { info, turn: { suspended, resumption: { ...resume, model: undefined } } };
           const resumption: Resumption =
             resume.kind === "not-started"
-              ? { kind: "not-started", runner: yield* runnerFor(sessionId, suspended.prompts.at(-1)?.prompt.options) }
+              ? { kind: "not-started", model: yield* resolveModel(sessionId, suspended.prompts.at(-1)?.prompt.options) }
               : {
                   kind: "open",
                   plan: resume.plan,
@@ -1312,8 +1207,6 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       // that a call into the store is made under (not `admit`). One deleted while no instance listened (between two,
       // say) is found gone when the next starts.
       yield* owner.observe(SessionRemoved, ({ sessionId }) => removed(sessionId), { overflow: "suspend" });
-      // Whether its own loop can run turns follows whether any model is available.
-      yield* owner.observe(ModelsChanged, () => events.publish(HarnessStatusChanged, { id: NATIVE_HARNESS }));
 
       // What the last instance left: each session's journal becomes its state, as it was, its turn suspended.
       const journals = yield* readJournals(files);
@@ -1398,7 +1291,6 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       };
       // How clients reach it: the transport serves what `Channels` holds.
       for (const channel of serveAgent(agent, events)) yield* owner.add(Channels, channel);
-      for (const channel of serveHarnesses(registries, events)) yield* owner.add(Channels, channel);
       return { agent };
     },
   });
