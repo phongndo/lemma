@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/actions": "workspace:*",
     "@lemma/client": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",

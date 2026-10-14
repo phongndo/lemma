@@ -159,6 +159,60 @@
   position: relative;
 }
 
+/* Find in the chat (`FindBar`): a bar over the view's top right, and the matches it highlights. */
+.chat-view {
+  --find-match: color-mix(in srgb, var(--warn) 28%, transparent);
+  --find-current: color-mix(in srgb, var(--warn) 70%, transparent);
+}
+
+.chat-find {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: min(380px, calc(100% - 32px));
+  padding: 3px 4px 3px 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+  color: var(--text-3);
+}
+
+.chat-find-input {
+  flex: 1;
+  min-width: 0;
+  height: 26px;
+  padding: 0 6px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  outline: none;
+}
+
+.chat-find-count {
+  flex: none;
+  padding: 0 6px;
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.chat-find-previous svg {
+  transform: rotate(180deg);
+}
+
+::highlight(chat-find) {
+  background-color: var(--find-match);
+}
+
+::highlight(chat-find-current) {
+  background-color: var(--find-current);
+}
+
 /* The prompt rail (`PromptRail`), over the chat view, for a pointer that can aim. */
 .prompt-rail {
   position: absolute;
