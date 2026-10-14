@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
 import { KERNEL_LABEL, RUNTIME_LABEL, capabilityName, describeReload, pluginWiring, recoverable, usersOf } from "@lemma/contracts";
 import type { PluginStatus } from "@lemma/contracts";
@@ -760,11 +760,13 @@ function PluginsInspector(props: { inspector: Inspector; filter: () => string; s
       if (selection !== undefined && narrow && selection.id !== previous?.id) split.scrollTop = 0;
       const shownFor = selection ?? (narrow ? previous : undefined);
       const entry = shownFor === undefined ? undefined : entries().find((candidate) => candidate.plugin.id === shownFor.id);
-      // Once drawn: its domain may open in this same change.
-      if (entry !== undefined)
-        requestAnimationFrame(() =>
-          table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" }),
-        );
+      if (entry === undefined) return;
+      // Once drawn: its domain may open in this same change. A frame not yet come when the selection moves again, or
+      // the table goes, is cancelled.
+      const frame = requestAnimationFrame(() =>
+        table?.querySelector(`[data-key="${CSS.escape(`${entry.kind}:${entry.plugin.id}`)}"]`)?.scrollIntoView({ block: "nearest" }),
+      );
+      onCleanup(() => cancelAnimationFrame(frame));
     }),
   );
   // The keys move through every row that shows, a domain's too (which Enter or → opens), and select a plugin's.
