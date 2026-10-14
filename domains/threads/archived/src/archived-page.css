@@ -22,7 +22,3 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.archived-delete {
-  color: var(--err);
-}
