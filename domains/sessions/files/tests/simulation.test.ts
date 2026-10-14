@@ -451,7 +451,9 @@ describe("session log simulation", () => {
       ),
       {
         numRuns: runs,
-        ...(process.env.LEMMA_SIM_SEED === undefined ? {} : { seed: Number(process.env.LEMMA_SIM_SEED) }),
+        // Seeded, so a run's coverage below is the same every time: unseeded, 100 runs sometimes reach no torn tail.
+        // The nightly run explores, a seed per run.
+        seed: Number(process.env.LEMMA_SIM_SEED ?? 1),
         ...(process.env.LEMMA_SIM_PATH === undefined ? {} : { path: process.env.LEMMA_SIM_PATH }),
       },
     );
