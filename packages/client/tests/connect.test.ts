@@ -99,6 +99,36 @@ describe("connect", () => {
     expect(subscriptions).toBe(2);
   });
 
+  test("reconnects though a status listener throws", async () => {
+    let subscriptions = 0;
+    const webSocket = Layer.succeed(
+      Socket.WebSocketConstructor,
+      () =>
+        new ScriptedWebSocket((request, reply) => {
+          if (request._tag !== "Request") return;
+          if (request.tag === "Host.Info") reply({ _tag: "Exit", requestId: request.id, exit: { _tag: "Success", value: info } }, 20);
+          else if (request.tag === "Host.Events") {
+            reply({ _tag: "Chunk", requestId: request.id, values: [{ type: "subscribed" }] });
+            if (++subscriptions === 1) reply({ _tag: "Exit", requestId: request.id, exit: { _tag: "Failure", cause: [{ _tag: "Die", defect: "dropped" }] } });
+          }
+        }) as unknown as globalThis.WebSocket,
+    );
+    const host = await connect({ url: "http://host.invalid", backoff: () => 1, webSocket });
+    const errors: unknown[] = [];
+    const logged = console.error;
+    console.error = (...args: unknown[]) => void errors.push(args);
+    try {
+      // Throws on every status but the one it is added with: the dropped subscription's, and the reconnect's.
+      host.onStatus((status) => {
+        if (status.attempts > 0 || status.generation > 0) throw new Error("listener broke");
+      });
+      expect((await untilConnected(host)).at(-1)?.state).toBe("connected");
+    } finally {
+      console.error = logged;
+    }
+    expect(errors.length).toBeGreaterThan(0);
+  });
+
   test("is not connected by a subscription that never says it is subscribed", async () => {
     let subscriptions = 0;
     const webSocket = Layer.succeed(
