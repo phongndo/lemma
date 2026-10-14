@@ -5,7 +5,7 @@
   height: 28px;
   padding: 0 8px;
   flex: none;
-  border-radius: calc(8px * var(--radius-scale));
+  border-radius: var(--radius-full);
   color: var(--text-3);
   font-size: calc(12px * var(--text-scale));
   font-variant-numeric: tabular-nums;

@@ -9,7 +9,7 @@
   min-width: 14px;
   height: 14px;
   padding: 0 3px;
-  border-radius: calc(7px * var(--radius-scale));
+  border-radius: var(--radius-full);
   background: var(--err);
   color: var(--err-fg);
   font-size: calc(10px * var(--text-scale));

@@ -40,7 +40,7 @@
   align-items: center;
   height: 18px;
   padding: 0 6px;
-  border-radius: calc(9px * var(--radius-scale));
+  border-radius: var(--radius-full);
   background: var(--bg-active);
   color: var(--text-2);
   font-size: calc(11px * var(--text-scale));
@@ -176,7 +176,7 @@
   width: min(380px, calc(100% - 32px));
   padding: 3px 4px 3px 10px;
   border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   box-shadow: var(--shadow);
   color: var(--text-3);
@@ -199,6 +199,10 @@
   font-size: calc(12px * var(--text-scale));
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+.chat-find .icon-button {
+  border-radius: var(--radius);
 }
 
 .chat-find-previous svg {
@@ -278,7 +282,7 @@
   height: 2px;
   padding: 0;
   border: 0;
-  border-radius: calc(1px * var(--radius-scale));
+  border-radius: var(--radius-2xs);
   background: color-mix(in srgb, var(--text-3) 55%, transparent);
   transform: translateY(-50%) scaleX(var(--scale));
   transform-origin: left;
@@ -318,7 +322,7 @@
   height: 20px;
   padding: 0;
   border: 0;
-  border-radius: calc(6px * var(--radius-scale));
+  border-radius: var(--radius-sm);
   background: none;
   color: var(--text-2);
   opacity: 0;
@@ -373,7 +377,7 @@
   width: 320px;
   padding: 12px;
   border: 1px solid var(--border-strong);
-  border-radius: calc(12px * var(--radius-scale));
+  border-radius: var(--radius-lg);
   background: var(--bg-raised);
   box-shadow: var(--shadow);
   font-size: calc(14px * var(--text-scale));
@@ -420,7 +424,7 @@
   align-self: flex-end;
   max-width: 88%;
   padding: 9px 14px;
-  border-radius: calc(14px * var(--radius-scale)) calc(14px * var(--radius-scale)) calc(4px * var(--radius-scale)) calc(14px * var(--radius-scale));
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg);
   background: var(--bg-active);
 }
 

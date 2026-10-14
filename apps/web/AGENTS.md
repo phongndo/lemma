@@ -80,10 +80,13 @@ replace it.
 - **The look is tokens all through**, so a theme or a setting reaches every
   plugin. Draw with the foundation's tokens; a color of a plugin's own (a
   shadow, a palette) is a token declared in its stylesheet, its default the
-  look it has. Sizes are scaled: `calc(12px * var(--text-scale))` for a font,
-  `calc(6px * var(--radius-scale))` for a corner. In a stylesheet,
-  `check-boundaries` fails a color written outside a token's declaration, or
-  a font size, line height, or radius with px not scaled so.
+  look it has. A font size is scaled, `calc(12px * var(--text-scale))`, and a corner is
+  one of the foundation's `--radius-*` tokens, chosen by what it rounds (they
+  are listed with their roles in `src/styles.css`). A shape inside another,
+  near its edge, takes the outer radius less the gap; shapes that touch are one
+  shape. In a stylesheet, `check-boundaries` fails a color written outside a
+  token's declaration, a font size or line height in px not scaled so, or a
+  radius that is not a `--radius-*` token, `50%`, `0`, or `inherit`.
 - **Utilities** (`src/tailwind.css`) are Tailwind's, prefixed `tw:` and named
   for the tokens: the token `--x` is the value `x`, as in `tw:bg-bg-raised`
   and `tw:text-text-2`. Use them for a plugin's own layout and spacing, as
