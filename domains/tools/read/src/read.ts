@@ -43,7 +43,7 @@ async function readHead(file: string, length: number): Promise<Uint8Array> {
 
 export const readTool: Tool<ReadInput> = {
   name: "read",
-  description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete.`,
+  description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Use it to examine files instead of cat or sed.`,
   input: ReadInput,
   // It only reads: cut off by a host restart, it runs again, and reads the model asks for together run together.
   replay: "safe",

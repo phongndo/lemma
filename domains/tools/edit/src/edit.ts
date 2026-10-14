@@ -144,7 +144,7 @@ export function applyEdits(content: string, edits: readonly Edit[], display: str
 export const editTool: Tool<EditInput> = {
   name: "edit",
   description:
-    "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes.",
+    "Edit a single file using exact text replacement. Every edits[].oldText must match a unique, non-overlapping region of the original file. If two changes affect the same block or nearby lines, merge them into one edit instead of emitting overlapping edits. Do not include large unchanged regions just to connect distant changes. Change several places in one file with one call, an entry in edits[] per place, each oldText as small as it can be while unique.",
   input: EditInput,
   execute: async ({ path, edits }, { cwd, signal }) => {
     if (edits.length === 0) throw new Error("Edit tool input is invalid. edits must contain at least one replacement.");
