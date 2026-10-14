@@ -19,6 +19,9 @@ describe("loadLocalPlugins", () => {
     try {
       await writeFile(join(dir, "plain.js"), `export default { id: "plain", layer: () => undefined };\n`);
       await writeFile(join(dir, "made.js"), `export default ({ bundled }) => ({ ...bundled.base, id: "made" });\n`);
+      // A whole second, so the file's time can be put back exactly.
+      const written = new Date(Math.floor(Date.now() / 1000) * 1000);
+      await utimes(join(dir, "made.js"), written, written);
       const context = { bundled: { base: fake("base") } };
       const load = async () => {
         const loaded = await Effect.runPromise(loadLocalPlugins([dir], context));
@@ -33,7 +36,11 @@ describe("loadLocalPlugins", () => {
       expect(first.made?.layer).toBe(context.bundled.base.layer);
       // An edited file is a new module, and its plugins new definitions.
       await utimes(join(dir, "made.js"), new Date(), new Date(Date.now() + 5_000));
-      expect((await load()).made).not.toBe(first.made);
+      const edited = (await load()).made;
+      expect(edited).not.toBe(first.made);
+      // Put back to the version before (as a refused reload leaves running), it finds the definitions it made then.
+      await utimes(join(dir, "made.js"), written, written);
+      expect((await load()).made).toBe(first.made);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

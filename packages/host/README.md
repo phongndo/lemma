@@ -22,7 +22,11 @@ too. The modules' doc comments give their contracts: `loadComposition` never
 fails and reports bad files as diagnostics; `patchConfig` and `updateConfig`
 edit rows in place, keeping comments, and write the file whole (through a
 link, to the file it points to); `compositionInfo`'s id is stable across
-processes, because session `request` events record it.
+processes, because session `request` events record it. `loadLocalPlugins`
+imports each edit of a plugin file as a new module and keeps what only its
+last few versions made, so a file put back to the version still running
+leaves it running, but Node.js's module cache, which no API evicts, keeps every
+version imported, so a long run of edits grows the host by each one's code.
 
 ## The host runtime
 
