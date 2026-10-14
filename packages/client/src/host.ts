@@ -438,7 +438,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
       for (;;) {
         const { generation } = status;
         try {
-          return await channels.call(target, payload);
+          return await runPromise(callOver(rpc, target, payload));
         } catch (error) {
           if (typeof target === "string" || target.repeatable !== true || !dropped(error) || tooLarge(error)) throw error;
           await connectedAfter(generation);
