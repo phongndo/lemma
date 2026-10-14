@@ -40,30 +40,36 @@ export const rail = async (): Promise<string> => {
   const ticks = page.locator("nav[aria-label='Prompts'] button.prompt-tick");
   assert.equal(await ticks.count(), 3, "the prompts landmark does not have a tick button per prompt");
   // The strip is level with the middle of the whole pane, the composer included, not just the chat above it.
-  const railPlace = () =>
+  const offCenter = await page.evaluate(() => {
+    const strip = document.querySelector(".prompt-strip")!.getBoundingClientRect();
+    const head = document.querySelector(".main-head")!.getBoundingClientRect();
+    const main = document.querySelector(".main")!.getBoundingClientRect();
+    return Math.abs(strip.top + strip.height / 2 - (head.bottom + main.bottom) / 2);
+  });
+  assert.ok(offCenter <= 1, "the prompt rail is not level with the middle of the pane");
+  // The transcript passes under the composer, and at its end, however tall the composer grows, the last turn clears it.
+  const clearance = () =>
     page.evaluate(() => {
-      const strip = document.querySelector(".prompt-strip")!.getBoundingClientRect();
-      const head = document.querySelector(".main-head")!.getBoundingClientRect();
-      const main = document.querySelector(".main")!.getBoundingClientRect();
-      return {
-        offCenter: Math.abs(strip.top + strip.height / 2 - (head.bottom + main.bottom) / 2),
-        stepsOut:
-          document.querySelector(".prompt-step.next")!.getBoundingClientRect().bottom - document.querySelector(".chat-view")!.getBoundingClientRect().bottom,
-      };
+      const composer = document.querySelector(".composer")!.getBoundingClientRect();
+      const scroller = document.querySelector(".chat-view .scroller")!.getBoundingClientRect();
+      const turns = document.querySelectorAll(".turn");
+      return { under: scroller.bottom - composer.top, clear: composer.top - turns[turns.length - 1]!.getBoundingClientRect().bottom };
     });
-  assert.ok((await railPlace()).offCenter <= 1, "the prompt rail is not level with the middle of the pane");
-  // With a composer too tall for that, it stops while its steps still fit in the chat view (once it has moved for it).
-  const short = await page.evaluate(() => (document.querySelector(".prompt-rail") as HTMLElement).style.getPropertyValue("--below"));
+  const short = await clearance();
+  assert.ok(short.under > 0 && short.clear >= 0, `the transcript does not pass under the composer and clear it at its end: ${JSON.stringify(short)}`);
   await page.fill("textarea", Array.from({ length: 40 }, (_, line) => `line ${line}`).join("\n"));
   await page
-    .waitForFunction((short) => (document.querySelector(".prompt-rail") as HTMLElement).style.getPropertyValue("--below") !== short, short, { timeout: 5_000 })
-    .catch(() => assert.fail("the prompt rail did not move for a taller composer"));
-  assert.ok((await railPlace()).stepsOut <= 0, "a tall composer pushes the prompt rail's steps out of the chat view");
-  // Pointing at a tick needs the rail back where it was.
+    .waitForFunction(
+      () => {
+        const composer = document.querySelector(".composer")!.getBoundingClientRect();
+        const turns = document.querySelectorAll(".turn");
+        return composer.top - turns[turns.length - 1]!.getBoundingClientRect().bottom >= 0;
+      },
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => assert.fail("a taller composer covers the end of the transcript"));
   await page.fill("textarea", "");
-  await page
-    .waitForFunction((short) => (document.querySelector(".prompt-rail") as HTMLElement).style.getPropertyValue("--below") === short, short, { timeout: 5_000 })
-    .catch(() => assert.fail("the prompt rail did not return for an emptied composer"));
   assert.deepEqual(
     await ticks.evaluateAll((all) => all.map((tick) => [tick.tabIndex, tick.getAttribute("aria-current")])),
     [

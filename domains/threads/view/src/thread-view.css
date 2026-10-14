@@ -6,6 +6,20 @@
   position: relative;
 }
 
+/* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
+.composer-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+  pointer-events: none;
+}
+
+.composer-dock > * {
+  pointer-events: auto;
+}
+
 .main-head {
   display: flex;
   align-items: center;
