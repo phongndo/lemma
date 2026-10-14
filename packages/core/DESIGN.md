@@ -137,6 +137,14 @@ uninterruptible region and lifecycle bookkeeping is uninterruptible by design.
 On expiry, cleanup keeps running in the background and is reported, while a
 drain is abandoned and its stale work interrupted.
 
+A failure drains only the `core.run` tasks that resolved what it revokes, and
+revokes it from them, by watching the map each task's context is made from
+(`internal/tracked.ts`). Effect has no API to observe a service lookup, so
+this depends on how Effect's `Context` holds that map: it resolves services
+through the map's `get`, and iterates the map before it stops using it.
+`tests/tracked.test.ts` checks that against the installed Effect, so an
+upgrade that changes it fails there rather than leaving tasks undrained.
+
 ## Limits
 
 Plugins are trusted, in-process code. Dependency visibility and scopes organize code; they are not a security boundary. Detached fibers, raw timers, and module-import side effects are outside the kernel's guarantees. Compositions supplied through the loader are validated when planned, so a loader-driven core is not statically typed (`Core<any>`).

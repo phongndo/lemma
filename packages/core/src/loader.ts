@@ -4,7 +4,8 @@ import type { Core, CoreOptions } from "./core.ts";
 import { Diagnostic, ReloadError } from "./errors.ts";
 import type { PluginFault } from "./errors.ts";
 import { makeRuntime, PlanError, toReloadError } from "./internal/runtime.ts";
-import type { Member, PartialStart } from "./internal/runtime.ts";
+import type { Member } from "./internal/change.ts";
+import type { PartialStart } from "./internal/runtime.ts";
 import type { Capability, Plugin } from "./plugin.ts";
 
 /** One row of a composition, keyed by plugin id. Config is validated by the plugin's schema. */
@@ -72,6 +73,15 @@ export interface Loader {
   readonly core: Core<any>;
   readonly composition: Effect.Effect<Composition>;
   readonly apply: (next: Composition) => Effect.Effect<ReloadReport, ReloadError>;
+  /**
+   * The plugins `apply(next)` would start, restart, or stop, decided as
+   * `apply` decides them, against what runs now; `restart` adds those ids and
+   * their dependents, as a forced `core.restart` restarts them. It changes
+   * nothing, and fails as `apply` would fail to plan. A change under way can
+   * alter what runs before the answer is used: an application acting on it
+   * makes its changes one at a time.
+   */
+  readonly affected: (next: Composition, options?: { readonly restart?: readonly string[] }) => Effect.Effect<ReadonlySet<string>, ReloadError>;
 }
 
 export function makeLoader<const Provides extends readonly Capability[] = readonly []>(
@@ -134,6 +144,13 @@ export function makeLoader<const Provides extends readonly Capability[] = readon
 
     const partial = options.partialStart === undefined ? undefined : { required: new Set(options.partialStart.required ?? []) };
     yield* apply(options.composition, partial).pipe(Effect.onError(() => runtime.shutdown));
-    return { core: runtime.core, composition: Effect.sync(() => current), apply: (next) => apply(next) };
+    const affected = (next: Composition, restart: readonly string[] = []): Effect.Effect<ReadonlySet<string>, ReloadError> =>
+      Effect.flatMap(resolve(next), (members) => runtime.affected(members, new Set(restart)).pipe(Effect.mapError(toReloadError)));
+    return {
+      core: runtime.core,
+      composition: Effect.sync(() => current),
+      apply: (next) => apply(next),
+      affected: (next, options) => affected(next, options?.restart),
+    };
   });
 }

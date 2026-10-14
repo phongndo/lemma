@@ -117,6 +117,30 @@ describe("loader", () => {
     );
   });
 
+  test("affected says what a change would start, restart, or stop, changing nothing", async () => {
+    await run(
+      Effect.gen(function* () {
+        const log: string[] = [];
+        const { source } = fixtures(log);
+        const running = composition({ db: { config: { name: "main" } }, api: {}, bystander: {} });
+        const loader = yield* makeLoader({ source, composition: running });
+        const affected = (next: Composition, restart?: readonly string[]) =>
+          Effect.map(loader.affected(next, restart === undefined ? undefined : { restart }), (ids) => [...ids].sort());
+        // An equal config read again is no change; one that differs restarts its plugin's dependents too.
+        expect(yield* affected(composition({ db: { config: { name: "main" } }, api: {}, bystander: {} }))).toEqual([]);
+        expect(yield* affected(composition({ db: { config: { name: "replica" } }, api: {}, bystander: {} }))).toEqual(["api", "db"]);
+        expect(yield* affected(composition({ db: { config: { name: "main" } }, api: {}, greeter: { config: { suffix: "!" } } }))).toEqual([
+          "bystander",
+          "greeter",
+        ]);
+        expect(yield* affected(running, ["db"])).toEqual(["api", "db"]);
+        // It fails as applying would.
+        expect((yield* Effect.flip(affected(composition({ db: { config: { name: 5 } }, api: {} })))).diagnostics[0]?.pluginId).toBe("db");
+        expect(log).toEqual(["db+1", "api+1", "bystander+"]);
+      }),
+    );
+  });
+
   test("reports every planning problem at once and leaves the running composition untouched", async () => {
     await run(
       Effect.gen(function* () {

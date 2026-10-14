@@ -195,9 +195,12 @@ describe("command sequences", () => {
                         const dependency = requires[id];
                         if (applied.get(id) !== command.version || (dependency !== undefined && changed.has(dependency))) changed.add(id);
                       }
+                      // Asked first, what a change touches is what applying it then touches.
+                      const predicted = yield* Effect.result(loader.affected(composition(subset, command.version)));
                       const result = yield* Effect.result(loader.apply(composition(subset, command.version)));
                       const after = yield* loader.core.inspect;
                       if (Result.isSuccess(result)) {
+                        expect(Result.isSuccess(predicted) && [...predicted.success].sort()).toEqual([...changed, ...result.success.stopped].sort());
                         // A successful change activates every changed plugin; unchanged ones keep their state (no automatic restarts).
                         const expectedActive = subset.filter((id) => changed.has(id) || before.plugins.find((p) => p.id === id)?.state === "active");
                         expect(after.plugins.filter((p) => p.state === "active").map((p) => p.id)).toEqual(expectedActive);
@@ -232,6 +235,7 @@ describe("command sequences", () => {
                     }
                     case "restart": {
                       const target = before.plugins.find((p) => p.id === command.id);
+                      const predicted = yield* Effect.result(loader.affected(yield* loader.composition, { restart: [command.id] }));
                       const result = yield* Effect.result(loader.core.restart(command.id));
                       const after = yield* loader.core.inspect;
                       if (!target) {
@@ -261,6 +265,11 @@ describe("command sequences", () => {
                         else expected.set(id, before.plugins.find((q) => q.id === id)!.state);
                       }
                       expect(after.plugins.map((p) => [p.id, p.state])).toEqual([...expected].map(([id, state]) => [id, state]));
+                      if (Result.isSuccess(result)) {
+                        expect(Result.isSuccess(predicted) && [...predicted.success].sort()).toEqual(
+                          [...result.success.restarted, ...result.success.failed].sort(),
+                        );
+                      }
                       break;
                     }
                     case "fault":
