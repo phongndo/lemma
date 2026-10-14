@@ -37,7 +37,7 @@ import type { Journal, StateFiles } from "./state.ts";
 import { makeRequestIndex } from "./requests.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, runTurn } from "./turn.ts";
-import type { TurnOutcome, TurnResume } from "./turn.ts";
+import type { Ended, TurnOutcome, TurnResume } from "./turn.ts";
 
 const AgentConfig = Schema.Struct({
   defaultModel: Schema.optional(Schema.String).annotate({ description: "<provider>/<model> for turns that name none. Absent: the first available model." }),
@@ -117,6 +117,10 @@ interface Running extends SlotHolder {
    */
   started: boolean;
   cancelling: boolean;
+  /** It resumes only to close so: it had ended, but its `turn-end` had not reached the log. */
+  readonly closing: Ended | undefined;
+  /** It ended so, but its `turn-end` did not reach the log (`TurnInput.unclosed`): it is kept to be closed so. */
+  unclosed: Ended | undefined;
 }
 
 /** A turn the last instance left open, not running: it resumes once its session is taken up (`reopen`). */
@@ -126,6 +130,8 @@ interface Suspended {
   readonly marked: boolean;
   /** `cancel` was asked for: it resumes only to close as cancelled. */
   cancelling: boolean;
+  /** It ended so, but its `turn-end` did not reach the log: it resumes only to close so. */
+  readonly closing?: Ended;
 }
 
 /**
@@ -399,6 +405,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
                   prompts: turn.prompts,
                   ...(turn.cancelling ? { cancelling: true } : {}),
                   ...(turn.marked ? { marked: true } : {}),
+                  ...(turn.closing === undefined ? {} : { closing: turn.closing }),
                 },
               }),
           queue: state.queue.map((item) => item.prompt),
@@ -546,6 +553,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         stopping: Deferred.await(stopping),
         idle: idle(entry),
         kept: kept(sessionId),
+        unclosed: (ended: Ended) => void (entry.unclosed = ended),
         ...(info.title === undefined ? {} : { title: info.title }),
       });
 
@@ -584,6 +592,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           const cancelling = yield* begin(entry);
           // Cut off before its first event: cancelled meanwhile, it never runs. (It has no model only if cancelled.)
           if (resumption.kind === "not-started") {
+            if (entry.closing !== undefined) return entry.closing.reason;
             return cancelling || resumption.model === undefined ? ("cancelled" as const) : yield* begun(sessionId, entry, info, resumption.model);
           }
           if (resumption.kind === "ended") return resumption.reason;
@@ -593,6 +602,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
             plan,
             cancelling,
             ...(restored?.turnId === entry.turnId ? { restored } : {}),
+            ...(entry.closing === undefined ? {} : { closing: entry.closing }),
           };
           return yield* runTurn(services, settings, {
             ...turnInput(sessionId, entry, info),
@@ -623,6 +633,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           readonly resume?: { readonly info: SessionInfo; readonly resumption: Resumption };
           readonly cancelling?: boolean;
           readonly marked?: boolean;
+          readonly closing?: Ended;
         } = {},
       ): Effect.Effect<Running, AgentError> =>
         Effect.gen(function* () {
@@ -641,13 +652,16 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
             started: false,
             cancelling: options.cancelling ?? false,
             marked: options.marked ?? true,
+            closing: options.closing,
+            unclosed: undefined,
           };
           const { resume } = options;
           assert(state.turn === undefined, `session ${sessionId} starts turn ${turnId} while turn ${state.turn?.turnId} runs`);
           assert(state.suspended === undefined, `session ${sessionId} starts turn ${turnId} while one is suspended`);
           const held = state.held;
           state.turn = entry;
-          state.held = false;
+          // One that only closes runs no queue on if it was held (see `ended`).
+          if (options.closing === undefined) state.held = false;
           // A resumed turn is in the journal already, as the last instance left it.
           if (resume !== undefined) yield* persistOrWarn(sessionId);
           else
@@ -712,9 +726,11 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
             );
             // Remembered as a withdrawn prompt is, before its caller hears: sent again (a client that never heard), it is
             // refused, not placed.
-            const retractedIds = cancelled
-              ? [...entry.items.values()].filter((item) => Exit.isFailure(answerFor(item))).map((item) => item.prompt.requestId)
-              : [];
+            // (One that only closes did so when it ended.)
+            const retractedIds =
+              cancelled && entry.closing === undefined
+                ? [...entry.items.values()].filter((item) => Exit.isFailure(answerFor(item))).map((item) => item.prompt.requestId)
+                : [];
             if (retractedIds.length > 0) {
               state.withdrawn = [...state.withdrawn, ...retractedIds].slice(-WITHDRAWN_KEPT);
               // Written as the turn will end it: a cancelled turn runs no queue on, which waits for the next prompt.
@@ -725,13 +741,34 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
               yield* writeLive(files, sessionId, entry.live.file());
               return yield* settle;
             }
+            const runsOn = (reason: TurnOutcome) => reason === "done" || reason === "max-steps";
+            const { unclosed } = entry;
+            if (unclosed !== undefined) {
+              // It ended, but not in the log: kept in the journal, suspended, before its callers hear, it is closed so
+              // when its session is next taken up (prompted, cancelled, or at the next start), and the queue then runs
+              // on as it would have now.
+              yield* writeLive(files, sessionId, entry.live.file());
+              state.suspended = {
+                turnId: entry.turnId,
+                prompts: yield* Effect.forEach(entry.prompts, restore),
+                marked: entry.marked,
+                cancelling: entry.cancelling,
+                closing: unclosed,
+              };
+              state.restored = true;
+              state.held = state.queue.length > 0 && !runsOn(unclosed.reason);
+              for (const item of state.queue) item.placing = false;
+              yield* persistOrWarn(sessionId);
+              return yield* settle;
+            }
             yield* removeLive(files, sessionId);
             yield* settle;
             // Steers this turn took but did not place (it ended first) can be withdrawn again.
             for (const item of state.queue) item.placing = false;
             const reason: TurnOutcome = Exit.isSuccess(exit) ? exit.value : interrupted ? "cancelled" : "error";
             const next = state.queue[0];
-            if (next !== undefined && (reason === "done" || reason === "max-steps")) {
+            // One that only closes ended before: the queue runs on unless that held it, and a prompt since let it go.
+            if (next !== undefined && (entry.closing === undefined ? runsOn(reason) : !state.held)) {
               // This turn holds the session still, so it is not being deleted: only one gone some other way refuses, and
               // the queue then waits for the next prompt, which reports it.
               const lease = yield* Effect.result(holdFor(sessionId));
@@ -905,13 +942,20 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
                       return yield* new AgentError({ sessionId, reason: "Busy", message: `Session ${sessionId} has ${MAX_QUEUED} prompts queued already` });
                     }
                     const item = yield* makeItem(placing, placingOptions, whenBusy, credit);
+                    const held = state.held;
                     yield* setQueue(state, [...state.queue, item]);
+                    // Behind a turn that only closes one that ended before, a new prompt lets go of a queue that ended
+                    // held, as it would have had the turn closed then.
+                    if (state.turn.closing !== undefined) state.held = false;
                     // Accepted once it is in the journal, as a crash would lose it otherwise.
                     yield* persist(sessionId).pipe(
                       Effect.tapError(() =>
-                        setQueue(
-                          state,
-                          state.queue.filter((queued) => queued !== item),
+                        Effect.andThen(
+                          setQueue(
+                            state,
+                            state.queue.filter((queued) => queued !== item),
+                          ),
+                          Effect.sync(() => void (state.held = held)),
                         ),
                       ),
                     );
@@ -939,6 +983,11 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           return { kind: "placed" } satisfies PromptOutcome;
         });
 
+      /**
+       * Marks the turn cancelling, in the journal, and stops it, as one step the caller's interruption cannot split (a
+       * flag set and never acted on would close the turn as cancelled only when it next resumes); then waits for it to
+       * close, which the caller may stop waiting for.
+       */
       const cancel = (sessionId: string) =>
         Effect.gen(function* () {
           const suspended = states.get(sessionId)?.suspended;
@@ -946,27 +995,33 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
             // Not running: marked in the journal, it closes as cancelled when it resumes, asking the model nothing. Now,
             // if the session can be taken up.
             yield* admit.withPermits(1)(
-              Effect.suspend(() => {
-                suspended.cancelling = true;
-                return persistOrWarn(sessionId);
-              }),
+              Effect.uninterruptible(
+                Effect.suspend(() => {
+                  suspended.cancelling = true;
+                  return persistOrWarn(sessionId);
+                }),
+              ),
             );
             yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
           }
           const entry = stateOf(sessionId).turn;
           if (entry === undefined) return;
-          // In the journal first: a host that stops while the turn closes resumes it as cancelled.
-          entry.cancelling = true;
-          yield* persistOrWarn(sessionId);
-          yield* Deferred.succeed(entry.cancelled, undefined);
-          // A turn whose body has not begun (waiting for a slot, or a resumed one for the composition) stops waiting,
-          // reads the flag, and closes at once.
-          if (!entry.started) {
-            yield* Effect.exit(Deferred.await(entry.ended));
-            return;
-          }
-          entry.controller.abort();
-          yield* Fiber.interrupt(yield* Deferred.await(entry.fiber));
+          yield* Effect.uninterruptibleMask((restore) =>
+            Effect.gen(function* () {
+              // In the journal first: a host that stops while the turn closes resumes it as cancelled.
+              entry.cancelling = true;
+              yield* persistOrWarn(sessionId);
+              yield* Deferred.succeed(entry.cancelled, undefined);
+              // A turn whose body has not begun (waiting for a slot, or a resumed one for the composition) stops
+              // waiting, reads the flag, and closes at once.
+              if (!entry.started) return yield* restore(Effect.exit(Deferred.await(entry.ended)));
+              entry.controller.abort();
+              const fiber = yield* Deferred.await(entry.fiber);
+              // Interrupted by the agent's own fiber, so the turn is stopped however soon the caller stops waiting.
+              yield* Effect.forkIn(Fiber.interrupt(fiber), turns);
+              yield* restore(Fiber.await(fiber));
+            }),
+          );
         });
 
       const withdraw = (sessionId: string, requestId: string) =>
@@ -1101,8 +1156,8 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           if (suspended === undefined) return { info };
           const resume = planResume(log, suspended.turnId, suspended.marked);
           if (resume.kind === "ended") return { info, turn: { suspended, resumption: resume } };
-          // Being cancelled, it only closes, so no model need resolve.
-          if (suspended.cancelling) return { info, turn: { suspended, resumption: { ...resume, model: undefined } } };
+          // Being cancelled, or closed as it ended, it only closes, so no model need resolve.
+          if (suspended.cancelling || suspended.closing !== undefined) return { info, turn: { suspended, resumption: { ...resume, model: undefined } } };
           const resumption: Resumption =
             resume.kind === "not-started"
               ? { kind: "not-started", model: yield* resolveModel(sessionId, suspended.prompts.at(-1)?.prompt.options) }
@@ -1151,6 +1206,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
               resume: { info: prepared.info, resumption },
               cancelling: suspended.cancelling,
               marked: suspended.marked,
+              ...(suspended.closing === undefined ? {} : { closing: suspended.closing }),
             });
           } else if (lease !== undefined && next !== undefined) {
             yield* setQueue(state, state.queue.slice(1));
@@ -1220,11 +1276,13 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         state.held = journal.held === true;
         state.withdrawn = journal.withdrawn ?? [];
         if (journal.turn !== undefined) {
+          const { closing } = journal.turn;
           state.suspended = {
             turnId: journal.turn.turnId,
             prompts: yield* Effect.forEach(journal.turn.prompts, restore),
             marked: journal.turn.marked === true,
             cancelling: journal.turn.cancelling === true,
+            ...(closing === undefined ? {} : { closing: { reason: closing.reason, ...(closing.error === undefined ? {} : { error: closing.error }) } }),
           };
         }
       }

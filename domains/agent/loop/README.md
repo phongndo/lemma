@@ -183,8 +183,8 @@ A host that crashes, restarts, or reloads the agent loses no turn and no queued
 prompt. Beside the log, under `<Paths.home>/agent`, the agent keeps per session:
 
 - `<session>.json`, the journal: the turn, running or suspended (the prompts it
-  was started with, whether it logs `agent.started` events, and whether it is
-  being cancelled), the queue, and the request ids retracted lately (how many,
+  was started with, whether it logs `agent.started` events, whether it is
+  being cancelled, and how it ended when its `turn-end` did not reach the log), the queue, and the request ids retracted lately (how many,
   and what a prompt sent again with one gets: `Retracted` in the contract).
   Written, and synced with its directory, before the log is, whenever the turn
   or the queue changes. A change the log will not record (a turn starting, a
@@ -231,6 +231,12 @@ parents, so titles a rename hung off the turn meanwhile do not mislead it.
   names the model its `request` did, without the wire API (`api` is empty). One
   whose model call had failed closes the way it was closing. Steers it had
   placed before the restart are answered.
+- A turn that ended but could not log its `turn-end` (a full or failing disk)
+  is kept, suspended, rather than left open in the log for good: its callers
+  hear how it ended, `TurnEnded` waits, and it closes the way it ended, asking
+  nothing, when its session is next taken up (prompted, cancelled, or at the
+  next start). The queue then runs on as it would have when the turn ended, or
+  at once behind a prompt sent meanwhile.
 
 The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
@@ -291,7 +297,8 @@ asked again, or run (or reported interrupted) when the turn resumes.
   results first; `rebuildRequest` then rebuilds what was sent.
 - **Plugin-owned turns.** Turns are forked into the plugin's scope. `prompt` awaits
   the turn, but interrupting the caller does not cancel it; only `cancel` does
-  (abort the signal, then interrupt), and it returns after `turn-end` is logged
+  (abort the signal, then interrupt, which a caller interrupted meanwhile does
+  not split: the cancel goes on), and it returns after `turn-end` is logged
   (or, for a turn still waiting for a slot, once it has ended without logging).
   Closing the plugin suspends running turns (see [Stopping](#stopping)).
 - **Intent before effect.** `agent.started` is synced before a tool call runs,

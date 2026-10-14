@@ -140,6 +140,25 @@ const unreadableSessions = (fails: {
     ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
   });
 
+/** The sessions store, but appending a `turn-end` fails while `fails.turnEnd` says so, as a full disk would. */
+const unclosableSessions = (fails: { turnEnd: boolean }) =>
+  definePlugin({
+    id: "sessions",
+    provides: [Sessions],
+    requires: [Paths],
+    exclusive: true,
+    layer: Layer.effect(
+      Sessions,
+      Effect.map(Sessions, (store) => ({
+        ...store,
+        append: (sessionId: string, data: EventData, options?: { readonly parent?: string }) =>
+          data.type === "turn-end" && fails.turnEnd
+            ? Effect.fail(new SessionError({ sessionId, reason: "Io", message: "disk full" }))
+            : store.append(sessionId, data, options),
+      })),
+    ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
+  });
+
 /** Every `request` event rebuilds to exactly what the model received, in order. */
 const expectLogInvariant = (events: readonly SessionEvent[], sessionId: string, requests: readonly LlmRequest[]) => {
   const logged = events.filter((event) => event.data.type === "request");
@@ -631,6 +650,31 @@ describe("agent", () => {
     );
   });
 
+  it("cancels a turn whatever becomes of the call that asked: one interrupted while the journal is written still stops the turn", async () => {
+    await withAgent({ scripts: [hang("partial ")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const turn = yield* Effect.forkChild(a.prompt(id, text("go")));
+        yield* waitFor(
+          Effect.sync(() => requests.length),
+          (asked) => asked === 1,
+        );
+        const writing = holdUpFile("rename", `${id}.json`);
+        const cancelling = yield* Effect.forkChild(a.cancel(id));
+        yield* writing.reached;
+        // The caller goes away while its cancel is being recorded; the cancel goes on.
+        const interrupted = yield* Effect.forkChild(Fiber.interrupt(cancelling));
+        writing.go();
+        yield* Fiber.join(interrupted);
+        yield* Fiber.join(turn);
+        expect(yield* a.busy(id)).toBe(false);
+        expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "cancelled" }]);
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
   it("cancels mid-tool: aborts the tool and answers every unanswered call", async () => {
     let aborted = false;
     const started = Effect.runSync(Deferred.make<void>());
@@ -931,6 +975,72 @@ describe("agent", () => {
         expect(ofType(events, "turn-start")).toHaveLength(1);
         expect(ofType(events, "turn-end")).toMatchObject([{ reason: "done" }]);
         yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
+  it("keeps a turn whose turn-end did not reach the log in its journal, and closes it as it ended before the session's next prompt", async () => {
+    const fails = { turnEnd: true };
+    await withAgent({ sessions: unclosableSessions(fails), scripts: [reply("first"), reply("second")] }, ({ rec }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        // Its caller is answered: the turn ended, though the log does not say so yet.
+        yield* a.prompt(id, text("go"));
+        const [started] = ofType(yield* log(id), "turn-start");
+        expect(ofType(yield* log(id), "turn-end")).toEqual([]);
+        expect(rec.ended).toEqual([]);
+        expect(yield* a.busy(id)).toBe(false);
+        const journal = (yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id);
+        expect(journal?.turn).toMatchObject({ turnId: started!.turnId, closing: { reason: "done" } });
+        fails.turnEnd = false;
+        yield* a.prompt(id, text("again"));
+        const events = yield* log(id);
+        const [, next] = ofType(events, "turn-start");
+        // Closed as it ended, asking nothing, before the next turn starts.
+        expect(ofType(events, "turn-end")).toMatchObject([
+          { turnId: started!.turnId, reason: "done" },
+          { turnId: next!.turnId, reason: "done" },
+        ]);
+        expect(ofType(events, "message").map((data) => data.message.role)).toEqual(["user", "assistant", "user", "assistant"]);
+        expect(rec.ended.map((ended) => ended.turnId)).toEqual([started!.turnId, next!.turnId]);
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => !journals.has(id));
+      }),
+    );
+  });
+
+  it("closes a cancelled turn whose turn-end was lost as cancelled when the agent next starts, and holds the queue it held", async () => {
+    const fails = { turnEnd: true };
+    const id = await withAgent({ sessions: unclosableSessions(fails), scripts: [hang("partial")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const first = yield* Effect.forkChild(a.prompt(id, text("go")));
+        yield* waitFor(
+          Effect.sync(() => requests.length),
+          (asked) => asked === 1,
+        );
+        // Queued behind it, then the turn is cancelled: cancelled, it holds the queue.
+        const queued = yield* Effect.forkChild(a.prompt(id, text("later"), { requestId: "later" }));
+        yield* waitFor(a.queue(id), (queue) => queue.length === 1);
+        yield* a.cancel(id);
+        yield* Fiber.join(first);
+        expect(ofType(yield* log(id), "turn-end")).toEqual([]);
+        const journal = (yield* readJournals({ home: dir, fs: nodeFileSystem })).get(id);
+        expect(journal).toMatchObject({ turn: { closing: { reason: "cancelled" } }, queue: [{ requestId: "later" }], held: true });
+        yield* Fiber.interrupt(queued);
+        return id;
+      }),
+    );
+    await withAgent({ scripts: [] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        yield* waitFor(log(id), (events) => ofType(events, "turn-end").length === 1);
+        expect(ofType(yield* log(id), "turn-end")).toMatchObject([{ reason: "cancelled" }]);
+        // The queue it held still waits for the next prompt, and nothing was asked.
+        expect((yield* a.queue(id)).map((prompt) => prompt.requestId)).toEqual(["later"]);
+        expect(requests).toEqual([]);
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => journals.get(id)?.turn === undefined && journals.get(id)?.held === true);
       }),
     );
   });
