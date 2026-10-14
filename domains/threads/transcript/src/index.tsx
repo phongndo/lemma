@@ -59,12 +59,14 @@ import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts
 import { createNow } from "@lemma/web/now";
 import { Client, Router, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
-import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
+import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
+import { Actions } from "@lemma/actions";
 import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
 import { PromptRail } from "./rail.tsx";
 import { Images, ToolCard, toolView } from "./tools.tsx";
+import { FindBar } from "./find-bar.tsx";
 import type { ToolState } from "./tools.tsx";
 
 /** The chat's scroll position, kept with each history entry. */
@@ -594,7 +596,8 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
   );
 }
 
-function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
+/** `findWith`: hands the plugin what opens the find bar (focusing it when open) while the view is shown, and undefined once it is not. */
+function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWith: (open: (() => void) | undefined) => void }) {
   const threads = props.chat.threads;
   let scroller!: HTMLDivElement;
   let content!: HTMLDivElement;
@@ -731,9 +734,32 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   });
   onCleanup(() => cancelAnimationFrame(settling));
 
+  const [finding, setFinding] = createSignal(false);
+  let findInput: HTMLInputElement | undefined;
+  /** What had focus before the find bar took it, given back when it closes. */
+  let returnTo: Element | null = null;
+  props.findWith(() => {
+    if (!finding()) {
+      returnTo = document.activeElement;
+      setFinding(true);
+    }
+    findInput?.focus();
+    findInput?.select();
+  });
+  onCleanup(() => props.findWith(undefined));
+  const closeFind = () => {
+    setFinding(false);
+    findInput = undefined;
+    if (returnTo instanceof HTMLElement && returnTo.isConnected) returnTo.focus();
+    returnTo = null;
+  };
+
   const empty = () => props.turns().length === 0;
   return (
     <div class="chat-view">
+      <Show when={finding()}>
+        <FindBar content={content} scroller={scroller} input={(element) => (findInput = element)} onClose={closeFind} />
+      </Show>
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="content" ref={content}>
           <Switch>
@@ -796,6 +822,8 @@ export default defineWebPlugin({
       return projector(threads.branch());
     });
     const pending = createMemo(() => pendingToolCalls(transcript()));
+    /** Opens the find bar of the transcript shown, if one is. */
+    const [find, setFind] = createSignal<(() => void) | undefined>();
     const now = createNow(1000, threads.busy);
     // A call's start, kept across its streamed and logged rows so its timer does not restart when the message lands.
     const firstSeen = new Map<string, number>();
@@ -832,7 +860,18 @@ export default defineWebPlugin({
       title: "Transcript",
       icon: ChatIcon,
       composer: true,
-      component: () => <ChatView chat={chat} turns={() => transcript().turns} />,
+      component: () => <ChatView chat={chat} turns={() => transcript().turns} findWith={(open) => setFind(() => open)} />,
+    });
+    slots.add(Actions, {
+      id: "thread.find",
+      order: 15,
+      title: "Find in thread",
+      category: "Thread",
+      keywords: ["search"],
+      icon: SearchIcon,
+      keys: "mod+f",
+      when: () => find() !== undefined,
+      run: () => find()?.(),
     });
   },
 });

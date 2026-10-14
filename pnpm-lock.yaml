@@ -2483,6 +2483,9 @@ importers:
 
   domains/threads/transcript:
     dependencies:
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../actions/contract
       '@lemma/client':
         specifier: workspace:*
         version: link:../../../packages/client

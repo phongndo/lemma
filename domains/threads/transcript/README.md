@@ -24,6 +24,11 @@ runtime's `Client`, `Router`, and `Slots`.
 - **Following the output.** The view keeps to the newest output while the
   reader is at the bottom, and stops once they scroll up. Its scroll position
   is kept with each history entry, so back and forward return to it.
+- **Find.** `thread.find` (mod+F, in `Actions`) opens a bar over the chat
+  that highlights where its text occurs, ignoring case, and goes from one to
+  the next (Enter, Shift+Enter); Escape closes it. It searches what the chat
+  shows, so not what a closed thought or tool call holds, and keeps up as the
+  transcript changes. Unbinding the key leaves mod+F to the browser.
 - **Steers.** A steer sent while a turn runs shows at once at the end of the
   turn, where it will join, as it will look once the turn places it after its
   current step: the prompt as sent under a quiet "Steer" mark
