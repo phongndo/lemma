@@ -4,6 +4,7 @@ import type { ToggleProps } from "@lemma/look";
 export function Toggle(props: ToggleProps) {
   return (
     <button
+      type="button"
       class="switch"
       role="switch"
       aria-label={props.label}

@@ -266,6 +266,34 @@ const HammerIcon = (props: GlyphProps) => (
     <path d="M9.5 2.5l4 4-1.75 1.75-4-4zM8.6 5.4L2.8 11.2a1.4 1.4 0 002 2l5.8-5.8" />
   </Icon>
 );
+const PlugIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M6 1.5v3M10 1.5v3M4 4.5h8v2.5a4 4 0 01-8 0zM8 11v3.5" />
+  </Icon>
+);
+const BotIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <rect x="2.5" y="5.5" width="11" height="8" rx="2" />
+    <path d="M8 2.5v3M6 9.25v.5M10 9.25v.5" />
+  </Icon>
+);
+const LockIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 015 0v2" />
+  </Icon>
+);
+const UnlockIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V4.5a2.5 2.5 0 015 0" />
+  </Icon>
+);
+const SparklesIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M7 2.5l1.1 3.4L11.5 7 8.1 8.1 7 11.5 5.9 8.1 2.5 7l3.4-1.1zM12 10.5l.5 1.5 1.5.5-1.5.5-.5 1.5-.5-1.5-1.5-.5 1.5-.5z" />
+  </Icon>
+);
 const SlidersIcon = (props: GlyphProps) => (
   <Icon class={props.class}>
     <path d="M2.5 4.5h6M11.5 4.5h2M2.5 11.5h2M7.5 11.5h6" />
@@ -336,6 +364,11 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   command: CommandIcon,
   terminal: TerminalIcon,
   hammer: HammerIcon,
+  plug: PlugIcon,
+  bot: BotIcon,
+  lock: LockIcon,
+  unlock: UnlockIcon,
+  sparkles: SparklesIcon,
   sliders: SlidersIcon,
   palette: PaletteIcon,
   "arrow-left": ArrowLeftIcon,

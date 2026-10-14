@@ -177,6 +177,11 @@ export type IconName =
   | "command"
   | "terminal"
   | "hammer"
+  | "plug"
+  | "bot"
+  | "lock"
+  | "unlock"
+  | "sparkles"
   | "sliders"
   | "palette"
   | "arrow-left"
@@ -322,6 +327,16 @@ export const CommandIcon = () => <Icon name="command" />;
 export const TerminalIcon = () => <Icon name="terminal" />;
 
 export const HammerIcon = () => <Icon name="hammer" />;
+
+export const PlugIcon = () => <Icon name="plug" />;
+
+export const BotIcon = () => <Icon name="bot" />;
+
+export const LockIcon = () => <Icon name="lock" />;
+
+export const UnlockIcon = () => <Icon name="unlock" />;
+
+export const SparklesIcon = () => <Icon name="sparkles" />;
 
 export const SlidersIcon = () => <Icon name="sliders" />;
 

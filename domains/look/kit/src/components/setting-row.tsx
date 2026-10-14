@@ -20,7 +20,7 @@ export function Segmented(props: SegmentedProps) {
     <div class="segmented" role="radiogroup" aria-label={props.label}>
       <For each={props.options}>
         {(option) => (
-          <button role="radio" aria-checked={props.value === option.value} onClick={() => props.onChange(option.value)}>
+          <button type="button" role="radio" aria-checked={props.value === option.value} onClick={() => props.onChange(option.value)}>
             {option.label}
           </button>
         )}
