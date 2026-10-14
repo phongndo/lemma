@@ -222,7 +222,7 @@ export const fakeHost = (host: {
     return wire as unknown as globalThis.WebSocket;
   };
   return {
-    target: { url: "http://host.test", token: "t" } as Connection["target"],
+    target: { url: "http://host.test", token: "t", source: "env", name: "LEMMA_URL", from: "LEMMA_URL" },
     rpc,
     host: (options) =>
       openHost(

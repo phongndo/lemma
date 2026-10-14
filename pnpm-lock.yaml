@@ -193,37 +193,31 @@ importers:
 
   apps/cli:
     dependencies:
-      '@lemma/agent':
+      '@lemma/cli':
         specifier: workspace:*
-        version: link:../../domains/agent/contract
+        version: link:../../domains/cli/contract
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@lemma/commands':
-        specifier: workspace:*
-        version: link:../../domains/commands/contract
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
       '@lemma/host':
         specifier: workspace:*
         version: link:../../packages/host
-      '@lemma/llm':
-        specifier: workspace:*
-        version: link:../../domains/llm/contract
-      '@lemma/sessions':
-        specifier: workspace:*
-        version: link:../../domains/sessions/contract
-      '@lemma/workspace':
-        specifier: workspace:*
-        version: link:../../domains/workspace/contract
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      jsonc-parser:
+        specifier: 3.3.1
+        version: 3.3.1
     devDependencies:
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -3068,9 +3062,9 @@ importers:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
     devDependencies:
-      '@lemma/cli':
+      '@lemma/cli-app':
         specifier: workspace:*
-        version: link:../../domains/cli/contract
+        version: link:../../apps/cli
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../domains/tools/registry
@@ -3096,9 +3090,9 @@ importers:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
     devDependencies:
-      '@lemma/cli':
+      '@lemma/cli-app':
         specifier: workspace:*
-        version: link:../../domains/cli/contract
+        version: link:../../apps/cli
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2

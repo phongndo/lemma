@@ -1,138 +1,107 @@
 import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Fiber, Option, Stream } from "effect";
-import type { Scope } from "effect";
 import { RpcClientError } from "effect/rpc";
 import { HostError } from "@lemma/contracts";
-import { AgentChannels } from "@lemma/agent";
-import { emptyUsage } from "@lemma/llm";
-import { SessionChannels } from "@lemma/sessions";
-import { FileChannels } from "@lemma/workspace";
 import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
-import type { AgentActivity } from "@lemma/agent";
-import type { EventData, SessionEvent, SessionLogUpdate, SessionsChange } from "@lemma/sessions";
 import { settled } from "../../../scripts/e2e.ts";
-import { call, follow, refined } from "../src/channels.ts";
+import { builtins, run } from "../src/cli.ts";
 import { CliError, ExitCode } from "../src/command.ts";
-import type { Command, Io, Options } from "../src/command.ts";
-import { doCommand, eventsCommand } from "../src/live.ts";
-import { toCliError } from "../src/remote.ts";
+import type { Connection, Failure, Globals, Io, Output } from "../src/command.ts";
 import { fakeHost, fed, info } from "./fake.ts";
 import type { Fed } from "./fake.ts";
+
+/*
+ * The runtime's commands that reach the host's channels, `channels call` and
+ * `events`, and the question handling of a command that watches the host,
+ * against a fake host (fake.ts).
+ */
 
 const refused = (code: string, subject: string) => () => Effect.fail(new HostError({ code, subject, message: `${code}: ${subject}` }));
 const failure = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(Effect.flip(effect));
 
+/** Runs one of lemma's own commands with `connection`. */
+const builtin = (path: string, connection: Connection, io: Io, globals: Globals, args: Record<string, unknown> = {}, flags: Record<string, unknown> = {}) =>
+  Effect.scoped(
+    builtins.find((command) => command.path.join(" ") === path)!.run({ args, flags, io, globals, connect: Effect.succeed(connection), rerun: run }),
+  ) as Effect.Effect<Output | undefined, Failure>;
+const channelCall = (connection: Connection, id: string, payload?: string) => builtin("channels call", connection, quiet, options, { id, payload });
+/** `lemma events`, watching until interrupted. */
+const eventsCommand = (connection: Connection, io: Io, globals: Globals, channel: readonly string[] = []) =>
+  builtin("events", connection, io, globals, {}, { channel });
+
+/** The agent's and the sessions' stream elements, as JSON: this command knows no domain's types. */
+type AgentActivity = { readonly type: string; readonly [field: string]: unknown };
+type SessionsChange = AgentActivity;
+const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+const quiet: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
+const options: Globals = { json: true, quiet: false, answers: [], help: false };
+
 describe("a channel's failure", () => {
   test("Unavailable naming the channel is the host still starting, and exits 3; a domain's own names what it concerns", async () => {
     const host = fakeHost({ calls: { "sessions.list": refused("Unavailable", "sessions.list"), "files.search": refused("Unavailable", "/work") } });
-    expect(await failure(call(host.rpc, SessionChannels.list, {}))).toMatchObject({
+    expect(await failure(channelCall(host, "sessions.list", "{}"))).toMatchObject({
       code: "Unavailable",
       subject: "sessions.list",
       exit: ExitCode.unavailable,
     });
-    const own = await failure(call(host.rpc, FileChannels.search, { cwd: "/work", query: "" }));
+    const own = await failure(channelCall(host, "files.search", '{"cwd": "/work", "query": ""}'));
     expect(own).toBeInstanceOf(HostError);
     expect(own).toMatchObject({ code: "Unavailable", subject: "/work" });
   });
 
   test("NotFound naming the channel says nothing serves it; one naming a session is the session's", async () => {
     const host = fakeHost({ calls: { "sessions.get": refused("NotFound", "s1") } });
-    const unserved = await failure(call(host.rpc, SessionChannels.list, {}));
+    const unserved = await failure(channelCall(host, "sessions.list"));
     expect(unserved).toBeInstanceOf(CliError);
-    expect(unserved).toMatchObject({ code: "NotFound", subject: "sessions.list" });
+    expect(unserved).toMatchObject({ code: "NotFound", subject: "sessions.list", exit: ExitCode.failed });
     expect(unserved.message).toContain("lemma plugins");
-    expect(await failure(call(host.rpc, SessionChannels.get, { sessionId: "s1" }))).toMatchObject({ code: "NotFound", subject: "s1" });
+    expect(await failure(channelCall(host, "sessions.get", '{"sessionId": "s1"}'))).toMatchObject({ code: "NotFound", subject: "s1" });
   });
 
-  test("a stream called, as `lemma channels call` can, is not said to be unserved", async () => {
+  test("a stream called is not said to be unserved", async () => {
     const host = fakeHost({ streams: { "agent.activity": () => fed({ type: "subscribed", running: [] }).stream } });
-    const called = await failure(Effect.mapError(host.rpc["Channel.Call"]({ id: "agent.activity" }), refined("agent.activity")));
-    expect(called).toMatchObject({ code: "NotFound", subject: "agent.activity", message: '"agent.activity" is a stream, not a call: open it' });
+    expect(await failure(channelCall(host, "agent.activity"))).toMatchObject({
+      code: "NotFound",
+      subject: "agent.activity",
+      message: '"agent.activity" is a stream, not a call: open it',
+    });
   });
 
   test("Withdrawn naming the channel is its plugin reloading: the command says to run it again, and exits 1", async () => {
     const host = fakeHost({ calls: { "agent.cancel": refused("Withdrawn", "agent.cancel") } });
-    const withdrawn = await failure(call(host.rpc, AgentChannels.cancel, { sessionId: "s1" }));
+    const withdrawn = await failure(channelCall(host, "agent.cancel", '{"sessionId": "s1"}'));
     expect(withdrawn).toBeInstanceOf(CliError);
     expect(withdrawn).toMatchObject({ code: "Withdrawn", subject: "agent.cancel", exit: ExitCode.failed });
     expect(withdrawn.message).toContain("run the command again");
   });
 
-  test("`lemma do` runs a command once: one its plugin's reload withdrew fails rather than running twice", async () => {
-    let runs = 0;
-    const host = fakeHost({
-      calls: {
-        "commands.run": () => {
-          runs++;
-          return refused("Withdrawn", "commands.run")();
-        },
-      },
-    });
-    const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
-    const failed = await failure(Effect.scoped(doCommand("host.toggle-plugin")(host, io, { json: false, answers: [] } as unknown as Options)));
-    expect(failed).toMatchObject({ code: "Withdrawn", subject: "commands.run", exit: ExitCode.failed });
-    expect(runs).toBe(1);
-  });
-
-  test("`lemma do` whose connection drops fails, saying to run it again, rather than running it twice", async () => {
-    let runs = 0;
-    const host: ReturnType<typeof fakeHost> = fakeHost({
-      calls: {
-        "commands.run": () =>
-          Effect.suspend(() => {
-            runs++;
-            host.drop();
-            return Effect.never;
-          }),
-      },
-    });
-    const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
-    const failed = await failure(Effect.scoped(doCommand("host.toggle-plugin")(host, io, { json: false, answers: [] } as unknown as Options)));
-    expect(failed).toMatchObject({ code: "Disconnected", subject: "commands.run", exit: ExitCode.unavailable });
-    expect(failed.message).toContain("run the command again");
-    expect(runs).toBe(1);
-  });
-
-  test("`lemma do` whose message the host refused as too large fails TooLarge: it never arrived, so running it again would not help", async () => {
-    const host: ReturnType<typeof fakeHost> = fakeHost({
-      calls: {
-        "commands.run": () =>
-          Effect.suspend(() => {
-            host.refuseTooLarge();
-            return Effect.never;
-          }),
-      },
-    });
-    const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
-    const failed = await failure(Effect.scoped(doCommand("host.toggle-plugin")(host, io, { json: false, answers: [] } as unknown as Options)));
-    expect(toCliError(failed)).toMatchObject({ code: "TooLarge", exit: ExitCode.failed });
+  test("a call answers its result, and one with none null", async () => {
+    const host = fakeHost({ calls: { "x.nothing": () => Effect.void, "x.list": () => Effect.succeed([1, 2]) } });
+    expect(await Effect.runPromise(channelCall(host, "x.nothing"))).toEqual({ json: null, text: "called x.nothing: no result" });
+    expect(await Effect.runPromise(channelCall(host, "x.list"))).toMatchObject({ json: [1, 2] });
   });
 });
 
 describe("a command that watches the host", () => {
-  const io: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
-  const options = { json: true, answers: [] } as unknown as Options;
-
   test("holds the host's questions if and only if it can answer them: watching, or leaving them to others, it holds none", async () => {
-    const subscribed = async (command: Command, terminal: Partial<Io>, fields: Partial<Options>) => {
-      const host = fakeHost({ calls: { "commands.run": () => Effect.never } });
-      const running = Effect.runFork(Effect.scoped(command(host, { ...io, ...terminal }, { ...options, ...fields })));
+    const subscribed = async (terminal: Partial<Io>, fields: Partial<Globals>) => {
+      const host = fakeHost({});
+      const running = Effect.runFork(eventsCommand(host, { ...quiet, ...terminal }, { ...options, ...fields }));
       if ((await settled(async () => host.subscriptions().length > 0 || undefined)) === undefined) throw new Error("never subscribed");
       await Effect.runPromise(Fiber.interrupt(running));
       return host.subscriptions();
     };
     const ask = { ask: () => new Promise<string>(() => {}) };
-    expect(await subscribed(eventsCommand, ask, {})).toEqual([false]);
-    expect(await subscribed(eventsCommand, ask, { questions: "ignore" })).toEqual([false]);
-    expect(await subscribed(eventsCommand, ask, { questions: "ask" })).toEqual([true]);
+    expect(await subscribed(ask, {})).toEqual([false]);
+    expect(await subscribed(ask, { questions: "ignore" })).toEqual([false]);
+    expect(await subscribed(ask, { questions: "ask" })).toEqual([true]);
     // Asked to ask, with no terminal to ask at: it cannot answer, so it holds none.
-    expect(await subscribed(eventsCommand, {}, { questions: "ask" })).toEqual([false]);
-    expect(await subscribed(eventsCommand, {}, { questions: "dismiss" })).toEqual([true]);
-    expect(await subscribed(eventsCommand, {}, { questions: "ignore", answers: ["yes"] })).toEqual([true]);
-    // A command's own questions, as any: at a terminal it asks, and without one or answers it holds none.
-    expect(await subscribed(doCommand("x.y"), ask, {})).toEqual([true]);
-    expect(await subscribed(doCommand("x.y"), {}, {})).toEqual([false]);
-    expect(await subscribed(doCommand("x.y"), {}, { answers: ["main"] })).toEqual([true]);
+    expect(await subscribed({}, { questions: "ask" })).toEqual([false]);
+    expect(await subscribed({}, { questions: "dismiss" })).toEqual([true]);
+    expect(await subscribed({}, { questions: "ignore", answers: ["yes"] })).toEqual([true]);
+    // `--answer` alone would answer every client's questions: it takes --questions too.
+    expect(await failure(eventsCommand(fakeHost({}), quiet, { ...options, answers: ["yes"] }))).toMatchObject({ code: "Usage" });
   });
 
   test("fails at once when its first connection fails, saying why as a one-shot command would", async () => {
@@ -142,84 +111,75 @@ describe("a command that watches the host", () => {
     });
     const unreachable = fakeHost({ rpcs: { "Host.Info": () => Effect.fail(refusedHttp) } });
     unreachable.drop();
-    expect(await failure(Effect.scoped(eventsCommand(unreachable, io, options)))).toBe(refusedHttp);
+    expect(await failure(eventsCommand(unreachable, quiet, options))).toBe(refusedHttp);
 
     // HTTP answers: the socket's own reason is all there is.
     const socketOnly = fakeHost({});
     socketOnly.drop();
-    const failed = await failure(Effect.scoped(eventsCommand(socketOnly, io, options)));
+    const failed = await failure(eventsCommand(socketOnly, quiet, options));
     expect(failed).toMatchObject({ code: "Unreachable", exit: ExitCode.unavailable });
     expect(failed.message).toContain("not over its WebSocket");
   });
 });
 
-describe("following a stream", () => {
-  test("interrupting the fiber that reads it closes the stream, while the command's scope goes on", async () => {
-    const closed = Deferred.makeUnsafe<void>();
-    const host = fakeHost({
-      streams: {
-        "agent.activity": () => fed<AgentActivity>({ type: "subscribed", running: [] }).stream.pipe(Stream.ensuring(Deferred.succeed(closed, undefined))),
-      },
-    });
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const reader = yield* follow(
-            yield* host.host({ answers: false }),
-            AgentChannels.activity,
-            () => undefined,
-            () => Effect.void,
-          );
-          yield* Fiber.interrupt(reader);
-          yield* Deferred.await(closed);
-        }),
-      ),
-    );
-  });
-});
-
 describe("lemma events", () => {
-  const options = { json: true, answers: [] } as unknown as Options;
+  /** The streams a host serves that take no payload, and one that takes one (a session's log), refusing none. */
+  const streams = (activities: Fed<AgentActivity>[]) => ({
+    "agent.activity": () => {
+      const opened = fed<AgentActivity>({ type: "subscribed", running: [] });
+      activities.push(opened);
+      return opened.stream;
+    },
+    "sessions.changes": () => fed<SessionsChange>({ type: "subscribed" }, { type: "session-removed", sessionId: "s1" }).stream,
+    "llm.changes": () => fed({ type: "subscribed" }).stream,
+    "commands.changes": () => fed([]).stream,
+    "sessions.log": () => Stream.fail(new HostError({ code: "InvalidPayload", subject: "sessions.log", message: "Expected { sessionId }" })),
+  });
+  const until = async (done: () => boolean, lines: unknown) => {
+    if ((await settled(async () => done() || undefined)) === undefined) throw new Error(`timed out: ${JSON.stringify(lines)}`);
+  };
 
   test("prints each stream's elements with where they came from, following one its plugin withdrew again", async () => {
     const activities: Fed<AgentActivity>[] = [];
-    const host = fakeHost({
-      calls: { "sessions.get": () => Effect.succeed({ id: "s1", cwd: "/", createdAt: 0, updatedAt: 0, lastSeq: 0 }) },
-      streams: {
-        "agent.activity": () => {
-          const opened = fed<AgentActivity>({ type: "subscribed", running: [] });
-          activities.push(opened);
-          return opened.stream;
-        },
-        "sessions.changes": () =>
-          fed<SessionsChange>({ type: "subscribed" }, { type: "session-removed", sessionId: "s1" }, { type: "session-removed", sessionId: "s2" }).stream,
-        "llm.changes": () => fed({ type: "subscribed" }).stream,
-        "commands.changes": () => fed([]).stream,
-        "sessions.log": () => fed({ type: "subscribed", events: [] }).stream,
-      },
-    });
+    const host = fakeHost({ streams: streams(activities) });
     const lines: { from: string; element: { type?: string } }[] = [];
-    const io: Io = { env: {}, cwd: "/", out: (text) => void lines.push(JSON.parse(text)), err: () => {} };
-    const following = Effect.runFork(Effect.scoped(eventsCommand(host, io, { ...options, session: "s1" })));
-    const until = async (done: () => boolean) => {
-      if ((await settled(async () => done() || undefined)) === undefined) throw new Error(`timed out: ${JSON.stringify(lines)}`);
-    };
-    await until(() => activities.length === 1 && lines.some((line) => line.from === "sessions.log"));
-    activities[0]!.push(
-      { type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [] },
-      { type: "turn-started", sessionId: "s2", turnId: "t2", requestIds: [] },
-    );
+    const io: Io = { ...quiet, out: (text) => void lines.push(JSON.parse(text)) };
+    const following = Effect.runFork(eventsCommand(host, io, options));
+    await until(() => activities.length === 1 && lines.some((line) => line.from === "commands.changes"), lines);
+    activities[0]!.push({ type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [] });
     activities[0]!.fail(new HostError({ code: "Withdrawn", subject: "agent.activity", message: "withdrawn" }));
-    await until(() => activities.length === 2);
-    activities[1]!.push({ type: "turn-ended", sessionId: "s1", turnId: "t1", usage: emptyUsage, reason: "done" });
-    await until(() => lines.some((line) => line.element.type === "turn-ended"));
+    await until(() => activities.length === 2, lines);
+    activities[1]!.push({ type: "turn-ended", sessionId: "s1", turnId: "t1", usage, reason: "done" });
+    await until(() => lines.some((line) => line.element.type === "turn-ended"), lines);
     await Effect.runPromise(Fiber.interrupt(following));
     const from = (source: string) => lines.filter((line) => line.from === source).map((line) => line.element.type ?? "list");
     expect(from("agent.activity")).toEqual(["subscribed", "turn-started", "subscribed", "turn-ended"]);
     expect(from("sessions.changes")).toEqual(["subscribed", "session-removed"]);
     expect(from("llm.changes")).toEqual(["subscribed"]);
     expect(from("commands.changes")).toEqual(["list"]);
-    expect(from("sessions.log")).toEqual(["subscribed"]);
+    // A stream that takes a payload is left out.
+    expect(from("sessions.log")).toEqual([]);
+  });
+
+  test("--channel follows only those streams, and says which take a payload", async () => {
+    const activities: Fed<AgentActivity>[] = [];
+    const host = fakeHost({ streams: streams(activities) });
+    const lines: string[] = [];
+    const io: Io = { ...quiet, out: (text) => void lines.push(text) };
+    const following = Effect.runFork(eventsCommand(host, io, { ...options, json: false }, ["agent.activity", "sessions.log"]));
+    await until(() => activities.length === 1 && lines.some((line) => line.startsWith("sessions.log takes a payload")), lines);
+    activities[0]!.push({ type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [] });
+    await until(() => lines.some((line) => line.includes("turn-started")), lines);
+    await Effect.runPromise(Fiber.interrupt(following));
+    // Each stream in its own order.
+    expect(lines).toHaveLength(3);
+    expect(lines).toEqual(
+      expect.arrayContaining([
+        "sessions.log takes a payload: lemma channels open sessions.log '<json>'",
+        'agent.activity: {"type":"subscribed","running":[]}',
+        'agent.activity: {"type":"turn-started","sessionId":"s1","turnId":"t1","requestIds":[]}',
+      ]),
+    );
   });
 
   test("answers a question already open, which the host sends as it subscribes, before its connection is confirmed", async () => {
@@ -239,70 +199,37 @@ describe("lemma events", () => {
       },
     });
     const lines: { from: string; element: unknown }[] = [];
-    const io: Io = { env: {}, cwd: "/", out: (text) => void lines.push(JSON.parse(text)), err: () => {} };
-    const watching = Effect.runFork(Effect.scoped(eventsCommand(host, io, { ...options, questions: "ignore", answers: ["yes"] })));
+    const io: Io = { ...quiet, out: (text) => void lines.push(JSON.parse(text)) };
+    const watching = Effect.runFork(eventsCommand(host, io, { ...options, questions: "ignore", answers: ["yes"] }));
     const given = await Effect.runPromise(Deferred.await(answered).pipe(Effect.timeoutOption(Duration.seconds(2))));
     await Effect.runPromise(Fiber.interrupt(watching));
     expect(given).toEqual(Option.some({ id: "q1", answer: { type: "confirm", value: true } }));
     expect(lines).toContainEqual({ from: "host", element: { type: "interaction", request: approval } });
   });
 
-  test("goes on after its connection drops: each stream says it is subscribed anew, and the log from the last event printed", async () => {
-    const logged: SessionEvent[] = [];
-    const logs: Fed<SessionLogUpdate>[] = [];
-    const append = (...data: readonly EventData[]) => {
-      for (const item of data) {
-        const seq = logged.length + 1;
-        const event: SessionEvent = { seq, id: `e${seq}`, parent: seq === 1 ? null : `e${seq - 1}`, at: seq, data: item };
-        logged.push(event);
-        logs.at(-1)?.push({ type: "appended", event });
-      }
-    };
-    const host = fakeHost({
-      calls: { "sessions.get": () => Effect.sync(() => ({ id: "s1", cwd: "/", createdAt: 0, updatedAt: 0, lastSeq: logged.length })) },
-      streams: {
-        "agent.activity": () => fed<AgentActivity>({ type: "subscribed", running: [] }).stream,
-        "sessions.changes": () => fed<SessionsChange>({ type: "subscribed" }).stream,
-        "llm.changes": () => fed({ type: "subscribed" }).stream,
-        "commands.changes": () => fed([]).stream,
-        "sessions.log": ({ after }: { after: number }) => {
-          const opened = fed<SessionLogUpdate>({ type: "subscribed", events: logged.filter((event) => event.seq > after) });
-          logs.push(opened);
-          return opened.stream;
-        },
-      },
-    });
-    const lines: { from: string; element: SessionLogUpdate | { type?: string } }[] = [];
+  test("goes on after its connection drops: each stream says it is subscribed anew", async () => {
+    const activities: Fed<AgentActivity>[] = [];
+    const host = fakeHost({ streams: streams(activities) });
+    const lines: { from: string; element: { type?: string } }[] = [];
     const said: string[] = [];
-    const io: Io = { env: {}, cwd: "/", out: (text) => void lines.push(JSON.parse(text)), err: (text) => void said.push(text) };
-    const following = Effect.runFork(Effect.scoped(eventsCommand(host, io, { ...options, session: "s1" })));
-    const until = async (done: () => boolean) => {
-      if ((await settled(async () => done() || undefined)) === undefined) throw new Error(`timed out: ${JSON.stringify(lines)}`);
-    };
-    const seqs = () =>
-      lines.flatMap(({ from, element }) =>
-        from !== "sessions.log" ? [] : "event" in element ? [element.event.seq] : "events" in element ? element.events.map((event) => event.seq) : [],
-      );
-    await until(() => logs.length === 1 && lines.some((line) => line.from === "sessions.log"));
-    append({ type: "turn-start", turnId: "t1" }, { type: "turn-end", turnId: "t1", reason: "done" });
-    await until(() => seqs().length === 2);
-    // The log goes on while the connection is down; the command hears it once it is back.
-    host.drop();
-    append({ type: "turn-start", turnId: "t2" }, { type: "turn-end", turnId: "t2", reason: "done" });
-    host.restore();
-    await until(() => logs.length === 2 && seqs().length === 4);
-    append({ type: "turn-start", turnId: "t3" });
-    await until(() => seqs().length === 5);
-    await Effect.runPromise(Fiber.interrupt(following));
-    expect(seqs()).toEqual([1, 2, 3, 4, 5]);
+    const io: Io = { ...quiet, out: (text) => void lines.push(JSON.parse(text)), err: (text) => void said.push(text) };
+    const following = Effect.runFork(eventsCommand(host, io, options));
     const subscribed = (source: string) => lines.filter((line) => line.from === source && line.element.type === "subscribed").length;
-    expect(["agent.activity", "sessions.changes", "llm.changes", "sessions.log"].map(subscribed)).toEqual([2, 2, 2, 2]);
+    const sources = ["agent.activity", "sessions.changes", "llm.changes"];
+    await until(() => sources.every((source) => subscribed(source) === 1), lines);
+    host.drop();
+    await until(() => said.length === 1, said);
+    host.restore();
+    await until(() => sources.every((source) => subscribed(source) === 2), lines);
+    // Heard on the new connection.
+    activities[1]!.push({ type: "turn-started", sessionId: "s1", turnId: "t1", requestIds: [] });
+    await until(() => lines.some((line) => line.element.type === "turn-started"), lines);
+    await Effect.runPromise(Fiber.interrupt(following));
     expect(said).toEqual(["lemma: lost the connection to the host; reconnecting…", "lemma: reconnected to the host"]);
   });
 });
 
 describe("a command's --answer values", () => {
-  const options = { json: true, answers: [] } as unknown as Options;
   const confirm = (id: string): InteractionRequest => ({ type: "confirm", id, title: `${id}?` });
 
   /**
@@ -365,8 +292,8 @@ describe("a command's --answer values", () => {
   };
 
   /** Runs `command` in the background: `until` waits for a condition, two seconds at most, and `stop` ends it. */
-  const started = (command: Effect.Effect<unknown, unknown, Scope.Scope>) => {
-    const running = Effect.runFork(Effect.scoped(command));
+  const started = (command: Effect.Effect<unknown, unknown>) => {
+    const running = Effect.runFork(command);
     return {
       until: (done: () => boolean) =>
         settled(
@@ -384,8 +311,6 @@ describe("a command's --answer values", () => {
       host.close("old");
       host.ask(confirm("live"));
     });
-
-  const quiet: Io = { env: {}, cwd: "/", out: () => {}, err: () => {} };
 
   test("one that reached a question already closed goes to the next question, as the command connects", async () => {
     const host = asking([confirm("old")], 3);

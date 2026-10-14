@@ -1,28 +1,28 @@
 {
-  "name": "@lemma/cli",
+  "name": "@lemma/cli-app",
   "version": "0.1.0",
   "private": true,
+  "description": "The lemma command: start and keep hosts, set them up, look inside them, and use what their plugins add",
   "bin": {
     "lemma": "./src/main.ts"
   },
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "node scripts/build.ts"
   },
   "dependencies": {
-    "@lemma/agent": "workspace:*",
+    "@lemma/cli": "workspace:*",
     "@lemma/client": "workspace:*",
-    "@lemma/commands": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
-    "@lemma/llm": "workspace:*",
-    "@lemma/sessions": "workspace:*",
-    "@lemma/workspace": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.4",
+    "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
+    "esbuild": "0.28.2",
     "typescript": "7.0.2",
     "vitest": "5.0.4"
   }

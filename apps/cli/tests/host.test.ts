@@ -30,7 +30,16 @@ describe("against a running host", () => {
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).toContain("agent.loop");
     expect(status.plugins.map((plugin: { id: string }) => plugin.id)).not.toContain("interaction");
     expect(status.plugins.every((plugin: { state: string }) => plugin.state === "active")).toBe(true);
-    expect(status.running).toEqual([]);
+    // Where it runs, and who started it: this test, by hand.
+    const { url } = JSON.parse(await readFile(join(home, "transport.json"), "utf8")) as { url: string };
+    expect(status).toMatchObject({ environment: "local", source: "local", url, pid: lemma.host.pid, inProgress: [] });
+    expect(status.info.pid).toBe(lemma.host.pid);
+    expect(status.info.startedBy).toBeUndefined();
+    expect(status.clients).toBeInstanceOf(Array);
+    const text = await invoke(["status"], home);
+    expect(text.out).toMatch(/^environment +local \(http/);
+    expect(text.out).toMatch(/\nstarted +.*by hand \(lemma serve\)/);
+    expect(text.out).toMatch(/\nin progress +nothing/);
   });
 
   test("lists providers, models, and open questions", async () => {
@@ -43,25 +52,78 @@ describe("against a running host", () => {
   test("session list is scoped to a directory unless --all", async () => {
     const empty = await mkdtemp(join(tmpdir(), "lemma-cli-empty-"));
     try {
-      expect(await invoke(["session", "list"], home, empty)).toMatchObject({ code: ExitCode.ok, out: `No sessions in ${empty}.` });
+      expect(await invoke(["sessions", "list"], home, empty)).toMatchObject({ code: ExitCode.ok, out: `No sessions in ${empty}.` });
     } finally {
       await rm(empty, { recursive: true, force: true });
     }
-    expect(JSON.parse((await invoke(["session", "list", "--all", "--json"], home)).out)).toBeInstanceOf(Array);
+    expect(JSON.parse((await invoke(["sessions", "list", "--all", "--json"], home)).out)).toBeInstanceOf(Array);
   });
 
-  test("open prints the web app's address for a session, with the token", async () => {
-    const session = JSON.parse((await invoke(["session", "new", "--json"], home)).out).id as string;
-    const { url } = JSON.parse((await invoke(["open", session, "trajectory", "--json"], home)).out) as { url: string };
-    const address = new URL(url);
-    expect(address.pathname).toBe(`/threads/${encodeURIComponent(session)}/trajectory`);
+  test("open prints the web app's address, with the token; sessions open answers a session's path in it", async () => {
+    const session = JSON.parse((await invoke(["sessions", "new", "--json"], home)).out).id as string;
+    const { path } = JSON.parse((await invoke(["sessions", "open", session, "trajectory", "--json"], home)).out) as { path: string };
+    expect(path).toBe(`/threads/${encodeURIComponent(session)}/trajectory`);
+    const address = new URL(JSON.parse((await invoke(["open", path, "--json"], home)).out).url);
+    expect(address.pathname).toBe(path);
     expect(address.searchParams.get("token")).toBeTruthy();
     expect(new URL(JSON.parse((await invoke(["open", "--json"], home)).out).url).pathname).toBe("/");
-    expect(JSON.parse((await invoke(["open", "missing", "--json"], home)).err).error).toMatchObject({ code: "NotFound" });
+    expect((await invoke(["open", "threads"], home)).code).toBe(ExitCode.usage);
+    expect(JSON.parse((await invoke(["sessions", "open", "missing", "--json"], home)).err).error).toMatchObject({ code: "NotFound" });
+  });
+
+  test("a plugin's command is parsed with its spec: a usage error exits 2, a typo is named, a group lists its commands", async () => {
+    const missing = await invoke(["sessions", "show", "--json"], home);
+    expect(missing.code).toBe(ExitCode.usage);
+    expect(JSON.parse(missing.err).error.code).toBe("Usage");
+    expect((await invoke(["run", "s", "hi", "--thinking", "huge"], home)).code).toBe(ExitCode.usage);
+    // Its own checks, on the host, are usage errors too.
+    expect((await invoke(["sessions", "list", "--all", "--cwd", "/x"], home)).code).toBe(ExitCode.usage);
+    const typo = await invoke(["sessions", "lst", "--json"], home);
+    expect(typo.code).toBe(ExitCode.usage);
+    expect(JSON.parse(typo.err).error).toMatchObject({ code: "UnknownCommand", message: expect.stringContaining('did you mean "lemma sessions list"?') });
+    const group = await invoke(["sessions"], home);
+    expect(group.code).toBe(ExitCode.ok);
+    expect(group.out).toMatch(/^lemma sessions <command>\n/);
+    expect(group.out).toContain("sessions inspect");
+    expect((await invoke(["sessions", "show", "--help"], home)).out).toContain("lemma sessions show <id>");
+  });
+
+  test("--quiet prints the ids a command reports; --fields keeps those fields of each item", async () => {
+    const made = (await invoke(["sessions", "new", "--cwd", home, "-q"], home)).out;
+    expect(made).toMatch(/^\S+$/);
+    const ids = (await invoke(["sessions", "list", "--cwd", home, "--quiet"], home)).out.split("\n");
+    expect(ids).toContain(made);
+    const rows = JSON.parse((await invoke(["sessions", "list", "--cwd", home, "--json", "--fields", "id,cwd"], home)).out) as object[];
+    expect(rows).toContainEqual({ id: made, cwd: home });
+    expect(rows.every((row) => Object.keys(row).every((key) => key === "id" || key === "cwd"))).toBe(true);
+    // A builtin's ids too: the plugins, one per line.
+    expect((await invoke(["plugins", "-q"], home)).out.split("\n")).toContain("agent.loop");
+  });
+
+  test("help --json lists every command, lemma's own and the host plugins', with a JSON Schema of what each takes", async () => {
+    const help = JSON.parse((await invoke(["help", "--json"], home)).out) as {
+      host: string | null;
+      exitCodes: Record<string, number>;
+      commands: {
+        path: string[];
+        source: string;
+        input: { type: string; properties: Record<string, { properties: Record<string, unknown>; required?: string[] }> };
+      }[];
+    };
+    expect(help.host).toBe("local");
+    expect(help.exitCodes).toMatchObject({ ok: 0, usage: 2, unavailable: 3 });
+    const find = (path: string) => help.commands.find((command) => command.path.join(" ") === path);
+    expect(find("serve")).toMatchObject({ source: "lemma", input: { type: "object" } });
+    expect(find("serve")!.input.properties.flags!.properties).toMatchObject({ detach: { type: "boolean" }, port: { type: "number" } });
+    expect(find("env add")!.input.properties.args!.required).toEqual(["name", "url"]);
+    expect(find("sessions list")).toMatchObject({ source: "sessions.cli" });
+    expect(find("run")).toMatchObject({ source: "agent.cli" });
+    expect(find("login")).toMatchObject({ source: "llm.cli" });
+    expect((await invoke(["help"], home)).out).toContain("From the plugins of the host local");
   });
 
   test("a domain error keeps the host's code", async () => {
-    const result = await invoke(["session", "show", "missing", "--json"], home);
+    const result = await invoke(["sessions", "show", "missing", "--json"], home);
     expect(result.code).toBe(ExitCode.failed);
     expect(JSON.parse(result.err).error).toMatchObject({ code: "NotFound", subject: "missing" });
   });
@@ -105,8 +167,8 @@ describe("against a running host", () => {
       expect(JSON.parse(llmOff.out)).toMatchObject({ disabled: "llm.pi-ai", stopped: expect.arrayContaining(["llm.pi-ai", "agent.loop"]) });
       expect((await rows(userConfig))["llm.pi-ai"].enabled).toBe(false);
       expect(await find("agent.loop")).toMatchObject({ enabled: true, state: "disabled", haltedBy: "llm.pi-ai" });
-      // With no agent, nothing serves `agent.running`: the host still answers, unsure what runs.
-      expect(await invoke(["status"], home)).toMatchObject({ code: ExitCode.ok, out: expect.stringMatching(/\nrunning +unknown: no agent runs/) });
+      // With no agent, nothing reports the turns running: the host still answers.
+      expect(await invoke(["status"], home)).toMatchObject({ code: ExitCode.ok, out: expect.stringMatching(/\nin progress +nothing/) });
       const llmOn = await invoke(["plugins", "enable", "llm.pi-ai", "--json"], home);
       expect(JSON.parse(llmOn.out)).toMatchObject({ enabled: "llm.pi-ai", started: expect.arrayContaining(["llm.pi-ai", "agent.loop"]) });
       expect((await rows(userConfig))["llm.pi-ai"].enabled).toBeUndefined();
@@ -249,8 +311,8 @@ describe("against a running host", () => {
       expect(await startedAt()).toBe(before);
 
       const wrong = await invoke(["plugins", "config", "agent.loop", "maxSteps", "1.5", "--json"], home);
-      expect(wrong.code).toBe(ExitCode.failed);
-      expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Usage", message: "maxSteps must be a whole number" });
+      expect(wrong.code).toBe(ExitCode.usage);
+      expect(JSON.parse(wrong.err).error).toMatchObject({ code: "Usage", message: expect.stringMatching(/^maxSteps must be a whole number/) });
       const unknown = await invoke(["plugins", "config", "agent.loop", "speed", "9", "--json"], home);
       expect(JSON.parse(unknown.err).error.message).toContain("its fields are defaultModel, systemPrompt, cli, maxSteps");
 
@@ -326,26 +388,26 @@ describe("against a running host", () => {
     }
   });
 
-  test("do lists the commands plugins registered and runs one, answering its questions", async () => {
-    const listed = JSON.parse((await invoke(["do", "--json"], home)).out).map((command: { id: string }) => command.id);
+  test("commands lists the commands plugins registered and commands run runs one, answering its questions", async () => {
+    const listed = JSON.parse((await invoke(["commands", "--json"], home)).out).map((command: { id: string }) => command.id);
     expect(listed).toEqual(expect.arrayContaining(["host.reload", "host.restart-plugin", "llm.logout", "workspace.checkout", "workspace.new-branch"]));
-    expect(await invoke(["do", "host.reload"], home)).toMatchObject({ code: ExitCode.ok, out: "Config reloaded; nothing changed" });
+    expect(await invoke(["commands", "run", "host.reload"], home)).toMatchObject({ code: ExitCode.ok, out: "Config reloaded; nothing changed" });
 
     const repo = await mkdtemp(join(tmpdir(), "lemma-cli-repo-"));
     try {
       execFileSync("git", ["init", "-q", "-b", "main"], { cwd: repo });
       execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init"], { cwd: repo });
-      expect(await invoke(["do", "workspace.new-branch", "--answer", "topic"], home, repo)).toMatchObject({
+      expect(await invoke(["commands", "run", "workspace.new-branch", "--answer", "topic"], home, repo)).toMatchObject({
         code: ExitCode.ok,
         out: "Created and switched to topic",
       });
-      const dismissed = await invoke(["do", "workspace.checkout", "--questions", "dismiss", "--json"], home, repo);
+      const dismissed = await invoke(["commands", "run", "workspace.checkout", "--questions", "dismiss", "--json"], home, repo);
       expect(dismissed.code).toBe(ExitCode.failed);
-      expect(JSON.parse(dismissed.err.split("\n").at(-1)!).error).toMatchObject({ code: "Cancelled", subject: "workspace.checkout" });
+      expect(JSON.parse(dismissed.err.split("\n").at(-1)!).error).toMatchObject({ code: "Cancelled", subject: "commands run" });
     } finally {
       await rm(repo, { recursive: true, force: true });
     }
-    expect(JSON.parse((await invoke(["do", "nope", "--json"], home)).err).error).toMatchObject({ code: "NotFound", subject: "nope" });
+    expect(JSON.parse((await invoke(["commands", "run", "nope", "--json"], home)).err).error).toMatchObject({ code: "NotFound", message: 'No command "nope"' });
   }, 30_000);
 
   test("workspace files finds a project's files by a fuzzy query", async () => {

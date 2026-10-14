@@ -16,12 +16,12 @@ describe("a host killed mid-turn", () => {
   printOnFailure(() => lemma?.output());
 
   const show = async (session: string) =>
-    JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as { branch: { data: Record<string, any> }[] };
+    JSON.parse((await invoke(["sessions", "show", session, "--json"], home)).out) as { branch: { data: Record<string, any> }[] };
 
   test("resumes its turns when it starts again: a cut-off command is reported with its output, a cut-off answer is asked again", async () => {
     const first = lemma.host;
-    const slow = (await invoke(["session", "new", "--cwd", home], home)).out;
-    const ramble = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const slow = (await invoke(["sessions", "new", "--cwd", home], home)).out;
+    const ramble = (await invoke(["sessions", "new", "--cwd", home], home)).out;
     // Both are left waiting when the host dies under them: the command runs until then, and the answer stops halfway.
     void invoke(["run", slow, "do it slowly"], home);
     void invoke(["run", ramble, "ramble on gate:crash"], home);

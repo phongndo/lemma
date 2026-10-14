@@ -2,8 +2,7 @@ import { Data } from "effect";
 import type { Effect, Scope } from "effect";
 import type { RpcClientError } from "effect/rpc";
 import type { HostError, RuntimeEvent } from "@lemma/contracts";
-import type { WhenBusy } from "@lemma/agent";
-import type { ThinkingLevel } from "@lemma/llm";
+import type { ArgSpec, ArgsOf, CommandSpec, FlagSpec, FlagsOf } from "@lemma/cli";
 import type { Host, HostRpcClient } from "@lemma/client";
 import type { Target } from "@lemma/contracts/discovery";
 
@@ -15,8 +14,8 @@ export class CliError extends Data.TaggedError("CliError")<{
   readonly message: string;
   readonly subject?: string;
   readonly exit: number;
-  /** The prompt a failed `run` may have placed: running it again with this id rejoins its turn. */
-  readonly requestId?: string;
+  /** Arguments that make running the command again safe (a run's `--request-id`), when it may have taken effect. */
+  readonly rerun?: readonly string[];
 }> {}
 
 export const usage = (message: string) => new CliError({ code: "Usage", message: `${message}\nRun \`lemma --help\` for usage.`, exit: ExitCode.usage });
@@ -39,52 +38,37 @@ export interface Io {
    */
   readonly drained?: (signal: AbortSignal) => Promise<void> | undefined;
   readonly err: (text: string) => void;
+  /** stderr without a line break. */
+  readonly errWrite?: (text: string) => void;
   /** Asks the person at the terminal; absent when stdin is not one. Aborting `signal` withdraws the prompt. */
   readonly ask?: (question: string, secret: boolean, signal?: AbortSignal) => Promise<string>;
   /** Opens a link in this machine's browser; absent where there is none to open (no display, or over SSH). */
   readonly open?: (url: string) => void;
   /** Aborted when the person interrupts (Ctrl+C): the command stops, running its cleanup (a login cancels). */
   readonly interrupt?: AbortSignal;
+  /** The terminal's width, when stdout is one. */
+  readonly columns?: number;
+  /** Runs the host in this process (`lemma serve` in the foreground); absent in tests. Resolves when it stops. */
+  readonly serve?: (argv: readonly string[]) => Promise<void>;
+  /** The command that runs this CLI again, `[node, ...flags, main.ts]`: what `serve --detach` and `service install` start. */
+  readonly self?: readonly string[];
 }
 
 /** What to do with a question the host asks while a command is attached. */
 export type QuestionPolicy = "ask" | "ignore" | "dismiss";
 
-export interface Options {
+/** The flags every command takes (`GLOBAL_FLAGS` in `@lemma/cli`), read before the command's own. */
+export interface Globals {
   readonly json: boolean;
-  readonly all: boolean;
-  readonly cwd?: string | undefined;
-  readonly step?: string | undefined;
-  readonly filter?: string | undefined;
-  readonly records: boolean;
-  readonly view?: "system" | "tools" | "diff" | "rebuilt" | undefined;
-  readonly sort?: string | undefined;
-  readonly desc: boolean;
-  readonly range?: string | undefined;
-  readonly model?: string | undefined;
-  readonly thinking?: ThinkingLevel | undefined;
-  readonly images: readonly string[];
-  readonly follow: boolean;
+  readonly quiet: boolean;
+  readonly env?: string | undefined;
+  readonly fields?: readonly string[] | undefined;
   readonly questions?: QuestionPolicy | undefined;
   readonly answers: readonly string[];
-  readonly method?: string | undefined;
-  readonly create: boolean;
-  readonly base?: string | undefined;
-  readonly path?: string | undefined;
-  /** `workspace files`: at most this many entries. */
-  readonly limit?: number | undefined;
-  readonly session?: string | undefined;
-  readonly force: boolean;
-  readonly project: boolean;
-  readonly unset: boolean;
-  readonly token?: string | undefined;
-  /** `run`: the submission's id, for exactly-once delivery. */
-  readonly requestId?: string | undefined;
-  /** `run`: what the prompt does while the session has a turn running. */
-  readonly whenBusy?: WhenBusy | undefined;
+  readonly help: boolean;
 }
 
-/** The host commands go to: `LEMMA_URL`, else `<home>/remote.json`, else the local host's transport.json. */
+/** The host commands go to: `--env`, `LEMMA_URL`, `LEMMA_ENV`, the default environment, else the local host. */
 export type { Target } from "@lemma/contracts/discovery";
 
 export interface Connection {
@@ -112,12 +96,44 @@ export interface Output {
   readonly exit?: number;
   /** Print the JSON on one line: the last line of an NDJSON stream. */
   readonly compact?: boolean;
+  /** What `--quiet` prints, one per line. */
+  readonly ids?: readonly string[];
 }
 
 export type Failure = HostError | RpcClientError.RpcClientError | CliError;
-export type Command = (connection: Connection, io: Io, options: Options) => Effect.Effect<Output | undefined, Failure, Scope.Scope>;
 
-/** A command about which host the others go to (`remote`, `token`): it runs without connecting to that host. */
-export interface Unattached {
-  readonly unattached: Effect.Effect<Output, Failure, Scope.Scope>;
+/** What a command of the `lemma` command's own runs with. */
+export interface Invocation {
+  readonly args: Readonly<Record<string, unknown>>;
+  readonly flags: Readonly<Record<string, unknown>>;
+  readonly io: Io;
+  readonly globals: Globals;
+  /** The host commands go to, connected on first use and closed with the command: a command that needs none never asks. */
+  readonly connect: Effect.Effect<Connection, Failure, Scope.Scope>;
+  /** Runs the `lemma` command again in this process with other words: `plugins check` reads a host's answers as JSON. */
+  readonly rerun: (argv: readonly string[], io: Io) => Promise<number>;
 }
+
+/**
+ * A command of the `lemma` command itself: one that needs no host plugin,
+ * either because it runs without a host (`serve`, `env`, `config`) or reads
+ * what the runtime serves (`status`, `plugins`). Plugins' commands come from
+ * the host (`CliCommands`); these come first, so no plugin shadows one.
+ */
+export interface Builtin extends CommandSpec {
+  /** Where `lemma help` lists it. */
+  readonly group: string;
+  readonly run: (invocation: Invocation) => Effect.Effect<Output | undefined, Failure, Scope.Scope>;
+}
+
+/** A builtin typed by its spec, as `defineCliCommand` types a plugin's: `args` and `flags` arrive as it declares them. */
+export const defineBuiltin = <const Args extends readonly ArgSpec[] = readonly [], const Flags extends Readonly<Record<string, FlagSpec>> = {}>(
+  command: Omit<CommandSpec, "args" | "flags"> & {
+    readonly group: string;
+    readonly args?: Args;
+    readonly flags?: Flags;
+    readonly run: (
+      invocation: Omit<Invocation, "args" | "flags"> & { readonly args: ArgsOf<Args>; readonly flags: FlagsOf<Flags> },
+    ) => Effect.Effect<Output | undefined, Failure, Scope.Scope>;
+  },
+): Builtin => command as unknown as Builtin;

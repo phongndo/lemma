@@ -7,10 +7,11 @@ import { basename, extname, join, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { Deferred, Effect } from "effect";
+import type { Scope } from "effect";
 import type { PluginStatus } from "@lemma/contracts";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { CliError, ExitCode } from "./command.ts";
-import type { Io, Output, Unattached } from "./command.ts";
+import type { Failure, Io, Output } from "./command.ts";
 
 /*
  * `lemma plugins check [path]`: a plugin as the host makes of it, before it is installed. A host of its own starts in
@@ -153,7 +154,15 @@ const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>)
     const child = yield* Effect.acquireRelease(
       Effect.sync(() =>
         spawn(process.execPath, ["--conditions=lemma-source", cliMain, "serve", "--no-open"], {
-          env: { ...process.env, ...env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined, LEMMA_SUPERVISED: "1" } as NodeJS.ProcessEnv,
+          env: {
+            ...process.env,
+            ...env,
+            LEMMA_HOME: home,
+            LEMMA_URL: undefined,
+            LEMMA_TOKEN: undefined,
+            LEMMA_ENV: undefined,
+            LEMMA_SUPERVISED: "1",
+          } as NodeJS.ProcessEnv,
           stdio: ["pipe", "pipe", "pipe"],
           detached: true,
         }),
@@ -189,7 +198,7 @@ const ask = (run: Runner, io: Io, home: string, argv: readonly string[]): Effect
     let err = "";
     const code = await run([...argv, "--json"], {
       ...io,
-      env: { ...io.env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined },
+      env: { ...io.env, LEMMA_HOME: home, LEMMA_URL: undefined, LEMMA_TOKEN: undefined, LEMMA_ENV: undefined },
       out: (text) => void (out += `${text}\n`),
       err: (text) => void (err += `${text}\n`),
     });
@@ -210,103 +219,98 @@ export interface Checked {
 }
 
 /** `lemma plugins check [path]`: a host of its own with the plugin in it, then what it made of it, and stopped. */
-export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Unattached => {
+export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Effect.Effect<Output, Failure, Scope.Scope> => {
   const plugin = resolve(io.cwd, path ?? ".");
-  return {
-    unattached: Effect.gen(function* () {
-      if (!existsSync(plugin)) return yield* fail("NotFound", `${plugin} does not exist`);
-      const home = yield* homeWith(plugin);
-      let host = yield* hostIn(home, io.env);
-      // A plugin of one's own is required to start, so one that fails keeps the host down (it exits, naming it): once
-      // more, not required, so the host starts with it failed, and says why as it says of any plugin.
-      const failing = named(host.lines);
-      // How the first host, failed, left things: stopped first, so the retry starts as clean as it did.
-      let failed: Stopped | undefined;
-      if (!host.started && host.ended && failing.length > 0) {
-        failed = yield* host.stop;
-        yield* Effect.promise(() => configure(home, failing));
-        host = yield* hostIn(home, io.env);
-      }
-      if (!host.started) {
-        // A host neither serving nor ended is still starting: it goes before anything else does, and one that ended
-        // takes its group with it, so either says what it left.
-        const ended = host.ended;
-        const problems = stopProblems(yield* host.stop, failed);
-        // What it said, but its advice to start without plugin files, which is no help here.
-        const said = host.lines.filter((line) => !line.startsWith("lemma: --safe"));
-        const why = ended ? "The host did not start with it:" : `The host had not started with it after ${START_MS / 1000} s:`;
-        return {
-          json: { started: false, ...(ended ? {} : { timedOut: true }), output: said, ...(problems.length === 0 ? {} : { problems }) },
-          text: [why, ...said.map((line) => `  ${line}`), ...(problems.length === 0 ? [] : ["problems:", ...problems.map((problem) => `  ${problem}`)])].join(
-            "\n",
-          ),
-          exit: ExitCode.failed,
-        } satisfies Output;
-      }
-      const listed = yield* ask(run, io, home, ["plugins"]);
-      if (!Array.isArray(listed)) {
-        // The host it started, unanswering: what it printed says why (a stall names the plugin), and its stop what it left.
-        const problems = [
-          `Could not list the host's plugins: ${(listed as { readonly error?: string }).error ?? ""}`,
-          ...stopProblems(yield* host.stop, failed),
-        ];
-        return {
-          json: { problems, output: host.lines },
-          text: ["problems:", ...problems.map((problem) => `  ${problem}`), ...host.lines.map((line) => `  ${line}`)].join("\n"),
-          exit: ExitCode.failed,
-        } satisfies Output;
-      }
-      const own = (listed as readonly PluginStatus[]).filter((status) => status.source === "user");
-      const checked: Checked[] = own.map((status) => ({
-        id: status.id,
-        state: status.state === "disabled" ? (status.enabled ? "not loaded" : "off") : status.state,
-        ...(status.fault === undefined ? {} : { fault: status.fault.message }),
-        provides: status.provides,
-        requires: status.requires,
-        hooks: (status.hooks ?? []).map((hook) => hook.name),
-        adds: (status.contributes ?? []).map((registry) => `${registry.name}: ${registry.keys?.join(", ") ?? `${registry.items} item(s)`}`),
-        warnings: host.lines.filter((line) => (line.includes(`[${status.id}]`) || line.includes(`"${status.id}"`)) && /warning|error|fail/.test(line)),
-      }));
-      // Stopped before the report, so a plugin that keeps it running (a timer it never clears) is reported too.
-      const stopped = yield* host.stop;
-      const folder = statSync(plugin).isDirectory();
-      const read = folder && existsSync(join(plugin, "package.json")) ? readManifest(join(plugin, "package.json")) : undefined;
-      const web = typeof read?.manifest?.lemma?.web === "string" ? read.manifest.lemma.web : undefined;
-      // A web half's id is its file's name, or its folder's: the host knows it by that.
-      const name = folder ? basename(plugin) : basename(plugin, extname(plugin));
-      const problems = [
-        ...(read?.problem === undefined ? [] : [read.problem]),
-        ...(read?.manifest?.lemma?.web !== undefined && web === undefined ? ["Its package.json's lemma.web is not a path"] : []),
-        ...(own.length === 0 ? [`No host half loaded from ${plugin}: see the host's output`] : []),
-        ...(web !== undefined && !existsSync(join(plugin, web)) ? [`Its web half ${web} does not exist`] : []),
-        ...(web !== undefined && own.length > 0 && !own.some((status) => status.id === name)
-          ? [
-              `Its folder is named ${name}, its plugin ${own.map((status) => status.id).join(", ")}: name the folder for its plugin, so the host knows its web half's id`,
-            ]
-          : []),
-        ...checked.flatMap((status) =>
-          status.state === "active" ? [] : [`${status.id} is ${status.state}${status.fault === undefined ? "" : `: ${status.fault}`}`],
-        ),
-        ...stopProblems(stopped, failed),
-      ];
-      const text = [
-        ...checked.flatMap((status) => [
-          `${status.id}: ${status.state}`,
-          ...(status.provides.length === 0 ? [] : [`  provides ${status.provides.join(", ")}`]),
-          ...(status.requires.length === 0 ? [] : [`  requires ${status.requires.join(", ")}`]),
-          ...(status.hooks.length === 0 ? [] : [`  handles ${status.hooks.join(", ")}`]),
-          ...status.adds.map((added) => `  adds ${added}`),
-          ...status.warnings.map((line) => `  ${line}`),
-        ]),
-        ...(web === undefined ? [] : [`web half: ${web}`]),
-        ...(problems.length === 0 ? ["no problems found"] : ["problems:", ...problems.map((problem) => `  ${problem}`)]),
-        ...(own.length === 0 ? host.lines.map((line) => `  ${line}`) : []),
-      ].join("\n");
+  return Effect.gen(function* () {
+    if (!existsSync(plugin)) return yield* fail("NotFound", `${plugin} does not exist`);
+    const home = yield* homeWith(plugin);
+    let host = yield* hostIn(home, io.env);
+    // A plugin of one's own is required to start, so one that fails keeps the host down (it exits, naming it): once
+    // more, not required, so the host starts with it failed, and says why as it says of any plugin.
+    const failing = named(host.lines);
+    // How the first host, failed, left things: stopped first, so the retry starts as clean as it did.
+    let failed: Stopped | undefined;
+    if (!host.started && host.ended && failing.length > 0) {
+      failed = yield* host.stop;
+      yield* Effect.promise(() => configure(home, failing));
+      host = yield* hostIn(home, io.env);
+    }
+    if (!host.started) {
+      // A host neither serving nor ended is still starting: it goes before anything else does, and one that ended
+      // takes its group with it, so either says what it left.
+      const ended = host.ended;
+      const problems = stopProblems(yield* host.stop, failed);
+      // What it said, but its advice to start without plugin files, which is no help here.
+      const said = host.lines.filter((line) => !line.startsWith("lemma: --safe"));
+      const why = ended ? "The host did not start with it:" : `The host had not started with it after ${START_MS / 1000} s:`;
       return {
-        json: { plugins: checked, ...(web === undefined ? {} : { web }), problems, ...(own.length === 0 ? { output: host.lines } : {}) },
-        text,
-        ...(problems.length === 0 ? {} : { exit: ExitCode.failed }),
+        json: { started: false, ...(ended ? {} : { timedOut: true }), output: said, ...(problems.length === 0 ? {} : { problems }) },
+        text: [why, ...said.map((line) => `  ${line}`), ...(problems.length === 0 ? [] : ["problems:", ...problems.map((problem) => `  ${problem}`)])].join(
+          "\n",
+        ),
+        exit: ExitCode.failed,
       } satisfies Output;
-    }),
-  };
+    }
+    const listed = yield* ask(run, io, home, ["plugins"]);
+    if (!Array.isArray(listed)) {
+      // The host it started, unanswering: what it printed says why (a stall names the plugin), and its stop what it left.
+      const problems = [`Could not list the host's plugins: ${(listed as { readonly error?: string }).error ?? ""}`, ...stopProblems(yield* host.stop, failed)];
+      return {
+        json: { problems, output: host.lines },
+        text: ["problems:", ...problems.map((problem) => `  ${problem}`), ...host.lines.map((line) => `  ${line}`)].join("\n"),
+        exit: ExitCode.failed,
+      } satisfies Output;
+    }
+    const own = (listed as readonly PluginStatus[]).filter((status) => status.source === "user");
+    const checked: Checked[] = own.map((status) => ({
+      id: status.id,
+      state: status.state === "disabled" ? (status.enabled ? "not loaded" : "off") : status.state,
+      ...(status.fault === undefined ? {} : { fault: status.fault.message }),
+      provides: status.provides,
+      requires: status.requires,
+      hooks: (status.hooks ?? []).map((hook) => hook.name),
+      adds: (status.contributes ?? []).map((registry) => `${registry.name}: ${registry.keys?.join(", ") ?? `${registry.items} item(s)`}`),
+      warnings: host.lines.filter((line) => (line.includes(`[${status.id}]`) || line.includes(`"${status.id}"`)) && /warning|error|fail/.test(line)),
+    }));
+    // Stopped before the report, so a plugin that keeps it running (a timer it never clears) is reported too.
+    const stopped = yield* host.stop;
+    const folder = statSync(plugin).isDirectory();
+    const read = folder && existsSync(join(plugin, "package.json")) ? readManifest(join(plugin, "package.json")) : undefined;
+    const web = typeof read?.manifest?.lemma?.web === "string" ? read.manifest.lemma.web : undefined;
+    // A web half's id is its file's name, or its folder's: the host knows it by that.
+    const name = folder ? basename(plugin) : basename(plugin, extname(plugin));
+    const problems = [
+      ...(read?.problem === undefined ? [] : [read.problem]),
+      ...(read?.manifest?.lemma?.web !== undefined && web === undefined ? ["Its package.json's lemma.web is not a path"] : []),
+      ...(own.length === 0 ? [`No host half loaded from ${plugin}: see the host's output`] : []),
+      ...(web !== undefined && !existsSync(join(plugin, web)) ? [`Its web half ${web} does not exist`] : []),
+      ...(web !== undefined && own.length > 0 && !own.some((status) => status.id === name)
+        ? [
+            `Its folder is named ${name}, its plugin ${own.map((status) => status.id).join(", ")}: name the folder for its plugin, so the host knows its web half's id`,
+          ]
+        : []),
+      ...checked.flatMap((status) =>
+        status.state === "active" ? [] : [`${status.id} is ${status.state}${status.fault === undefined ? "" : `: ${status.fault}`}`],
+      ),
+      ...stopProblems(stopped, failed),
+    ];
+    const text = [
+      ...checked.flatMap((status) => [
+        `${status.id}: ${status.state}`,
+        ...(status.provides.length === 0 ? [] : [`  provides ${status.provides.join(", ")}`]),
+        ...(status.requires.length === 0 ? [] : [`  requires ${status.requires.join(", ")}`]),
+        ...(status.hooks.length === 0 ? [] : [`  handles ${status.hooks.join(", ")}`]),
+        ...status.adds.map((added) => `  adds ${added}`),
+        ...status.warnings.map((line) => `  ${line}`),
+      ]),
+      ...(web === undefined ? [] : [`web half: ${web}`]),
+      ...(problems.length === 0 ? ["no problems found"] : ["problems:", ...problems.map((problem) => `  ${problem}`)]),
+      ...(own.length === 0 ? host.lines.map((line) => `  ${line}`) : []),
+    ].join("\n");
+    return {
+      json: { plugins: checked, ...(web === undefined ? {} : { web }), problems, ...(own.length === 0 ? { output: host.lines } : {}) },
+      text,
+      ...(problems.length === 0 ? {} : { exit: ExitCode.failed }),
+    } satisfies Output;
+  });
 };
