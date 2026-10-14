@@ -214,24 +214,20 @@ function PluginView(props: { deps: Deps; kind: Kind; plugin: PluginStatus; plugi
         {/* Its spans, while a plugin shows the trace (`devtools.trace`). */}
         <Show when={deps.slots.get(DevtoolsPanels, TRACE_PANEL)}>
           <button
-            class="dt-link"
-            style={{ "margin-left": "auto" }}
+            class="dt-link devtools-end"
             onClick={() => deps.devtools.show(TRACE_PANEL, `trace:${props.kind === "web" ? "page" : "host"} plugin:${plugin().id}`)}
           >
             Spans
           </button>
         </Show>
-        <a
-          style={{ "margin-left": deps.slots.get(DevtoolsPanels, TRACE_PANEL) === undefined ? "auto" : "8px" }}
-          href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}
-        >
+        <a class="devtools-end" href={deps.router.href(SettingsRoute, { section: SectionIds.plugins }, { plugin: plugin().id, kind: props.kind })}>
           Plugins page
         </a>
       </div>
       <div class="dt-side-body">
         <Show when={plugin().fault}>
           {(fault) => (
-            <div class="dt-banner dt-err" style={{ background: "var(--err-soft)" }}>
+            <div class="dt-banner dt-err">
               {fault().phase}
               {fault().operation === undefined ? "" : ` (${fault().operation})`}: {fault().message}
             </div>
@@ -488,11 +484,11 @@ function PluginsPanel(props: { deps: Deps; inspectors: Accessor<readonly Inspect
             <thead>
               <tr>
                 <th>Plugin</th>
-                <th style={{ width: "80px" }}>State</th>
-                <th style={{ width: "72px" }}>Source</th>
+                <th class="devtools-plugins-state">State</th>
+                <th class="devtools-plugins-source">Source</th>
                 <th>Provides</th>
-                <th style={{ width: "64px" }}>Requires</th>
-                <th style={{ width: "56px" }}>Faults</th>
+                <th class="devtools-plugins-requires">Requires</th>
+                <th class="devtools-plugins-faults">Faults</th>
               </tr>
             </thead>
             <tbody>
@@ -573,7 +569,7 @@ function HooksPanel(props: { deps: Deps }) {
             <thead>
               <tr>
                 <th>{what() === "hooks" ? "Hook" : "Event"}</th>
-                <th style={{ width: "70px" }}>{what() === "hooks" ? "Handlers" : "Observers"}</th>
+                <th class="devtools-hooks-count">{what() === "hooks" ? "Handlers" : "Observers"}</th>
                 <th>{what() === "hooks" ? "Runs" : "Observed by"}</th>
               </tr>
             </thead>
@@ -615,9 +611,7 @@ function HooksPanel(props: { deps: Deps }) {
                       <For each={row.plugins}>
                         {(id, index) => (
                           <tr data-row>
-                            <td class="dt-num dt-muted" style={{ width: "28px" }}>
-                              {index() + 1}
-                            </td>
+                            <td class="dt-num dt-muted devtools-chain-place">{index() + 1}</td>
                             <td>
                               <PluginName deps={deps} kind={kind()} id={id} />
                             </td>
@@ -678,7 +672,7 @@ function RegistriesPanel(props: { deps: Deps }) {
             <thead>
               <tr>
                 <th>{kind() === "web" ? "Slot" : "Registry"}</th>
-                <th style={{ width: "50px" }}>Items</th>
+                <th class="devtools-registries-items">Items</th>
                 <th>Plugins</th>
               </tr>
             </thead>
@@ -771,9 +765,7 @@ function RegistriesPanel(props: { deps: Deps }) {
                               <For each={view.items}>
                                 {(item, index) => (
                                   <tr data-row>
-                                    <td class="dt-num dt-muted" style={{ "white-space": "nowrap" }}>
-                                      {placeOf(item)}
-                                    </td>
+                                    <td class="dt-num dt-muted devtools-registry-place">{placeOf(item)}</td>
                                     <td class="dt-code">{item.id}</td>
                                     <td>
                                       <PluginName deps={deps} kind="web" id={item.plugin} />
@@ -838,7 +830,7 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
         <span class="dt-muted">Host plugins add these to the Inspectors registry; open ones refresh every {INSPECT_EVERY / 1000}s.</span>
       </div>
       <div class="dt-split">
-        <div class="dt-main" tabindex="-1" style={{ "max-width": "380px" }}>
+        <div class="dt-main devtools-inspectors-list" tabindex="-1">
           <table class="dt-table" aria-label="Inspectors">
             <thead>
               <tr>
@@ -871,7 +863,7 @@ function InspectorsPanel(props: { deps: Deps; inspectors: Accessor<readonly Insp
         </div>
         <Show when={current()} keyed>
           {(inspector) => (
-            <section class="dt-details" style={{ flex: "1" }} aria-label="Inspector snapshot">
+            <section class="dt-details devtools-inspector-snapshot" aria-label="Inspector snapshot">
               <div class="dt-details-title">
                 <strong>{inspector.title}</strong>
                 <span class="dt-muted dt-code">{inspector.id}</span>

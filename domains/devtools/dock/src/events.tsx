@@ -237,12 +237,12 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
           <table class="dt-table log-table" aria-label="Events">
             <thead>
               <tr>
-                <th style={{ width: "108px" }}>Time</th>
-                <th style={{ width: "62px" }}>Gap</th>
-                <th style={{ width: "130px" }}>Stream</th>
-                <th style={{ width: "130px" }}>Type</th>
-                <th style={{ width: "120px" }}>Session</th>
-                <th style={{ width: "56px" }}>Size</th>
+                <th class="devtools-log-time">Time</th>
+                <th class="devtools-log-gap">Gap</th>
+                <th class="devtools-log-stream">Stream</th>
+                <th class="devtools-log-stream">Type</th>
+                <th class="devtools-log-session">Session</th>
+                <th class="devtools-log-size">Size</th>
                 <th>Message</th>
               </tr>
             </thead>
@@ -294,7 +294,7 @@ function EventLog(props: { client: ClientService; router: RouterService; lines: 
                 <strong class={`dt-code log-type is-${category(line)}`}>{typeOf(line)}</strong>
                 <span class="dt-muted dt-code">{streamOf(line)}</span>
                 <span class="dt-muted">{clockTime(line.at)}</span>
-                <button class="dt-close" style={{ "margin-left": "auto" }} aria-label="Close details" onClick={() => setSelected(undefined)}>
+                <button class="dt-close devtools-end" aria-label="Close details" onClick={() => setSelected(undefined)}>
                   <XIcon />
                 </button>
               </div>

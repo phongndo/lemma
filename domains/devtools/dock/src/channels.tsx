@@ -42,7 +42,7 @@ function ChannelsView(props: { devtools: DevtoolsService; channels: Accessor<rea
             <thead>
               <tr>
                 <th>Channel</th>
-                <th style={{ width: "72px" }}>Kind</th>
+                <th class="devtools-channels-kind">Kind</th>
                 <th>Plugin</th>
                 <th>Title</th>
               </tr>
@@ -86,7 +86,7 @@ function ChannelsView(props: { devtools: DevtoolsService; channels: Accessor<rea
               <div class="dt-details-title">
                 <strong class="dt-code">{channel.id}</strong>
                 <span class="dt-muted">{channel.kind}</span>
-                <button class="dt-close" style={{ "margin-left": "auto" }} aria-label="Close details" onClick={() => setSelected(undefined)}>
+                <button class="dt-close devtools-end" aria-label="Close details" onClick={() => setSelected(undefined)}>
                   <XIcon />
                 </button>
               </div>

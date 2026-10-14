@@ -76,7 +76,7 @@ function Routes(props: { router: RouterService; slots: SlotsService; devtools: D
   return (
     <div class="dt-scope">
       <div class="dt-toolbar" role="toolbar" aria-label="Routes toolbar">
-        <label class="dt-filter" style={{ width: "420px" }}>
+        <label class="dt-filter devtools-routes-address">
           <span>Address</span>
           <input
             aria-label="Address to explain"
@@ -242,9 +242,9 @@ function Navigation(props: { router: RouterService }) {
           <table class="dt-table" aria-label="Router journal">
             <thead>
               <tr>
-                <th style={{ width: "96px" }}>Time</th>
-                <th style={{ width: "40px" }}>At</th>
-                <th style={{ width: "86px" }}>Event</th>
+                <th class="devtools-journal-time">Time</th>
+                <th class="devtools-journal-at">At</th>
+                <th class="devtools-journal-event">Event</th>
                 <th>Address</th>
                 <th>Details</th>
               </tr>

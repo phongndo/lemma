@@ -33,7 +33,7 @@
 
 /* Host events, in the foundation's `.dt-*` vocabulary; the type column is coloured by what each line is about. */
 .log-view {
-  --log-session: #4b8fe8;
+  --devtools-log-session: #4b8fe8;
   --log-turn: var(--ok);
   --log-interaction: var(--warn);
   --log-host: #9b7be8;
@@ -46,7 +46,7 @@
 }
 
 .log-type.is-session {
-  color: var(--log-session);
+  color: var(--devtools-log-session);
 }
 
 .log-type.is-turn {
@@ -75,4 +75,93 @@
 
 .log-type.is-notice-error {
   color: var(--err);
+}
+
+/* The panels' pieces, in their place: what ends a details title (its links, its close button) sits at its end. */
+.dt-details-title > .devtools-end {
+  margin-left: auto;
+}
+
+.dt-details-title > .devtools-end ~ .devtools-end {
+  margin-left: 8px;
+}
+
+/* A plugin's fault, over its details. */
+.dt-banner.dt-err {
+  background: var(--err-soft);
+}
+
+.devtools-routes-address {
+  width: 420px;
+}
+
+.devtools-inspectors-list {
+  max-width: 380px;
+}
+
+.devtools-inspector-snapshot {
+  flex: 1;
+}
+
+.devtools-registry-place {
+  white-space: nowrap;
+}
+
+/* Columns of a width of their own, by what they hold. */
+.devtools-log-time {
+  width: 108px;
+}
+
+.devtools-log-gap {
+  width: 62px;
+}
+
+.devtools-log-stream {
+  width: 130px;
+}
+
+.devtools-log-session {
+  width: 120px;
+}
+
+.devtools-log-size,
+.devtools-plugins-faults {
+  width: 56px;
+}
+
+.devtools-journal-time {
+  width: 96px;
+}
+
+.devtools-journal-at {
+  width: 40px;
+}
+
+.devtools-journal-event {
+  width: 86px;
+}
+
+.devtools-channels-kind,
+.devtools-plugins-source {
+  width: 72px;
+}
+
+.devtools-plugins-state {
+  width: 80px;
+}
+
+.devtools-plugins-requires {
+  width: 64px;
+}
+
+.devtools-hooks-count {
+  width: 70px;
+}
+
+.devtools-registries-items {
+  width: 50px;
+}
+
+.devtools-chain-place {
+  width: 28px;
 }
