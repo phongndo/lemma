@@ -68,6 +68,7 @@ export function hostRuntime(options: {
       const detached = <A, E>(change: Effect.Effect<A, E>): Effect.Effect<A, E> => Effect.flatMap(Effect.forkIn(change, scope), Fiber.join);
       return {
         runtime,
+        process: control.process,
         plugins: control.plugins,
         composition: control.composition,
         restart: (pluginId, options) => detached(control.restart(pluginId, options).pipe(Effect.ensuring(changed))),

@@ -179,6 +179,7 @@ const RUNTIME_CONTRACTS = [
   "host.ts",
   "ids.ts",
   "index.ts",
+  "clients.ts",
   "inspectors.ts",
   "interaction.ts",
   "kernel.ts",

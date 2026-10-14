@@ -6,7 +6,7 @@ import { Diagnostic, Events, makeLoader, makeSpanCollector, ReloadError } from "
 import type { Composition, CoreClosed, CoreSnapshot, Event, Loader, PluginSource, ReloadReport, ReportedFault } from "@lemma/core";
 import { catalog, compositionHistory, faultHistory, planComposition, restartedBy, withReplacements, closestId } from "@lemma/composition";
 import type { KnownPlugin, Resolved } from "@lemma/composition";
-import type { ChangeReport, CompositionChange, ConfigScope, PluginChange, WebComposition } from "@lemma/contracts";
+import type { ChangeReport, CompositionChange, ConfigScope, PluginChange, PluginRow, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { appDefaults, bundled, bundledCode, bundledWeb } from "./bundled.ts";
 import { compositionInfo } from "./composition.ts";
@@ -16,6 +16,7 @@ import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from
 import { SHUTDOWN_TIMEOUT_MS } from "./limits.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
+import { holdHostLock, teeLog } from "./process.ts";
 import { recordStall, watchStalls } from "./stall.ts";
 import type { CodeOwner, StallWatch } from "./stall.ts";
 import { catchUnhandled, hostRuntime, reportFaults, runtimeCapabilities } from "./runtime.ts";
@@ -23,7 +24,29 @@ import type { HostControlHandle } from "./runtime.ts";
 import { listWebFiles, userPluginsDir as pluginsDirOf } from "./web.ts";
 import { watchConfig, watchPlugins } from "./watch.ts";
 
-const args = new Set(process.argv.slice(2));
+const argv = process.argv.slice(2);
+const args = new Set(argv);
+/** `--name value` or `--name=value` among the host's arguments. */
+const argValue = (name: string): string | undefined => {
+  const at = argv.findIndex((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`));
+  if (at === -1) return undefined;
+  const arg = argv[at]!;
+  return arg.includes("=") ? arg.slice(arg.indexOf("=") + 1) : argv[at + 1];
+};
+/**
+ * The transport's `port` and `host` for this run only (`lemma serve --port 8080 --host 0.0.0.0`): over what the config
+ * files say, and never written to them.
+ */
+const transportOverrides: Readonly<Record<string, unknown>> = {
+  ...(argValue("port") === undefined ? {} : { port: Number(argValue("port")) }),
+  ...(argValue("host") === undefined ? {} : { host: argValue("host") }),
+};
+const withOverrides = (rows: Readonly<Record<string, PluginRow>>): Readonly<Record<string, PluginRow>> => {
+  if (Object.keys(transportOverrides).length === 0) return rows;
+  const row = rows["transport.server"] ?? {};
+  const config = typeof row.config === "object" && row.config !== null ? row.config : {};
+  return { ...rows, "transport.server": { ...row, config: { ...config, ...transportOverrides } } };
+};
 /**
  * `--safe` (or `LEMMA_SAFE=1`): the bundled plugins as shipped, reading no
  * config file and no plugin file, and writing neither: the way back from a
@@ -69,8 +92,36 @@ const killOwnGroup = (): boolean => {
 // However it exits (failing to start, a fault that ends it) once its supervisor is gone, nothing else would end what
 // its plugins started. While the supervisor runs, it does, and reports what was left.
 if (supervisorGone !== undefined) process.on("exit", () => void (supervisorLeft && killOwnGroup()));
+/**
+ * This process, and what started it, as it said: `LEMMA_STARTED_BY` (`cli` for `lemma serve --detach`, `desktop`,
+ * `service`). Consumed here, so what the host's tools start is not taken for it.
+ */
+const launch = {
+  pid: process.pid,
+  startedAt: Date.now(),
+  ...(process.env.LEMMA_STARTED_BY?.trim() ? { startedBy: process.env.LEMMA_STARTED_BY.trim() } : {}),
+};
+delete process.env.LEMMA_STARTED_BY;
 // `pnpm start` runs from packages/host; INIT_CWD is where the user invoked it.
 const paths = resolvePaths({ env: process.env, cwd: process.env.INIT_CWD ?? process.cwd() });
+// One host per home, said before anything starts: a second would break the sessions store's single writer.
+const holder = holdHostLock(paths.home);
+if (holder !== undefined) {
+  const which = holder > 0 ? ` (pid ${holder})` : "";
+  console.error(`lemma: a host already runs for ${paths.home}${which}; \`lemma status\` shows it, and \`lemma stop\` stops it`);
+  process.exit(1);
+}
+teeLog(
+  paths.home,
+  `lemma: --- ${new Date(launch.startedAt).toISOString()} pid ${launch.pid}${launch.startedBy === undefined ? "" : `, started by ${launch.startedBy}`} ---`,
+);
+// What the host's tools run reaches this host: a \`lemma\` command the agent runs finds it in this home, whatever the
+// environment the host was started in names (another host's LEMMA_URL, a default environment), and prints JSON.
+process.env.LEMMA_HOME = paths.home;
+process.env.LEMMA_ENV = "local";
+process.env.LEMMA_AGENT = "1";
+delete process.env.LEMMA_URL;
+delete process.env.LEMMA_TOKEN;
 // Consumed here: tools inherit this environment, and a CLI the agent runs must use its own directory, not ours.
 delete process.env.INIT_CWD;
 const userPluginsDir = pluginsDirOf(paths);
@@ -157,7 +208,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
   Effect.gen(function* () {
     const input = { bundled, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
     if (safe) {
-      const planned = planComposition({ ...input, local: [], rows: {} });
+      const planned = planComposition({ ...input, local: [], rows: withOverrides({}) });
       const errors = planned.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
       if (errors.length) return yield* new ReloadError({ diagnostics: errors });
       return { ...planned, enabledIn: {}, configIn: {}, trusted: false, web: EMPTY_WEB, webIds: bundledWeb, code: bundledCode(bundled) };
@@ -175,7 +226,7 @@ const load = (): Effect.Effect<Loaded, ReloadError> =>
     const planned = planComposition({
       ...input,
       local: localPlugins,
-      rows: loaded.rows,
+      rows: withOverrides(loaded.rows),
       elsewhere: (id) => webIds.includes(id),
       elsewhereIds: webIds,
     });
@@ -446,6 +497,7 @@ const program = Effect.gen(function* () {
     ),
   );
   const handle: HostControlHandle = {
+    process: launch,
     plugins: withLoader((loader) => Effect.map(loader.core.inspect, catalogOf)),
     web: Effect.sync(() => applied.web),
     composition: withLoader((loader) =>

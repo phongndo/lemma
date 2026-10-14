@@ -6,6 +6,7 @@ import { HostError, wireCodec } from "@lemma/contracts";
 import type {
   ChannelDeclaration,
   ChannelInfo,
+  ClientHello,
   ConfigScope,
   HostInfo,
   InspectorInfo,
@@ -156,6 +157,8 @@ export interface ConnectOptions {
    * `connect`).
    */
   readonly onEvent?: (event: RuntimeEvent) => void;
+  /** What this client is, as the host lists its clients (`Host.Clients`): `cli`, `web`, `desktop`, or a name of its own. */
+  readonly client?: string | ClientHello;
 }
 
 export const defaultBackoff = (attempt: number): number => Math.min(5_000, 250 * 2 ** Math.max(0, attempt - 1));
@@ -283,8 +286,13 @@ type HostEventsElement = { readonly type: "subscribed" } | RuntimeEvent;
  * called. What `connect` subscribes with, saying whether it `answers`
  * questions.
  */
-const eventsOver = (rpc: HostRpcClient, answers: boolean, onEvent: (event: HostEventsElement) => void, onEnd?: StreamEnd): (() => void) =>
-  drain(raw(rpc)["Host.Events"]({ answers }), onEvent, onEnd, "Host event listener failed");
+const eventsOver = (
+  rpc: HostRpcClient,
+  answers: boolean,
+  client: ClientHello | undefined,
+  onEvent: (event: HostEventsElement) => void,
+  onEnd?: StreamEnd,
+): (() => void) => drain(raw(rpc)["Host.Events"]({ answers, ...(client === undefined ? {} : { client }) }), onEvent, onEnd, "Host event listener failed");
 
 /**
  * Whether a request failed because its connection dropped: `Host` rejects
@@ -344,6 +352,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
   const scope = await runPromise(Scope.make());
   const rpc: HostRpcClient = await runPromise(Scope.provide(makeHostRpc(rpcUrl(options.url, options.token), options.webSocket), scope));
   const answers = options.answers ?? true;
+  const client: ClientHello | undefined = typeof options.client === "string" ? { kind: options.client } : options.client;
   const backoff = options.backoff ?? defaultBackoff;
   const probeTimeout = Duration.millis(options.probeTimeoutMs ?? 8_000);
 
@@ -368,6 +377,7 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
         eventsOver(
           rpc,
           answers,
+          client,
           (event) => (event.type === "subscribed" ? Deferred.doneUnsafe(subscribed, Effect.void) : emit(event)),
           (error) => Deferred.doneUnsafe(ended, Effect.succeed(error === undefined ? "Event stream ended" : describeError(error))),
         ),

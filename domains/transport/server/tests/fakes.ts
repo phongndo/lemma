@@ -81,6 +81,7 @@ export const fakeHostControl = (holder: ControlHolder) =>
         const changed = Effect.flatMap(plugins, (plugins) => events.publish(PluginsChanged, { plugins }));
         return {
           runtime: [Paths.key, HostControl.key],
+          process: { pid: process.pid, startedAt: 0 },
           plugins,
           // Up once the core is, which the transport's startup gate waits for.
           composition: Effect.as(core, { id: "c0ffee", plugins: [{ id: "transport.server", version: "0.1.0" }] }),
