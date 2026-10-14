@@ -1,3 +1,4 @@
+import { NATIVE_HARNESS } from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, ImageContent, TextContent, ToolCall, ToolResultMessage, Usage } from "@lemma/llm";
 import type { SessionEvent, Timing, TurnEndReason } from "@lemma/sessions";
@@ -92,6 +93,8 @@ export interface TurnView {
   readonly usage: Usage;
   /** Distinct `provider/model` used by the turn's model calls, in order. */
   readonly models: readonly string[];
+  /** The other coding agent that ran it (its `turn-start`'s harness); absent for the agent's own loop. */
+  readonly harness?: string;
   readonly steps: number;
   readonly firstTokenMs?: number;
 }
@@ -141,6 +144,7 @@ interface MutableTurn {
   end: { reason: TurnEndReason; error?: string } | undefined;
   usage: Usage;
   models: string[];
+  harness: string | undefined;
   steps: number;
   firstTokenMs: number | undefined;
   hasUser: boolean;
@@ -156,6 +160,7 @@ const newTurn = (key: string, at: number, turnId?: string): MutableTurn => ({
   end: undefined,
   usage: emptyUsage,
   models: [],
+  harness: undefined,
   steps: 0,
   firstTokenMs: undefined,
   hasUser: false,
@@ -270,6 +275,7 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
         } else {
           start(event, data.turnId);
         }
+        if (data.harness !== undefined && data.harness !== NATIVE_HARNESS) current!.harness = data.harness;
         break;
       }
       case "turn-end": {
@@ -277,6 +283,7 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
         if (turn !== undefined) {
           turn.end = { reason: data.reason, ...(data.error === undefined ? {} : { error: data.error }) };
           turn.endedAt = event.at;
+          if (data.usage !== undefined) turn.usage = addUsage(turn.usage, data.usage);
         }
         break;
       }
@@ -368,6 +375,7 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
       turn.end?.reason ?? "",
       turn.end?.error ?? "",
       turn.steps,
+      turn.harness ?? "",
       ...turn.items.map(identity),
     ].join("|");
     return cache.get(`turn:${turn.key}`, signature, () => ({
@@ -379,6 +387,7 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
       ...(turn.end === undefined ? {} : { end: turn.end }),
       usage: turn.usage,
       models: turn.models,
+      ...(turn.harness === undefined ? {} : { harness: turn.harness }),
       steps: turn.steps,
       ...(turn.firstTokenMs === undefined ? {} : { firstTokenMs: turn.firstTokenMs }),
     }));

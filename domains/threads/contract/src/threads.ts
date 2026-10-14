@@ -1,9 +1,10 @@
+import { NATIVE_HARNESS } from "@lemma/agent";
 import type { PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { MenuAction } from "@lemma/frame";
 import type { IconName } from "@lemma/look";
 import type { LedgerRecord, SessionEvent, SessionInfo, SessionMarks } from "@lemma/sessions";
 import { defineSlot } from "@lemma/web";
-import type { Region } from "@lemma/web";
+import type { Region, SlotsService } from "@lemma/web";
 import { Context } from "effect";
 import type { Accessor, Component } from "solid-js";
 import type { LiveState } from "./live.ts";
@@ -230,8 +231,28 @@ export interface ComposerTakeover {
 
 export const ComposerTakeovers = defineSlot<ComposerTakeover>("composer.takeovers");
 
-/** The composer's toolbar, left of its buttons: the model and reasoning pickers. */
+/** The composer's toolbar, left of its buttons: the harness, model, and reasoning pickers. */
 export const ComposerControls = defineSlot<Region>("composer.controls");
+
+/**
+ * What a prompt sent from the composer runs with besides the model picker's choice (`Models.turnOptions`): each item's
+ * options, merged over it in order. The harness picker's names the harness (`TurnOptions.harness`).
+ */
+export interface ComposerTurnOption {
+  readonly options: Accessor<Partial<TurnOptions> | undefined>;
+}
+
+export const ComposerTurnOptions = defineSlot<ComposerTurnOption>("composer.turn-options");
+
+/** `ComposerTurnOptions`' items merged, in order. Reactive. */
+export const composerTurn = (slots: SlotsService): Partial<TurnOptions> =>
+  Object.assign({}, ...slots.list(ComposerTurnOptions).map((item) => item.options() ?? {})) as Partial<TurnOptions>;
+
+/**
+ * The turn runs on another coding agent, which picks its own model: the composer sends no model or reasoning level
+ * with it, and their pickers hide.
+ */
+export const picksOwnModel = (turn: Partial<TurnOptions>): boolean => turn.harness !== undefined && turn.harness !== NATIVE_HARNESS;
 
 /** Under the composer: the workspace bar. */
 export const ComposerFooter = defineSlot<Region>("composer.footer");
