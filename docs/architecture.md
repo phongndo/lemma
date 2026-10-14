@@ -43,7 +43,8 @@ streams there as [channels](../packages/contracts/src/channels.ts), with no
 change to the contracts or the transport.
 
 The [session log](../domains/sessions/files/README.md) is the source of truth: every
-model request can be rebuilt from it (`rebuildRequest` in the contracts), along
+model request can be rebuilt from it (`rebuildRequest` in the sessions domain's
+contract, [`@lemma/sessions`](../domains/sessions/contract/src/derive.ts)), along
 with which plugins contributed each part, which handlers changed it, and who
 shaped each tool result (the `credit` vocabulary in `@lemma/contracts`). The
 host's trace, in memory, shows the same work as it ran: every span its plugins'
