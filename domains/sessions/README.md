@@ -5,6 +5,7 @@ The session log, the source of truth every request is rebuilt from, and its stor
 | Plugin                              | Halves | What it does                                                                                         |
 | ----------------------------------- | ------ | ---------------------------------------------------------------------------------------------------- |
 | [`sessions.files`](files/README.md) | host   | Stores each session as a JSONL file: provides `Sessions`, and serves it as the `sessions.*` channels |
+| [`sessions.cli`](cli/README.md)     | host   | The `lemma` command's `sessions …`, `inspect` among them: adds them to `CliCommands`                 |
 
 ## Extending it
 

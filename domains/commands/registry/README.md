@@ -2,7 +2,7 @@
 
 Provides `CommandRunner` (`@lemma/commands`), which lists and runs the actions
 plugins add to `Commands`: what a person runs from any client, such as the web
-app's command palette (Cmd+K on macOS, Ctrl+K elsewhere) or `lemma do <id>`. A
+app's command palette (Cmd+K on macOS, Ctrl+K elsewhere) or `lemma commands run <id>`. A
 command that needs input asks for it with `Interaction`, so every client that
 can answer questions can run it.
 

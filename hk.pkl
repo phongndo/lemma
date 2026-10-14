@@ -16,10 +16,14 @@ hooks {
     steps = linters
   }
   // CI's check and test jobs, before commits leave. It checks the working tree as it is, uncommitted changes
-  // included.
+  // included. Without the repository variables git gives a hook: a test's `git init`, `config`, or `commit` in a
+  // temporary directory would otherwise write this repository (its config, and a commit on the branch pushed).
   ["pre-push"] {
     steps {
-      ["ci"] = new Step { check = "pnpm run ci" }
+      ["ci"] = new Step {
+        check =
+          "env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_PREFIX -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_QUARANTINE_PATH pnpm run ci"
+      }
     }
   }
   // `hk check` and `hk fix` run the same steps by hand (all files with --all).

@@ -55,6 +55,7 @@ const start = (
     const configured: Record<string, unknown>[] = [];
     const ui: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, files: [] };
     const handle: HostControlHandle = {
+      process: { pid: process.pid, startedAt: 0 },
       // Each plugin with its recorded faults, as the catalog lists them.
       plugins: withLoader((loader) =>
         Effect.map(loader.core.inspect, (snapshot) =>

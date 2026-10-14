@@ -30,13 +30,13 @@ describe("a run across a cut connection", () => {
 
   /** Resolves once the session's turn has ended, as the host has it (asked directly, not through the proxy). */
   const over = async (session: string) => {
-    const ended = await settled(async () => !(JSON.parse((await invoke(["status", "--json"], home)).out).running as string[]).includes(session) || undefined);
+    const ended = await settled(async () => !(JSON.parse((await invoke(["agent", "running", "--json"], home)).out) as string[]).includes(session) || undefined);
     if (ended === undefined) throw new Error(`the turn in ${session} did not end`);
   };
 
   /** The log events with the prompt's message: one, however often it was sent. */
   const placed = async (session: string, requestId: string) => {
-    const { branch } = JSON.parse((await invoke(["session", "show", session, "--json"], home)).out) as {
+    const { branch } = JSON.parse((await invoke(["sessions", "show", session, "--json"], home)).out) as {
       branch: { data: { type: string; requestId?: string } }[];
     };
     return branch.filter((event) => event.data.type === "message" && event.data.requestId === requestId).length;
@@ -44,7 +44,7 @@ describe("a run across a cut connection", () => {
 
   for (const json of [false, true]) {
     test(`--follow${json ? " --json" : ""} shows the rest of the turn once it is back, nothing twice, and places the prompt once`, async () => {
-      const session = (await invoke(["session", "new", "--cwd", home], home)).out;
+      const session = (await invoke(["sessions", "new", "--cwd", home], home)).out;
       const gate = `cut${json ? "j" : "t"}`;
       let shown = "";
       const said: string[] = [];
@@ -92,7 +92,7 @@ describe("a run across a cut connection", () => {
   }
 
   test("without --follow ends with the turn's result once it is back", async () => {
-    const session = (await invoke(["session", "new", "--cwd", home], home)).out;
+    const session = (await invoke(["sessions", "new", "--cwd", home], home)).out;
     let out = "";
     const said: string[] = [];
     const running = run(["run", session, "ramble on gate:plain", "--request-id", "r-plain", "--json"], {

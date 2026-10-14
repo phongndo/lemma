@@ -48,7 +48,7 @@ const run = <A, E>(plugins: readonly Plugin[], body: Effect.Effect<A, E, ToolRun
   );
 
 describe("registry", () => {
-  it("shows its tools and guards to the devtools and `lemma inspect`, each with the plugin that added it", async () => {
+  it("shows its tools and guards to the devtools and `lemma inspectors`, each with the plugin that added it", async () => {
     const snapshot = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {

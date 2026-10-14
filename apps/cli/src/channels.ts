@@ -1,7 +1,7 @@
-import { Cause, Deferred, Effect, Fiber, Queue, Stream } from "effect";
+import { Cause, Effect, Queue, Stream } from "effect";
 import type { Scope } from "effect";
 import { RpcClientError } from "effect/rpc";
-import { callChannel, connect, dropped, follow as followChannel, tooLarge } from "@lemma/client";
+import { connect, dropped, follow as followChannel, tooLarge } from "@lemma/client";
 import type { ConnectOptions, ConnectionStatus, Followable, Host, HostRpcClient } from "@lemma/client";
 import { HostError } from "@lemma/contracts";
 import type { ChannelDeclaration } from "@lemma/contracts";
@@ -73,13 +73,6 @@ export const refined =
       });
     return error;
   };
-
-/** One call to a channel over HTTP, for a one-shot command. */
-export const call = <Payload, Success>(
-  rpc: HostRpcClient,
-  channel: ChannelDeclaration<"call", Payload, Success>,
-  payload: Payload,
-): Effect.Effect<Success, Failure> => Effect.mapError(callChannel(rpc, channel, payload), refined(channel.id));
 
 /** What a `Host` rejects with, as a command fails: its refusals and the connection's failures, else a defect (a host handler that died). */
 const failure = (error: HostError | Error): Cause.Cause<Failure> =>
@@ -240,19 +233,6 @@ export const callOn = <Payload, Success>(
     }),
   );
 
-/** How a command calls channels: over HTTP (`over`) when it makes a call or two, or over its `Host` (`on`) when it watches the host. */
-export type Calls = <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload) => Effect.Effect<Success, Failure>;
-
-export const over =
-  (rpc: HostRpcClient): Calls =>
-  (channel, payload) =>
-    call(rpc, channel, payload);
-
-export const on =
-  (host: Host): Calls =>
-  (channel, payload) =>
-    callOn(host, channel, payload);
-
 /**
  * Follows a channel's stream with `@lemma/client`'s `follow`, the one reopen
  * policy clients share, for as long as the scope lasts, or until `keep`, told
@@ -261,7 +241,7 @@ export const on =
  */
 export const following = <Payload, Success>(
   connection: Followable,
-  channel: ChannelDeclaration<"stream", Payload, Success>,
+  channel: ChannelDeclaration<"stream", Payload, Success> | string,
   payload: () => Payload,
   onElement: (element: Success) => void,
   keep: (error: HostError | Error | undefined) => boolean,
@@ -271,81 +251,20 @@ export const following = <Payload, Success>(
       Effect.sync(() => {
         let over = false;
         let stop: (() => void) | undefined;
-        stop = followChannel(connection, channel, payload, onElement, (error) => {
+        const onEnd = (error?: HostError | Error) => {
           if (keep(error)) return;
           over = true;
           stop?.();
-        });
+        };
+        // A declaration's elements are decoded with its schema; one named by id arrives as plain JSON.
+        stop =
+          typeof channel === "string"
+            ? followChannel(connection, channel, payload, onElement as (element: unknown) => void, onEnd)
+            : followChannel(connection, channel, payload, onElement, onEnd);
         // It ended for good while it was first opened, before `stop` was known.
         if (over) stop();
         return stop;
       }),
       (stop) => Effect.sync(stop),
-    ),
-  );
-
-/**
- * Forks `run`, which reads a stream, in the scope, and returns its fiber once
- * `run` has handled the first element (and run `handled`). A stream of the
- * host's says with its first element that it hears everything from then on
- * (`subscribed`, or a whole list): what a command does next is heard. One
- * that ends first fails the command: its reason is the host's or the
- * connection's, and one that just ends has nothing to follow.
- */
-const subscribed = <R>(name: string, run: (handled: Effect.Effect<void>) => Effect.Effect<void, Failure, R>) =>
-  Effect.gen(function* () {
-    const first = yield* Deferred.make<void>();
-    const fiber = yield* Effect.forkScoped(run(Effect.asVoid(Deferred.succeed(first, undefined))), { startImmediately: true });
-    yield* Effect.raceFirst(
-      Deferred.await(first),
-      Effect.andThen(
-        Fiber.join(fiber),
-        Effect.fail(new CliError({ code: "Unexpected", message: `The host ended ${name} before it said it was subscribed`, exit: ExitCode.failed })),
-      ),
-    );
-    return fiber;
-  });
-
-/**
- * Follows a channel's stream over a command's `Host` (`following`): opened
- * again on the next connection when the connection drops, and at once when
- * withdrawn, with the payload `payload()` gives then, so a follower passes
- * what it has (a log's last `seq`) and resyncs from the new `subscribed`, and
- * once it is listed if nothing serves it then (an exclusive plugin's
- * replacement is listed only once the old one has gone). Its elements are
- * handled in turn, those of each opening after the last's, as they came, and
- * this returns once the first has been. The fiber fails with any other ending
- * (the channel's error, or nothing serving it before it was ever withdrawn),
- * and ends when the stream does. It is followed for as long as the fiber
- * runs: interrupting it closes the stream.
- */
-export const follow = <Payload, Success>(
-  host: Host,
-  channel: ChannelDeclaration<"stream", Payload, Success>,
-  payload: () => Payload,
-  onElement: (element: Success) => Effect.Effect<void, Failure>,
-): Effect.Effect<Fiber.Fiber<void, Failure>, Failure, Scope.Scope> =>
-  subscribed(`"${channel.id}"`, (handled) =>
-    Effect.scoped(
-      Effect.gen(function* () {
-        const elements = yield* Queue.unbounded<Success, Failure | Cause.Done>();
-        let withdrawn = false;
-        yield* following(
-          host,
-          channel,
-          payload,
-          (element) => void Queue.offerUnsafe(elements, element),
-          (error) => {
-            if (dropped(error)) return true;
-            if (ofChannel(error, channel.id, "Withdrawn")) return (withdrawn = true);
-            // Since withdrawn, nothing serving it yet is its replacement on its way.
-            if (withdrawn && ofChannel(error, channel.id, "NotFound")) return true;
-            if (error === undefined) Queue.endUnsafe(elements);
-            else Queue.failCauseUnsafe(elements, Cause.map(failure(error), refined(channel.id)));
-            return false;
-          },
-        );
-        yield* Stream.runForEach(Stream.fromQueue(elements), (element) => Effect.andThen(onElement(element), handled));
-      }),
     ),
   );

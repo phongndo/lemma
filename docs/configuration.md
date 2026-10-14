@@ -123,3 +123,8 @@ warns and ignores them.
 ```jsonc
 { "trustedProjects": ["/Users/you/code"] }
 ```
+
+`lemma trust add [path]` and `lemma trust remove [path]` write that list,
+keeping the file's comments; `lemma trust` lists it and says whether the
+current directory is trusted. `lemma config --show-origin` lists what the files
+set for this directory's host, and which file sets each.

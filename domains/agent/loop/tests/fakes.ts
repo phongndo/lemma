@@ -134,6 +134,7 @@ export const host = (compositionId = "comp-1") =>
     provides: [HostControl],
     layer: Layer.succeed(HostControl, {
       runtime: [HostControl.key],
+      process: { pid: process.pid, startedAt: 0 },
       plugins: Effect.succeed([]),
       composition: Effect.succeed({ id: compositionId, plugins: [] }),
       restart: () => Effect.succeed({}),

@@ -2,6 +2,7 @@ import { Rpc, RpcGroup } from "effect/rpc";
 import { Schema } from "effect";
 import { ChannelInfo } from "./channels.ts";
 import { ConfigScope, NoticePayload, PluginChange, WebComposition } from "./host.ts";
+import { ClientHello, ClientInfo } from "./clients.ts";
 import { InspectorInfo } from "./inspectors.ts";
 import { InteractionAnswer, InteractionRequest } from "./interaction.ts";
 import { HostError, HostInfo, PluginStatus, ReloadResult } from "./status.ts";
@@ -54,9 +55,10 @@ export class RuntimeRpcs extends RpcGroup.make(
    * `answers` says whether the subscriber answers the host's questions: the
    * host holds a question for the subscribers that do, and passes it on when
    * none is there; one that only watches sees the questions the others hold.
+   * `client` says what the subscriber is, for `Host.Clients`.
    */
   Rpc.make("Host.Events", {
-    payload: { answers: Schema.Boolean },
+    payload: { answers: Schema.Boolean, client: Schema.optional(ClientHello) },
     success: Schema.Union([Schema.Struct({ type: Schema.Literal("subscribed") }), RuntimeEvent]),
     stream: true,
   }),
@@ -71,6 +73,8 @@ export class RuntimeRpcs extends RpcGroup.make(
    * is not JSON.
    */
   Rpc.make("Host.Inspect", { payload: { id: Schema.String }, success: Schema.Unknown, error: HostError }),
+  /** The clients attached now: each subscription to `Host.Events`, oldest first. */
+  Rpc.make("Host.Clients", { success: Schema.Array(ClientInfo) }),
   /** A failed or halted plugin and its dependents; `force` also replaces a running one. */
   Rpc.make("Host.RestartPlugin", { payload: { pluginId: Schema.String, force: Schema.optional(Schema.Boolean) }, error: HostError }),
   /** Re-read config files and apply the composition; diagnostics come back as the error message. */

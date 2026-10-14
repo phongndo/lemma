@@ -1,5 +1,6 @@
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "electron";
 import type { UtilityProcess } from "electron";
@@ -7,11 +8,13 @@ import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
 import { findTarget, readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery, Target } from "@lemma/contracts/discovery";
+import { callChannel, makeHostRpcHttp } from "@lemma/client";
+import { CliChannels } from "@lemma/cli";
 import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
-import { resolvePaths } from "@lemma/host/paths";
+import { hostFiles, resolvePaths } from "@lemma/host/paths";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
-// It finds its host like the CLI does: one on another machine (`LEMMA_URL`, or `remote.json`), else a running local
+// It finds its host like the CLI does: one on another machine (`LEMMA_URL`, or the default environment), else a running local
 // one, and starts one only when none runs, since the sessions store has a single writer. A host it started stops
 // when it quits.
 const hostMain = fileURLToPath(import.meta.resolve("@lemma/host"));
@@ -26,6 +29,37 @@ const SHUTDOWN_TIMEOUT_MS = HOST_SHUTDOWN_MS + 5_000;
 const REMOTE_TIMEOUT_MS = 10_000;
 /** The shared app icon (assets/brand); the dark tile reads on light and dark desktops alike. */
 const icon = fileURLToPath(new URL("../../../assets/brand/icon-dark.png", import.meta.url));
+
+/** What the app says of its own running (a host it started that exited, a start that failed): `<home>/logs/desktop.log`. */
+const logLine = (text: string) => {
+  try {
+    mkdirSync(hostFiles(paths.home).logs, { recursive: true, mode: 0o700 });
+    appendFileSync(join(hostFiles(paths.home).logs, "desktop.log"), `${new Date().toISOString()} ${text}\n`, { mode: 0o600 });
+  } catch {
+    // No log: the app runs on.
+  }
+};
+
+/**
+ * `<home>/desktop.json` while the app runs: its process, and the command that reaches it with a `lemma://` link (the
+ * app again, which hands the link to this instance), so `lemma open` shows a page here rather than in a browser.
+ */
+const desktopFile = join(paths.home, "desktop.json");
+const announce = () => {
+  try {
+    const open = [process.execPath, ...(process.defaultApp ? [resolve(process.argv[1] ?? ".")] : [])];
+    writeFileSync(desktopFile, `${JSON.stringify({ pid: process.pid, open })}\n`, { mode: 0o600 });
+  } catch {
+    // `lemma open` uses a browser then.
+  }
+};
+const unannounce = () => {
+  try {
+    if ((JSON.parse(readFileSync(desktopFile, "utf8")) as { readonly pid?: unknown }).pid === process.pid) rmSync(desktopFile);
+  } catch {
+    // Gone already, or another instance's.
+  }
+};
 
 let host: UtilityProcess | undefined;
 let ownsHost = false;
@@ -86,7 +120,8 @@ const startHost = async (): Promise<Discovery> => {
   ownsHost = true;
   const child = utilityProcess.fork(hostMain, ["--no-open"], {
     cwd: project,
-    env: { ...process.env, INIT_CWD: project },
+    // It says the app started it, so `lemma status` names its owner and `lemma stop` leaves it to the app.
+    env: { ...process.env, INIT_CWD: project, LEMMA_STARTED_BY: "desktop" },
     execArgv: ["--conditions=lemma-source"],
     stdio: "inherit",
     serviceName: "lemma host",
@@ -95,6 +130,7 @@ const startHost = async (): Promise<Discovery> => {
   let exited: number | undefined;
   child.once("exit", (code) => {
     exited = code;
+    if (!quitting && !reloading) logLine(`the host (pid ${child.pid}) exited with code ${code}; its log is ${hostFiles(paths.home).log}`);
     if (host === child) host = undefined;
   });
   // The transport writes transport.json once it listens; the entry is ours when it names our process.
@@ -234,6 +270,7 @@ const openLink = (path: string) => {
 const linkIn = (argv: readonly string[]) => argv.map(deepLinkPath).find((path) => path !== undefined);
 
 const fail = (error: unknown) => {
+  logLine(`could not start: ${error instanceof Error ? error.message : String(error)}`);
   dialog.showErrorBox("Lemma could not start", error instanceof Error ? error.message : String(error));
   app.exit(1);
 };
@@ -289,7 +326,7 @@ if (!app.requestSingleInstanceLock()) {
         const reached = await untilReached(
           () => problemWith(target),
           `Cannot reach the Lemma host at ${target.url}`,
-          `The address is set by ${target.from}. Check that the host runs on that machine and that this one can reach it, or run \`lemma remote clear\` to use a host on this machine.`,
+          `The address is set by ${target.from}. Check that the host runs on that machine and that this one can reach it, or run \`lemma env use local\` to use a host on this machine.`,
         );
         if (!reached) return app.quit();
         served = target;
@@ -299,6 +336,7 @@ if (!app.requestSingleInstanceLock()) {
       }
       openWindow(pageAt(pending)!);
       pending = undefined;
+      announce();
     })
     .catch(fail);
 
@@ -311,11 +349,55 @@ if (!app.requestSingleInstanceLock()) {
     if (process.platform !== "darwin") app.quit();
   });
 
+  // Quitting stops a host this app started: first it says what that cuts off, and asks, when there is anything.
+  let asking = false;
   app.on("before-quit", (event) => {
-    const first = !quitting;
-    quitting = true;
-    if (!first || host === undefined) return;
+    if (quitting) return;
+    if (host === undefined) {
+      quitting = true;
+      return;
+    }
     event.preventDefault();
-    void stopHost().then(() => app.quit());
+    if (asking) return;
+    asking = true;
+    void inProgress().then(async (work) => {
+      asking = false;
+      if (work.length > 0) {
+        const { response } = await dialog.showMessageBox({
+          type: "warning",
+          message: "Quit Lemma?",
+          detail: `Quitting stops the host this app started, which cuts off:\n${work.map((item) => `• ${item}`).join("\n")}\n\nA running turn resumes when Lemma starts again.`,
+          buttons: ["Quit", "Cancel"],
+          defaultId: 1,
+          cancelId: 1,
+        });
+        if (response !== 0) {
+          // Kept running: a quit that came from closing the last window leaves none, and off macOS nothing else opens one.
+          const url = pageAt();
+          if (url !== undefined && BrowserWindow.getAllWindows().length === 0) openWindow(url);
+          return;
+        }
+      }
+      quitting = true;
+      await stopHost();
+      app.quit();
+    });
   });
+  app.on("will-quit", unannounce);
+}
+
+/**
+ * What stopping the host this app started would cut off, as its plugins say (`cli.in-progress`). A host that cannot say
+ * within two seconds, or at all (`cli.registry` is off), is taken to be busy: better to ask needlessly than to cut off a turn unasked.
+ */
+async function inProgress(): Promise<readonly string[]> {
+  if (served === undefined) return [];
+  const { url, token } = served;
+  return Effect.runPromise(
+    Effect.scoped(Effect.flatMap(makeHostRpcHttp(url, token), (rpc) => callChannel(rpc, CliChannels.inProgress, {}))).pipe(
+      Effect.map((reports) => reports.flatMap((report) => report.items)),
+      Effect.timeoutOrElse({ duration: "2 seconds", orElse: () => Effect.succeed(["work it could not list in time"]) }),
+      Effect.orElseSucceed(() => ["work it could not list (it did not answer)"]),
+    ),
+  );
 }

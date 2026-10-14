@@ -219,6 +219,8 @@ export class HostControl extends Context.Service<
      * `HostApi(HOST_API)`. Any plugin may require them; none provides them, and none has a row. Fixed for the host's life.
      */
     readonly runtime: readonly string[];
+    /** The host's process: when it started, and what started it, as it said (`LEMMA_STARTED_BY`: `cli`, `desktop`, `service`). */
+    readonly process: { readonly pid: number; readonly startedAt: number; readonly startedBy?: string };
     /** Every known plugin, enabled or not. */
     readonly plugins: Effect.Effect<readonly PluginInfo[]>;
     readonly composition: Effect.Effect<CompositionInfo>;

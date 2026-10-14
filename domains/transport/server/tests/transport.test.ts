@@ -107,6 +107,9 @@ describe("transport", () => {
             home: host.home,
             composition: { id: "c0ffee", plugins: [{ id: "transport.server", version: "0.1.0" }] },
             runtime: ["lemma/Paths", "lemma/HostControl"],
+            // Its process, as `HostControl.process` says: what `lemma status` shows.
+            pid: process.pid,
+            startedAt: 0,
           });
           const plugins = yield* client["Host.Plugins"]();
           // It requires the runtime only: each domain serves its own calls as channels, so none restarts it.

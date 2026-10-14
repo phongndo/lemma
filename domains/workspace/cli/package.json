@@ -1,0 +1,29 @@
+{
+  "name": "@lemma/workspace-cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The project directory's commands for the lemma command: its git status, branches, worktrees, and files",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/cli": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/workspace": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./src/index.ts"
+  }
+}

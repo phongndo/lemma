@@ -57,7 +57,7 @@ function environment(facts: EnvironmentFacts): string {
     ...(facts.cli === undefined
       ? []
       : [
-          `Lemma CLI: \`${facts.cli}\` inspects and changes the host you run in: \`status\`, \`plugins\` (\`plugins enable|disable <id>\` turns one on or off; \`reload\` applies config edits), \`session show <id>\`, \`inspect <session> --filter "is:error tool:bash turn:2"\`, and \`inspect <session> --request last\` (add \`--system\`, \`--tools\`, \`--diff\`, or \`--rebuilt\` to see exactly what you were sent and which plugin contributed each part). Add \`--json\` for structured output; \`--help\` lists the rest.`,
+          `Lemma CLI: \`${facts.cli}\` inspects and changes the host you run in, printing JSON for you: \`help --json\` lists every command, its plugins' included, with a JSON Schema of what each takes. Among them: \`status\`, \`plugins\` (\`plugins enable|disable <id>\`; \`reload\` applies config edits), \`sessions show <id>\`, \`sessions inspect <session> --filter "is:error tool:bash turn:2"\`, and \`sessions inspect <session> --request last\` (add \`--system\`, \`--tools\`, \`--diff\`, or \`--rebuilt\` to see exactly what you were sent and which plugin contributed each part).`,
         ]),
     "</environment>",
   ].join("\n");

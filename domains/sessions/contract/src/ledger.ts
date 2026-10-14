@@ -371,7 +371,7 @@ export function promptDiff(previous: TrajectoryRequest | undefined, current: Tra
 export const LEDGER_SORTS = ["time", "name", "status", "type", "tokens", "duration"] as const;
 export type LedgerSort = (typeof LEDGER_SORTS)[number];
 
-/** Records ordered by a column, as the web table's header and `lemma inspect --sort` do; `time` is log order. */
+/** Records ordered by a column, as the web table's header and `lemma sessions inspect --sort` do; `time` is log order. */
 export function sortRecords(records: readonly LedgerRecord[], key: LedgerSort, desc = false, running = false): LedgerRecord[] {
   if (key === "time") return desc ? [...records].reverse() : [...records];
   const value = (record: LedgerRecord): string | number => {

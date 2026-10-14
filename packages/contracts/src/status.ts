@@ -111,14 +111,21 @@ export const HostInfo = Schema.Struct({
   composition: CompositionInfo,
   /** What the host provides itself, by capability key (`HostControl.runtime`): a plugin requiring one needs no plugin for it. */
   runtime: Schema.Array(Schema.String),
+  /** Its process (`HostControl.process`). */
+  pid: Schema.optional(Schema.Number),
+  /** Epoch milliseconds. */
+  startedAt: Schema.optional(Schema.Number),
+  /** What started it, as it said (`LEMMA_STARTED_BY`): `cli`, `desktop`, `service`; absent when it was run by hand. */
+  startedBy: Schema.optional(Schema.String),
 });
 export type HostInfo = typeof HostInfo.Type;
 
 /**
- * The version of what the host serves on the wire (`RuntimeRpcs`, and its encoding, which Effect's RPC owns): 5 since
+ * The version of what the host serves on the wire (`RuntimeRpcs`, and its encoding, which Effect's RPC owns): 6 since
+ * it says who started it (`Host.Info`'s `pid`, `startedAt`, `startedBy`) and who is attached (`Host.Clients`), 5 since
  * the web app's calls and events are named for it (`Web.Composition`, `web-changed`, `/api/web`), 4 since a plugin's
  * one row decides its host and web halves alike (`Host.Configure` writes every row), 3 since it serves the runtime's calls and events only, each domain reached through its channels, 2 since Lemma moved to
  * Effect 4, 1 before (a host whose `/api/health` names none). A client and a host speaking different versions cannot
  * talk, so a client whose calls fail asks `/api/health` to say why.
  */
-export const HOST_PROTOCOL = 5;
+export const HOST_PROTOCOL = 6;

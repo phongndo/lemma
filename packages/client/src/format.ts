@@ -25,3 +25,17 @@ export const formatDuration = (ms: number): string => {
   if (minutes < 60) return seconds === 0 ? `${minutes}m` : `${minutes}m ${seconds}s`;
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 };
+
+/** A turn's or a step's usage in a line, `↑12k ↓1.2k cache 8.0k $0.012`: input counts cache reads and writes, as providers bill them. */
+export const formatUsage = (usage: {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+  readonly cost: { readonly total: number };
+}): string => {
+  const parts = [`↑${formatTokens(usage.input + usage.cacheRead + usage.cacheWrite)}`, `↓${formatTokens(usage.output)}`];
+  if (usage.cacheRead > 0) parts.push(`cache ${formatTokens(usage.cacheRead)}`);
+  if (usage.cost.total > 0) parts.push(formatCost(usage.cost.total));
+  return parts.join(" ");
+};

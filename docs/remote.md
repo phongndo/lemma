@@ -5,6 +5,11 @@ with the web app, the desktop app, or the CLI. The UI runs on the client and
 talks to the host over its RPC socket, so nothing is drawn over SSH. The host
 stays on loopback and Tailscale carries it across machines over HTTPS.
 
+Each host is the authority over its own home: the server's sessions, config,
+credentials, and tools are the server's, and a client's own host (the desktop
+app's, say) is a separate one. A client reaches several hosts by name: its own
+machine's (`local`) and the servers it has saved (`lemma env`).
+
 Keep the client's checkout at the server's version: the RPC protocol changes
 between versions (`HOST_PROTOCOL` in the transport plugin's
 [README](../domains/transport/server/README.md#use)), and a CLI that finds the
@@ -13,63 +18,24 @@ The web app comes from the host, so it always matches.
 
 ## On the server
 
-Build the web app once (and after updating the checkout), then run the host
-under a supervisor so it comes back after a crash or a reboot. Turns a crash or
-a restart cut off resume when it does, and queued prompts run on (see the
-[agent plugin](../domains/agent/loop/README.md#durability)):
+Build the web app once (and after updating the checkout), then keep the host
+running as a user service, so it comes back after a crash or a reboot. Turns a
+crash or a restart cut off resume when it does, and queued prompts run on (see
+the [agent plugin](../domains/agent/loop/README.md#durability)):
 
 ```sh
 nix develop -c pnpm --filter @lemma/web-app build
-nix develop -c pnpm lemma serve --no-open   # what the services below run
+nix develop -c pnpm lemma service install   # a systemd user unit, or a launchd agent, running `lemma serve`
+nix develop -c pnpm lemma service           # installed, enabled, running
+loginctl enable-linger $USER                # Linux: keep it running without a login session, from boot
 ```
 
-A systemd user service, `~/.config/systemd/user/lemma.service`:
-
-```ini
-[Unit]
-Description=Lemma host
-
-[Service]
-WorkingDirectory=%h/code/lemma
-# The absolute path `command -v nix` prints.
-ExecStart=/run/current-system/sw/bin/nix develop -c pnpm lemma serve --no-open
-Restart=on-failure
-
-[Install]
-WantedBy=default.target
-```
-
-`systemctl --user enable --now lemma` starts it, and `loginctl enable-linger $USER`
-keeps it running without a login session, from boot.
-
-A launchd agent on macOS, `~/Library/LaunchAgents/dev.lemma.host.plist`, started
-with `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/dev.lemma.host.plist`.
-An agent starts when the user logs in.
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>dev.lemma.host</string>
-  <key>WorkingDirectory</key><string>/Users/you/code/lemma</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/nix/var/nix/profiles/default/bin/nix</string>
-    <string>develop</string><string>-c</string>
-    <string>pnpm</string><string>lemma</string><string>serve</string><string>--no-open</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardOutPath</key><string>/Users/you/Library/Logs/lemma.log</string>
-  <key>StandardErrorPath</key><string>/Users/you/Library/Logs/lemma.log</string>
-</dict>
-</plist>
-```
-
-On NixOS and nix-darwin, the same service can be declared in the system
-configuration (`systemd.user.services`, `launchd.user.agents`) instead of written
-by hand.
+`lemma service install --print` shows the definition without writing it. It
+names this checkout's `node` and `lemma`, which under Nix live in the store and
+may be garbage-collected: on NixOS and nix-darwin, declare the service in the
+system configuration instead (`systemd.user.services`, `launchd.user.agents`)
+from what `--print` shows. `lemma stop` stops a host the service runs through
+the service manager; `lemma logs` shows what it printed.
 
 Keep the transport on loopback (its default `host`) and let Tailscale serve it to
 your tailnet over HTTPS (the tailnet needs HTTPS certificates turned on):
@@ -85,27 +51,35 @@ The token is in `~/.lemma/token` (`<home>/token`) and survives restarts; see the
 ## On the client
 
 ```sh
-lemma remote set https://<machine>.<tailnet>.ts.net --token <token>
-lemma remote          # which host commands go to
-lemma status
-lemma open            # the web app, from the server, with the token
-lemma remote clear    # back to a local host
+lemma env add box https://<machine>.<tailnet>.ts.net   # asks for the token, checks it, saves it
+lemma --env box status                                 # one command on the server
+lemma env use box                                      # or every command, from now on
+lemma env                                              # the hosts this client knows, and which answer
+lemma open                                             # the web app, from the server, with the token
+lemma env use local                                    # back to this machine's host
 ```
 
-`remote set` calls the host with the token before it writes `~/.lemma/remote.json`
-(`{ "url", "token" }`, mode 0600), and refuses a host it cannot reach or that
-rejects the token. Without `--token` it takes `LEMMA_TOKEN` or asks. For one
-shell or script, `LEMMA_URL` and `LEMMA_TOKEN` override `remote.json`; with
-neither, commands go to the local host. `lemma serve` always runs locally.
+`env add` calls the host with the token before it writes `~/.lemma/environments.json`
+(`{ "default"?, "environments": { "<name>": { "url", "token" } } }`, mode 0600),
+and refuses a host it cannot reach or that rejects the token. Without `--token`
+it takes `LEMMA_TOKEN` or asks. Saving one never makes it the default: `env use`
+does (or `env add --use`). A command goes to the host `--env` names, else the one
+`LEMMA_URL` (with `LEMMA_TOKEN`) names, else the environment `LEMMA_ENV` names,
+else the default, else this machine's. A host that does not answer fails the
+command rather than falling back to another, which would act on the wrong
+machine. `serve`, `stop`, `logs`, and `service` always act on this machine.
+A `remote.json` that an older `lemma remote set` wrote is read as the default
+environment `remote` until environments.json exists; the first `lemma env`
+change writes it there.
 
 - **Web app.** Open `https://<machine>.<tailnet>.ts.net/?token=<token>`, which
   `lemma open` prints and opens. The page keeps the token for that tab and drops
   it from the address bar; it derives its socket from the page's address, so
   over HTTPS it connects with `wss:`.
-- **Desktop app.** It reads the same `LEMMA_URL`/`LEMMA_TOKEN` and `remote.json`
-  at start and shows the server's page, `lemma://` links included, without
-  starting a local host. If the server does not answer, it says so with the URL
-  and offers Retry or Quit.
+- **Desktop app.** It finds its host as the CLI does by default: `LEMMA_URL`, or
+  the default environment, shows the server's page, `lemma://` links included,
+  without starting a local host. If the server does not answer, it says so with
+  the URL and offers Retry or Quit.
 - **Paths are the server's.** Tools run there, and session and workspace
   directories are server paths, while the CLI's directory defaults are the
   client's current directory: give a server path
@@ -115,13 +89,13 @@ neither, commands go to the local host. `lemma serve` always runs locally.
 
 The token is a bearer secret for the whole host: whoever holds it can run tools,
 including shell commands, as the user the host runs as. Keep it in
-`remote.json` or the environment; a `--token` argument lands in shell history
-(leave it out to be asked).
+`environments.json` or the environment; a `--token` argument lands in shell
+history (leave it out to be asked).
 
 - Do not set the transport's `host` to `0.0.0.0` on a network you do not
   trust: it serves plain HTTP to everyone who can reach the port. `tailscale serve`
   keeps it on your tailnet, encrypted; Tailscale's access rules can narrow it to
   your own devices. `tailscale funnel` would publish it to the internet.
 - Rotate the token by deleting `<home>/token` on the server and restarting the
-  host, then run `lemma remote set` again on each client. A `token` set in the
+  host, then run `lemma env add` again on each client. A `token` set in the
   transport's config takes the file's place.

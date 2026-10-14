@@ -7,7 +7,7 @@ import type { Contribution, EventData, ProviderAnswer, SessionEvent, Timing, Tur
  * The trajectory of a branch: per turn, per step, what the model was sent,
  * which plugin contributed each part, what came back, and what the tools did.
  * A pure projection of the log, shared by the web app's Trajectory view and
- * `lemma inspect`, so both show the same thing.
+ * `lemma sessions inspect`, so both show the same thing.
  */
 
 export interface TrajectorySection {

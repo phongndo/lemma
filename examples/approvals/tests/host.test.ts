@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
-import { run as cli } from "@lemma/cli/src/cli.ts";
+import { run as cli } from "@lemma/cli-app/src/cli.ts";
 import { proxy, settled, startLemma } from "../../../scripts/e2e.ts";
 import type { Lemma } from "../../../scripts/e2e.ts";
 
@@ -17,7 +17,9 @@ describe("as a plugin file in a real host", () => {
   let started: Lemma;
   let home: string;
   const lemma = async (...argv: string[]) => {
-    const { stdout } = await execFileAsync(process.execPath, ["--conditions=lemma-source", cliMain, ...argv], { env: { ...process.env, LEMMA_HOME: home } });
+    const { stdout } = await execFileAsync(process.execPath, ["--conditions=lemma-source", cliMain, ...argv], {
+      env: { ...process.env, LEMMA_HOME: home, LEMMA_OUTPUT: "text" },
+    });
     return stdout;
   };
 
@@ -40,7 +42,7 @@ describe("as a plugin file in a real host", () => {
     const status = JSON.parse(await lemma("plugins", "--json"));
     expect(status.find((plugin: { id: string }) => plugin.id === "approvals")).toMatchObject({ source: "user", state: "active" });
 
-    const session = (await lemma("session", "new", "--cwd", home)).trim();
+    const session = (await lemma("sessions", "new", "--cwd", home)).trim();
     const allowed = await lemma("run", session, "check the shell", "--model", "mock/scripted", "--answer", "once");
     expect(allowed).toContain("hello from lemma");
     const denied = await lemma("run", session, "again", "--model", "mock/scripted", "--answer", "deny");
@@ -54,7 +56,7 @@ describe("as a plugin file in a real host", () => {
   }, 60_000);
 
   test("a question answered elsewhere closes the terminal's prompt", async () => {
-    const session = (await lemma("session", "new", "--cwd", home)).trim();
+    const session = (await lemma("sessions", "new", "--cwd", home)).trim();
     let withdrawn = false;
     const asking = cli(["run", session, "check the shell", "--model", "mock/scripted"], {
       env: { LEMMA_HOME: home },
@@ -84,7 +86,7 @@ describe("as a plugin file in a real host", () => {
     const discovery = JSON.parse(await readFile(join(home, "transport.json"), "utf8")) as { url: string; token: string };
     const link = await proxy(Number(new URL(discovery.url).port));
     try {
-      const session = (await lemma("session", "new", "--cwd", home)).trim();
+      const session = (await lemma("sessions", "new", "--cwd", home)).trim();
       let reply: ((value: string) => void) | undefined;
       const said: string[] = [];
       let out = "";
@@ -111,7 +113,7 @@ describe("as a plugin file in a real host", () => {
   }, 60_000);
 
   test("a command that only watches holds no approval: an unattended run is denied at once while one watches", async () => {
-    const session = (await lemma("session", "new", "--cwd", home)).trim();
+    const session = (await lemma("sessions", "new", "--cwd", home)).trim();
     const stop = new AbortController();
     const shown: string[][] = [[], []];
     const watching = (argv: string[], lines: string[]) =>

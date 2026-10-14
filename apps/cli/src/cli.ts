@@ -1,710 +1,109 @@
-import { resolve } from "node:path";
-import { parseArgs } from "node:util";
-import { Cause, Effect, Exit, Schema, Stream } from "effect";
+import { Cause, Duration, Effect, Exit } from "effect";
 import type { Scope } from "effect";
-import { appUrl, HOST_PROTOCOL, HostError, kernelOf, parseConfigValue } from "@lemma/contracts";
-import { AgentChannels, WhenBusy } from "@lemma/agent";
-import { ThinkingLevel } from "@lemma/llm";
-import {
-  branchOf,
-  NewThreadRoute,
-  ThreadRoute,
-  LEDGER_SORTS,
-  ledger,
-  parseLedgerFilter,
-  promptDiff,
-  rebuildRequest,
-  recordStart,
-  recordsBetween,
-  recordSummary,
-  SessionChannels,
-  sortRecords,
-  trajectory,
-} from "@lemma/sessions";
-import { FILE_SEARCH_LIMIT } from "@lemma/workspace";
-import type { ConfigScope, PluginChange } from "@lemma/contracts";
-import type { LedgerSort, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
-import { makeHostRpcHttp } from "@lemma/client";
-import type { HostRpcClient } from "@lemma/client";
-import { resolvePaths } from "@lemma/host/paths";
-import { call, ofChannel, openHost, over, received, refined, starting } from "./channels.ts";
+import { closest, columns, GLOBAL_FLAGS, inputJsonSchema, parseInput, renderGlobalFlags, renderHelp, usageLine } from "@lemma/cli";
+import type { CliCommandInfo, CommandSpec } from "@lemma/cli";
+import { readEnvironments } from "@lemma/contracts/discovery";
+import packageJson from "../package.json" with { type: "json" };
+import { hostCommands } from "./commands/host.ts";
+import { lifecycleCommands } from "./commands/lifecycle.ts";
+import { setupCommands } from "./commands/setup.ts";
 import { CliError, ExitCode, usage } from "./command.ts";
-import { checkPlugin } from "./check.ts";
-import type { Command, Connection, Failure, Io, Options, Output, QuestionPolicy, Target, Unattached } from "./command.ts";
-import {
-  formatConfig,
-  formatDiff,
-  formatPlugin,
-  formatPlugins,
-  formatRecords,
-  formatReload,
-  formatSession,
-  formatSessions,
-  formatStatus,
-  formatStep,
-  formatSystem,
-  formatTools,
-  formatTrajectory,
-  formatWebHalves,
-  formatHooks,
-  formatRegistries,
-  formatEvents,
-  formatCapabilities,
-  formatChannels,
-  formatInspectors,
-  formatSnapshot,
-} from "./format.ts";
-import {
-  answerCommand,
-  cancelCommand,
-  dismissCommand,
-  doCommand,
-  eventsCommand,
-  loginCommand,
-  logoutCommand,
-  modelsCommand,
-  providersCommand,
-  listCommandsCommand,
-  queueCommand,
-  questionsCommand,
-  withdrawCommand,
-} from "./live.ts";
-import { findTarget, noLocalHost, remoteCommand, toCliError, tokenCommand } from "./remote.ts";
-import { readSession, runCommand } from "./run.ts";
-import { workspaceCommand } from "./workspace.ts";
+import type { Builtin, Connection, Failure, Globals, Io, Output, QuestionPolicy } from "./command.ts";
+import { connect, homeOf, otherProtocol, toCliError } from "./connect.ts";
+import { groupHelp, hostedCommand, leadingWords, listHosted, match } from "./hosted.ts";
 
 export { ExitCode } from "./command.ts";
 
-const USAGE = `Usage: lemma <command> [options] [--json]
+/** The `lemma` command's own commands, in the order `lemma help` lists their groups. */
+export const builtins: readonly Builtin[] = [...lifecycleCommands, ...hostCommands, ...setupCommands];
 
-Everything the web app can do, from a shell. Every command except serve, remote,
-token, and plugins check talks to a running host: the one LEMMA_URL (with LEMMA_TOKEN) names,
-else the one in $LEMMA_HOME/remote.json, else the local host found in
-$LEMMA_HOME/transport.json ($LEMMA_HOME defaults to ~/.lemma).
-
-Host
-  serve                          Run the host in this terminal (always here, never remote)
-  status                         Host, composition, plugin states, running turns
-  plugins                        Every host plugin: id, version, state (or "disabled"), source, and why; then
-                                 rows for the web app's, and the web halves in the plugin directories
-  plugins enable <id>            Turn a plugin on, both its halves: removes its "enabled" row from the user config
-  plugins disable <id>           Turn a plugin off: writes "enabled": false; plugins needing it stop too
-    --project                    ...in the project's .lemma/config.jsonc instead (a trusted project)
-  plugins show <id>              One plugin: state and why, what it provides and requires and who is on
-                                 the other end, the hooks and events it takes part in, its recent faults
-  plugins restart <id>           Restart a failed plugin and the plugins it halted
-    --force                      ...also when it is running, unless the host depends on it
-  plugins check [path]           Start a host of its own with the plugin file or folder (default: here) and
-                                 say what it made of it: its state or fault, what it provides, requires,
-                                 handles, and adds, and the host's warnings; fails on a problem
-  plugins config <id>            Its settings: each field, its value or default, and what it does
-  plugins config <id> <key> <value>
-                                 Set one field in the config file that sets its config (user by default); a
-                                 web half's value is JSON when it parses and text otherwise
-    --unset                      ...remove the field instead, back to its default
-  reload                         Re-read config files and apply them
-
-A host on another machine (docs/remote.md)
-  remote                         Which host commands go to (LEMMA_URL, remote.json, or local) and its URL
-  remote set <url> [--token <t>] Use the host at <url> from now on: checks the token against it, then
-                                 writes $LEMMA_HOME/remote.json (the token: --token, LEMMA_TOKEN, or asked)
-  remote clear                   Remove remote.json: back to the local host
-  token                          The local host's token, to give a client on another machine
-
-  events                         Follow what the host publishes: its own events (notices, questions, plugin
-                                 changes) and its domains' streams (agent.activity, sessions.changes,
-                                 llm.changes, commands.changes); NDJSON of {from, element} with --json
-    --session <id>               ...only that session's turns and changes, and its log from now on
-
-Sessions and turns
-  session list [--cwd <dir>]     Sessions for a directory (default: the current one); --all for every one
-  session show <id>              Session info and its current branch as a transcript
-  session new [--cwd <dir>]      Create a session (default: the current directory)
-  session title <id> <title>     Rename a session
-  session pin|unpin <id>         Keep a session at the top of the web app's sidebar, or stop
-  session archive|unarchive <id> Hide a session from the sidebar (it stays on disk), or bring it back
-  session delete <id>            Delete a session's log for good (refused while a turn runs in it)
-  session checkout <id> <event>  Move the session's leaf: the next prompt branches from that event
-  run <id|new> <prompt…>         Send a prompt and wait for the turn to end
-    --model <provider/model>     Model for this turn (see lemma models)
-    --thinking <level>           off, minimal, low, medium, high, xhigh, max
-    --image <file>               Attach an image (repeatable)
-    --follow                     Stream the turn: text, tool calls, results (NDJSON with --json)
-    --cwd <dir>                  Directory for a new session
-    --when-busy <mode>           While a turn runs: follow-up (default: the next turn), steer (join it
-                                 after its current step), or reject (fail Busy). --steer: --when-busy steer
-    --request-id <id>            Send it exactly once: the same id again waits for (or reports) the turn
-                                 that placed it rather than placing it twice
-  cancel <id>                    Cancel the session's running turn
-  queue <id>                     Prompts waiting for a turn: mode, request id, and text
-  withdraw <id> <request>        Take a prompt out of the queue
-  open [<id> [<view>]]           Open the web app at a session (a new thread without one) in the browser,
-                                 in a view such as trajectory; prints the address. --json: print it only.
-                                 Without a display or over SSH it only prints it
-
-Commands (what the web app's command palette runs; plugins add them)
-  do                             List commands: id, title, category, and the plugin that added it
-  do <command>                   Run one in the current directory (or --cwd); --session <id> for its session
-                                 Its questions are answered like a login's (see --questions, --answer)
-
-Channels (calls and streams host plugins serve their clients)
-  channels                       What host plugins serve: id, call or stream, title, plugin, and what it does
-  channels call <id> [<json>]    Call one with a JSON payload and print the result
-  channels open <id> [<json>]    Open a stream and print each element as a line of JSON until it ends or
-                                 is stopped; it fails Withdrawn when its plugin stops or reloads
-
-Questions the host asks (logins, tools that confirm)
-  questions                      Open questions, with their ids
-  answer <question> <value>      Answer one: yes/no, text, or an option (value, label, or number)
-  dismiss <question>             Dismiss one
-    While run, login, do, or events --questions … is attached:
-    --questions ask|ignore|dismiss   ask at the terminal (default when there is one), leave them
-                                     to another client such as the web app, holding none (default
-                                     otherwise), or dismiss
-    --answer <value>               Answer the next question with this (repeatable, in order)
-
-Providers and models
-  providers                      Providers, whether they are configured, and how to log in
-  login <provider> [--method api_key|oauth]
-  logout <provider>
-  models [--all]                 Models you can use now (--all: every known model)
-
-Workspace (the project directory; --path defaults to the current one)
-  workspace status [path]        Whether it exists, git branch, head, changes, upstream
-  workspace branches [path]      Local branches by recency, then remote-only ones
-  workspace checkout <branch> [--create] [--path <dir>]
-  workspace worktree <branch> [--base <ref>] [--path <dir>]
-                                 A linked worktree on a new branch, as the web app's "new worktree"
-  workspace mkdir <path>         Create a directory
-  workspace browse [partial]     Complete a directory path, as the add-project dialog does
-  workspace files [query…] [--limit <n>] [--path <dir>]
-                                 Its files and directories matching the query, best first, as the composer's @ finds them
-
-Inspect (the web app's Trajectory view)
-  kernel [capabilities]          Each capability: who provides it, in what state, and who requires it
-  kernel hooks                   Each hook's chain, in the order its handlers run
-  kernel registries              Each registry and what each plugin contributes to it
-  kernel events                  Each event and who observes it
-  inspectors                     What host plugins let you look into (tools, running turns, commands…)
-  inspectors <id>                One inspector's snapshot, as tables
-  inspect <id>                   Turns and steps: model, history, usage, timing, tools
-  inspect <id> --records         Every record (prompt, system change, model call, tool run) as a table
-    --filter <query>             is:error, is:running, kind:model, tool:bash, turn:2, req:5, text,
-                                 and -term to exclude (implies --records)
-    --sort <column> [--desc]     time, name, status, type, tokens, or duration
-    --range <from>..<to>         Only records active in that span, as offsets from the first
-                                 record (90s, 1m30s, 500ms; either side may be empty)
-  inspect <id> --request <r>     One request: each system section and tool with the plugin that
-                                 contributed it, then the response and tool runs. <r> is a request
-                                 number (5), <turn>.<step> (2.1), a step id, or "last"
-    --system                     ...only the system prompt, section by section
-    --tools                      ...only the tool definitions
-    --diff                       ...how its system prompt differs from the request before
-    --rebuilt                    ...the exact request sent to the model, as JSON
-  inspect <id> --step <step>     Same as --request
-
-Options
-  --json      Print results as JSON (errors as {"error": {...}} on stderr)
-  -h, --help  Show this help
-
-Exit codes: 0 ok, 1 the host refused or failed the request (or the turn failed),
-2 usage error, 3 no running host, it could not be reached (or the connection to it
-was lost), or it is still starting, 130 interrupted (Ctrl+C).`;
-
-/** `90s`, `1m30s`, `500ms`, `2m`, or bare seconds, in milliseconds. */
-export const parseOffset = (text: string): number | undefined => {
-  if (/^\d+(\.\d+)?$/.test(text)) return Number(text) * 1000;
-  const units: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
-  let total = 0;
-  const rest = text.replace(/(\d+(?:\.\d+)?)(ms|s|m|h)/g, (_, value: string, unit: string) => {
-    total += Number(value) * units[unit]!;
-    return "";
-  });
-  return rest === "" && text !== "" ? total : undefined;
-};
-
-/** Sessions with a turn running, or undefined when nothing serves `agent.running` (the agent is off): the host's status says so rather than failing. */
-const runningTurns = (rpc: HostRpcClient) =>
-  call(rpc, AgentChannels.running, undefined).pipe(
-    Effect.catch((error) => (ofChannel(error, AgentChannels.running.id, "NotFound") ? Effect.succeed(undefined) : Effect.fail(error))),
-  );
-
-/** The web app's address for a session (checked to exist) or a new thread, with the token; opened unless `--json` or there is no browser here. */
-const openCommand =
-  (sessionId: string | undefined, view: string | undefined, options: Options): Command =>
-  ({ target, rpc }, io) =>
-    Effect.gen(function* () {
-      if (sessionId !== undefined) yield* call(rpc, SessionChannels.get, { sessionId });
-      const path = sessionId === undefined ? NewThreadRoute.href({}) : ThreadRoute.href({ id: sessionId, ...(view === undefined ? {} : { view }) });
-      const url = appUrl(target.url, path, target.token);
-      if (!options.json) io.open?.(url);
-      return { json: { url }, text: url };
-    });
-
-const route = (positionals: readonly string[], options: Options, io: Io): Command | Unattached | CliError => {
-  const [command, sub, arg, ...rest] = positionals;
-  const extra = (count: number) => (positionals.length > count ? usage(`Unexpected argument "${positionals[count]}"`) : undefined);
-  switch (command) {
-    case "status":
-      return (
-        extra(1) ??
-        (({ target, rpc }) =>
-          Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"](), runningTurns(rpc)], { concurrency: "unbounded" }).pipe(
-            Effect.map(([info, plugins, running]) => ({
-              json: { url: target.url, source: target.source, pid: target.pid, startedAt: target.startedAt, info, plugins, running },
-              text: formatStatus(target, info, plugins, running),
-            })),
-          ))
-      );
-    case "remote":
-      return remoteCommand(sub, arg, rest, io, options);
-    case "token":
-      return extra(1) ?? tokenCommand(io);
-    case "plugins":
-      if (sub === undefined || sub === "list") {
-        return (
-          extra(sub === undefined ? 1 : 2) ??
-          (({ rpc }) =>
-            Effect.map(Effect.all([rpc["Host.Plugins"](), rpc["Web.Composition"]()], { concurrency: "unbounded" }), ([plugins, composition]) => ({
-              json: plugins,
-              text: [formatPlugins(plugins), formatWebHalves(composition, new Set(plugins.map((plugin) => plugin.id)))].filter(Boolean).join("\n\n"),
-            })))
-        );
-      }
-      // Runs a host of its own: it goes to no host the others would.
-      if (sub === "check") return extra(3) ?? checkPlugin(arg, io, run);
-      if (sub === "restart") {
-        if (arg === undefined) return usage("plugins restart needs a plugin id");
-        return (
-          extra(3) ??
-          (({ rpc }) =>
-            Effect.as(rpc["Host.RestartPlugin"](options.force ? { pluginId: arg, force: true } : { pluginId: arg }), {
-              json: { restarted: arg },
-              text: `restarted ${arg}`,
-            }))
-        );
-      }
-      if (sub === "enable" || sub === "disable") {
-        if (arg === undefined) return usage(`plugins ${sub} needs a plugin id`);
-        const enabled = sub === "enable";
-        return (
-          extra(3) ??
-          (({ rpc }) =>
-            Effect.gen(function* () {
-              const host = (yield* rpc["Host.Plugins"]()).some((plugin) => plugin.id === arg);
-              const report = yield* rpc["Host.Configure"]({ plugins: { [arg]: { enabled } }, ...(options.project ? { scope: "project" as const } : {}) });
-              // A plugin with no host half is the web app's: its row is written, and open web apps apply it.
-              const applied = host ? formatReload(report) : "not a host plugin, so open web apps apply it";
-              return { json: { [enabled ? "enabled" : "disabled"]: arg, ...report }, text: `${enabled ? "enabled" : "disabled"} ${arg}: ${applied}` };
-            }))
-        );
-      }
-      if (sub === "show") {
-        if (arg === undefined) return usage("plugins show needs a plugin id");
-        return (
-          extra(3) ??
-          (({ rpc }) =>
-            Effect.flatMap(Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"]()], { concurrency: "unbounded" }), ([info, plugins]) => {
-              const plugin = plugins.find((candidate) => candidate.id === arg);
-              return plugin === undefined
-                ? Effect.fail(new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg }))
-                : Effect.succeed({ json: plugin, text: formatPlugin(plugins, plugin, info.runtime) });
-            }))
-        );
-      }
-      if (sub === "config") {
-        if (arg === undefined) return usage("plugins config needs a plugin id");
-        const [key, value, ...more] = rest;
-        if (more.length) return usage(`Unexpected argument "${more[0]}"`);
-        if (key === undefined) {
-          return ({ rpc }) =>
-            Effect.flatMap(rpc["Host.Plugins"](), (plugins) => {
-              const plugin = plugins.find((candidate) => candidate.id === arg);
-              return plugin === undefined
-                ? Effect.fail(new HostError({ code: "NotFound", message: `No plugin "${arg}"`, subject: arg }))
-                : Effect.succeed({ json: { id: plugin.id, fields: plugin.configFields ?? [], ...plugin.config }, text: formatConfig(plugin) });
-            });
-        }
-        if ((value === undefined) === !options.unset) return usage("plugins config <id> <key> needs a value, or --unset");
-        return ({ rpc }) =>
-          Effect.gen(function* () {
-            const plugin = (yield* rpc["Host.Plugins"]()).find((candidate) => candidate.id === arg);
-            if (plugin === undefined) {
-              // A web half's: only the web app knows its fields, so the value is JSON when it parses and text otherwise.
-              const parsed = options.unset ? { value: null } : parseConfigValue(undefined, value!);
-              if ("error" in parsed) return yield* new HostError({ code: "Usage", message: parsed.error, subject: arg });
-              const scope: ConfigScope = options.project ? "project" : "user";
-              const report = yield* rpc["Host.Configure"]({
-                plugins: { [arg]: { values: { [key]: parsed.value } } },
-                ...(scope === "project" ? { scope } : {}),
-              });
-              return {
-                json: { id: arg, key, ...(options.unset ? { unset: true } : { value: parsed.value }), scope, ...report },
-                text: `${options.unset ? `unset ${arg}.${key}` : `set ${arg}.${key} = ${JSON.stringify(parsed.value)}`} in the ${scope} config: not a host plugin, so open web apps apply it`,
-              };
-            }
-            const field = plugin.configFields?.find((candidate) => candidate.key === key);
-            if (field === undefined) {
-              const keys = (plugin.configFields ?? []).map((candidate) => candidate.key);
-              return yield* new HostError({
-                code: "Usage",
-                message: keys.length ? `${arg} has no "${key}"; its fields are ${keys.join(", ")}` : `${arg} takes no config`,
-                subject: arg,
-              });
-            }
-            const parsed = options.unset ? { value: null } : parseConfigValue(field, value!);
-            if ("error" in parsed) return yield* new HostError({ code: "Usage", message: parsed.error, subject: arg });
-            const scope: ConfigScope = options.project ? "project" : (plugin.configScope ?? "user");
-            const change: PluginChange = { values: { [key]: parsed.value } };
-            const report = yield* rpc["Host.Configure"]({ plugins: { [arg]: change }, ...(scope === "project" ? { scope } : {}) });
-            return {
-              json: { id: arg, key, ...(options.unset ? { unset: true } : { value: parsed.value }), scope, ...report },
-              text: `${options.unset ? `unset ${arg}.${key}` : `set ${arg}.${key} = ${JSON.stringify(parsed.value)}`} in the ${scope} config: ${formatReload(report)}`,
-            };
-          });
-      }
-      return usage(`Unknown plugins command "${sub}"`);
-    case "reload":
-      return (
-        extra(1) ??
-        (({ rpc }) =>
-          Effect.map(rpc["Host.Reload"](), (report) => ({
-            json: report,
-            text: formatReload(report, "the plugins the reload changes, the transport among them"),
-          })))
-      );
-    case "events":
-      // Watching answers nothing unless asked to: answers given alone would go unused.
-      if (options.answers.length > 0 && options.questions === undefined) return usage("events answers questions only with --questions ask, ignore, or dismiss");
-      return extra(1) ?? eventsCommand;
-    case "session":
-      return sessionCommand(sub, arg, rest, options, io);
-    case "run": {
-      if (sub === undefined || (positionals.length < 3 && options.images.length === 0)) return usage("run needs a session id (or new) and a prompt");
-      return runCommand(sub, positionals.slice(2));
-    }
-    case "open":
-      return extra(3) ?? openCommand(sub, arg, options);
-    case "cancel":
-      if (sub === undefined) return usage("cancel needs a session id");
-      return extra(2) ?? cancelCommand(sub);
-    case "queue":
-      if (sub === undefined) return usage("queue needs a session id");
-      return extra(2) ?? queueCommand(sub);
-    case "withdraw":
-      if (sub === undefined || arg === undefined) return usage("withdraw needs a session id and a request id (see lemma queue)");
-      return extra(3) ?? withdrawCommand(sub, arg);
-    case "do":
-      if (sub === undefined) return listCommandsCommand;
-      return extra(2) ?? doCommand(sub);
-    case "channels":
-      return channelsCommand(sub, arg, rest);
-    case "questions":
-      return extra(1) ?? questionsCommand;
-    case "answer":
-      if (sub === undefined || arg === undefined) return usage("answer needs a question id and a value");
-      return answerCommand(sub, positionals.slice(2));
-    case "dismiss":
-      if (sub === undefined) return usage("dismiss needs a question id");
-      return extra(2) ?? dismissCommand(sub);
-    case "providers":
-      return extra(1) ?? providersCommand;
-    case "models":
-      return extra(1) ?? modelsCommand;
-    case "login":
-      if (sub === undefined) return usage("login needs a provider id (see lemma providers)");
-      return extra(2) ?? loginCommand(sub);
-    case "logout":
-      if (sub === undefined) return usage("logout needs a provider id");
-      return extra(2) ?? logoutCommand(sub);
-    case "workspace":
-      return workspaceCommand(sub, positionals.slice(2), io, options);
-    case "kernel": {
-      const views = { hooks: formatHooks, registries: formatRegistries, events: formatEvents, capabilities: formatCapabilities } as const;
-      const view = sub ?? "capabilities";
-      if (!Object.hasOwn(views, view)) return usage(`kernel shows hooks, registries, events, or capabilities, not "${view}"`);
-      return (
-        extra(2) ??
-        (({ rpc }) =>
-          Effect.map(Effect.all([rpc["Host.Info"](), rpc["Host.Plugins"]()], { concurrency: "unbounded" }), ([info, plugins]) => {
-            const kernel = kernelOf(plugins, info.runtime);
-            const key = view as keyof typeof views;
-            return { json: kernel[key], text: views[key](kernel) };
-          }))
-      );
-    }
-    case "inspectors":
-      if (sub === undefined)
-        return extra(1) ?? (({ rpc }) => Effect.map(rpc["Host.Inspectors"](), (inspectors) => ({ json: inspectors, text: formatInspectors(inspectors) })));
-      return (
-        extra(2) ??
-        (({ rpc }) =>
-          rpc["Host.Inspect"]({ id: sub }).pipe(
-            Effect.mapError(starting(sub)),
-            Effect.map((snapshot) => ({ json: snapshot, text: formatSnapshot(snapshot) })),
-          ))
-      );
-    case "inspect":
-      if (sub === undefined) return usage("inspect needs a session id");
-      return extra(2) ?? inspectCommand(sub, options);
-    case undefined:
-      return usage("No command given");
-    default:
-      return usage(`Unknown command "${command}"`);
-  }
-};
+export const VERSION: string = packageJson.version;
 
 /**
- * `channels`: the list, a call, or a stream. The stream is read once over
- * the command's `Host`, printing what it sends as it is: a connection that
- * drops ends it (exit 3), as its plugin's reload does (`Withdrawn`), rather
- * than opening it again.
+ * Variables an agent's shell sets, so a command it runs prints JSON unless
+ * told otherwise (`--text`, `LEMMA_OUTPUT=text`): Lemma's own agent
+ * (`LEMMA_AGENT`, which the host sets for its tools), Claude Code, Gemini CLI,
+ * Codex, and Cursor's agent.
  */
-const channelsCommand = (sub: string | undefined, id: string | undefined, rest: readonly string[]): Command | CliError => {
-  if (sub === undefined || sub === "list") {
-    if (id !== undefined) return usage(`Unexpected argument "${id}"`);
-    return ({ rpc }) => Effect.map(rpc["Channel.List"](), (channels) => ({ json: channels, text: formatChannels(channels) }));
-  }
-  if (sub !== "call" && sub !== "open") return usage(`Unknown channels command "${sub}"`);
-  if (id === undefined) return usage(`channels ${sub} needs a channel id`);
-  const [text, ...more] = rest;
-  if (more.length) return usage(`Unexpected argument "${more[0]}"`);
-  let request: { readonly id: string; readonly payload?: unknown } = { id };
-  if (text !== undefined) {
-    try {
-      request = { id, payload: JSON.parse(text) };
-    } catch (error) {
-      return usage(`The payload must be JSON: ${error instanceof Error ? error.message : String(error)}`);
-    }
-  }
-  if (sub === "call") {
-    // A call with no result (`Schema.Void`) answers `null`.
-    return ({ rpc }) =>
-      Effect.map(Effect.mapError(rpc["Channel.Call"](request), refined(id)), (result) =>
-        result === null ? { json: null, text: `called ${id}: no result` } : { json: result, text: formatSnapshot(result) },
-      );
-  }
-  return (connection, io) =>
-    Effect.gen(function* () {
-      const host = yield* connection.host({ answers: false });
-      const elements = yield* received<unknown>((onElement, onEnd) => host.channel.open(id, request.payload, onElement, onEnd));
-      yield* Stream.runForEach(Stream.mapError(elements, refined(id)), (element) =>
-        Effect.andThen(
-          Effect.sync(() => io.out(JSON.stringify(element))),
-          caughtUp(io),
-        ),
-      );
-      return undefined;
-    });
+const AGENT_VARIABLES = ["LEMMA_AGENT", "CLAUDECODE", "GEMINI_CLI", "CODEX_SANDBOX", "CURSOR_AGENT"];
+
+/** Whether output is JSON by default here: `LEMMA_OUTPUT` says, else whether an agent runs the command. */
+export const jsonByDefault = (env: Io["env"]): boolean => {
+  const output = env.LEMMA_OUTPUT?.trim();
+  if (output === "json") return true;
+  if (output === "text") return false;
+  return AGENT_VARIABLES.some((name) => (env[name] ?? "").trim() !== "" && env[name] !== "0");
 };
 
-/**
- * Waits while stdout is behind (`Io.drained`), so what is printed goes out at
- * its reader's pace. What the host sends meanwhile waits in the command's
- * queue (`received`), never on the connection.
- */
-const caughtUp = (io: Io): Effect.Effect<void> => {
-  const drained = io.drained;
-  if (drained === undefined) return Effect.void;
-  return Effect.callback<void>((resume, signal) => {
-    const pending = drained(signal);
-    if (pending === undefined) resume(Effect.void);
-    else void pending.then(() => resume(Effect.void));
-  });
-};
+const QUESTION_POLICIES = new Set(["ask", "ignore", "dismiss"]);
 
-const sessionCommand = (sub: string | undefined, arg: string | undefined, rest: readonly string[], options: Options, io: Io): Command | CliError => {
-  switch (sub) {
-    case "list": {
-      if (arg !== undefined) return usage(`Unexpected argument "${arg}"`);
-      if (options.all && options.cwd !== undefined) return usage("Use either --all or --cwd");
-      const cwd = options.all ? undefined : resolve(io.cwd, options.cwd ?? ".");
-      return ({ rpc }) =>
-        Effect.map(call(rpc, SessionChannels.list, cwd === undefined ? {} : { cwd }), (sessions) => ({
-          json: sessions,
-          text: sessions.length ? formatSessions(sessions, cwd === undefined) : `No sessions${cwd === undefined ? "" : ` in ${cwd}`}.`,
-        }));
+/** The global flags out of `argv`, wherever they are before `--`, and the rest: the command line itself. */
+export const splitGlobals = (
+  argv: readonly string[],
+  env: Io["env"],
+): { readonly globals: Globals & { readonly version: boolean }; readonly rest: readonly string[] } | CliError => {
+  const rest: string[] = [];
+  const values: Record<string, unknown> = { answer: [] as string[] };
+  for (let i = 0; i < argv.length; i++) {
+    const word = argv[i]!;
+    if (word === "--") {
+      rest.push(...argv.slice(i));
+      break;
     }
-    case "show":
-      if (arg === undefined) return usage("session show needs a session id");
-      if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
-      return ({ rpc }) =>
-        Effect.gen(function* () {
-          const [info, events] = yield* readSession(over(rpc), arg);
-          const branch = branchOf(events, info.leaf);
-          return { json: { info, branch }, text: formatSession(info, branch) };
-        });
-    case "new":
-      if (arg !== undefined) return usage(`Unexpected argument "${arg}"`);
-      return ({ rpc }) =>
-        Effect.map(call(rpc, SessionChannels.create, { cwd: resolve(io.cwd, options.cwd ?? ".") }), (info) => ({ json: info, text: info.id }));
-    case "title": {
-      const title = rest.join(" ").trim();
-      if (arg === undefined || title === "") return usage("session title needs a session id and a title");
-      return ({ rpc }) =>
-        Effect.map(call(rpc, SessionChannels.setTitle, { sessionId: arg, title }), (info) => ({ json: info, text: `${info.id}  ${info.title ?? ""}` }));
+    const short = /^-([hq])$/.exec(word)?.[1];
+    const long = word.startsWith("--") ? word.slice(2).split("=")[0]! : undefined;
+    const name = short === "h" ? "help" : short === "q" ? "quiet" : long !== undefined && Object.hasOwn(GLOBAL_FLAGS, long) ? long : undefined;
+    if (name === undefined) {
+      rest.push(word);
+      continue;
     }
-    case "pin":
-    case "unpin":
-    case "archive":
-    case "unarchive": {
-      if (arg === undefined) return usage(`session ${sub} needs a session id`);
-      if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
-      const marks = sub === "pin" || sub === "unpin" ? { pinned: sub === "pin" } : { archived: sub === "archive" };
-      const done = { pin: "pinned", unpin: "unpinned", archive: "archived", unarchive: "unarchived" }[sub];
-      return ({ rpc }) => Effect.map(call(rpc, SessionChannels.mark, { sessionId: arg, ...marks }), (info) => ({ json: info, text: `${info.id}  ${done}` }));
+    const flag = GLOBAL_FLAGS[name]!;
+    if (flag.type === "boolean") {
+      values[name] = !word.endsWith("=false");
+      continue;
     }
-    case "delete":
-      if (arg === undefined) return usage("session delete needs a session id");
-      if (rest.length) return usage(`Unexpected argument "${rest[0]}"`);
-      return ({ rpc }) =>
-        Effect.map(call(rpc, SessionChannels.delete, { sessionId: arg }), () => ({ json: { id: arg, deleted: true }, text: `${arg}  deleted` }));
-    case "checkout": {
-      const eventId = rest[0];
-      if (arg === undefined || eventId === undefined) return usage("session checkout needs a session id and an event id");
-      if (rest.length > 1) return usage(`Unexpected argument "${rest[1]}"`);
-      return ({ rpc }) =>
-        Effect.map(call(rpc, SessionChannels.checkout, { sessionId: arg, eventId }), (info) => ({
-          json: info,
-          text: `${info.id} now continues from ${eventId}; the next prompt starts a new branch there`,
-        }));
-    }
-    default:
-      return usage(
-        sub === undefined
-          ? "session needs a command: list, show, new, title, pin, unpin, archive, unarchive, delete, or checkout"
-          : `Unknown session command "${sub}"`,
-      );
+    const value = word.includes("=") ? word.slice(word.indexOf("=") + 1) : argv[++i];
+    if (value === undefined) return usage(`--${name} needs a value`);
+    if (flag.multiple === true) (values[name] as string[]).push(value);
+    else values[name] = value;
   }
+  const questions = values.questions as string | undefined;
+  if (questions !== undefined && !QUESTION_POLICIES.has(questions)) return usage("--questions must be ask, ignore, or dismiss");
+  if (values.json === true && values.text === true) return usage("Use either --json or --text");
+  const fields =
+    typeof values.fields === "string"
+      ? values.fields
+          .split(",")
+          .map((field) => field.trim())
+          .filter(Boolean)
+      : undefined;
+  return {
+    globals: {
+      json: values.json === true || (values.text !== true && jsonByDefault(env)),
+      quiet: values.quiet === true,
+      env: values.env as string | undefined,
+      fields,
+      questions: questions as QuestionPolicy | undefined,
+      answers: values.answer as string[],
+      help: values.help === true,
+      version: values.version === true,
+    },
+    rest,
+  };
 };
 
-const inspectCommand = (sessionId: string, options: Options): Command | CliError => {
-  const selector = options.step;
-  const listing = options.records || options.filter !== undefined || options.sort !== undefined || options.range !== undefined;
-  if (options.view !== undefined && selector === undefined) return usage(`--${options.view} needs --request`);
-  if (selector !== undefined && listing) return usage("Use either --request or --records/--filter/--sort/--range");
-  if (options.sort !== undefined && !(LEDGER_SORTS as readonly string[]).includes(options.sort))
-    return usage(`--sort must be one of ${LEDGER_SORTS.join(", ")}`);
-  let range: { from: number | undefined; to: number | undefined } | undefined;
-  if (options.range !== undefined) {
-    const [from, to, ...more] = options.range.split("..");
-    const start = from === undefined || from === "" ? undefined : parseOffset(from);
-    const end = to === undefined || to === "" ? undefined : parseOffset(to);
-    if (to === undefined || more.length > 0 || (from !== "" && start === undefined) || (to !== "" && end === undefined)) {
-      return usage("--range looks like 30s..1m30s (either side may be empty)");
-    }
-    range = { from: start, to: end };
-  }
-  return ({ rpc }) =>
-    Effect.gen(function* () {
-      const [info, events] = yield* readSession(over(rpc), sessionId);
-      const branch = branchOf(events, info.leaf);
-      const turns = trajectory(branch);
-      if (listing) {
-        const running = turns.at(-1)?.end === undefined;
-        let records = ledger(turns).filter(parseLedgerFilter(options.filter ?? ""));
-        if (range !== undefined && records.length > 0) {
-          const origin = Math.min(...ledger(turns).map(recordStart));
-          records = recordsBetween(records, origin + (range.from ?? 0), range.to === undefined ? Infinity : origin + range.to);
-        }
-        records = sortRecords(records, (options.sort ?? "time") as LedgerSort, options.desc, running);
-        return { json: records.map((record) => recordSummary(record, running)), text: formatRecords(records, running) };
-      }
-      if (selector === undefined) return { json: { info, turns }, text: formatTrajectory(turns) };
-      const found = findStep(turns, selector);
-      if (found === undefined) {
-        return yield* new CliError({
-          code: "NotFound",
-          message: `No request "${selector}" on the current branch of ${sessionId}`,
-          subject: selector,
-          exit: ExitCode.failed,
-        });
-      }
-      const request = found.step.request;
-      if (options.view !== undefined && request === undefined) {
-        return yield* new CliError({
-          code: "NotFound",
-          message: `Step ${found.turn.index}.${found.step.index} logged no request`,
-          subject: selector,
-          exit: ExitCode.failed,
-        });
-      }
-      switch (options.view) {
-        case "system":
-          return { json: request!.sections, text: formatSystem(request!) };
-        case "tools":
-          return { json: request!.tools, text: formatTools(request!) };
-        case "diff": {
-          const requests = turns.flatMap((turn) => turn.steps.flatMap((step) => (step.request === undefined ? [] : [step.request])));
-          const previous = requests[requests.indexOf(request!) - 1];
-          const diff = promptDiff(previous, request!);
-          return { json: { previous: previous?.eventId, sections: diff }, text: formatDiff(diff, previous === undefined) };
-        }
-        case "rebuilt": {
-          const rebuilt = rebuildRequest(branch, request!.eventId, sessionId);
-          return { json: rebuilt, text: JSON.stringify(rebuilt, null, 2) };
-        }
-        case undefined:
-          return { json: { info, turn: found.turn.index, step: found.step }, text: formatStep(found.turn, found.step) };
-      }
-    });
+/** Keeps `fields` of each object in a list (or of the object itself): `--fields`. */
+const project = (value: unknown, fields: readonly string[] | undefined): unknown => {
+  if (fields === undefined) return value;
+  const pick = (item: unknown) =>
+    typeof item === "object" && item !== null && !Array.isArray(item)
+      ? Object.fromEntries(fields.filter((field) => field in item).map((field) => [field, (item as Record<string, unknown>)[field]]))
+      : item;
+  return Array.isArray(value) ? value.map(pick) : pick(value);
 };
 
-/** A step by request number, by `<turn>.<step>` (1-based), by step id, or the last step that sent a request. */
-const findStep = (turns: readonly TrajectoryTurn[], selector: string): { turn: TrajectoryTurn; step: TrajectoryStep } | undefined => {
-  const all = turns.flatMap((turn) => turn.steps.map((step) => ({ turn, step })));
-  const requests = all.filter(({ step }) => step.request !== undefined);
-  if (selector === "last") return requests.at(-1);
-  if (/^\d+$/.test(selector)) return requests[Number(selector) - 1];
-  const position = /^(\d+)\.(\d+)$/.exec(selector);
-  if (position !== null) {
-    const turn = turns[Number(position[1]) - 1];
-    const step = turn?.steps[Number(position[2]) - 1];
-    return turn === undefined || step === undefined ? undefined : { turn, step };
-  }
-  return all.find(({ step }) => step.stepId === selector);
-};
-
-/**
- * The host commands go to (see `findTarget`): one-shot HTTP calls for most
- * commands, and `@lemma/client`'s reconnecting `Host` (opened only by a
- * command that watches the host) for its events, questions, and streams, as
- * the web app has it.
- */
-const connect = (io: Io) =>
-  Effect.gen(function* () {
-    const target = yield* findTarget(io);
-    if (target === undefined) return yield* noLocalHost(resolvePaths({ env: io.env, cwd: io.cwd }).home);
-    const rpc = yield* makeHostRpcHttp(target.url, target.token);
-    const host: Connection["host"] = (options) => openHost({ url: target.url, token: target.token, ...options }, rpc);
-    return { target, rpc, host };
-  });
-
-/**
- * Whether the host speaks another RPC protocol (`HOST_PROTOCOL`): a host from another version of Lemma fails every
- * call in ways that name nothing useful (one from before Effect 4 rejects even the request ids), and its health check
- * says why. Undefined when it speaks this one, or cannot say.
- */
-const otherProtocol = (target: Target): Effect.Effect<CliError | undefined> =>
-  Effect.promise(async () => {
-    try {
-      const response = await fetch(new URL("/api/health", target.url), {
-        headers: { authorization: `Bearer ${target.token}` },
-        signal: AbortSignal.timeout(2_000),
-      });
-      if (!response.ok) return undefined;
-      const protocol = ((await response.json()) as { readonly protocol?: unknown }).protocol ?? 1;
-      if (protocol === HOST_PROTOCOL) return undefined;
-      const where = target.source === "local" ? "The local host" : `The host at ${target.url}`;
-      return new CliError({
-        code: "OtherVersion",
-        message: `${where} runs another version of Lemma: it speaks RPC protocol ${String(protocol)}, this command ${HOST_PROTOCOL}. Restart it from this version (stop it, then \`lemma serve\`, or reopen the desktop app).`,
-        exit: ExitCode.unavailable,
-      });
-    } catch {
-      return undefined;
-    }
-  });
+/** A word as a POSIX shell reads it back. */
+const shellWord = (word: string): string => (/^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`);
 
 const report = (io: Io, json: boolean, error: CliError): number => {
   if (json) {
@@ -714,152 +113,274 @@ const report = (io: Io, json: boolean, error: CliError): number => {
           code: error.code,
           message: error.message,
           ...(error.subject === undefined ? {} : { subject: error.subject }),
-          ...(error.requestId === undefined ? {} : { requestId: error.requestId }),
+          ...(error.rerun === undefined ? {} : { rerun: error.rerun }),
         },
       }),
     );
   } else {
     io.err(`lemma: ${error.message}`);
+    if (error.rerun !== undefined)
+      io.err(`lemma: it may still be running: run \`lemma ${error.rerun.map(shellWord).join(" ")}\` to rejoin it rather than start it twice`);
   }
   return error.exit;
 };
 
-const QUESTION_POLICIES = new Set(["ask", "ignore", "dismiss"]);
+// ------------------------------------------------------------------ help
 
-/** Runs one command (anything but `serve`) and returns the exit code. */
+/** What a host's plugins add, if one answers soon: help lists them without waiting on a host that is slow or gone. */
+const hostedSoon = (io: Io, globals: Globals): Effect.Effect<{ readonly name: string; readonly commands: readonly CliCommandInfo[] } | undefined> =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const connection = yield* connect(io, globals);
+      const host = yield* connection.host({ answers: false });
+      const commands = yield* listHosted(host);
+      return commands === undefined ? undefined : { name: connection.target.name, commands };
+    }),
+  ).pipe(
+    Effect.timeoutOrElse({ duration: Duration.millis(1_500), orElse: () => Effect.succeed(undefined) }),
+    Effect.orElseSucceed(() => undefined),
+  );
+
+const listing = (commands: readonly CommandSpec[]) =>
+  columns(
+    commands.map((command) => [
+      usageLine(command)
+        .replace(/^lemma /, "")
+        .replace(/ \[options\]$/, ""),
+      command.summary,
+    ]),
+  );
+
+const topHelp = (hosted: { readonly name: string; readonly commands: readonly CliCommandInfo[] } | undefined): string => {
+  const groups = new Map<string, Builtin[]>();
+  for (const command of builtins) groups.set(command.group, [...(groups.get(command.group) ?? []), command]);
+  return [
+    "Usage: lemma <command> [options]",
+    "",
+    "Start and keep hosts, set them up, look inside them, and use what their plugins add. A command goes to the host --env names, else LEMMA_URL, LEMMA_ENV, the default environment (lemma env), else this machine's.",
+    ...[...groups].flatMap(([group, commands]) => ["", group, listing(commands)]),
+    "",
+    hosted === undefined
+      ? "From the host's plugins: none answers now. Start one (lemma serve) to see the commands its plugins add: sessions, run, models, login, workspace, …"
+      : `From the plugins of the host ${hosted.name}\n${listing(hosted.commands)}`,
+    "",
+    "Global options",
+    renderGlobalFlags(),
+    "",
+    "Exit codes: 0 ok, 1 the host refused or failed the request (or the work it ran failed), 2 usage error, 3 no host, or it could not be reached, the connection was lost, or it is still starting, 130 interrupted (Ctrl+C).",
+    "`lemma help <command>` shows one's options; `lemma help --json` every command, with a JSON Schema of what it takes.",
+  ].join("\n");
+};
+
+const describe = (command: CommandSpec, source: string) => ({
+  path: command.path,
+  summary: command.summary,
+  ...(command.description === undefined ? {} : { description: command.description }),
+  ...(command.args === undefined ? {} : { args: command.args }),
+  ...(command.flags === undefined ? {} : { flags: command.flags }),
+  ...(command.examples === undefined ? {} : { examples: command.examples }),
+  source,
+  input: inputJsonSchema(command),
+});
+
+/** `lemma help [command…]`: the commands, or one's help; with `--json`, all of them as data for an agent. */
+const help = (io: Io, globals: Globals, words: readonly string[]): Effect.Effect<Output, Failure> =>
+  Effect.gen(function* () {
+    const builtin = words.length === 0 ? undefined : match(builtins, words);
+    if (builtin !== undefined && builtin.path.length === words.length) return { json: describe(builtin, "lemma"), text: renderHelp(builtin) };
+    const hosted = yield* hostedSoon(io, globals);
+    if (words.length === 0)
+      return {
+        json: {
+          version: VERSION,
+          globalFlags: GLOBAL_FLAGS,
+          exitCodes: ExitCode,
+          host: hosted === undefined ? null : hosted.name,
+          commands: [...builtins.map((command) => describe(command, "lemma")), ...(hosted?.commands ?? []).map((command) => describe(command, command.source))],
+        },
+        text: topHelp(hosted),
+      };
+    const found = hosted === undefined ? undefined : match(hosted.commands, words);
+    if (found !== undefined && found.path.length === words.length) return { json: describe(found, found.source), text: renderHelp(found) };
+    const group = [...builtins, ...(hosted?.commands ?? [])].filter((command) => command.path[0] === words[0]);
+    if (words.length === 1 && group.length > 0)
+      return {
+        json: group.map((command) => describe(command, "source" in command ? (command.source as string) : "lemma")),
+        text: groupHelp(words[0]!, group as CliCommandInfo[]),
+      };
+    const all = [...builtins, ...(hosted?.commands ?? [])].map((command) => command.path.join(" "));
+    const near = closest(words.join(" "), all);
+    return yield* usage(
+      `No command "${words.join(" ")}"${near === undefined ? "" : `; did you mean "${near}"?`}${hosted === undefined ? " (no host answers to say what its plugins add)" : ""}`,
+    );
+  });
+
+// ------------------------------------------------------------------ completion
+
+const COMPLETIONS: Readonly<Record<string, string>> = {
+  bash: `# lemma completion for bash: source <(lemma completion bash)
+_lemma() {
+  local IFS=$'\\n'
+  COMPREPLY=($(lemma __complete "\${COMP_WORDS[@]:1:COMP_CWORD}" 2>/dev/null))
+}
+complete -o default -F _lemma lemma
+`,
+  zsh: `#compdef lemma
+# lemma completion for zsh: source <(lemma completion zsh)
+_lemma() {
+  local -a candidates
+  candidates=("\${(@f)$(lemma __complete "\${words[@]:1:CURRENT-1}" 2>/dev/null)}")
+  compadd -a candidates
+}
+compdef _lemma lemma
+`,
+  fish: `# lemma completion for fish: lemma completion fish | source
+complete -c lemma -f -a '(lemma __complete (commandline -opc)[2..-1] (commandline -ct) 2>/dev/null)'
+`,
+};
+
+/**
+ * What `words`' last word can be: a command's next word, a flag, or a flag's
+ * value. The host's plugins' commands come in when one answers soon.
+ */
+const complete = (io: Io, globals: Globals, words: readonly string[]): Effect.Effect<readonly string[]> =>
+  Effect.gen(function* () {
+    const current = words.at(-1) ?? "";
+    const before = words.slice(0, -1);
+    const previous = before.at(-1);
+    if (previous === "--env") {
+      const file = yield* readEnvironments(homeOf(io)).pipe(Effect.orElseSucceed(() => ({ environments: {} })));
+      return ["local", ...Object.keys(file.environments)].filter((name) => name.startsWith(current));
+    }
+    const hosted = yield* hostedSoon(io, globals);
+    const commands: readonly CommandSpec[] = [...builtins, ...(hosted?.commands ?? [])];
+    const path = leadingWords(before);
+    const command = match(commands, path);
+    if (previous?.startsWith("--") === true && command !== undefined) {
+      const flag = command.flags?.[previous.slice(2)];
+      if (flag?.values !== undefined) return flag.values.filter((value) => value.startsWith(current));
+    }
+    if (current.startsWith("-"))
+      return [...Object.keys(command?.flags ?? {}), ...Object.keys(GLOBAL_FLAGS)].map((name) => `--${name}`).filter((flag) => flag.startsWith(current));
+    if (path.length < before.length) return [];
+    const next = new Set(
+      commands
+        .filter((candidate) => candidate.path.length > path.length && path.every((word, i) => candidate.path[i] === word))
+        .map((candidate) => candidate.path[path.length]!),
+    );
+    if (path.length === 0) for (const word of ["help", "completion"]) next.add(word);
+    return [...next].filter((word) => word.startsWith(current)).sort();
+  });
+
+// ------------------------------------------------------------------ run
+
+/** Runs one command line and returns the exit code. */
 export async function run(argv: readonly string[], io: Io): Promise<number> {
-  const wantsJson = argv.includes("--json");
-  let parsed;
-  try {
-    parsed = parseArgs({
-      args: [...argv],
-      allowPositionals: true,
-      options: {
-        json: { type: "boolean", default: false },
-        all: { type: "boolean", default: false },
-        cwd: { type: "string" },
-        step: { type: "string" },
-        request: { type: "string" },
-        filter: { type: "string" },
-        records: { type: "boolean", default: false },
-        system: { type: "boolean", default: false },
-        tools: { type: "boolean", default: false },
-        diff: { type: "boolean", default: false },
-        rebuilt: { type: "boolean", default: false },
-        sort: { type: "string" },
-        desc: { type: "boolean", default: false },
-        range: { type: "string" },
-        model: { type: "string" },
-        thinking: { type: "string" },
-        image: { type: "string", multiple: true, default: [] },
-        follow: { type: "boolean", short: "f", default: false },
-        questions: { type: "string" },
-        answer: { type: "string", multiple: true, default: [] },
-        method: { type: "string" },
-        create: { type: "boolean", default: false },
-        base: { type: "string" },
-        path: { type: "string" },
-        limit: { type: "string" },
-        session: { type: "string" },
-        force: { type: "boolean", default: false },
-        project: { type: "boolean", default: false },
-        unset: { type: "boolean", default: false },
-        token: { type: "string" },
-        "request-id": { type: "string" },
-        "when-busy": { type: "string" },
-        steer: { type: "boolean", default: false },
-        help: { type: "boolean", short: "h", default: false },
-      },
-    });
-  } catch (error) {
-    return report(io, wantsJson, usage(error instanceof Error ? error.message : String(error)));
-  }
-  const { positionals, values } = parsed;
-  if (values.help) {
-    io.out(USAGE);
+  if (argv[0] === "__complete") {
+    // The words as typed: a global flag among them is completed (`--env <name>`), not read. Those before the last pick the host.
+    const words = argv.slice(1);
+    const split = splitGlobals(words.slice(0, -1), io.env);
+    const done = split instanceof CliError ? undefined : split;
+    const globals = done?.globals ?? (splitGlobals([], io.env) as Exclude<typeof split, CliError>).globals;
+    const line = [...(done?.rest ?? words.slice(0, -1)), words.at(-1) ?? ""];
+    for (const candidate of await Effect.runPromise(complete(io, globals, line))) io.out(candidate);
     return ExitCode.ok;
   }
-  const views = (["system", "tools", "diff", "rebuilt"] as const).filter((view) => values[view]);
-  if (views.length > 1) return report(io, values.json, usage(`Use one of ${views.map((view) => `--${view}`).join(", ")}`));
-  if (values.request !== undefined && values.step !== undefined) return report(io, values.json, usage("Use either --request or --step"));
-  if (values.questions !== undefined && !QUESTION_POLICIES.has(values.questions))
-    return report(io, values.json, usage("--questions must be ask, ignore, or dismiss"));
-  const whenBusy = values.steer ? "steer" : values["when-busy"];
-  if (values.steer && values["when-busy"] !== undefined && values["when-busy"] !== "steer")
-    return report(io, values.json, usage("Use either --steer or --when-busy"));
-  const limit = values.limit === undefined ? undefined : Number(values.limit);
-  if (limit !== undefined && !(Number.isInteger(limit) && limit >= 1 && limit <= FILE_SEARCH_LIMIT))
-    return report(io, values.json, usage(`--limit must be a whole number from 1 to ${FILE_SEARCH_LIMIT}`));
-  if (whenBusy !== undefined && !Schema.is(WhenBusy)(whenBusy))
-    return report(io, values.json, usage(`--when-busy must be one of ${WhenBusy.literals.join(", ")}`));
-  const thinking = values.thinking;
-  if (thinking !== undefined && !Schema.is(ThinkingLevel)(thinking))
-    return report(io, values.json, usage(`--thinking must be one of ${ThinkingLevel.literals.join(", ")}`));
-  const options: Options = {
-    json: values.json,
-    all: values.all,
-    cwd: values.cwd,
-    step: values.request ?? values.step,
-    filter: values.filter,
-    records: values.records,
-    view: views[0],
-    sort: values.sort,
-    desc: values.desc,
-    range: values.range,
-    model: values.model,
-    thinking,
-    images: values.image,
-    follow: values.follow,
-    questions: values.questions as QuestionPolicy | undefined,
-    answers: values.answer,
-    method: values.method,
-    create: values.create,
-    base: values.base,
-    path: values.path,
-    limit,
-    session: values.session,
-    force: values.force,
-    project: values.project,
-    unset: values.unset,
-    token: values.token,
-    requestId: values["request-id"],
-    whenBusy,
-  };
-  const command = route(positionals, options, io);
-  if (command instanceof CliError) return report(io, options.json, command);
+  const split = splitGlobals(argv, io.env);
+  // For an error splitGlobals gives before it decides: --json or --text as given (the later, when both are the error), else the environment.
+  const asked = argv.filter((word) => word === "--json" || word === "--text").at(-1);
+  const wantsJson = asked === undefined ? jsonByDefault(io.env) : asked === "--json";
+  if (split instanceof CliError) return report(io, wantsJson, split);
+  const { globals, rest } = split;
+  const words = leadingWords(rest);
+  if (globals.version && words.length === 0) {
+    io.out(globals.json ? JSON.stringify({ version: VERSION }) : VERSION);
+    return ExitCode.ok;
+  }
 
-  const program: Effect.Effect<Output | undefined, Failure, Scope.Scope> =
-    typeof command === "function"
-      ? Effect.flatMap(connect(io), (connection) =>
-          command(connection, io, options).pipe(
-            // A reply the RPC client cannot read (from a host on another protocol) is a defect: reported, not thrown.
-            Effect.catchDefect((defect) =>
-              Effect.fail(
-                new CliError({
-                  code: "Unexpected",
-                  message: `The host's reply could not be read: ${defect instanceof Error ? defect.message : String(defect)}`,
-                  exit: ExitCode.failed,
-                }),
+  // The connection a command makes on first use, and the target it found: one per command line.
+  let connection: Connection | undefined;
+  const connectOnce: Effect.Effect<Connection, Failure, Scope.Scope> = Effect.suspend(() =>
+    connection !== undefined ? Effect.succeed(connection) : Effect.tap(connect(io, globals), (made) => Effect.sync(() => (connection = made))),
+  );
+
+  const program: Effect.Effect<Output | undefined, Failure, Scope.Scope> = Effect.gen(function* () {
+    if (words.length === 0) return globals.help || rest.length === 0 ? yield* help(io, globals, []) : yield* usage(`"${rest[0]}" is no command`);
+    if (words[0] === "help") {
+      if (words.length !== rest.length) return yield* usage("help takes command words only");
+      return yield* help(io, globals, words.slice(1));
+    }
+    if (words[0] === "completion") {
+      const shell = words[1];
+      const script = shell === undefined ? undefined : COMPLETIONS[shell];
+      if (script === undefined) return yield* usage(`completion takes a shell: ${Object.keys(COMPLETIONS).join(", ")}`);
+      io.write?.(script);
+      return undefined;
+    }
+    const builtin = match(builtins, words);
+    if (builtin !== undefined) {
+      if (globals.help) return { json: describe(builtin, "lemma"), text: renderHelp(builtin) };
+      const input = parseInput(builtin, rest.slice(builtin.path.length));
+      if ("error" in input) {
+        // A word the builtin takes no argument for may name a plugin's command under it (`lemma plugins` is one, `lemma env` another).
+        return yield* usage(input.error);
+      }
+      return yield* builtin.run({ args: input.args, flags: input.flags, io, globals, connect: connectOnce, rerun: run });
+    }
+    const near = closest(
+      words[0]!,
+      builtins.map((command) => command.path[0]!),
+    );
+    return yield* Effect.flatMap(
+      connectOnce.pipe(
+        Effect.catch((error) =>
+          // Not one of lemma's own, and no host to ask for its plugins': a typo of one of lemma's is said so.
+          error instanceof CliError && error.code === "NoHost" && near !== undefined && near !== words[0]
+            ? Effect.fail(usage(`Unknown command "${words[0]}"; did you mean "lemma ${near}"?`))
+            : Effect.fail(
+                error instanceof CliError && error.code === "NoHost"
+                  ? new CliError({
+                      ...error,
+                      message: `"lemma ${words.join(" ")}" is no command of lemma's own, so it is a plugin's, which only a running host has. ${error.message}`,
+                    })
+                  : error,
               ),
-            ),
-            Effect.mapError((error) => toCliError(error, connection.target)),
-            Effect.catch((error) =>
-              error.code === "Unreachable" || error.code === "NoHost" || error.code === "Unexpected"
-                ? Effect.flatMap(otherProtocol(connection.target), (other) => Effect.fail(other ?? error))
-                : Effect.fail(error),
-            ),
-          ),
-        )
-      : command.unattached;
-  const exit = await Effect.runPromiseExit(Effect.scoped(program).pipe(Effect.result), io.interrupt === undefined ? undefined : { signal: io.interrupt });
+        ),
+      ),
+      (made) => hostedCommand(made, io, globals, rest, builtins),
+    );
+  });
+
+  const guarded = program.pipe(
+    // A reply the RPC client cannot read (from a host on another protocol) is a defect: reported, not thrown.
+    Effect.catchDefect((defect) =>
+      Effect.fail(
+        new CliError({
+          code: "Unexpected",
+          message: `The host's reply could not be read: ${defect instanceof Error ? defect.message : String(defect)}`,
+          exit: ExitCode.failed,
+        }),
+      ),
+    ),
+    Effect.mapError((error) => toCliError(error, connection?.target)),
+    Effect.catch((error) =>
+      connection !== undefined && (error.code === "Unreachable" || error.code === "NoHost" || error.code === "Unexpected")
+        ? Effect.flatMap(otherProtocol(connection.target), (other) => Effect.fail(other ?? error))
+        : Effect.fail(error),
+    ),
+  );
+  const exit = await Effect.runPromiseExit(Effect.scoped(guarded).pipe(Effect.result), io.interrupt === undefined ? undefined : { signal: io.interrupt });
   if (Exit.isFailure(exit)) {
     if (Cause.hasInterruptsOnly(exit.cause)) return ExitCode.interrupted;
     throw Cause.squash(exit.cause);
   }
   const result = exit.value;
-  if (result._tag === "Failure") return report(io, options.json, toCliError(result.failure));
+  if (result._tag === "Failure") return report(io, globals.json, result.failure);
   const output = result.success;
   if (output === undefined) return ExitCode.ok;
-  io.out(options.json ? JSON.stringify(output.json, null, output.compact ? undefined : 2) : output.text);
+  if (globals.quiet) {
+    for (const id of output.ids ?? []) io.out(id);
+  } else if (globals.json) io.out(JSON.stringify(project(output.json, globals.fields), null, output.compact ? undefined : 2));
+  else if (output.text !== "") io.out(output.text);
   return output.exit ?? ExitCode.ok;
 }

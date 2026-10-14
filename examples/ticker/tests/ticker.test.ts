@@ -88,7 +88,8 @@ const folder = fileURLToPath(new URL("..", import.meta.url));
 describe("as a plugin file in a real host", () => {
   let started: Lemma;
   let home: string;
-  const env = () => ({ ...process.env, LEMMA_HOME: home });
+  // Text, as a person reads it, though an agent runs these tests (its variable makes JSON the default).
+  const env = () => ({ ...process.env, LEMMA_HOME: home, LEMMA_OUTPUT: "text" });
   const lemma = async (...argv: string[]) => (await execFileAsync(process.execPath, ["--conditions=lemma-source", cliMain, ...argv], { env: env() })).stdout;
   /** Starts `lemma` and reads its output a line at a time. */
   const follow = (...argv: string[]) => {

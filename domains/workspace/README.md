@@ -12,6 +12,7 @@ Projects, git, directories, and file search. Its contract is [`@lemma/workspace`
 | [`workspace.add-project`](add-project/)        | web    | Pick a folder on the host by typing its path                                                      |
 | [`workspace.bar`](bar/)                        | web    | The strip under the composer                                                                      |
 | [`workspace.file-mentions`](file-mentions/)    | web    | Mentions of the project's files in the prompt                                                     |
+| [`workspace.cli`](cli/README.md)               | host   | The `lemma` command's `workspace …`: adds them to `CliCommands`                                   |
 
 ## Extending it
 

@@ -9,6 +9,7 @@ Models and their providers: what the agent asks, and how a person connects one. 
 | [`llm.client`](client/)              | web    | Providers and models as the host reports them, and this browser's choices: provides `Models`                    |
 | [`llm.model-picker`](model-picker/)  | web    | The model and reasoning pickers                                                                                 |
 | [`llm.providers`](providers/)        | web    | Settings › Providers: connecting providers, and adding your own                                                 |
+| [`llm.cli`](cli/README.md)           | host   | The `lemma` command's `models`, `providers`, `login`, `logout`, and a check for `lemma doctor`                  |
 
 ## Extending it
 

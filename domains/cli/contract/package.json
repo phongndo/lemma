@@ -1,0 +1,25 @@
+{
+  "name": "@lemma/cli",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The cli domain's contract: the commands and checks host plugins add to the lemma command, how its words become their input, and the channels clients run them by",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/client": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}

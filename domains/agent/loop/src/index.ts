@@ -8,6 +8,7 @@ import { Channels, creditOf, HostControl, inChainOrder, Inspectors, InteractionO
 import type { IdSource, ResultCredit } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
+import { InProgress } from "@lemma/cli";
 import { Agent, AgentError, AgentInputHook, PromptSections, QueueChanged, serveAgent } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
@@ -1231,7 +1232,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       // with nothing to take up is held all the same, which finds a session deleted while no agent ran, and removes it.
       for (const sessionId of journals.keys()) yield* resume(sessionId).pipe(Effect.catch(notTakenUp(sessionId)));
 
-      // What the devtools and `lemma inspect` show of it. Only a view: failing to add it never stops the agent.
+      // What the devtools and `lemma inspectors` show of it. Only a view: failing to add it never stops the agent.
       yield* owner
         .add(Inspectors, {
           id: "agent.turns",
@@ -1255,6 +1256,21 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
                     },
                   ],
             ),
+          ),
+        })
+        .pipe(Effect.ignore);
+
+      // What stopping the host would cut off: a turn it cut off resumes when the agent starts again, and queued prompts
+      // run then, but nothing runs meanwhile. Only a view: failing to add it never stops the agent.
+      yield* owner
+        .add(InProgress, {
+          id: "agent.turns",
+          title: "Turns",
+          items: Effect.sync(() =>
+            [...states].flatMap(([sessionId, state]) => [
+              ...(state.turn === undefined ? [] : [`a turn running in session ${sessionId}`]),
+              ...(state.queue.length === 0 ? [] : [`${state.queue.length} prompt${state.queue.length === 1 ? "" : "s"} queued in session ${sessionId}`]),
+            ]),
           ),
         })
         .pipe(Effect.ignore);

@@ -22,7 +22,9 @@ const start = async () => {
     const { createMockHost } = await import("./mock.ts");
     host = createMockHost();
   } else {
-    host = await connect({ url: location.href, token });
+    // The host lists its clients by what they say they are: this page in the desktop app's window, or in a browser.
+    const client = "lemmaDesktop" in window ? "desktop" : "web";
+    host = await connect({ url: location.href, token, client });
   }
   // `?safe` runs the app as shipped, ignoring the rows and the plugin directories: the way back from a broken customization.
   // The api for web halves loads only when one needs it, keeping it out of the app's own bundle.

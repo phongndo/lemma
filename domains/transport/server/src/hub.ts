@@ -1,7 +1,7 @@
 import { Deferred, Effect, Queue, Stream } from "effect";
 import type { Context } from "effect";
 import { changesSince, Channels, Notice, PluginsChanged, toPluginStatus, WebChanged } from "@lemma/contracts";
-import type { InteractionRequest, RuntimeEvent } from "@lemma/contracts";
+import type { ClientHello, ClientInfo, InteractionRequest, RuntimeEvent } from "@lemma/contracts";
 import type { CoreClosed, Event, EventError, PluginContext, Registries } from "@lemma/core";
 import { answers, channelInfo } from "./channels.ts";
 
@@ -11,6 +11,8 @@ const SUBSCRIBER_BUFFER = 1024;
 interface Subscriber {
   /** Whether it answers questions: only such subscribers hold them (`count`, `drained`). */
   readonly answers: boolean;
+  /** What it said it is, and since when it is here (`Host.Clients`). */
+  readonly client: ClientInfo;
   /** Kernel events: bounded, drop-oldest. */
   readonly feed: Queue.Queue<RuntimeEvent>;
   /** Interaction traffic: never dropped, since a hook is waiting on the answer. */
@@ -28,8 +30,11 @@ export interface Hub {
    * One subscription per run of the stream: `subscribed` once it has joined,
    * then the interactions still open, then what comes. `answers` says whether
    * the subscriber answers questions; one that does not still receives them.
+   * `client` is what it says it is.
    */
-  readonly events: (answers: boolean) => Stream.Stream<RuntimeEvent | { readonly type: "subscribed" }>;
+  readonly events: (answers: boolean, client?: ClientHello) => Stream.Stream<RuntimeEvent | { readonly type: "subscribed" }>;
+  /** Every subscriber now, oldest first. */
+  readonly clients: Effect.Effect<readonly ClientInfo[]>;
   /** Subscribers that answer questions. */
   readonly count: Effect.Effect<number>;
   /** Lossless delivery to current subscribers, every one of them, for interaction traffic. */
@@ -75,9 +80,20 @@ export const makeHub = (
     // Joining and leaving each change the set and `drained` in one synchronous step: no other subscriber comes or goes
     // between them, so the first answerer in replaces a drained `drained`, and the last one out completes the one it
     // replaced, which the grace period may be waiting on.
-    const join = (answers: boolean) =>
+    const join = (answers: boolean, hello: ClientHello | undefined) =>
       Effect.gen(function* () {
-        const subscriber: Subscriber = { answers, feed: yield* Queue.sliding<RuntimeEvent>(SUBSCRIBER_BUFFER), inbox: yield* Queue.unbounded<RuntimeEvent>() };
+        const client: ClientInfo = {
+          kind: hello?.kind ?? "unknown",
+          ...(hello?.version === undefined ? {} : { version: hello.version }),
+          since: Date.now(),
+          answers,
+        };
+        const subscriber: Subscriber = {
+          answers,
+          client,
+          feed: yield* Queue.sliding<RuntimeEvent>(SUBSCRIBER_BUFFER),
+          inbox: yield* Queue.unbounded<RuntimeEvent>(),
+        };
         // Nor can an interaction open or close between the replay and joining the set.
         yield* Effect.sync(() => {
           for (const request of open()) Queue.offerUnsafe(subscriber.inbox, { type: "interaction", request });
@@ -97,15 +113,16 @@ export const makeHub = (
       });
 
     // `subscribed` first, once the subscriber has joined: a request's reply on the same socket can overtake the join.
-    const events: Hub["events"] = (answers) =>
+    const events: Hub["events"] = (answers, client) =>
       Stream.unwrap(
-        Effect.map(Effect.acquireRelease(join(answers), leave), (subscriber) =>
+        Effect.map(Effect.acquireRelease(join(answers, client), leave), (subscriber) =>
           Stream.concat(Stream.succeed({ type: "subscribed" } as const), Stream.merge(Stream.fromQueue(subscriber.inbox), Stream.fromQueue(subscriber.feed))),
         ),
       );
 
     return {
       events,
+      clients: Effect.sync(() => [...subscribers].map((subscriber) => subscriber.client)),
       count: Effect.sync(answering),
       broadcast: (event) => Effect.forEach(subscribers, (subscriber) => Queue.offer(subscriber.inbox, event), { discard: true }),
       drained: Effect.suspend(() => Deferred.await(drained)),
