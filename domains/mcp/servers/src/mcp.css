@@ -48,10 +48,6 @@
   min-width: 0;
 }
 
-.mcp-danger {
-  color: var(--err);
-}
-
 .mcp-tools-toggle[aria-expanded="true"] .icon {
   transform: rotate(180deg);
 }

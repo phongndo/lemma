@@ -499,7 +499,7 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
                         }
                       >
                         <span class="muted small">Remove {server().name} from mcp.json?</span>
-                        <button type="button" class="button small mcp-danger" onClick={remove}>
+                        <button type="button" class="button small button-danger" onClick={remove}>
                           Remove
                         </button>
                         <button type="button" class="button small" onClick={() => setRemoving(false)}>

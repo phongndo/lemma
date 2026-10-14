@@ -231,28 +231,42 @@
     }
   }
 
+  /*
+   * Buttons are flush: text on whatever they sit on, highlighted only under
+   * the pointer, while pressed, or while what they open is open. Variants
+   * change the text, not the shape: `button-primary` is the action that
+   * commits (full-strength and heavier, its highlight the accent's tint),
+   * `button-danger` one that destroys (in the error color). `small` fits a
+   * row or a notice.
+   */
   .button {
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 6px;
     height: 30px;
-    padding: 0 12px;
+    padding: 0 10px;
+    border: 0;
     border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--bg-raised);
-    color: var(--text);
+    background: transparent;
+    color: var(--text-2);
     font-size: calc(13px * var(--text-scale));
     font-weight: 500;
     white-space: nowrap;
     text-decoration: none;
     transition:
       background 0.1s,
-      border-color 0.1s;
+      color 0.1s;
   }
 
-  .button:hover:not(:disabled) {
+  .button:hover:not(:disabled),
+  .button[aria-expanded="true"] {
     background: var(--bg-hover);
-    border-color: var(--border-strong);
+    color: var(--text);
+  }
+
+  .button:active:not(:disabled) {
+    background: var(--bg-active);
   }
 
   .button:disabled {
@@ -261,20 +275,28 @@
 
   .button.small {
     height: 26px;
-    padding: 0 9px;
+    padding: 0 8px;
     font-size: calc(12px * var(--text-scale));
   }
 
   .button-primary {
-    background: var(--accent);
-    border-color: transparent;
-    color: var(--accent-fg);
+    color: var(--accent-text);
+    font-weight: 600;
   }
 
-  .button-primary:hover:not(:disabled) {
-    background: var(--accent);
-    filter: brightness(1.08);
-    border-color: transparent;
+  .button-primary:hover:not(:disabled),
+  .button-primary[aria-expanded="true"] {
+    background: var(--accent-soft);
+    color: var(--accent-text);
+  }
+
+  .button-danger,
+  .button-danger:hover:not(:disabled) {
+    color: var(--err);
+  }
+
+  .button-danger:hover:not(:disabled) {
+    background: var(--err-soft);
   }
 
   .icon-button {
