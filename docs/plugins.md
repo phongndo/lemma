@@ -101,7 +101,7 @@ in each.
 | Complete a word typed after a trigger (`@`, `$`)                   | Add to `ComposerCompletions`                                   | [threads](../domains/threads/README.md)                                    |
 | Give the agent instructions for a kind of task                     | A skill: `~/.lemma/skills/<name>/SKILL.md`                     | [skills](../domains/skills/README.md)                                      |
 | Add a model provider                                               | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
-| Change model requests or their streams                             | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
+| Time, gate, or wrap model calls and their streams                  | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
 | Bring an MCP server and its tools                                  | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
 | Search files another way                                           | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
 | Serve your web half, or the CLI, data of your own                  | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
@@ -214,7 +214,7 @@ do (as of Pi's docs at `c30840c`, 2026-10-05), in Lemma's shapes:
 | Compaction controls, a `compaction` entry        | Intercept `CompactionHook` (`@lemma/context`): write the summary, move the cut, or skip it                                                 |
 | `pi.on("provider_stream_event")`                 | Observe `LlmProviderStreamEvent` (with `llm.pi-ai`'s `providerEvents` on), and `LlmProviderResponse` for the response's status and headers |
 | A provider request's headers                     | Intercept `LlmProviderHeadersHook`                                                                                                         |
-| `pi.registerVirtualModel()`, routing a request   | Intercept `LlmRequestHook`, or set the draft's `model` in `AgentRequestHook`                                                               |
+| `pi.registerVirtualModel()`, routing a request   | Set the draft's `model` in `AgentRequestHook`, where the route is logged with the request                                                  |
 | `pi.sendUserMessage()`                           | `Agent.prompt` (the `agent.prompt` channel from a client)                                                                                  |
 | `pi.appendEntry()`                               | `Sessions.append` a `custom` event, which the model does not see                                                                           |
 | `pi.registerFlag()`                              | A `config` Schema: a row in `config.jsonc`, a settings form                                                                                |

@@ -4,11 +4,11 @@ import * as path from "node:path";
 import { Deferred, Duration, Effect, Layer, Schema, Stream } from "effect";
 import type { Tracer } from "effect";
 import { TestClock } from "effect/testing";
-import { definePlugin, makeCore, PluginContext } from "@lemma/core";
+import { definePlugin, Hooks, makeCore, PluginContext } from "@lemma/core";
 import type { Events, Plugin } from "@lemma/core";
 import { HostControl } from "@lemma/contracts";
 import { AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
-import { emptyUsage, Llm, LlmError } from "@lemma/llm";
+import { emptyUsage, Llm, LlmError, streamThroughHook } from "@lemma/llm";
 import { Sessions } from "@lemma/sessions";
 import { ToolResult, Tools } from "@lemma/tools";
 import type { Agent } from "@lemma/agent";
@@ -100,30 +100,39 @@ export const hang = (text: string): Script =>
 /** Emits `script` once `gate` opens. */
 export const gated = (gate: Deferred.Deferred<void>, script: Script): Script => Stream.unwrap(Effect.as(Deferred.await(gate), script));
 
-/** A model that plays one script per call, in order, and records every request it received. */
+/**
+ * A model that plays one script per call, in order, and records every request it received: through `LlmRequestHook`,
+ * as a provider of `Llm` runs it, so what it records is what a provider would be asked.
+ */
 export function fakeLlm(scripts: readonly (Script | ((request: LlmRequest) => Script))[], models: readonly string[] = ["fake/m1"]) {
   const requests: LlmRequest[] = [];
   const queue = [...scripts];
   const plugin = definePlugin({
     id: "llm",
     provides: [Llm],
-    layer: Layer.succeed(Llm, {
-      providers: Effect.succeed([]),
-      models: () => Effect.succeed(models.map(model)),
-      model: (ref) =>
-        models.includes(ref) ? Effect.succeed(model(ref)) : Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
-      stream: (request) => {
-        requests.push(request);
-        const next = queue.shift();
-        if (next === undefined) return Stream.fail(new LlmError({ reason: "UnknownModel", message: "no script left" }));
-        return typeof next === "function" ? next(request) : next;
-      },
-      login: () => Effect.void,
-      logout: () => Effect.void,
-      addCustom: () => Effect.succeed("custom"),
-      removeCustom: () => Effect.void,
-      setLogo: () => Effect.void,
-    }),
+    layer: Layer.effect(
+      Llm,
+      Effect.map(Hooks, (hooks) => ({
+        providers: Effect.succeed([]),
+        models: () => Effect.succeed(models.map(model)),
+        model: (ref: string) =>
+          models.includes(ref) ? Effect.succeed(model(ref)) : Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
+        stream: (request: LlmRequest) =>
+          streamThroughHook(hooks, request, (asked) =>
+            Effect.sync(() => {
+              requests.push(asked);
+              const next = queue.shift();
+              if (next === undefined) return Stream.fail(new LlmError({ reason: "UnknownModel", message: "no script left" }));
+              return typeof next === "function" ? next(asked) : next;
+            }),
+          ),
+        login: () => Effect.void,
+        logout: () => Effect.void,
+        addCustom: () => Effect.succeed("custom"),
+        removeCustom: () => Effect.void,
+        setLogo: () => Effect.void,
+      })),
+    ),
   });
   return { plugin, requests };
 }

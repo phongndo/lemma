@@ -9,10 +9,10 @@ import { Paths } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
 import type { PromptDecision, PromptInput } from "@lemma/agent";
-import { emptyUsage } from "@lemma/llm";
+import { emptyUsage, LlmRequest, LlmRequestHook } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
-import type { LlmRequest, ToolResultMessage } from "@lemma/llm";
+import type { ToolResultMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions from "@lemma/sessions-files";
@@ -436,6 +436,50 @@ describe("agent", () => {
           credit: { handlers: [{ source: "tracer", changed: ["x-trace"] }] },
         });
         expect(rec.deltas.map((event) => event.type)).toEqual(["start", "text-delta", "text-delta", "done"]);
+      }),
+    );
+  });
+
+  it("sends the request it logged: routed in AgentRequestHook, it rebuilds from the log; changed in LlmRequestHook, it is not sent", async () => {
+    const router = definePlugin({
+      id: "router",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(AgentRequestHook, (draft, next) => next(draft.model === "fake/m1" ? { ...draft, model: "fake/m2" } : draft)),
+        ),
+      ),
+    });
+    let rewrite = false;
+    const rewriter = definePlugin({
+      id: "rewriter",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(LlmRequestHook, (request, next) => next(rewrite ? new LlmRequest({ ...request, system: "Something else" }) : request)),
+        ),
+      ),
+    });
+    await withAgent({ plugins: [router, rewriter], models: ["fake/m1", "fake/m2"], scripts: [reply("routed"), reply("unsent")] }, ({ requests, rec }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        yield* a.prompt(id, text("first"));
+        expect(requests.map((request) => request.model)).toEqual(["fake/m2"]);
+        expect(ofType(yield* log(id), "request")[0]).toMatchObject({
+          model: "fake/m2",
+          handlers: [{ source: "router", changed: ["model fake/m1 → fake/m2"] }],
+        });
+        expectLogInvariant(yield* log(id), id, requests);
+        rewrite = true;
+        yield* a.prompt(id, text("second"));
+        // The provider was asked nothing more: what the log says was sent is all that was.
+        expect(requests).toHaveLength(1);
+        const events = yield* log(id);
+        const failed = ofType(events, "attempt").at(-1)!;
+        expect(failed.message.errorMessage).toContain("rewriter changed the request");
+        expect(ofType(events, "turn-end").at(-1)).toMatchObject({ reason: "error" });
+        expect(rec.ended.at(-1)!.reason).toBe("error");
+        const logged = events.filter((event) => event.data.type === "request");
+        expect(rebuildRequest(branchOf(events, logged[0]!.id), logged[0]!.id, id)).toEqual(requests[0]);
       }),
     );
   });
