@@ -1,4 +1,5 @@
 import type { Plugin } from "@lemma/core";
+import acp from "@lemma/agent-acp/web";
 import addProject from "@lemma/workspace-add-project";
 import appearance from "@lemma/look-appearance";
 import appearancePage from "@lemma/look-appearance-page";
@@ -14,7 +15,9 @@ import devtools from "@lemma/devtools-dock";
 import trace from "@lemma/devtools-trace/web";
 import fileIcons from "@lemma/look-file-icons";
 import fileMentions from "@lemma/workspace-file-mentions";
+import harnessPicker from "@lemma/agent-harness-picker";
 import highlight from "@lemma/look-highlight";
+import integrations from "@lemma/integrations-page";
 import interactionDialog from "@lemma/frame-questions";
 import keymap from "@lemma/actions-keymap";
 import keysPage from "@lemma/actions-keys-page";
@@ -81,6 +84,7 @@ export const bundled: readonly Plugin[] = [
   ask,
   composer,
   fileMentions,
+  harnessPicker,
   modelPicker,
   compaction,
   workspaceBar,
@@ -89,6 +93,8 @@ export const bundled: readonly Plugin[] = [
   palette,
   settings,
   providers,
+  integrations,
+  acp,
   mcp,
   pluginsPage,
   keysPage,

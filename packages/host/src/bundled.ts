@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
+import agentAcp from "@lemma/agent-acp";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
 import cliRegistry from "@lemma/cli-registry";
@@ -56,6 +57,7 @@ export const bundled: readonly Plugin[] = [
   mcpServers,
   sessionsFiles,
   agentLoop,
+  agentAcp,
   contextCompaction,
   contextProject,
   workspaceLocal,
@@ -92,6 +94,8 @@ export const bundledWeb: readonly string[] = [
   "actions.keymap",
   "actions.keys-page",
   "actions.palette",
+  "agent.acp",
+  "agent.harness-picker",
   "commands.client",
   "context.compaction",
   "devtools.dock",
@@ -105,6 +109,7 @@ export const bundledWeb: readonly string[] = [
   "frame.sidebar",
   "frame.toasts",
   "frame.tooltips",
+  "integrations.page",
   "llm.client",
   "llm.model-picker",
   "llm.providers",
