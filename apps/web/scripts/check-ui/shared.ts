@@ -27,7 +27,12 @@ export const url = `http://127.0.0.1:${address.port}`;
 const engine = { chromium, firefox, webkit }[process.env.LEMMA_BROWSER ?? "chromium"];
 assert(engine !== undefined, `LEMMA_BROWSER is chromium, firefox, or webkit, not "${process.env.LEMMA_BROWSER}"`);
 const executablePath = engine === chromium ? process.env.LEMMA_CHROMIUM : undefined;
-export const browser = await engine.launch({ headless: true, ...(executablePath ? { executablePath } : {}) });
+// With the scrollbars a desktop draws (Playwright hides them), which take room from what they scroll.
+export const browser = await engine.launch({
+  headless: true,
+  ...(engine === chromium ? { ignoreDefaultArgs: ["--hide-scrollbars"] } : {}),
+  ...(executablePath ? { executablePath } : {}),
+});
 
 /** What went wrong on a lane's pages (see `lanes` in check-ui.ts), kept apart from the other lanes'. */
 export const log = () => {
