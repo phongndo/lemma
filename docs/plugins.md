@@ -100,7 +100,6 @@ in each.
 | Add a model provider                                               | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
 | Change model requests or their streams                             | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
 | Bring an MCP server and its tools                                  | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
-| Run turns on another coding agent                                  | Add to `Harnesses`                                             | [agent](../domains/agent/README.md)                                        |
 | Search files another way                                           | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
 | Serve your web half, or the CLI, data of your own                  | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
 | Add a command to the `lemma` command, or a check to `lemma doctor` | Add to `CliCommands`, `CliChecks`                              | [cli](../domains/cli/README.md)                                            |

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { Deferred, Duration, Effect, Exit, Fiber, Layer } from "effect";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
-import { Agent, AgentChannels, HarnessChannels } from "@lemma/agent";
+import { Agent, AgentChannels } from "@lemma/agent";
 import { SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import type { ChannelInfo } from "@lemma/contracts";
 import type { AgentView, QueuedPrompt } from "@lemma/agent";
@@ -26,7 +26,7 @@ describe("the agent channels, through the transport", () => {
       Effect.gen(function* () {
         const listed = (yield* client["Channel.List"]()).filter((channel: ChannelInfo) => channel.id.startsWith("agent."));
         expect(listed.map(({ id, kind, source }) => [id, kind, source])).toEqual(
-          [...Object.values(AgentChannels), ...Object.values(HarnessChannels)].map((channel) => [channel.id, channel.kind, "agent.loop"]),
+          Object.values(AgentChannels).map((channel) => [channel.id, channel.kind, "agent.loop"]),
         );
         expect(listed.every((channel) => channel.title !== undefined && channel.description !== undefined)).toBe(true);
       }),

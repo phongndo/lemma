@@ -8,7 +8,6 @@ import type { ToolResultMessage } from "@lemma/llm";
 import { TurnEndReason } from "@lemma/sessions";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import { ToolOutput } from "@lemma/tools";
-import { Access } from "./harness.ts";
 import type { ToolContribution } from "@lemma/tools";
 
 export class AgentError extends Data.TaggedError("AgentError")<{
@@ -23,29 +22,16 @@ export class AgentError extends Data.TaggedError("AgentError")<{
    * `Io`: the agent could not record the change the call asked for on disk (its journal), so it did not make it in
    * this instance: the queue is as it was. A write that failed may have landed part-way, so the next instance may find
    * the change made: send the prompt again with the same `requestId` to settle its fate.
-   *
-   * `NoHarness`: the harness the turn names (`TurnOptions.harness`) is not added, or cannot run turns now.
    */
-  readonly reason: "Busy" | "NoModel" | "NoHarness" | "Session" | "Hook" | "Retracted" | "Io";
+  readonly reason: "Busy" | "NoModel" | "Session" | "Hook" | "Retracted" | "Io";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
 export const TurnOptions = Schema.Struct({
-  /**
-   * The model of the harness that runs the turn: for the agent's own loop a `<provider>/<model>` ref, falling back to
-   * its configured default, then the first available model; for another harness, one of its own (`HarnessStatus.models`).
-   */
+  /** Falls back to the agent's configured default, then the first available model. */
   model: Schema.optional(ModelRef),
   thinking: Schema.optional(ThinkingLevel),
-  /**
-   * The harness that runs the turn (see `Harnesses`). Falls back to the agent's configured default, then its own loop
-   * (`NATIVE_HARNESS`), not to the session's last turn's: a client that keeps a thread on its harness names it, as the
-   * web app's agent picker does (`lastHarness`). `thinking` is the native loop's.
-   */
-  harness: Schema.optional(Schema.String),
-  /** How much another harness's agent may do without asking (see `Access`); the native loop has no such choice. */
-  access: Schema.optional(Access),
 });
 export type TurnOptions = typeof TurnOptions.Type;
 

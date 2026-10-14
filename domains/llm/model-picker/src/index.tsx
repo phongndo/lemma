@@ -1,11 +1,11 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
 import { contextSize } from "./context-size.ts";
-import { ComposerModelPart, DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ProviderLogo } from "@lemma/llm/web";
+import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ProviderLogo } from "@lemma/llm/web";
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { ComposerControls, composerTurn, picksOwnModel, ThreadsActionIds } from "@lemma/threads";
-import { First, Slots, defineWebPlugin } from "@lemma/web";
+import { ComposerControls, ThreadsActionIds } from "@lemma/threads";
+import { Slots, defineWebPlugin } from "@lemma/web";
 import type { ModelsService } from "@lemma/llm/web";
 import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
@@ -296,22 +296,16 @@ export default defineWebPlugin({
     const runAction = (id: string) => slots.get(Actions, id)?.run();
     const providers = () => (slots.get(Actions, LlmActionIds.providers) === undefined ? undefined : () => runAction(LlmActionIds.providers));
     const add = plugin.onCleanup;
-    /** The prompt runs on another coding agent, which picks its own model: the pickers have nothing to choose. */
-    const ownModel = () => picksOwnModel(composerTurn(slots));
-    add(slots.add(ComposerControls, { id: "model", component: () => <First slot={ComposerModelPart} /> }));
     add(
-      slots.add(ComposerModelPart, {
-        id: "llm.model-picker",
-        phase: "default",
+      slots.add(ComposerControls, {
+        id: "model",
         component: () => (
-          <Show when={!ownModel()}>
-            <ModelPicker
-              models={models}
-              afterPick={() => runAction(ThreadsActionIds.focusComposer)}
-              onProviders={providers()}
-              controller={(handle) => setOpen(() => handle.open)}
-            />
-          </Show>
+          <ModelPicker
+            models={models}
+            afterPick={() => runAction(ThreadsActionIds.focusComposer)}
+            onProviders={providers()}
+            controller={(handle) => setOpen(() => handle.open)}
+          />
         ),
       }),
     );
@@ -319,11 +313,7 @@ export default defineWebPlugin({
       slots.add(ComposerControls, {
         id: "thinking",
         order: 10,
-        component: () => (
-          <Show when={!ownModel()}>
-            <ThinkingPicker models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} />
-          </Show>
-        ),
+        component: () => <ThinkingPicker models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} />,
       }),
     );
     add(

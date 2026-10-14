@@ -6,8 +6,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./prompt": "./src/prompt.ts",
-    "./acp": "./src/acp.ts"
+    "./prompt": "./src/prompt.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",

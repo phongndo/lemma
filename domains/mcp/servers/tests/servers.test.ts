@@ -9,7 +9,7 @@ import { PromptSections } from "@lemma/agent";
 import { definePlugin, Events, Hooks, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { eventFeed, Paths } from "@lemma/contracts";
-import { Mcp, McpChanged, McpLaunches, McpServers } from "@lemma/mcp";
+import { Mcp, McpChanged, McpServers } from "@lemma/mcp";
 import type { McpServerConfig, McpState } from "@lemma/mcp";
 import { declaredTools, ToolInvocation, ToolRunner } from "@lemma/tools";
 import { textOf } from "@lemma/tools/testing";
@@ -190,7 +190,7 @@ describe("a server in mcp.json", () => {
           yield* until(connected("fixture"));
           yield* mcp.put("second", { ...local, description: "Another copy" });
           const added = yield* until(connected("second"));
-          expect(server(added, "second")).toMatchObject({ sourceKind: "file", entry: { ...local, description: "Another copy" }, harnesses: true });
+          expect(server(added, "second")).toMatchObject({ sourceKind: "file", entry: { ...local, description: "Another copy" } });
           yield* mcp.put("fixture", { ...local, exposure: "direct" });
           const file = () => Effect.promise(async () => JSON.parse(await readFile(join(home, "mcp.json"), "utf8")).mcpServers);
           expect((yield* file()).fixture).toEqual({ alwaysAllow: ["echo"], ...local, exposure: "direct" });
@@ -204,41 +204,6 @@ describe("a server in mcp.json", () => {
           });
         }),
       ),
-    );
-  });
-
-  it("offers its enabled servers to other agents, but those kept from them or turned off", async () => {
-    await withCore(
-      {
-        fixture: { ...local, env: { TOKEN: "${HOME}" } },
-        kept: { ...local, harnesses: false },
-        off: { ...local, enabled: false },
-        remote: { url: "https://example.com/mcp", headers: { A: "b" } },
-      },
-      (core) =>
-        core.run(
-          Effect.gen(function* () {
-            const registries = yield* Registries;
-            yield* until(connected("fixture"));
-            const launches = (yield* registries.items(McpLaunches)).map(({ item, pluginId }) => [pluginId, item]);
-            expect(launches).toEqual([
-              [
-                "mcp.servers",
-                { name: "fixture", transport: "stdio", command: process.execPath, args: [fixture], env: { TOKEN: process.env["HOME"] }, headers: {} },
-              ],
-              ["mcp.servers", { name: "remote", transport: "http", url: "https://example.com/mcp", args: [], env: {}, headers: { A: "b" } }],
-            ]);
-            yield* (yield* Mcp).put("fixture", null);
-            yield* until((state) => state.servers.every((status) => status.name !== "fixture"));
-            yield* Effect.gen(function* () {
-              for (;;) {
-                const names = (yield* registries.items(McpLaunches)).map(({ item }) => item.name);
-                if (!names.includes("fixture")) return names;
-                yield* Effect.yieldNow;
-              }
-            }).pipe(Effect.timeout("5 seconds"));
-          }),
-        ),
     );
   });
 

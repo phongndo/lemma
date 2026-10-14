@@ -53,7 +53,7 @@ function Overview(props: { add: () => void }) {
     <div class="integrations-overview">
       <PlugIcon />
       <h2>Integrations</h2>
-      <p class="muted">The coding agents a thread can run on, and the MCP servers that give agents tools. Pick one to see and change it, or add one.</p>
+      <p class="muted">The MCP servers that give agents tools. Pick one to see and change it, or add one.</p>
       <div class="integrations-overview-kinds">
         <button type="button" class="button" onClick={() => props.add()}>
           <PlusIcon />

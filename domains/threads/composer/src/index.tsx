@@ -24,8 +24,6 @@ import {
   ComposerQueued,
   ComposerSuggestionView,
   queuePlaces,
-  composerTurn,
-  picksOwnModel,
 } from "@lemma/threads";
 import type {
   TriggerMatch,
@@ -421,10 +419,7 @@ function Composer(props: { deps: Deps }) {
     try {
       // A new chat may start in its own worktree, named from the prompt.
       const cwd = threads.activeId() === undefined ? await workspace.newChatDir(sent.text) : undefined;
-      // Another agent picks its own model: the model picker's choice is the native loop's.
-      const extra = composerTurn(slots);
-      const turn = picksOwnModel(extra) ? extra : { ...models.turnOptions(), ...extra };
-      ok = await threads.send(content, { turn, cwd, requestId: sent.requestId, whenBusy });
+      ok = await threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy });
     } catch (error) {
       notify.report(error, "Could not create a session");
     }

@@ -5,11 +5,7 @@ Provides `Agent` (`@lemma/agent`): the turn loop. Requires `Sessions`, `Llm`,
 sections to `PromptSections` (in its phases `base` and `environment`). Exclusive: a reload stops it, suspending
 its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and
-`agent.activity`, its live output and each turn's and queue's change; and
-`agent.harnesses` and `agent.harness-changes` (`serveHarnesses`), every harness
-a turn can run on with its status, its own loop (`lemma`, ready while a model is
-available) first. A turn that names another harness runs on it
-([Other harnesses](#other-harnesses)).
+`agent.activity`, its live output and each turn's and queue's change.
 
 ```ts
 Effect.gen(function* () {
@@ -22,19 +18,18 @@ Effect.gen(function* () {
 
 ## Config
 
-| Key              | Default                                       | Meaning                                                                                                    |
-| ---------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `defaultModel`   | first of `Llm.models({ available: true })`    | `<provider>/<model>` for turns that name none.                                                             |
-| `systemPrompt`   | pi-style base prompt                          | Replaces the base section; the environment section is still added.                                         |
-| `maxSteps`       | `200`                                         | Model calls per turn before it ends with `max-steps`; retries (below) take none.                           |
-| `cli`            | set by `packages/host` to this checkout's CLI | Shell command for the `lemma` CLI, named in the environment section so the agent can inspect itself.       |
-| `retries`        | `10`                                          | Failed model calls asked again in a row before the turn ends in `error` (see [Retries](#retries)).         |
-| `retryDelay`     | `2`                                           | Seconds before the first retry; each later one waits twice as long.                                        |
-| `maxRetryDelay`  | `60`                                          | Seconds the wait between retries grows to, at most.                                                        |
-| `stopGrace`      | `5`                                           | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).               |
-| `parallelTools`  | `8`                                           | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).            |
-| `maxRunning`     | `16`                                          | Turns running at once, across sessions; another waits for a slot before its first event.                   |
-| `defaultHarness` | `lemma`                                       | The harness for turns that name none (`TurnOptions.harness`): another coding agent's id, such as `claude`. |
+| Key             | Default                                       | Meaning                                                                                              |
+| --------------- | --------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `defaultModel`  | first of `Llm.models({ available: true })`    | `<provider>/<model>` for turns that name none.                                                       |
+| `systemPrompt`  | pi-style base prompt                          | Replaces the base section; the environment section is still added.                                   |
+| `maxSteps`      | `200`                                         | Model calls per turn before it ends with `max-steps`; retries (below) take none.                     |
+| `cli`           | set by `packages/host` to this checkout's CLI | Shell command for the `lemma` CLI, named in the environment section so the agent can inspect itself. |
+| `retries`       | `10`                                          | Failed model calls asked again in a row before the turn ends in `error` (see [Retries](#retries)).   |
+| `retryDelay`    | `2`                                           | Seconds before the first retry; each later one waits twice as long.                                  |
+| `maxRetryDelay` | `60`                                          | Seconds the wait between retries grows to, at most.                                                  |
+| `stopGrace`     | `5`                                           | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).         |
+| `parallelTools` | `8`                                           | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).      |
+| `maxRunning`    | `16`                                          | Turns running at once, across sessions; another waits for a slot before its first event.             |
 
 ## A turn
 
@@ -102,35 +97,6 @@ unanswered tool call with an error result (so the next request stays valid),
 then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed usage.
 A turn the agent is closing under (the host stopping, the plugin reloading) is
 left open instead, to resume (see [Stopping](#stopping)).
-
-## Other harnesses
-
-A turn whose last prompt names a harness other than `lemma` (`TurnOptions.harness`,
-else `defaultHarness`) runs on that `Harnesses` item, within its contribution, so
-its plugin's disposal waits for it. One not added, or not ready, fails `NoHarness`
-before anything is logged; no model is needed. The turn is logged as the loop's
-own are: unanswered calls on the branch answered, `turn-start` naming the
-harness, the user messages and the title; then what the harness reports, each
-assistant message it writes a step (`step-start`, the `message`, its tool
-results, `step-end`; no `request`), and `turn-end`. Its text, thinking, and
-calls stream as `AssistantDelta`s and its calls' output as `ToolOutput`, and
-`Agent.view` shows them. A call still running when the agent writes on is
-answered when its result comes, under the step that made it; one the agent never
-reports a result for is answered as the turn ends, so the log stays well formed.
-What the turn cost, which the harness reports for the turn as a whole, is logged
-with `turn-end` (its `usage`). What the harness keeps of the session (its `state`
-update, the other agent's session id) is logged as a `custom`
-`agent.harness-state` event and handed back on its next turn on the branch, with
-the messages since, unless it has since run a turn on another branch: its other
-agent's session went on with that branch, so it starts afresh.
-
-A harness turn takes no steers: they wait, and start the next turn. Cancelling
-aborts its `signal` and interrupts its stream. It is never left open: a host
-stopping, or its plugin, ends it in error, and one a crash cut off is closed in
-error when the agent starts again, its open calls answered. A native turn after
-turns another harness ran is given the conversation as text, as a `compaction`
-keeping its prompts, since another agent's tool calls are not the loop's to send
-as its own.
 
 ## Retries
 

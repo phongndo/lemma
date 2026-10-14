@@ -558,23 +558,6 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
               </Show>
             </section>
           </Show>
-
-          <Show when={server().sourceKind === "file" && server().entry !== undefined}>
-            <section class="integration-section">
-              <h3>Other agents</h3>
-              <div class="mcp-share">
-                <span class="integration-hint">Hand it to the coding agents a thread runs on (Claude Code, Codex), so their turns have its tools too.</span>
-                <Toggle
-                  label={`Hand ${server().name} to other agents`}
-                  checked={server().harnesses}
-                  onChange={plugin.action("share server", (harnesses: boolean) => {
-                    const { harnesses: _, ...entry } = server().entry!;
-                    return props.actions.put(server().name, harnesses ? entry : { ...entry, harnesses: false });
-                  })}
-                />
-              </div>
-            </section>
-          </Show>
         </div>
       )}
     </Show>
@@ -583,9 +566,8 @@ function ServerDetail(props: IntegrationDetailProps & { actions: Actions }) {
 
 /**
  * The web half of `mcp.servers`: the MCP servers' part of Settings › Integrations. Every server with its state and
- * switch, its details (why it failed, how it is reached, its tools and how they reach the model, whether other agents
- * get it), editing and removing it, and adding one by a form or by pasting another client's JSON, written to the
- * user's `mcp.json`. It runs while the host half does.
+ * switch, its details (why it failed, how it is reached, its tools and how they reach the model), editing and removing
+ * it, and adding one by a form or by pasting another client's JSON, written to the user's `mcp.json`. It runs while the host half does.
  */
 export default defineWebPlugin({
   id: "mcp.servers",

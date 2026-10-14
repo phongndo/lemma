@@ -1,8 +1,7 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
-import { AgentChannels, HarnessChannels, NATIVE_HARNESS } from "@lemma/agent";
-import { AcpChannels } from "@lemma/agent/acp";
+import { AgentChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
@@ -454,10 +453,6 @@ export const createMockHost = (): Host => {
       provides: ["lemma/Agent"],
       requires: ["lemma/Sessions", "lemma/Llm", "lemma/ToolRunner", "lemma/HostControl"],
       contributes: [{ name: "lemma/agent.sections", items: 2, keys: ["agent.base", "agent.environment"] }],
-    }),
-    bundled("agent.acp", {
-      requires: ["lemma/Paths", "lemma/Interaction"],
-      contributes: [{ name: "lemma/agent.harnesses", items: 3, keys: ["claude", "codex", "opencode"] }],
     }),
     bundled("mcp.servers", { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] }),
     bundled("context.compaction", { requires: ["lemma/Sessions", "lemma/Llm"] }),
@@ -977,8 +972,7 @@ export const createMockHost = (): Host => {
         },
         step.id,
       );
-    const harness = options?.harness !== undefined && options.harness !== NATIVE_HARNESS ? options.harness : undefined;
-    append(sessionId, { type: "turn-start", turnId, model: by.ref, ...(harness === undefined ? {} : { harness }) });
+    append(sessionId, { type: "turn-start", turnId, model: by.ref });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     running.add(sessionId);
     const turn = { turnId, output: new Map<string, string>() };
@@ -1597,25 +1591,6 @@ export const createMockHost = (): Host => {
     ),
     serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.history.get()),
 
-    serveCall("agent.loop", HarnessChannels.list, async () => integrations.harnesses()),
-    serveStream("agent.loop", HarnessChannels.changes, (_, send) => integrations.followHarnesses(send)),
-    serveCall("agent.acp", AcpChannels.state, async () => integrations.acpState()),
-    serveStream("agent.acp", AcpChannels.changes, (_, send) => integrations.followAcp(send)),
-    serveCall("agent.acp", AcpChannels.put, async ({ id, entry }) => integrations.putAgent(id, entry)),
-    serveCall("agent.acp", AcpChannels.check, async ({ id }) => {
-      const agent = integrations.agent(id);
-      if (agent === undefined) throw new HostError({ code: "Failed", subject: "acp.check", message: `No agent is named "${id}"` });
-      return agent;
-    }),
-    serveCall("agent.acp", AcpChannels.authenticate, async () => {}),
-    serveCall("agent.acp", AcpChannels.registry, async () => integrations.registry()),
-    serveStream("agent.acp", AcpChannels.permissions, (_, send) => {
-      send([]);
-      return () => {};
-    }),
-    serveCall("agent.acp", AcpChannels.respond, async ({ id }) => {
-      throw new HostError({ code: "Failed", subject: "acp.respond", message: `No permission request "${id}" is open` });
-    }),
     serveCall("mcp.servers", McpChannels.state, async () => integrations.mcpState()),
     serveStream("mcp.servers", McpChannels.changes, (_, send) => integrations.followMcp(send)),
     serveCall("mcp.servers", McpChannels.reconnect, async () => {}),

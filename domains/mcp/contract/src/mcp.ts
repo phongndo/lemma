@@ -39,11 +39,6 @@ export const McpServerConfig = Schema.Struct({
   toolExposure: Schema.optional(Schema.Record(Schema.String, Exposure)),
   /** Seconds a request may take; 60 when absent, and at most about 24 days. Progress the server reports restarts it. */
   timeout: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
-  /**
-   * `false` keeps it from the other coding agents a turn may run on (the agent's harnesses, such as Claude Code over
-   * ACP), which are handed every other enabled server (`McpLaunches`).
-   */
-  harnesses: Schema.optional(Schema.Boolean),
   /** Lemma's own: an image's address (`https:`, or a `data:image/` URL) for its icon, over the one the server declares. */
   icon: Schema.optional(Schema.String),
 });
@@ -120,8 +115,6 @@ export const McpServerStatus = Schema.Struct({
   tools: Schema.Array(McpToolInfo),
   /** The file's entry for it, as written (`${VAR}` references and all): what a client edits and `put` writes back. */
   entry: Schema.optional(McpServerConfig),
-  /** It is handed to other coding agents' turns (`McpServerConfig.harnesses`). */
-  harnesses: Schema.Boolean,
 });
 export type McpServerStatus = typeof McpServerStatus.Type;
 
@@ -177,25 +170,6 @@ export class Mcp extends Context.Service<
     readonly put: (server: string, entry: McpServerConfig | null) => Effect.Effect<void, McpError>;
   }
 >()("lemma/Mcp") {}
-
-/** An enabled server as another coding agent launches it: its entry with `${VAR}` references read. */
-export interface McpLaunch {
-  readonly name: string;
-  readonly transport: "stdio" | "http";
-  readonly command?: string;
-  readonly args: readonly string[];
-  readonly env: Readonly<Record<string, string>>;
-  readonly cwd?: string;
-  readonly url?: string;
-  readonly headers: Readonly<Record<string, string>>;
-}
-
-/**
- * The servers other coding agents are handed: `mcp.servers` adds one for each enabled server not kept from them
- * (`McpServerConfig.harnesses`), and a harness plugin reads them as it starts one of its sessions. A server whose
- * variables are not set is left out.
- */
-export const McpLaunches = Registry.make<McpLaunch>("lemma/mcp.launches", { key: (launch) => launch.name, unique: true });
 
 const serverField = { server: Schema.String };
 

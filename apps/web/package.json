@@ -16,8 +16,6 @@
     "@lemma/actions-keys-page": "workspace:*",
     "@lemma/actions-palette": "workspace:*",
     "@lemma/agent": "workspace:*",
-    "@lemma/agent-acp": "workspace:*",
-    "@lemma/agent-harness-picker": "workspace:*",
     "@lemma/client": "workspace:*",
     "@lemma/commands": "workspace:*",
     "@lemma/commands-client": "workspace:*",

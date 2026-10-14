@@ -22,7 +22,7 @@ import type { AuthFilter, CustomProviderDraft, ModelsService, ProviderRowProps }
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
-import { ComposerNotices, composerTurn, picksOwnModel } from "@lemma/threads";
+import { ComposerNotices } from "@lemma/threads";
 import { Client, Interactions, Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import { CheckIcon, FilterIcon, KeyIcon, PlusIcon, Popover, SearchField, Spinner } from "@lemma/look";
 import { ConnectDialog } from "./connect.tsx";
@@ -547,8 +547,7 @@ export default defineWebPlugin({
       id: SECTION,
       order: 10,
       component: () => (
-        // Not while the prompt goes to another coding agent, which needs none of these.
-        <Show when={models.providersLoaded() && !models.configured() && !picksOwnModel(composerTurn(slots))}>
+        <Show when={models.providersLoaded() && !models.configured()}>
           <div class="callout callout-info composer-callout">
             <KeyIcon />
             <span>No model provider is set up yet.</span>
