@@ -28,18 +28,38 @@ export function toModelInfo(model: Pi.Model<Pi.Api>): ModelInfo {
   };
 }
 
+/**
+ * A contract value as pi-ai types it, for what pi-ai only reads: its arrays and properties writable, all the way down;
+ * an optional field without the `undefined` the contract's Schema allows it, as pi-ai reads an absent field and an
+ * undefined one alike; and what the contract leaves `unknown` (a tool call's arguments) JSON, as it is what the session
+ * log holds.
+ */
+type AsPi<T> = unknown extends T
+  ? Pi.JsonValue
+  : T extends readonly (infer E)[]
+    ? AsPi<E>[]
+    : T extends object
+      ? { -readonly [K in keyof T]: {} extends Pick<T, K> ? AsPi<Exclude<T[K], undefined>> : AsPi<T[K]> }
+      : T;
+
+/**
+ * The contract's messages as pi-ai's, unchanged (pi-ai does not mutate its input). Only what `AsPi` says is assumed;
+ * the compiler checks the rest, so a contract message pi-ai's type no longer accepts fails the build.
+ */
+const piMessages = (messages: LlmRequest["messages"]): Pi.Message[] => messages as AsPi<LlmRequest["messages"]>;
+
 export function toContext(request: LlmRequest): Pi.Context {
   return {
     ...(request.system === undefined ? {} : { systemPrompt: request.system }),
-    // Structurally pi-ai messages; pi-ai does not mutate its input.
-    messages: request.messages as unknown as Pi.Message[],
+    messages: piMessages(request.messages),
     ...(request.tools === undefined
       ? {}
       : {
           tools: request.tools.map((tool) => ({
             name: tool.name,
             description: tool.description,
-            parameters: tool.parameters as unknown as Pi.TSchema,
+            // A JSON Schema object, which is what pi-ai's (TypeBox's) `TSchema` is.
+            parameters: tool.parameters,
           })),
         }),
   };
