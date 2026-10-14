@@ -10,6 +10,8 @@
     "check": "tsc --noEmit"
   },
   "dependencies": {
+    "@lemma/cli": "workspace:*",
+    "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
     "effect": "4.0.4"
