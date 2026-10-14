@@ -18,8 +18,7 @@ const CARD_INSET = 8;
  * arrow keys, Home, and End move between them. The ticks of the turns in view
  * are lit. The strip keeps to the space beside the transcript's text
  * (`--room`), so it never covers what the reader is selecting, and sits level
- * with the middle of the whole pane, the composer below the chat included
- * (`--below`), as far as the chat view leaves room.
+ * with the middle of the chat view, as far as it leaves room.
  */
 export function PromptRail(props: {
   marks: readonly PromptMark[];
@@ -32,8 +31,6 @@ export function PromptRail(props: {
   seen: { readonly first: number; readonly last: number } | undefined;
   /** The space between the chat's left edge and the transcript's text, in pixels. */
   room: number;
-  /** How far the pane the chat is in reaches below the chat view (its composer), in pixels. */
-  below: number;
   onJump: (key: string) => void;
 }) {
   let rail!: HTMLElement;
@@ -76,9 +73,9 @@ export function PromptRail(props: {
     ticks[Math.max(0, Math.min(count() - 1, to))]?.focus();
   };
   // The card's middle is level with its tick unless that takes it out of the chat view, and it is no larger than the view leaves.
-  // It is placed again whenever the strip moves under it: the composer settling below (`below`), the room beside the text, a new prompt.
+  // It is placed again whenever the strip moves under it: the room beside the text, a new prompt.
   createEffect(
-    on([shown, () => props.below, () => props.room, count], () => {
+    on([shown, () => props.room, count], () => {
       const index = shown()?.index;
       if (index === undefined || card === undefined) return;
       const view = rail.getBoundingClientRect();
@@ -95,7 +92,7 @@ export function PromptRail(props: {
       classList={{ tucked: props.room < RAIL_ROOM }}
       aria-label="Prompts"
       ref={rail}
-      style={{ "--room": `${props.room}px`, "--below": `${props.below}px`, "--count": count() }}
+      style={{ "--room": `${props.room}px`, "--count": count() }}
     >
       <div class="prompt-strip" ref={strip}>
         <button class="prompt-step previous" aria-label="Previous prompt" disabled={props.previous === undefined} onClick={() => jump(props.previous)}>

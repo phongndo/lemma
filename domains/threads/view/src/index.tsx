@@ -179,8 +179,18 @@ export default defineWebPlugin({
     ));
 
     function Main() {
+      let main!: HTMLElement;
+      // The composer lies over the view's bottom: its height, for the view to pad its end by and scroll under it.
+      const dock = (element: HTMLDivElement) => {
+        const observer = new ResizeObserver(() => main.style.setProperty("--composer-height", `${element.offsetHeight}px`));
+        observer.observe(element);
+        onCleanup(() => {
+          observer.disconnect();
+          main.style.removeProperty("--composer-height");
+        });
+      };
       return (
-        <main class="main">
+        <main class="main" ref={main}>
           <header class="main-head">
             <Each slot={ThreadHeader} filter={(item) => item.side === "start"} />
             <span class="spacer" />
@@ -204,7 +214,9 @@ export default defineWebPlugin({
             )}
           </Show>
           <Show when={unknown() === undefined && view()?.composer === true}>
-            <First slot={ComposerRegion} />
+            <div class="composer-dock" ref={dock}>
+              <First slot={ComposerRegion} />
+            </div>
           </Show>
         </main>
       );

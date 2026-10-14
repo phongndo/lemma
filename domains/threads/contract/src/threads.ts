@@ -112,7 +112,7 @@ export interface ThreadView {
   readonly title: string;
   readonly icon: Component;
   readonly component: Component;
-  /** The composer shows under it. */
+  /** The composer shows over its bottom: it pads its end by `--composer-height` (the composer's height, set on the page) to scroll under it. */
   readonly composer?: boolean;
 }
 

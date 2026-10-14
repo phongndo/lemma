@@ -596,7 +596,6 @@ function Transcript(props: { chat: Chat; turns: readonly TurnView[] }) {
 
 function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   const threads = props.chat.threads;
-  let view!: HTMLDivElement;
   let scroller!: HTMLDivElement;
   let content!: HTMLDivElement;
   const [stuck, setStuck] = createSignal(true);
@@ -611,8 +610,6 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
   });
   /** The space beside the transcript's text, where the prompt rail goes. */
   const [room, setRoom] = createSignal(0);
-  /** How far the pane reaches below the chat view (the composer), so the prompt rail can center on the whole pane. */
-  const [below, setBelow] = createSignal(0);
   const turnElement = (key: string) => content.querySelector<HTMLElement>(`[data-turn="${CSS.escape(key)}"]`);
   /** Where a jump is taking the view, until the scroll gets there or the reader takes it elsewhere. */
   let heading: number | undefined;
@@ -691,14 +688,6 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
     measure.observe(scroller);
     measure.observe(content);
     onCleanup(() => measure.disconnect());
-    // The pane is the box the view is laid out in; the composer below it grows as the reader types.
-    const pane = view.offsetParent as HTMLElement | null;
-    if (pane !== null) {
-      const height = new ResizeObserver(() => setBelow(Math.max(0, pane.clientHeight - view.offsetTop - view.offsetHeight)));
-      height.observe(view);
-      height.observe(pane);
-      onCleanup(() => height.disconnect());
-    }
     // Follow new output while the reader is at the bottom; leave them alone once they scroll up.
     const observer = new ResizeObserver(() => {
       const held = anchor;
@@ -711,7 +700,8 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
       else if (stuck()) toBottom();
       locateSoon();
     });
-    observer.observe(content);
+    // Its border box: the end it pads for the composer grows with the composer, and the end stays in view.
+    observer.observe(content, { box: "border-box" });
     // Capture: the toggle's own handler changes the DOM before a bubbling listener would see the click.
     content.addEventListener("click", noteToggle, true);
     onCleanup(() => {
@@ -740,7 +730,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
 
   const empty = () => props.turns().length === 0;
   return (
-    <div class="chat-view" ref={view}>
+    <div class="chat-view">
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="content" ref={content}>
           <Switch>
@@ -775,16 +765,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[] }) {
         </Show>
       </div>
       <Show when={props.chat.config.promptRail && marks().length > 1}>
-        <PromptRail
-          marks={marks()}
-          current={current()}
-          previous={steps().previous}
-          next={steps().next}
-          seen={seen()}
-          room={room()}
-          below={below()}
-          onJump={jump}
-        />
+        <PromptRail marks={marks()} current={current()} previous={steps().previous} next={steps().next} seen={seen()} room={room()} onJump={jump} />
       </Show>
     </div>
   );

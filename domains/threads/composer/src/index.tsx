@@ -458,7 +458,14 @@ function Composer(props: { deps: Deps }) {
 
   return (
     <div class="composer-wrap">
-      <Each slot={ComposerNotices} />
+      {/* Over the conversation: each notice on the page's background, so what passes under does not show through its tint. */}
+      <For each={slots.list(ComposerNotices)}>
+        {(item) => (
+          <div class="composer-notice">
+            <Contained slot={ComposerNotices} item={item} component={item.component} />
+          </div>
+        )}
+      </For>
       {/* Above the box, in the page's flow so it covers nothing: what is queued, which the completion menu covers while open. */}
       <Show when={queued().length > 0}>
         <div class="composer-queue">
