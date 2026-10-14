@@ -338,3 +338,33 @@
   font-size: calc(12px * var(--text-scale));
   white-space: nowrap;
 }
+
+/* The ghost: the textarea's text, unseen, and after it what completing would add, muted, at the same place. */
+.composer-input {
+  position: relative;
+}
+
+.composer-ghost {
+  position: absolute;
+  inset: 0;
+  padding: 16px 18px 6px;
+  overflow: hidden;
+  font-size: calc(14px * var(--text-scale));
+  line-height: 1.625;
+  color: transparent;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  pointer-events: none;
+}
+
+.composer-ghost-text {
+  color: var(--text-3);
+}
+
+/* What a suggestion takes once picked (`<server>`), between its label and its detail. */
+.completion-usage {
+  flex-shrink: 0;
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+}

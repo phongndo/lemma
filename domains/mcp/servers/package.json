@@ -20,6 +20,7 @@
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/mcp": "workspace:*",
+    "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
     "@modelcontextprotocol/client": "2.3.1",

@@ -6,6 +6,7 @@ import type { EntryGroup } from "./settings.ts";
 import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, Settings, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
+import { PromptCommands } from "@lemma/threads";
 import { Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
 import type { SettingsEntry, SettingsSection } from "@lemma/settings";
 import type { SlotItem, SlotsService } from "@lemma/web";
@@ -295,6 +296,28 @@ export default defineWebPlugin({
       keys: "mod+,",
       when: () => section() === undefined,
       run: () => open("general"),
+    });
+    slots.add(PromptCommands, {
+      id: "settings",
+      order: 40,
+      description: "Open settings, or one of its sections",
+      icon: GearIcon,
+      args: [
+        {
+          name: "section",
+          optional: true,
+          rest: true,
+          values: () => slots.list(SettingsSections).map((found) => ({ value: found.id, detail: found.title })),
+        },
+      ],
+      // By the whole text, so a title with spaces (`Archived threads`) names its section too.
+      run: ({ text }) => {
+        const wanted = text;
+        if (wanted === "") return open(SectionIds.general);
+        const found = slots.list(SettingsSections).find((candidate) => candidate.id === wanted || candidate.title.toLowerCase() === wanted.toLowerCase());
+        if (found === undefined) throw new Error(`No settings section “${wanted}”`);
+        open(found.id);
+      },
     });
     slots.add(Actions, {
       id: "settings.close",

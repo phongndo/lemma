@@ -19,6 +19,7 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",

@@ -4,7 +4,7 @@ import { contextSize } from "./context-size.ts";
 import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ProviderLogo } from "@lemma/llm/web";
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { ComposerControls, ThreadsActionIds } from "@lemma/threads";
+import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
 import type { ModelsService } from "@lemma/llm/web";
 import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
@@ -314,6 +314,60 @@ export default defineWebPlugin({
         id: "thinking",
         order: 10,
         component: () => <ThinkingPicker models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} />,
+      }),
+    );
+    /** The models `query` names: the one with that ref first, then those a search finds, in the picker's order. */
+    const modelsFor = (query: string) => {
+      const exact = models.models().filter((model) => model.ref === query);
+      return [...exact, ...filterModels(models.models(), query).flatMap((group) => group.models.filter((model) => model.ref !== query))];
+    };
+    add(
+      slots.add(PromptCommands, {
+        id: "model",
+        order: 29,
+        description: "Choose the model, by its id or a search",
+        icon: BrainIcon,
+        args: [
+          {
+            name: "model",
+            // As `run` chooses: the model with that ref, then those a search finds, in the picker's order.
+            ranked: true,
+            values: ({ query }) => {
+              const current = models.selected()?.ref;
+              return modelsFor(query).map((model) => ({ value: model.ref, detail: model.ref === current ? `${model.name} · current` : model.name }));
+            },
+          },
+        ],
+        run: ({ text }) => {
+          const found = modelsFor(text)[0];
+          if (found === undefined) throw new Error(models.models().length === 0 ? "No models yet: log in to a provider" : `No model matches “${text}”`);
+          models.choose(found.ref);
+        },
+      }),
+    );
+    add(
+      slots.add(PromptCommands, {
+        id: "thinking",
+        order: 30,
+        description: "Set how hard the model reasons",
+        icon: BrainIcon,
+        args: [
+          {
+            name: "level",
+            values: () => {
+              const current = models.thinking() ?? DEFAULT_THINKING;
+              return thinkingLevels(models.selected()).map((level) => ({ value: level, ...(level === current ? { detail: "current" } : {}) }));
+            },
+          },
+        ],
+        run: ({ args }) => {
+          const levels = thinkingLevels(models.selected());
+          const name = models.selected()?.name ?? "The selected model";
+          if (levels.length === 0) throw new Error(`${name} has no reasoning levels`);
+          const level = levels.find((candidate) => candidate === args[0]?.toLowerCase());
+          if (level === undefined) throw new Error(`Choose one of ${levels.join(", ")} for ${name}`);
+          models.chooseThinking(level);
+        },
       }),
     );
     add(

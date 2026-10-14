@@ -2,7 +2,8 @@ import { Show, createMemo } from "solid-js";
 import { formatTokens } from "@lemma/client/format";
 import { Models } from "@lemma/llm/web";
 import type { ModelsService } from "@lemma/llm/web";
-import { ComposerControls, Threads } from "@lemma/threads";
+import { ComposerControls, PromptCommands, Threads } from "@lemma/threads";
+import { ArchiveIcon } from "@lemma/look";
 import type { ThreadsService } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
 import { measuredTokens } from "./compact.ts";
@@ -92,6 +93,16 @@ export default defineWebPlugin({
         id: "context-meter",
         order: 20,
         component: () => <ContextMeter threads={threads} models={models} at={plugin.config.at} />,
+      }),
+    );
+    // Sent as typed: the host half answers it (`compactAsked`).
+    plugin.onCleanup(
+      slots.add(PromptCommands, {
+        id: "compact",
+        order: 20,
+        description: "Summarize the conversation so far, to free its context",
+        icon: ArchiveIcon,
+        args: [{ name: "focus", optional: true, rest: true }],
       }),
     );
   },

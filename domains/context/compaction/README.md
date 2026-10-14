@@ -43,7 +43,8 @@ divider. Requires `Llm`.
   summary should focus on (`/compact keep the API decisions`), is handled
   rather than sent (`AgentInputHook`): the session's next model call, in the
   running turn or the next one, summarizes whatever the estimate says, once,
-  keeping at most a quarter of the conversation word for word. A notice says
+  keeping at most a quarter of the conversation word for word. The web half
+  offers it in the `/` menu (`PromptCommands`). A notice says
   when there is nothing to summarize or a handler skipped it. The request is
   held in memory, so a restart before that call forgets it.
 - **The summary.** It follows a fixed outline (goal, constraints, progress,

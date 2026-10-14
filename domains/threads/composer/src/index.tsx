@@ -9,7 +9,13 @@ import { formatKeys, listKey, modKey, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
 import {
   applySuggestion,
+  commandInvocation,
+  commandNodes,
+  commandProblem,
+  findCommandLine,
   findTrigger,
+  PromptCommands,
+  runsHere,
   ComposerActions,
   ComposerCompletions,
   ComposerControls,
@@ -140,6 +146,7 @@ interface CompletionGroup {
   readonly suggestions: readonly ComposerSuggestion[];
   readonly loading: boolean;
   readonly note?: string | undefined;
+  readonly hint?: string | undefined;
   readonly error?: string;
 }
 
@@ -155,7 +162,7 @@ const sameWord = (a: TriggerMatch | undefined, b: TriggerMatch | undefined) =>
   a?.trigger === b?.trigger && a?.query === b?.query && a?.start === b?.start && a?.end === b?.end;
 
 const settled = (answer: ComposerCompletionAnswer): Omit<CompletionGroup, "source"> =>
-  "suggestions" in answer ? { suggestions: answer.suggestions, note: answer.note, loading: false } : { suggestions: answer, loading: false };
+  "suggestions" in answer ? { suggestions: answer.suggestions, note: answer.note, hint: answer.hint, loading: false } : { suggestions: answer, loading: false };
 const failed = (error: unknown): Omit<CompletionGroup, "source"> => ({
   suggestions: [],
   loading: false,
@@ -169,10 +176,23 @@ const failed = (error: unknown): Omit<CompletionGroup, "source"> => ({
  */
 function createCompletion(slots: SlotsService, text: () => string, cursor: () => number, asking: () => boolean) {
   const sources = () => slots.list(ComposerCompletions);
+  const spanOf = (source: ComposerCompletion) => source.span ?? "word";
+  const triggers = (span: "word" | "line") => [...new Set(sources().flatMap((source) => (spanOf(source) === span ? [source.trigger] : [])))];
   const [dismissed, setDismissed] = createSignal<number>();
-  const word = createMemo(() => (asking() ? findTrigger(text(), cursor(), [...new Set(sources().map((source) => source.trigger))]) : undefined), undefined, {
-    equals: sameWord,
-  });
+  // A command line (`/thinking hi`): its trigger starts the prompt, and it runs across spaces.
+  const word = createMemo(
+    (): (TriggerMatch & { readonly span: "word" | "line" }) | undefined => {
+      if (!asking()) return undefined;
+      // A word trigger past the line's own (`/compact keep @src/a`) completes that word, as anywhere else.
+      const found = findTrigger(text(), cursor(), triggers("word"));
+      if (found !== undefined && found.start > 0) return { ...found, span: "word" };
+      const line = findCommandLine(text(), cursor(), triggers("line"));
+      if (line !== undefined) return { ...line, span: "line" };
+      return found === undefined ? undefined : { ...found, span: "word" };
+    },
+    undefined,
+    { equals: (a, b) => a?.span === b?.span && sameWord(a, b) },
+  );
   createEffect(() => {
     if (dismissed() !== undefined && word()?.start !== dismissed()) setDismissed(undefined);
   });
@@ -185,7 +205,7 @@ function createCompletion(slots: SlotsService, text: () => string, cursor: () =>
   let shown: TriggerMatch | undefined;
   createEffect(() => {
     const current = match();
-    const answering = current === undefined ? [] : sources().filter((source) => source.trigger === current.trigger);
+    const answering = current === undefined ? [] : sources().filter((source) => source.trigger === current.trigger && spanOf(source) === current.span);
     // Typing on in a word keeps what shows until the next answers arrive. Another word starts empty, and so does the
     // same word asked again because what a source read changed (another project): its old answer is not this one.
     const kept =
@@ -249,7 +269,13 @@ function createCompletion(slots: SlotsService, text: () => string, cursor: () =>
     /** Some source has yet to answer this word. */
     loading: () => groups().some((group) => group.loading),
     setActive: (index: number) => setChosen(items()[index]?.key),
-    open: () => match() !== undefined && groups().length > 0,
+    open: () => {
+      const current = match();
+      if (current === undefined || groups().length === 0) return false;
+      // Past a command's name, a line no source has anything for is just a prompt that starts with `/` (a path).
+      const quiet = groups().every((group) => !group.loading && group.suggestions.length === 0 && group.note === undefined && group.error === undefined);
+      return !(current.span === "line" && /\s/.test(current.query) && quiet);
+    },
     move: (by: number) => {
       const all = items();
       if (all.length > 0) setChosen(all[(active() + by + all.length) % all.length]!.key);
@@ -311,6 +337,25 @@ function Composer(props: { deps: Deps }) {
    */
   const [recalled, setRecalled] = createSignal<SentPrompt & { readonly at: number }>();
   const completion = createCompletion(slots, boxText, cursor, () => focused() && recalled() === undefined && taken()?.readOnly?.() !== true);
+  /**
+   * Muted after the cursor while it ends the prompt: the rest of the active suggestion, when what is typed begins it,
+   * and what follows it (`/mcp rec` → `onnect <server>`); with none active, what the word takes (`<server>`). Tab
+   * takes the suggestion.
+   */
+  /** The box is at its tallest and scrolls: the ghost, drawn over it unscrolled, would be out of place, so none shows. */
+  const [scrolls, setScrolls] = createSignal(false);
+  const ghost = createMemo(() => {
+    const word = completion.match();
+    const value = boxText();
+    if (word === undefined || taken() !== undefined || scrolls() || cursor() !== value.length) return "";
+    const item = completion.open() ? completion.items()[completion.active()] : undefined;
+    if (item === undefined) return completion.groups().find((group) => group.hint !== undefined)?.hint ?? "";
+    const typed = value.slice(word.start, cursor());
+    const { insert, hint } = item.suggestion;
+    if (!insert.toLowerCase().startsWith(typed.toLowerCase())) return "";
+    const rest = insert.slice(typed.length);
+    return hint === undefined ? rest : `${rest} ${hint}`;
+  });
   const listId = createUniqueId();
   const optionId = (index: number) => `${listId}-${index}`;
   createEffect(() => {
@@ -359,6 +404,7 @@ function Composer(props: { deps: Deps }) {
   const resize = () => {
     input.style.height = "auto";
     input.style.height = `${Math.min(input.scrollHeight, Math.round(window.innerHeight * 0.4))}px`;
+    setScrolls(input.scrollHeight > input.clientHeight + 1);
   };
 
   onMount(() => {
@@ -391,8 +437,40 @@ function Composer(props: { deps: Deps }) {
   /** Enter, or the send button: the takeover's, while the box is given to one, else the person's prompt goes. */
   const submit = async (whenBusy: "steer" | "follow-up" = busyMode()) => {
     const item = taken();
-    if (item === undefined) return sendPrompt(whenBusy);
+    if (item === undefined) return (await runCommand()) ? undefined : sendPrompt(whenBusy);
     if (item.canSubmit?.() !== false) item.submit();
+  };
+  /**
+   * A prompt that is a command running here (a `PromptCommands` tree with a `run`: `/new`, `/mcp reconnect github`)
+   * runs instead of going out: the box clears first, as the command may go to another thread, and gets the prompt
+   * back if it fails. One missing a subcommand or an argument says what it takes, and stays. A command whose tree runs
+   * nothing here is the host's, and goes out as typed.
+   */
+  const runCommand = async (): Promise<boolean> => {
+    const typed = commandInvocation(text(), commandNodes(slots.list(PromptCommands)));
+    if (typed === undefined || !runsHere(typed.root)) return false;
+    const name = `/${typed.path.join(" ")}`;
+    // Never sent to the model in its place: what is wrong with it is said, and the prompt stays to be fixed.
+    const problem = images().length > 0 ? `${name} runs here, and takes no images: remove them first` : commandProblem(typed);
+    if (problem !== undefined) {
+      notify.toast({ level: "warning", message: problem });
+      return true;
+    }
+    const before = text();
+    const key = draftKey();
+    edited();
+    setText("");
+    queueMicrotask(resize);
+    try {
+      await typed.node.run!({ path: typed.path, args: typed.args, text: typed.text });
+    } catch (error) {
+      notify.report(error, `${name} did not run`);
+      if (draftKey() === key && text() === "") {
+        setText(before);
+        queueMicrotask(resize);
+      }
+    }
+    return true;
   };
   const sendPrompt = async (whenBusy: "steer" | "follow-up") => {
     if (sending()) {
@@ -516,8 +594,8 @@ function Composer(props: { deps: Deps }) {
       resize();
     });
   };
-  /** Puts a suggestion in place of the word being completed. */
-  const pick = (suggestion: ComposerSuggestion) => {
+  /** Puts a suggestion in place of the word being completed; with `complete`, Tab's, only that, never sending. */
+  const pick = (suggestion: ComposerSuggestion, how: "pick" | "complete" = "pick") => {
     const word = completion.match();
     if (word === undefined) return;
     const next = applySuggestion(boxText(), word, suggestion.insert, { space: suggestion.partial !== true });
@@ -531,6 +609,8 @@ function Composer(props: { deps: Deps }) {
       input.setSelectionRange(next.cursor, next.cursor);
       resize();
     });
+    // A command needing nothing more goes as Enter would send it.
+    if (suggestion.submit === true && how === "pick") void submit();
   };
   const addFiles = async (files: Iterable<File>) => {
     const given = [...files];
@@ -588,7 +668,7 @@ function Composer(props: { deps: Deps }) {
       if (event.key === "Tab" || event.key === "Enter") {
         if (count > 0) {
           event.preventDefault();
-          pick(completion.items()[completion.active()]!.suggestion);
+          pick(completion.items()[completion.active()]!.suggestion, event.key === "Tab" ? "complete" : "pick");
           return;
         }
         // An answer is on its way: the key waits for it rather than sending a half-typed mention.
@@ -764,7 +844,7 @@ function Composer(props: { deps: Deps }) {
                   </div>
                 )}
               </For>
-              <Show when={completion.items().length === 0 && completion.groups().every((group) => group.error === undefined)}>
+              <Show when={completion.items().length === 0 && completion.groups().every((group) => (group.error ?? group.note) === undefined)}>
                 <div class="completions-note">{completion.loading() ? "Searching…" : "No matches"}</div>
               </Show>
             </div>
@@ -795,50 +875,58 @@ function Composer(props: { deps: Deps }) {
             </Show>
           </div>
         </Show>
-        <textarea
-          ref={input}
-          rows={1}
-          value={boxText()}
-          placeholder={taken()?.placeholder() ?? placeholder()}
-          readOnly={taken()?.readOnly?.() === true}
-          aria-label="Message"
-          aria-autocomplete="list"
-          aria-controls={completion.open() && completion.items().length > 0 ? listId : undefined}
-          aria-activedescendant={completion.open() && completion.items().length > 0 ? optionId(completion.active()) : undefined}
-          spellcheck={true}
-          onInput={(event) => {
-            const value = event.currentTarget.value;
-            // Text and cursor together: completion asks for the word once, not for each half of the change.
-            batch(() => {
-              const item = taken();
-              if (item !== undefined) item.setText(value);
-              else {
-                edited();
-                setText(value);
-              }
+        <div class="composer-input">
+          <Show when={ghost() !== ""}>
+            <div class="composer-ghost" aria-hidden="true">
+              {boxText()}
+              <span class="composer-ghost-text">{ghost()}</span>
+            </div>
+          </Show>
+          <textarea
+            ref={input}
+            rows={1}
+            value={boxText()}
+            placeholder={taken()?.placeholder() ?? placeholder()}
+            readOnly={taken()?.readOnly?.() === true}
+            aria-label="Message"
+            aria-autocomplete="list"
+            aria-controls={completion.open() && completion.items().length > 0 ? listId : undefined}
+            aria-activedescendant={completion.open() && completion.items().length > 0 ? optionId(completion.active()) : undefined}
+            spellcheck={true}
+            onInput={(event) => {
+              const value = event.currentTarget.value;
+              // Text and cursor together: completion asks for the word once, not for each half of the change.
+              batch(() => {
+                const item = taken();
+                if (item !== undefined) item.setText(value);
+                else {
+                  edited();
+                  setText(value);
+                }
+                syncCursor();
+              });
+              resize();
+            }}
+            onFocus={() =>
+              batch(() => {
+                setFocused(true);
+                syncCursor();
+              })
+            }
+            onBlur={(event) => {
+              hold.track(event);
+              setFocused(false);
+            }}
+            onKeyUp={(event) => {
+              hold.track(event);
               syncCursor();
-            });
-            resize();
-          }}
-          onFocus={() =>
-            batch(() => {
-              setFocused(true);
-              syncCursor();
-            })
-          }
-          onBlur={(event) => {
-            hold.track(event);
-            setFocused(false);
-          }}
-          onKeyUp={(event) => {
-            hold.track(event);
-            syncCursor();
-          }}
-          onClick={syncCursor}
-          onSelect={syncCursor}
-          onKeyDown={onKeyDown}
-          onPaste={onPaste}
-        />
+            }}
+            onClick={syncCursor}
+            onSelect={syncCursor}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+          />
+        </div>
         <div class="composer-bar">
           <div class="composer-controls">
             <Each slot={ComposerControls} />
@@ -934,6 +1022,7 @@ function SuggestionRow(props: ComposerSuggestionProps) {
       <span class="menu-label">
         <Highlighted text={props.suggestion.label} matches={props.suggestion.matches ?? []} />
       </span>
+      <Show when={props.suggestion.hint}>{(hint) => <span class="completion-usage">{hint()}</span>}</Show>
       <Show when={props.suggestion.detail}>
         {(detail) => (
           <span class="menu-hint completion-detail">

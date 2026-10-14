@@ -1,0 +1,22 @@
+{
+  "name": "@lemma/skills",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The skills domain's contract: instructions the agent takes up on demand, and their channel",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}

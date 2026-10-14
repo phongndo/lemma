@@ -5,7 +5,7 @@ completions for the word being typed, and the buttons to send, steer, and
 stop. Adds the composer to `ComposerRegion`, and draws what plugins add to
 `ComposerNotices` (above the box), `ComposerControls` and `ComposerActions`
 (its toolbar), `ComposerFooter` (under it), `ComposerCompletions` (the
-completion menu), and `ComposerTakeovers` (a plugin's banner just above the box, which
+completion menu), `PromptCommands` (it runs those with `run`), and `ComposerTakeovers` (a plugin's banner just above the box, which
 then takes the text box and the send button, or its line above the box), all
 in [`@lemma/threads`](../contract/src/threads.ts). Its own
 pieces go through the same slots and parts: `composer.attach` in
@@ -87,4 +87,19 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   note saying so.
 - **Completions.** Enter or Tab with no suggestion in the menu yet, and a
   source still to answer, waits for it rather than sending the half-typed
-  word.
+  word. A source's `span: "line"` completes the prompt's first line from its
+  trigger, spaces and all, so a command and then its arguments complete in
+  turn; past the command's name, a line no source answers closes the menu,
+  so a prompt starting with a path is not in its way. While the cursor ends
+  the prompt, the rest of the active suggestion and its `hint` show muted after
+  it (with none active, the source's own `hint`), and Tab takes it. Enter picks a
+  suggestion and, for one marked `submit` (a command needing nothing more),
+  sends too; Tab only completes. A source's note stands in for "No matches",
+  so an empty menu can say why.
+- **Commands.** A prompt that names a `PromptCommands` command, or one of its
+  subcommands, with `run` (`/new`, `/mcp reconnect github`) runs that instead
+  of being sent: the box clears first (the command may go to another thread),
+  and gets the prompt back, with the error shown, when it fails. One still
+  missing a subcommand or a required argument says what it takes and stays. A
+  command whose tree runs nothing here is sent as typed, for the host to
+  answer.

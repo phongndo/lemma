@@ -8,6 +8,7 @@ import commandsCli from "@lemma/commands-cli";
 import commandsHost from "@lemma/commands-host";
 import commandsRegistry from "@lemma/commands-registry";
 import contextCompaction from "@lemma/context-compaction";
+import skillsFiles from "@lemma/skills-files";
 import contextProject from "@lemma/context-project";
 import credentialsFile from "@lemma/credentials-file";
 import devtoolsTrace from "@lemma/devtools-trace";
@@ -58,6 +59,7 @@ export const bundled: readonly Plugin[] = [
   agentLoop,
   contextCompaction,
   contextProject,
+  skillsFiles,
   workspaceLocal,
   workspaceSearchFff,
   workspaceCommands,
@@ -118,9 +120,11 @@ export const bundledWeb: readonly string[] = [
   "mcp.servers",
   "settings.page",
   "settings.plugins",
+  "skills.files",
   "threads.archived",
   "threads.client",
   "threads.composer",
+  "threads.prompt-commands",
   "threads.trajectory",
   "threads.transcript",
   "threads.view",

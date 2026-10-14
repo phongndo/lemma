@@ -9,6 +9,7 @@ import { SessionChannels } from "@lemma/sessions";
 import { matches, selectSpans, TraceChannels } from "@lemma/devtools";
 import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
+import { SkillChannels } from "@lemma/skills";
 import { fuzzy } from "@lemma/web/match";
 import { createIntegrationsMock } from "./mock-integrations.ts";
 import type {
@@ -223,6 +224,17 @@ const MODELS: ModelInfo[] = [
     maxTokens: 32_000,
     cost: { input, output, cacheRead: 0, cacheWrite: 0 },
   })),
+];
+
+/** The skills every directory has, as `skills.files` finds them. */
+const MOCK_SKILLS = [
+  { name: "review", description: "Review a diff for bugs before it merges", path: "/home/me/.lemma/skills/review/SKILL.md", scope: "user" as const },
+  {
+    name: "release",
+    description: "Cut a release: changelog, tag, and publish",
+    path: "/home/me/project/.agents/skills/release/SKILL.md",
+    scope: "project" as const,
+  },
 ];
 
 const MOCK_COMMANDS = [
@@ -1517,6 +1529,7 @@ export const createMockHost = (): Host => {
       currentBranch = name;
       return workspaceStatus(path);
     }),
+    serveCall("skills.files", SkillChannels.list, async () => ({ skills: MOCK_SKILLS })),
     serveCall("workspace.local", FileChannels.search, async ({ cwd, query, limit = 50, kind, within: folder }) => {
       await sleep(40);
       const within = folder?.replace(/\/+$/, "");

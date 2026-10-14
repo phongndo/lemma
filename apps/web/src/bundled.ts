@@ -6,6 +6,7 @@ import archivedPage from "@lemma/threads-archived";
 import chat from "@lemma/threads-transcript";
 import commands from "@lemma/commands-client";
 import composer from "@lemma/threads-composer";
+import promptCommands from "@lemma/threads-prompt-commands";
 import connection from "@lemma/frame-connection";
 import compaction from "@lemma/context-compaction/web";
 import diagrams from "@lemma/look-diagrams";
@@ -21,6 +22,7 @@ import keymap from "@lemma/actions-keymap";
 import keysPage from "@lemma/actions-keys-page";
 import kit from "@lemma/look-kit";
 import mcp from "@lemma/mcp-servers/web";
+import skills from "@lemma/skills-files/web";
 import modelPicker from "@lemma/llm-model-picker";
 import models from "@lemma/llm-client";
 import pages from "@lemma/frame-pages";
@@ -81,7 +83,9 @@ export const bundled: readonly Plugin[] = [
   search,
   ask,
   composer,
+  promptCommands,
   fileMentions,
+  skills,
   modelPicker,
   compaction,
   workspaceBar,

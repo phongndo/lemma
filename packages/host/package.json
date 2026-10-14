@@ -42,6 +42,8 @@
     "@lemma/sessions": "workspace:*",
     "@lemma/sessions-cli": "workspace:*",
     "@lemma/sessions-files": "workspace:*",
+    "@lemma/skills": "workspace:*",
+    "@lemma/skills-files": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/tools-ask": "workspace:*",
     "@lemma/tools-bash": "workspace:*",

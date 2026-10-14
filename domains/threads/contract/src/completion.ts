@@ -78,3 +78,18 @@ export const applySuggestion = (
   // After the space either way: the one added, or the one that was there.
   return { text: text.slice(0, match.start) + spaced + after, cursor: match.start + insert.length + 1 };
 };
+
+/**
+ * The command line at the cursor: the prompt starts with one of `triggers` (`/`), right before a word, and the cursor
+ * is past it on the first line. Unlike `findTrigger`'s word it runs across spaces, so a source completes a command and
+ * then its arguments (`/thinking hi`); a pick replaces it from the trigger to the end of the word at the cursor.
+ */
+export const findCommandLine = (text: string, cursor: number, triggers: readonly string[]): TriggerMatch | undefined => {
+  if (cursor < 0 || cursor > text.length || text.lastIndexOf("\n", cursor - 1) !== -1) return undefined;
+  const trigger = [...triggers]
+    .filter((candidate) => candidate !== "")
+    .sort((a, b) => b.length - a.length)
+    .find((candidate) => text.startsWith(candidate) && cursor >= candidate.length);
+  if (trigger === undefined || /\s/.test(text[trigger.length] ?? "")) return undefined;
+  return { trigger, query: text.slice(trigger.length, cursor), quoted: false, start: 0, end: wordEnd(text, cursor) };
+};
