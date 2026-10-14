@@ -2,6 +2,7 @@ import { Client, SdkHttpError, StreamableHTTPClientTransport } from "@modelconte
 import type { Tool as McpTool } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { McpServerConfig } from "@lemma/mcp";
+import { isImageAddress } from "./form.ts";
 import type { CallResult } from "./tools.ts";
 
 export type { McpTool };
@@ -41,6 +42,8 @@ export class Connection {
   server: { readonly name: string; readonly version?: string; readonly title?: string } | undefined;
   protocolVersion: string | undefined;
   instructions: string | undefined;
+  /** The icon the server declares, an `https:` or `data:` image; one for a theme only when it has no other. */
+  icon: string | undefined;
   private client: Client | undefined;
   private connecting: Promise<Client> | undefined;
   /** Stops the connect under way: its probe, its handshake, and a local server's process. */
@@ -146,6 +149,8 @@ export class Connection {
       if (this.closing) throw new Error("The server was stopped");
       const info = client.getServerVersion();
       this.server = info === undefined ? undefined : { name: info.name, version: info.version, ...(info.title === undefined ? {} : { title: info.title }) };
+      const icons = (info?.icons ?? []).filter((candidate) => isImageAddress(candidate.src));
+      this.icon = (icons.find((candidate) => candidate.theme === undefined) ?? icons[0])?.src;
       this.protocolVersion = client.getNegotiatedProtocolVersion();
       this.instructions = client.getInstructions();
       this.client = client;
