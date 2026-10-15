@@ -168,7 +168,16 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       const registries = yield* Registries;
       // Its own sections, beside any other plugin's.
       yield* owner.add(PromptSections, baseSection(config.systemPrompt), { phase: "base" });
-      yield* owner.add(PromptSections, environmentSection(config.cli, options.platform ?? `${os.platform()} (${os.arch()})`), { phase: "environment" });
+      yield* owner.add(
+        PromptSections,
+        environmentSection(config.cli, options.platform ?? `${os.platform()} (${os.arch()})`, (ref) =>
+          llm.model(ref).pipe(
+            Effect.map((model): string | undefined => model.name),
+            Effect.catch(() => Effect.succeed(undefined)),
+          ),
+        ),
+        { phase: "environment" },
+      );
       /**
        * Each section's text for the request, as part of its plugin's lifetime: one whose plugin a reload replaced since it
        * was listed is found again by its id, and one whose plugin has left is left out. Empty text (or none) is no section.
