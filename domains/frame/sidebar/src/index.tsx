@@ -1,20 +1,21 @@
 import { For, Show, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
 import { NewThreadRoute } from "@lemma/sessions";
-import { stepFor, withKeys } from "@lemma/web/keys";
+import { withKeys } from "@lemma/web/keys";
 import { loadJson, save } from "@lemma/web/storage";
 import { Actions, shownKeys } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
 import { createNow } from "@lemma/web/now";
-import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
+import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion, TopRegion } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
 import { Router, Slots, WebPlugins, defineWebPlugin, Each } from "@lemma/web";
 import type { Action } from "@lemma/actions";
 import type { ThreadsService, SidebarRowProps } from "@lemma/threads";
 import type { RouterService, SlotsService, WebPluginsService } from "@lemma/web";
-import { Popover, SidebarIcon, XIcon } from "@lemma/look";
+import { PlusIcon, Popover, SidebarIcon, XIcon } from "@lemma/look";
 import { afterClose, neighborOf, pruned, seedOpen, shownThreads, withClosed, withOpened } from "./open.ts";
 import type { Shown } from "./open.ts";
+import { Effect, Schema } from "effect";
 import styles from "./sidebar.css?inline";
 
 const OPEN_KEY = "lemma.frame.sidebar.open";
@@ -125,44 +126,65 @@ interface Deps {
   readonly close: (id: string) => void;
 }
 
+/** A row of the open threads, as the `sidebar.row` part draws it, for either layout. */
+const threadRow = (deps: Deps, onPick: () => void) => {
+  const { threads, slots } = deps;
+  const actionsFor = (session: SessionInfo) => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
+  return (session: SessionInfo, closable: boolean) => (
+    <li>
+      <SidebarRow
+        session={session}
+        active={threads.activeId() === session.id}
+        running={threads.running().includes(session.id)}
+        unread={deps.unread().has(session.id)}
+        now={deps.now()}
+        href={threads.href(session.id)}
+        select={() => {
+          void threads.select(session.id);
+          onPick();
+        }}
+        rename={(title) => void threads.rename(session.id, title)}
+        actions={actionsFor(session)}
+        close={closable ? () => deps.close(session.id) : undefined}
+      />
+    </li>
+  );
+};
+
+/** Moves focus between rows with `keys`: [back, forward]. */
+const rowKeys =
+  (keys: readonly [string, string]) =>
+  (event: KeyboardEvent): void => {
+    const step = event.key === keys[0] ? -1 : event.key === keys[1] ? 1 : 0;
+    if (step === 0) return;
+    const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("[data-session-row]")];
+    const index = rows.indexOf(document.activeElement as HTMLElement);
+    if (index === -1) return;
+    event.preventDefault();
+    rows[Math.max(0, Math.min(rows.length - 1, index + step))]?.focus();
+  };
+
+/** The row of a thread not yet sent, while its page shows. */
+const DraftRow = () => (
+  <li>
+    <div class="session-row active">
+      <span class="session-open">
+        <span class="session-title untitled">Thread</span>
+      </span>
+    </div>
+  </li>
+);
+
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
   const { threads, slots, router, webPlugins, layout } = props.deps;
   const toggleKeys = () => {
     const action = slots.get(Actions, "shell.toggle-sidebar");
     return action === undefined ? undefined : shownKeys(action, webPlugins.list());
   };
-  const actionsFor = (session: SessionInfo) => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
-  const onKey = (event: KeyboardEvent) => {
-    // Arrow keys move between rows.
-    const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("[data-session-row]")];
-    const index = rows.indexOf(document.activeElement as HTMLElement);
-    const next = stepFor(event.key, index, rows.length);
-    if (next === undefined || index === -1) return;
-    event.preventDefault();
-    rows[next]?.focus();
-  };
-  const row = (session: SessionInfo, closable: boolean) => (
-    <li>
-      <SidebarRow
-        session={session}
-        active={threads.activeId() === session.id}
-        running={threads.running().includes(session.id)}
-        unread={props.deps.unread().has(session.id)}
-        now={props.deps.now()}
-        href={threads.href(session.id)}
-        select={() => {
-          void threads.select(session.id);
-          props.onPick();
-        }}
-        rename={(title) => void threads.rename(session.id, title)}
-        actions={actionsFor(session)}
-        close={closable ? () => props.deps.close(session.id) : undefined}
-      />
-    </li>
-  );
+  const row = threadRow(props.deps, props.onPick);
   const drafting = () => threads.activeId() === undefined && router.matchOf(NewThreadRoute) !== undefined;
   return (
-    <nav class="sidebar" aria-label="Open threads" onKeyDown={onKey}>
+    <nav class="sidebar" aria-label="Open threads" onKeyDown={rowKeys(["ArrowUp", "ArrowDown"])}>
       <div class="sidebar-head">
         <button class="icon-button" aria-label="Toggle sidebar" data-tip={withKeys("Toggle sidebar", toggleKeys())} onClick={() => layout.toggleSidebar()}>
           <SidebarIcon />
@@ -181,13 +203,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
         <ul class="session-list">
           <For each={props.deps.shown().open}>{(session) => row(session, true)}</For>
           <Show when={drafting()}>
-            <li>
-              <div class="session-row active">
-                <span class="session-open">
-                  <span class="session-title untitled">Thread</span>
-                </span>
-              </div>
-            </li>
+            <DraftRow />
           </Show>
         </ul>
       </div>
@@ -198,12 +214,51 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   );
 }
 
+/** The open threads as tabs across the window's top, then a + for a new one; the sidebar's foot items sit at its end. */
+function TabStrip(props: { deps: Deps }) {
+  const { threads, router } = props.deps;
+  const pick = () => undefined;
+  const row = threadRow(props.deps, pick);
+  const drafting = () => threads.activeId() === undefined && router.matchOf(NewThreadRoute) !== undefined;
+  return (
+    <nav class="tab-strip" aria-label="Open threads">
+      <ul class="tab-list" onKeyDown={rowKeys(["ArrowLeft", "ArrowRight"])}>
+        <For each={props.deps.shown().pinned}>{(session) => row(session, false)}</For>
+        <For each={props.deps.shown().open}>{(session) => row(session, true)}</For>
+        <Show when={drafting()}>
+          <DraftRow />
+        </Show>
+      </ul>
+      <button class="icon-button tab-new" aria-label="New thread" data-tip="New thread" onClick={() => threads.newThread()}>
+        <PlusIcon />
+      </button>
+      <div class="sidebar-actions">
+        <Each slot={SidebarActions} props={{ onPick: pick }} />
+      </div>
+      <span class="tab-spacer" />
+      <div class="tab-foot">
+        <Each slot={SidebarFooter} props={{ onPick: pick }} />
+      </div>
+    </nav>
+  );
+}
+
+/** Where the open threads show. */
+const SidebarConfig = Schema.Struct({
+  tabs: Schema.Literals(["top", "side"])
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => "top" as const)))
+    .annotate({
+      title: "Tabs",
+      description: "Show the open threads as tabs across the top of the window, or down a sidebar beside the thread.",
+    }),
+});
+
 const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
 /**
- * The threads kept open, as a browser keeps tabs: each with a mark for a
- * running turn or one that finished unseen, under the sidebar's toggle. New
- * threads and search are commands (the palette, their keys). Opening a
+ * The threads kept open, as a browser keeps tabs: across the window's top
+ * (the default) or down the sidebar, each with a mark for a running turn or
+ * one that finished unseen. Search is a command (the palette, its keys). Opening a
  * thread adds it, closing it only takes it out of the list; pinned ones stay,
  * and one still running stays in sight. Everything else about a thread is in
  * its page and in the palette.
@@ -211,8 +266,9 @@ const isStrings = (value: unknown): value is string[] => Array.isArray(value) &&
 export default defineWebPlugin({
   id: "frame.sidebar",
   styles,
+  config: SidebarConfig,
   requires: { threads: Threads, slots: Slots, router: Router, webPlugins: WebPlugins, layout: Layout },
-  setup: ({ threads, slots, router, webPlugins, layout }) => {
+  setup: ({ threads, slots, router, webPlugins, layout }, plugin) => {
     // Relative times refresh once a minute, for a row part that shows them.
     const now = createNow(60_000);
     const stored = loadJson<string[] | undefined>(OPEN_KEY, undefined, (value): value is string[] | undefined => isStrings(value));
@@ -267,7 +323,9 @@ export default defineWebPlugin({
     };
 
     const deps: Deps = { threads, slots, router, webPlugins, layout, now, shown, unread, close };
-    slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
+    if (plugin.config.tabs === "side")
+      slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
+    else slots.add(TopRegion, { id: "tabs", phase: "default", component: () => <TabStrip deps={deps} /> });
     slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: ThreadRow });
 
     // Moving through and closing the open threads, from the keyboard and the palette; Settings › Keyboard rebinds these.
@@ -276,8 +334,8 @@ export default defineWebPlugin({
       if (next !== undefined) void threads.select(next);
     };
     const add = (id: string, order: number, action: Omit<Action, "category">) => slots.add(Actions, { id, order, category: "Thread", ...action });
-    add("sidebar.next-thread", 20, { title: "Next open thread", keys: "mod+alt+arrowdown", whileTyping: true, run: () => move(1) });
-    add("sidebar.previous-thread", 21, { title: "Previous open thread", keys: "mod+alt+arrowup", whileTyping: true, run: () => move(-1) });
+    add("sidebar.next-thread", 20, { title: "Next open thread", keys: ["mod+shift+]", "mod+alt+arrowdown"], whileTyping: true, run: () => move(1) });
+    add("sidebar.previous-thread", 21, { title: "Previous open thread", keys: ["mod+shift+[", "mod+alt+arrowup"], whileTyping: true, run: () => move(-1) });
     add("sidebar.close-thread", 22, {
       title: "Close thread",
       detail: "Takes it out of the open threads; the thread stays",

@@ -19,8 +19,8 @@ export const separate = async (): Promise<string> => {
   await fresh.waitForSelector(".settings", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("connecting the first provider left settings open"));
   await fresh.waitForSelector("textarea");
   assert.equal(await fresh.locator(".composer-callout").count(), 0, "the no-provider notice stayed after connecting one");
-  const connection = fresh.locator(".sidebar-foot .connection");
-  assert.ok((await connection.boundingBox())!.width < 30, "the footer connection should be a dot, not text");
+  const connection = fresh.locator(".main-head .connection");
+  assert.ok((await connection.boundingBox())!.width < 30, "the header's connection should be a dot, not text");
   assert.equal((await connection.textContent())?.trim(), "Connected", "the dot's live region must carry its status as text, which is announced");
   // Reload is its own plugin: an action (listed in the palette, keys bindable) that its footer button, right of the dot, runs.
   assert.ok(
@@ -30,10 +30,21 @@ export const separate = async (): Promise<string> => {
     }),
     "reload is not an action",
   );
-  const [dot, reloadButton] = await Promise.all([connection.boundingBox(), fresh.getByRole("button", { name: "Reload Lemma", exact: true }).boundingBox()]);
-  assert.ok(dot!.x < reloadButton!.x, "the connection's dot should sit left of the reload button");
-  await Promise.all([fresh.waitForEvent("load"), fresh.getByRole("button", { name: "Reload Lemma", exact: true }).click()]);
-  await fresh.waitForSelector(".sidebar-foot .connection-connected");
+  // The dot is the open thread's: in its header, just before the thread's menu.
+  const menu = fresh.locator(".main-head [aria-label='Thread actions']");
+  if ((await menu.count()) > 0) {
+    const [dot, menuButton] = await Promise.all([connection.boundingBox(), menu.boundingBox()]);
+    assert.ok(dot!.x < menuButton!.x, "the connection's dot should sit left of the thread's menu");
+  }
+  // Reload is a command (the palette, its keys): run it as one is.
+  await Promise.all([
+    fresh.waitForEvent("load"),
+    fresh.evaluate(async () => {
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      (window as any).lemma.slots().get(Actions, "reload.app")?.run();
+    }),
+  ]);
+  await fresh.waitForSelector(".main-head .connection-connected");
   // What the host's reload changed is reported on the page it reloads to.
   await fresh
     .getByText(/^Reloaded: /)

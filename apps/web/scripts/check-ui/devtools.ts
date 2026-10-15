@@ -14,7 +14,8 @@ export const devtools = async (): Promise<string> => {
   });
   await page.keyboard.press("ControlOrMeta+Shift+d");
   await page.waitForSelector(".devtools");
-  const appHeight = () => page.evaluate(() => document.querySelector(".app")!.getBoundingClientRect().height);
+  // Where the app ends: the window's bottom with nothing docked under it (a bar across the top leaves its height as it is).
+  const appHeight = () => page.evaluate(() => document.querySelector(".app")!.getBoundingClientRect().bottom);
   // On every page, and across a reload: what covers the app (settings) leaves what is docked under it in view.
   const dockOnTop = () =>
     page.evaluate(() => {

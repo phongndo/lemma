@@ -2,7 +2,7 @@ import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-j
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
-import { sessionTitle, ComposerRegion, ThreadActions, ThreadHeader, Threads, Views } from "@lemma/threads";
+import { sessionTitle, ComposerRegion, ThreadActions, ThreadCorner, ThreadHeader, Threads, Views } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { ActionMenu, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
@@ -205,7 +205,7 @@ export default defineWebPlugin({
     const header = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) => slots.add(ThreadHeader, { id, order, side, component });
     // While the sidebar shows, its own head has the toggle.
     header("thread.sidebar-toggle", 0, "start", () => (
-      <Show when={!layout.sidebarShown()}>
+      <Show when={layout.sidebarHidden()}>
         <button class="icon-button sidebar-toggle" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
           <SidebarIcon />
         </button>
@@ -337,6 +337,9 @@ export default defineWebPlugin({
               <First slot={ComposerRegion} />
             </div>
           </Show>
+          <div class="thread-corner">
+            <Each slot={ThreadCorner} />
+          </div>
         </main>
       );
     }

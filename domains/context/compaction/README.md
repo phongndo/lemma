@@ -16,9 +16,9 @@ divider. Requires `Llm`.
 | `keepRecent` | `20000` | Tokens of the latest conversation kept word for word (at most 30% of the window)  |
 | `model`      | unset   | The model that writes summaries (`provider/model`); the turn's model when unset   |
 
-- **The meter.** Its web half adds a ring to the composer's toolbar
-  (`ComposerControls`), beside the model and reasoning pickers, so how full the
-  open thread's context is stays in view. It measures as the estimate below
+- **The meter.** Its web half adds a ring to the thread page's bottom right
+  corner (`ThreadCorner`), so how full the open thread's context is stays in
+  view. It measures as the estimate below
   does (`measuredTokens`), against the selected model's window, since that is
   the model the next prompt goes to, and reads `at` from the same row. It turns
   the warning color within 10 points of `at`, and the error color past the

@@ -17,7 +17,7 @@
 
 /* In a desktop window: the head shares the title bar with the window's controls, and drags it. */
 [data-titlebar] .sidebar-head {
-  height: 48px;
+  height: 40px;
   padding-left: max(8px, var(--titlebar-inset, 0px));
   app-region: drag;
 }
@@ -186,4 +186,68 @@
   align-items: center;
   gap: 2px;
   padding: 8px 12px 8px 8px;
+}
+
+/* Tabs across the window's top: the same rows, side by side. */
+.tab-strip {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 40px;
+  padding: 0 8px;
+  background: var(--bg-sunk);
+  border-bottom: 1px solid var(--border);
+}
+
+/* In a desktop window it is the title bar: beside the window's controls, and its empty space drags the window. */
+[data-titlebar] .tab-strip {
+  padding-left: max(8px, var(--titlebar-inset, 0px));
+  app-region: drag;
+}
+
+[data-titlebar] .tab-strip :is(button, a, input, li, .tab-foot > *) {
+  app-region: no-drag;
+}
+
+.tab-list {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* Each tab as wide as a title needs up to 200px, narrowing to 96px before the list scrolls. */
+.tab-list > li {
+  flex: 0 1 auto;
+  width: 200px;
+  min-width: 96px;
+}
+
+.tab-strip .session-rename {
+  height: 28px;
+}
+
+.tab-new {
+  width: 28px;
+  height: 28px;
+}
+
+.tab-spacer {
+  flex: 1;
+  min-width: 16px;
+  align-self: stretch;
+}
+
+.tab-foot {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
 }

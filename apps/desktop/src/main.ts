@@ -219,10 +219,10 @@ const openWindow = (url: string) => {
     icon,
     show: false,
     // No native title bar: the controls overlay the page, which reads where (Window Controls Overlay) and makes
-    // its own 48px top bars the title bar; centered in one at y 17.
+    // its own 40px top bar (the tabs, or the sidebar's head) the title bar; centered in it at y 13.
     titleBarStyle: "hidden",
     titleBarOverlay: true,
-    trafficLightPosition: { x: 17, y: 17 },
+    trafficLightPosition: { x: 17, y: 13 },
     webPreferences: {
       contextIsolation: true,
       sandbox: true,

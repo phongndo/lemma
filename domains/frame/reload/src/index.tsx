@@ -1,10 +1,8 @@
-import { Show, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { describeReload } from "@lemma/contracts";
 import { Actions } from "@lemma/actions";
-import { SidebarFooter } from "@lemma/frame";
 import { Client, Notify, Slots, defineWebPlugin } from "@lemma/web";
-import { RefreshIcon, Spinner } from "@lemma/look";
-import styles from "./reload.css?inline";
+import { RefreshIcon } from "@lemma/look";
 
 const ACTION = "reload.app";
 /** What a host reload changed, for the page it reloads to show: the page that asked is gone by then. Per tab. */
@@ -34,12 +32,10 @@ const takeReport = (): string | undefined => {
 
 /**
  * Loads what changed without leaving the app: the host first (the desktop app restarts one it started; any other
- * re-reads its config and plugin files), then the page. An action, so the palette lists it and keys can run it, and a
- * button in the sidebar's footer beside the connection's dot.
+ * re-reads its config and plugin files), then the page. An action, so the palette lists it and keys can run it.
  */
 export default defineWebPlugin({
   id: "frame.reload",
-  styles,
   requires: { client: Client, slots: Slots, notify: Notify },
   setup: ({ client, slots, notify }) => {
     const left = takeReport();
@@ -106,25 +102,6 @@ export default defineWebPlugin({
       keywords: ["refresh", "restart", "hot reload", "plugins", "config"],
       icon: RefreshIcon,
       run: () => void reload(),
-    });
-    slots.add(SidebarFooter, {
-      id: "reload",
-      // After the connection's dot (100), which also pushes both to the right.
-      order: 110,
-      component: () => (
-        <button
-          class="icon-button reload-button"
-          aria-label="Reload Lemma"
-          aria-busy={reloading()}
-          disabled={reloading()}
-          data-tip={`Reload: ${detail.toLowerCase()}`}
-          onClick={() => slots.get(Actions, ACTION)?.run()}
-        >
-          <Show when={reloading()} fallback={<RefreshIcon />}>
-            <Spinner />
-          </Show>
-        </button>
-      ),
     });
   },
 });

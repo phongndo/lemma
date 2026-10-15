@@ -1,7 +1,7 @@
 import { Show, createSignal, onCleanup } from "solid-js";
 import { load, save } from "@lemma/web/storage";
 import { Actions } from "@lemma/actions";
-import { Docks, Layers, Layout, MainRegion, SidebarRegion } from "@lemma/frame";
+import { Docks, Layers, Layout, MainRegion, SidebarRegion, TopRegion } from "@lemma/frame";
 import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
 import styles from "./shell.css?inline";
@@ -24,10 +24,10 @@ const controlsOverlay = (navigator as { windowControlsOverlay?: ControlsOverlay 
 const clampWidth = (width: number) => Math.round(Math.max(MIN_WIDTH, Math.min(width, MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - MIN_MAIN))));
 
 /**
- * The page's frame: the sidebar region (resizable, collapsible, a drawer on
- * narrow screens), the main region, and every layer over them. It fills the
- * `root` slot; each region is whatever plugin fills it, so any can be left
- * empty or replaced.
+ * The page's frame: a bar across the top, the sidebar region (resizable,
+ * collapsible, a drawer on narrow screens), the main region, and every layer
+ * over them. It fills the `root` slot; each region is whatever plugin fills
+ * it, so any can be left empty or replaced.
  */
 export default defineWebPlugin({
   id: "frame.shell",
@@ -45,7 +45,7 @@ export default defineWebPlugin({
     const narrowQuery = window.matchMedia(NARROW);
     const [narrow, setNarrow] = createSignal(narrowQuery.matches);
     plugin.listen(narrowQuery, "change", () => setNarrow(narrowQuery.matches));
-    const sidebarShown = () => slots.first(SidebarRegion) !== undefined && (narrow() ? drawer() : !collapsed());
+    const sidebarHidden = () => slots.first(SidebarRegion) !== undefined && (narrow() ? !drawer() : collapsed());
     const width = () => {
       viewport();
       return clampWidth(chosen());
@@ -109,13 +109,22 @@ export default defineWebPlugin({
       if (controlsOverlay !== undefined) onCleanup(plugin.listen(controlsOverlay, "geometrychange", onGeometry));
       const sidebar = () => slots.first(SidebarRegion);
       const main = () => slots.first(MainRegion);
+      const top = () => slots.first(TopRegion);
       return (
         <div class="frame">
+          <Show when={top()} keyed>
+            {(region) => (
+              // A bar across the top takes the title bar, so what is under it no longer makes room for the window's controls.
+              <div class="top-slot" data-titlebar={titlebar() ? "" : undefined}>
+                <Contained slot={TopRegion} item={region} component={region.component} />
+              </div>
+            )}
+          </Show>
           <div
             class="app"
             classList={{ "drawer-open": drawer(), "sidebar-collapsed": collapsed() || sidebar() === undefined, resizing: resizing() }}
             style={{ "--sidebar": `${width()}px` }}
-            data-titlebar={titlebar() ? "" : undefined}
+            data-titlebar={titlebar() && top() === undefined ? "" : undefined}
           >
             <Show when={sidebar()} keyed>
               {(region) => (
@@ -152,6 +161,6 @@ export default defineWebPlugin({
       );
     }
     slots.add(Root, { id: "shell", phase: "default", component: Shell });
-    return { layout: { sidebarShown, toggleSidebar, closeDrawer } };
+    return { layout: { sidebarHidden, toggleSidebar, closeDrawer } };
   },
 });

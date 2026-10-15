@@ -122,3 +122,18 @@
   font: inherit;
   font-weight: 600;
 }
+
+/* The page's bottom right corner, over the view: what plugins add (the context meter). */
+.thread-corner {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.thread-corner:empty {
+  display: none;
+}

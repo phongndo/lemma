@@ -1407,6 +1407,9 @@ importers:
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
       solid-js:
         specifier: 1.9.17
         version: 1.9.17

@@ -9,6 +9,18 @@
   height: 100%;
 }
 
+.top-slot {
+  flex: none;
+  display: flex;
+  min-width: 0;
+}
+
+/* In a desktop window the bar is the title bar: as tall as it, beside the window's controls. */
+.top-slot[data-titlebar] {
+  --titlebar-inset: env(titlebar-area-x, 0px);
+  min-height: env(titlebar-area-height, 0px);
+}
+
 .app {
   position: relative;
   display: flex;

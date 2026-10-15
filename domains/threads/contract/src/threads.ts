@@ -288,6 +288,9 @@ export interface ThreadHeaderItem extends Region {
 /** The session's header: the sidebar toggle, title, running chip, and the thread's ⋯ menu are its default items. */
 export const ThreadHeader = defineSlot<ThreadHeaderItem>("thread.header");
 
+/** The thread page's bottom right corner, over the view and beside the composer, in order: the context meter. */
+export const ThreadCorner = defineSlot<Region>("thread.corner");
+
 /** Above the composer box: the connection notice, the provider callout. */
 export const ComposerNotices = defineSlot<Region>("composer.notices");
 

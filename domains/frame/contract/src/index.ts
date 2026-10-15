@@ -12,8 +12,8 @@ export interface DialogsService {
 export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-web/Dialogs") {}
 
 export interface LayoutService {
-  /** The sidebar is in view: open beside the main region, or open as a drawer on a narrow screen. */
-  readonly sidebarShown: Accessor<boolean>;
+  /** There is a sidebar, and it is out of view: collapsed, or a closed drawer on a narrow screen. */
+  readonly sidebarHidden: Accessor<boolean>;
   readonly toggleSidebar: () => void;
   /** On a narrow screen the sidebar is a drawer; picking something in it closes it. */
   readonly closeDrawer: () => void;
@@ -33,6 +33,13 @@ export const Docks = defineSlot<Region>("docks");
 export const SidebarRegion = defineSlot<Region<{ readonly onPick: () => void }>>("sidebar", { shows: "first" });
 
 export const MainRegion = defineSlot<Region>("main", { shows: "first" });
+
+/**
+ * A bar across the window's top, over the sidebar and the main region: horizontal tabs. In a desktop window it is the
+ * title bar, beside the window's controls (`--titlebar-inset` is their width); what it draws drags the window unless
+ * it is a control.
+ */
+export const TopRegion = defineSlot<Region>("top", { shows: "first" });
 
 /** Buttons at the end of the sidebar's head, after its toggle; it has none by default. `onPick` closes the drawer on narrow screens. */
 export const SidebarActions = defineSlot<Region<{ readonly onPick: () => void }>>("sidebar.actions");

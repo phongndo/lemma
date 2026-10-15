@@ -7,16 +7,27 @@ import { boot, checkPlugin, expose, root, settled, switchTo, url } from "./share
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
 export const parts = async (): Promise<string> => {
   const { page, errors, expectNoErrors } = await boot();
-  // A sidebar collapsed is remembered apart from the sections folded in it: it opens again after a reload, and draws.
+  // The open threads are tabs across the top by default, and down the sidebar when frame.sidebar's `tabs` says so.
+  await page.waitForSelector(".tab-strip", { timeout: 5_000 }).catch(() => assert.fail("the open threads did not show as tabs across the top"));
+  const tabsAt = (tabs: "top" | "side") =>
+    page.evaluate(async (where) => {
+      const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      await (await (window as any).lemma.service(Client)).configure({ "frame.sidebar": { values: { tabs: where } } });
+    }, tabs);
+  // A sidebar collapsed is remembered across a reload: once the threads move to it, it opens again and draws.
   await page.evaluate(() => localStorage.setItem("lemma.sidebar.collapsed", "1"));
   await page.reload();
   await settled(page);
   await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
+  await tabsAt("side");
+  await page.waitForSelector(".tab-strip", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("the open threads did not move to the sidebar"));
   await page.keyboard.press("ControlOrMeta+b");
   await page
     .waitForSelector(".sidebar .sidebar-head", { timeout: 5_000 })
     .catch(() => assert.fail("the sidebar did not draw after a reload with it collapsed"));
   expectNoErrors("a reload with the sidebar collapsed");
+  await tabsAt("top");
+  await page.waitForSelector(".tab-strip", { timeout: 5_000 }).catch(() => assert.fail("the open threads did not move back to the top"));
   await checkPlugin(page);
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
@@ -697,7 +708,7 @@ export const parts = async (): Promise<string> => {
   await page.waitForSelector(".page-missing >> text=This page failed");
   await page.waitForSelector(".page-missing >> text=check boom");
   await page.waitForSelector(".toast >> text=match the same addresses");
-  assert(await page.locator(".sidebar").isVisible(), "a failing page took the sidebar with it");
+  assert(await page.locator(".tab-strip").isVisible(), "a failing page took the tabs with it");
   // Readers run again as the router takes the address in (all at once): once it has, their count is final.
   await expose(page, "Router");
   const reruns = async (navigate: string) => {

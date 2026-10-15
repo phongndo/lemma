@@ -2,8 +2,7 @@ import { Show } from "solid-js";
 import type { Accessor } from "solid-js";
 import type { ConnectionStatus } from "@lemma/client";
 import { createNow } from "@lemma/web/now";
-import { SidebarFooter } from "@lemma/frame";
-import { ComposerNotices } from "@lemma/threads";
+import { ComposerNotices, ThreadHeader } from "@lemma/threads";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { AlertIcon, CopyButton } from "@lemma/look";
 import styles from "./connection.css?inline";
@@ -62,7 +61,7 @@ function ConnectionNotice(props: { status: Accessor<ConnectionStatus>; now: Acce
   );
 }
 
-/** How the connection to the host is doing: a dot in the sidebar (its label is the tooltip), a notice above the composer while it is down. */
+/** How the connection to the host is doing: a dot in the thread's header, beside its menu (its label is the tooltip), and a notice above the composer while it is down. */
 export default defineWebPlugin({
   id: "frame.connection",
   styles,
@@ -70,15 +69,11 @@ export default defineWebPlugin({
   setup: ({ client, slots }) => {
     // Ticks only while a retry is being counted down to.
     const now = createNow(1_000, () => client.status().retryAt !== undefined);
-    slots.add(SidebarFooter, {
+    slots.add(ThreadHeader, {
       id: "connection",
-      order: 100,
-      component: () => (
-        <>
-          <span class="spacer" />
-          <ConnectionBadge status={client.status()} now={now} compact />
-        </>
-      ),
+      order: 18,
+      side: "end",
+      component: () => <ConnectionBadge status={client.status()} now={now} compact />,
     });
     slots.add(ComposerNotices, { id: "connection", component: () => <ConnectionNotice status={client.status} now={now} /> });
   },
