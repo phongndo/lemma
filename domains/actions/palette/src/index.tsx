@@ -18,7 +18,7 @@ import { Workspace } from "@lemma/workspace/web";
 import type { PaletteItem, PaletteSource } from "@lemma/actions";
 import type { DialogsService } from "@lemma/frame";
 import type { InteractionsService, SlotsService } from "@lemma/web";
-import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, KeyIcon, PuzzleIcon, RefreshIcon, Spinner } from "@lemma/look";
+import { ChatIcon, CheckIcon, ChevronIcon, CommandIcon, FolderIcon, GitBranchIcon, KeyIcon, PuzzleIcon, RefreshIcon, SearchIcon, Spinner } from "@lemma/look";
 import styles from "./palette.css?inline";
 
 const DIALOG = "palette";
@@ -31,6 +31,8 @@ interface Deps {
   readonly slots: SlotsService;
   /** An action to ask for at once when the palette opens: its keys were pressed and it needs a value. Taken once read. */
   readonly takeRequested: () => string | undefined;
+  /** What the search starts with when the palette opens (a source's prefix). Taken once read. */
+  readonly takeQuery: () => string | undefined;
   /** The keys that open it, and close it while it shows: its own, or what the user bound it to. Reactive. */
   readonly closeKeys: () => readonly string[];
 }
@@ -322,6 +324,8 @@ function Palette(props: { deps: Deps }) {
 
   onMount(() => {
     const requested = props.deps.takeRequested();
+    const start = props.deps.takeQuery();
+    if (start !== undefined) setQuery(start);
     const item = requested === undefined ? undefined : pool(undefined).find((candidate) => candidate.key === `action:${requested}`);
     if (item?.input !== undefined) setLocal(askFor(item, item.input()));
     queueMicrotask(() => input.focus());
@@ -507,6 +511,7 @@ export default defineWebPlugin({
   setup: (services) => {
     const { client, threads, workspace, commands, dialogs, interactions, webPlugins, slots } = services;
     let requested: string | undefined;
+    let startQuery: string | undefined;
     const deps: Deps = {
       interactions,
       dialogs,
@@ -515,6 +520,11 @@ export default defineWebPlugin({
         const id = requested;
         requested = undefined;
         return id;
+      },
+      takeQuery: () => {
+        const start = startQuery;
+        startQuery = undefined;
+        return start;
       },
       closeKeys: () => keysFor(ActionIds.palette, CLOSE_KEYS, overridesFrom(webPlugins.list())),
     };
@@ -612,6 +622,20 @@ export default defineWebPlugin({
           dialogs.open(undefined);
           queueMicrotask(() => dialogs.open(DIALOG));
         } else dialogs.open(dialogs.current() === DIALOG ? undefined : DIALOG);
+      },
+    });
+    slots.add(Actions, {
+      id: ActionIds.searchThreads,
+      title: "Search threads",
+      category: "Thread",
+      icon: SearchIcon,
+      keys: "mod+p",
+      global: true,
+      when: () => interactions.open().length === 0,
+      run: () => {
+        startQuery = "@";
+        dialogs.open(undefined);
+        queueMicrotask(() => dialogs.open(DIALOG));
       },
     });
   },

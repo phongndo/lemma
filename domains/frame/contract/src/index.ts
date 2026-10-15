@@ -12,6 +12,8 @@ export interface DialogsService {
 export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-web/Dialogs") {}
 
 export interface LayoutService {
+  /** The sidebar is in view: open beside the main region, or open as a drawer on a narrow screen. */
+  readonly sidebarShown: Accessor<boolean>;
   readonly toggleSidebar: () => void;
   /** On a narrow screen the sidebar is a drawer; picking something in it closes it. */
   readonly closeDrawer: () => void;
@@ -32,7 +34,7 @@ export const SidebarRegion = defineSlot<Region<{ readonly onPick: () => void }>>
 
 export const MainRegion = defineSlot<Region>("main", { shows: "first" });
 
-/** Buttons in the sidebar's head beside its search: add project and new chat are its defaults. `onPick` closes the drawer on narrow screens. */
+/** Buttons at the end of the sidebar's head, after its toggle; it has none by default. `onPick` closes the drawer on narrow screens. */
 export const SidebarActions = defineSlot<Region<{ readonly onPick: () => void }>>("sidebar.actions");
 
 /** Items at the foot of the sidebar: the settings button, the connection badge. `onPick` closes the drawer on narrow screens. */
@@ -51,3 +53,5 @@ export interface MenuAction<Subject, Control = undefined> {
   readonly section?: boolean;
   readonly run: (subject: Subject, control: Control) => void;
 }
+
+export { ActionMenu } from "./menu.tsx";

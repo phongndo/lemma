@@ -80,4 +80,6 @@ export const PaletteSources = defineSlot<PaletteSource>("palette.sources");
 export const ActionIds = {
   /** Run with an action's id, opens asking for that action's value. */
   palette: "palette.open",
+  /** Opens the palette searching threads only (its `@` source). */
+  searchThreads: "palette.search-threads",
 } as const;

@@ -2,13 +2,14 @@
   "name": "@lemma/frame-sidebar",
   "version": "0.1.0",
   "private": true,
-  "description": "The sidebar: threads grouped by project, its head's buttons, and its foot's items",
+  "description": "The sidebar: the open threads, as a browser keeps tabs, a + for a new one, and its foot's items",
   "type": "module",
   "exports": {
     ".": "./src/index.tsx"
   },
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test": "vitest run"
   },
   "dependencies": {
     "@lemma/actions": "workspace:*",
@@ -17,7 +18,6 @@
     "@lemma/sessions": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/web": "workspace:*",
-    "@lemma/workspace": "workspace:*",
     "solid-js": "1.9.17"
   },
   "devDependencies": {

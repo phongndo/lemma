@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, utilityProcess } from "electron";
 import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
@@ -303,11 +303,30 @@ if (!app.requestSingleInstanceLock()) {
     window.focus();
   });
 
+  /**
+   * Electron's default menu, less what the page binds itself: ⌘W and ⌘T close and open threads (the web app's
+   * Actions), so no menu item takes them first. Quitting closes the window.
+   */
+  const menu: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
+    { role: "editMenu" },
+    { role: "viewMenu" },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        ...(process.platform === "darwin" ? [{ type: "separator" as const }, { role: "front" as const }] : [{ role: "quit" as const }]),
+      ],
+    },
+  ];
+
   app
     .whenReady()
     .then(async () => {
       // Windows and Linux take the window's `icon`; the macOS Dock takes the app's.
       app.dock?.setIcon(icon);
+      Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
       // Without the dev server the window would be blank, and a host started for it would serve nothing.
       if (
         webUrl !== undefined &&

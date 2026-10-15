@@ -129,6 +129,8 @@ export interface SidebarRowProps {
   readonly active: boolean;
   /** A turn is running in it. */
   readonly running: boolean;
+  /** A turn ended in it while another thread was open, and it has not been opened since. */
+  readonly unread: boolean;
   /** The time, ticking once a minute, for relative times. */
   readonly now: number;
   /** Its address: the row is a link, so it opens in a new tab or window too. */
@@ -138,9 +140,11 @@ export interface SidebarRowProps {
   readonly rename: (title: string) => void;
   /** Its menu: the `ThreadActions` that apply to it, in order. */
   readonly actions: readonly ThreadAction[];
+  /** Takes it out of the open threads, leaving the thread as it is; absent for one that cannot close (a pinned one). */
+  readonly close?: (() => void) | undefined;
 }
 
-/** A session in the sidebar's list. Arrow keys move between elements marked `data-session-row`. */
+/** A thread in the sidebar's list of open threads. Arrow keys move between elements marked `data-session-row`. */
 export const SidebarRowPart = definePart<SidebarRowProps>("sidebar.row");
 
 export const ChatUser = partView(ChatUserPart);

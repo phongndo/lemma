@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { Page } from "playwright";
 import { boot, checkPlugin, expose, root, settled, switchTo, url } from "./shared.ts";
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
@@ -12,7 +13,9 @@ export const parts = async (): Promise<string> => {
   await settled(page);
   await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
   await page.keyboard.press("ControlOrMeta+b");
-  await page.waitForSelector(".sidebar input", { timeout: 5_000 }).catch(() => assert.fail("the sidebar did not draw after a reload with it collapsed"));
+  await page
+    .waitForSelector(".sidebar .sidebar-head", { timeout: 5_000 })
+    .catch(() => assert.fail("the sidebar did not draw after a reload with it collapsed"));
   expectNoErrors("a reload with the sidebar collapsed");
   await checkPlugin(page);
 
@@ -402,7 +405,7 @@ export const parts = async (): Promise<string> => {
   // A view is in the address, and back returns to the one before.
   // The trajectory opens at its newest row, and scrolling up stops following it until Follow; a short window makes it scroll.
   await page.setViewportSize({ width: 1200, height: 320 });
-  await page.click(".view-tab[aria-label=Trajectory]");
+  await showView(page, "trajectory");
   await page.waitForFunction(() => location.pathname.endsWith("/trajectory"));
   const atNewest = (failure: string) =>
     page
@@ -770,9 +773,7 @@ export const parts = async (): Promise<string> => {
     const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
     (window as any).lemmaMock.setWebFiles([{ name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url }]);
   }, todo);
-  await page
-    .click("[role=tablist][aria-label='Thread view'] [role=tab][aria-label=Todos]", { timeout: 10_000 })
-    .catch(() => assert.fail("examples/todo added no Todos view"));
+  await showView(page, "todo").catch(() => assert.fail("examples/todo added no Todos view"));
   await page.waitForSelector(".todo-view >> text=No todos in this thread.");
   assert.equal(
     await page.evaluate(async () => {
@@ -785,3 +786,20 @@ export const parts = async (): Promise<string> => {
   expectNoErrors("an example's web half");
   return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
 };
+
+/** Shows a view of the open thread by its id, as its palette command does (the header has no switch), once the thread has loaded. */
+async function showView(page: Page, id: string): Promise<void> {
+  // The thread's menu shows once it has loaded; a view chosen before then gives way to the address it loads at.
+  await page.waitForSelector(".main-head [aria-label='Thread actions']", { timeout: 10_000 });
+  await page.waitForFunction(
+    async (view) => {
+      const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      const action = (window as any).lemma.slots().get(Actions, `thread.view.${view}`);
+      action?.run();
+      return action !== undefined;
+    },
+    id,
+    { timeout: 10_000 },
+  );
+  await page.waitForFunction((view) => location.pathname.endsWith(`/${view}`), id, { timeout: 10_000 });
+}

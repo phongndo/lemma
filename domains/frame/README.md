@@ -6,7 +6,7 @@ The page's frame: its regions, layers, docks, dialogs, and what shows in them be
 | --------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------- |
 | [`frame.shell`](shell/)           | web    | The sidebar and main regions, layers over them, and docks under them. Pinned: replace it, never turn it off |
 | [`frame.pages`](pages/)           | web    | The page the address names, in the main region. Pinned                                                      |
-| [`frame.sidebar`](sidebar/)       | web    | Threads grouped by project, its head's buttons, and its foot's items                                        |
+| [`frame.sidebar`](sidebar/)       | web    | The open threads, as a browser keeps tabs, a + for a new one, and its foot's items                          |
 | [`frame.dialogs`](dialogs/)       | web    | Which dialog is open: provides `Dialogs`                                                                    |
 | [`frame.questions`](questions/)   | web    | The host's questions, the oldest first                                                                      |
 | [`frame.toasts`](toasts/)         | web    | The `Notify` messages, in a corner                                                                          |

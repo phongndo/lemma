@@ -1,25 +1,27 @@
-import { For, Show, createEffect, createMemo, onCleanup } from "solid-js";
+import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
-import { sessionTitle, ComposerRegion, ThreadHeader, Threads, Views } from "@lemma/threads";
+import { sessionTitle, ComposerRegion, ThreadActions, ThreadHeader, Threads, Views } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
-import { Layout } from "@lemma/frame";
+import { ActionMenu, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { Client, Notify, Pages, Router, Slots, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
-import { CopyIcon, PenSquareIcon, SidebarIcon, Spinner, StopIcon } from "@lemma/look";
+import type { ThreadAction } from "@lemma/threads";
+import { ArchiveIcon, CopyIcon, MoreIcon, PenSquareIcon, PencilIcon, PinIcon, Popover, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
 import styles from "./thread-view.css?inline";
 
 /**
  * The page for one thread (and for a new one): a header, the chosen view
  * (chat, trajectory, or any other plugin's), and the composer under views
- * that want it. Views are siblings over the same log; the address names the
- * view (`/threads/<id>/trajectory`, the first when absent), the choice
- * carries over when switching threads, and a new thread opens in the first.
+ * that want it. Views are siblings over the same log, switched from the
+ * keyboard and the palette; the address names the view
+ * (`/threads/<id>/trajectory`, the first when absent), the choice carries
+ * over when switching threads, and a new thread opens in the first.
  */
 export default defineWebPlugin({
   id: "threads.view",
@@ -28,6 +30,8 @@ export default defineWebPlugin({
   requires: { client: Client, threads: Threads, workspace: Workspace, slots: Slots, layout: Layout, notify: Notify, router: Router },
   setup: ({ client, threads, workspace, slots, layout, notify, router }) => {
     const views = () => slots.list(Views);
+    /** The header's title is being edited in place. */
+    const [renaming, setRenaming] = createSignal(false);
     /** The view the address names while it exists (its plugin may be off: the address is left as it is), else the first. */
     const view = createMemo(() => {
       const all = views();
@@ -54,7 +58,8 @@ export default defineWebPlugin({
         title: "New thread",
         category: "Thread",
         icon: PenSquareIcon,
-        keys: "mod+shift+o",
+        // ⌘T as a browser opens a tab; in a browser tab it stays the browser's, so ⌘⇧O works there.
+        keys: ["mod+t", "mod+shift+o"],
         global: true,
         run: () => {
           threads.newThread();
@@ -101,7 +106,84 @@ export default defineWebPlugin({
           void copyAndTell(notify, id);
         },
       },
+      {
+        id: "thread.pin",
+        order: 15,
+        title: "Pin or unpin thread",
+        category: "Thread",
+        icon: PinIcon,
+        keys: "mod+alt+p",
+        when: () => threads.active() !== undefined,
+        run: () => {
+          const session = threads.active();
+          if (session !== undefined) void threads.mark(session.id, { pinned: session.pinned !== true });
+        },
+      },
+      {
+        id: "thread.archive",
+        order: 16,
+        title: "Archive thread",
+        category: "Thread",
+        icon: ArchiveIcon,
+        keys: "mod+alt+a",
+        when: () => threads.active() !== undefined && threads.active()?.archived !== true,
+        run: () => {
+          const session = threads.active();
+          if (session !== undefined) void threads.mark(session.id, { archived: true });
+        },
+      },
+      {
+        id: "thread.delete",
+        order: 17,
+        title: "Delete thread",
+        category: "Thread",
+        icon: TrashIcon,
+        when: () => threads.active() !== undefined,
+        run: () => {
+          const session = threads.active();
+          if (session !== undefined) void threads.remove(session.id);
+        },
+      },
     );
+
+    // A thread's menu (its header's ⋯, a right-click on its row) goes through the slot other plugins add theirs to.
+    const menuItem = (id: string, order: number, action: ThreadAction) => slots.add(ThreadActions, { id, order, ...action });
+    menuItem("thread.menu.rename", 10, { label: () => "Rename", icon: PencilIcon, run: (_, row) => row.rename() });
+    menuItem("thread.menu.pin", 20, {
+      label: (session) => (session.pinned === true ? "Unpin" : "Pin"),
+      icon: PinIcon,
+      run: (session) => void threads.mark(session.id, { pinned: session.pinned !== true }),
+    });
+    menuItem("thread.menu.archive", 30, {
+      label: (session) => (session.archived === true ? "Unarchive" : "Archive"),
+      icon: ArchiveIcon,
+      run: (session) => void threads.mark(session.id, { archived: session.archived !== true }),
+    });
+    menuItem("thread.menu.delete", 40, {
+      label: () => "Delete",
+      icon: TrashIcon,
+      danger: true,
+      section: true,
+      confirm: () => "Delete for good?",
+      run: (session) => void threads.remove(session.id),
+    });
+    // The views take turns from the keyboard; the header has no switch of its own.
+    slots.add(Actions, {
+      id: "thread.next-view",
+      order: 12,
+      title: "Switch thread view",
+      detail: "Transcript, trajectory, and any other view, in turn",
+      category: "View",
+      keys: "mod+i",
+      whileTyping: true,
+      when: () => threads.active() !== undefined && views().length > 1,
+      run: () => {
+        const all = views();
+        const at = all.findIndex((item) => item.id === view()?.id);
+        const next = all[(at + 1) % all.length];
+        if (next !== undefined) setChosen(next.id);
+      },
+    });
     // One action per view, as views come and go.
     createEffect(() => {
       for (const item of views()) {
@@ -121,10 +203,13 @@ export default defineWebPlugin({
 
     // Its header's items go through the slot other plugins add theirs to.
     const header = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) => slots.add(ThreadHeader, { id, order, side, component });
+    // While the sidebar shows, its own head has the toggle.
     header("thread.sidebar-toggle", 0, "start", () => (
-      <button class="icon-button sidebar-toggle" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
-        <SidebarIcon />
-      </button>
+      <Show when={!layout.sidebarShown()}>
+        <button class="icon-button sidebar-toggle" aria-label="Toggle sidebar" data-tip="Toggle sidebar" onClick={() => layout.toggleSidebar()}>
+          <SidebarIcon />
+        </button>
+      </Show>
     ));
     header("thread.title", 10, "start", () => {
       const cwd = () => workspace.workingDir();
@@ -146,7 +231,44 @@ export default defineWebPlugin({
               );
             }}
           </Show>
-          <h1>{unknown() !== undefined ? "No thread here" : threads.activeId() === undefined ? "New thread" : sessionTitle(threads.active())}</h1>
+          <Show
+            when={renaming() && threads.active()}
+            keyed
+            fallback={
+              <h1 onDblClick={() => threads.active() !== undefined && setRenaming(true)}>
+                {unknown() !== undefined ? "No thread here" : threads.activeId() === undefined ? "Thread" : sessionTitle(threads.active())}
+              </h1>
+            }
+          >
+            {(session) => {
+              const commit = (value: string) => {
+                setRenaming(false);
+                if (value.trim() !== "" && value.trim() !== session.title) void threads.rename(session.id, value);
+              };
+              return (
+                <input
+                  class="main-rename"
+                  value={session.title ?? ""}
+                  aria-label="Thread title"
+                  ref={(el) =>
+                    queueMicrotask(() => {
+                      el.focus();
+                      el.select();
+                    })
+                  }
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") commit(event.currentTarget.value);
+                    else if (event.key === "Escape") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      setRenaming(false);
+                    }
+                  }}
+                  onBlur={(event) => commit(event.currentTarget.value)}
+                />
+              );
+            }}
+          </Show>
         </div>
       );
     });
@@ -157,24 +279,21 @@ export default defineWebPlugin({
         </span>
       </Show>
     ));
-    header("thread.views", 10, "end", () => (
-      <Show when={threads.activeId() !== undefined && views().length > 1}>
-        <div class="view-tabs" role="tablist" aria-label="Thread view">
-          <For each={views()}>
-            {(item) => (
-              <button
-                role="tab"
-                class="view-tab"
-                aria-label={item.title}
-                data-tip={item.title}
-                aria-selected={view()?.id === item.id}
-                onClick={() => setChosen(item.id)}
-              >
-                <Contained slot={Views} item={item} component={item.icon} />
-              </button>
-            )}
-          </For>
-        </div>
+
+    header("thread.menu", 20, "end", () => (
+      <Show when={threads.active()} keyed>
+        {(session) => {
+          const actions = () => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
+          return (
+            <Show when={actions().length > 0}>
+              <Popover label="Thread actions" tip="Thread" trigger={<MoreIcon />} triggerClass="icon-button" placement="bottom-end">
+                {(close) => (
+                  <ActionMenu subject={session} control={{ rename: () => setRenaming(true) }} slot={ThreadActions} actions={actions()} close={close} />
+                )}
+              </Popover>
+            </Show>
+          );
+        }}
       </Show>
     ));
 

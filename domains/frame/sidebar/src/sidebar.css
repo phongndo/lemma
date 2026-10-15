@@ -8,105 +8,42 @@
 }
 
 .sidebar-head {
-  padding: 10px 8px 6px;
   display: flex;
   align-items: center;
-  gap: 4px;
+  height: 40px;
+  padding: 0 8px;
+  flex: none;
 }
 
-/* In a desktop window: the actions share the title bar with the window's controls; search goes below. */
+/* In a desktop window: the head shares the title bar with the window's controls, and drags it. */
 [data-titlebar] .sidebar-head {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: ". actions" "search search";
-  row-gap: 4px;
-  padding-top: 0;
+  height: 48px;
+  padding-left: max(8px, var(--titlebar-inset, 0px));
   app-region: drag;
 }
 
-[data-titlebar] .sidebar-head .search-box {
-  grid-area: search;
+[data-titlebar] .sidebar-head > :not(.spacer) {
+  app-region: no-drag;
 }
 
-[data-titlebar] .sidebar-head .sidebar-actions {
-  grid-area: actions;
-  height: 48px;
+.sidebar-head .spacer {
+  flex: 1;
 }
 
 .sidebar-actions {
   display: flex;
   align-items: center;
-  flex: none;
 }
 
-.sidebar-actions .icon-button.active {
-  color: var(--text);
+.sidebar-head .icon-button {
+  width: 28px;
+  height: 28px;
 }
 
 .session-groups {
   flex: 1;
   overflow-y: auto;
-  padding: 4px 6px 12px;
-}
-
-.sidebar-empty {
-  color: var(--text-3);
-  font-size: calc(12.5px * var(--text-scale));
-  padding: 8px 10px;
-}
-
-.session-group + .session-group {
-  margin-top: 10px;
-}
-
-.group-head {
-  display: flex;
-  align-items: center;
-  height: 26px;
-  padding-right: 4px;
-  color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
-}
-
-.group-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-  min-width: 0;
-  height: 100%;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-}
-
-.group-toggle:hover .group-name {
-  color: var(--text);
-}
-
-.group-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text-2);
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.group-button {
-  width: 22px;
-  height: 22px;
-  opacity: 0;
-}
-
-.group-head:hover .group-button,
-.group-button:focus-visible,
-.group-button.active,
-.group-button[aria-expanded="true"] {
-  opacity: 1;
+  padding: 0 8px 12px;
 }
 
 .session-list {
@@ -115,12 +52,29 @@
   padding: 0;
 }
 
+.session-list.pinned {
+  margin-bottom: 4px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
 .session-row {
   position: relative;
   display: flex;
   align-items: center;
-  height: 30px;
+  height: 28px;
   border-radius: var(--radius-sm);
+  color: var(--text-2);
+}
+
+.session-row:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-row.active {
+  background: var(--bg-active);
+  color: var(--text);
 }
 
 .session-open {
@@ -139,46 +93,26 @@
   font: inherit;
   font-size: calc(13px * var(--text-scale));
   text-decoration: none;
-  cursor: pointer;
+  cursor: default;
 }
 
-/* The time gives way to the ⋯ menu while the row is hovered, focused, or its menu is open. */
-.session-more {
-  position: absolute;
-  right: 4px;
-  width: 24px;
-  height: 24px;
-  opacity: 0;
+/* A dot at the end while a turn runs (pulsing) or finished unseen; the close button covers it on hover. */
+.session-mark {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--accent);
 }
 
-.session-row:hover .session-more,
-.session-row:focus-within .session-more,
-.session-more[aria-expanded="true"] {
-  opacity: 1;
+.session-mark.running {
+  animation: pulse 1.4s ease-in-out infinite;
 }
 
-.session-row:hover .session-time,
-.session-row:focus-within .session-time,
-.session-row:has(.session-more[aria-expanded="true"]) .session-time {
+.session-row.active .session-mark,
+.session-row:hover .session-mark {
   visibility: hidden;
-}
-
-@media (hover: none) {
-  .session-more {
-    opacity: 1;
-  }
-
-  .session-time {
-    visibility: hidden;
-  }
-}
-
-.session-row:hover {
-  background: var(--bg-hover);
-}
-
-.session-row.active {
-  background: var(--bg-active);
 }
 
 .session-title {
@@ -190,27 +124,55 @@
 }
 
 .session-title.untitled {
-  color: var(--text-2);
-}
-
-.session-time {
-  flex: none;
   color: var(--text-3);
-  font-size: calc(11.5px * var(--text-scale));
 }
 
-.running-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: none;
-  animation: pulse 1.4s ease-in-out infinite;
+.session-close {
+  position: absolute;
+  right: 2px;
+  width: 24px;
+  height: 24px;
+  opacity: 0;
+}
+
+.session-close .icon {
+  width: 14px;
+  height: 14px;
+}
+
+/* Always on the open thread's row; on the others, while hovered. */
+.session-row.active .session-close,
+.session-row:hover .session-close,
+.session-close:focus-visible {
+  opacity: 1;
+}
+
+.session-row.active .session-title,
+.session-row:hover .session-title {
+  padding-right: 20px;
+}
+
+@media (hover: none) {
+  .session-close {
+    opacity: 1;
+  }
+}
+
+/* The right-click menu opens from here; the trigger is never seen. */
+.session-menu-anchor {
+  position: absolute;
+  left: 8px;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  visibility: hidden;
 }
 
 .session-rename {
   width: 100%;
-  height: 30px;
+  height: 28px;
   padding: 0 8px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--accent);
@@ -224,13 +186,4 @@
   align-items: center;
   gap: 2px;
   padding: 8px 12px 8px 8px;
-  border-top: 1px solid var(--border);
-}
-
-.menu-item.menu-danger {
-  color: var(--err);
-}
-
-.menu-item.menu-danger[data-active="true"] {
-  color: var(--err);
 }

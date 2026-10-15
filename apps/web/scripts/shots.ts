@@ -72,7 +72,7 @@ try {
     await shot(page, `${theme}-19-devtools-trace-open`);
     await page.keyboard.press("ControlOrMeta+Shift+d");
     // The thread's Trajectory, and a request selected in it.
-    await page.click(".view-tab[aria-label=Trajectory]");
+    await page.keyboard.press("ControlOrMeta+i");
     await page.waitForSelector(".trj-table tbody tr[data-record]");
     await shot(page, `${theme}-20-trajectory`);
     await page.click(".trj-table tbody tr[data-record]");

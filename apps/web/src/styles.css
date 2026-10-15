@@ -538,6 +538,11 @@
     color: var(--text);
   }
 
+  .menu-item.menu-danger,
+  .menu-item.menu-danger[data-active="true"] {
+    color: var(--err);
+  }
+
   .menu-item > .icon,
   .menu-check .icon {
     color: var(--text-3);

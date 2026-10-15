@@ -103,7 +103,7 @@ export interface ThreadRowControl {
   readonly rename: () => void;
 }
 
-/** An item in a session's menu in the sidebar (its row's ⋯ button, or a right-click). Rename, pin, archive, and delete are the sidebar's defaults. */
+/** An item in a thread's menu: the ⋯ in its header, and a right-click on its row in the sidebar. Rename, pin, archive, and delete are the thread view's defaults. */
 export type ThreadAction = MenuAction<SessionInfo, ThreadRowControl>;
 
 export const ThreadActions = defineSlot<ThreadAction>("thread.actions");
@@ -285,7 +285,7 @@ export interface ThreadHeaderItem extends Region {
   readonly side: "start" | "end";
 }
 
-/** The session's header: the sidebar toggle, title, running chip, and view tabs are its default items. */
+/** The session's header: the sidebar toggle, title, running chip, and the thread's ⋯ menu are its default items. */
 export const ThreadHeader = defineSlot<ThreadHeaderItem>("thread.header");
 
 /** Above the composer box: the connection notice, the provider callout. */

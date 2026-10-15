@@ -42,6 +42,10 @@ export default defineWebPlugin({
     const [collapsed, setCollapsed] = createSignal(load(COLLAPSED_KEY) === "1");
     const [resizing, setResizing] = createSignal(false);
     const [titlebar, setTitlebar] = createSignal(controlsOverlay?.visible === true);
+    const narrowQuery = window.matchMedia(NARROW);
+    const [narrow, setNarrow] = createSignal(narrowQuery.matches);
+    plugin.listen(narrowQuery, "change", () => setNarrow(narrowQuery.matches));
+    const sidebarShown = () => slots.first(SidebarRegion) !== undefined && (narrow() ? drawer() : !collapsed());
     const width = () => {
       viewport();
       return clampWidth(chosen());
@@ -51,7 +55,7 @@ export default defineWebPlugin({
       save(COLLAPSED_KEY, value ? "1" : undefined);
     };
     /** On narrow screens the sidebar is a drawer; otherwise it collapses in place. */
-    const toggleSidebar = () => (window.matchMedia(NARROW).matches ? setDrawer(!drawer()) : setCollapsedSaved(!collapsed()));
+    const toggleSidebar = () => (narrow() ? setDrawer(!drawer()) : setCollapsedSaved(!collapsed()));
     const closeDrawer = () => setDrawer(false);
 
     slots.add(Actions, {
@@ -148,6 +152,6 @@ export default defineWebPlugin({
       );
     }
     slots.add(Root, { id: "shell", phase: "default", component: Shell });
-    return { layout: { toggleSidebar, closeDrawer } };
+    return { layout: { sidebarShown, toggleSidebar, closeDrawer } };
   },
 });

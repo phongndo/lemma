@@ -186,16 +186,13 @@ function AddProjectDialog(props: { deps: Deps }) {
 
   onMount(async () => {
     input.focus();
-    // Learn the host user's home, then start beside the host's project.
-    let userHome: string | undefined;
+    // Learn the host user's home, and start there: `..` or a typed `/` goes on to the disk's root.
     try {
-      userHome = (await client.channel.call(WorkspaceChannels.browse, { partialPath: "~/" })).parent;
-      setHome(userHome);
+      setHome((await client.channel.call(WorkspaceChannels.browse, { partialPath: "~/" })).parent);
     } catch {
       /* absolute paths still work */
     }
-    const cwd = client.info()?.cwd;
-    const initial = cwd === undefined ? "~/" : withSlash(tildePath(cwd.slice(0, cwd.lastIndexOf("/")) || "/", userHome));
+    const initial = "~/";
     update(initial, true);
     input.setSelectionRange(initial.length, initial.length);
   });

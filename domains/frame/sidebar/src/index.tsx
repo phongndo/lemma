@@ -1,100 +1,26 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
-import type { JSX } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, on, untrack } from "solid-js";
 import type { SessionInfo } from "@lemma/sessions";
-import { copyAndTell } from "@lemma/web/clipboard";
+import { NewThreadRoute } from "@lemma/sessions";
 import { stepFor, withKeys } from "@lemma/web/keys";
-import { loadStrings, save } from "@lemma/web/storage";
-import { relativeTime, tildePath } from "@lemma/web/format";
-import { shownKeys, ActionIds, Actions } from "@lemma/actions";
-import { fileSessions, sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
+import { loadJson, save } from "@lemma/web/storage";
+import { Actions, shownKeys } from "@lemma/actions";
+import { sessionTitle, ThreadActions, Threads, SidebarRowPart, SidebarRow } from "@lemma/threads";
 import { createNow } from "@lemma/web/now";
-import { SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
-import { Client, Notify, Slots, WebPlugins, defineWebPlugin, Contained, Each, usePlugin } from "@lemma/web";
-import { ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
+import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
+import type { LayoutService } from "@lemma/frame";
+import { Router, Slots, WebPlugins, defineWebPlugin, Each } from "@lemma/web";
 import type { Action } from "@lemma/actions";
-import type { MenuAction } from "@lemma/frame";
-import type { ThreadAction, ThreadsService, SidebarRowProps } from "@lemma/threads";
-import type { ClientService, Slot, SlotItem, SlotsService } from "@lemma/web";
-import type { WorkspaceService } from "@lemma/workspace/web";
-import {
-  ArchiveIcon,
-  ChatIcon,
-  CheckIcon,
-  CommandIcon,
-  CopyIcon,
-  FolderIcon,
-  FolderOpenIcon,
-  FolderPlusIcon,
-  MoreIcon,
-  PenSquareIcon,
-  PencilIcon,
-  PinIcon,
-  PlusIcon,
-  Popover,
-  SearchIcon,
-  TrashIcon,
-  XIcon,
-} from "@lemma/look";
+import type { ThreadsService, SidebarRowProps } from "@lemma/threads";
+import type { RouterService, SlotsService, WebPluginsService } from "@lemma/web";
+import { Popover, SidebarIcon, XIcon } from "@lemma/look";
+import { afterClose, neighborOf, pruned, seedOpen, shownThreads, withClosed, withOpened } from "./open.ts";
+import type { Shown } from "./open.ts";
 import styles from "./sidebar.css?inline";
 
-interface Deps {
-  readonly client: ClientService;
-  readonly threads: ThreadsService;
-  readonly slots: SlotsService;
-  readonly workspace: WorkspaceService;
-  readonly now: () => number;
-  readonly newChatIn: (cwd?: string) => void;
-  /** The project the list is narrowed to, or all when undefined; the head's projects button sets it. */
-  readonly scope: () => string | undefined;
-}
+const OPEN_KEY = "lemma.frame.sidebar.open";
 
-/**
- * A menu's items for one subject, grouped by `section`. An item with a
- * `confirm` text arms on the first pick, showing the text, and runs on the second.
- */
-function ActionMenu<Subject, Control>(props: {
-  subject: Subject;
-  control: Control;
-  /** The slot the actions are items of, so one whose icon throws is named. */
-  slot: Slot<any>;
-  actions: readonly MenuAction<Subject, Control>[];
-  close: () => void;
-}) {
-  const [armed, setArmed] = createSignal<MenuAction<Subject, Control> | undefined>();
-  return (
-    <For each={props.actions}>
-      {(action, index) => {
-        const confirm = () => action.confirm?.(props.subject);
-        return (
-          <>
-            <Show when={action.section && index() > 0}>
-              <div class="menu-sep" role="separator" />
-            </Show>
-            <button
-              class="menu-item"
-              classList={{ "menu-danger": action.danger === true }}
-              role="menuitem"
-              onClick={() => {
-                if (confirm() !== undefined && armed() !== action) {
-                  setArmed(() => action);
-                  return;
-                }
-                props.close();
-                action.run(props.subject, props.control);
-              }}
-            >
-              <Show when={action.icon}>{(icon) => <Contained slot={props.slot} item={action as unknown as SlotItem<unknown>} component={icon()} />}</Show>
-              <span class="menu-label">{armed() === action ? confirm() : action.label(props.subject)}</span>
-            </button>
-          </>
-        );
-      }}
-    </For>
-  );
-}
-
-/** The default `sidebar.row` part: title, running dot, and time, which gives way to a ⋯ menu on hover; double-click renames. */
-function SessionRow(props: SidebarRowProps) {
+/** The default `sidebar.row` part: the title, and a dot while it runs or finished unseen; × closes it (always on the open one, on hover for the rest), a right-click opens its menu, a double-click renames. */
+function ThreadRow(props: SidebarRowProps) {
   const [editing, setEditing] = createSignal(false);
   let openMenu: (() => void) | undefined;
   const commit = (value: string) => {
@@ -125,22 +51,33 @@ function SessionRow(props: SidebarRowProps) {
               event.preventDefault();
               props.select();
             }}
+            onAuxClick={(event) => {
+              if (event.button !== 1 || props.close === undefined) return;
+              event.preventDefault();
+              props.close();
+            }}
             onDblClick={() => setEditing(true)}
           >
-            <Show when={props.running}>
-              <span class="running-dot" data-tip="Running" />
-            </Show>
             <span class="session-title" classList={{ untitled: props.session.title === undefined }}>
               {sessionTitle(props.session)}
             </span>
-            <span class="session-time">{relativeTime(props.session.updatedAt, props.now)}</span>
+            <Show when={props.running || props.unread}>
+              <span class="session-mark" classList={{ running: props.running }} data-tip={props.running ? "Running" : "Finished"} />
+            </Show>
           </a>
+          <Show when={props.close}>
+            {(close) => (
+              <button class="icon-button session-close" aria-label="Close thread" data-tip="Close" onClick={() => close()()}>
+                <XIcon />
+              </button>
+            )}
+          </Show>
+          {/* Opened by a right-click; the trigger itself stays out of sight. */}
           <Show when={props.actions.length > 0}>
             <Popover
               label="Thread actions"
-              tip="More"
-              trigger={<MoreIcon />}
-              triggerClass="icon-button session-more"
+              trigger={<span />}
+              triggerClass="session-menu-anchor"
               placement="bottom-start"
               controller={(handle) => (openMenu = handle.open)}
             >
@@ -176,51 +113,27 @@ function SessionRow(props: SidebarRowProps) {
   );
 }
 
-/** Its own key: `frame.shell` keeps whether the whole sidebar is collapsed under `lemma.sidebar.collapsed`. */
-const FOLDED_KEY = "lemma.sidebar.folded";
-/** The pinned section's key among the folded ones, which are otherwise project directories. */
-const PINNED = ":pinned";
+interface Deps {
+  readonly threads: ThreadsService;
+  readonly slots: SlotsService;
+  readonly router: RouterService;
+  readonly webPlugins: WebPluginsService;
+  readonly layout: LayoutService;
+  readonly now: () => number;
+  readonly shown: () => Shown;
+  readonly unread: () => ReadonlySet<string>;
+  readonly close: (id: string) => void;
+}
 
 function Sidebar(props: { deps: Deps; onPick: () => void }) {
-  const { client, threads, slots, workspace } = props.deps;
-  const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
-  const [query, setQuery] = createSignal("");
-  // Sections folded shut, by project directory (or PINNED); kept across reloads. A search shows every match regardless.
-  const [collapsed, setCollapsed] = createSignal(new Set(loadStrings(FOLDED_KEY)));
-  const isOpen = (key: string) => query().trim() !== "" || !collapsed().has(key);
-  const toggle = (key: string) => {
-    const next = new Set(collapsed());
-    if (!next.delete(key)) next.add(key);
-    setCollapsed(next);
-    save(FOLDED_KEY, next.size === 0 ? undefined : JSON.stringify([...next]));
+  const { threads, slots, router, webPlugins, layout } = props.deps;
+  const toggleKeys = () => {
+    const action = slots.get(Actions, "shell.toggle-sidebar");
+    return action === undefined ? undefined : shownKeys(action, webPlugins.list());
   };
-  const filed = createMemo(() => {
-    const needle = query().trim().toLowerCase();
-    const matches = (session: SessionInfo) => needle === "" || sessionTitle(session).toLowerCase().includes(needle);
-    const scope = props.deps.scope();
-    const inScope = (session: SessionInfo) => scope === undefined || session.cwd === scope;
-    const { pinned, groups } = fileSessions(threads.list());
-    return {
-      pinned: pinned.filter((session) => inScope(session) && matches(session)),
-      groups: groups
-        .filter((group) => scope === undefined || group.cwd === scope)
-        .map((group) => ({ ...group, sessions: group.sessions.filter(matches) }))
-        .filter((group) => group.sessions.length > 0),
-    };
-  });
-  const shown = () => filed().pinned.length + filed().groups.length > 0;
-  /** Opens a project's menu from a right-click on its head, by directory. */
-  const openProjectMenu = new Map<string, () => void>();
-  const home = () => client.info()?.home;
-  const standalone = (cwd: string) => workspace.isStandalone(cwd);
-  const newChatIn = (cwd?: string) => {
-    props.deps.newChatIn(cwd);
-    props.onPick();
-  };
-  const sessionActions = (session: SessionInfo) => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
-  const projectActions = (cwd: string) => slots.list(ProjectActions).filter((action) => action.when?.(cwd) ?? true);
+  const actionsFor = (session: SessionInfo) => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
   const onKey = (event: KeyboardEvent) => {
-    // Arrow keys move between session rows.
+    // Arrow keys move between rows.
     const rows = [...(event.currentTarget as HTMLElement).querySelectorAll<HTMLElement>("[data-session-row]")];
     const index = rows.indexOf(document.activeElement as HTMLElement);
     const next = stepFor(event.key, index, rows.length);
@@ -228,132 +141,55 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     event.preventDefault();
     rows[next]?.focus();
   };
-  const rows = (list: readonly SessionInfo[]) => (
-    <ul class="session-list">
-      <For each={list}>
-        {(session) => (
-          <li>
-            <SidebarRow
-              session={session}
-              active={threads.activeId() === session.id}
-              running={threads.running().includes(session.id)}
-              now={props.deps.now()}
-              href={threads.href(session.id)}
-              select={() => {
-                void threads.select(session.id);
-                props.onPick();
-              }}
-              rename={(title) => void threads.rename(session.id, title)}
-              actions={sessionActions(session)}
-            />
-          </li>
-        )}
-      </For>
-    </ul>
+  const row = (session: SessionInfo, closable: boolean) => (
+    <li>
+      <SidebarRow
+        session={session}
+        active={threads.activeId() === session.id}
+        running={threads.running().includes(session.id)}
+        unread={props.deps.unread().has(session.id)}
+        now={props.deps.now()}
+        href={threads.href(session.id)}
+        select={() => {
+          void threads.select(session.id);
+          props.onPick();
+        }}
+        rename={(title) => void threads.rename(session.id, title)}
+        actions={actionsFor(session)}
+        close={closable ? () => props.deps.close(session.id) : undefined}
+      />
+    </li>
   );
+  const drafting = () => threads.activeId() === undefined && router.matchOf(NewThreadRoute) !== undefined;
   return (
-    <nav class="sidebar" aria-label="Threads" onKeyDown={onKey}>
+    <nav class="sidebar" aria-label="Open threads" onKeyDown={onKey}>
       <div class="sidebar-head">
-        <label class="search-box">
-          <SearchIcon />
-          <input
-            type="search"
-            placeholder="Search"
-            aria-label="Search threads"
-            value={query()}
-            onInput={(event) => setQuery(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && query() !== "") {
-                event.preventDefault();
-                event.stopPropagation();
-                setQuery("");
-              }
-            }}
-          />
-          <Show when={query() !== ""}>
-            <button class="icon-button search-clear" aria-label="Clear search" onClick={() => setQuery("")}>
-              <XIcon />
-            </button>
-          </Show>
-        </label>
+        <button class="icon-button" aria-label="Toggle sidebar" data-tip={withKeys("Toggle sidebar", toggleKeys())} onClick={() => layout.toggleSidebar()}>
+          <SidebarIcon />
+        </button>
+        <span class="spacer" />
         <div class="sidebar-actions">
           <Each slot={SidebarActions} props={{ onPick: props.onPick }} />
         </div>
       </div>
       <div class="session-groups">
-        <Show when={threads.loaded() && threads.list().length === 0}>
-          <p class="sidebar-empty">No threads yet. Your conversations will appear here.</p>
+        <Show when={props.deps.shown().pinned.length > 0}>
+          <ul class="session-list pinned">
+            <For each={props.deps.shown().pinned}>{(session) => row(session, false)}</For>
+          </ul>
         </Show>
-        <Show when={threads.list().length > 0 && !shown()}>
-          <p class="sidebar-empty">{query().trim() === "" ? "Every thread is archived." : "No matching threads."}</p>
-        </Show>
-        <Show when={filed().pinned.length > 0}>
-          <section class="session-group">
-            <div class="group-head">
-              <button class="group-toggle" aria-expanded={isOpen(PINNED)} onClick={() => toggle(PINNED)}>
-                <PinIcon />
-                <span class="group-name">Pinned</span>
-              </button>
-            </div>
-            <Show when={isOpen(PINNED)}>{rows(filed().pinned)}</Show>
-          </section>
-        </Show>
-        <For each={filed().groups}>
-          {(group) => (
-            <section class="session-group">
-              <div
-                class="group-head"
-                onContextMenu={(event) => {
-                  const open = openProjectMenu.get(group.cwd);
-                  if (open === undefined) return;
-                  event.preventDefault();
-                  open();
-                }}
-              >
-                <button
-                  class="group-toggle"
-                  aria-expanded={isOpen(group.cwd)}
-                  data-tip={standalone(group.cwd) ? "Threads in no project" : tildePath(group.cwd, home())}
-                  onClick={() => toggle(group.cwd)}
-                >
-                  <Show when={!standalone(group.cwd)} fallback={<ChatIcon />}>
-                    <Show when={isOpen(group.cwd)} fallback={<FolderIcon />}>
-                      <FolderOpenIcon />
-                    </Show>
-                  </Show>
-                  <span class="group-name">{standalone(group.cwd) ? "No project" : workspace.projectName(group.cwd)}</span>
-                </button>
-                <Show when={!standalone(group.cwd) && projectActions(group.cwd).length > 0}>
-                  <Popover
-                    label={`Actions for ${workspace.projectName(group.cwd)}`}
-                    tip="More"
-                    trigger={<MoreIcon />}
-                    triggerClass="icon-button group-button"
-                    placement="bottom-start"
-                    controller={(handle) => openProjectMenu.set(group.cwd, handle.open)}
-                  >
-                    {(close) => <ActionMenu subject={group.cwd} control={undefined} slot={ProjectActions} actions={projectActions(group.cwd)} close={close} />}
-                  </Popover>
-                </Show>
-                <button
-                  class="icon-button group-button"
-                  classList={{ active: threads.activeId() === undefined && threads.pendingCwd() === group.cwd }}
-                  aria-label={standalone(group.cwd) ? "New thread in no project" : `New thread in ${group.cwd}`}
-                  data-tip={standalone(group.cwd) ? "New thread in no project" : `New thread in ${tildePath(group.cwd, home())}`}
-                  onClick={() => {
-                    if (standalone(group.cwd)) {
-                      newStandalone();
-                      props.onPick();
-                    } else newChatIn(group.cwd);
-                  }}
-                >
-                  <PlusIcon />
-                </button>
+        <ul class="session-list">
+          <For each={props.deps.shown().open}>{(session) => row(session, true)}</For>
+          <Show when={drafting()}>
+            <li>
+              <div class="session-row active">
+                <span class="session-open">
+                  <span class="session-title untitled">Thread</span>
+                </span>
               </div>
-              <Show when={isOpen(group.cwd)}>{rows(group.sessions)}</Show>
-            </section>
-          )}
-        </For>
+            </li>
+          </Show>
+        </ul>
       </div>
       <div class="sidebar-foot">
         <Each slot={SidebarFooter} props={{ onPick: props.onPick }} />
@@ -362,207 +198,100 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   );
 }
 
-/** Threads by project, pinned ones first, with search, new-chat buttons, and a menu for each session and project. Its foot is a slot (settings, connection). */
+const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
+
+/**
+ * The threads kept open, as a browser keeps tabs: each with a mark for a
+ * running turn or one that finished unseen, under the sidebar's toggle. New
+ * threads and search are commands (the palette, their keys). Opening a
+ * thread adds it, closing it only takes it out of the list; pinned ones stay,
+ * and one still running stays in sight. Everything else about a thread is in
+ * its page and in the palette.
+ */
 export default defineWebPlugin({
   id: "frame.sidebar",
   styles,
-  requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots, webPlugins: WebPlugins },
-  setup: (use) => {
-    // Relative times refresh once a minute.
+  requires: { threads: Threads, slots: Slots, router: Router, webPlugins: WebPlugins, layout: Layout },
+  setup: ({ threads, slots, router, webPlugins, layout }) => {
+    // Relative times refresh once a minute, for a row part that shows them.
     const now = createNow(60_000);
-    const { client, threads, workspace, notify, slots, webPlugins } = use;
-    const newChatIn = (cwd?: string) => threads.newThread(cwd);
-    /** Projects with threads, which the list can be narrowed to; a chosen one that loses its last thread lets go. */
-    const scopes = createMemo(() => fileSessions(threads.list()).groups.map((group) => group.cwd));
-    const [chosenScope, setScope] = createSignal<string | undefined>();
-    const scope = () => {
-      const chosen = chosenScope();
-      return chosen !== undefined && scopes().includes(chosen) ? chosen : undefined;
+    const stored = loadJson<string[] | undefined>(OPEN_KEY, undefined, (value): value is string[] | undefined => isStrings(value));
+    const [open, setOpenRaw] = createSignal<readonly string[]>(stored ?? []);
+    const setOpen = (next: readonly string[]) => {
+      setOpenRaw(next);
+      save(OPEN_KEY, JSON.stringify(next));
     };
-    const scopeName = (cwd: string) => (workspace.isStandalone(cwd) ? "No project" : workspace.projectName(cwd));
-    const deps: Deps = { client, threads, slots, workspace, now, newChatIn, scope };
+    // A first visit opens the few most recent threads; afterwards, gone and archived threads drop out.
+    let seeded = stored !== undefined;
+    createEffect(() => {
+      if (!threads.loaded()) return;
+      const list = threads.list();
+      if (!seeded) {
+        seeded = true;
+        setOpen(seedOpen(list));
+        return;
+      }
+      const kept = pruned(untrack(open), list);
+      if (kept.length !== untrack(open).length) setOpen(kept);
+    });
+    // Opening a thread opens it here.
+    createEffect(() => {
+      const id = threads.activeId();
+      if (id !== undefined) setOpen(withOpened(untrack(open), id));
+    });
+
+    // A turn that ends while another thread is open leaves its thread unread until it is opened.
+    const [unread, setUnread] = createSignal<ReadonlySet<string>>(new Set());
+    createEffect(
+      on(threads.running, (running, before) => {
+        const ended = (before ?? []).filter((id) => !running.includes(id) && id !== threads.activeId());
+        if (ended.length > 0) setUnread(new Set([...unread(), ...ended]));
+      }),
+    );
+    createEffect(() => {
+      const id = threads.activeId();
+      if (id === undefined || !untrack(unread).has(id)) return;
+      const next = new Set(untrack(unread));
+      next.delete(id);
+      setUnread(next);
+    });
+
+    const shown = createMemo(() => shownThreads(threads.list(), open(), threads.running()));
+    const order = () => [...shown().pinned, ...shown().open];
+    const close = (id: string) => {
+      const next = id === threads.activeId() ? afterClose(order(), id) : undefined;
+      setOpen(withClosed(open(), id));
+      if (id !== threads.activeId()) return;
+      if (next !== undefined) void threads.select(next);
+      else threads.newThread();
+    };
+
+    const deps: Deps = { threads, slots, router, webPlugins, layout, now, shown, unread, close };
     slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
-    slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: SessionRow });
+    slots.add(SidebarRowPart, { id: "sidebar.row", phase: "default", component: ThreadRow });
 
-    // Its menus' items go through the slots other plugins add theirs to.
-    const sessionAction = (id: string, order: number, action: ThreadAction) => slots.add(ThreadActions, { id, order, ...action });
-    sessionAction("sidebar.rename", 10, { label: () => "Rename", icon: PencilIcon, run: (_, row) => row.rename() });
-    sessionAction("sidebar.pin", 20, {
-      label: (session) => (session.pinned === true ? "Unpin" : "Pin"),
-      icon: PinIcon,
-      run: (session) => void threads.mark(session.id, { pinned: session.pinned !== true }),
-    });
-    sessionAction("sidebar.archive", 30, {
-      label: (session) => (session.archived === true ? "Unarchive" : "Archive"),
-      icon: ArchiveIcon,
-      run: (session) => void threads.mark(session.id, { archived: session.archived !== true }),
-    });
-    sessionAction("sidebar.delete", 40, {
-      label: () => "Delete",
-      icon: TrashIcon,
-      danger: true,
-      section: true,
-      run: (session) => void threads.remove(session.id),
-    });
-
-    // The open thread, from the keyboard and the palette; Settings › Keyboard rebinds these.
-    const open = () => threads.active();
-    const threadAction = (id: string, order: number, action: Omit<Action, "category" | "when"> & { readonly when?: () => boolean }) =>
-      slots.add(Actions, { id, order, category: "Thread", ...action, when: () => open() !== undefined && (action.when?.() ?? true) });
-    /** The thread `step` rows away from the open one in the sidebar's order (pinned first, then by project), wrapping. */
-    const neighbor = (step: number) => {
-      const { pinned, groups } = fileSessions(threads.list());
-      const order = [...pinned, ...groups.flatMap((group) => group.sessions)];
-      if (order.length === 0) return undefined;
-      const at = order.findIndex((session) => session.id === threads.activeId());
-      return order[at === -1 ? 0 : (at + step + order.length) % order.length];
+    // Moving through and closing the open threads, from the keyboard and the palette; Settings › Keyboard rebinds these.
+    const move = (step: number) => {
+      const next = neighborOf(order(), threads.activeId(), step);
+      if (next !== undefined) void threads.select(next);
     };
-    slots.add(Actions, {
-      id: "sidebar.next-thread",
-      order: 20,
-      category: "Thread",
-      title: "Next thread",
-      keys: "mod+alt+arrowdown",
+    const add = (id: string, order: number, action: Omit<Action, "category">) => slots.add(Actions, { id, order, category: "Thread", ...action });
+    add("sidebar.next-thread", 20, { title: "Next open thread", keys: "mod+alt+arrowdown", whileTyping: true, run: () => move(1) });
+    add("sidebar.previous-thread", 21, { title: "Previous open thread", keys: "mod+alt+arrowup", whileTyping: true, run: () => move(-1) });
+    add("sidebar.close-thread", 22, {
+      title: "Close thread",
+      detail: "Takes it out of the open threads; the thread stays",
+      icon: XIcon,
+      keys: "mod+w",
       whileTyping: true,
+      when: () => {
+        const id = threads.activeId();
+        return id !== undefined && shown().open.some((session) => session.id === id);
+      },
       run: () => {
-        const next = neighbor(1);
-        if (next !== undefined) void threads.select(next.id);
+        const id = threads.activeId();
+        if (id !== undefined) close(id);
       },
     });
-    slots.add(Actions, {
-      id: "sidebar.previous-thread",
-      order: 21,
-      category: "Thread",
-      title: "Previous thread",
-      keys: "mod+alt+arrowup",
-      whileTyping: true,
-      run: () => {
-        const previous = neighbor(-1);
-        if (previous !== undefined) void threads.select(previous.id);
-      },
-    });
-    threadAction("sidebar.pin-thread", 23, {
-      title: "Pin or unpin thread",
-      icon: PinIcon,
-      keys: "mod+alt+p",
-      run: () => {
-        const session = open();
-        if (session !== undefined) void threads.mark(session.id, { pinned: session.pinned !== true });
-      },
-    });
-    threadAction("sidebar.archive-thread", 24, {
-      title: "Archive thread",
-      icon: ArchiveIcon,
-      keys: "mod+alt+a",
-      when: () => open()?.archived !== true,
-      run: () => {
-        const session = open();
-        if (session !== undefined) void threads.mark(session.id, { archived: true });
-      },
-    });
-    threadAction("sidebar.delete-thread", 25, {
-      title: "Delete thread",
-      icon: TrashIcon,
-      run: () => {
-        const session = open();
-        if (session !== undefined) void threads.remove(session.id);
-      },
-    });
-
-    slots.add(ProjectActions, { id: "sidebar.new-chat", order: 10, label: () => "New thread", icon: PenSquareIcon, run: (cwd) => newChatIn(cwd) });
-    slots.add(ProjectActions, {
-      id: "sidebar.copy-path",
-      order: 20,
-      label: () => "Copy path",
-      icon: CopyIcon,
-      run: (cwd) => void copyAndTell(notify, cwd),
-    });
-    // Its head's buttons go through the slot other plugins add theirs to.
-    type ActionProps = { readonly onPick: () => void };
-    const action = (id: string, order: number, component: (props: ActionProps) => JSX.Element) => slots.add(SidebarActions, { id, order, component });
-    /** Another plugin's action, when one is running: the sidebar offers it without knowing who provides it. */
-    const runAction = (id: string, props: ActionProps) => {
-      slots.get(Actions, id)?.run();
-      props.onPick();
-    };
-    action("sidebar.palette", 0, (props) => (
-      <Show when={slots.get(Actions, ActionIds.palette)}>
-        {(palette) => (
-          <button
-            class="icon-button"
-            aria-label="Command palette"
-            data-tip={withKeys("Commands, threads, projects", shownKeys(palette(), webPlugins.list()))}
-            onClick={() => runAction(ActionIds.palette, props)}
-          >
-            <CommandIcon />
-          </button>
-        )}
-      </Show>
-    ));
-    action("sidebar.projects", 10, () => {
-      const choose = (cwd: string | undefined, close: () => void) => {
-        setScope(cwd);
-        close();
-      };
-      return (
-        <Popover
-          label={scope() === undefined ? "Projects" : `Project: ${scopeName(scope()!)}`}
-          trigger={<FolderIcon />}
-          triggerClass={scope() === undefined ? "icon-button" : "icon-button active"}
-        >
-          {(close) => (
-            <>
-              <button class="menu-item" role="menuitemradio" aria-checked={scope() === undefined} onClick={() => choose(undefined, close)}>
-                <span class="menu-check">
-                  <Show when={scope() === undefined}>
-                    <CheckIcon />
-                  </Show>
-                </span>
-                All projects
-              </button>
-              <For each={scopes()}>
-                {(cwd) => (
-                  <button
-                    class="menu-item"
-                    role="menuitemradio"
-                    aria-checked={scope() === cwd}
-                    data-tip={workspace.isStandalone(cwd) ? undefined : tildePath(cwd, client.info()?.home)}
-                    onClick={() => choose(cwd, close)}
-                  >
-                    <span class="menu-check">
-                      <Show when={scope() === cwd}>
-                        <CheckIcon />
-                      </Show>
-                    </span>
-                    <span class="menu-label">{scopeName(cwd)}</span>
-                  </button>
-                )}
-              </For>
-            </>
-          )}
-        </Popover>
-      );
-    });
-    action("sidebar.add-project", 20, (props) => (
-      <Show when={slots.get(Actions, WorkspaceActionIds.addProject)}>
-        <button class="icon-button" aria-label="Add project" data-tip="Add project" onClick={() => runAction(WorkspaceActionIds.addProject, props)}>
-          <FolderPlusIcon />
-        </button>
-      </Show>
-    ));
-    action("sidebar.new-chat", 30, (props) => (
-      <button
-        class="icon-button"
-        classList={{ active: threads.activeId() === undefined }}
-        data-tip="New thread"
-        aria-label="New thread"
-        onClick={() => {
-          newChatIn();
-          props.onPick();
-        }}
-      >
-        <PenSquareIcon />
-      </button>
-    ));
   },
 });

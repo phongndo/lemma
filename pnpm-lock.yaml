@@ -1407,9 +1407,6 @@ importers:
       '@lemma/web':
         specifier: workspace:*
         version: link:../../../packages/web
-      '@lemma/workspace':
-        specifier: workspace:*
-        version: link:../../workspace/contract
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
