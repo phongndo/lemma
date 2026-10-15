@@ -57,8 +57,8 @@ same for every request.
    `title` from the first if the session has none.
 3. Each step: `step-start`; a `RequestDraft` with the sections `PromptSections`
    holds, in order, each written for the request and attributed to the plugin
-   that added it (its own: the base prompt, and the environment: cwd, date,
-   platform, session id, and the `cli` command when configured), `ToolRunner.list`, the turn's branch and
+   that added it (its own: the base prompt, and the environment: the harness,
+   the model asked, cwd, date, platform, session id, and the `cli` command when configured), `ToolRunner.list`, the turn's branch and
    `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
    change what the model sees by appending events with `append` (a
    `compaction`, whose `usage` the turn's then includes); the `request` event with

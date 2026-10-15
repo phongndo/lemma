@@ -1,5 +1,6 @@
 import { Clock, Effect } from "effect";
 import type { PromptContent, PromptSection } from "@lemma/agent";
+import type { ModelRef } from "@lemma/llm";
 
 /**
  * The default base prompt, short and in opencode's shape: how the agent works, with no role line, which the model does
@@ -23,6 +24,10 @@ const BASE_PROMPT = `# Harness
 
 interface EnvironmentFacts {
   readonly cwd: string;
+  /** The model the request asks, as `<provider>/<model>`. */
+  readonly model: ModelRef;
+  /** Its display name, when the model is known: `DeepSeek V4.1 Flash`. */
+  readonly modelName?: string;
   /** The session this turn belongs to, so the agent can inspect its own log. */
   readonly sessionId: string;
   /** How to run the `lemma` CLI from a shell, when the host app knows. */
@@ -34,15 +39,16 @@ interface EnvironmentFacts {
 }
 
 /**
- * Where and when the agent runs, and how it can inspect itself. The date has
- * day precision and the session id is fixed per session, so the system prompt
- * (and with it the provider's prompt cache) stays stable within a session and day.
+ * What the agent runs in and as, where and when, and how it can inspect itself. The date has day precision, the
+ * session id is fixed per session, and the model changes only when the user switches it (which starts a new prompt
+ * cache anyway), so the system prompt stays stable within a session and day.
  */
 function environment(facts: EnvironmentFacts): string {
   const now = new Date(facts.now);
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return [
     "<environment>",
+    `You are ${facts.modelName === undefined || facts.modelName === facts.model ? facts.model : `${facts.modelName} (${facts.model})`}, running in Lemma, a coding-agent harness. When asked what model you are, answer with this, not with what your training suggests.`,
     `Current working directory: ${facts.cwd}`,
     `Current date: ${date}`,
     `Platform: ${facts.platform}`,
@@ -62,11 +68,22 @@ export const baseSection = (override?: string): PromptSection => ({
   text: () => override ?? BASE_PROMPT,
 });
 
-/** Where and when the agent runs, on `platform`; `cli` (its setting) names the `lemma` CLI. */
-export const environmentSection = (cli: string | undefined, platform: string): PromptSection => ({
+/**
+ * What, where, and when the agent runs, on `platform`; `cli` (its setting) names the `lemma` CLI, and `modelName` finds
+ * a model's display name (none when it cannot: the ref alone is named).
+ */
+export const environmentSection = (
+  cli: string | undefined,
+  platform: string,
+  modelName: (ref: ModelRef) => Effect.Effect<string | undefined>,
+): PromptSection => ({
   id: "agent.environment",
-  text: ({ cwd, sessionId }) =>
-    Effect.map(Clock.currentTimeMillis, (now) => environment({ cwd, sessionId, platform, now, ...(cli === undefined ? {} : { cli }) })),
+  text: ({ cwd, sessionId, model }) =>
+    Effect.gen(function* () {
+      const now = yield* Clock.currentTimeMillis;
+      const name = yield* modelName(model);
+      return environment({ cwd, sessionId, model, platform, now, ...(name === undefined ? {} : { modelName: name }), ...(cli === undefined ? {} : { cli }) });
+    }),
 });
 
 const TITLE_CHARS = 60;

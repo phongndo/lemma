@@ -1277,6 +1277,7 @@ describe("agent", () => {
           expect(requests[0]).toMatchObject({ model: "fake/m2", thinking: "high" });
           expect(requests[0]!.system!.startsWith("Custom base.\n\n<environment>")).toBe(true);
           expect(requests[0]!.system).toContain(`Lemma session: ${id}`);
+          expect(requests[0]!.system).toMatch(/^You are .*fake\/m2\)?, running in Lemma, a coding-agent harness\./m);
           expect(requests[0]!.system).not.toContain("Lemma CLI:");
         }),
     );
