@@ -857,7 +857,7 @@ export default defineWebPlugin({
     slots.add(Views, {
       id: "transcript",
       order: -10,
-      title: "Transcript",
+      title: "Thread",
       icon: ChatIcon,
       composer: true,
       component: () => <ChatView chat={chat} turns={() => transcript().turns} findWith={(open) => setFind(() => open)} />,

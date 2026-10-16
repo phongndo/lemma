@@ -251,3 +251,17 @@
   gap: 2px;
   flex: none;
 }
+
+/* A row being dragged to another place: lifted, and the list shows the grabbing hand. */
+.rows-dragging {
+  cursor: grabbing;
+}
+
+.rows-dragging .session-row {
+  pointer-events: none;
+}
+
+li.dragging .session-row {
+  background: var(--bg-active);
+  color: var(--text);
+}

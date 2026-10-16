@@ -2,17 +2,18 @@ import { Show, createEffect, createMemo, createSignal, onCleanup } from "solid-j
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
-import { sessionTitle, ComposerRegion, ThreadActions, ThreadCorner, ThreadHeader, Threads, Views } from "@lemma/threads";
+import { sessionTitle, ThreadActions, ThreadCorner, ThreadHeader, Threads, Views } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { ActionMenu, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
-import { Client, Notify, Pages, Router, Slots, defineWebPlugin, Contained, Each, First } from "@lemma/web";
+import { Client, Notify, Pages, Router, Slots, defineWebPlugin, Each } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
 import type { ThreadAction } from "@lemma/threads";
 import { ArchiveIcon, CopyIcon, MoreIcon, PenSquareIcon, PencilIcon, PinIcon, Popover, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
+import { createPanes } from "./pane-view.tsx";
 import styles from "./thread-view.css?inline";
 
 /**
@@ -38,10 +39,11 @@ export default defineWebPlugin({
       const named = router.matchOf(ThreadRoute)?.params.view;
       return (threads.activeId() === undefined ? undefined : all.find((candidate) => candidate.id === named)) ?? all[0];
     });
-    const setChosen = (id: string) => {
+    const setChosen = (id: string, replace = false) => {
       const sessionId = threads.activeId();
-      if (sessionId !== undefined) router.navigate(threads.href(sessionId, id === views()[0]?.id ? undefined : id));
+      if (sessionId !== undefined) router.navigate(threads.href(sessionId, id === views()[0]?.id ? undefined : id), { replace });
     };
+    const panes = createPanes({ threads, slots, views, view, choose: setChosen });
     /** The address names a thread the host does not have. */
     const unknown = () => {
       const named = router.matchOf(ThreadRoute)?.params.id;
@@ -178,12 +180,46 @@ export default defineWebPlugin({
       whileTyping: true,
       when: () => threads.active() !== undefined && views().length > 1,
       run: () => {
-        const all = views();
+        // In the focused pane, through the views no other pane shows.
+        const all = views().filter((item) => item.id === view()?.id || !panes.panes().some((pane) => pane.view === item.id));
         const at = all.findIndex((item) => item.id === view()?.id);
         const next = all[(at + 1) % all.length];
         if (next !== undefined) setChosen(next.id);
       },
     });
+    // Panes, from the keyboard as Ghostty's splits are.
+    const paneAction = (id: string, order: number, action: Omit<Action, "category" | "whileTyping">) =>
+      slots.add(Actions, { id, order, category: "Pane", whileTyping: true, ...action });
+    const many = () => threads.active() !== undefined && panes.panes().length > 1;
+    paneAction("pane.split-right", 30, {
+      title: "Open pane beside",
+      keys: "mod+d",
+      when: () => threads.active() !== undefined && panes.free().length > 0,
+      run: () => panes.split("right"),
+    });
+    paneAction("pane.split-down", 31, {
+      title: "Open pane below",
+      keys: "mod+alt+d",
+      when: () => threads.active() !== undefined && panes.free().length > 0,
+      run: () => panes.split("bottom"),
+    });
+    // Before the open thread's own ⌘W: with panes open, it closes the focused one.
+    paneAction("pane.close", 5, { title: "Close pane", keys: "mod+w", when: many, run: () => panes.close() });
+    paneAction("pane.zoom", 32, {
+      title: "Zoom pane",
+      detail: "The focused pane fills the page, and back",
+      keys: "mod+shift+enter",
+      when: many,
+      run: panes.toggleZoom,
+    });
+    for (const [edge, key, title] of [
+      ["left", "arrowleft", "left"],
+      ["right", "arrowright", "right"],
+      ["top", "arrowup", "above"],
+      ["bottom", "arrowdown", "below"],
+    ] as const) {
+      paneAction(`pane.focus-${edge}`, 33, { title: `Focus the pane ${title}`, keys: `mod+alt+${key}`, when: many, run: () => panes.focusToward(edge) });
+    }
     // One action per view, as views come and go.
     createEffect(() => {
       for (const item of views()) {
@@ -298,18 +334,8 @@ export default defineWebPlugin({
     ));
 
     function Main() {
-      let main!: HTMLElement;
-      // The composer lies over the view's bottom: its height, for the view to pad its end by and scroll under it.
-      const dock = (element: HTMLDivElement) => {
-        const observer = new ResizeObserver(() => main.style.setProperty("--composer-height", `${element.offsetHeight}px`));
-        observer.observe(element);
-        onCleanup(() => {
-          observer.disconnect();
-          main.style.removeProperty("--composer-height");
-        });
-      };
       return (
-        <main class="main" ref={main}>
+        <main class="main">
           <header class="main-head">
             <Each slot={ThreadHeader} filter={(item) => item.side === "start"} />
             <span class="spacer" />
@@ -318,8 +344,8 @@ export default defineWebPlugin({
           <Show
             when={unknown()}
             fallback={
-              <Show when={view()} keyed fallback={<div class="scroller" />}>
-                {(item) => <Contained slot={Views} item={item} component={item.component} />}
+              <Show when={views().length > 0} fallback={<div class="scroller" />}>
+                <panes.Panes />
               </Show>
             }
           >
@@ -331,11 +357,6 @@ export default defineWebPlugin({
                 </p>
               </div>
             )}
-          </Show>
-          <Show when={unknown() === undefined && view()?.composer === true}>
-            <div class="composer-dock" ref={dock}>
-              <First slot={ComposerRegion} />
-            </div>
           </Show>
           <div class="thread-corner">
             <Each slot={ThreadCorner} />

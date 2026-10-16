@@ -169,6 +169,8 @@ export type IconName =
   | "more"
   | "pin"
   | "archive"
+  | "history"
+  | "grid"
   | "trash"
   | "pencil"
   | "brain"
@@ -308,6 +310,10 @@ export const MoreIcon = () => <Icon name="more" />;
 export const PinIcon = () => <Icon name="pin" />;
 
 export const ArchiveIcon = () => <Icon name="archive" />;
+
+export const HistoryIcon = () => <Icon name="history" />;
+
+export const GridIcon = () => <Icon name="grid" />;
 
 export const TrashIcon = () => <Icon name="trash" />;
 

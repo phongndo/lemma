@@ -149,6 +149,8 @@ const GLYPHS: Readonly<Record<IconName, string>> = {
   more: "⋯",
   pin: "⊙",
   archive: "⊟",
+  history: "◷",
+  grid: "⊞",
   trash: "⊠",
   pencil: "/",
   brain: "※",

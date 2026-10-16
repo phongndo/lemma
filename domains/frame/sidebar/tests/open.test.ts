@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { SessionInfo } from "@lemma/sessions";
-import { afterClose, neighborOf, pruned, seedOpen, shownThreads, withClosed, withOpened } from "../src/open.ts";
+import { afterClose, lastClosed, moved, neighborOf, pruned, seedOpen, shownThreads, withClosed, withOpened, withReopened } from "../src/open.ts";
 
 const thread = (id: string, updatedAt: number, marks: Partial<SessionInfo> = {}): SessionInfo => ({
   id,
@@ -65,5 +65,52 @@ describe("moving", () => {
     expect(neighborOf(order, "a", -1)).toBe("c");
     expect(neighborOf(order, undefined, 1)).toBe("a");
     expect(neighborOf([], "a", 1)).toBeUndefined();
+  });
+});
+
+describe("reopening closed threads", () => {
+  test("the latest closed one comes back where it stood", () => {
+    const { reopen, rest } = lastClosed(
+      [
+        { id: "a", index: 0 },
+        { id: "c", index: 1 },
+      ],
+      ["b"],
+      all,
+    );
+    expect(reopen).toEqual({ id: "c", index: 1 });
+    expect(rest).toEqual([{ id: "a", index: 0 }]);
+    expect(withReopened(["a", "b"], { id: "c", index: 1 })).toEqual(["a", "c", "b"]);
+  });
+
+  test("skips ones gone, archived, or open again", () => {
+    expect(
+      lastClosed(
+        [
+          { id: "b", index: 0 },
+          { id: "gone", index: 0 },
+          { id: "x", index: 0 },
+          { id: "a", index: 0 },
+        ],
+        ["a"],
+        all,
+      ).reopen,
+    ).toEqual({ id: "b", index: 0 });
+  });
+
+  test("lands at the end when the list has shrunk", () => {
+    expect(withReopened(["a"], { id: "c", index: 4 })).toEqual(["a", "c"]);
+  });
+});
+
+describe("moving a tab", () => {
+  test("takes it to the place named, the rest in order", () => {
+    expect(moved(["a", "b", "c"], "a", 2)).toEqual(["b", "c", "a"]);
+    expect(moved(["a", "b", "c"], "c", 0)).toEqual(["c", "a", "b"]);
+    expect(moved(["a", "b", "c"], "b", 9)).toEqual(["a", "c", "b"]);
+  });
+
+  test("adds one that was only in view", () => {
+    expect(moved(["a", "b"], "r", 1)).toEqual(["a", "r", "b"]);
   });
 });

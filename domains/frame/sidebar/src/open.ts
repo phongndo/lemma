@@ -61,3 +61,31 @@ export const neighborOf = (order: readonly SessionInfo[], id: string | undefined
   const at = order.findIndex((session) => session.id === id);
   return order[at === -1 ? 0 : (at + step + order.length) % order.length]?.id;
 };
+
+/** A closed thread and where it stood, for reopening it there. */
+export interface Closed {
+  readonly id: string;
+  readonly index: number;
+}
+
+/** The most recently closed thread that can come back (still there, not archived, not open again), and the closed ones before it. */
+export const lastClosed = (
+  closed: readonly Closed[],
+  open: readonly string[],
+  sessions: readonly SessionInfo[],
+): { readonly reopen: Closed | undefined; readonly rest: readonly Closed[] } => {
+  const live = new Set(sessions.filter(listed).map((session) => session.id));
+  const rest = closed.filter((entry) => live.has(entry.id) && !open.includes(entry.id));
+  return { reopen: rest.at(-1), rest: rest.slice(0, -1) };
+};
+
+/** `id` opened back at `index`, or at the end when the list has since shrunk. */
+export const withReopened = (open: readonly string[], { id, index }: Closed): readonly string[] =>
+  open.includes(id) ? open : [...open.slice(0, index), id, ...open.slice(index)];
+
+/** `id` moved to `index` among the open threads (added there when it was only in view, running); the rest keep their order. */
+export const moved = (open: readonly string[], id: string, index: number): readonly string[] => {
+  const rest = open.filter((other) => other !== id);
+  const at = Math.max(0, Math.min(rest.length, index));
+  return [...rest.slice(0, at), id, ...rest.slice(at)];
+};

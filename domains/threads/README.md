@@ -5,12 +5,13 @@ A session as the web app shows it: the thread page, its views (the transcript, t
 | Plugin                                        | Halves | What it does                                                                                                                          |
 | --------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------------------------------------------- |
 | [`threads.client`](client/)                   | web    | Threads and the active one's log: provides `Threads`                                                                                  |
-| [`threads.view`](view/)                       | web    | The page for one thread, and for a new one, with its views as tabs                                                                    |
+| [`threads.view`](view/)                       | web    | The page for one thread, and for a new one: its views in panes, split and moved as Ghostty splits a window                            |
 | [`threads.transcript`](transcript/)           | web    | The session as a conversation                                                                                                         |
 | [`threads.trajectory`](trajectory/)           | web    | Every request, response, and tool call, as a network panel shows them, with each one's pipeline: who shaped it, from the log          |
 | [`threads.composer`](composer/)               | web    | A prompt being written, with its completions, controls, and queue                                                                     |
 | [`threads.prompt-commands`](prompt-commands/) | web    | The `/` menu: `PromptCommands`, their subcommands, and their arguments, completed and hinted in turn; adds `/new`, `/rename`, `/copy` |
-| [`threads.archived`](archived/)               | web    | Archived threads, as a settings section                                                                                               |
+| [`threads.history`](history/)                 | web    | Every thread by when it was last used, archived ones on their own shelf; its button, where the tabs end, also leads to settings       |
+| [`threads.browser`](browser/)                 | web    | A browser as a view of the thread, for a page beside the conversation (a local dev server)                                            |
 
 ## Extending it
 

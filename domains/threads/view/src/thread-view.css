@@ -6,7 +6,7 @@
   position: relative;
 }
 
-/* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
+/* Over its pane's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
 .composer-dock {
   position: absolute;
   left: 0;
@@ -136,4 +136,147 @@
 
 .thread-corner:empty {
   display: none;
+}
+
+/* The page's panes: each placed by its box in the area, so one moving or resizing leaves the others as they are. */
+.panes {
+  --pane-drop: color-mix(in srgb, var(--accent) 22%, transparent);
+  --pane-dim: color-mix(in srgb, var(--bg) 30%, transparent);
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+.pane {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pane.hidden {
+  display: none;
+}
+
+/* A pane below another keeps a strip at its top for its grip, clear of what the view draws. */
+.panes-many .pane.below {
+  padding-top: 14px;
+}
+
+/* With several, the ones without focus fade a little, as Ghostty's do. */
+.panes-many .pane:not(.focused)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: var(--pane-dim);
+  pointer-events: none;
+}
+
+/* A frame or a drag takes no pointer while a pane moves or a divider is dragged. */
+.panes-dragging iframe {
+  pointer-events: none;
+}
+
+.panes-dragging {
+  user-select: none;
+}
+
+.pane-missing {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--text-3);
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* A pane's ⋯ grip: drag it onto another pane to move this one, click it for the pane's menu. Over the panes, at the
+   middle of its pane's top; one along the page's top sits in the header row above, as Ghostty's sit in its title bar. */
+.pane-grip-at {
+  position: absolute;
+  z-index: 8;
+  width: 40px;
+  height: 14px;
+  margin-left: -20px;
+}
+
+.pane-grip-at.top {
+  top: -31px;
+}
+
+.pane-grip {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+  opacity: 0.6;
+  transition: opacity 0.12s;
+}
+
+.pane-grip:hover {
+  opacity: 1;
+}
+
+.pane-grip > span {
+  width: 14px;
+  height: 3px;
+  background: radial-gradient(circle, var(--text-3) 1.5px, transparent 1.6px) 0 0 / 5px 3px repeat-x;
+}
+
+.panes-dragging .pane-grip {
+  cursor: grabbing;
+}
+
+/* Between two halves: a hairline, with room either side to take the pointer. */
+.pane-divider {
+  position: absolute;
+  z-index: 9;
+  touch-action: none;
+}
+
+.pane-divider.row {
+  width: 9px;
+  margin-left: -4px;
+  cursor: col-resize;
+}
+
+.pane-divider.column {
+  height: 9px;
+  margin-top: -4px;
+  cursor: row-resize;
+}
+
+.pane-divider::after {
+  content: "";
+  position: absolute;
+  background: var(--border);
+}
+
+.pane-divider.row::after {
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 1px;
+}
+
+.pane-divider.column::after {
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+}
+
+.pane-divider:hover::after {
+  background: var(--border-strong);
+}
+
+/* The half a dragged pane would take. */
+.pane-drop {
+  position: absolute;
+  z-index: 10;
+  background: var(--pane-drop);
+  pointer-events: none;
 }

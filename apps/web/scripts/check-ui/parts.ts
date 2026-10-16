@@ -464,7 +464,7 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings after a reload went to ${await where()}`));
-  // An archived thread opened from settings: settings close and the thread opens, rather than the close undoing the open.
+  // An archived thread opened from History, the button where the tabs end: the thread opens, and back returns to History.
   const archive = (archived: boolean) =>
     page.evaluate(
       async ({ id, archived }) => {
@@ -474,39 +474,63 @@ export const parts = async (): Promise<string> => {
       { id: seeded, archived },
     );
   await archive(true);
-  // Opened from a new thread, so where each step lands is unambiguous.
-  await page.evaluate(async () => {
-    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    void (await (window as any).lemma.service(Threads)).select(undefined);
-  });
-  await page.waitForFunction(() => location.pathname === "/");
-  await page.evaluate(async () => {
-    const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
-    (await (window as any).lemma.service(Settings)).open("archived");
-  });
-  await page.waitForFunction(() => location.pathname === "/settings/archived");
-  await expose(page, "Router");
+  await page.click(".tab-foot [aria-label=History]");
+  await page.waitForFunction(() => location.pathname === "/history");
+  await page.click(".history-nav-item >> text=Archived");
   await page.click(
-    `.archived-row:has-text("${await page.evaluate(async (id) => {
-      const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      const { sessionTitle } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    `.history-row:has-text("${await page.evaluate(async (id) => {
+      const { Threads, sessionTitle } = (await import("/src/ui/api.ts" as string)).api.contracts;
       return sessionTitle((await (window as any).lemma.service(Threads)).list().find((session: any) => session.id === id));
-    }, seeded)}") .archived-title`,
+    }, seeded)}") .history-open`,
   );
-  // Closing settings goes back, which lands later; the thread's own navigation waits for it, in every engine (unheld,
-  // Chromium and WebKit apply the back after it and end on "/", and Firefox keeps settings behind the thread). So the
-  // thread shows once the back has landed, and stays.
   await page
-    .waitForFunction((id) => !(window as any).services.Router.inspect().moving && location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
-    .catch(async () => assert.fail(`opening an archived thread ended on ${await where()}`));
+    .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
+    .catch(async () => assert.fail(`opening an archived thread from History ended on ${await where()}`));
   await page.goBack();
   await page
-    .waitForFunction(() => location.pathname === "/", undefined, { timeout: 5_000 })
-    .catch(async () => assert.fail(`back from an archived thread went to ${await where()}, not where settings were opened from`));
-  await page.goForward();
-  await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
+    .waitForFunction(() => location.pathname === "/history", undefined, { timeout: 5_000 })
+    .catch(async () => assert.fail(`back from an archived thread went to ${await where()}, not History`));
+  // Escape closes History, back where it was opened from.
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => location.pathname !== "/history");
   await archive(false);
+  await page.evaluate(async (id) => {
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    void (await (window as any).lemma.service(Threads)).select(id);
+  }, seeded);
+  await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   await page.waitForSelector(".turn");
+  // Unarchived while shown, the thread is a tab again.
+  await page.waitForSelector(`.tab-list [data-session-row][href^="/threads/${seeded}"]`);
+  // A closed tab comes back with ⌘Z, where it stood.
+  const tabs = () => page.$$eval(".tab-list [data-session-row]", (rows) => rows.map((row) => row.getAttribute("href")));
+  const before = await tabs();
+  await page.keyboard.press("ControlOrMeta+w");
+  await page.waitForFunction((id) => !location.pathname.endsWith(id), seeded);
+  await page.locator(".tab-strip").click({ position: { x: 1, y: 1 } });
+  await page.keyboard.press("ControlOrMeta+z");
+  await page
+    .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
+    .catch(async () => assert.fail(`⌘Z after closing a tab ended on ${await where()}`));
+  assert.deepEqual(await tabs(), before, "a reopened tab returns where it stood");
+  // A tab dragged past its neighbor's middle takes its place, and the drag's end opens nothing.
+  const openRows = page.locator(".tab-list > [data-open-row]");
+  const order = await openRows.evaluateAll((rows) => rows.map((row) => row.querySelector("a")!.getAttribute("href")));
+  assert.ok(order.length >= 2, "two open tabs to reorder");
+  const [from, to] = [await openRows.nth(0).boundingBox(), await openRows.nth(1).boundingBox()];
+  const shownBefore = await page.evaluate(() => location.pathname);
+  await page.mouse.move(from!.x + 20, from!.y + from!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to!.x + to!.width - 10, to!.y + to!.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page
+    .waitForFunction(
+      (want) => JSON.stringify([...document.querySelectorAll(".tab-list > [data-open-row] a")].map((a) => a.getAttribute("href")).slice(0, 2)) === want,
+      JSON.stringify([order[1], order[0]]),
+      { timeout: 5_000 },
+    )
+    .catch(async () => assert.fail(`dragging a tab left them in ${JSON.stringify(await tabs())}`));
+  assert.equal(await page.evaluate(() => location.pathname), shownBefore, "the drag's end opens nothing");
   // The thread page's plugin off: the address stays and says so, naming the plugin that declares the route; back on,
   // the thread returns.
   await switchTo(page, "threads.view", false);

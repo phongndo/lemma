@@ -224,6 +224,19 @@ const ArchiveIcon = (props: GlyphProps) => (
     <path d="M3.5 6v6a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" />
   </Icon>
 );
+const HistoryIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M2.8 8a5.2 5.2 0 101.5-3.7M2.5 2.5v2.3h2.3M8 5.2V8l2 1.3" />
+  </Icon>
+);
+const GridIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
+  </Icon>
+);
 const TrashIcon = (props: GlyphProps) => (
   <Icon class={props.class}>
     <path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8a1 1 0 001 .9h3.8a1 1 0 001-.9l.6-8" />
@@ -338,6 +351,8 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   more: MoreIcon,
   pin: PinIcon,
   archive: ArchiveIcon,
+  history: HistoryIcon,
+  grid: GridIcon,
   trash: TrashIcon,
   pencil: PencilIcon,
   brain: BrainIcon,

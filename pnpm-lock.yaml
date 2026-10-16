@@ -402,15 +402,18 @@ importers:
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../domains/threads/contract
-      '@lemma/threads-archived':
+      '@lemma/threads-browser':
         specifier: workspace:*
-        version: link:../../domains/threads/archived
+        version: link:../../domains/threads/browser
       '@lemma/threads-client':
         specifier: workspace:*
         version: link:../../domains/threads/client
       '@lemma/threads-composer':
         specifier: workspace:*
         version: link:../../domains/threads/composer
+      '@lemma/threads-history':
+        specifier: workspace:*
+        version: link:../../domains/threads/history
       '@lemma/threads-prompt-commands':
         specifier: workspace:*
         version: link:../../domains/threads/prompt-commands
@@ -2265,20 +2268,11 @@ importers:
         specifier: 5.0.4
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
-  domains/threads/archived:
+  domains/threads/browser:
     dependencies:
-      '@lemma/actions':
-        specifier: workspace:*
-        version: link:../../actions/contract
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
-      '@lemma/sessions':
-        specifier: workspace:*
-        version: link:../../sessions/contract
-      '@lemma/settings':
-        specifier: workspace:*
-        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
@@ -2405,6 +2399,49 @@ importers:
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/threads/history:
+    dependencies:
+      '@lemma/actions':
+        specifier: workspace:*
+        version: link:../../actions/contract
+      '@lemma/frame':
+        specifier: workspace:*
+        version: link:../../frame/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/router':
+        specifier: workspace:*
+        version: link:../../../packages/router
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../../workspace/contract
       solid-js:
         specifier: 1.9.17
         version: 1.9.17

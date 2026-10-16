@@ -3,7 +3,7 @@ import { withKeys } from "@lemma/web/keys";
 import { shownKeys, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
-import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
+import { Layout, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, Settings, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
 import { PromptCommands } from "@lemma/threads";
@@ -338,25 +338,6 @@ export default defineWebPlugin({
       order: -10,
       when: () => section() !== undefined && focus() !== undefined,
       run: () => focus()?.(),
-    });
-    // A section needing attention is the likeliest reason to open settings, so the button goes straight to it.
-    const attention = () => slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
-    slots.add(SidebarFooter, {
-      id: "settings",
-      component: (props) => (
-        <button
-          class="icon-button with-badge"
-          aria-label="Settings"
-          data-tip={attention() === undefined ? withKeys("Settings", keysOf("settings.open")) : `Settings · ${attention()!.title}: ${attention()!.badge!()}`}
-          onClick={() => {
-            open(attention()?.id ?? "general");
-            props.onPick();
-          }}
-        >
-          <GearIcon />
-          <Show when={attention()?.badge?.()}>{(badge) => <span class="count-badge">{Number.parseInt(badge(), 10) || "!"}</span>}</Show>
-        </button>
-      ),
     });
     return { settings: { section, open, params, setParams } };
   },

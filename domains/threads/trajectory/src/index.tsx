@@ -148,6 +148,6 @@ export default defineWebPlugin({
   styles,
   requires: { threads: Threads, notify: Notify, slots: Slots },
   setup: ({ threads, notify, slots }) => {
-    slots.add(Views, { id: "trajectory", order: 10, title: "Trajectory", icon: TrajectoryIcon, component: createTrajectory({ threads, notify, slots }) });
+    slots.add(Views, { id: "trajectory", order: 10, title: "Trace", icon: TrajectoryIcon, component: createTrajectory({ threads, notify, slots }) });
   },
 });

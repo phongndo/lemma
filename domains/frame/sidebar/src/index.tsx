@@ -13,8 +13,8 @@ import type { Action } from "@lemma/actions";
 import type { ThreadsService, SidebarRowProps } from "@lemma/threads";
 import type { RouterService, SlotsService, WebPluginsService } from "@lemma/web";
 import { PlusIcon, Popover, SidebarIcon, XIcon } from "@lemma/look";
-import { afterClose, neighborOf, pruned, seedOpen, shownThreads, withClosed, withOpened } from "./open.ts";
-import type { Shown } from "./open.ts";
+import { afterClose, lastClosed, moved, neighborOf, pruned, seedOpen, shownThreads, withClosed, withOpened, withReopened } from "./open.ts";
+import type { Closed, Shown } from "./open.ts";
 import { Effect, Schema } from "effect";
 import styles from "./sidebar.css?inline";
 
@@ -124,14 +124,23 @@ interface Deps {
   readonly shown: () => Shown;
   readonly unread: () => ReadonlySet<string>;
   readonly close: (id: string) => void;
+  /** Puts an open thread at `index` among the open ones. */
+  readonly move: (id: string, index: number) => void;
+  /** Leaves a new thread's page for the last open one; undefined when none is open. */
+  readonly leaveDraft: () => (() => void) | undefined;
 }
 
 /** A row of the open threads, as the `sidebar.row` part draws it, for either layout. */
-const threadRow = (deps: Deps, onPick: () => void) => {
+const threadRow = (deps: Deps, onPick: () => void, axis: Axis) => {
   const { threads, slots } = deps;
   const actionsFor = (session: SessionInfo) => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
   return (session: SessionInfo, closable: boolean) => (
-    <li>
+    <li
+      data-open-row={closable ? "" : undefined}
+      onPointerDown={closable ? dragRow(axis, session.id, deps.move) : undefined}
+      // A link dragged natively would carry its address off instead.
+      onDragStart={(event) => event.preventDefault()}
+    >
       <SidebarRow
         session={session}
         active={threads.activeId() === session.id}
@@ -151,6 +160,57 @@ const threadRow = (deps: Deps, onPick: () => void) => {
   );
 };
 
+type Axis = "x" | "y";
+
+/** Takes the click that ends a drag, so it opens nothing. */
+const swallow = (event: Event) => {
+  event.preventDefault();
+  event.stopPropagation();
+};
+
+/**
+ * Lets an open thread's row be dragged along `axis` to another place among the
+ * open ones: past a neighbor's middle, it moves there. The list holds the
+ * pointer, since the row itself moves in it.
+ */
+const dragRow = (axis: Axis, id: string, move: (id: string, index: number) => void) => (event: PointerEvent) => {
+  const row = event.currentTarget as HTMLElement;
+  const list = row.parentElement;
+  list?.removeEventListener("click", swallow, { capture: true });
+  if (list === null || event.button !== 0 || (event.target as Element).closest("button, input") !== null) return;
+  const along = (point: { clientX: number; clientY: number }) => (axis === "x" ? point.clientX : point.clientY);
+  const start = along(event);
+  let dragging = false;
+  const onMove = (moveEvent: PointerEvent) => {
+    const at = along(moveEvent);
+    if (!dragging) {
+      if (Math.abs(at - start) < 5) return;
+      dragging = true;
+      list.setPointerCapture(moveEvent.pointerId);
+      list.classList.add("rows-dragging");
+      row.classList.add("dragging");
+    }
+    const before = [...list.querySelectorAll<HTMLElement>(":scope > [data-open-row]")].filter((other) => {
+      if (other === row) return false;
+      const box = other.getBoundingClientRect();
+      return (axis === "x" ? box.left + box.width / 2 : box.top + box.height / 2) < at;
+    });
+    move(id, before.length);
+  };
+  const onUp = () => {
+    list.removeEventListener("pointermove", onMove);
+    list.removeEventListener("pointerup", onUp);
+    list.removeEventListener("pointercancel", onUp);
+    if (!dragging) return;
+    list.classList.remove("rows-dragging");
+    row.classList.remove("dragging");
+    list.addEventListener("click", swallow, { capture: true, once: true });
+  };
+  list.addEventListener("pointermove", onMove);
+  list.addEventListener("pointerup", onUp);
+  list.addEventListener("pointercancel", onUp);
+};
+
 /** Moves focus between rows with `keys`: [back, forward]. */
 const rowKeys =
   (keys: readonly [string, string]) =>
@@ -164,13 +224,20 @@ const rowKeys =
     rows[Math.max(0, Math.min(rows.length - 1, index + step))]?.focus();
   };
 
-/** The row of a thread not yet sent, while its page shows. */
-const DraftRow = () => (
+/** The row of a thread not yet sent, while its page shows; × leaves it for `close`, when there is somewhere to go. */
+const DraftRow = (props: { close: (() => void) | undefined }) => (
   <li>
     <div class="session-row active">
       <span class="session-open">
         <span class="session-title untitled">Thread</span>
       </span>
+      <Show when={props.close}>
+        {(close) => (
+          <button class="icon-button session-close" aria-label="Close thread" data-tip="Close" onClick={() => close()()}>
+            <XIcon />
+          </button>
+        )}
+      </Show>
     </div>
   </li>
 );
@@ -181,7 +248,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
     const action = slots.get(Actions, "shell.toggle-sidebar");
     return action === undefined ? undefined : shownKeys(action, webPlugins.list());
   };
-  const row = threadRow(props.deps, props.onPick);
+  const row = threadRow(props.deps, props.onPick, "y");
   const drafting = () => threads.activeId() === undefined && router.matchOf(NewThreadRoute) !== undefined;
   return (
     <nav class="sidebar" aria-label="Open threads" onKeyDown={rowKeys(["ArrowUp", "ArrowDown"])}>
@@ -203,7 +270,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
         <ul class="session-list">
           <For each={props.deps.shown().open}>{(session) => row(session, true)}</For>
           <Show when={drafting()}>
-            <DraftRow />
+            <DraftRow close={props.deps.leaveDraft()} />
           </Show>
         </ul>
       </div>
@@ -218,7 +285,7 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
 function TabStrip(props: { deps: Deps }) {
   const { threads, router } = props.deps;
   const pick = () => undefined;
-  const row = threadRow(props.deps, pick);
+  const row = threadRow(props.deps, pick, "x");
   const drafting = () => threads.activeId() === undefined && router.matchOf(NewThreadRoute) !== undefined;
   return (
     <nav class="tab-strip" aria-label="Open threads">
@@ -226,7 +293,7 @@ function TabStrip(props: { deps: Deps }) {
         <For each={props.deps.shown().pinned}>{(session) => row(session, false)}</For>
         <For each={props.deps.shown().open}>{(session) => row(session, true)}</For>
         <Show when={drafting()}>
-          <DraftRow />
+          <DraftRow close={props.deps.leaveDraft()} />
         </Show>
       </ul>
       <button class="icon-button tab-new" aria-label="New thread" data-tip="New thread" onClick={() => threads.newThread()}>
@@ -252,6 +319,12 @@ const SidebarConfig = Schema.Struct({
       description: "Show the open threads as tabs across the top of the window, or down a sidebar beside the thread.",
     }),
 });
+
+/** Whether `element` is a text field with text in it, whose ⌘Z undoes typing. */
+const holdsText = (element: Element | null): boolean =>
+  element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
+    ? element.value !== ""
+    : element instanceof HTMLElement && element.isContentEditable && (element.textContent ?? "") !== "";
 
 const isStrings = (value: unknown): value is string[] => Array.isArray(value) && value.every((item) => typeof item === "string");
 
@@ -290,10 +363,11 @@ export default defineWebPlugin({
       const kept = pruned(untrack(open), list);
       if (kept.length !== untrack(open).length) setOpen(kept);
     });
-    // Opening a thread opens it here.
+    // The thread shown is open here: on opening it, and again when it is unarchived while shown.
     createEffect(() => {
       const id = threads.activeId();
-      if (id !== undefined) setOpen(withOpened(untrack(open), id));
+      if (id === undefined || pruned([id], threads.list()).length === 0) return;
+      setOpen(withOpened(untrack(open), id));
     });
 
     // A turn that ends while another thread is open leaves its thread unread until it is opened.
@@ -314,15 +388,28 @@ export default defineWebPlugin({
 
     const shown = createMemo(() => shownThreads(threads.list(), open(), threads.running()));
     const order = () => [...shown().pinned, ...shown().open];
+    // The threads closed here, latest last, so an undo opens them again where they were.
+    const [closed, setClosed] = createSignal<readonly Closed[]>([]);
     const close = (id: string) => {
       const next = id === threads.activeId() ? afterClose(order(), id) : undefined;
+      const index = open().indexOf(id);
+      if (index !== -1) setClosed([...closed().filter((entry) => entry.id !== id), { id, index }].slice(-50));
       setOpen(withClosed(open(), id));
       if (id !== threads.activeId()) return;
       if (next !== undefined) void threads.select(next);
       else threads.newThread();
     };
 
-    const deps: Deps = { threads, slots, router, webPlugins, layout, now, shown, unread, close };
+    const leaveDraft = () => {
+      const last = order().at(-1);
+      return last === undefined ? undefined : () => void threads.select(last.id);
+    };
+    // The order the open threads show in: moving one that shows only while it runs opens it there.
+    const place = (id: string, index: number) => {
+      const next = moved(open(), id, index);
+      if (next.some((other, at) => other !== open()[at]) || next.length !== open().length) setOpen(next);
+    };
+    const deps: Deps = { threads, slots, router, webPlugins, layout, now, shown, unread, close, move: place, leaveDraft };
     if (plugin.config.tabs === "side")
       slots.add(SidebarRegion, { id: "sidebar", phase: "default", component: (props) => <Sidebar deps={deps} onPick={props.onPick} /> });
     else slots.add(TopRegion, { id: "tabs", phase: "default", component: () => <TabStrip deps={deps} /> });
@@ -334,8 +421,8 @@ export default defineWebPlugin({
       if (next !== undefined) void threads.select(next);
     };
     const add = (id: string, order: number, action: Omit<Action, "category">) => slots.add(Actions, { id, order, category: "Thread", ...action });
-    add("sidebar.next-thread", 20, { title: "Next open thread", keys: ["mod+shift+]", "mod+alt+arrowdown"], whileTyping: true, run: () => move(1) });
-    add("sidebar.previous-thread", 21, { title: "Previous open thread", keys: ["mod+shift+[", "mod+alt+arrowup"], whileTyping: true, run: () => move(-1) });
+    add("sidebar.next-thread", 20, { title: "Next open thread", keys: "mod+shift+]", whileTyping: true, run: () => move(1) });
+    add("sidebar.previous-thread", 21, { title: "Previous open thread", keys: "mod+shift+[", whileTyping: true, run: () => move(-1) });
     add("sidebar.close-thread", 22, {
       title: "Close thread",
       detail: "Takes it out of the open threads; the thread stays",
@@ -349,6 +436,33 @@ export default defineWebPlugin({
       run: () => {
         const id = threads.activeId();
         if (id !== undefined) close(id);
+      },
+    });
+    const step = (by: number) => () => {
+      const id = threads.activeId();
+      const at = id === undefined ? -1 : open().indexOf(id);
+      if (id !== undefined && at !== -1) place(id, at + by);
+    };
+    const movable = () => {
+      const id = threads.activeId();
+      return id !== undefined && open().includes(id);
+    };
+    add("sidebar.move-thread-back", 24, { title: "Move tab back", keys: "mod+alt+shift+[", whileTyping: true, when: movable, run: step(-1) });
+    add("sidebar.move-thread-forward", 25, { title: "Move tab forward", keys: "mod+alt+shift+]", whileTyping: true, when: movable, run: step(1) });
+    const reopenable = () => lastClosed(closed(), open(), threads.list());
+    add("sidebar.reopen-thread", 23, {
+      title: "Reopen closed thread",
+      detail: "Undoes the last close",
+      keys: ["mod+z", "mod+shift+t"],
+      // A field with text in it keeps its own undo.
+      whileTyping: true,
+      when: () => reopenable().reopen !== undefined && !holdsText(document.activeElement),
+      run: () => {
+        const { reopen, rest } = reopenable();
+        if (reopen === undefined) return;
+        setClosed(rest);
+        setOpen(withReopened(open(), reopen));
+        void threads.select(reopen.id);
       },
     });
   },

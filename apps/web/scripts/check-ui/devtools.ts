@@ -26,7 +26,7 @@ export const devtools = async (): Promise<string> => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     return (await (window as any).lemma.service(Threads)).list()[0].id;
   });
-  const sections = ["general", "appearance", "keyboard", "providers", "plugins", "projects", "archived"].map((section) => `/settings/${section}`);
+  const sections = ["general", "appearance", "keyboard", "providers", "plugins", "projects"].map((section) => `/settings/${section}`);
   for (const path of ["/", `/threads/${firstThread}`, `/threads/${firstThread}/trajectory`, ...sections, "/nowhere"]) {
     await page.evaluate(async (path) => {
       const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
