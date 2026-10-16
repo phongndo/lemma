@@ -107,7 +107,7 @@ process.once("SIGINT", interrupted);
 process.once("SIGTERM", interrupted);
 
 const sessions: string[] = [];
-for (let n = 0; n < SESSIONS; n++) sessions.push((await lemmaCli("session", "new", "--cwd", lemma.home)).out);
+for (let n = 0; n < SESSIONS; n++) sessions.push((await json<{ readonly id: string }>("sessions", "new", "--cwd", lemma.home)).id);
 
 const actions = {
   prompt: async () => {
@@ -126,13 +126,13 @@ const actions = {
     const [id, prompt] = prng.pick([...sent]);
     track(lemmaCli("run", prompt.session, prompt.text, "--request-id", id, "--when-busy", prompt.mode));
   },
-  cancel: async () => void track(lemmaCli("cancel", prng.pick(sessions))),
+  cancel: async () => void track(lemmaCli("agent", "cancel", prng.pick(sessions))),
   withdraw: async () => {
     const session = prng.pick(sessions);
     // Drawn whatever the queue holds, which timing decides: so every later draw is the seed's, as the workload is.
     const draw = prng.next();
-    const queue = await json<readonly { readonly requestId: string }[]>("queue", session).catch(() => []);
-    if (queue.length > 0) track(lemmaCli("withdraw", session, queue[Math.floor(draw * queue.length)]!.requestId));
+    const queue = await json<readonly { readonly requestId: string }[]>("agent", "queue", session).catch(() => []);
+    if (queue.length > 0) track(lemmaCli("agent", "withdraw", session, queue[Math.floor(draw * queue.length)]!.requestId));
   },
   kill: async () => {
     const host = lemma.host;
@@ -205,10 +205,10 @@ try {
   const timedOut = await Promise.race([asked.then(() => false), delay(LIVENESS_MS).then(() => true)]);
   if (timedOut) violations.push(`liveness: not every prompt reached the end of a turn within ${LIVENESS_MS} ms`);
   else {
-    const status = await json<{ readonly running?: readonly unknown[] }>("status");
-    if ((status.running ?? []).length > 0) violations.push(`liveness: turns still running: ${JSON.stringify(status.running)}`);
+    const running = await json<readonly string[]>("agent", "running");
+    if (running.length > 0) violations.push(`liveness: turns still running: ${JSON.stringify(running)}`);
     for (const session of sessions) {
-      const queue = await json<readonly unknown[]>("queue", session);
+      const queue = await json<readonly unknown[]>("agent", "queue", session);
       if (queue.length > 0) violations.push(`liveness: ${session} still queues ${queue.length} prompt(s)`);
     }
   }
@@ -224,7 +224,7 @@ try {
   const calls = new Map<string, number>();
   for (const session of sessions) {
     const log = await json<readonly Logged[]>("channels", "call", "sessions.events", JSON.stringify({ sessionId: session }));
-    const { branch } = await json<{ readonly branch: readonly Logged[] }>("session", "show", session);
+    const { branch } = await json<{ readonly branch: readonly Logged[] }>("sessions", "show", session);
     const seen = new Set<string>();
     const onBranch = new Set(branch.map((event) => event.id));
     log.forEach((event, index) => {
