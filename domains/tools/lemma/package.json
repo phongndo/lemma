@@ -1,0 +1,32 @@
+{
+  "name": "@lemma/tools-lemma",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Lemma's own channels as tools scripts call (the `lemma` namespace), and `lemma_delegate`: a task handed to a new session",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./src/index.ts"
+  }
+}
