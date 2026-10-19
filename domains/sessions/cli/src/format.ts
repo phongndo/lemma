@@ -1,6 +1,6 @@
 import { parseModelRef } from "@lemma/llm";
 import { RECORD_KIND_LABEL, recordDuration, recordName, recordStatus } from "@lemma/sessions";
-import type { LedgerRecord, SectionDiff, SessionEvent, SessionInfo, TrajectoryRequest, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
+import type { LedgerRecord, PluginShare, SectionDiff, SessionEvent, SessionInfo, TrajectoryRequest, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
 import { formatDuration, formatTokens, formatUsage, table as pad, time } from "@lemma/cli";
 
 /** Human-readable views of sessions; `--json` prints the contract shapes instead. */
@@ -251,6 +251,27 @@ export const formatTools = (request: TrajectoryRequest): string =>
       ].join("\n"),
     )
     .join("\n\n") || "No tools.";
+
+/** Characters as tokens, roughly: four to a token. */
+const tokensOf = (chars: number) => `≈${formatTokens(Math.ceil(chars / 4))}`;
+
+/** Each plugin's share of a request: its prompt and tools in tokens, and what of it changed since the request before. */
+export const formatShares = (shares: readonly PluginShare[], first: boolean): string =>
+  shares.length === 0
+    ? "No plugin put anything in this request."
+    : [
+        pad([
+          ["plugin", "prompt", "tools", "changed"],
+          ...shares.map((share) => [
+            share.source,
+            share.systemChars === 0 ? "" : tokensOf(share.systemChars),
+            share.toolChars === 0 ? "" : tokensOf(share.toolChars),
+            first ? "(first request)" : share.changed.join(", "),
+          ]),
+        ]),
+        "",
+        "Tokens are estimated at four characters each. A provider caches a prompt up to its first change: what changed costs the cache of everything after it.",
+      ].join("\n");
 
 /** Section-by-section changes to the system prompt, as unified-style lines. */
 export const formatDiff = (diff: readonly SectionDiff[], first: boolean): string => {

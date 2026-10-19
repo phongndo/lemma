@@ -3,7 +3,7 @@ import { emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, ToolSpec } from "@lemma/llm";
 import type { Contribution, EventData, SessionEvent } from "../src/sessions.ts";
 import { deriveMessages } from "../src/derive.ts";
-import { splitSystem, trajectory } from "../src/trajectory.ts";
+import { latestRequest, pluginShares, splitSystem, trajectory } from "../src/trajectory.ts";
 
 function log(...items: readonly EventData[]): SessionEvent[] {
   return items.map((data, i) => ({ seq: i + 1, id: `e${i + 1}`, parent: i === 0 ? null : `e${i}`, at: 1000 + i, data }));
@@ -263,6 +263,16 @@ describe("trajectory", () => {
     expect(next.tools.map((t) => [t.name, t.changed])).toEqual([["read", false]]);
     expect(next.removed).toEqual(["bash"]);
     expect(next.thinking).toBe("high");
+  });
+
+  it("gives each plugin's share of a request, and what of it changed since the one before", () => {
+    const next = latestRequest(turns)!;
+    expect(next).toBe(turns[1]!.steps[0]!.request);
+    expect(pluginShares(next)).toEqual([
+      { source: "read", systemChars: 0, toolChars: JSON.stringify(read).length, sections: [], tools: ["read"], changed: [] },
+      { source: "agent", systemChars: "BASE".length + "ENV 2".length, toolChars: 0, sections: ["base", "environment"], tools: [], changed: ["environment"] },
+    ]);
+    expect(latestRequest([])).toBeUndefined();
   });
 
   it("keeps failed attempts and counts their usage", () => {

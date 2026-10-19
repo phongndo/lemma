@@ -136,6 +136,50 @@ export interface TrajectoryTurn {
   readonly usage: Usage;
 }
 
+/** What one plugin put in a request: its sections and tools, their size, and those new or changed since the request before. */
+export interface PluginShare {
+  /** Plugin id. */
+  readonly source: string;
+  readonly systemChars: number;
+  readonly toolChars: number;
+  /** Its section ids and tool names in the request. */
+  readonly sections: readonly string[];
+  readonly tools: readonly string[];
+  /**
+   * Those of them new or different since the previous request on the branch (all of them, on the first): a provider's
+   * prompt cache holds up to the first change, so a part that changes costs the cache of everything after it.
+   */
+  readonly changed: readonly string[];
+}
+
+/** Each plugin's share of a request, the largest first. */
+export function pluginShares(request: TrajectoryRequest): readonly PluginShare[] {
+  const shares = new Map<string, { systemChars: number; toolChars: number; sections: string[]; tools: string[]; changed: string[] }>();
+  const shareOf = (source: string) =>
+    shares.get(source) ?? shares.set(source, { systemChars: 0, toolChars: 0, sections: [], tools: [], changed: [] }).get(source)!;
+  for (const section of request.sections) {
+    const share = shareOf(section.source);
+    share.systemChars += section.chars;
+    share.sections.push(section.id);
+    if (section.changed) share.changed.push(section.id);
+  }
+  for (const tool of request.tools) {
+    const share = shareOf(tool.source);
+    share.toolChars += tool.chars;
+    share.tools.push(tool.name);
+    if (tool.changed) share.changed.push(tool.name);
+  }
+  return [...shares]
+    .map(([source, share]) => ({ source, ...share }))
+    .sort((a, b) => b.systemChars + b.toolChars - (a.systemChars + a.toolChars) || a.source.localeCompare(b.source));
+}
+
+/** The latest request among `turns`: the last that a step logged. */
+export function latestRequest(turns: readonly TrajectoryTurn[]): TrajectoryRequest | undefined {
+  for (const turn of [...turns].reverse()) for (const step of [...turn.steps].reverse()) if (step.request !== undefined) return step.request;
+  return undefined;
+}
+
 /**
  * `system` split back into its sections by the recorded sizes (see the
  * `request` event). Undefined when the sizes do not add up, e.g. a request

@@ -7,6 +7,7 @@ import {
   LEDGER_SORTS,
   ledger,
   parseLedgerFilter,
+  pluginShares,
   promptDiff,
   rebuildRequest,
   recordStart,
@@ -19,7 +20,7 @@ import {
 } from "@lemma/sessions";
 import type { LedgerSort, SessionLogUpdate, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
 import { callHere, CliCommandError, CliCommands, defineCliCommand, followHere, usageError } from "@lemma/cli";
-import { formatDiff, formatRecords, formatSession, formatSessions, formatStep, formatSystem, formatTools, formatTrajectory } from "./format.ts";
+import { formatDiff, formatRecords, formatShares, formatSession, formatSessions, formatStep, formatSystem, formatTools, formatTrajectory } from "./format.ts";
 
 type Reader = Context.Service.Shape<typeof Registries>;
 
@@ -217,11 +218,19 @@ export const sessionCommands = (registries: Reader) => [
       tools: { type: "boolean", description: "With --request: only the tool definitions" },
       diff: { type: "boolean", description: "With --request: how its system prompt differs from the request before" },
       rebuilt: { type: "boolean", description: "With --request: the exact request sent to the model, as JSON" },
+      plugins: {
+        type: "boolean",
+        description: "With --request: each plugin's share of it (its prompt and tools, in tokens) and what of it changed since the request before",
+      },
     },
-    examples: ['lemma sessions inspect 01J… --filter "is:error tool:bash"', "lemma sessions inspect 01J… --request last --system"],
+    examples: [
+      'lemma sessions inspect 01J… --filter "is:error tool:bash"',
+      "lemma sessions inspect 01J… --request last --system",
+      "lemma sessions inspect 01J… --request last --plugins",
+    ],
     run: ({ args, flags }) =>
       Effect.gen(function* () {
-        const views = (["system", "tools", "diff", "rebuilt"] as const).filter((view) => flags[view]);
+        const views = (["system", "tools", "diff", "rebuilt", "plugins"] as const).filter((view) => flags[view]);
         if (views.length > 1) return yield* usageError(`Use one of ${views.map((view) => `--${view}`).join(", ")}`);
         const view = views[0];
         const selector = flags.request;
@@ -276,6 +285,10 @@ export const sessionCommands = (registries: Reader) => [
             const previous = requests[requests.indexOf(request!) - 1];
             const diff = promptDiff(previous, request!);
             return { json: { previous: previous?.eventId, sections: diff }, text: formatDiff(diff, previous === undefined) };
+          }
+          case "plugins": {
+            const first = turns.flatMap((turn) => turn.steps).find((step) => step.request !== undefined)?.request === request;
+            return { json: pluginShares(request!), text: formatShares(pluginShares(request!), first) };
           }
           case "rebuilt": {
             const rebuilt = rebuildRequest(branch, request!.eventId, sessionId);

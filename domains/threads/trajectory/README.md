@@ -12,7 +12,11 @@ without the composer), and draws what plugins add to `TrajectoryTabs` and
 `Threads.branch` with `trajectory` and `ledger`
 ([`@lemma/sessions`](../../sessions/contract/src/ledger.ts)): a row for the
 system prompt when first sent or changed, each prompt, each model call (a
-failed attempt too), and each tool run. Requires `Threads` and the runtime's
+failed attempt too), and each tool run. On the Plugins page it adds a
+`PluginsFacts` line (the open thread's latest request in tokens, and how many
+of its parts changed since the one before) and a **Cost** tab to `PluginTabs`
+([`@lemma/settings`](../../settings/contract/src/index.ts)) for each plugin
+that put something in it (`pluginShares`). Requires `Threads` and the runtime's
 `Notify` and `Slots`. No config.
 
 ## Behavior

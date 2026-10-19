@@ -318,10 +318,13 @@ export const parts = async (): Promise<string> => {
   assert.equal(await page.inputValue("textarea"), "use $review ", "picking a skill does not write its name");
   await page.fill("textarea", "");
   expectNoErrors("completing in the composer");
-  // An inspector tab: it lists for the selected plugin.
+  // An inspector tab: it lists for the selected plugin. Over a thread with requests, whose latest one the Cost tab reads.
   await page.evaluate(async () => {
-    const { PluginTabs, Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const { PluginTabs, Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     const lemma = (window as any).lemma;
+    const threads = await lemma.service(Threads);
+    (window as any).threadBefore = threads.activeId();
+    await threads.select(threads.list().find((info: { readonly title?: string }) => info.title === "Fix flaky session log test").id);
     const remove = (window as any).checkSlots.add(PluginTabs, {
       id: "check.tab",
       order: 1_000,
@@ -335,6 +338,19 @@ export const parts = async (): Promise<string> => {
   await page.click(".inspector-table [role=rowgroup][aria-label='agent'] .inspector-domain");
   await page.click(".inspector-row[data-key='host:agent.loop']");
   await page.waitForSelector(".inspector-tabs >> text=Checked", { timeout: 5_000 }).catch(() => assert.fail("an inspector tab does not show"));
+  // A plugin's share of the open thread's latest request: agent.loop put the base prompt there.
+  await page.click(".inspector-tabs >> text=Cost");
+  await page
+    .waitForSelector(".trj-cost td >> text=base", { timeout: 5_000 })
+    .catch(() => assert.fail("the Cost tab does not show what a plugin put in the latest request"));
+  // Back over the thread it was opened over, as the checks below expect, the page as it was left.
+  await page.evaluate(async () => {
+    const { Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const lemma = (window as any).lemma;
+    await (await lemma.service(Threads)).select((window as any).threadBefore);
+    (await lemma.service(Settings)).open("plugins");
+  });
+  await page.waitForSelector(".inspector-table [aria-selected=true] >> text=agent.loop", { timeout: 5_000 });
   await page.evaluate(() => {
     for (const remove of (window as any).removals) remove();
   });

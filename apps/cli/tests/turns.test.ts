@@ -57,6 +57,13 @@ describe("turns against a running host", () => {
     );
     expect(durations).toEqual([...durations].sort((a, b) => b - a));
     expect(durations[0]).toBeGreaterThanOrEqual(0);
+    // Each plugin's share of the latest request: the agent's base prompt, and the bash tool its plugin offered.
+    const shares = JSON.parse((await invoke(["sessions", "inspect", session, "--request", "last", "--plugins", "--json"], home)).out) as {
+      readonly source: string;
+      readonly tools: readonly string[];
+    }[];
+    expect(shares.find((share) => share.tools.includes("bash"))?.source).toBe("tools.bash");
+    expect(shares.some((share) => share.source === "agent.loop")).toBe(true);
     expect((await invoke(["agent", "cancel", session], home)).code).toBe(ExitCode.ok);
   }, 30_000);
 
