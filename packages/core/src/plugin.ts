@@ -74,7 +74,6 @@ export type Provided<P extends Capabilities> = keyof P extends never ? void | un
  */
 export type SetupResult<Out, R> = Effect.Effect<Out, unknown, R> | Generator<Effect.Effect<unknown, unknown, R>, Out, any>;
 
-/** The manifest fields every way of writing a plugin shares. */
 /**
  * Which versions of named contracts a plugin is written against (`uses`) and implements (`implements`), each
  * `name@version` with a whole-number version: `"example/store@2"`. Planning refuses a plugin that uses a version of a
@@ -88,6 +87,7 @@ export interface ContractVersions {
   readonly implements?: readonly string[];
 }
 
+/** The manifest fields every way of writing a plugin shares. */
 export interface PluginManifest extends ContractVersions {
   readonly id: string;
   readonly version?: string;

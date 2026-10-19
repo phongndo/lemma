@@ -33,7 +33,6 @@ const hostControl = definePlugin({
   }),
 });
 
-/** What a host runs besides its sessions store, its agent, and its tool registry: the model and the tools. */
 /**
  * The plugin providing `Agent`, given the run's seams: the disk it keeps its journals on, its ids, and the platform it
  * names. `agent.loop` by default; a replacement runs the same simulation by giving its own (it must take its time,
@@ -43,6 +42,7 @@ export type AgentFactory = (seams: { readonly fs: FileSystem; readonly ids: IdSo
 
 export const bundledAgent: AgentFactory = (seams) => makeAgentPlugin(seams);
 
+/** What a host runs besides its sessions store, its agent, and its tool registry: the model and the tools. */
 export interface HostParts {
   readonly plugins: readonly Plugin[];
   /** The plugin providing `Agent`: `agent.loop` when absent. */
