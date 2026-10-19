@@ -17,7 +17,7 @@ export type Kind = LedgerRecord["kind"];
 export type TypeFilter = "all" | Kind | "error";
 export type SortKey = LedgerSort;
 
-/** The view's state (selection, filters, zoom) and what its pieces share, one per plugin instance. */
+/** The view's state (selection, filters, zoom) and what its pieces share, one per tab it shows in. */
 export function createView(deps: TrajectoryDeps) {
   /** Elements the pieces set and read: the filter field, the table's scroller, and where it last was (a scroll above it is the reader's, which stops following). */
   const refs: { filterInput?: HTMLInputElement | undefined; scroller?: HTMLDivElement | undefined; lastTop: number } = { lastTop: 0 };

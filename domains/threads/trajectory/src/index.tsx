@@ -1,11 +1,12 @@
-import { Show, createEffect, createMemo, on } from "solid-js";
+import { Show, createEffect, createMemo, createRoot, getOwner, on, runWithOwner } from "solid-js";
 import type { JSX } from "solid-js";
 import { ledger, ledgerSpans, parseLedgerFilter, trajectory as projectTrajectory } from "@lemma/sessions";
 import type { LedgerRecord } from "@lemma/sessions";
 import { stepFor } from "@lemma/web/keys";
 import { timeScale } from "./scale.ts";
 import { createNow } from "@lemma/web/now";
-import { Threads, Views } from "@lemma/threads";
+import { Pane, Threads, Views } from "@lemma/threads";
+import type { ThreadViewProps } from "@lemma/threads";
 import { Notify, Slots, defineWebPlugin } from "@lemma/web";
 import { TrajectoryIcon } from "@lemma/look";
 import styles from "./trajectory.css?inline";
@@ -21,7 +22,8 @@ import { createToolbar } from "./toolbar.tsx";
  * DeepSeek Harness's trajectory: a filter toolbar, a zoomable three-lane
  * overview, a sortable table with a waterfall column, a details panel with
  * tabs, a context menu, and a status bar. Everything is projected from the
- * session log (`trajectory` → `ledger`). One per plugin instance.
+ * session log (`trajectory` → `ledger`). One per tab: its filter, selection,
+ * and scroll are that tab's.
  */
 function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   const view = createView(deps);
@@ -30,6 +32,8 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   const { Overview } = createTimeline(view);
   const { Table, ContextMenu, StatusBar } = createTable(view);
   const { Details } = createDetails(view);
+  /** The thread it last showed: its state is that thread's. */
+  let shownFor: string | undefined;
 
   function Trajectory(): JSX.Element {
     const records = createMemo(() => ledger(projectTrajectory(deps.threads.branch())));
@@ -46,7 +50,14 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
     createEffect(
       on(
         () => deps.threads.activeId(),
-        () => {
+        (id) => {
+          // Drawn again over the thread it last showed (its tab shown again), it is as it was, where it was scrolled to.
+          if (id === shownFor) {
+            if (stuck() && sort().key === "time") follow();
+            else queueMicrotask(() => refs.scroller?.scrollTo({ top: refs.lastTop }));
+            return;
+          }
+          shownFor = id;
           select(undefined);
           setRange(undefined);
           setQuery("");
@@ -124,9 +135,7 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
           >
             <Show
               when={records().length > 0}
-              fallback={
-                <p class="trj-empty">{deps.threads.activeId() === undefined ? "Start a chat to see its trajectory." : "No records on this branch yet."}</p>
-              }
+              fallback={<p class="trj-empty">{deps.threads.blank() ? "Start a chat to see its trajectory." : "No records on this branch yet."}</p>}
             >
               <Table records={records()} visible={visible()} scale={scale()} ledgerSpans={spanById()} now={now()} compact={selection() !== undefined} />
             </Show>
@@ -142,12 +151,43 @@ function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
   return Trajectory;
 }
 
-/** The session as the requests and tool runs behind it, like DevTools' Network panel. */
+/** The trace of the thread's first view, when it is one: not in a tab. */
+const MAIN = "trajectory";
+
+/**
+ * The session as the requests and tool runs behind it, like DevTools' Network panel. Each tab of it has its own
+ * (filter, selection, scroll), kept while another tab shows, until the tab closes.
+ */
 export default defineWebPlugin({
   id: "threads.trajectory",
   styles,
-  requires: { threads: Threads, notify: Notify, slots: Slots },
-  setup: ({ threads, notify, slots }) => {
-    slots.add(Views, { id: "trajectory", order: 10, title: "Trace", icon: TrajectoryIcon, component: createTrajectory({ threads, notify, slots }) });
+  requires: { threads: Threads, notify: Notify, slots: Slots, pane: Pane },
+  setup: ({ threads, notify, slots, pane }) => {
+    const owner = getOwner();
+    const kept = new Map<string, { readonly draw: () => JSX.Element; readonly dispose: () => void }>();
+    /** The tab's trace, made when it first shows; the plugin's, so it outlives being drawn. */
+    const traceFor = (tab: string) => {
+      const known = kept.get(tab);
+      if (known !== undefined) return known.draw;
+      const made = runWithOwner(owner, () => createRoot((dispose) => ({ draw: createTrajectory({ threads, notify, slots }), dispose })))!;
+      kept.set(tab, made);
+      return made.draw;
+    };
+    createEffect(() => {
+      const tabs = new Set([MAIN, ...pane.tabs().map((tab) => tab.id)]);
+      for (const [tab, trace] of kept)
+        if (!tabs.has(tab)) {
+          trace.dispose();
+          kept.delete(tab);
+        }
+    });
+    slots.add(Views, {
+      id: "trajectory",
+      order: 10,
+      title: "Trace",
+      icon: TrajectoryIcon,
+      letter: "t",
+      component: (props: ThreadViewProps) => traceFor(props.tab ?? MAIN)(),
+    });
   },
 });

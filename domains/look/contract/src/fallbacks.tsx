@@ -148,6 +148,8 @@ const GLYPHS: Readonly<Record<IconName, string>> = {
   star: "☆",
   more: "⋯",
   pin: "⊙",
+  "pin-off": "⊘",
+  question: "?",
   archive: "⊟",
   history: "◷",
   grid: "⊞",
@@ -165,6 +167,8 @@ const GLYPHS: Readonly<Record<IconName, string>> = {
   "arrow-left": "←",
   redo: "↷",
   skip: "⏭",
+  maximize: "⤢",
+  minimize: "⤡",
   spinner: "…",
 };
 
