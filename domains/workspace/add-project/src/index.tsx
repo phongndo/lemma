@@ -1,6 +1,5 @@
 import { For, Show, createMemo, createSignal, createUniqueId, onCleanup, onMount } from "solid-js";
 import { WorkspaceChannels } from "@lemma/workspace";
-import type { DirectoryEntry } from "@lemma/workspace";
 import { Portal } from "solid-js/web";
 import { listKey, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
@@ -13,6 +12,8 @@ import type { DialogsService } from "@lemma/frame";
 import type { ClientService, NotifyService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
 import { ChevronIcon, FolderIcon, FolderPlusIcon, GitBranchIcon, Spinner } from "@lemma/look";
+import { above, listRows } from "./rows.ts";
+import type { Listing, Row } from "./rows.ts";
 import styles from "./add-project.css?inline";
 
 const DIALOG = "add-project";
@@ -24,27 +25,23 @@ interface Deps {
   readonly dialogs: DialogsService;
 }
 
-type Row =
-  /** `..`: goes up to `path`, highlighting `from`, the folder it leaves. */
-  | { readonly kind: "up"; readonly path: string; readonly from: string }
-  | { readonly kind: "entry"; readonly entry: DirectoryEntry }
-  | { readonly kind: "create"; readonly path: string };
-
 const withSlash = (path: string) => (path.endsWith("/") ? path : `${path}/`);
 
 /**
  * Pick a folder on the host by typing its path. Matching folders list as you
- * type (letters in order match), the arrow keys move, Tab or → goes into the
- * highlighted folder, `..` or Backspace after a slash goes up with the folder
- * left highlighted, Enter opens. A name that matches nothing can be created as
- * a new folder.
+ * type (letters in order match). As in every search list, ↑ and ↓ move, and
+ * Enter, a click, or mod+1 … mod+9 picks a row: a folder opens, a name that
+ * matches nothing is created. Tab, → at the end, or a row's chevron goes into
+ * the highlighted folder; at a slash the first row opens the folder typed, and
+ * `..` or Backspace goes up with the folder left highlighted. A key that picks
+ * waits for the folders of what is typed, so it never acts on the last path's.
  */
 function AddProjectDialog(props: { deps: Deps }) {
   // Unique per instance: the page could show two lists.
   const listId = `add-project-list-${createUniqueId()}`;
   const { client, workspace, notify, dialogs } = props.deps;
   const [value, setValue] = createSignal("");
-  const [listing, setListing] = createSignal<{ parent: string; entries: readonly DirectoryEntry[]; truncated: boolean }>();
+  const [listing, setListing] = createSignal<Listing>();
   const [active, setActive] = createSignal(0);
   const [loading, setLoading] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
@@ -53,47 +50,48 @@ function AddProjectDialog(props: { deps: Deps }) {
   let list!: HTMLDivElement;
   let request = 0;
   let debounce: number | undefined;
+  /** The path last asked for, and the one the folders shown answer (listed, or failed to be). */
+  let asked: string | undefined;
+  let answered: string | undefined;
+  /** A key that picks, waiting for `answered` to catch up with what is typed. */
+  let waiting: (() => void) | undefined;
+  /** A row was moved to (↑/↓, the pointer) since the path last changed: the folders arriving leave it chosen. */
+  let chosen = false;
   const previous = document.activeElement as HTMLElement | null;
 
-  /** The part after the last slash: what the listing is filtered by. */
-  const needle = () => value().slice(value().lastIndexOf("/") + 1);
-
-  const rows = createMemo((): Row[] => {
-    const current = listing();
-    if (current === undefined) return [];
-    const typed = needle();
-    const out: Row[] = [];
-    const cut = current.parent.lastIndexOf("/");
-    if (typed === "" && current.parent !== "/") {
-      out.push({ kind: "up", path: current.parent.slice(0, cut) || "/", from: current.parent.slice(cut + 1) });
-    }
-    out.push(...current.entries.map((entry): Row => ({ kind: "entry", entry })));
-    const exact = current.entries.some((entry) => entry.name.toLowerCase() === typed.toLowerCase());
-    if (typed !== "" && !exact) out.push({ kind: "create", path: `${withSlash(current.parent)}${typed}` });
-    return out;
-  });
+  const rows = createMemo(() => listRows(value(), listing(), home()));
 
   const close = () => dialogs.open(undefined);
   /** List `typed`, highlighting the folder named `select` when it is there. */
   const refresh = async (typed: string, select?: string) => {
     const id = ++request;
+    asked = typed;
     setLoading(true);
     try {
       const next = await client.channel.call(WorkspaceChannels.browse, { partialPath: typed });
       if (id !== request) return;
       setListing(next);
       const index = rows().findIndex((row) => row.kind === "entry" && row.entry.name === select);
-      setActive(Math.max(index, 0));
+      if (index !== -1 || !chosen) setActive(Math.max(index, 0));
+      else setActive((at) => Math.min(at, rows().length - 1));
       list.scrollTop = 0;
       if (index > 0) list.querySelector(`[data-index="${index}"]`)?.scrollIntoView({ block: "nearest" });
     } catch {
       if (id === request) setListing(undefined);
     } finally {
-      if (id === request) setLoading(false);
+      if (id === request) {
+        setLoading(false);
+        answered = typed;
+        const run = waiting;
+        waiting = undefined;
+        run?.();
+      }
     }
   };
   const update = (next: string, immediate = false, select?: string) => {
     setValue(next);
+    waiting = undefined;
+    chosen = false;
     window.clearTimeout(debounce);
     if (immediate) void refresh(next, select);
     else debounce = window.setTimeout(() => void refresh(next), 50);
@@ -106,12 +104,8 @@ function AddProjectDialog(props: { deps: Deps }) {
   };
   const up = () => {
     // `~/` goes up too, to the folder holding the home folder.
-    const trimmed = value()
-      .replace(/\/+$/, "")
-      .replace(/^~(?=\/|$)/, () => home() ?? "~");
-    const cut = trimmed.lastIndexOf("/");
-    if (cut < 0) return;
-    go(trimmed.slice(0, cut) || "/", trimmed.slice(cut + 1));
+    const to = above(value(), home());
+    if (to !== undefined) go(to.path, to.from);
   };
 
   const open = async (path: string) => {
@@ -138,6 +132,9 @@ function AddProjectDialog(props: { deps: Deps }) {
       return;
     }
     switch (row.kind) {
+      case "here":
+        void open(row.path);
+        return;
       case "up":
         go(row.path, row.from);
         return;
@@ -152,15 +149,25 @@ function AddProjectDialog(props: { deps: Deps }) {
   const move = (delta: number) => {
     const count = rows().length;
     if (count === 0) return;
+    chosen = true;
     setActive((index) => (index + delta + count) % count);
     list.querySelector(`[data-index="${active()}"]`)?.scrollIntoView({ block: "nearest" });
+  };
+
+  /** Runs a key that picks on the rows of what is typed: now, or once its folders arrive, asked for at once. */
+  const settled = (act: () => void) => {
+    if (answered === value()) return act();
+    waiting = act;
+    if (asked !== value()) {
+      window.clearTimeout(debounce);
+      void refresh(value());
+    }
   };
 
   const caretAtEnd = () => input.selectionStart === value().length && input.selectionEnd === value().length;
   const hold = createQuickHold();
   const onKeyDown = (event: KeyboardEvent) => {
     hold.track(event);
-    const row = rows()[active()];
     const list = event.isComposing ? undefined : listKey(event);
     if (event.key === "Escape") {
       event.preventDefault();
@@ -169,35 +176,47 @@ function AddProjectDialog(props: { deps: Deps }) {
     } else if (list !== undefined) {
       event.preventDefault();
       if (!("pick" in list)) move(list.move);
-      else if (list.pick < rows().length) pick(rows()[list.pick]);
+      else
+        settled(() => {
+          const row = rows()[list.pick];
+          if (row !== undefined) pick(row);
+        });
     } else if ((event.key === "Tab" && !event.shiftKey) || (event.key === "ArrowRight" && caretAtEnd())) {
-      if (row?.kind === "entry") {
-        event.preventDefault();
-        go(row.entry.path);
-      } else if (event.key === "Tab") event.preventDefault();
+      event.preventDefault();
+      settled(() => {
+        const row = rows()[active()];
+        if (row?.kind === "entry") go(row.entry.path);
+      });
+    } else if (event.key === "Tab") {
+      // Shift+Tab too: focus stays in the dialog.
+      event.preventDefault();
     } else if (event.key === "Backspace" && value().endsWith("/") && caretAtEnd() && value().length > 1) {
       event.preventDefault();
       up();
     } else if (event.key === "Enter" && !event.isComposing) {
       event.preventDefault();
-      pick(row);
+      settled(() => pick(rows()[active()]));
     }
   };
 
-  onMount(async () => {
+  onMount(() => {
     input.focus();
-    // Learn the host user's home, and start there: `..` or a typed `/` goes on to the disk's root.
-    try {
-      setHome((await client.channel.call(WorkspaceChannels.browse, { partialPath: "~/" })).parent);
-    } catch {
-      /* absolute paths still work */
-    }
     const initial = "~/";
     update(initial, true);
     input.setSelectionRange(initial.length, initial.length);
+    // The host user's home, for `~`: `..` from it, or a typed `/`, goes on to the disk's root.
+    void client.channel.call(WorkspaceChannels.browse, { partialPath: "~/" }).then(
+      (found) => setHome(found.parent),
+      () => {
+        /* absolute paths still work */
+      },
+    );
   });
   onCleanup(() => {
     window.clearTimeout(debounce);
+    // Closed, nothing waiting may open a project.
+    waiting = undefined;
+    request++;
     previous?.focus?.();
   });
 
@@ -220,7 +239,7 @@ function AddProjectDialog(props: { deps: Deps }) {
               role="combobox"
               aria-expanded="true"
               aria-controls={listId}
-              aria-activedescendant={`${listId}-${active()}`}
+              aria-activedescendant={rows().length > 0 ? `${listId}-${active()}` : undefined}
               autocomplete="off"
               autocapitalize="off"
               spellcheck={false}
@@ -243,10 +262,21 @@ function AddProjectDialog(props: { deps: Deps }) {
                   data-quick-key={hold.held() ? quickKey(index()) : undefined}
                   aria-selected={index() === active()}
                   onPointerMove={() => setActive(index())}
+                  // The path keeps focus, so the keys still reach the list.
+                  onMouseDown={(event) => event.preventDefault()}
                   onClick={() => pick(row)}
                 >
                   {(() => {
                     switch (row.kind) {
+                      case "here":
+                        return (
+                          <>
+                            <FolderIcon />
+                            <span class="palette-name">
+                              Open <span class="palette-mono">{tildePath(row.path, home()).replace(/(.)\/+$/, "$1")}</span>
+                            </span>
+                          </>
+                        );
                       case "up":
                         return (
                           <>
@@ -295,7 +325,7 @@ function AddProjectDialog(props: { deps: Deps }) {
                 </div>
               )}
             </For>
-            <Show when={!loading() && listing() !== undefined && rows().length === 0}>
+            <Show when={!loading() && listing() === undefined && value() !== ""}>
               <div class="palette-empty">No folder here. Check the path.</div>
             </Show>
             <Show when={listing()?.truncated}>
