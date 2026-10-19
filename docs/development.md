@@ -40,6 +40,12 @@ revision (by hand, or on a pull request labelled `performance`); locally,
 time, as a session grows ([`@lemma/sim`](../packages/sim/README.md#the-harness-benchmark)):
 its counts are the same on every machine, and hard budgets.
 
+`pnpm check` also holds the runtime (what no plugin can replace: the kernel,
+the runtime's contracts, the host and web runtimes, the planner, the client)
+to a size budget in lines (`scripts/size.ts`), and prints how many extension
+points each domain's contract declares. A change that needs more raises the
+budget in the same change.
+
 Tests wait for a condition, never a fixed time, and make their temporary files
 with `mkdtemp`: `scripts/check-boundaries.ts` (in `pnpm check`) counts fixed
 waits and fixed temporary names per file, and fails when a count rises above

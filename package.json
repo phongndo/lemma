@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @lemma/core --filter @lemma/router build",
-    "check": "pnpm build && node scripts/check-boundaries.ts && tsc -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
+    "check": "pnpm build && node scripts/check-boundaries.ts && node scripts/size.ts && tsc -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",
     "format:check": "oxfmt --check",

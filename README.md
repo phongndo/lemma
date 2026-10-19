@@ -7,6 +7,21 @@ a plugin of yours stands where a bundled one does.
 
 Lemma runs from a checkout and is under active development.
 
+## Principles
+
+- **Every part is a plugin.** The agent loop, the tools, the session store,
+  and the web app's views are plugins on the same footing as yours, met
+  only through contracts, so any of them can be turned off or replaced by id.
+- **The runtime stays small.** What no plugin can replace (the kernel, the
+  runtime's contracts, the host and web runtimes) is held to a size budget
+  (`scripts/size.ts`), raised only on purpose.
+- **The session log is the truth.** Every model request can be rebuilt from
+  it, with the plugin that contributed each part, so what the model saw is
+  never a guess.
+- **Legible over clever.** A useful plugin is one short file; each extension
+  point says how it composes where it is declared; a plugin's failure is
+  named for it.
+
 ## Documentation
 
 - [Usage](docs/usage.md): run the host, the web app, the desktop app, and the CLI
