@@ -318,12 +318,14 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
       case "error":
         throw socketError(data);
     }
+    // The response ended: what follows (a proxy holding the stream open) is not waited for.
+    if (ended) break;
   }
   if (!ended) throw new Error("The provider's stream ended before the response did");
   // The agent runs every call of a finished answer: one whose arguments never finished arriving is not one to run.
   for (const [index, block] of out.content.entries()) {
     if (block.type === "toolCall" && out.open(index) && out.stopReason === "toolUse") {
-      throw new Error(`The response ended with an unfinished tool call: ${block.name} (${block.id})`);
+      return out.stopWith(`The response ended with an unfinished tool call: ${block.name} (${block.id})`, undefined);
     }
   }
 }

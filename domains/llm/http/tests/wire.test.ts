@@ -75,6 +75,24 @@ async function parse(wire: Wire, target: Model, body: string): Promise<StreamEve
 
 const last = (events: StreamEvent[]) => events.at(-1)!;
 
+/** What `wire` makes of `events`, the connection then dropping (`terminated`, as Node's fetch says), ended as the plugin ends it. */
+async function parseCut(wire: Wire, target: Model, events: readonly unknown[]): Promise<StreamEvent[]> {
+  const out: StreamEvent[] = [];
+  const answer = new Output(target, (more) => out.push(...more));
+  answer.start();
+  async function* cut() {
+    for await (const event of sse(new Response(sseBody(events)).body!)) yield event;
+    throw new TypeError("terminated");
+  }
+  try {
+    await wire.read(cut(), answer, call(target, {}), () => {});
+    answer.finish();
+  } catch (error) {
+    answer.fail(error);
+  }
+  return out;
+}
+
 describe("anthropic-messages", () => {
   const claude = model({ provider: "anthropic", api: "anthropic-messages", baseUrl: "https://api.anthropic.com", id: "claude" });
 
@@ -316,6 +334,27 @@ describe("anthropic-messages", () => {
       sseBody([{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" } } }]),
     );
     expect(last(full)).toMatchObject({ type: "error", failure: { kind: "overflow" } });
+  });
+
+  it("takes the provider at its word when the connection drops after it said how the answer ends", async () => {
+    const delta = (stop_reason: string) => ({ event: "message_delta", data: { type: "message_delta", delta: { stop_reason } } });
+    expect(last(await parseCut(anthropicMessages, claude, [delta("model_context_window_exceeded")]))).toMatchObject({
+      type: "error",
+      failure: { kind: "overflow" },
+    });
+    expect(last(await parseCut(anthropicMessages, claude, [delta("refusal")]))).toMatchObject({ type: "error", failure: { kind: "fatal" } });
+    // A finished answer stays one, though its last event never came.
+    expect(last(await parseCut(anthropicMessages, claude, [delta("end_turn")]))).toMatchObject({ type: "done", message: { stopReason: "stop" } });
+    // What follows the message's end is not read: the answer is done though the connection then drops.
+    expect(last(await parseCut(anthropicMessages, claude, [delta("end_turn"), { event: "message_stop", data: { type: "message_stop" } }]))).toMatchObject({
+      type: "done",
+    });
+    // Before it said so, the drop decides: asked again, it may pass.
+    expect(last(await parseCut(anthropicMessages, claude, []))).toMatchObject({ type: "error", failure: { kind: "transient" } });
+    expect(last(await parseCut(openaiCompletions, model(), [{ choices: [{ delta: {}, finish_reason: "content_filter" }] }]))).toMatchObject({
+      type: "error",
+      failure: { kind: "fatal" },
+    });
   });
 
   it("fails on an error event, overloaded as transient, and on a refusal with its explanation", async () => {

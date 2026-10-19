@@ -238,9 +238,9 @@ export class Output {
     if (this.ended) return;
     for (const index of this.buffers.keys()) this.endToolCall(index);
     const stopReason = this.stopReason;
-    if (stopReason === undefined) return this.fail(new Error("The provider ended the response without a stop reason"), { kind: "transient" });
+    if (stopReason === undefined) return this.end(new Error("The provider ended the response without a stop reason"), { kind: "transient" });
     if (stopReason === "error" || stopReason === "aborted") {
-      return this.fail(new Error(this.errorMessage ?? "The provider ended the response with an error"), this.stopFailure);
+      return this.end(new Error(this.errorMessage ?? "The provider ended the response with an error"), this.stopFailure);
     }
     const filled = this.usage.input + this.usage.cacheRead + this.usage.cacheWrite >= this.model.contextWindow * 0.99;
     if (stopReason === "length" && this.usage.output === 0 && filled) {
@@ -251,9 +251,17 @@ export class Output {
 
   /**
    * Ends the answer as failed, with what it produced. Aborted (the caller stopped it) it is `aborted`, unclassified;
-   * otherwise `failure`, or what `classifyFailure` makes of the error.
+   * otherwise `failure`, or what `classifyFailure` makes of the error. An answer whose provider had already said how it
+   * ends (its stop, or a failure it named) ends so: the connection dropping, or stalling, after the provider's last word
+   * changes nothing it said.
    */
   fail(error: unknown, failure?: LlmFailure, aborted = false): void {
+    if (this.ended) return;
+    if (!aborted && this.stopReason !== undefined) return this.finish();
+    this.end(error, failure, aborted);
+  }
+
+  private end(error: unknown, failure: LlmFailure | undefined, aborted = false): void {
     if (this.ended) return;
     for (const [index, buffer] of this.buffers) {
       const block = this.content[index];

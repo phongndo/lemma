@@ -270,6 +270,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
         stopped = true;
         break;
     }
+    // The message ended: what follows (a proxy holding the stream open) is not waited for.
+    if (stopped) break;
   }
   if (!stopped && out.stopReason === undefined) throw new Error("The provider's stream ended before the message did");
 }
