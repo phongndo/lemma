@@ -1,7 +1,7 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
-import { AgentChannels } from "@lemma/agent";
+import { AgentChannels, ProfileChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
@@ -482,6 +482,7 @@ export const createMockHost = (): Host => {
     },
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
+    "agent.profiles": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
     "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
@@ -1294,6 +1295,14 @@ export const createMockHost = (): Host => {
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
   const served: Served[] = [
+    // The bundled profiles, as `agent.profiles` lists them for any directory.
+    serveCall("agent.profiles", ProfileChannels.list, async () => ({
+      profiles: [
+        { name: "coding", description: "A coding agent: reads, edits, and runs code in the project", source: "bundled" as const },
+        { name: "general", description: "A general assistant: answers, research, writing, and files, with every tool", source: "bundled" as const },
+      ],
+      default: "coding",
+    })),
     serveCall("sessions.files", SessionChannels.list, async ({ cwd }) =>
       [...sessions.values()]
         .map((session) => session.info)

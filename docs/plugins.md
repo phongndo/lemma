@@ -93,36 +93,38 @@ in each.
 
 ## What to plug into
 
-| To                                                                     | Use                                                            | Domain                                                                     |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Give the model a tool                                                  | Add to `Tools`                                                 | [tools](../domains/tools/README.md)                                        |
-| Check, and maybe refuse, a tool call                                   | Add to `Guards` ([approvals](../examples/approvals/README.md)) | [tools](../domains/tools/README.md)                                        |
-| Rewrite, time, or answer tool calls                                    | Intercept `ToolExecuteHook`                                    | [tools](../domains/tools/README.md)                                        |
-| Tell the model something with every request                            | Add to `PromptSections` ([todo](../examples/todo/README.md))   | [agent](../domains/agent/README.md)                                        |
-| Tell the model something once, where it happened (an email, a reading) | Append a `context` event to the session                        | [sessions](../domains/sessions/README.md)                                  |
-| Change a request before it is sent                                     | Intercept `AgentRequestHook`                                   | [agent](../domains/agent/README.md)                                        |
-| Decide whether a turn takes another step                               | Intercept `AgentContinueHook`                                  | [agent](../domains/agent/README.md)                                        |
-| Act when a turn starts or ends                                         | Observe `TurnStarted`, `TurnEnded`                             | [agent](../domains/agent/README.md)                                        |
-| Offer a command in the palette and `lemma commands run`                | Add to `Commands`                                              | [commands](../domains/commands/README.md)                                  |
-| Offer a `/` command in the prompt, with subcommands and arguments      | Add to `PromptCommands`                                        | [threads](../domains/threads/README.md)                                    |
-| Complete a word typed after a trigger (`@`, `$`)                       | Add to `ComposerCompletions`                                   | [threads](../domains/threads/README.md)                                    |
-| Give the agent instructions for a kind of task                         | A skill: `~/.lemma/skills/<name>/SKILL.md`                     | [skills](../domains/skills/README.md)                                      |
-| Add a model provider                                                   | Add to `Providers`                                             | [llm](../domains/llm/README.md)                                            |
-| Time, gate, or wrap model calls and their streams                      | Intercept `LlmRequestHook`                                     | [llm](../domains/llm/README.md)                                            |
-| Bring an MCP server and its tools                                      | Add to `McpServers`                                            | [mcp](../domains/mcp/README.md)                                            |
-| Search files another way                                               | Add to `FileSearchers`                                         | [workspace](../domains/workspace/README.md)                                |
-| Serve your web half, or the CLI, data of your own                      | Serve a channel ([ticker](../examples/ticker/README.md))       | the runtime's `Channels`                                                   |
-| Add a command to the `lemma` command, or a check to `lemma doctor`     | Add to `CliCommands`, `CliChecks`                              | [cli](../domains/cli/README.md)                                            |
-| Say what stopping the host would cut off                               | Add to `InProgress`                                            | [cli](../domains/cli/README.md)                                            |
-| Show a tool's calls                                                    | Add to `ToolViews`                                             | [threads](../domains/threads/README.md)                                    |
-| Add a view of a thread                                                 | Add to `Views` ([todo](../examples/todo/README.md))            | [threads](../domains/threads/README.md)                                    |
-| Add a page at an address                                               | Add to `Pages`, with a `defineRoute` route                     | the runtime's `Pages`                                                      |
-| Add a settings section                                                 | Add to `SettingsSections`                                      | [settings](../domains/settings/README.md)                                  |
-| List a kind of thing in Settings › Integrations                        | Add to `IntegrationKinds`                                      | [integrations](../domains/integrations/README.md)                          |
-| Add a theme, an accent, or a font                                      | Add to `Themes`, `Accents`, `Fonts`                            | [look](../domains/look/README.md)                                          |
-| Add a key or a palette list                                            | Add to `Actions`, `PaletteSources`                             | [actions](../domains/actions/README.md)                                    |
-| Draw a shared piece differently everywhere                             | Intercept its part (`IconPart`, `ChatToolPart`, …)             | [look](../domains/look/README.md), [threads](../domains/threads/README.md) |
-| Replace a bundled plugin                                               | Give yours its id (below)                                      |                                                                            |
+| To                                                                     | Use                                                             | Domain                                                                     |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Give the model a tool                                                  | Add to `Tools`                                                  | [tools](../domains/tools/README.md)                                        |
+| Check, and maybe refuse, a tool call                                   | Add to `Guards` ([approvals](../examples/approvals/README.md))  | [tools](../domains/tools/README.md)                                        |
+| Rewrite, time, or answer tool calls                                    | Intercept `ToolExecuteHook`                                     | [tools](../domains/tools/README.md)                                        |
+| Tell the model something with every request                            | Add to `PromptSections` ([todo](../examples/todo/README.md))    | [agent](../domains/agent/README.md)                                        |
+| Tell the model something once, where it happened (an email, a reading) | Append a `context` event to the session                         | [sessions](../domains/sessions/README.md)                                  |
+| Change a request before it is sent                                     | Intercept `AgentRequestHook`                                    | [agent](../domains/agent/README.md)                                        |
+| Decide whether a turn takes another step                               | Intercept `AgentContinueHook`                                   | [agent](../domains/agent/README.md)                                        |
+| Act when a turn starts or ends                                         | Observe `TurnStarted`, `TurnEnded`                              | [agent](../domains/agent/README.md)                                        |
+| Offer a command in the palette and `lemma commands run`                | Add to `Commands`                                               | [commands](../domains/commands/README.md)                                  |
+| Offer a `/` command in the prompt, with subcommands and arguments      | Add to `PromptCommands`                                         | [threads](../domains/threads/README.md)                                    |
+| Complete a word typed after a trigger (`@`, `$`)                       | Add to `ComposerCompletions`                                    | [threads](../domains/threads/README.md)                                    |
+| Give the agent instructions for a kind of task                         | A skill: `~/.lemma/skills/<name>/SKILL.md`                      | [skills](../domains/skills/README.md)                                      |
+| Give a thread an agent for something else (writing, research)          | A profile: `~/.lemma/profiles/<name>.md`                        | [agent](../domains/agent/profiles/README.md)                               |
+| Send a choice of yours with each prompt, logged with its turn          | Add to `TurnOptionSources`; read `plugins` in a section or hook | [threads](../domains/threads/README.md)                                    |
+| Add a model provider                                                   | Add to `Providers`                                              | [llm](../domains/llm/README.md)                                            |
+| Time, gate, or wrap model calls and their streams                      | Intercept `LlmRequestHook`                                      | [llm](../domains/llm/README.md)                                            |
+| Bring an MCP server and its tools                                      | Add to `McpServers`                                             | [mcp](../domains/mcp/README.md)                                            |
+| Search files another way                                               | Add to `FileSearchers`                                          | [workspace](../domains/workspace/README.md)                                |
+| Serve your web half, or the CLI, data of your own                      | Serve a channel ([ticker](../examples/ticker/README.md))        | the runtime's `Channels`                                                   |
+| Add a command to the `lemma` command, or a check to `lemma doctor`     | Add to `CliCommands`, `CliChecks`                               | [cli](../domains/cli/README.md)                                            |
+| Say what stopping the host would cut off                               | Add to `InProgress`                                             | [cli](../domains/cli/README.md)                                            |
+| Show a tool's calls                                                    | Add to `ToolViews`                                              | [threads](../domains/threads/README.md)                                    |
+| Add a view of a thread                                                 | Add to `Views` ([todo](../examples/todo/README.md))             | [threads](../domains/threads/README.md)                                    |
+| Add a page at an address                                               | Add to `Pages`, with a `defineRoute` route                      | the runtime's `Pages`                                                      |
+| Add a settings section                                                 | Add to `SettingsSections`                                       | [settings](../domains/settings/README.md)                                  |
+| List a kind of thing in Settings › Integrations                        | Add to `IntegrationKinds`                                       | [integrations](../domains/integrations/README.md)                          |
+| Add a theme, an accent, or a font                                      | Add to `Themes`, `Accents`, `Fonts`                             | [look](../domains/look/README.md)                                          |
+| Add a key or a palette list                                            | Add to `Actions`, `PaletteSources`                              | [actions](../domains/actions/README.md)                                    |
+| Draw a shared piece differently everywhere                             | Intercept its part (`IconPart`, `ChatToolPart`, …)              | [look](../domains/look/README.md), [threads](../domains/threads/README.md) |
+| Replace a bundled plugin                                               | Give yours its id (below)                                       |                                                                            |
 
 ## Two halves, and state
 

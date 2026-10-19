@@ -1,0 +1,111 @@
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { Effect, Stream } from "effect";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { Events, makeCore } from "@lemma/core";
+import { Notice } from "@lemma/contracts";
+import { Agent } from "@lemma/agent";
+import { Sessions } from "@lemma/sessions";
+import agent from "@lemma/agent-loop";
+import sessions from "@lemma/sessions-files";
+import tools from "@lemma/tools-registry";
+import { fakeLlm, host, paths, reply, tempDir, testTools } from "../../loop/tests/fakes.ts";
+import profiles, { byName, keeps, parseProfile } from "../src/index.ts";
+
+describe("a profile file", () => {
+  it("reads its fields and its body", () => {
+    const profile = parseProfile(
+      "writing",
+      [
+        "---",
+        "description: Drafts prose",
+        "model: p/m",
+        "thinking: low",
+        "tools: read, write",
+        'sections: ["*", "!project-context"]',
+        "---",
+        "",
+        "You help the user write.",
+        "",
+      ].join("\n"),
+      "user",
+    );
+    expect(profile).toEqual({
+      name: "writing",
+      description: "Drafts prose",
+      model: "p/m",
+      thinking: "low",
+      tools: ["read", "write"],
+      sections: ["*", "!project-context"],
+      prompt: "You help the user write.",
+      source: "user",
+    });
+    expect(parseProfile("plain", "Just a prompt.", "project")).toEqual({ name: "plain", prompt: "Just a prompt.", source: "project" });
+  });
+
+  it("keeps what its patterns allow, the last match deciding", () => {
+    expect(keeps(undefined, "bash")).toBe(true);
+    expect(keeps(["read", "write"], "bash")).toBe(false);
+    expect(keeps(["*", "!bash"], "bash")).toBe(false);
+    expect(keeps(["*", "!bash"], "read")).toBe(true);
+    expect(keeps(["mcp__*"], "mcp__github__issue")).toBe(true);
+    expect(keeps(["!bash", "bash"], "bash")).toBe(true);
+  });
+
+  it("is the project's over the user's over the bundled one of a name", () => {
+    const named = byName([parseProfile("a", "project", "project"), parseProfile("a", "bundled", "bundled"), parseProfile("a", "user", "user")]);
+    expect(named.get("a")?.prompt).toBe("project");
+  });
+});
+
+describe("in a turn", () => {
+  let home: string;
+  beforeEach(async () => {
+    home = await tempDir();
+    await fs.mkdir(path.join(home, "profiles"), { recursive: true });
+    await fs.writeFile(path.join(home, "profiles", "reader.md"), '---\ntools: echo\nsections: "*", "!agent.environment"\n---\nYou only read.\n');
+  });
+  afterEach(async () => {
+    await fs.rm(home, { recursive: true, force: true });
+  });
+
+  const turn = (plugins: Readonly<Record<string, unknown>> | undefined, config: Readonly<Record<string, unknown>> = {}) => {
+    const llm = fakeLlm([reply("ok")]);
+    const toolset = testTools();
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths(home, home), host(), sessions, tools, toolset.plugin, llm.plugin, agent, profiles], {
+            configs: { "agent.profiles": config },
+          });
+          return yield* core.run(
+            Effect.gen(function* () {
+              const notices: string[] = [];
+              yield* Effect.forkScoped(Stream.runForEach((yield* Events).stream(Notice), (notice) => Effect.sync(() => notices.push(notice.message))));
+              yield* Effect.yieldNow;
+              const { id } = yield* (yield* Sessions).create();
+              yield* (yield* Agent).prompt(id, [{ type: "text", text: "go" }], plugins === undefined ? {} : { plugins });
+              return { request: llm.requests[0]!, notices };
+            }),
+          );
+        }),
+      ),
+    );
+  };
+
+  it("adds the chosen profile's prompt and keeps only the tools and sections it allows", async () => {
+    const { request } = await turn({ "agent.profiles": "reader" });
+    expect((request.tools ?? []).map((tool) => tool.name)).toEqual(["echo"]);
+    expect(request.system).toContain("You only read.");
+    expect(request.system).not.toContain("<environment>");
+  });
+
+  it("gives a thread with none chosen the default, and says so when a profile named is not there", async () => {
+    const defaulted = await turn(undefined, { default: "reader" });
+    expect((defaulted.request.tools ?? []).map((tool) => tool.name)).toEqual(["echo"]);
+    const missing = await turn({ "agent.profiles": "nonesuch" });
+    // Nothing of the reader profile applies: its sections stay.
+    expect(missing.request.system).toContain("<environment>");
+    expect(missing.notices.some((message) => message.includes('No profile named "nonesuch"'))).toBe(true);
+  });
+});

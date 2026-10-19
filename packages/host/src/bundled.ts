@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
+import agentProfiles from "@lemma/agent-profiles";
 import cliRegistry from "@lemma/cli-registry";
 import commandsCli from "@lemma/commands-cli";
 import commandsHost from "@lemma/commands-host";
@@ -61,6 +62,7 @@ export const bundled: readonly Plugin[] = [
   mcpServers,
   sessionsFiles,
   agentLoop,
+  agentProfiles,
   contextCompaction,
   contextPrune,
   contextProject,
@@ -99,6 +101,7 @@ export const bundledWeb: readonly string[] = [
   "actions.keymap",
   "actions.keys-page",
   "actions.palette",
+  "agent.profiles",
   "commands.client",
   "context.compaction",
   "devtools.dock",

@@ -273,6 +273,9 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../domains/agent/contract
+      '@lemma/agent-profiles':
+        specifier: workspace:*
+        version: link:../../domains/agent/profiles
       '@lemma/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -740,6 +743,58 @@ importers:
       fast-check:
         specifier: 4.10.2
         version: 4.10.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/agent/profiles:
+    dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@lemma/agent-loop':
+        specifier: workspace:*
+        version: link:../loop
+      '@lemma/sessions-files':
+        specifier: workspace:*
+        version: link:../../sessions/files
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../../tools/registry
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -3461,6 +3516,9 @@ importers:
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../domains/agent/loop
+      '@lemma/agent-profiles':
+        specifier: workspace:*
+        version: link:../../domains/agent/profiles
       '@lemma/cli':
         specifier: workspace:*
         version: link:../../domains/cli/contract

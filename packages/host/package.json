@@ -17,6 +17,7 @@
     "@lemma/agent": "workspace:*",
     "@lemma/agent-cli": "workspace:*",
     "@lemma/agent-loop": "workspace:*",
+    "@lemma/agent-profiles": "workspace:*",
     "@lemma/cli": "workspace:*",
     "@lemma/cli-registry": "workspace:*",
     "@lemma/commands": "workspace:*",
