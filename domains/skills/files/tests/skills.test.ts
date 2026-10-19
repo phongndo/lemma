@@ -143,20 +143,22 @@ describe("skills.files", () => {
     );
   };
 
-  it("finds the skills an enabled plugin's package brings, and lets the user's own of a name replace one", async () => {
+  it("finds the skills a running plugin's package brings, and lets the user's own of a name replace one", async () => {
     await put("pack/skills/triage/SKILL.md", skill("triage", "Sort an inbox"));
     await put("pack/skills/review/SKILL.md", skill("review", "The pack's review"));
     await put("off/skills/hidden/SKILL.md", skill("hidden", "From a plugin turned off"));
+    await put("failed/skills/hidden/SKILL.md", skill("hidden", "From a plugin that failed"));
     await put("home/skills/review/SKILL.md", skill("review", "The user's review"));
-    const plugin = (id: string, enabled: boolean): PluginInfo => ({
+    const plugin = (id: string, enabled: boolean, state: PluginInfo["state"] = "active"): PluginInfo => ({
       id,
       source: "user",
       enabled,
+      state,
       provides: [],
       requires: [],
       resources: { skills: [path.join(dir, id, "skills")] },
     });
-    const section = await run((core) => core.section(path.join(dir, "repo")), [plugin("pack", true), plugin("off", false)]);
+    const section = await run((core) => core.section(path.join(dir, "repo")), [plugin("pack", true), plugin("off", false), plugin("failed", true, "failed")]);
     expect(section).toContain("- triage: Sort an inbox");
     expect(section).toContain("- review: The user's review");
     expect(section).not.toContain("hidden");

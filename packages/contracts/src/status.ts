@@ -82,15 +82,20 @@ export const toPluginStatus = (info: PluginInfo): PluginStatus => {
   };
 };
 
+/** The states of a plugin that is loaded and has not failed or stopped. */
+const RUNNING: ReadonlySet<PluginInfo["state"]> = new Set(["pending", "activating", "active", "draining"]);
+
 /**
- * The folders of one kind of resource (`PluginStatus.resources`) that enabled plugins' packages name, once each, in
+ * The folders of one kind of resource (`PluginStatus.resources`) that running plugins' packages name, once each, in
  * the order the plugins are listed (bundled, the user's, a project's), with where each came from: what the plugin
- * reading that kind looks in, beside its own places.
+ * reading that kind looks in, beside its own places. A plugin turned off, left out, halted, or failed brings none.
  */
 export const resourcesOf = (plugins: readonly PluginInfo[], kind: string): readonly { readonly dir: string; readonly source: PluginStatus["source"] }[] => {
   const seen = new Set<string>();
   return plugins.flatMap((plugin) =>
-    plugin.enabled ? (plugin.resources?.[kind] ?? []).filter((dir) => !seen.has(dir) && seen.add(dir)).map((dir) => ({ dir, source: plugin.source })) : [],
+    plugin.enabled && RUNNING.has(plugin.state)
+      ? (plugin.resources?.[kind] ?? []).filter((dir) => !seen.has(dir) && seen.add(dir)).map((dir) => ({ dir, source: plugin.source }))
+      : [],
   );
 };
 

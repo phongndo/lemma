@@ -51,6 +51,7 @@ describe("in a turn", () => {
       id: "notes",
       source: "user",
       enabled: true,
+      state: "active",
       provides: [],
       requires: [],
       resources: { profiles: [fileURLToPath(new URL("../profiles", import.meta.url))], skills: [fileURLToPath(new URL("../skills", import.meta.url))] },

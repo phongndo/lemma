@@ -109,7 +109,7 @@ describe("in a turn", () => {
     expect(request.system).not.toContain("<environment>");
   });
 
-  it("takes a profile from an enabled plugin's package, a user's own of the name replacing it", async () => {
+  it("takes a profile from a running plugin's package, a user's own of the name replacing it", async () => {
     await fs.mkdir(path.join(home, "pack", "profiles"), { recursive: true });
     await fs.writeFile(path.join(home, "pack", "profiles", "triage.md"), "---\ntools: echo\n---\nSort the inbox.\n");
     await fs.writeFile(path.join(home, "pack", "profiles", "reader.md"), "The pack's reader.\n");
@@ -117,6 +117,7 @@ describe("in a turn", () => {
       id: "pack",
       source: "user",
       enabled: true,
+      state: "active",
       provides: [],
       requires: [],
       resources: { profiles: [path.join(home, "pack", "profiles")] },
@@ -126,8 +127,12 @@ describe("in a turn", () => {
     const reader = await turn({ "agent.profiles": "reader" }, {}, [pack]);
     expect(reader.request.system).toContain("You only read.");
     expect(reader.request.system).not.toContain("The pack's reader.");
-    const off = await turn({ "agent.profiles": "triage" }, {}, [{ ...pack, enabled: false }]);
-    expect(off.request.system).not.toContain("Sort the inbox.");
+    // Turned off, failed, or left out (not loaded): it brings none.
+    const { state: _, ...unloaded } = pack;
+    for (const stopped of [{ ...pack, enabled: false }, { ...pack, state: "failed" as const }, unloaded]) {
+      const off = await turn({ "agent.profiles": "triage" }, {}, [stopped]);
+      expect(off.request.system).not.toContain("Sort the inbox.");
+    }
   });
 
   it("gives a thread with none chosen the default, and says so when a profile named is not there", async () => {

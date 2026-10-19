@@ -64,6 +64,7 @@ describe("in a turn", () => {
         id: "inbox",
         source: "user",
         enabled: true,
+        state: "active",
         provides: [],
         requires: [],
         resources: { profiles: [fileURLToPath(new URL("../profiles", import.meta.url))] },

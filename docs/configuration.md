@@ -64,8 +64,8 @@ your plugins. What is there loads by itself, and again when it changes:
 
 A folder plugin's manifest can also name folders of things other plugins read,
 by kind: `"resources": { "skills": "./skills", "profiles": "./profiles" }`.
-They come and go with its host half's plugins (turned off, a project not
-trusted), and the plugin that reads a kind finds them in plugin status
+They come and go with its host half's plugins (turned off, failed, a project
+not trusted), and the plugin that reads a kind finds them in plugin status
 (`resourcesOf`): `skills.files` reads `skills`, and `agent.profiles` reads
 `profiles`, each below your own of the same name. A field Lemma does not read
 is reported, which catches a typo.

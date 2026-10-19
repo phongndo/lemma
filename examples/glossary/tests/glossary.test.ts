@@ -39,7 +39,9 @@ describe("the guide", () => {
 });
 
 describe("in a turn", () => {
-  const known: PluginInfo[] = [{ id: "glossary", source: "user", enabled: true, provides: [], requires: [], resources: { profiles: [here("profiles")] } }];
+  const known: PluginInfo[] = [
+    { id: "glossary", source: "user", enabled: true, state: "active", provides: [], requires: [], resources: { profiles: [here("profiles")] } },
+  ];
   const run = (scripts: readonly Script[], profile?: string) => {
     const llm = scriptedLlm(scripts);
     return Effect.runPromise(

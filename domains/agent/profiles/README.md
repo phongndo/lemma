@@ -16,7 +16,7 @@ sections: "*", "!project-context"
 You help the user write. Keep their voice; say what you changed and why.
 ```
 
-- **Where.** Bundled ones (`profiles/` here), then those an enabled plugin's
+- **Where.** Bundled ones (`profiles/` here), then those a running plugin's
   package brings (`"resources": { "profiles": "./profiles" }`, read from
   plugin status), then `~/.lemma/profiles/`, then `.lemma/profiles/` in the
   session's directory; a later one of a name wins.
