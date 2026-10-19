@@ -19,7 +19,7 @@ import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import compaction, { chooseCut, compactAsked, estimateTokens, requestChars, transcript } from "../src/index.ts";
-import { SUMMARY_PROMPT, summaryAsk } from "../src/compact.ts";
+import { SUMMARY_PROMPT, summaryAsk, validCut } from "../src/compact.ts";
 
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
 const answer = (content: AssistantMessage["content"], input = 0, output = 0): Message => ({
@@ -58,6 +58,34 @@ describe("the estimate", () => {
     });
     // The usage before it counted what the summary replaced: estimated instead (base, summary, kept prompt).
     expect(estimateTokens(compacted, () => 400)).toBe(100 + 10 + 10);
+  });
+});
+
+describe("context a plugin told the model", () => {
+  it("counts in the estimate, and is a place the history may be kept from", () => {
+    const told: EventData = { type: "context", source: "mail", content: [{ type: "text", text: "z".repeat(80) }] };
+    const log = branch(message(user("x".repeat(400))), message(answer([{ type: "text", text: "ok" }], 900, 100)), told);
+    // 1,000 reported, then 20 for what the plugin told it.
+    expect(estimateTokens(log, () => 0)).toBe(1020);
+    expect(chooseCut(log, 1)).toBe(2);
+  });
+
+  it("is no place to keep the history from when it is logged among a response's results", () => {
+    // The model sees it after the result; on the branch it is before it, so keeping from it would keep the result
+    // without its call.
+    const told: EventData = { type: "context", source: "mail", content: [{ type: "text", text: "z".repeat(80) }] };
+    const log = branch(
+      message(user("x".repeat(400))),
+      message(answer([{ type: "toolCall", id: "c1", name: "bash", arguments: {} }])),
+      told,
+      message(result("c1", "r".repeat(40))),
+      message(answer([{ type: "text", text: "done" }])),
+    );
+    expect(validCut(log, 2)).toBe(false);
+    expect(validCut(log, 1)).toBe(true);
+    // The last response, 1 token, is enough; for 20, the call with its result and the context after it.
+    expect(chooseCut(log, 1)).toBe(4);
+    expect(chooseCut(log, 20)).toBe(1);
   });
 });
 

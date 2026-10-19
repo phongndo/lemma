@@ -6,7 +6,7 @@ import { SessionError } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, unsupportedSync } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
-import { decodeRecord, encodeLine } from "./format.ts";
+import { decodeRecord, encodeLine, FORMAT_VERSION } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
 
 export const io = (sessionId: string | undefined, message: string) => (cause: unknown) =>
@@ -108,16 +108,24 @@ async function readLines(fs: FileSystem, file: string, from: number, visit: (tex
  * `visit` in order. A last line that is not JSON is a write a crash cut short
  * (a power loss can leave one ending in a newline), so it is left out of
  * `validBytes` like a torn tail; one with lines after it is damage. Returns
- * the lines taken in all, and why reading stopped if it failed.
+ * the lines taken in all and the last of them, and if reading failed why, and
+ * where the line it failed on is (`failedAt`): what came before it is sound.
  */
 async function readJson(
   fs: FileSystem,
   file: string,
   from: { readonly validBytes: number; readonly lines: number } & Partial<LastLine>,
   visit: (json: unknown, line: number) => string | undefined,
-): Promise<{ readonly extent: Extent & Stamp; readonly lines: number; readonly last?: LastLine; readonly failure?: string }> {
+): Promise<{
+  readonly extent: Extent & Stamp;
+  readonly lines: number;
+  readonly last?: LastLine;
+  readonly failure?: string;
+  readonly failedAt?: { readonly line: number; readonly start: number };
+}> {
   let line = from.lines;
   let failure: string | undefined;
+  let failedAt: { readonly line: number; readonly start: number } | undefined;
   let unreadable: { readonly line: number; readonly start: number } | undefined;
   /** The last line taken: where it starts, and its text. */
   let lastStart = -1;
@@ -126,6 +134,7 @@ async function readJson(
     line++;
     if (unreadable !== undefined) {
       failure = `line ${unreadable.line}: not JSON`;
+      failedAt = unreadable;
       return false;
     }
     let json: unknown;
@@ -136,9 +145,13 @@ async function readJson(
       return true;
     }
     failure = visit(json, line);
+    if (failure !== undefined) {
+      failedAt = { line, start };
+      return false;
+    }
     lastStart = start;
     lastText = text;
-    return failure === undefined;
+    return true;
   });
   const lastLine =
     lastStart >= 0
@@ -147,7 +160,7 @@ async function readJson(
         ? { lastStart: from.lastStart, lastHash: from.lastHash }
         : undefined;
   const taken = lastLine === undefined ? {} : { last: lastLine };
-  if (failure !== undefined) return { extent, lines: line, failure, ...taken };
+  if (failure !== undefined && failedAt !== undefined) return { extent, lines: failedAt.line - 1, failure, failedAt, ...taken };
   if (unreadable === undefined) return { extent, lines: line, ...taken };
   return { extent: { ...extent, validBytes: unreadable.start }, lines: unreadable.line - 1, ...taken };
 }
@@ -214,6 +227,12 @@ export const applyMarks = (filed: FiledAs, marks: Pick<Marks, "pinned" | "archiv
   };
 };
 
+/** Where a session's log stops reading: the line, and why. What comes before it is served, read-only. */
+export interface Damage {
+  readonly line: number;
+  readonly reason: string;
+}
+
 interface Loaded {
   readonly header: Header;
   readonly events: SessionEvent[];
@@ -227,12 +246,17 @@ interface Loaded {
   readonly size: number;
   /** What `list` would know of the file after this read. */
   readonly scanned: Scanned;
+  /** Set when a complete line does not read: the session is what came before it, and takes no writes. */
+  readonly damage?: Damage;
 }
 
 /**
  * Reads and validates a whole session. Any unreadable complete line but the
- * last, an event whose parent is unknown, or a checkout to nowhere is
- * `Corrupt`: skipping one would silently change what the model saw.
+ * last, an event whose parent is unknown, a seq gap, a duplicate id, or a
+ * checkout to nowhere is damage: skipping it and reading on would silently
+ * change what the model saw, so the session is what came before it, read-only
+ * (`damage`). A file whose header does not read is `Corrupt`: nothing of it is
+ * known to be a session.
  */
 export function load(fs: FileSystem, file: string, sessionId: string): Effect.Effect<Loaded, SessionError> {
   return Effect.suspend(() => {
@@ -246,7 +270,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
     const visit = (json: unknown, n: number): string | undefined => {
       if (header === undefined) {
         const decoded = decodeRecord(json, true);
-        if (Result.isFailure(decoded)) return `unreadable header (${decoded.failure})`;
+        if (Result.isFailure(decoded)) return decoded.failure;
         header = decoded.success as Header;
         updatedAt = header.createdAt;
         return undefined;
@@ -275,13 +299,15 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
       return undefined;
     };
     return Effect.tryPromise({ try: () => readJson(fs, file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
-      Effect.flatMap(({ extent, lines, last, failure }) => {
-        if (failure !== undefined) return Effect.fail(corrupt(sessionId, file, failure));
+      Effect.flatMap(({ extent: read, lines, last, failure, failedAt }) => {
         // The header is synced before `create` returns, so a file without one was never a session.
         if (header === undefined || last === undefined) {
-          return Effect.fail(corrupt(sessionId, file, extent.size === 0 ? "missing header" : "unreadable header"));
+          return Effect.fail(corrupt(sessionId, file, failure ?? (read.size === 0 ? "missing header" : "unreadable header")));
         }
-        const info = infoOf(header, { leaf, title, marks, updatedAt, lastSeq: events.length });
+        // Damaged: the session is what came before the line that does not read, which stays where it is.
+        const damage = failure === undefined || failedAt === undefined ? undefined : { line: failedAt.line, reason: failure };
+        const extent = damage === undefined ? read : { ...read, validBytes: failedAt!.start };
+        const info = infoOf(header, { leaf, title, marks, updatedAt, lastSeq: events.length, ...(damage === undefined ? {} : { damage }) });
         return Effect.succeed({
           header,
           events,
@@ -293,6 +319,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
           validBytes: extent.validBytes,
           size: extent.size,
           scanned: { size: extent.size, mtimeMs: extent.mtimeMs, ino: extent.ino, validBytes: extent.validBytes, lines, ...last, info },
+          ...(damage === undefined ? {} : { damage }),
         });
       }),
     );
@@ -317,7 +344,7 @@ export function scan(fs: FileSystem, file: string, sessionId: string, prior?: Sc
 /** `scan` from `from` (or the start): the scan, or why the file is not a session. */
 async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined): Promise<Scanned | string> {
   let header: Header | undefined =
-    from === undefined ? undefined : { type: "session", version: 1, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
+    from === undefined ? undefined : { type: "session", version: FORMAT_VERSION, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
   let leaf = from?.info.leaf;
   let title = from?.info.title;
   // A moved session's directory is already the header's here (`info.cwd`).
@@ -328,7 +355,7 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
   const visit = (json: unknown, n: number): string | undefined => {
     if (header === undefined) {
       const decoded = decodeRecord(json, true);
-      if (Result.isFailure(decoded)) return `unreadable header (${decoded.failure})`;
+      if (Result.isFailure(decoded)) return decoded.failure;
       header = decoded.success as Header;
       updatedAt = header.createdAt;
       return undefined;
@@ -350,27 +377,31 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
       marks = applyMarks(marks, line);
       return undefined;
     }
-    if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
     if (line.type === "checkout") {
+      if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
       leaf = line.leaf;
       return undefined;
     }
+    // The one check `load` makes that costs nothing here: a gap would have `list` describe events `load` refuses.
+    if (line.seq !== lastSeq + 1) return `line ${n}: expected seq ${lastSeq + 1}, found ${String(line.seq)}`;
+    if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
     leaf = line.id;
-    lastSeq = line.seq ?? lastSeq;
+    lastSeq = line.seq;
     if (line.data?.type === "title") title = line.data.title;
     return undefined;
   };
-  const { extent, lines, last, failure } = await readJson(fs, file, from ?? { validBytes: 0, lines: 0 }, visit);
-  if (failure !== undefined) return failure;
-  if (header === undefined || last === undefined) return extent.size === 0 ? "missing header" : "unreadable header";
+  const { extent, lines, last, failure, failedAt } = await readJson(fs, file, from ?? { validBytes: 0, lines: 0 }, visit);
+  if (header === undefined || last === undefined) return failure ?? (extent.size === 0 ? "missing header" : "unreadable header");
+  // Damaged: listed as what reads, said to be damaged, so it can be opened read-only and forked rather than vanish.
+  const damage = failure === undefined || failedAt === undefined ? undefined : { line: failedAt.line, reason: failure };
   return {
     size: extent.size,
     mtimeMs: extent.mtimeMs,
     ino: extent.ino,
-    validBytes: extent.validBytes,
+    validBytes: damage === undefined ? extent.validBytes : failedAt!.start,
     lines,
     ...last,
-    info: infoOf(header, { leaf, title, marks, updatedAt, lastSeq }),
+    info: infoOf(header, { leaf, title, marks, updatedAt, lastSeq, ...(damage === undefined ? {} : { damage }) }),
   };
 }
 
@@ -382,6 +413,7 @@ export const infoOf = (
     readonly marks: FiledAs;
     readonly updatedAt: number;
     readonly lastSeq: number;
+    readonly damage?: Damage;
   },
 ): SessionInfo => ({
   id: header.id,
@@ -394,6 +426,7 @@ export const infoOf = (
   ...(state.marks.pinned ? { pinned: true } : {}),
   ...(state.marks.archived ? { archived: true } : {}),
   ...(state.marks.kept ? { kept: true } : {}),
+  ...(state.damage === undefined ? {} : { damaged: { line: state.damage.line, reason: state.damage.reason } }),
 });
 
 /**

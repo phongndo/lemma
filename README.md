@@ -1,17 +1,35 @@
 # Lemma
 
-Lemma is a coding-agent harness in which every part, including the agent loop
-and the web app's views, is a plugin that can be turned off or replaced by id.
+Lemma is an agent harness in which every part, including the agent loop and
+the web app's views, is a plugin that can be turned off or replaced by id.
+What a thread's agent is for is its profile: coding by default, or writing,
+research, or anything a profile of yours describes.
 The plugins are written against a runtime the host and the web app provide, so
 a plugin of yours stands where a bundled one does.
 
 Lemma runs from a checkout and is under active development.
+
+## Principles
+
+- **Every part is a plugin.** The agent loop, the tools, the session store,
+  and the web app's views are plugins on the same footing as yours, met
+  only through contracts, so any of them can be turned off or replaced by id.
+- **The runtime stays small.** What no plugin can replace (the kernel, the
+  runtime's contracts, the host and web runtimes) is held to a size budget
+  (`scripts/size.ts`), raised only on purpose.
+- **The session log is the truth.** Every model request can be rebuilt from
+  it, with the plugin that contributed each part, so what the model saw is
+  never a guess.
+- **Legible over clever.** A useful plugin is one short file; each extension
+  point says how it composes where it is declared; a plugin's failure is
+  named for it.
 
 ## Documentation
 
 - [Usage](docs/usage.md): run the host, the web app, the desktop app, and the CLI
 - [Configuration](docs/configuration.md): config files, plugins, project trust, and providers
 - [Remote access](docs/remote.md): run the host on one machine and use it from another
+- [Building on Lemma](docs/building.md): one plugin built in three steps, a tool, a view of it, and a profile that uses it
 - [Writing plugins](docs/plugins.md): the five shapes, where to plug in, testing, and coming from Pi
 - [Debugging plugins](docs/debugging.md): whether one runs, what it is plugged into, what it did, and why it failed
 - [Web app](apps/web/README.md): its plugins and web halves, addresses, and devtools

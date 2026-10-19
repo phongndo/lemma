@@ -39,6 +39,14 @@ export const PluginStatus = Schema.Struct({
   /** Capability keys. */
   provides: Schema.Array(Schema.String),
   requires: Schema.Array(Schema.String),
+  /** The domain contracts it is written against, and implements, as `name@version` (`ContractVersions` in `@lemma/core`). */
+  uses: Schema.optional(Schema.Array(Schema.String)),
+  implements: Schema.optional(Schema.Array(Schema.String)),
+  /**
+   * Folders of things other plugins read, by kind, as its package's manifest names them (`"resources": { "skills":
+   * "./skills" }`): absolute paths on the host. The plugin that reads a kind finds them here.
+   */
+  resources: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
   state: Schema.Literals(["pending", "activating", "active", "draining", "closed", "failed", "disabled"]),
   fault: Schema.optional(Schema.Struct({ phase: Schema.String, operation: Schema.optional(Schema.String), message: Schema.String })),
   /** The plugin whose failure or absence keeps this one from running. */
@@ -72,6 +80,23 @@ export const toPluginStatus = (info: PluginInfo): PluginStatus => {
       ? {}
       : { fault: { phase: fault.phase, ...(fault.operation === undefined ? {} : { operation: fault.operation }), message: faultMessage(fault) } }),
   };
+};
+
+/** The states of a plugin that is loaded and has not failed or stopped. */
+const RUNNING: ReadonlySet<PluginInfo["state"]> = new Set(["pending", "activating", "active", "draining"]);
+
+/**
+ * The folders of one kind of resource (`PluginStatus.resources`) that running plugins' packages name, once each, in
+ * the order the plugins are listed (bundled, the user's, a project's), with where each came from: what the plugin
+ * reading that kind looks in, beside its own places. A plugin turned off, left out, halted, or failed brings none.
+ */
+export const resourcesOf = (plugins: readonly PluginInfo[], kind: string): readonly { readonly dir: string; readonly source: PluginStatus["source"] }[] => {
+  const seen = new Set<string>();
+  return plugins.flatMap((plugin) =>
+    plugin.enabled && RUNNING.has(plugin.state)
+      ? (plugin.resources?.[kind] ?? []).filter((dir) => !seen.has(dir) && seen.add(dir)).map((dir) => ({ dir, source: plugin.source }))
+      : [],
+  );
 };
 
 /** What a reload or configure changed, as clients report it. */

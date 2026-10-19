@@ -48,16 +48,21 @@ export const parseSkill = (text: string): { readonly fields: Readonly<Record<str
 /** `~` and `~/…` as under `home`. */
 export const expandHome = (dir: string, home: string) => (dir === "~" ? home : dir.startsWith("~/") ? path.join(home, dir.slice(2)) : dir);
 
-/** Where skills are: the user's directories, and the names of a project's, looked for in a session's directory and each above it. */
+/**
+ * Where skills are: the user's directories, the names of a project's, looked for in a session's directory and each
+ * above it, and those plugins' packages bring (`resources.skills`), read on each find, as plugins come and go.
+ */
 export interface SkillRoots {
   readonly user: readonly string[];
   readonly project: readonly string[];
+  readonly plugins?: () => Promise<readonly { readonly dir: string; readonly scope: Skill["scope"] }[]>;
 }
 
 /**
  * Finds the skills a session in a directory has, caching each `SKILL.md` by its size and mtime, so a request costs a
- * directory listing and a `stat` a skill. By name, the last found wins: the user's directories, in order, then the
- * project's from the filesystem root down to the session's directory, so the nearest is used. A directory both
+ * directory listing and a `stat` a skill. By name, the last found wins: plugins' packages', then the user's
+ * directories, in order, then the project's from the filesystem root down to the session's directory, so the nearest
+ * is used and a skill of the user's own replaces a plugin's. A directory both
  * the user's and a project's (`~/.agents/skills` above a project in the home) counts as the user's.
  */
 export function makeSkillFinder(roots: SkillRoots) {
@@ -95,7 +100,10 @@ export function makeSkillFinder(roots: SkillRoots) {
   };
 
   return async (cwd: string): Promise<readonly Skill[]> => {
-    const dirs: { readonly dir: string; readonly scope: Skill["scope"] }[] = roots.user.map((dir) => ({ dir: path.resolve(dir), scope: "user" }));
+    const dirs: { readonly dir: string; readonly scope: Skill["scope"] }[] = [
+      ...((await roots.plugins?.()) ?? []),
+      ...roots.user.map((dir) => ({ dir: path.resolve(dir), scope: "user" as const })),
+    ];
     const ancestors: string[] = [];
     for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
       ancestors.unshift(dir);

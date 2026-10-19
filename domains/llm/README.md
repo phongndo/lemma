@@ -11,6 +11,8 @@ Models and their providers: what the agent asks, and how a person connects one. 
 | [`llm.providers`](providers/)        | web    | Settings › Providers: connecting providers, and adding your own                                                 |
 | [`llm.cli`](cli/README.md)           | host   | The `lemma` command's `models`, `providers`, `login`, `logout`, and a check for `lemma doctor`                  |
 
+A plugin replacing `llm.pi-ai` runs `llmConformance` from `@lemma/llm/testing`: the tests `llm.pi-ai` passes, against the contract alone. The same module's `scriptedLlm` is a model for a plugin's tests: it plays the answers and tool calls it is given (`reply`, `callTools`), a call each, and records each request.
+
 ## Extending it
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):

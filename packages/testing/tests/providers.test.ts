@@ -4,7 +4,8 @@ import { awaitable, definePlugin, Hooks, Registries } from "@lemma/core";
 import { emptyUsage, Llm, LlmError, streamThroughHook } from "@lemma/llm";
 import type { AssistantMessage, ModelInfo, StreamEvent } from "@lemma/llm";
 import { ToolError, ToolResult, ToolRunner, Tools } from "@lemma/tools";
-import { llmConformance, streamProblems, toolsConformance } from "../src/providers.ts";
+import { llmConformance, streamProblems } from "@lemma/llm/testing";
+import { toolsConformance } from "@lemma/tools/testing";
 
 // These replacements use contracts only, so the suite cannot silently depend on bundled provider internals.
 const info: ModelInfo = {

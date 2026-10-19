@@ -327,6 +327,15 @@ function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: bo
           </div>
         )}
       </Match>
+      <Match when={props.item.kind === "context" && props.item}>
+        {(item) => (
+          <div class="divider" data-tip={item().text}>
+            <span>
+              Context from {item().source}: {item().text.split("\n")[0]}
+            </span>
+          </div>
+        )}
+      </Match>
       <Match when={props.item.kind === "orphan-result" && props.item}>
         {(item) => (
           <ToolCard

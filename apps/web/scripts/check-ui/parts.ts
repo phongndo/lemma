@@ -318,10 +318,13 @@ export const parts = async (): Promise<string> => {
   assert.equal(await page.inputValue("textarea"), "use $review ", "picking a skill does not write its name");
   await page.fill("textarea", "");
   expectNoErrors("completing in the composer");
-  // An inspector tab: it lists for the selected plugin.
+  // An inspector tab: it lists for the selected plugin. Over a thread with requests, whose latest one the Cost tab reads.
   await page.evaluate(async () => {
-    const { PluginTabs, Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const { PluginTabs, Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     const lemma = (window as any).lemma;
+    const threads = await lemma.service(Threads);
+    (window as any).threadBefore = threads.activeId();
+    await threads.select(threads.list().find((info: { readonly title?: string }) => info.title === "Fix flaky session log test").id);
     const remove = (window as any).checkSlots.add(PluginTabs, {
       id: "check.tab",
       order: 1_000,
@@ -335,6 +338,19 @@ export const parts = async (): Promise<string> => {
   await page.click(".inspector-table [role=rowgroup][aria-label='agent'] .inspector-domain");
   await page.click(".inspector-row[data-key='host:agent.loop']");
   await page.waitForSelector(".inspector-tabs >> text=Checked", { timeout: 5_000 }).catch(() => assert.fail("an inspector tab does not show"));
+  // A plugin's share of the open thread's latest request: agent.loop put the base prompt there.
+  await page.click(".inspector-tabs >> text=Cost");
+  await page
+    .waitForSelector(".trj-cost td >> text=base", { timeout: 5_000 })
+    .catch(() => assert.fail("the Cost tab does not show what a plugin put in the latest request"));
+  // Back over the thread it was opened over, as the checks below expect, the page as it was left.
+  await page.evaluate(async () => {
+    const { Settings, Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const lemma = (window as any).lemma;
+    await (await lemma.service(Threads)).select((window as any).threadBefore);
+    (await lemma.service(Settings)).open("plugins");
+  });
+  await page.waitForSelector(".inspector-table [aria-selected=true] >> text=agent.loop", { timeout: 5_000 });
   await page.evaluate(() => {
     for (const remove of (window as any).removals) remove();
   });
@@ -1096,15 +1112,22 @@ export const parts = async (): Promise<string> => {
   errors.splice(0);
 
   // An example's web half runs as a user's would, from the plugin directory: examples/todo adds a view of the thread
-  // and how its tool's calls show.
+  // and how its tool's calls show, and so does examples/glossary, which docs/building.md builds.
   const todo = readFileSync(resolve(root, "../../examples/todo/web.js"), "utf8");
+  const glossary = readFileSync(resolve(root, "../../examples/glossary/glossary.web.js"), "utf8");
   await page.goto(`${url}/threads/s1?mock`);
   await settled(page);
   await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
-  await page.evaluate((source) => {
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setWebFiles([{ name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url }]);
-  }, todo);
+  await page.evaluate(
+    ([todo, glossary]) => {
+      const url = (source: string) => URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+      (window as any).lemmaMock.setWebFiles([
+        { name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url: url(todo!) },
+        { name: "glossary/glossary.web.js", source: "user", kind: "script", path: "/plugins/glossary/glossary.web.js", url: url(glossary!) },
+      ]);
+    },
+    [todo, glossary],
+  );
   await showView(page, "todo").catch(() => assert.fail("examples/todo added no Todos view"));
   await page.waitForSelector(".todo-view >> text=No todos in this thread.");
   assert.equal(
@@ -1115,6 +1138,8 @@ export const parts = async (): Promise<string> => {
     "check",
     "examples/todo added no view of its tool's calls",
   );
+  await showView(page, "glossary").catch(() => assert.fail("examples/glossary added no Glossary view"));
+  await page.waitForSelector(".glossary-view >> text=No terms in this thread yet.");
   expectNoErrors("an example's web half");
   return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
 };

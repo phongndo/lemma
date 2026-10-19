@@ -1,7 +1,7 @@
 import { join } from "node:path";
 import { Effect, Semaphore } from "effect";
 import { Paths } from "@lemma/contracts";
-import { CredentialError, Credentials } from "@lemma/credentials";
+import { CredentialError, Credentials, CREDENTIALS_CONTRACT } from "@lemma/credentials";
 import type { Credential } from "@lemma/credentials";
 import { awaitable, definePlugin } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
@@ -18,6 +18,7 @@ export type { LockOptions, RawStore } from "./store.ts";
  */
 export default definePlugin({
   id: "credentials.file",
+  implements: [CREDENTIALS_CONTRACT],
   version: "0.1.0",
   provides: { credentials: Credentials },
   requires: { paths: Paths },

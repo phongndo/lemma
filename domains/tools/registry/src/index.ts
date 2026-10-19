@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core";
-import { ToolRunner } from "@lemma/tools";
+import { ToolRunner, TOOLS_CONTRACT } from "@lemma/tools";
 import { makeRegistry } from "./registry.ts";
 
 const ToolsConfig = Schema.Struct({
@@ -16,6 +16,7 @@ export { toolParameters } from "./schema.ts";
 
 export default definePlugin({
   id: "tools.registry",
+  implements: [TOOLS_CONTRACT],
   version: "0.1.0",
   config: ToolsConfig,
   provides: { tools: ToolRunner },

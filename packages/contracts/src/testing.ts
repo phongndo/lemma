@@ -4,7 +4,8 @@ import type { Context } from "effect";
 import { definePlugin } from "@lemma/core";
 import type { Registries } from "@lemma/core";
 import { resultOf, withChannel, withdrawnFrom } from "./channels.ts";
-import { Paths } from "./host.ts";
+import { HostControl, Paths } from "./host.ts";
+import type { PluginInfo } from "./host.ts";
 
 /*
  * Node only, for plugins' tests: `@lemma/contracts/testing`.
@@ -23,6 +24,26 @@ export const pathsPlugin = (home: string, paths: Partial<Context.Service.Shape<t
           projectConfig: join(paths.cwd ?? home, ".lemma", "config.jsonc"),
           cwd: home,
           ...paths,
+        },
+      }),
+  });
+
+/** A plugin providing `HostControl` with `plugins` as its plugins, for a plugin that reads them; the rest is unused. */
+export const hostControlPlugin = (plugins: readonly PluginInfo[] = []) =>
+  definePlugin({
+    id: "host",
+    provides: { host: HostControl },
+    setup: () =>
+      Effect.succeed({
+        host: {
+          runtime: [HostControl.key],
+          process: { pid: process.pid, startedAt: 0 },
+          plugins: Effect.succeed(plugins),
+          composition: Effect.succeed({ id: "test", plugins: [] }),
+          restart: () => Effect.succeed({}),
+          reload: Effect.die("unused"),
+          configure: () => Effect.die("unused"),
+          web: Effect.succeed({ plugins: {}, enabledIn: {}, configIn: {}, files: [] }),
         },
       }),
   });

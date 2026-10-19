@@ -1,16 +1,20 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { Predicate } from "effect";
+import { isInside } from "@lemma/contracts/fs";
 
 /*
  * A plugin directory (`<home>/plugins`, a trusted project's `.lemma/plugins`) holds a plugin's halves as files, by
  * name, or as a package:
  *
  *   approvals.ts        a host half (`.ts`, `.js`, `.mjs`): the host loads it
- *   notes.web.js        a web half (`.web.js`, `.web.mjs`): the web app loads it
+ *   notes.web.js        a web half (`.web.js`, `.web.mjs`, or `.web.ts`, its types stripped as it is served)
  *   theme.css           a stylesheet the web app applies after its own
  *   ticker/             a package, whose package.json says where its halves are:
  *     package.json        "lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }
+ *
+ * A package also names folders of things other plugins read, by kind (`"resources": { "skills": "./skills" }`): the
+ * host passes them on as they are, in its plugin's status, for the plugin that reads that kind to find them.
  *
  * Both halves of one plugin define the same id, so one row decides both, and the web app runs a web half only while its
  * host half runs.
@@ -21,7 +25,12 @@ export interface Manifest {
   readonly host?: string;
   readonly web?: string;
   readonly styles?: readonly string[];
+  /** Folders of things other plugins read, by kind (`skills`, `profiles`): absolute, each inside the package. */
+  readonly resources?: Readonly<Record<string, readonly string[]>>;
 }
+
+/** The manifest's fields; any other is said to be ignored, which catches a typo. */
+const FIELDS = new Set(["host", "web", "styles", "resources"]);
 
 /**
  * An entry of a plugin directory: a file of a half (`approvals.ts`, `notes.web.js`), a stylesheet, or a package, whose
@@ -38,7 +47,7 @@ export type Entry =
       readonly problems: readonly string[];
     };
 
-const WEB_FILE = /\.web\.(js|mjs)$/;
+const WEB_FILE = /\.web\.(js|mjs|ts|mts)$/;
 const isWeb = (name: string) => WEB_FILE.test(name);
 /** The plugin a web half's file is named for: `notes.web.js` defines `notes`. */
 export const webPluginOf = (name: string): string => name.replace(WEB_FILE, "");
@@ -56,14 +65,15 @@ const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; r
     }
   })();
   if (!Predicate.isObject(lemma)) return undefined;
-  const { host, web, styles } = lemma as Record<string, unknown>;
+  const { host, web, styles, resources } = lemma as Record<string, unknown>;
   const problems: string[] = [];
+  for (const field of Object.keys(lemma)) if (!FIELDS.has(field)) problems.push(`"lemma.${field}" is not a field Lemma reads (host, web, styles, resources)`);
   /** `file` as an absolute path when it is one of the package's own (a string, inside it, there). */
   const inside = async (field: string, file: unknown): Promise<string[]> => {
     if (file === undefined) return [];
     if (typeof file !== "string") return (problems.push(`"lemma.${field}" is not a path`), []);
     const path = join(dir, file);
-    if (relative(dir, path).startsWith("..")) return (problems.push(`"lemma.${field}" names ${file}, outside the package`), []);
+    if (!isInside(dir, path)) return (problems.push(`"lemma.${field}" names ${file}, outside the package`), []);
     // A host half that is missing is the loader's to report: that plugin cannot run.
     if (field !== "host" && !(await stat(path).catch(() => undefined))?.isFile())
       return (problems.push(`"lemma.${field}" names ${file}, which is missing`), []);
@@ -71,18 +81,40 @@ const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; r
   };
   const [hostPath] = await inside("host", host);
   let [webPath] = await inside("web", web);
-  // The web app imports a web half as it is: a module in JavaScript.
-  if (webPath !== undefined && !/\.m?js$/.test(webPath)) {
-    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript (.js or .mjs), which the web app imports as it is`);
+  // The web app imports a web half as a module: JavaScript, or TypeScript whose types are stripped as it is served.
+  if (webPath !== undefined && !/\.m?[jt]s$/.test(webPath)) {
+    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript or TypeScript (.js, .mjs, .ts, .mts), not JSX`);
     webPath = undefined;
   }
   if (styles !== undefined && !Array.isArray(styles)) problems.push(`"lemma.styles" is not a list of paths`);
   const stylePaths = Array.isArray(styles) ? (await Promise.all(styles.map((style) => inside("styles", style)))).flat() : undefined;
+  /** A kind's folders, each one of the package's own and there. */
+  const folders = async (kind: string, value: unknown): Promise<string[]> => {
+    const listed = typeof value === "string" ? [value] : Array.isArray(value) ? value : undefined;
+    if (listed === undefined) return (problems.push(`"lemma.resources.${kind}" is not a folder or a list of folders`), []);
+    const found: string[] = [];
+    for (const folder of listed) {
+      if (typeof folder !== "string") {
+        problems.push(`"lemma.resources.${kind}" lists something that is not a path`);
+        continue;
+      }
+      const path = join(dir, folder);
+      if (!isInside(dir, path)) problems.push(`"lemma.resources.${kind}" names ${folder}, outside the package`);
+      else if (!(await stat(path).catch(() => undefined))?.isDirectory()) problems.push(`"lemma.resources.${kind}" names ${folder}, which is no folder`);
+      else found.push(path);
+    }
+    return found;
+  };
+  if (resources !== undefined && !Predicate.isObject(resources)) problems.push(`"lemma.resources" is not an object of folders by kind`);
+  const resourcePaths = Predicate.isObject(resources)
+    ? Object.fromEntries(await Promise.all(Object.entries(resources).map(async ([kind, value]) => [kind, await folders(kind, value)] as const)))
+    : undefined;
   return {
     manifest: {
       ...(hostPath === undefined ? {} : { host: hostPath }),
       ...(webPath === undefined ? {} : { web: webPath }),
       ...(stylePaths === undefined ? {} : { styles: stylePaths }),
+      ...(resourcePaths === undefined ? {} : { resources: resourcePaths }),
     },
     problems,
   };

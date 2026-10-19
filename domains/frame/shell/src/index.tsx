@@ -3,7 +3,7 @@ import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
 import { Actions } from "@lemma/actions";
-import { Docks, Layers, Layout, MainRegion, SidebarRegion, TopRegion } from "@lemma/frame";
+import { Docks, FRAME_CONTRACT, Layers, Layout, MainRegion, SidebarRegion, TopRegion } from "@lemma/frame";
 import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
 import styles from "./shell.css?inline";
@@ -36,6 +36,7 @@ const clampWidth = (width: number) => Math.round(Math.max(MIN_WIDTH, Math.min(wi
  */
 export default defineWebPlugin({
   id: "frame.shell",
+  implements: [FRAME_CONTRACT],
   styles,
   requires: { slots: Slots },
   provides: { layout: Layout },

@@ -1,6 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
 import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
+import { editApplies, messageOf } from "./derive.ts";
 import type { Contribution, EventData, ProviderAnswer, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
@@ -135,6 +136,82 @@ export interface TrajectoryTurn {
   readonly usage: Usage;
 }
 
+/** What one plugin put in a request: its sections and tools, their size, and those new or changed since the request before. */
+export interface PluginShare {
+  /** Plugin id. */
+  readonly source: string;
+  readonly systemChars: number;
+  readonly toolChars: number;
+  /** Its section ids and tool names in the request. */
+  readonly sections: readonly string[];
+  readonly tools: readonly string[];
+  /**
+   * Those of them new or different since the previous request on the branch (all of them, on the first): a provider's
+   * prompt cache holds up to the first change, so a part that changes costs the cache of everything after it.
+   */
+  readonly changed: readonly string[];
+}
+
+/** Each plugin's share of a request, the largest first. */
+export function pluginShares(request: TrajectoryRequest): readonly PluginShare[] {
+  const shares = new Map<string, { systemChars: number; toolChars: number; sections: string[]; tools: string[]; changed: string[] }>();
+  const shareOf = (source: string) =>
+    shares.get(source) ?? shares.set(source, { systemChars: 0, toolChars: 0, sections: [], tools: [], changed: [] }).get(source)!;
+  for (const section of request.sections) {
+    const share = shareOf(section.source);
+    share.systemChars += section.chars;
+    share.sections.push(section.id);
+    if (section.changed) share.changed.push(section.id);
+  }
+  for (const tool of request.tools) {
+    const share = shareOf(tool.source);
+    share.toolChars += tool.chars;
+    share.tools.push(tool.name);
+    if (tool.changed) share.changed.push(tool.name);
+  }
+  return [...shares]
+    .map(([source, share]) => ({ source, ...share }))
+    .sort((a, b) => b.systemChars + b.toolChars - (a.systemChars + a.toolChars) || a.source.localeCompare(b.source));
+}
+
+/**
+ * How a branch's requests kept the provider's prompt cache. A provider caches a request's prefix, and sends the tools
+ * and the system prompt ahead of the history: a request that changes either loses the cache of all that follows,
+ * the history included.
+ */
+export interface CacheReport {
+  readonly requests: number;
+  /** Requests after the branch's first that changed the system prompt or the tools. */
+  readonly changed: number;
+  /** For each plugin, the requests in which it changed a part of its own; `(removed)` counts those that dropped one. */
+  readonly changedBy: Readonly<Record<string, number>>;
+  /** Input tokens over the branch's answers and failed calls, and of them those the provider read from its cache. */
+  readonly input: number;
+  readonly cacheRead: number;
+}
+
+/** `turns`' cache report (`CacheReport`). */
+export function cacheReport(turns: readonly TrajectoryTurn[]): CacheReport {
+  const requests = turns.flatMap((turn) => turn.steps.flatMap((step) => (step.request === undefined ? [] : [step.request])));
+  const changedBy: Record<string, number> = {};
+  let changed = 0;
+  for (const request of requests.slice(1)) {
+    const sources = new Set([...request.sections, ...request.tools].filter((part) => part.changed).map((part) => part.source));
+    if (request.removed.length > 0) sources.add("(removed)");
+    if (sources.size === 0) continue;
+    changed++;
+    for (const source of sources) changedBy[source] = (changedBy[source] ?? 0) + 1;
+  }
+  const input = turns.reduce((sum, turn) => sum + turn.usage.input + turn.usage.cacheRead + turn.usage.cacheWrite, 0);
+  return { requests: requests.length, changed, changedBy, input, cacheRead: turns.reduce((sum, turn) => sum + turn.usage.cacheRead, 0) };
+}
+
+/** The latest request among `turns`: the last that a step logged. */
+export function latestRequest(turns: readonly TrajectoryTurn[]): TrajectoryRequest | undefined {
+  for (const turn of [...turns].reverse()) for (const step of [...turn.steps].reverse()) if (step.request !== undefined) return step.request;
+  return undefined;
+}
+
 /**
  * `system` split back into its sections by the recorded sizes (see the
  * `request` event). Undefined when the sizes do not add up, e.g. a request
@@ -199,12 +276,36 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   let previousSections = new Map<string, string | number>();
   let previousTools = new Map<string, string>();
   // How many messages each request carried, as `deriveMessages` of the branch before it would count them, kept as the
-  // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start.
+  // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start
+  // but those an edit omits.
   const positionOf = new Map(branch.map((event, position) => [event.id, position]));
   const messagesBefore = [0];
-  for (const event of branch) messagesBefore.push(messagesBefore.at(-1)! + (event.data.type === "message" ? 1 : 0));
+  // Where each tool call's results are, so a response a `context-edit` omits takes its results out of the count too.
+  const resultsOf = new Map<string, number[]>();
+  branch.forEach((event, position) => {
+    const message = messageOf(event);
+    messagesBefore.push(messagesBefore.at(-1)! + (message === undefined ? 0 : 1));
+    if (message?.role === "toolResult") resultsOf.set(message.toolCallId, [...(resultsOf.get(message.toolCallId) ?? []), position]);
+  });
   let viewStart = 0;
   let summarized = 0;
+  // The events `context-edit`s so far omit, by position: per target, as the latest that applies to it says.
+  const omitted = new Set<number>();
+  /** The messages before `position` in the view that an omit leaves out: each omitted event's, and its calls' results. */
+  const omittedBefore = (position: number): number => {
+    let count = 0;
+    for (const target of omitted) {
+      if (target < viewStart || target >= position) continue;
+      count++;
+      const message = messageOf(branch[target]!)!;
+      if (message.role !== "assistant") continue;
+      for (const block of message.content) {
+        if (block.type !== "toolCall") continue;
+        for (const result of resultsOf.get(block.id) ?? []) if (result >= viewStart && result < position) count++;
+      }
+    }
+    return count;
+  };
 
   const stepFor = (turnId: string, stepId: string, at: number): MutableStep | undefined => {
     const existing = stepById.get(stepId);
@@ -294,7 +395,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           model: data.model,
           ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
           composition: data.composition,
-          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]!,
+          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]! - omittedBefore(position),
           ...(system === undefined ? {} : { system }),
           sections,
           tools,
@@ -322,6 +423,14 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
             ...(data.usage === undefined ? {} : { usage: data.usage }),
           });
         }
+        return;
+      }
+      case "context-edit": {
+        const target = positionOf.get(data.target);
+        const message = target === undefined ? undefined : messageOf(branch[target]!);
+        if (target === undefined || message === undefined || !editApplies(data, message)) return;
+        if (data.op === "omit") omitted.add(target);
+        else omitted.delete(target);
         return;
       }
       case "attempt": {

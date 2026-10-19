@@ -78,6 +78,8 @@ export const step = (quotes: readonly Quote[], random: () => number, at: number)
 export default definePlugin({
   id: "ticker",
   version: "0.1.0",
+  // It uses only the runtime's contracts (`@lemma/contracts`), which `HostApi` versions: no domain's.
+  uses: [],
   config: Config,
   setup: function* (_, owner) {
     const config = owner.config;

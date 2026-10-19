@@ -304,6 +304,10 @@ export const channelProblem = (value: unknown): string | undefined => {
  * another's channel by adding one with its id and a lower order: streams open
  * on the one replaced end `Withdrawn`, so their clients reopen on the new one,
  * while calls in flight there finish, since they were made to it.
+ *
+ * @composition the first by `order` answers for an id; a stream on one replaced ends `Withdrawn`, and its client
+ * reopens on the new one. A handler that fails answers its caller with the failure. Checked when added: a channel's
+ * shape.
  */
 export const Channels = Registry.make<Channel>("lemma/channels", { key: (channel) => channel.id, check: channelProblem });
 

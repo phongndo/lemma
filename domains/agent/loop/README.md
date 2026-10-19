@@ -7,6 +7,12 @@ its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and
 `agent.activity`, its live output and each turn's and queue's change.
 
+It is the agent kit's (`@lemma/agent/kit`) `makeAgent` with the kit's own
+policy, `toolLoop`: what follows is the kit's behavior, which a loop built on
+it shares. A loop of another kind gives `makeAgent` its own `TurnPolicy`
+(whether a turn takes another step), or builds on the kit's parts: `runTurn`,
+`planResume`, the journal, the queue's rules, and the live view.
+
 ```ts
 Effect.gen(function* () {
   const agent = yield* Agent;
@@ -29,11 +35,12 @@ Effect.gen(function* () {
 | `maxRetryDelay` | `60`                                          | Seconds the wait between retries grows to, at most.                                                  |
 | `stopGrace`     | `5`                                           | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).         |
 | `parallelTools` | `8`                                           | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).      |
+| `keepCancelled` | `true`                                        | What the model wrote before the user stopped its reply stays in what it sees next (see below).       |
 | `maxRunning`    | `16`                                          | Turns running at once, across sessions; another waits for a slot before its first event.             |
 
 ## Base prompt
 
-The `agent.base` section ([`src/prompt.ts`](src/prompt.ts)) says how the agent
+The `agent.base` section ([`kit/prompt.ts`](../contract/src/kit/prompt.ts)) says how the agent
 works, not how to use any tool: that is in each tool's own description, so a
 replaced or removed tool takes its advice with it, and the section's text is the
 same for every request.
@@ -99,7 +106,11 @@ their work, the plugins' hooks included, carries `session.id`, `turn.id`,
 ([devtools.trace](../../devtools/trace/README.md)) shows a turn's work by them.
 
 `turn-end` closes every turn the agent finishes. On cancellation or failure the
-closing sequence logs the partial model output as an `attempt`, answers every
+closing sequence logs the partial model output as an `attempt`, but for a reply
+the user stopped (`cancel`) that had written some text: that is logged as the
+assistant `message` it got as far as (its text, and thinking a provider can
+replay; no tool call), marked `aborted`, and the model sees it next as a reply
+that ended there, as the user read it (`keepCancelled`). It then answers every
 unanswered tool call with an error result (so the next request stays valid),
 then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed usage.
 A turn the agent is closing under (the host stopping, the plugin reloading) is

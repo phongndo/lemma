@@ -133,6 +133,19 @@ describe("transcript", () => {
     expect(t.turns[0]!.items.map((item) => item.kind)).toEqual(["compaction", "orphan-result"]);
   });
 
+  it("shows what a plugin told the model as its display, else its text", () => {
+    const t = transcriptOf(
+      branch(
+        { type: "context", source: "mail", content: [{ type: "text", text: "From: a@b\nHello" }], display: "1 new email" },
+        { type: "context", source: "sensor", content: [{ type: "text", text: "21.5 °C" }] },
+      ),
+    );
+    expect(t.turns[0]!.items).toMatchObject([
+      { kind: "context", source: "mail", text: "1 new email" },
+      { kind: "context", source: "sensor", text: "21.5 °C" },
+    ]);
+  });
+
   it("marks the errors of a stopped turn's last step as the stop's, and no other errors", () => {
     const stopped = (reason: "cancelled" | "error") => {
       const project = createProjector();

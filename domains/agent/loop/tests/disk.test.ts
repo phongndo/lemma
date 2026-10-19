@@ -8,7 +8,7 @@ import tools from "@lemma/tools-registry";
 import { SimDisk, seededRandom } from "@lemma/testing";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { MAX_QUEUED, makeAgentPlugin } from "../src/index.ts";
-import { readJournals } from "../src/state.ts";
+import { readJournals } from "@lemma/agent/kit";
 import { fakeLlm, hang, host, paths, testTools, text, waitFor } from "./fakes.ts";
 
 /*

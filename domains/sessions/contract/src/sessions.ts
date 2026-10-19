@@ -1,11 +1,11 @@
-import { Context, Data, Effect, Schema, Stream } from "effect";
+import { Context, Data, Effect, Predicate, Schema, Stream } from "effect";
 import type { Scope } from "effect";
-import { Event, Hook } from "@lemma/core";
+import { Event, Hook, schemaCheck } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
 import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
-import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
+import { AssistantMessage, IMAGE_TYPES, ImageContent, LlmFailure, MAX_IMAGE_BYTES, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 import { SessionSearchMatch } from "./search.ts";
 
 /**
@@ -48,9 +48,34 @@ export type Contribution = typeof Contribution.Type;
 export const TurnEndReason = Schema.Literals(["done", "cancelled", "error", "max-steps"]);
 export type TurnEndReason = typeof TurnEndReason.Type;
 
+/**
+ * What a `context` event, or a `context-edit` replacing an event's content, puts before the model: at least one part,
+ * no blank text, and images of a type and size every provider takes. A provider refuses a message with any of these,
+ * and the log cannot be edited, so one logged would fail every later request of its session.
+ */
+const ShownContent = Schema.Array(Schema.Union([TextContent, ImageContent])).check(
+  Schema.isMinLength(1),
+  Schema.makeFilter((parts) => {
+    for (const part of parts) {
+      if (part.type === "text" && part.text.trim() === "") return "a text part is blank";
+      if (part.type === "image" && !IMAGE_TYPES.has(part.mimeType)) return `an image is ${part.mimeType}, which not every provider takes`;
+      // Base64: four characters for every three bytes.
+      if (part.type === "image" && part.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) return "an image is larger than providers take";
+    }
+    return undefined;
+  }),
+);
+
 export const EventData = Schema.Union([
   /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
-  Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
+  Schema.Struct({
+    type: Schema.Literal("turn-start"),
+    turnId: Schema.String,
+    model: Schema.optional(Schema.String),
+    thinking: Schema.optional(ThinkingLevel),
+    /** The turn's choices for plugins, by plugin id (the agent's `TurnOptions.plugins`). */
+    plugins: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
   Schema.Struct({
     type: Schema.Literal("turn-end"),
     turnId: Schema.String,
@@ -76,8 +101,8 @@ export const EventData = Schema.Union([
     ),
   }),
   /**
-   * The request header, logged before the model call. `system` and `tools` are
-   * omitted when unchanged since the previous `request` on the branch.
+   * The request header, logged before the model call. `system`, `tools`, and
+   * `nested` are omitted when unchanged since the previous `request` on the branch.
    * `system` is the text of the `system` contributions, in order, with empty
    * ones dropped, joined by a blank line (`"\n\n"`); `chars` is each text's
    * length, so `trajectory` can split it back into sections.
@@ -92,6 +117,11 @@ export const EventData = Schema.Union([
     composition: Schema.String,
     system: Schema.optional(Schema.String),
     tools: Schema.optional(Schema.Array(ToolSpec)),
+    /**
+     * The `nested` tools the request offered beside `tools` without declaring them to the model, by name: with
+     * `tools`, what its calls may reach (`ToolInvocation.offered`), so a call resumed after a restart is held to it.
+     */
+    nested: Schema.optional(Schema.Array(Schema.String)),
     contributions: Schema.Array(Contribution),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),
@@ -147,6 +177,38 @@ export const EventData = Schema.Union([
     /** What writing the summary cost. */
     usage: Schema.optional(Usage),
   }),
+  /**
+   * Something a plugin tells the model where it was appended (an email that arrived, a document attached, a reading),
+   * which the model reads as a user message with `content`, word for word. `source` is the plugin; `display` is what a
+   * transcript shows of it, in place of its content. Logged like any event, so a request with it still rebuilds from
+   * the log. One placed among a response's tool results is seen after them, so the calls keep their results next to
+   * them. During a turn, append it through `AgentRequestHook`'s `append` (with the turn's id), as the turn's later
+   * events follow its own last one; between turns, with `Sessions.append`.
+   */
+  Schema.Struct({
+    type: Schema.Literal("context"),
+    source: Schema.String,
+    content: ShownContent,
+    display: Schema.optional(Schema.String),
+    turnId: Schema.optional(Schema.String),
+    stepId: Schema.optional(Schema.String),
+  }),
+  /**
+   * Changes what the model sees of an earlier event on the branch, which stays in the log as it was: `omit` leaves it
+   * out (a response with its tool results, so calls keep their results), `replace` puts `content` in its place (a
+   * prompt, a tool result, or a `context` event; never a response, whose calls its results answer). Of an event's
+   * edits, the latest that applies wins. One that cannot apply (its target not on the branch, or already summarized
+   * away by a compaction, or omitting a lone tool result, or replacing a response) changes nothing, and leaves an
+   * earlier one in force. Append it as `context` says.
+   */
+  Schema.Struct({
+    type: Schema.Literal("context-edit"),
+    target: Schema.String,
+    op: Schema.Literals(["omit", "replace"]),
+    content: Schema.optional(ShownContent),
+    source: Schema.String,
+    turnId: Schema.optional(Schema.String),
+  }),
   Schema.Struct({ type: Schema.Literal("title"), title: Schema.String }),
   /** Plugin-owned data; `kind` is namespaced by the plugin id. Not model-visible. */
   Schema.Struct({ type: Schema.Literal("custom"), kind: Schema.String, data: Schema.Unknown }),
@@ -179,6 +241,11 @@ export const SessionInfo = Schema.Struct({
   archived: Schema.optional(Schema.Boolean),
   /** Set by `mark`, present only when true: kept though nothing has gone into it (see `SessionMarks.kept`). */
   kept: Schema.optional(Schema.Boolean),
+  /**
+   * Its log is damaged from line `line` on (`reason`): it reads up to the event before (`lastSeq` counts what reads),
+   * and takes no writes (`ReadOnly`). `fork` copies it, from any event that reads, into a session that does.
+   */
+  damaged: Schema.optional(Schema.Struct({ line: Schema.Number, reason: Schema.String })),
 });
 export type SessionInfo = typeof SessionInfo.Type;
 
@@ -186,9 +253,10 @@ export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
   /**
    * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler
-   * refused it. `NotEmpty`: `relocate` refused, as something has gone into the session.
+   * refused it. `NotEmpty`: `relocate` refused, as something has gone into the session. `ReadOnly`: a write refused, as
+   * the session's log is damaged (`SessionInfo.damaged`): `fork` it to go on.
    */
-  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty";
+  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty" | "ReadOnly";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -211,6 +279,9 @@ export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/
  * `Sessions` runs each removal through it, so a handler's rule holds for every
  * client and every plugin. Work that writes to the session holds it instead
  * (see `Sessions.hold`).
+ *
+ * @composition a chain: a handler refuses by failing instead of calling `next`, which fails `remove` with its error
+ * and keeps the session; one that calls `next` and then fails reports its failure after the session is gone.
  */
 export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
 
@@ -225,8 +296,22 @@ export interface CheckoutRequest {
  * Around every `Sessions.checkout`, whoever calls it; the terminal moves the leaf. A handler refuses a checkout by
  * failing instead of calling `next` (a plugin keeping a session on its branch while it works there), or acts on one
  * after `next` succeeded. A provider of `Sessions` runs each checkout through it.
+ *
+ * @composition a chain: a handler refuses by failing instead of calling `next`, which fails `checkout` with its error
+ * and leaves the leaf where it was. Checked: what a handler hands on is a checkout request, what it returns a
+ * `SessionInfo`.
  */
 export const SessionCheckoutHook = Hook.make<CheckoutRequest, SessionInfo, SessionError>("lemma/session.checkout", {
+  check: {
+    input: (value) =>
+      Predicate.isObject(value) &&
+      typeof value.sessionId === "string" &&
+      typeof value.eventId === "string" &&
+      (value.from === undefined || typeof value.from === "string")
+        ? undefined
+        : "expected a checkout: { sessionId, eventId, from? }, all strings",
+    output: (value) => schemaCheck(SessionInfo)(value),
+  },
   summary: { input: (request) => ({ session: request.sessionId, to: request.eventId }) },
 });
 
@@ -286,6 +371,13 @@ export class Sessions extends Context.Service<
      * it is held.
      */
     readonly relocate: (sessionId: string, cwd: string) => Effect.Effect<SessionInfo, SessionError>;
+    /**
+     * A new session in the same directory holding the branch that ends at `eventId`, as it reads: the same events,
+     * ids, and times, numbered from 1, its leaf at `eventId`, filed as new (no marks). How a session goes on from a
+     * point without changing it: one that is damaged (`SessionInfo.damaged`), from its last event that reads. Fails
+     * `NotFound` for an event not in the session.
+     */
+    readonly fork: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /**
      * Holds the session while the scope lasts, so it is not removed: work that
      * writes to it holds it from before it starts until it has stopped, as the
@@ -432,6 +524,14 @@ export const SessionChannels = {
     payload: Schema.Struct({ ...sessionField, cwd: Schema.String }),
     success: SessionInfo,
   }),
+  fork: defineChannel({
+    kind: "call",
+    id: "sessions.fork",
+    title: "Fork a session",
+    description: "A new session holding the branch that ends at an event (eventId), as it reads; how a damaged session goes on",
+    payload: Schema.Struct({ ...sessionField, eventId: Schema.String }),
+    success: SessionInfo,
+  }),
   /** `Sessions.search`: what was said in sessions. It reads sessions' logs, so a client asks once the query has settled. */
   search: defineChannel({
     kind: "call",
@@ -535,6 +635,7 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
     }),
   ),
   serveChannel(SessionChannels.relocate, ({ sessionId, cwd }) => sessions.relocate(sessionId, cwd)),
+  serveChannel(SessionChannels.fork, ({ sessionId, eventId }) => sessions.fork(sessionId, eventId)),
   serveChannel(SessionChannels.search, ({ query, limit }) => sessions.search(query, limit === undefined ? undefined : { limit })),
   serveChannel(SessionChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
   serveChannel(SessionChannels.changes, () =>

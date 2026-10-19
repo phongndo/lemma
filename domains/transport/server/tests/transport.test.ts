@@ -56,6 +56,37 @@ describe("transport", () => {
       }),
     ));
 
+  test("serves a package's own modules beside its web half, TypeScript with its types stripped, and nothing outside it", () =>
+    withHost((host) =>
+      Effect.gen(function* () {
+        const dir = join(host.home, "plugins");
+        yield* Effect.promise(() => mkdir(join(dir, "board", "node_modules", "dep"), { recursive: true }));
+        yield* Effect.promise(() => writeFile(join(dir, "board", "web.ts"), 'import { title } from "./model.ts";\nexport default (api: unknown) => title;'));
+        yield* Effect.promise(() => writeFile(join(dir, "board", "model.ts"), 'export const title: string = "Board";'));
+        yield* Effect.promise(() => writeFile(join(dir, "board", "node_modules", "dep", "index.js"), "secret"));
+        yield* Effect.promise(() => writeFile(join(dir, "board", "data.json"), "{}"));
+        yield* Effect.promise(() => mkdir(join(dir, "board", ".cache"), { recursive: true }));
+        yield* Effect.promise(() => writeFile(join(dir, "board", ".cache", "built.js"), "hidden"));
+        host.holder.web = {
+          ...host.holder.web,
+          files: [{ name: "board/web.ts", source: "user", kind: "script", path: join(dir, "board", "web.ts"), url: "/api/web/user@abc/board/web.ts" }],
+        };
+        const get = (path: string) => Effect.promise(() => fetch(`${host.url}/api/web/t/${encodeURIComponent(host.token)}${path}`));
+        const web = yield* get("/user@abc/board/web.ts");
+        expect(web.headers.get("content-type")).toMatch(/javascript/);
+        expect(yield* Effect.promise(() => web.text())).not.toContain(": unknown");
+        const model = yield* get("/user@abc/board/model.ts");
+        expect(model.status).toBe(200);
+        expect(yield* Effect.promise(() => model.text())).toMatch(/export const title\s*=\s*"Board";/);
+        expect((yield* get("/user@abc/board/node_modules/dep/index.js")).status).toBe(404);
+        expect((yield* get("/user@abc/board/data.json")).status).toBe(404);
+        // Nor what is hidden, which its version does not follow.
+        expect((yield* get("/user@abc/board/.cache/built.js")).status).toBe(404);
+        expect((yield* get("/user@abc/other/web.js")).status).toBe(404);
+        expect((yield* get("/user@abc/board/..%2F..%2Fconfig.jsonc")).status).toBe(404);
+      }),
+    ));
+
   test("serves listed web halves with the token, a package's too, and tells clients when a row changes", () =>
     withHost((host) =>
       Effect.gen(function* () {
@@ -67,21 +98,24 @@ describe("transport", () => {
         host.holder.web = {
           ...host.holder.web,
           files: [
-            { name: "panel.js", source: "user", kind: "script", path: join(dir, "panel.js"), url: "/api/web/user/panel.js?v=1" },
-            { name: "ticker/web.js", source: "user", kind: "script", path: join(dir, "ticker", "web.js"), url: "/api/web/user/ticker/web.js?v=1" },
+            { name: "panel.js", source: "user", kind: "script", path: join(dir, "panel.js"), url: "/api/web/user@1/panel.js" },
+            { name: "ticker/web.js", source: "user", kind: "script", path: join(dir, "ticker", "web.js"), url: "/api/web/user@1/ticker/web.js" },
           ],
         };
         const get = (path: string) => Effect.promise(() => fetch(`${host.url}${path}`));
         const token = `token=${encodeURIComponent(host.token)}`;
-        expect((yield* get("/api/web/user/panel.js?v=1")).status).toBe(401);
-        const served = yield* get(`/api/web/user/panel.js?v=1&${token}`);
+        expect((yield* get("/api/web/user@1/panel.js")).status).toBe(401);
+        const served = yield* get(`/api/web/user@1/panel.js?${token}`);
         expect(served.status).toBe(200);
         expect(served.headers.get("content-type")).toMatch(/javascript/);
         expect(yield* Effect.promise(() => served.text())).toBe("export default () => [];");
-        expect((yield* get(`/api/web/user/ticker/web.js?v=1&${token}`)).status).toBe(200);
+        // The token in the path, as the web app writes it, so a relative import carries it.
+        const inPath = `/api/web/t/${encodeURIComponent(host.token)}`;
+        expect((yield* get(`${inPath}/user@1/ticker/web.js`)).status).toBe(200);
+        expect((yield* get(`/api/web/t/wrong/user@1/ticker/web.js`)).status).toBe(401);
         // Only listed files are served, whatever else is in the directory.
-        expect((yield* get(`/api/web/user/secret.js?${token}`)).status).toBe(404);
-        expect((yield* get(`/api/web/user/..%2Fconfig.jsonc?${token}`)).status).toBe(404);
+        expect((yield* get(`/api/web/user@1/secret.js?${token}`)).status).toBe(404);
+        expect((yield* get(`/api/web/user@1/..%2Fconfig.jsonc?${token}`)).status).toBe(404);
 
         const client = yield* host.connect("websocket");
         const events = yield* subscribe(client);

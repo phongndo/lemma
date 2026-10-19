@@ -3,14 +3,14 @@ import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { definePlugin, PluginContext } from "@lemma/core";
-import { Agent } from "@lemma/agent";
+import { Agent, AgentRequestHook } from "@lemma/agent";
 import { emptyUsage } from "@lemma/llm";
 import { SessionAppended, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
-import { LiveTurn } from "../src/live.ts";
-import { INTERRUPTED_CALL, planResume } from "../src/resume.ts";
+import { LiveTurn } from "@lemma/agent/kit";
+import { INTERRUPTED_CALL, planResume } from "@lemma/agent/kit";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
 import type { AgentSetup } from "./fakes.ts";
 
@@ -370,6 +370,54 @@ describe("resume", () => {
     );
   });
 
+  it("holds a resumed call to the tools its request offered: a nested tool a handler took out is not there for it", async () => {
+    const hidden: Tool<Record<string, never>> = {
+      name: "hidden",
+      description: "Only a tool that runs others calls it.",
+      input: Schema.Struct({}),
+      nested: true,
+      execute: () => new ToolResult({ content: [{ type: "text", text: "reached" }] }),
+    };
+    const runner: Tool<Record<string, never>> = {
+      name: "runner",
+      description: "Runs other tools.",
+      input: Schema.Struct({}),
+      nests: true,
+      replay: "safe",
+      execute: (_, { offered }) => new ToolResult({ content: [{ type: "text", text: `offered: ${offered?.join(",")}` }] }),
+    };
+    // As a profile leaving the tool out does.
+    const select = definePlugin({
+      id: "select",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(AgentRequestHook, (draft, next) => next({ ...draft, tools: draft.tools.filter((tool) => tool.spec.name !== "hidden") }), {
+            phase: "select",
+          }),
+        ),
+      ),
+    });
+    const tools = [slow, runner, hidden];
+    const id = await run({ scripts: [useTools(call("t1", "slow", {}), call("t2", "runner", {}))], tools, plugins: [select] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        yield* Effect.forkChild(a.prompt(id, text("go")));
+        yield* waitFor(a.view(id), (view) => view.output.some((entry) => entry.output.includes("step 1 done")));
+        return id;
+      }),
+    );
+    await run({ scripts: [reply("recovered")], tools, plugins: [select] }, () =>
+      Effect.gen(function* () {
+        const events = yield* ended(id);
+        expect(ofType(events, "request")[0]!.nested).toEqual([]);
+        const result = ofType(events, "message").find((data) => data.message.role === "toolResult" && data.message.toolCallId === "t2")!;
+        expect(JSON.stringify(result.message.content)).not.toContain("hidden");
+        expect(JSON.stringify(result.message.content)).toContain("runner");
+      }),
+    );
+  });
+
   it("resumes on the turn's own events when renames during its call made a longer branch, so a finished tool is not run again", async () => {
     const gate = Effect.runSync(Deferred.make<void>());
     const id = await run({ scripts: [gated(gate, useTools(call("t1", "echo", { text: "once" }), call("t2", "slow", {})))], tools: [slow] }, () =>
@@ -524,6 +572,15 @@ describe("planResume", () => {
     const resume = planResume(events, "t");
     expect(resume).toMatchObject({ kind: "open", plan: { lastId: "d", model: "fake/m1", steps: 1, at: { kind: "model", stepId: "s", logged: false } } });
     expect(resume.kind === "open" && [...resume.plan.placed]).toEqual(["r"]);
+  });
+
+  it("goes on with the plugins' choices the turn was taken with", () => {
+    const events = [
+      event(1, "a", null, { type: "turn-start", turnId: "t", model: "fake/m1", plugins: { "agent.profiles": "writing" } }),
+      event(2, "b", "a", { type: "message", turnId: "t", requestId: "r", message: { role: "user", content: text("go"), timestamp: 1 } }),
+      event(3, "c", "b", { type: "step-start", turnId: "t", stepId: "s" }),
+    ];
+    expect(planResume(events, "t")).toMatchObject({ kind: "open", plan: { plugins: { "agent.profiles": "writing" } } });
   });
 
   it("answers a steer placed after the last step before the restart, rather than closing the turn", () => {

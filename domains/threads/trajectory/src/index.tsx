@@ -16,6 +16,7 @@ import type { TrajectoryDeps } from "./state.ts";
 import { createTable } from "./table.tsx";
 import { createTimeline } from "./timeline.tsx";
 import { createToolbar } from "./toolbar.tsx";
+import { addCosts } from "./costs.tsx";
 
 /**
  * The Trajectory view, modeled on Chrome DevTools' Network panel and on
@@ -189,5 +190,6 @@ export default defineWebPlugin({
       letter: "t",
       component: (props: ThreadViewProps) => traceFor(props.tab ?? MAIN)(),
     });
+    addCosts(threads, slots);
   },
 });

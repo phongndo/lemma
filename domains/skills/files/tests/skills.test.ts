@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Hooks, makeCore, Registries } from "@lemma/core";
 import { AgentInputHook, PromptSections } from "@lemma/agent";
 import type { PromptDecision, PromptInput, SectionRequest } from "@lemma/agent";
-import { pathsPlugin } from "@lemma/contracts/testing";
+import type { PluginInfo } from "@lemma/contracts";
+import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
 import { Sessions } from "@lemma/sessions";
 import skillsFiles, { makeSkillFinder, mentionedSkills, parseSkill, skillBlock } from "../src/index.ts";
 
@@ -111,6 +112,7 @@ describe("mentionedSkills", () => {
 describe("skills.files", () => {
   const run = async <A>(
     use: (core: { section: (cwd: string) => Promise<string | undefined>; input: (text: string) => Promise<PromptDecision> }) => Promise<A>,
+    plugins: readonly PluginInfo[] = [],
   ) => {
     const repo = path.join(dir, "repo");
     const sessions = definePlugin({
@@ -121,7 +123,7 @@ describe("skills.files", () => {
     return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([pathsPlugin(path.join(dir, "home"), { cwd: repo }), sessions, skillsFiles]);
+          const core = yield* makeCore([pathsPlugin(path.join(dir, "home"), { cwd: repo }), hostControlPlugin(plugins), sessions, skillsFiles]);
           return yield* core.run(
             Effect.gen(function* () {
               const [section] = yield* Effect.flatMap(Registries, (registries) => registries.items(PromptSections));
@@ -140,6 +142,27 @@ describe("skills.files", () => {
       ),
     );
   };
+
+  it("finds the skills a running plugin's package brings, and lets the user's own of a name replace one", async () => {
+    await put("pack/skills/triage/SKILL.md", skill("triage", "Sort an inbox"));
+    await put("pack/skills/review/SKILL.md", skill("review", "The pack's review"));
+    await put("off/skills/hidden/SKILL.md", skill("hidden", "From a plugin turned off"));
+    await put("failed/skills/hidden/SKILL.md", skill("hidden", "From a plugin that failed"));
+    await put("home/skills/review/SKILL.md", skill("review", "The user's review"));
+    const plugin = (id: string, enabled: boolean, state: PluginInfo["state"] = "active"): PluginInfo => ({
+      id,
+      source: "user",
+      enabled,
+      state,
+      provides: [],
+      requires: [],
+      resources: { skills: [path.join(dir, id, "skills")] },
+    });
+    const section = await run((core) => core.section(path.join(dir, "repo")), [plugin("pack", true), plugin("off", false), plugin("failed", true, "failed")]);
+    expect(section).toContain("- triage: Sort an inbox");
+    expect(section).toContain("- review: The user's review");
+    expect(section).not.toContain("hidden");
+  });
 
   it("lists the skills to the model, and adds a named one's instructions to the prompt", async () => {
     await put("repo/.agents/skills/review/SKILL.md", skill("review", "Review a diff", "Look for bugs."));

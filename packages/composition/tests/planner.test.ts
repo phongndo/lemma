@@ -68,6 +68,9 @@ describe("planComposition", () => {
     const shadow = definePlugin({ id: "llm", provides: [Llm], layer: Layer.succeed(Llm, "shadow") });
     const shadowed = plan({ local: [{ plugin: shadow, source: "project" }] });
     expect(shadowed.known.find((entry) => entry.plugin.id === "llm")).toMatchObject({ plugin: shadow, source: "project", shadows: true });
+    // The folders its package names travel with it, for its status.
+    const pack = plan({ local: [{ plugin: mine, source: "user", resources: { skills: ["/pack/skills"] } }] });
+    expect(pack.known.find((entry) => entry.plugin.id === "my-llm")).toMatchObject({ resources: { skills: ["/pack/skills"] } });
   });
 
   test("ignores a row naming no plugin, unless it is required", () => {
@@ -177,6 +180,34 @@ describe("planComposition", () => {
     });
     expect(appProvided.problems.get("current")).toBe(`it is written for version ${HOST_API} of the lemma API, and this Lemma provides version ${HOST_API + 1}`);
     expect(running(appProvided)).toContain("later");
+  });
+
+  test("an opt-in bundled plugin starts off, and a row turns it on", () => {
+    const extra = definePlugin({ id: "extra", layer: Layer.empty });
+    expect(running(plan({ bundled: [...bundled, extra], optIn: new Set(["extra"]) }))).not.toContain("extra");
+    expect(running(plan({ bundled: [...bundled, extra], optIn: new Set(["extra"]), rows: { extra: { enabled: true } } }))).toContain("extra");
+    // A row's config alone does not turn it on.
+    expect(running(plan({ bundled: [...bundled, extra], optIn: new Set(["extra"]), rows: { extra: { config: {} } } }))).not.toContain("extra");
+  });
+
+  test("a plugin written for another version of a domain's contract is left out with both versions named", () => {
+    const provider = definePlugin({ id: "store", implements: ["lemma/store@2"], layer: Layer.empty });
+    const old = definePlugin({ id: "old", uses: ["lemma/store@1"], layer: Layer.empty });
+    const fresh = definePlugin({ id: "fresh", uses: ["lemma/store@2"], layer: Layer.empty });
+    const planned = plan({
+      bundled: [...bundled, provider],
+      local: [
+        { plugin: old, source: "user" },
+        { plugin: fresh, source: "user" },
+      ],
+    });
+    expect(planned.problems.get("old")).toBe(`it is written for version 1 of the lemma/store contract, and "store" implements version 2`);
+    expect(planned.diagnostics.find((diagnostic) => diagnostic.pluginId === "old")?.suggestion).toBe(
+      "Update the plugin for this version of the contract, or turn it off",
+    );
+    expect(running(planned)).toEqual(expect.arrayContaining(["store", "fresh"]));
+    // With the provider off, the old plugin runs: using a contract needs no plugin for it.
+    expect(running(plan({ bundled: [...bundled, provider], rows: { store: { enabled: false } }, local: [{ plugin: old, source: "user" }] }))).toContain("old");
   });
 
   test("a plugin providing what the app provides is left out, even when a pinned plugin requires that", () => {

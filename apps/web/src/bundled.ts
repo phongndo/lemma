@@ -24,6 +24,7 @@ import kit from "@lemma/look-kit";
 import mcp from "@lemma/mcp-servers/web";
 import skills from "@lemma/skills-files/web";
 import modelPicker from "@lemma/llm-model-picker";
+import profiles from "@lemma/agent-profiles/web";
 import models from "@lemma/llm-client";
 import pages from "@lemma/frame-pages";
 import palette from "@lemma/actions-palette";
@@ -87,6 +88,7 @@ export const bundled: readonly Plugin[] = [
   promptCommands,
   fileMentions,
   skills,
+  profiles,
   modelPicker,
   compaction,
   workspaceBar,

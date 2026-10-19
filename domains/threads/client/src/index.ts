@@ -7,26 +7,27 @@ import { isRoute } from "@lemma/router";
 import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
 import {
+  appendLog,
   appendOutput,
   applyDelta,
+  applySessionsChange,
   beginJoin,
   emptyLive,
   endTurn,
+  isBlank,
   joinLive,
-  reconcileLive,
-  appendLog,
-  applySessionsChange,
+  LEAVING_MS,
   logFailure,
   newerQueue,
-  resolveLeaf,
-  waitingPrompts,
   recentRequests,
-  LEAVING_MS,
+  reconcileLive,
+  resolveLeaf,
+  ThreadHolds,
+  Threads,
+  THREADS_CONTRACT,
   trackTurn,
   upsertSession,
-  isBlank,
-  Threads,
-  ThreadHolds,
+  waitingPrompts,
   written,
 } from "@lemma/threads";
 import type { LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft } from "@lemma/threads";
@@ -81,6 +82,7 @@ const hashThread = (): string | undefined => {
  */
 export default defineWebPlugin({
   id: "threads.client",
+  implements: [THREADS_CONTRACT],
   requires: { client: Client, notify: Notify, router: Router, slots: Slots },
   provides: { threads: Threads },
   setup: ({ client, notify, router, slots }, plugin) => {
@@ -767,6 +769,18 @@ export default defineWebPlugin({
             upsert(await client.channel.call(SessionChannels.mark, { sessionId, ...marks }));
           } catch (error) {
             notify.report(error, "Could not update the session");
+          }
+        },
+        fork: async (eventId?: string) => {
+          const from = active();
+          const at = eventId ?? from?.leaf;
+          if (from === undefined || at === undefined) return;
+          try {
+            const forked = await client.channel.call(SessionChannels.fork, { sessionId: from.id, eventId: at });
+            upsert(forked);
+            await select(forked.id);
+          } catch (error) {
+            notify.report(error, "Could not fork the thread");
           }
         },
         remove,

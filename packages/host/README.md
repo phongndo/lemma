@@ -27,6 +27,9 @@ imports each edit of a plugin file as a new module and keeps what only its
 last few versions made, so a file put back to the version still running
 leaves it running, but Node.js's module cache, which no API evicts, keeps every
 version imported, so a long run of edits grows the host by each one's code.
+A plugin whose code is edited often, or may hang, can run that code in a
+worker thread, which takes its module cache with it when it stops, as
+[isolated](../../examples/isolated/README.md) runs its tools.
 
 ## The host runtime
 

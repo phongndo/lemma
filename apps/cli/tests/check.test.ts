@@ -37,11 +37,11 @@ describe("lemma plugins check", () => {
     const { code, out } = await invoke(["plugins", "check", fixture("good"), "--json"], home);
     expect(code).toBe(0);
     expect(JSON.parse(out)).toMatchObject({
-      plugins: [{ id: "good", state: "active", hooks: ["lemma/agent.request"], warnings: [] }],
+      plugins: [{ id: "good", state: "active", uses: ["lemma/agent@1"], hooks: ["lemma/agent.request"], warnings: [] }],
       problems: [],
     });
     const text = await invoke(["plugins", "check", fixture("good")], home);
-    expect(text.out).toBe("good: active\n  handles lemma/agent.request\nno problems found");
+    expect(text.out).toBe("good: active\n  uses lemma/agent@1\n  handles lemma/agent.request\nno problems found");
   }, 60_000);
 
   test("reports a plugin that fails to start with its fault, and fails", async () => {
@@ -50,6 +50,8 @@ describe("lemma plugins check", () => {
     const report = JSON.parse(out);
     expect(report.plugins).toMatchObject([{ id: "broken", state: "failed", fault: expect.stringContaining("cannot start: no settings") }]);
     expect(report.problems).toEqual([expect.stringMatching(/^broken is failed: .*cannot start: no settings/)]);
+    // It names no contract versions, which the report warns of.
+    expect((await invoke(["plugins", "check", fixture("broken.js")], home)).out).toContain("warning: it names no contract versions");
   }, 60_000);
 
   test("stops a host that failed to start before starting another, and reports what the plugin left running", async () => {

@@ -1,15 +1,17 @@
 import { timingSafeEqual } from "node:crypto";
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
-import { join, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { stripTypeScriptTypes } from "node:module";
+import { extname, join, relative, resolve } from "node:path";
 import { Deferred, Effect, Layer, Scope } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/http";
 import type { HttpServerError } from "effect/http";
 import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
-import { HOST_PROTOCOL } from "@lemma/contracts";
-import type { WebComposition } from "@lemma/contracts";
+import { HOST_PROTOCOL, WEB_IMPORTABLE } from "@lemma/contracts";
+import type { WebComposition, WebFile } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 import { ServedRpcs } from "./channels.ts";
 import type { ChannelLifetime } from "./channels.ts";
@@ -31,7 +33,10 @@ interface ServerOptions {
   readonly token: string;
   readonly version: string;
   readonly staticDir?: string | undefined;
-  /** The files the web app loads from the plugin directories; `/api/web/<source>/<path>` serves only a file listed here. */
+  /**
+   * The files the web app loads from the plugin directories, which `/api/web/<source>@<version>/<name>` serves, with
+   * the modules and stylesheets of a listed package's folder its web half may import (`webFileFor`).
+   */
   readonly web?: Effect.Effect<WebComposition>;
 }
 
@@ -41,11 +46,49 @@ const equalTokens = (a: string, b: string): boolean => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 
-/** Bearer header for HTTP; `?token=` for WebSocket, whose browser API cannot set headers. */
+/**
+ * A web file's address may carry the token in its path (`/api/web/t/<token>/…`), as the web app writes it, so a module
+ * a web half imports by a relative path, which keeps the path but not the query, carries it too.
+ */
+const WEB_TOKEN = /^\/api\/web\/t\/([^/]+)(\/.*)$/;
+
+/** Bearer header for HTTP; `?token=` for WebSocket, whose browser API cannot set headers; or the web file's path. */
 const presented = (request: HttpServerRequest.HttpServerRequest, url: URL): string | undefined => {
   const header = request.headers["authorization"];
   if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length);
-  return url.searchParams.get("token") ?? undefined;
+  const inPath = WEB_TOKEN.exec(url.pathname)?.[1];
+  return url.searchParams.get("token") ?? (inPath === undefined ? undefined : decodeURIComponent(inPath));
+};
+
+/**
+ * The file `path` (`/api/web/<source>@<version>/<name>`, its token taken out) names: a listed web half or stylesheet,
+ * or a module or stylesheet inside a listed package's folder (one its web half imports by a relative path,
+ * `WEB_IMPORTABLE`), but nothing in its dependencies or hidden, and nothing outside it.
+ */
+const webFileFor = (files: readonly WebFile[], path: string): string | undefined => {
+  const listed = files.find((file) => file.url.split("?")[0] === path);
+  if (listed !== undefined) return listed.path;
+  const asked = /^\/api\/web\/(user|project)@[^/]+\/(.+)$/.exec(path);
+  if (asked === null) return undefined;
+  const [, source, encoded] = asked as unknown as [string, string, string];
+  let name: string;
+  try {
+    name = encoded.split("/").map(decodeURIComponent).join("/");
+  } catch {
+    return undefined;
+  }
+  const folder = name.split("/")[0]!;
+  const owner = files.find((file) => file.source === source && file.name.includes("/") && file.name.split("/")[0] === folder);
+  if (owner === undefined || !WEB_IMPORTABLE.has(extname(name))) return undefined;
+  const pluginsDir = owner.path.slice(0, owner.path.length - owner.name.length);
+  const packageDir = resolve(pluginsDir, folder);
+  const file = resolve(pluginsDir, name);
+  if (!isInside(packageDir, file)) return undefined;
+  return relative(packageDir, file)
+    .split(/[\\/]/)
+    .some((part) => part === "node_modules" || part.startsWith("."))
+    ? undefined
+    : file;
 };
 
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
@@ -132,10 +175,18 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
         }
         if (path === "/api/health") return HttpServerResponse.jsonUnsafe({ ok: true, version: options.version, protocol: HOST_PROTOCOL });
         if (under(path, "/api/web") && options.web !== undefined && (request.method === "GET" || request.method === "HEAD")) {
-          const listed = (yield* options.web).files.find((file) => file.url.slice(0, file.url.indexOf("?")) === path);
-          if (listed === undefined) return HttpServerResponse.jsonUnsafe({ error: "Not found" }, { status: 404 });
+          const tokened = WEB_TOKEN.exec(path);
+          const file = webFileFor((yield* options.web).files, tokened === null ? path : `/api/web${tokened[2]}`);
+          if (file === undefined) return HttpServerResponse.jsonUnsafe({ error: "Not found" }, { status: 404 });
+          // TypeScript, its types stripped (erasable syntax only), so a web half may be written in it with no build.
+          if (/\.m?ts$/.test(file)) {
+            return yield* Effect.tryPromise(async () => stripTypeScriptTypes(await readFile(file, "utf8"), { mode: "strip" })).pipe(
+              Effect.map((script) => HttpServerResponse.text(script, { contentType: "text/javascript", headers: { "cache-control": "no-cache" } })),
+              Effect.catch((error) => Effect.succeed(HttpServerResponse.text(`Cannot serve ${file}: ${String(error)}`, { status: 500 }))),
+            );
+          }
           // The version in the URL makes an edited file a new URL, so nothing needs revalidating by date.
-          return yield* HttpServerResponse.file(listed.path, { headers: { "cache-control": "no-cache" } }).pipe(
+          return yield* HttpServerResponse.file(file, { headers: { "cache-control": "no-cache" } }).pipe(
             Effect.provide(platform),
             Effect.catch(() => Effect.succeed(HttpServerResponse.text("Cannot read file", { status: 500 }))),
           );

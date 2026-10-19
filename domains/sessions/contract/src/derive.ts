@@ -36,26 +36,167 @@ export function modelView(branch: readonly SessionEvent[]): { readonly start: nu
 }
 
 /**
- * Model history for a branch. The latest `compaction` replaces everything
- * before its `firstKeptId` with a summary message.
+ * The message an event puts in the model's view, before a compaction or an edit changes the view: a `message` event's
+ * own; none for the rest. Every reader of what the model sees (the agent, compaction's estimates and cut, the
+ * trajectory, the inspector) goes through this and `modelEntries`, so an event type added later is seen the same way
+ * by all of them, and the switch below fails to compile until it is decided what the new type shows the model.
  */
-export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
+export function messageOf(event: SessionEvent): Message | undefined {
+  const data = event.data;
+  switch (data.type) {
+    case "message":
+      // A reply the user stopped, logged as far as it got: the model sees it as a reply that ended there, as the user
+      // read it (a provider drops a reply marked aborted).
+      return data.message.role === "assistant" && data.message.stopReason === "aborted" ? { ...data.message, stopReason: "stop" } : data.message;
+    case "context":
+      return { role: "user", content: data.content, timestamp: event.at };
+    case "context-edit":
+    case "turn-start":
+    case "turn-end":
+    case "step-start":
+    case "step-end":
+    case "request":
+    case "attempt":
+    case "compaction":
+    case "title":
+    case "custom":
+      return undefined;
+    default:
+      return unknownEvent(data);
+  }
+}
+
+const unknownEvent = (data: never): undefined => {
+  throw new Error(`An event of a type the model view does not know: ${JSON.stringify((data as { readonly type?: unknown }).type)}`);
+};
+
+/**
+ * One message of the model's view of a branch, and where it comes from: `index`, the event's place on the branch; for
+ * the summary a compaction put in place of what came before, the compaction's (`summary`).
+ */
+export interface ModelEntry {
+  readonly message: Message;
+  readonly index: number;
+  readonly summary?: true;
+  /** From a `context` event: a plugin's, which a response's tool results go before. */
+  readonly context?: true;
+}
+
+/**
+ * The model's view of a branch, message by message, each with the event it comes from: the latest `compaction`'s
+ * summary in place of everything before its `firstKeptId`, then each event's message (`messageOf`) from there, tool
+ * results in the order the model made their calls. `deriveMessages` is its messages.
+ */
+export function modelEntries(branch: readonly SessionEvent[]): ModelEntry[] {
   const { start, compaction } = modelView(branch);
   const summary = compaction === undefined ? undefined : branch[compaction]!;
-  const messages: Message[] =
+  const entries: ModelEntry[] =
     summary?.data.type !== "compaction"
       ? []
       : [
           {
-            role: "user",
-            content: [{ type: "text", text: `<summary>\nThe conversation so far, summarized:\n\n${summary.data.summary}\n</summary>` }],
-            timestamp: summary.at,
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `<summary>\nThe conversation so far, summarized:\n\n${summary.data.summary}\n</summary>` }],
+              timestamp: summary.at,
+            },
+            index: compaction!,
+            summary: true,
           },
         ];
-  for (const event of branch.slice(start)) {
-    if (event.data.type === "message") messages.push(event.data.message);
+  for (let index = start; index < branch.length; index++) {
+    const event = branch[index]!;
+    const message = messageOf(event);
+    if (message !== undefined) entries.push(event.data.type === "context" ? { message, index, context: true } : { message, index });
   }
-  return inCallOrder(messages);
+  return inCallOrder(afterResults(edited(branch, entries)));
+}
+
+type ContextEdit = Extract<SessionEvent["data"], { type: "context-edit" }>;
+
+/**
+ * Whether `edit` changes `message`, its target's: an omit leaves out anything but a lone tool result (a response takes
+ * its results with it), a replace puts its content in place of anything but a response (whose calls its results answer).
+ */
+export function editApplies(edit: ContextEdit, message: Message): boolean {
+  return edit.op === "omit" ? message.role !== "toolResult" : edit.content !== undefined && message.role !== "assistant";
+}
+
+/** Of a target's edits, oldest first, the latest that applies to its message. */
+function latestApplying(edits: readonly ContextEdit[] | undefined, message: Message): ContextEdit | undefined {
+  for (let at = (edits?.length ?? 0) - 1; at >= 0; at--) if (editApplies(edits![at]!, message)) return edits![at];
+  return undefined;
+}
+
+/**
+ * `entries` with the branch's `context-edit`s applied: per target, the latest that applies to it; one that cannot apply
+ * changes nothing, and leaves an earlier one in force.
+ */
+function edited(branch: readonly SessionEvent[], entries: ModelEntry[]): ModelEntry[] {
+  const edits = new Map<string, ContextEdit[]>();
+  for (const event of branch) {
+    if (event.data.type !== "context-edit") continue;
+    const target = edits.get(event.data.target);
+    if (target === undefined) edits.set(event.data.target, [event.data]);
+    else target.push(event.data);
+  }
+  if (edits.size === 0) return entries;
+  const omittedCalls = new Set<string>();
+  const out: ModelEntry[] = [];
+  for (const entry of entries) {
+    const message = entry.message;
+    const edit = entry.summary === true ? undefined : latestApplying(edits.get(branch[entry.index]!.id), message);
+    if (edit?.op === "omit") {
+      if (message.role === "assistant") for (const block of message.content) if (block.type === "toolCall") omittedCalls.add(block.id);
+      continue;
+    }
+    if (edit?.op === "replace" && edit.content !== undefined && message.role !== "assistant") {
+      out.push({ ...entry, message: { ...message, content: edit.content } });
+      continue;
+    }
+    out.push(entry);
+  }
+  // A response left out takes its results with it.
+  return omittedCalls.size === 0 ? out : out.filter((entry) => !(entry.message.role === "toolResult" && omittedCalls.has(entry.message.toolCallId)));
+}
+
+/**
+ * Moves each `context` entry that lands among a response's tool results to after them: a provider wants a response's
+ * results right after it. The results a response waits for are those of its calls; the run ends at the first entry
+ * that is neither one of them nor context.
+ */
+function afterResults(entries: ModelEntry[]): ModelEntry[] {
+  if (!entries.some((entry) => entry.context === true)) return entries;
+  for (let i = 0; i < entries.length; i++) {
+    const message = entries[i]!.message;
+    if (message.role !== "assistant") continue;
+    const calls = new Set(message.content.flatMap((block) => (block.type === "toolCall" ? [block.id] : [])));
+    if (calls.size === 0) continue;
+    let end = i + 1;
+    while (end < entries.length) {
+      const entry = entries[end]!;
+      if (entry.context === true || (entry.message.role === "toolResult" && calls.has(entry.message.toolCallId))) end++;
+      else break;
+    }
+    const run = entries.slice(i + 1, end);
+    const context = run.filter((entry) => entry.context === true);
+    if (context.length === 0) continue;
+    // Context after the last result is in place already; only context before one moves.
+    let lastResult = run.length - 1;
+    while (lastResult >= 0 && run[lastResult]!.context === true) lastResult--;
+    if (lastResult === -1 || run.slice(0, lastResult).every((entry) => entry.context !== true)) continue;
+    entries.splice(i + 1, run.length, ...run.filter((entry) => entry.context !== true), ...context);
+    i = end - 1;
+  }
+  return entries;
+}
+
+/**
+ * Model history for a branch: `modelEntries`' messages. The latest `compaction` replaces everything before its
+ * `firstKeptId` with a summary message.
+ */
+export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
+  return modelEntries(branch).map((entry) => entry.message);
 }
 
 /**
@@ -64,23 +205,23 @@ export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
  * that follows an assistant message; a result for a call it did not make keeps
  * its place after the others.
  */
-function inCallOrder(messages: Message[]): Message[] {
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i]!;
+function inCallOrder(entries: ModelEntry[]): ModelEntry[] {
+  for (let i = 0; i < entries.length; i++) {
+    const message = entries[i]!.message;
     if (message.role !== "assistant") continue;
     let end = i + 1;
-    while (end < messages.length && messages[end]!.role === "toolResult") end++;
+    while (end < entries.length && entries[end]!.message.role === "toolResult") end++;
     if (end - i <= 2) continue;
     const order = new Map<string, number>();
     for (const block of message.content) if (block.type === "toolCall") order.set(block.id, order.size);
-    const rank = (result: Message) => (result.role === "toolResult" ? (order.get(result.toolCallId) ?? order.size) : order.size);
-    const results = messages.slice(i + 1, end);
+    const rank = (entry: ModelEntry) => (entry.message.role === "toolResult" ? (order.get(entry.message.toolCallId) ?? order.size) : order.size);
+    const results = entries.slice(i + 1, end);
     if (results.every((result, index) => index === 0 || rank(results[index - 1]!) <= rank(result))) continue;
     results.sort((a, b) => rank(a) - rank(b));
-    messages.splice(i + 1, results.length, ...results);
+    entries.splice(i + 1, results.length, ...results);
     i = end - 1;
   }
-  return messages;
+  return entries;
 }
 
 export interface RequestState {
@@ -88,6 +229,8 @@ export interface RequestState {
   readonly thinking?: ThinkingLevel;
   readonly system?: string;
   readonly tools?: readonly ToolSpec[];
+  /** The `nested` tools offered beside `tools`; undefined when the log predates their being logged. */
+  readonly nested?: readonly string[];
 }
 
 /** The request state after `event`: a `request` event's header, its omitted fields kept from `state`; any other, `state`. */
@@ -99,6 +242,7 @@ export function nextRequestState(state: RequestState, event: SessionEvent): Requ
     ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
     ...(data.system !== undefined ? { system: data.system } : state.system === undefined ? {} : { system: state.system }),
     ...(data.tools !== undefined ? { tools: data.tools } : state.tools === undefined ? {} : { tools: state.tools }),
+    ...(data.nested !== undefined ? { nested: data.nested } : state.nested === undefined ? {} : { nested: state.nested }),
   };
 }
 
@@ -141,4 +285,38 @@ export function rebuildRequest(branch: readonly SessionEvent[], requestId: strin
   const index = branch.findIndex((event) => event.id === requestId);
   if (index === -1 || branch[index]!.data.type !== "request") return undefined;
   return requestFrom(requestState(branch.slice(0, index + 1)), deriveMessages(branch.slice(0, index)), branch[index]!, sessionId);
+}
+
+/*
+ * What a plugin reads back of its own state on a branch, the way the log keeps it: a tool's state in its results'
+ * `details` (so it follows the branch, and survives a restart with nothing stored), and a plugin's own data in
+ * `custom` events. The host and web halves read the same branch with these, rather than walking events by hand.
+ */
+
+/**
+ * The `details` of the latest successful result of the tool `toolName` on `branch`, or undefined: where a tool that
+ * keeps state in its results (a todo list) finds it, as of the branch's end.
+ */
+export function latestDetails(branch: readonly SessionEvent[], toolName: string): unknown {
+  for (let at = branch.length - 1; at >= 0; at--) {
+    const data = branch[at]!.data;
+    if (data.type !== "message" || data.message.role !== "toolResult" || data.message.toolName !== toolName || data.message.isError) continue;
+    if (data.details !== undefined) return data.details;
+  }
+  return undefined;
+}
+
+/** The data of the `custom` events of `kind` on `branch`, oldest first: a plugin's own records (`kind` namespaced by its id). */
+export function customEvents(branch: readonly SessionEvent[], kind: string): readonly unknown[] {
+  return branch.flatMap((event) => (event.data.type === "custom" && event.data.kind === kind ? [event.data.data] : []));
+}
+
+/** The text of the latest prompt on `branch` (its text parts, joined), or undefined when it has none. */
+export function lastPromptText(branch: readonly SessionEvent[]): string | undefined {
+  for (let at = branch.length - 1; at >= 0; at--) {
+    const data = branch[at]!.data;
+    if (data.type !== "message" || data.message.role !== "user") continue;
+    return data.message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+  }
+  return undefined;
 }

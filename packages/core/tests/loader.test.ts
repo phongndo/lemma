@@ -390,6 +390,26 @@ describe("loader", () => {
     await Effect.runPromise(Scope.close(scope, Exit.void));
   });
 
+  test("checkComposition refuses a plugin that uses another version of a contract than a plugin implements, and nothing else", () => {
+    const provider = (version: number) => definePlugin({ id: "provider", implements: [`example/store@${version}`], layer: Layer.empty });
+    const user = (spec: string) => definePlugin({ id: "user", uses: [spec], layer: Layer.empty });
+    expect(checkComposition([provider(2), user("example/store@2")])).toEqual([]);
+    // No plugin implements the contract: nothing to be incompatible with, and `uses` starts nothing.
+    expect(checkComposition([user("example/store@1")])).toEqual([]);
+    expect(checkComposition([provider(2), user("example/store@1")])).toMatchObject([
+      {
+        reason: "IncompatibleContract",
+        plugins: ["user"],
+        contract: { name: "example/store", uses: 1, implemented: 2, by: "provider" },
+        message: 'Plugin "user" is written for version 1 of contract "example/store", but "provider" implements version 2',
+      },
+    ]);
+    expect(checkComposition([user("example/store")])).toMatchObject([{ reason: "IncompatibleContract", plugins: ["user"] }]);
+    expect(checkComposition([definePlugin({ id: "odd", implements: ["store@1.2"], layer: Layer.empty })])).toMatchObject([
+      { reason: "IncompatibleContract", plugins: ["odd"] },
+    ]);
+  });
+
   test("checkComposition finds what planning would refuse, without running anything", () => {
     const log: string[] = [];
     const { all } = fixtures(log);

@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { bindsTyping, matchesKeys, typing } from "@lemma/web/keys";
-import { KEYMAP_PLUGIN, keysFor, parseBindings, ActionIds, Actions } from "@lemma/actions";
+import { ActionIds, Actions, ACTIONS_CONTRACT, KEYMAP_PLUGIN, keysFor, parseBindings } from "@lemma/actions";
 import { Dialogs } from "@lemma/frame";
 import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
 
@@ -21,6 +21,7 @@ const KeymapConfig = Schema.Struct({
  */
 export default defineWebPlugin({
   id: KEYMAP_PLUGIN,
+  implements: [ACTIONS_CONTRACT],
   config: KeymapConfig,
   requires: { slots: Slots, dialogs: Dialogs, interactions: Interactions },
   setup: ({ slots, dialogs, interactions }, plugin) => {

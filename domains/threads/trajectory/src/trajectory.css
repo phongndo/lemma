@@ -693,3 +693,25 @@
   color: var(--text);
   font-family: var(--font-mono);
 }
+
+/* A plugin's share of the latest request, in the Plugins page's Cost tab. */
+.trj-cost {
+  font-size: calc(12.5px * var(--text-scale));
+}
+.trj-cost p {
+  margin: 0 0 10px;
+}
+.trj-cost table {
+  border-collapse: collapse;
+  margin-bottom: 10px;
+}
+.trj-cost th {
+  color: var(--text-3);
+  font-weight: normal;
+  text-align: left;
+}
+.trj-cost th,
+.trj-cost td {
+  padding: 3px 16px 3px 0;
+  border-bottom: 1px solid var(--border);
+}

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { ledger, promptDiff, trajectory } from "@lemma/sessions";
+import { ledger, pluginShares, promptDiff, trajectory } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
-import { formatDiff, formatRecords, formatSession, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
+import { formatCache, formatDiff, formatRecords, formatSession, formatShares, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
 import { findStep, parseOffset } from "../src/index.ts";
 
 describe("formatSession", () => {
@@ -144,6 +144,41 @@ describe("inspect formatting", () => {
     const edited = { ...request, sections: request.sections.map((section) => (section.id === "base" ? { ...section, text: "BASE 2" } : section)) };
     expect(formatDiff(promptDiff(request, edited), false)).toBe("── base from agent (changed)\n- BASE\n+ BASE 2");
     expect(formatDiff([], false)).toContain("unchanged");
+  });
+
+  test("the plugins view gives each plugin's share in tokens, and what of it changed", () => {
+    const request = turns[0]!.steps[0]!.request!;
+    const shares = pluginShares(request);
+    expect(formatShares(shares, true).split("\n").slice(0, 4)).toEqual([
+      "plugin           prompt  tools  changed",
+      "bash                     ≈13    (first request)",
+      "agent            ≈1             (first request)",
+      "project-context  ≈1             (first request)",
+    ]);
+    expect(formatShares([{ ...shares[1]!, changed: ["base"] }], false)).toContain("agent   ≈1             base");
+    expect(formatShares([], false)).toBe("No plugin put anything in this request.");
+  });
+
+  test("the cache report has a row a session, then the totals", () => {
+    const report = (session: string, changed: number, changedBy: Record<string, number>) => ({
+      session,
+      requests: 10,
+      changed,
+      changedBy,
+      input: 1000,
+      cacheRead: 600,
+    });
+    expect(
+      formatCache([report("s1", 2, { "agent.loop": 2 }), report("s2", 1, { mcp: 1, "agent.loop": 1 })])
+        .split("\n")
+        .slice(0, 4),
+    ).toEqual([
+      "session  requests  changed  cache read  changed by",
+      "s1       10        2        60%         agent.loop 2",
+      "s2       10        1        60%         mcp 1, agent.loop 1",
+      "all      20        3        60%         agent.loop 3, mcp 1",
+    ]);
+    expect(formatCache([])).toBe("No sessions.");
   });
 
   test("a step names the plugin behind every part of the request", () => {

@@ -90,6 +90,8 @@ interface Known {
   removedUnsynced: boolean;
   /** Another program wrote to its file: nothing is promised for it any more. */
   tampered: boolean;
+  /** How, first: a line of its own added after its events damages the log from there, and what came before still reads. */
+  tamperedHow?: "append" | "replace" | "truncate";
 }
 
 /**
@@ -105,6 +107,7 @@ const reached = {
   failedAppendDropped: 0,
   reloadAfterUnload: 0,
   tamperedRefused: 0,
+  tamperedReadable: 0,
   removedReturned: 0,
 };
 
@@ -306,6 +309,7 @@ const simulate = (seed: number, faults: Faults, initial: number, commands: reado
           const file = session === undefined ? undefined : fileOf(session.id);
           if (session === undefined || file === undefined) break;
           session.tampered = true;
+          session.tamperedHow ??= next.how;
           if (next.how === "append") disk.outside.append(file, '{"written":"by another program"}\n');
           else if (next.how === "replace") disk.outside.replace(file, "not a session\n");
           else disk.outside.truncate(file, Math.floor((disk.read(file)?.length ?? 0) / 2));
@@ -326,6 +330,14 @@ const simulate = (seed: number, faults: Faults, initial: number, commands: reado
         }
         for (const session of known) {
           if (!session.tampered || session.removed) continue;
+          // A line another program added after the events damages the log from there on: what came before still reads.
+          if (session.tamperedHow === "append") {
+            const read = yield* Effect.result(host.sessions.events(session.id));
+            if (Result.isSuccess(read)) {
+              expect(read.success.slice(0, session.acked.length), `damaged session ${session.id} reads its events`).toEqual(session.acked);
+              reached.tamperedReadable++;
+            } else expect(read.failure.reason, read.failure.message).toBe("Io");
+          }
           const appended = yield* Effect.result(host.sessions.append(session.id, { type: "title", title: "over theirs" }));
           if (Result.isFailure(appended)) reached.tamperedRefused++;
         }

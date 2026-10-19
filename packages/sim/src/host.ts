@@ -8,6 +8,7 @@ import { makeAgentPlugin } from "@lemma/agent-loop";
 import { makeSessionsPlugin } from "@lemma/sessions-files";
 import type { Claimant, SessionsPluginOptions } from "@lemma/sessions-files";
 import type { FileSystem } from "@lemma/contracts/fs";
+import type { IdSource } from "@lemma/contracts";
 import tools from "@lemma/tools-registry";
 import type { SimDisk } from "@lemma/testing";
 import type { Simulation } from "./simulation.ts";
@@ -32,9 +33,20 @@ const hostControl = definePlugin({
   }),
 });
 
+/**
+ * The plugin providing `Agent`, given the run's seams: the disk it keeps its journals on, its ids, and the platform it
+ * names. `agent.loop` by default; a replacement runs the same simulation by giving its own (it must take its time,
+ * randomness, and disk from these and Effect's `Clock` and `Random`, as every simulated part does).
+ */
+export type AgentFactory = (seams: { readonly fs: FileSystem; readonly ids: IdSource; readonly platform: string }) => Plugin;
+
+export const bundledAgent: AgentFactory = (seams) => makeAgentPlugin(seams);
+
 /** What a host runs besides its sessions store, its agent, and its tool registry: the model and the tools. */
 export interface HostParts {
   readonly plugins: readonly Plugin[];
+  /** The plugin providing `Agent`: `agent.loop` when absent. */
+  readonly agent?: AgentFactory;
   /** Each plugin's config, by id. */
   readonly configs?: Readonly<Record<string, unknown>>;
   /** The sessions service as provided, given the store's: the benchmark counts the calls made to it. */
@@ -77,7 +89,7 @@ export class SimHost {
         claimant,
         ...(parts.wrapSessions === undefined ? {} : { wrap: parts.wrapSessions }),
       }),
-      makeAgentPlugin({ fs, ids: sim.random.split(`agent ids ${generation}`).ids(), platform: PLATFORM }),
+      (parts.agent ?? bundledAgent)({ fs, ids: sim.random.split(`agent ids ${generation}`).ids(), platform: PLATFORM }),
       tools,
       ...parts.plugins,
     ];

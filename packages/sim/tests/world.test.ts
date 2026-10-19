@@ -31,7 +31,7 @@ const REACHED = [
   "tool fail",
   "tool slow",
   "tool output",
-  ...["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail"].map((kind) => `hook ${kind}`),
+  ...["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail", "requestContext"].map((kind) => `hook ${kind}`),
   ...["write", "sync", "truncate", "rename", "open"].map((operation) => `disk ${operation}`),
   "crash",
   "crash mid-write",

@@ -24,6 +24,7 @@ export const fakeInteraction = definePlugin({
           ask({ type: "confirm", id: `i${++count}`, title, ...(detail === undefined ? {} : { detail }) }, (answer) => answer.value === true),
         ask: (title) => ask({ type: "ask", id: `i${++count}`, title }, (answer) => String(answer.value)),
         select: (title, options) => ask({ type: "select", id: `i${++count}`, title, options }, (answer) => answer.value as never),
+        form: (title) => ask({ type: "form", id: `i${++count}`, title, fields: [] }, (answer) => answer.value as never),
       };
     }),
   ),

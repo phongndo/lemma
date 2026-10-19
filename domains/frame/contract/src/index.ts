@@ -62,3 +62,4 @@ export interface MenuAction<Subject, Control = undefined> {
 }
 
 export { ActionMenu } from "./menu.tsx";
+export { FRAME_CONTRACT } from "./version.ts";

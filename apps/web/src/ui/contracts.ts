@@ -5,7 +5,7 @@ import * as frame from "@lemma/frame";
 import * as integrations from "@lemma/integrations";
 import * as llm from "@lemma/llm/web";
 import * as look from "@lemma/look";
-import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
+import { customEvents, lastPromptText, latestDetails, modelEntries, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import * as settings from "@lemma/settings";
 import * as threads from "@lemma/threads";
 import * as webRuntime from "@lemma/web";
@@ -18,7 +18,7 @@ const omit = <T extends object, K extends keyof T>(value: T, keys: readonly K[])
 /**
  * Every contract a web half receives, by the module a bundled plugin imports it from: the web runtime's (`@lemma/web`:
  * `Client`, `Slots`, `Router`, …), each domain's web contract (`@lemma/frame`, `@lemma/threads`, `@lemma/llm/web`, …),
- * with the views that draw each part, and the thread routes (`@lemma/sessions`). The one list: `contracts` merges it
+ * with the views that draw each part, and the thread routes and log readers (`@lemma/sessions`: `latestDetails`, …). The one list: `contracts` merges it
  * for `api.contracts` (`ui/api.ts`), and `WebPlugins.contracts` hands it to the plugins that show it (the devtools).
  * Not what makes slots and parts: a web half makes those with `api.defineSlot` and `api.definePart`, which gives a part
  * no fallback, since a fallback belongs to no plugin and outlives the half. `tests/api.test.ts` fails when a web
@@ -36,7 +36,7 @@ export const contractModules = {
   "@lemma/llm/web": llm,
   "@lemma/workspace/web": workspace,
   "@lemma/commands/web": commands,
-  "@lemma/sessions": { NewThreadRoute, ThreadRoute },
+  "@lemma/sessions": { NewThreadRoute, ThreadRoute, latestDetails, customEvents, lastPromptText, modelEntries },
 };
 
 type Modules = typeof contractModules;

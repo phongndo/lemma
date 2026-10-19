@@ -108,6 +108,11 @@ export interface ThreadsService {
   readonly cancel: () => void;
   /** Moves the active session's leaf: the next prompt branches from `eventId`. Resolves whether it moved; a failure is reported. */
   readonly checkout: (eventId: string) => Promise<boolean>;
+  /**
+   * Copies the active thread's branch up to `eventId` (its leaf when absent) into a new thread (`sessions.fork`), and
+   * goes to it: how a thread whose log is damaged (`SessionInfo.damaged`) goes on. Failures are reported.
+   */
+  readonly fork: (eventId?: string) => Promise<void>;
 }
 
 export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-web/Threads") {}
@@ -473,6 +478,19 @@ export const ComposerTakeovers = defineSlot<ComposerTakeover>("composer.takeover
 
 /** The composer's toolbar, left of its buttons: the model and reasoning pickers. */
 export const ComposerControls = defineSlot<Region>("composer.controls");
+
+/**
+ * A plugin's choice for the turns a prompt starts, sent with it (the agent's `TurnOptions.plugins`, keyed by `id`,
+ * the plugin's id): the thread's profile, for `agent.profiles`. Asked as each prompt is sent, for the thread it goes
+ * to (`undefined` for a new one); `undefined` sends nothing for the plugin.
+ */
+export interface TurnOptionSource {
+  /** The plugin whose choice it is: its key in `TurnOptions.plugins`. */
+  readonly id: string;
+  readonly value: (sessionId: string | undefined) => unknown;
+}
+
+export const TurnOptionSources = defineSlot<TurnOptionSource>("composer.turn-options");
 
 /** Under the composer: the workspace bar. */
 export const ComposerFooter = defineSlot<Region>("composer.footer");

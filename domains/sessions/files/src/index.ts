@@ -3,7 +3,7 @@ import type { Context } from "effect";
 import { definePlugin, Events } from "@lemma/core";
 import { Channels, Paths, secureIds } from "@lemma/contracts";
 import type { IdSource } from "@lemma/contracts";
-import { serveSessions, Sessions } from "@lemma/sessions";
+import { serveSessions, Sessions, SESSIONS_CONTRACT } from "@lemma/sessions";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { thisProcess } from "./lock.ts";
@@ -45,6 +45,7 @@ export interface SessionsPluginOptions {
 export const makeSessionsPlugin = (options: SessionsPluginOptions = {}) =>
   definePlugin({
     id: "sessions.files",
+    implements: [SESSIONS_CONTRACT],
     version: "0.1.0",
     config: Config,
     provides: { sessions: Sessions },

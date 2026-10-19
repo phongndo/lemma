@@ -1,6 +1,6 @@
-import { modelView } from "@lemma/sessions";
+import { modelEntries } from "@lemma/sessions";
 import type { Message } from "@lemma/llm";
-import type { SessionEvent } from "@lemma/sessions";
+import type { ModelEntry, SessionEvent } from "@lemma/sessions";
 
 /** What an image costs in the estimate, in characters (about 1,200 tokens). */
 const IMAGE_CHARS = 4_800;
@@ -27,22 +27,30 @@ const tokensOf = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
  * its own output, and later messages (tool results, a new prompt) are
  * estimated from their length. Undefined without such a response.
  */
-export const measuredTokens = (branch: readonly SessionEvent[]): number | undefined => {
-  const { compaction } = modelView(branch);
-  for (let i = branch.length - 1; i > (compaction ?? -1); i--) {
-    const data = branch[i]!.data;
-    if (data.type !== "message" || data.message.role !== "assistant") continue;
-    const usage = data.message.usage;
+export const measuredTokens = (branch: readonly SessionEvent[], entries: readonly ModelEntry[] = modelEntries(branch)): number | undefined => {
+  // A response logged before the latest compaction (one it kept) was given the context from before it, and one logged
+  // before the latest edit of the view (a `context-edit`) the context from before that.
+  let after = entries[0]?.summary === true ? entries[0].index : -1;
+  for (let index = branch.length - 1; index > after; index--) {
+    if (branch[index]!.data.type !== "context-edit") continue;
+    after = index;
+    break;
+  }
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at]!;
+    if (entry.index <= after || entry.message.role !== "assistant") continue;
+    const usage = entry.message.usage;
     const reported = usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
     if (reported === 0) continue;
-    return reported + messagesTokens(branch.slice(i + 1));
+    return reported + entriesTokens(entries, entry.index + 1);
   }
   return undefined;
 };
 
-const messagesTokens = (events: readonly SessionEvent[]): number => {
+/** The tokens of the view's messages from event `from` on, about; the summary is not one of them. */
+const entriesTokens = (entries: readonly ModelEntry[], from = 0): number => {
   let tokens = 0;
-  for (const event of events) if (event.data.type === "message") tokens += tokensOf(messageChars(event.data.message));
+  for (const entry of entries) if (entry.summary !== true && entry.index >= from) tokens += tokensOf(messageChars(entry.message));
   return tokens;
 };
 
@@ -52,12 +60,43 @@ const messagesTokens = (events: readonly SessionEvent[]): number => {
  * `baseChars()` for the system prompt and tools (only then worked out).
  */
 export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () => number): number => {
-  const measured = measuredTokens(branch);
+  const entries = modelEntries(branch);
+  const measured = measuredTokens(branch, entries);
   if (measured !== undefined) return measured;
-  const { start, compaction } = modelView(branch);
-  const summary = compaction === undefined ? undefined : branch[compaction]!.data;
-  return tokensOf(baseChars() + (summary?.type === "compaction" ? summary.summary.length : 0)) + messagesTokens(branch.slice(start));
+  const summary = entries[0]?.summary === true ? branch[entries[0].index]!.data : undefined;
+  return tokensOf(baseChars() + (summary?.type === "compaction" ? summary.summary.length : 0)) + entriesTokens(entries);
 };
+
+/**
+ * The view's messages in the order of their events on the branch, which is what a cut divides (a `context` entry the
+ * view moved after a response's tool results is before them on the branch), with where each tool call is made.
+ */
+const inBranchOrder = (branch: readonly SessionEvent[]) => {
+  const entries = modelEntries(branch)
+    .filter((entry) => entry.summary !== true)
+    .sort((a, b) => a.index - b.index);
+  const callAt = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.message.role !== "assistant") continue;
+    for (const block of entry.message.content) if (block.type === "toolCall") callAt.set(block.id, entry.index);
+  }
+  return { entries, callAt };
+};
+
+/**
+ * Whether the history may be kept from `index`: a message in the model's view after one at least (so a summary has
+ * something to stand for), neither a tool result nor one after which a result is kept whose call the summary would
+ * take from it.
+ */
+export const validCut = (branch: readonly SessionEvent[], index: number): boolean => {
+  const { entries, callAt } = inBranchOrder(branch);
+  const at = entries.find((entry) => entry.index === index);
+  if (at === undefined || at.message.role === "toolResult" || !entries.some((entry) => entry.index < index)) return false;
+  return !entries.some((entry) => entry.index > index && entry.message.role === "toolResult" && (callAt.get(entry.message.toolCallId) ?? index) < index);
+};
+
+/** The tokens of the messages in the model's view, about (what a cut divides). */
+export const viewTokens = (branch: readonly SessionEvent[]): number => entriesTokens(modelEntries(branch));
 
 /**
  * Where to cut the model's view so about `keep` tokens of it stay word for
@@ -65,36 +104,23 @@ export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () =>
  * prompt or a response, never between a tool call and its result, and leaves
  * at least one message to summarize. Undefined when there is no such place.
  */
-/**
- * Whether the history may be kept from `index`: a message in the model's view after one at least (so a summary has
- * something to stand for), and not a tool result, whose call the summary would take from it.
- */
-export const validCut = (branch: readonly SessionEvent[], index: number): boolean => {
-  const { start } = modelView(branch);
-  const data = branch[index]?.data;
-  if (index <= start || data?.type !== "message" || data.message.role === "toolResult") return false;
-  return branch.slice(start, index).some((event) => event.data.type === "message");
-};
-
-/** The tokens of the messages in the model's view, about (what a cut divides). */
-export const viewTokens = (branch: readonly SessionEvent[]): number =>
-  branch.slice(modelView(branch).start).reduce((sum, event) => sum + (event.data.type === "message" ? tokensOf(messageChars(event.data.message)) : 0), 0);
-
 export const chooseCut = (branch: readonly SessionEvent[], keep: number): number | undefined => {
-  const { start } = modelView(branch);
-  const seen: { readonly index: number; readonly message: Message }[] = [];
-  for (let i = start; i < branch.length; i++) {
-    const data = branch[i]!.data;
-    if (data.type === "message") seen.push({ index: i, message: data.message });
-  }
+  const { entries, callAt } = inBranchOrder(branch);
   let tail = 0;
   let smallest: number | undefined;
-  for (let at = seen.length - 1; at >= 1; at--) {
-    tail += tokensOf(messageChars(seen[at]!.message));
-    if (seen[at]!.message.role === "toolResult") continue;
+  // The earliest call a kept result answers: a cut after it would summarize the call and keep its result.
+  let earliestCall = Infinity;
+  for (let at = entries.length - 1; at >= 1; at--) {
+    const entry = entries[at]!;
+    tail += tokensOf(messageChars(entry.message));
+    if (entry.message.role === "toolResult") {
+      earliestCall = Math.min(earliestCall, callAt.get(entry.message.toolCallId) ?? Infinity);
+      continue;
+    }
+    if (earliestCall < entry.index) continue;
     // The latest place keeping at least `keep`; failing that, the earliest, keeping the most.
-    if (tail >= keep) return seen[at]!.index;
-    smallest = seen[at]!.index;
+    if (tail >= keep) return entry.index;
+    smallest = entry.index;
   }
   return smallest;
 };

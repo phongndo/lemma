@@ -1,7 +1,6 @@
 import { Cause, Deferred, Effect, Exit, Fiber, Stream } from "effect";
 import type { Context } from "effect";
 import { Registries } from "@lemma/core";
-import type { Plugin } from "@lemma/core";
 import { HostError } from "@lemma/contracts";
 import { callServed } from "@lemma/contracts/testing";
 import { Agent } from "@lemma/agent";
@@ -9,12 +8,15 @@ import type { PromptOutcome, WhenBusy } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import compaction from "@lemma/context-compaction";
+import prune from "@lemma/context-prune";
 import { SimDisk } from "@lemma/testing";
 import { Checker } from "./checker.ts";
 import type { Outcome } from "./checker.ts";
 import { NO_HOOK_FAULTS, simHooks } from "./hooks.ts";
 import type { HookFaults } from "./hooks.ts";
-import { HOME, SimHost } from "./host.ts";
+import { bundledAgent, HOME, SimHost } from "./host.ts";
+import { MemFs } from "./memfs.ts";
+import type { AgentFactory, HostParts } from "./host.ts";
 import { answerAsSimulated, NO_MODEL_FAULTS, simModel } from "./model.ts";
 import type { ModelCall, ModelFaults } from "./model.ts";
 import type { Prng } from "./random.ts";
@@ -103,7 +105,7 @@ export const drawSwarm = (prng: Prng, focus: Focus = prng.pick(FOCUSES)): Swarm 
       focus === "model",
     ),
     tools: rates(prng, ["fail", "slow"], 0.4, focus === "tools"),
-    hooks: rates(prng, ["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail"], 0.3),
+    hooks: rates(prng, ["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail", "requestContext"], 0.3),
     disk: rates(prng, ["write", "sync", "truncate", "rename", "open"], focus === "disk" ? 0.5 : 0.1, focus === "disk"),
   };
 };
@@ -126,6 +128,8 @@ export interface WorldOptions {
   readonly shuffle?: boolean;
   /** In place of the seed's mix. */
   readonly swarm?: Swarm;
+  /** The plugin providing `Agent` (`agent.loop` when absent): a replacement runs the same workload and checks. */
+  readonly agent?: AgentFactory;
 }
 
 /** A simulated run went wrong: what the checker found, with the seed that replays it. */
@@ -184,6 +188,9 @@ export class World {
   private requests = 0;
   /** Steps a turn may take: few in some runs, so turns end `max-steps`. */
   private readonly maxSteps: number;
+  /** The plugin providing `Agent`, and its id: what `restartAgent` restarts and a disk fault may fail. */
+  private readonly agent: AgentFactory;
+  private readonly agentId: string;
   readonly shuffled: boolean;
 
   constructor(options: WorldOptions) {
@@ -197,6 +204,8 @@ export class World {
     this.faults = this.swarm;
     this.ticks = options.ticks ?? 200;
     this.maxSteps = this.sim.random.split("limits").between(2, 8);
+    this.agent = options.agent ?? bundledAgent;
+    this.agentId = this.agent({ fs: new MemFs(), ids: this.sim.random.split("agent id probe").ids(), platform: "probe" }).id;
     const diskRandom = this.sim.random.split("disk");
     this.disk = new SimDisk(() => diskRandom.next());
     // A power loss kills the host as it strikes, part-way through a write too: its clients hear nothing more from it.
@@ -270,7 +279,7 @@ export class World {
   }
 
   /** The plugins a host of this run adds, drawing from the faults in force now. */
-  private parts(generation: number): { readonly plugins: readonly Plugin[]; readonly configs: Readonly<Record<string, unknown>> } {
+  private parts(generation: number): HostParts {
     const faults = this.faults;
     const count = (what: string) => this.checker.count(what);
     const model = simModel(this.sim.random.split(`model ${generation}`), {
@@ -279,15 +288,24 @@ export class World {
       calls: this.calls,
       count,
     });
+    // Half the runs shorten old tool results as they go (context-edit events), from a source of its own so the rest of
+    // the run draws as it did.
+    const prunes = this.sim.random.split("prune").chance(0.5);
     return {
+      agent: this.agent,
       plugins: [
         compaction,
+        ...(prunes ? [prune] : []),
         model.plugin,
         simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools, count }).plugin,
         simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks, count),
         this.checker.observer(),
       ],
-      configs: { "agent.loop": { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 } },
+      configs: {
+        [this.agentId]: { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 },
+        // Against the simulated model's large window and short tool results: shortens nearly every older result.
+        "context.prune": { at: 0.0001, minChars: 10, keepChars: 6, keepTurns: 1 },
+      },
     };
   }
 
@@ -385,7 +403,7 @@ export class World {
         this.checker.violation(`plugin ${plugin.id} broke an assertion: ${Cause.pretty(cause).split("\n")[0]}`);
       }
       if (plugin.state !== "failed") continue;
-      const writes = plugin.id === "sessions.files" || plugin.id === "agent.loop";
+      const writes = plugin.id === "sessions.files" || plugin.id === this.agentId;
       if (!(writes && diskFails)) this.checker.violation(`plugin ${plugin.id} failed in host ${host.generation}: ${plugin.fault?.message ?? "no fault"}`);
       this.checker.count(`plugin failed ${plugin.id}`);
     }
@@ -587,7 +605,7 @@ export class World {
       case "restartAgent":
       case "restartSessions":
       case "restartTools": {
-        const id = action === "restartAgent" ? "agent.loop" : action === "restartSessions" ? "sessions.files" : "tools.registry";
+        const id = action === "restartAgent" ? this.agentId : action === "restartSessions" ? "sessions.files" : "tools.registry";
         const core = this.running?.host.core;
         if (core !== undefined)
           this.client(

@@ -14,6 +14,8 @@ import type { KnownPlugin, Resolved } from "./catalog.ts";
 export interface LocalPlugin {
   readonly plugin: Plugin;
   readonly source: "user" | "project";
+  /** Folders of things other plugins read, by kind, as its package's manifest names them (`PluginStatus.resources`). */
+  readonly resources?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface PlanInput {
@@ -25,6 +27,8 @@ export interface PlanInput {
   readonly rows: Readonly<Record<string, PluginRow>>;
   /** Plugins that always run, with everything they need; a problem in one stops the start. */
   readonly pinned?: readonly string[];
+  /** Bundled plugins that start off: each runs once a row turns it on (`enabled: true`). */
+  readonly optIn?: ReadonlySet<string>;
   /** Config the app supplies beneath a row's `config`, key by key (the host's `staticDir`). */
   readonly defaults?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /** Whether plugins from files must start unless their row says `required: false` (the host's policy). */
@@ -103,17 +107,18 @@ export function planComposition(input: PlanInput): Plan {
 
   const byId = new Map<string, KnownPlugin>();
   for (const plugin of input.bundled) byId.set(plugin.id, { plugin, source: "bundled" });
-  for (const { plugin, source } of input.local) {
+  for (const { plugin, source, resources } of input.local) {
     const previous = byId.get(plugin.id);
     const shadows = previous?.source === "bundled" || previous?.shadows === true;
-    byId.set(plugin.id, { plugin, source, ...(shadows ? { shadows } : {}) });
+    byId.set(plugin.id, { plugin, source, ...(shadows ? { shadows } : {}), ...(resources === undefined ? {} : { resources }) });
   }
   const known = [...byId.values()];
 
   const plugins: Record<string, PluginEntry> = {};
-  for (const { plugin } of known) {
+  for (const { plugin, source } of known) {
     const base = input.defaults?.[plugin.id];
-    plugins[plugin.id] = base === undefined ? {} : { config: base };
+    const off = source === "bundled" && input.optIn?.has(plugin.id) === true;
+    plugins[plugin.id] = { ...(base === undefined ? {} : { config: base }), ...(off ? { enabled: false } : {}) };
   }
   for (const { plugin, source } of known) {
     if (source === "bundled" || rows[plugin.id]?.enabled === false) continue;
@@ -320,6 +325,7 @@ function targetOf(error: CompositionError, optional: (id: string) => boolean, so
     case "DuplicatePlugin":
     case "ReservedCapability":
     case "MissingCapability":
+    case "IncompatibleContract":
     case "InvalidConfig": {
       const id = error.plugins[0];
       return id !== undefined && optional(id) ? id : undefined;
@@ -356,6 +362,11 @@ function describe(
         .map((match) => match[2]!);
       return `it is written for version ${api[2]} of the ${api[1]} API, and this Lemma provides ${offered.length ? `version ${[...new Set(offered)].join(", ")}` : "no version of it"}`;
     }
+    case "IncompatibleContract": {
+      const contract = error.contract;
+      if (contract?.uses === undefined || contract.implemented === undefined) return error.message;
+      return `it is written for version ${contract.uses} of the ${contract.name} contract, and "${contract.by}" implements version ${contract.implemented}`;
+    }
     case "DuplicateCapability":
       return `it provides "${error.capability}", as ${error.plugins.map((id) => `"${id}"`).join(" and ")} both do`;
     case "ReservedCapability":
@@ -375,6 +386,10 @@ function suggestionFor(error: CompositionError, appKeys: ReadonlySet<string>): s
       return `Fix its "config" row (its README lists the current settings)`;
     case "MissingCapability":
       return API_KEY.test(error.capability ?? "") ? "Update the plugin for this version of Lemma, or turn it off" : "Fix the plugin, or turn it off";
+    case "IncompatibleContract":
+      return error.contract?.uses === undefined
+        ? "Fix its uses (name@version), or turn it off"
+        : "Update the plugin for this version of the contract, or turn it off";
     case "DuplicateCapability":
       return "Turn one of them off";
     case "ReservedCapability":

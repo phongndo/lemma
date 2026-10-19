@@ -28,7 +28,13 @@ const isPlugin = (value: unknown): value is Plugin =>
  * of utilities (`ui/utilities.ts`), and drops it when none is.
  */
 export function createFileLoader(token: string | undefined, api: () => Promise<unknown>) {
-  const withToken = (url: string) => (token === undefined ? url : `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`);
+  // In a web file's path (`/api/web/t/<token>/…`), so a module it imports by a relative path carries it too.
+  const withToken = (url: string) =>
+    token === undefined
+      ? url
+      : url.startsWith("/api/web/")
+        ? `/api/web/t/${encodeURIComponent(token)}/${url.slice("/api/web/".length)}`
+        : `${url}${url.includes("?") ? "&" : "?"}token=${encodeURIComponent(token)}`;
   const links = new Map<string, HTMLLinkElement>();
   // By URL: an unchanged file keeps the same plugin definitions, which the kernel leaves running on reload.
   const scripts = new Map<string, Promise<LoadedFiles>>();

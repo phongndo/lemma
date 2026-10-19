@@ -5,7 +5,7 @@ import { filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
 import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
-import { SectionIds, Settings, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
+import { SectionIds, Settings, SETTINGS_CONTRACT, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
 import { PromptCommands } from "@lemma/threads";
 import { Pages, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
 import type { SettingsEntry, SettingsSection } from "@lemma/settings";
@@ -54,6 +54,7 @@ function Groups(props: { groups: readonly EntryGroup<SettingsEntry>[] }) {
  */
 export default defineWebPlugin({
   id: "settings.page",
+  implements: [SETTINGS_CONTRACT],
   styles,
   routes: [SettingsRoute],
   requires: { slots: Slots, router: Router, webPlugins: WebPlugins, layout: Layout },

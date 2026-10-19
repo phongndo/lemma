@@ -28,7 +28,8 @@ import { toggling } from "./check-ui/toggling.ts";
  *    (named for its plugin, the rest of the app updating on).
  * 5. A plugin's stylesheet leaves when it stops and returns once when it starts.
  * 6. What a plugin adds to the places the defaults use (header, sidebar and
- *    composer buttons, workspace bar, palette sources, inspector tabs) shows.
+ *    composer buttons, workspace bar, palette sources, inspector tabs) shows,
+ *    and a plugin's Cost tab gives its share of the open thread's latest request.
  *    Typing `@` offers the project's files and a pick writes the mention; a
  *    plugin's completion source answers its own trigger, Escape and Tab work
  *    in the menu, and its rows are a replaceable part. Enter waits for

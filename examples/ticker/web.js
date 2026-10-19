@@ -24,6 +24,7 @@ export default ({
   return defineWebPlugin({
     id: "ticker",
     api: 4,
+    uses: ["lemma/actions@1"],
     routes: [TickerRoute],
     styles,
     requires: { slots: Slots, client: Client, router: Router },

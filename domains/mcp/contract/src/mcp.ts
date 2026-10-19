@@ -56,6 +56,8 @@ export const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
 /**
  * Servers plugins add, beside the user's `mcp.json`: `PluginContext.add(McpServers, { name, command, … })`. A server
  * belongs to the plugin that added it and is disconnected when it leaves; the file's entry with the same name wins.
+ *
+ * @composition all servers, one per name; the user's `mcp.json` entry with the same name wins over a plugin's.
  */
 export const McpServers = Registry.make<McpServer>("lemma/mcp.servers", {
   key: (server) => server.name,

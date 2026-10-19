@@ -32,6 +32,13 @@ export const snapshotOf = (inspector: Inspector): Effect.Effect<unknown> => {
   return awaitable(() => (snapshot as () => Awaitable<unknown>).call(inspector));
 };
 
+/**
+ * What a plugin shows of its own state to `lemma inspect` and the devtools: `PluginContext.add(Inspectors,
+ * inspector)`.
+ *
+ * @composition all inspectors; the first with an id answers for it. One whose snapshot fails says so to whoever
+ * asked, and never takes the transport with it.
+ */
 export const Inspectors = Registry.make<Inspector>("lemma/inspectors", { key: (inspector) => inspector.id });
 
 /** An inspector as clients list it: `source` is the plugin that added it. */

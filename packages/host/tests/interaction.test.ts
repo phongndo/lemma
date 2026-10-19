@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import { Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
 import { definePlugin, makeCore, PluginContext } from "@lemma/core";
@@ -31,6 +31,8 @@ const scripted = (request: InteractionRequest): Effect.Effect<InteractionAnswer>
       return Effect.succeed({ type: "ask", value: request.secret ? "sk-secret" : "plain" });
     case "select":
       return Effect.succeed({ type: "select", value: request.options[1]!.value });
+    case "form":
+      return Effect.succeed({ type: "form", value: { title: "Standup", minutes: 15 } });
   }
 };
 
@@ -67,6 +69,37 @@ describe("interaction", () => {
     expect(ui.seen[1]).toMatchObject({ title: "Key", secret: true });
     expect(ui.seen[2]).toEqual({ type: "ask", id: ui.seen[2]!.id, title: "Name", placeholder: "you" });
     expect(ui.seen[3]).toMatchObject({ title: "Model", detail: "For this session" });
+  });
+
+  test("asks for a Schema's fields as a settings form has them, and decodes the answer with it", async () => {
+    const Meeting = Schema.Struct({
+      title: Schema.String.annotate({ description: "What it is about" }),
+      minutes: Schema.Number.pipe(Schema.withDecodingDefaultType(Effect.sync(() => 30))),
+      remote: Schema.optional(Schema.Boolean),
+    });
+    const ui = answerer(scripted);
+    const meeting = await run(
+      [ui.plugin],
+      Effect.flatMap(Interaction, (ask) => ask.form("Book a meeting", Meeting, "For the team")),
+    );
+    expect(meeting).toEqual({ title: "Standup", minutes: 15 });
+    expect(ui.seen[0]).toMatchObject({
+      type: "form",
+      title: "Book a meeting",
+      detail: "For the team",
+      fields: [
+        { key: "title", type: "string", optional: false, description: "What it is about" },
+        { key: "minutes", type: "number", optional: true, default: 30 },
+        { key: "remote", type: "boolean", optional: true },
+      ],
+    });
+    // An answer that does not decode breaks the protocol: the asker recovers as when nobody answers.
+    const wrong = answerer(() => Effect.succeed({ type: "form", value: { minutes: "soon" } }));
+    const exit = await Effect.runPromiseExit(
+      Effect.scoped(Effect.flatMap(makeCore([wrong.plugin], { provide }), (core) => core.run(Effect.flatMap(Interaction, (ask) => ask.form("Book", Meeting))))),
+    );
+    expect(exit).toMatchObject({ _tag: "Failure" });
+    expect(JSON.stringify(exit)).toContain('The answer to \\"Book\\" does not fit');
   });
 
   test("marks each question with the asking fiber's origin", async () => {

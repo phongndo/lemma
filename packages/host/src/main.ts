@@ -7,11 +7,12 @@ import type { ReportedFault } from "@lemma/core";
 import { compositionHistory, faultHistory, planComposition } from "@lemma/composition";
 import type { PluginRow, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { appDefaults, bundled, bundledCode, bundledWeb } from "./bundled.ts";
+import { appDefaults, bundled, bundledCode, bundledWeb, optIn } from "./bundled.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { makeHostChanges } from "./control.ts";
 import type { HostChanges, Read } from "./control.ts";
 import { SHUTDOWN_TIMEOUT_MS } from "./limits.ts";
+import { linkHostPackages } from "./links.ts";
 import { loadLocalPlugins } from "./local.ts";
 import { resolvePaths } from "./paths.ts";
 import { holdHostLock, teeLog } from "./process.ts";
@@ -154,7 +155,7 @@ const EMPTY_WEB: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, fi
 
 /** Reads config files and local plugins into the next composition (see `planComposition`), with every diagnostic. */
 const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
-  const input = { bundled, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
+  const input = { bundled, optIn, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
   if (safe) {
     const planned = planComposition({ ...input, local: [], rows: withOverrides({}) });
     // The bundled plugins as shipped: only an error in them is said, as it stops the start.
@@ -166,7 +167,11 @@ const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
   const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir], {
     bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
   });
-  const localPlugins = local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) }));
+  const localPlugins = local.plugins.map(({ plugin, dir, resources }) => ({
+    plugin,
+    source: dir === userPluginsDir ? ("user" as const) : ("project" as const),
+    ...(resources === undefined ? {} : { resources }),
+  }));
   const files = yield* listWebFiles(paths, loaded.trusted);
   // A row naming a web half is the web app's, which plans its halves from the same rows; one naming no plugin either
   // app has is a mistake (renamed, removed, mistyped), said so here with the id meant, and refused when required.
@@ -218,6 +223,14 @@ const SHUTDOWN_TIMEOUT = Duration.millis(SHUTDOWN_TIMEOUT_MS);
 const program = Effect.gen(function* () {
   const faults = faultHistory();
   if (safe) yield* log("safe mode: the bundled plugins as shipped; no config file or plugin file is read or written");
+  // What a plugin file imports, where it and an editor find it: `<home>/node_modules`. Never stops the start.
+  else
+    yield* Effect.tryPromise(() => linkHostPackages(paths.home)).pipe(
+      Effect.flatMap((linked) =>
+        linked.length === 0 ? Effect.void : log(`linked ${linked.length} packages plugin files import into ${paths.home}/node_modules`),
+      ),
+      Effect.catch((error) => log(`could not link the packages plugin files import into ${paths.home}/node_modules: ${String(error)}`)),
+    );
   const host = yield* makeHostChanges({
     paths,
     read,

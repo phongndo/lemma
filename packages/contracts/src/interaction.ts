@@ -1,6 +1,7 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
-import { Hook } from "@lemma/core";
+import { Hook, schemaCheck } from "@lemma/core";
+import { ConfigField } from "./config.ts";
 
 /**
  * Who is asking, so a client answers only the questions it caused: `session:<id>`
@@ -46,6 +47,19 @@ export const InteractionRequest = Schema.Union([
     detail: Schema.optional(Schema.String),
     options: Schema.Array(Schema.Struct({ value: Schema.String, label: Schema.String, description: Schema.optional(Schema.String) })),
   }),
+  /**
+   * Several values at once, as a plugin's settings are asked for: its `fields` are a settings form's
+   * (`describeConfig` of the asker's Schema), so a client draws it as it draws one, and answers with the values by
+   * field key (`{ type: "form", value }`), which the asker decodes with its Schema.
+   */
+  Schema.Struct({
+    type: Schema.Literal("form"),
+    id: Schema.String,
+    origin: Schema.optional(Schema.String),
+    title: Schema.String,
+    detail: Schema.optional(Schema.String),
+    fields: Schema.Array(ConfigField),
+  }),
 ]);
 export type InteractionRequest = typeof InteractionRequest.Type;
 
@@ -53,6 +67,7 @@ export const InteractionAnswer = Schema.Union([
   Schema.Struct({ type: Schema.Literal("confirm"), value: Schema.Boolean }),
   Schema.Struct({ type: Schema.Literal("ask"), value: Schema.String }),
   Schema.Struct({ type: Schema.Literal("select"), value: Schema.String }),
+  Schema.Struct({ type: Schema.Literal("form"), value: Schema.Record(Schema.String, Schema.Unknown) }),
 ]);
 export type InteractionAnswer = typeof InteractionAnswer.Type;
 
@@ -68,8 +83,14 @@ export class InteractionError extends Data.TaggedError("InteractionError")<{
  * fiber interrupts the handler chain, which withdraws the question (a login
  * callback that arrives first cancels a paste-the-code prompt; the transport
  * then tells clients to close it).
+ *
+ * @composition a chain: the first handler that can ask someone answers without `next`; one with nobody to ask passes
+ * it on, and the terminal fails `Unavailable`. A handler that fails fails the question. Checked: what a handler hands
+ * on is an `InteractionRequest`, what it returns an `InteractionAnswer`.
  */
-export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, InteractionError>("lemma/interaction.request");
+export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, InteractionError>("lemma/interaction.request", {
+  check: { input: schemaCheck(InteractionRequest), output: schemaCheck(InteractionAnswer) },
+});
 
 /**
  * Questions for the human, provided by the host itself. Each runs
@@ -79,8 +100,9 @@ export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, 
  * see only `InteractionError`:
  *
  * - `Unavailable` when nobody answers, the hook or the core fails, or the
- *   answer breaks the protocol (it is not of the question's type, or a
- *   `select` answer is not one of the options offered), naming the question.
+ *   answer breaks the protocol (it is not of the question's type, a
+ *   `select` answer is not one of the options offered, or a `form` answer does
+ *   not decode with its Schema), naming the question.
  *   An answerer that breaks the protocol is no usable answerer rather than a
  *   defect, so a login flow or a tool recovers as when nobody is attached.
  * - `Dismissed` when the human closes the question.
@@ -102,5 +124,11 @@ export class Interaction extends Context.Service<
       options: readonly { readonly value: V; readonly label: string; readonly description?: string }[],
       detail?: string,
     ) => Effect.Effect<V, InteractionError>;
+    /**
+     * Asks for the fields of `schema`, a struct, as a settings form shows them: each property a field, titled and
+     * described by its annotations, defaults filled in. Only what a settings form edits can be answered (text,
+     * numbers, booleans, a choice, a list of strings); give anything else a default.
+     */
+    readonly form: <A>(title: string, schema: Schema.Codec<A, any>, detail?: string) => Effect.Effect<A, InteractionError>;
   }
 >()("lemma/Interaction") {}

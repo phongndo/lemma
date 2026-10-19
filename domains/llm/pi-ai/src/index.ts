@@ -8,13 +8,14 @@ import { Channels, creditOf, HostControl, inChainOrder, Interaction, Interaction
 import { Credentials } from "@lemma/credentials";
 import {
   Llm,
+  LLM_CONTRACT,
   LlmError,
   LlmProviderHeadersHook,
   LlmProviderResponse,
   LlmProviderStreamEvent,
   ModelsChanged,
-  Providers,
   parseModelRef,
+  Providers,
   serveLlm,
   streamThroughHook,
 } from "@lemma/llm";
@@ -143,6 +144,7 @@ function loginError(error: unknown, provider: Provider): LlmError {
 export function makeLlmPlugin(options: Options = {}) {
   return definePlugin({
     id: "llm.pi-ai",
+    implements: [LLM_CONTRACT],
     version: "0.1.0",
     config: Config,
     provides: { llm: Llm },

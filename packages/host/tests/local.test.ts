@@ -99,4 +99,31 @@ describe("loadLocalPlugins", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  test("hands on the folders a package names by kind with its plugins, and says what it leaves out", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "lemma-local-"));
+    try {
+      const folder = join(dir, "pack");
+      await mkdir(join(folder, "skills"), { recursive: true });
+      await mkdir(join(folder, "profiles"));
+      await writeFile(join(folder, "plugin.js"), `export default { id: "pack", layer: () => undefined };\n`);
+      await writeFile(
+        join(folder, "package.json"),
+        JSON.stringify({
+          lemma: { host: "./plugin.js", hots: "./plugin.js", resources: { skills: "./skills", profiles: ["./profiles", "../elsewhere", "./none"] } },
+        }),
+      );
+      const loaded = await Effect.runPromise(loadLocalPlugins([dir], { bundled: {} }));
+      expect(loaded.plugins.map(({ plugin, resources }) => [plugin.id, resources])).toEqual([
+        ["pack", { skills: [join(folder, "skills")], profiles: [join(folder, "profiles")] }],
+      ]);
+      expect(loaded.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+        `${folder}/package.json: "lemma.hots" is not a field Lemma reads (host, web, styles, resources); it is left out`,
+        `${folder}/package.json: "lemma.resources.profiles" names ../elsewhere, outside the package; it is left out`,
+        `${folder}/package.json: "lemma.resources.profiles" names ./none, which is no folder; it is left out`,
+      ]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });

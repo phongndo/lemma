@@ -1,6 +1,6 @@
 import { createEffect, createMemo, createSignal, createUniqueId } from "solid-js";
 import { paint, unpaint } from "@lemma/web/paint";
-import { APPEARANCE_PLUGIN, AppearanceConfig, resolveLook, Accents, Fonts, Themes } from "@lemma/look";
+import { Accents, APPEARANCE_PLUGIN, AppearanceConfig, Fonts, LOOK_CONTRACT, resolveLook, Themes } from "@lemma/look";
 import { Slots, defineWebPlugin } from "@lemma/web";
 import { ACCENTS, FONTS, THEMES } from "./presets.ts";
 
@@ -18,6 +18,7 @@ const isColor = (value: string) => CSS.supports("color", value);
  */
 export default defineWebPlugin({
   id: APPEARANCE_PLUGIN,
+  implements: [LOOK_CONTRACT],
   config: AppearanceConfig,
   requires: { slots: Slots },
   setup: ({ slots }, plugin) => {

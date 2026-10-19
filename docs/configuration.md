@@ -1,7 +1,11 @@
 # Configuration
 
-With no config, every bundled plugin runs. `~/.lemma/config.jsonc` and
-`<project>/.lemma/config.jsonc` patch that by plugin id:
+With no config, every bundled plugin runs but a few that start off until a
+row turns them on (`"enabled": true`): `context.prune`. `~/.lemma/config.jsonc` and
+`<project>/.lemma/config.jsonc` patch that by plugin id. The project's is the
+one in the directory the host was started in; a session in another project
+with config of its own is told it does not apply there, while that project's
+`AGENTS.md`, skills, and profiles do.
 
 ```jsonc
 {
@@ -51,12 +55,26 @@ needs of it), and by the web app for a web-only one.
 `~/.lemma/plugins/` and a trusted project's `<project>/.lemma/plugins/` hold
 your plugins. What is there loads by itself, and again when it changes:
 
-| Entry                          | What it is                                                                                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `approvals.ts` (`.js`, `.mjs`) | A host half, which the host runs                                                                                                           |
-| `notes.web.js` (`.web.mjs`)    | A web half, which open web apps run                                                                                                        |
-| `theme.css`                    | A stylesheet the web app applies after its own                                                                                             |
-| `ticker/`                      | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
+| Entry                                  | What it is                                                                                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `approvals.ts` (`.js`, `.mjs`)         | A host half, which the host runs                                                                                                           |
+| `notes.web.js` (`.web.mjs`, `.web.ts`) | A web half, which open web apps run (TypeScript's types stripped as it is served)                                                          |
+| `theme.css`                            | A stylesheet the web app applies after its own                                                                                             |
+| `ticker/`                              | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
+
+A folder plugin's manifest can also name folders of things other plugins read,
+by kind: `"resources": { "skills": "./skills", "profiles": "./profiles" }`.
+They come and go with its host half's plugins (turned off, failed, a project
+not trusted), and the plugin that reads a kind finds them in plugin status
+(`resourcesOf`): `skills.files` reads `skills`, and `agent.profiles` reads
+`profiles`, each below your own of the same name. A field Lemma does not read
+is reported, which catches a typo.
+
+The host links what a plugin file may import (`effect`, `@lemma/core`,
+`@lemma/contracts`, the domains' contracts) into `~/.lemma/node_modules` as it
+starts, pointing at the packages it runs, so those files resolve them, and an
+editor finds their types, with nothing installed; a directory of your own
+there is left alone.
 
 A plugin is one id, with a host half, a web half, or both. Both halves of one
 plugin define its id, so its one row decides both, and the web app runs the
@@ -109,7 +127,10 @@ A plugin says which version of the host's contracts it is written for by
 requiring `HostApi(version)` from `@lemma/contracts`, which the host provides
 for the version it implements (`HOST_API`), and a web app plugin by
 `defineWebPlugin({ api })`, so after an incompatible change it is left out with
-the version named rather than failing at some later call. A plugin that
+the version named rather than failing at some later call. It says the same of
+each domain's contract it uses with `uses: ["lemma/tools@1", …]`, and is left
+out when the plugin serving that domain implements another version
+([writing plugins](plugins.md#contract-versions)). A plugin that
 renames a setting reads its users' old rows with `migrateConfig` from
 `@lemma/contracts`.
 

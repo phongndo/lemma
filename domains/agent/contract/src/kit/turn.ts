@@ -1,0 +1,1165 @@
+import { isDeepStrictEqual } from "node:util";
+import { Cause, Clock, Effect, Exit, Option, Semaphore, Stream } from "effect";
+import type { Context } from "effect";
+import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
+import type { Events, HandlerStep, Hooks } from "@lemma/core";
+import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "../agent.ts";
+import { addUsage, emptyUsage } from "@lemma/llm";
+import { deriveMessages, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
+import { declaredTools, ToolInvocation } from "@lemma/tools";
+import { creditOf, inChainOrder } from "@lemma/contracts";
+import type { HostControl, ResultCredit } from "@lemma/contracts";
+import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "../agent.ts";
+import type {
+  AssistantMessage,
+  Llm,
+  LlmFailure,
+  LlmRequest,
+  ModelInfo,
+  StreamEvent,
+  ThinkingLevel,
+  ToolCall,
+  ToolResultMessage,
+  ToolSpec,
+  Usage,
+} from "@lemma/llm";
+import type { Contribution, EventData, ProviderAnswer, RequestState, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
+import type { ToolRunner } from "@lemma/tools";
+import { handlerChanges } from "./credit.ts";
+import { partialMessage } from "./live.ts";
+import type { LiveTurn, ModelIdentity, PartialMessage } from "./live.ts";
+import { titleFrom } from "./prompt.ts";
+import { INTERRUPTED_CALL, RESUMED, TOOLS_STARTED } from "./resume.ts";
+import { longestWait, nextRetry, noRetries, retried } from "./retry.ts";
+import type { RetrySettings, RetryStreak } from "./retry.ts";
+import type { ResumePlan, StepOutcome } from "./resume.ts";
+import type { LiveFile } from "./state.ts";
+
+interface TurnServices {
+  readonly sessions: Context.Service.Shape<typeof Sessions>;
+  readonly llm: Context.Service.Shape<typeof Llm>;
+  readonly tools: Context.Service.Shape<typeof ToolRunner>;
+  readonly host: Context.Service.Shape<typeof HostControl>;
+  readonly hooks: Context.Service.Shape<typeof Hooks>;
+  readonly events: Context.Service.Shape<typeof Events>;
+  /** The system prompt's sections for a request, in order (`PromptSections`), each attributed to the plugin that added it. */
+  readonly sections: (request: SectionRequest) => Effect.Effect<readonly SystemSection[], AgentError>;
+  /** A span of the agent's own work, named for its plugin (`PluginContext.trace`). */
+  readonly trace: Context.Service.Shape<typeof PluginContext>["trace"];
+  /** A new id for a step, from the agent's `IdSource`. */
+  readonly newId: () => string;
+}
+
+/**
+ * Whether a turn takes another step after one, before `AgentContinueHook`'s handlers have their say: the loop's shape.
+ * `decide` sees the step as the hook's terminal does, and says why, which the step's `step-end` logs.
+ */
+export interface TurnPolicy {
+  readonly decide: (outcome: { readonly message: AssistantMessage; readonly results: readonly ToolResultMessage[] }) => {
+    readonly result: "continue" | "stop";
+    readonly why: string;
+  };
+}
+
+/**
+ * The agent's own: another step while the model asked for tools, or tools answered it (results it has not read
+ * yet keep it going, whatever the provider called its stop); else it stops.
+ */
+export const toolLoop: TurnPolicy = {
+  decide: (outcome) =>
+    outcome.message.stopReason === "toolUse"
+      ? { result: "continue", why: "the model asked for tools" }
+      : outcome.results.length > 0
+        ? { result: "continue", why: "tool results to read" }
+        : { result: "stop", why: `the model stopped (${outcome.message.stopReason})` },
+};
+
+interface TurnSettings extends RetrySettings {
+  /** The loop's shape: whether a turn takes another step (`toolLoop` for the agent's own). */
+  readonly policy: TurnPolicy;
+  readonly maxSteps: number;
+  /** A reply the user stopped is logged as a `message` of what it had written, which the model then sees (`stopped`). */
+  readonly keepCancelled: boolean;
+  /** Calls of one response that run at once, at most, when their tools may run together. */
+  readonly parallelTools: number;
+}
+
+/** The tools, by name, a step's request offered its calls (`ToolInvocation.offered`), and declared to the model (`declared`). */
+interface Offer {
+  readonly offered: readonly string[];
+  readonly declared: readonly string[];
+}
+
+/** Each tool spec's JSON length, kept per spec: the registry hands out the same object for a tool until it changes. */
+const specLengths = new WeakMap<ToolSpec, number>();
+const specChars = (spec: ToolSpec): number => {
+  let chars = specLengths.get(spec);
+  if (chars === undefined) specLengths.set(spec, (chars = JSON.stringify(spec).length));
+  return chars;
+};
+
+/** The same spec objects, in the same order: unchanged without comparing their contents. */
+const sameSpecs = (logged: readonly ToolSpec[] | undefined, specs: readonly ToolSpec[]): boolean =>
+  logged !== undefined && logged.length === specs.length && logged.every((spec, index) => spec === specs[index]);
+/** A prompt as a turn places it: a user message carrying the submission's id. */
+interface Placed {
+  readonly requestId: string;
+  readonly content: PromptContent;
+  /** Who shaped it (`AgentInputHook`'s handlers), logged with it. */
+  readonly credit?: ResultCredit;
+}
+
+/** The session's queue as the turn sees it: steers join the turn between steps. */
+interface TurnInbox {
+  /** Queued steers, oldest first. They stay queued until `placed`, so one is never lost between the queue and the log. */
+  readonly steers: Effect.Effect<readonly Placed[]>;
+  /** These steers' messages are in the log: take them out of the queue. */
+  readonly placed: (requestIds: readonly string[]) => Effect.Effect<void>;
+}
+
+/** A turn that a host restart cut off: where it stopped, and what its cut-off calls had produced then. */
+export interface TurnResume {
+  readonly plan: ResumePlan;
+  readonly restored?: LiveFile;
+  /** `cancel` had been asked for: the turn closes as cancelled. */
+  readonly cancelling: boolean;
+  /** It had ended so, but its `turn-end` did not reach the log (`TurnInput.unclosed`): it closes so, asking nothing. */
+  readonly closing?: Ended;
+}
+
+interface TurnInput {
+  readonly sessionId: string;
+  readonly turnId: string;
+  readonly cwd: string;
+  /** Session title before the turn; a missing title is set from the first prompt. */
+  readonly title?: string;
+  /** The model it asks. Only a resumed turn that closes as cancelled may have none: it asks nothing. */
+  readonly model?: ModelInfo;
+  readonly thinking?: ThinkingLevel;
+  /** The turn's choices for plugins (`TurnOptions.plugins`), logged with `turn-start` and handed to each request. */
+  readonly plugins?: Readonly<Record<string, unknown>>;
+  /** Placed first, in order: a new turn's prompts, or those a resumed turn had not placed yet. */
+  readonly prompts: readonly Placed[];
+  /** Present when the turn continues one a restart cut off. */
+  readonly resume?: TurnResume;
+  /** Aborted by `cancel`; handed to every tool execution. */
+  readonly signal: AbortSignal;
+  readonly inbox: TurnInbox;
+  readonly live: LiveTurn;
+  /** A prompt's message is in the log. */
+  readonly logged: (requestId: string) => void;
+  /**
+   * True once the agent is closing (the host stopping, or the agent
+   * reloading): a turn interrupted then, or failing, is left open in the log,
+   * to resume when the agent starts again, rather than closed as cancelled or
+   * failed. The turn suspends itself at its next step or tool call, or when
+   * `stopping` completes while it waits to ask again. (A host stopping shuts
+   * the core's hooks before it closes the agent; a turn that finds them shut
+   * is left open the same way.)
+   */
+  readonly suspended: () => boolean;
+  readonly stopping: Effect.Effect<void>;
+  /** Runs a wait (before a failed call is asked again) during which the turn holds no slot, then waits for one. */
+  readonly idle: <A, E, R>(wait: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
+  /**
+   * The session's branch as the last turn left it, which a new turn starts from rather than read it again when the
+   * session's leaf is still its end; and where the turn leaves its own when it ends.
+   */
+  readonly kept?: { readonly branch: () => readonly SessionEvent[] | undefined; readonly keep: (branch: readonly SessionEvent[]) => void };
+  /**
+   * The turn ended so, but closing it in the log failed (a full disk): it is left open there, `TurnEnded` unpublished,
+   * for the agent to close as it ended when the session is next taken up (`TurnResume.closing`).
+   */
+  readonly unclosed?: (ended: Ended) => void;
+}
+
+/** How `runTurn` returns: the reason it ended, or `suspended` when it was left open in the log to resume. */
+export type TurnOutcome = TurnEndReason | "suspended";
+/** How a turn ended, as its `turn-end` says. */
+export interface Ended {
+  readonly reason: TurnEndReason;
+  readonly error?: string;
+}
+
+/** What a tool call in a response cut off at its output limit returns, instead of running. */
+const TRUNCATED_CALL =
+  "Not run: your response reached its output token limit before this call was complete, so its arguments may be cut off. Make the call again; if it carries a lot of text (a long file), split it into smaller calls.";
+
+/** The text a cut-off tool call that is not run again returns to the model. */
+const interruptedText = (output: string | undefined) =>
+  output === undefined || output === ""
+    ? "Tool execution was interrupted: the host stopped while it ran. It may or may not have finished; check before running it again."
+    : `Tool execution was interrupted: the host stopped while it ran. It may or may not have finished; check before running it again. Its output until then:\n${output}`;
+
+/**
+ * What a reply the user stopped keeps for the model: its text, and thinking a provider can replay (signed); never a
+ * tool call, which nothing will answer. Undefined when that leaves no text.
+ */
+export const stopped = (message: AssistantMessage): AssistantMessage | undefined => {
+  const content = message.content.filter((block) => block.type === "text" || (block.type === "thinking" && block.thinkingSignature !== undefined));
+  return content.some((block) => block.type === "text" && block.text.trim() !== "") ? { ...message, content } : undefined;
+};
+
+/** What a tool call the branch left without a result tells the model. */
+export const BRANCHED_CALL = "No result was recorded for this tool call: the conversation continued without it.";
+
+/**
+ * The last assistant message on `branch` the model sees, and its tool calls
+ * that have no result after it. A turn answers its calls, so this is set
+ * where a checkout put the leaf inside a turn, or a turn ended without
+ * logging its results (a write that failed).
+ */
+export function unansweredCalls(branch: readonly SessionEvent[]): { readonly event: SessionEvent; readonly calls: readonly ToolCall[] } | undefined {
+  const entries = modelEntries(branch);
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at]!;
+    if (entry.summary === true || entry.message.role !== "assistant") continue;
+    const answered = new Set(entries.slice(at + 1).flatMap((later) => (later.message.role === "toolResult" ? [later.message.toolCallId] : [])));
+    const calls = entry.message.content.filter((block): block is ToolCall => block.type === "toolCall" && !answered.has(block.id));
+    return calls.length === 0 ? undefined : { event: branch[entry.index]!, calls };
+  }
+  return undefined;
+}
+
+const isFirstToken = (event: StreamEvent) =>
+  event.type === "text-delta" || event.type === "thinking-delta" || event.type === "toolcall-start" || event.type === "toolcall-delta";
+
+const causeMessage = (cause: Cause.Cause<unknown>): string => {
+  const error = Cause.squash(cause);
+  return error instanceof Error ? error.message : typeof error === "object" && error !== null && "message" in error ? String(error.message) : String(error);
+};
+
+/** A failure of another capability (the log, the models) as the agent reports it: its message, with it as the cause. */
+export const failedAs =
+  (sessionId: string, reason: AgentError["reason"]) =>
+  (error: { readonly message: string }): AgentError =>
+    new AgentError({ sessionId, reason, message: error.message, cause: error });
+
+/** `error` is the core's `CoreClosed`, or wraps one (as a hook failure the turn reports does). */
+const isCoreClosed = (error: unknown, depth = 0): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  depth < 8 &&
+  ((error as { readonly _tag?: unknown })._tag === "CoreClosed" || ("cause" in error && isCoreClosed(error.cause, depth + 1)));
+
+/** The turn failed because the core is shutting down. */
+const closedCore = (cause: Cause.Cause<unknown>): boolean =>
+  cause.reasons.some((reason) => (Cause.isFailReason(reason) && isCoreClosed(reason.error)) || (Cause.isDieReason(reason) && isCoreClosed(reason.defect)));
+
+/** Never handled: dispatching it says whether the core still dispatches hooks. */
+const Probe = Hook.make<void, void>("agent/core-closing");
+
+/**
+ * One turn. The log is written as the turn goes: `turn-start`, the user
+ * messages, then per step `step-start`, `request`, the assistant `message` (or
+ * an `attempt`), tool results, and `step-end`, with steers placed between
+ * steps; `turn-end` closes it, unless the agent suspends it to resume later.
+ * Every append names the previous one as its parent, so a checkout elsewhere
+ * during the turn cannot splice the turn into another branch.
+ */
+export function runTurn(services: TurnServices, settings: TurnSettings, input: TurnInput): Effect.Effect<TurnOutcome, AgentError> {
+  const { sessions, llm, tools, host, hooks, events } = services;
+  const { sessionId, turnId, cwd, signal, live } = input;
+
+  const state: {
+    lastId: string | undefined;
+    usage: Usage;
+    /** Open step, closed by `step-end`, and the model it asks (none in a turn closing as cancelled after a restart). */
+    step: { readonly id: string; readonly model: ModelIdentity | undefined } | undefined;
+    /** Output of a model call in flight. */
+    partial: PartialMessage | undefined;
+    partialStartedAt: number;
+    /** Tool calls of the logged assistant message that have no result yet. */
+    pending: ToolCall[];
+    /** Tool calls a `TOOLS_STARTED` event names: they may have run, whatever becomes of the turn. */
+    started: Set<string>;
+    /** Failed calls asked again since the model last answered. */
+    streak: RetryStreak;
+    /**
+     * The branch ending at `lastId`, kept as the turn appends (every event it appends chains onto it), so a step does
+     * not read the session back. Read from the store when there is none yet, or an append did not chain onto it.
+     */
+    branch: SessionEvent[] | undefined;
+    /** `requestState(branch)`, kept as the branch is. */
+    request: RequestState | undefined;
+    /** The tool specs the turn last logged (or found logged): unchanged by identity, they need no comparing. */
+    loggedSpecs: readonly ToolSpec[] | undefined;
+  } = {
+    lastId: undefined,
+    usage: emptyUsage,
+    step: undefined,
+    partial: undefined,
+    partialStartedAt: 0,
+    pending: [],
+    started: new Set(),
+    streak: noRetries,
+    branch: undefined,
+    request: undefined,
+    loggedSpecs: undefined,
+  };
+
+  const sessionError = failedAs(sessionId, "Session");
+
+  /**
+   * Whether the core is shutting down. It refuses every hook call from the moment it begins (hooks fail closed, so
+   * that no guard is skipped), before it stops the agent: a turn can go no further, and is not over either.
+   */
+  const coreClosing = hooks
+    .invoke(Probe, undefined, () => Effect.void)
+    .pipe(
+      Effect.as(false),
+      Effect.catch((error) => Effect.succeed(error._tag === "CoreClosed")),
+    );
+  /** Stops the turn, to be left open, when the core is shutting down. */
+  const unlessClosing = Effect.flatMap(coreClosing, (closing) => (closing ? Effect.die(new CoreClosed()) : Effect.void));
+
+  /**
+   * Uninterruptible so a cancelled turn never loses track of an event that did reach the log. One at a time, so tool
+   * calls running together each chain after the last.
+   */
+  const appending = Semaphore.makeUnsafe(1);
+  const append = (data: EventData): Effect.Effect<SessionEvent, AgentError> =>
+    appending.withPermits(1)(
+      Effect.uninterruptible(
+        Effect.suspend(() => sessions.append(sessionId, data, state.lastId === undefined ? undefined : { parent: state.lastId })).pipe(
+          Effect.tap((event) =>
+            Effect.sync(() => {
+              state.lastId = event.id;
+              const branch = state.branch;
+              if (branch !== undefined && event.parent === (branch.at(-1)?.id ?? null)) {
+                branch.push(event);
+                state.request = nextRequestState(state.request!, event);
+              } else {
+                state.branch = undefined;
+                state.request = undefined;
+              }
+            }),
+          ),
+          Effect.mapError(sessionError),
+        ),
+      ),
+    );
+
+  /** Where a stopping agent suspends the turn: before a step or a tool call, never inside one. */
+  const boundary = Effect.suspend(() => (input.suspended() ? Effect.interrupt : Effect.void));
+
+  /**
+   * Waits until epoch `at`, without a slot; a stopping agent suspends the turn instead, and the rest of the wait comes
+   * when it resumes. Times in a turn come from Effect's `Clock`, as its waits do, so a test's clock drives both. `at` is
+   * wall-clock time, logged: a wall clock set back since (a correction) never makes the wait longer than a retry's
+   * could be.
+   */
+  const waitUntil = (at: number) =>
+    Effect.andThen(
+      input.idle(
+        Effect.raceFirst(
+          Effect.flatMap(Clock.currentTimeMillis, (now) => Effect.sleep(Math.min(Math.max(0, at - now), longestWait(settings)))),
+          input.stopping,
+        ),
+      ),
+      boundary,
+    );
+
+  const hookError = (hook: string) => (error: { readonly message: string }) =>
+    new AgentError({ sessionId, reason: "Hook", message: `${hook}: ${error.message}`, cause: error });
+
+  /**
+   * Logs a placed prompt and records it placed (`input.logged`, and `also`) in one step a cancel cannot split: a prompt
+   * logged but not recorded would be answered as never placed.
+   */
+  const userMessage = (placed: Placed, also: () => void = () => {}) =>
+    Effect.uninterruptible(
+      Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
+        append({
+          type: "message",
+          message: { role: "user", content: placed.content, timestamp },
+          turnId,
+          requestId: placed.requestId,
+          ...(placed.credit === undefined ? {} : { credit: placed.credit }),
+        }),
+      ).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            input.logged(placed.requestId);
+            also();
+          }),
+        ),
+      ),
+    );
+
+  const toolResult = (call: ToolCall, text: string, timestamp: number): ToolResultMessage => ({
+    role: "toolResult",
+    toolCallId: call.id,
+    toolName: call.name,
+    content: [{ type: "text", text }],
+    isError: true,
+    timestamp,
+  });
+
+  /**
+   * Answers tool calls the branch left without a result, before the turn
+   * starts after them: every request needs a result for each call, and a
+   * provider adapter that made one up would send what the log does not hold.
+   * The results name the call's own turn and step, as that turn's closing
+   * results would.
+   */
+  const closeBranch = Effect.gen(function* () {
+    // The branch the last turn left, if the session's leaf has not moved since (no checkout, no other append): no
+    // reading it all back.
+    const kept = input.kept?.branch();
+    const leaf = kept === undefined ? undefined : (yield* sessions.get(sessionId).pipe(Effect.mapError(sessionError))).leaf;
+    const branch =
+      kept !== undefined && leaf !== undefined && kept.at(-1)?.id === leaf ? kept : yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError));
+    // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
+    state.lastId = branch.at(-1)?.id;
+    keep(branch);
+    const open = unansweredCalls(branch);
+    if (open === undefined || open.event.data.type !== "message") return;
+    const { turnId: callTurn, stepId: callStep } = open.event.data;
+    for (const call of open.calls) {
+      yield* append({
+        type: "message",
+        message: toolResult(call, BRANCHED_CALL, yield* Clock.currentTimeMillis),
+        ...(callTurn === undefined ? {} : { turnId: callTurn }),
+        ...(callStep === undefined ? {} : { stepId: callStep }),
+      });
+    }
+  });
+
+  /** The model a turn that runs steps asks: it has one (see `TurnInput.model`). */
+  const asked = Effect.suspend(() => (input.model === undefined ? Effect.die(new Error(`Turn ${turnId} has no model to ask`)) : Effect.succeed(input.model)));
+
+  /** `branch`, read from the store, as the turn's branch from here on (`state.branch`). */
+  const keep = (branch: readonly SessionEvent[]) => {
+    state.branch = [...branch];
+    state.request = requestState(branch);
+  };
+  /** The turn's branch, ending at `lastId`: kept, or read from the store when it is not. */
+  const branchNow: Effect.Effect<SessionEvent[], AgentError> = Effect.suspend(() =>
+    state.branch !== undefined
+      ? Effect.succeed(state.branch)
+      : sessions.branch(sessionId, { leaf: state.lastId! }).pipe(
+          Effect.mapError(sessionError),
+          Effect.map((branch) => {
+            keep(branch);
+            return state.branch!;
+          }),
+        ),
+  );
+
+  /** Builds, logs, and returns the exact request for this step, asking `asking` unless a handler names another. */
+  const prepareRequest = (stepId: string, asking: ModelInfo) =>
+    Effect.gen(function* () {
+      // As it stands now: the branch kept grows as the turn appends, and handlers see this one.
+      const branch: readonly SessionEvent[] = (yield* branchNow).slice();
+      const listed = yield* tools.list;
+      const sections = yield* services.sections({
+        sessionId,
+        turnId,
+        cwd,
+        model: asking.ref,
+        tools: listed,
+        branch,
+        ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
+      });
+      /** The events each plugin's handler appended, by type, for its credit. */
+      const appended = new Map<string, string[]>();
+      const draft: RequestDraft = {
+        sessionId,
+        turnId,
+        cwd,
+        model: asking.ref,
+        ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+        ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
+        sections,
+        tools: listed,
+        ...(state.streak.shorten ? { overflow: true } : {}),
+        branch,
+        history: deriveMessages(branch),
+        // Through the turn's own append, so the event chains after the turn's last one and the turn continues from it.
+        append: (data) =>
+          Effect.uninterruptible(
+            append(data).pipe(
+              Effect.tap(() =>
+                Effect.sync(() => {
+                  if (data.type === "compaction" && data.usage !== undefined) state.usage = addUsage(state.usage, data.usage);
+                }),
+              ),
+              // Credited to the handler that appended it, which runs as its plugin.
+              Effect.tap(() =>
+                Effect.map(Effect.serviceOption(PluginContext), (by) => {
+                  if (Option.isSome(by)) appended.set(by.value.id, [...(appended.get(by.value.id) ?? []), data.type]);
+                }),
+              ),
+            ),
+          ),
+      };
+      const steps: HandlerStep<RequestDraft, RequestPlan>[] = [];
+      const plan = yield* hooks
+        .invoke(
+          AgentRequestHook,
+          draft,
+          (final): Effect.Effect<RequestPlan> =>
+            Effect.succeed({
+              model: final.model,
+              ...(final.thinking === undefined ? {} : { thinking: final.thinking }),
+              sections: final.sections,
+              tools: final.tools,
+              ...(final.providerOptions === undefined ? {} : { providerOptions: final.providerOptions }),
+            }),
+          { onStep: (step) => void steps.push(step) },
+        )
+        .pipe(Effect.mapError(hookError("AgentRequestHook")));
+      const handlers = inChainOrder(steps).map((step) => creditOf(step, handlerChanges(step, appended.get(step.pluginId) ?? [])));
+      const model = plan.model === asking.ref ? asking : yield* llm.model(plan.model).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
+      const system = plan.sections
+        .map((section) => section.text)
+        .filter((text) => text.length > 0)
+        .join("\n\n");
+      // A nested tool is offered but not declared, when a tool that runs others is there to call it.
+      const declared = declaredTools(plan.tools);
+      const specs: ToolSpec[] = declared.map((tool) => tool.spec);
+      const contributions: Contribution[] = [
+        ...plan.sections.map((section): Contribution => ({ source: section.source, kind: "system", label: section.id, chars: section.text.length })),
+        ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: specChars(tool.spec) })),
+      ];
+      // The branch as handlers left it (one may have appended a compaction), and what the request before it said.
+      const before = yield* branchNow;
+      const previous = state.request!;
+      const history = deriveMessages(before);
+      const unchanged = sameSpecs(state.loggedSpecs, specs) || isDeepStrictEqual(previous.tools ?? [], specs);
+      // Offered beside them, logged so a call resumed after a restart is held to them (the first request logs none too).
+      const declaredNames = new Set(specs.map((spec) => spec.name));
+      const nested = plan.tools.flatMap((tool) => (declaredNames.has(tool.spec.name) ? [] : [tool.spec.name]));
+      const composition = yield* host.composition;
+      const logged = yield* append({
+        type: "request",
+        turnId,
+        stepId,
+        model: plan.model,
+        ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
+        composition: composition.id,
+        ...(previous.system === system ? {} : { system }),
+        ...(unchanged ? {} : { tools: specs }),
+        ...(isDeepStrictEqual(previous.nested, nested) ? {} : { nested }),
+        contributions,
+        ...(handlers.length === 0 ? {} : { handlers }),
+        ...(plan.providerOptions === undefined ? {} : { providerOptions: plan.providerOptions }),
+      });
+      state.loggedSpecs = specs;
+      // Send what the log says was sent: the request as the branch now ending at the request event rebuilds it, from
+      // the state kept as the turn appended. Checked against a rebuild from the store's branch where it is `Verify`d.
+      const request =
+        state.request === undefined
+          ? rebuildRequest(yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError)), logged.id, sessionId)
+          : requestFrom(state.request, history, logged, sessionId);
+      if (request === undefined) return yield* Effect.die(new Error(`request ${logged.id} is not on its own branch`));
+      if (yield* Verify) {
+        const stored = yield* sessions.branch(sessionId, { leaf: logged.id }).pipe(Effect.mapError(sessionError));
+        assert(isDeepStrictEqual(rebuildRequest(stored, logged.id, sessionId), request), `request ${logged.id} is not what its branch rebuilds`);
+        if (state.branch !== undefined) {
+          assert(state.branch.length === stored.length, `turn ${turnId} keeps ${state.branch.length} events of a branch of ${stored.length}`);
+          assert(
+            state.branch.every((event, index) => event.id === stored[index]!.id),
+            `turn ${turnId} keeps a branch that is not the store's`,
+          );
+        }
+      }
+      const offer: Offer = { offered: plan.tools.map((tool) => tool.spec.name), declared: specs.map((spec) => spec.name) };
+      return { request, model, offer };
+    });
+
+  /** Whether a failed call is asked again, and when (`nextRetry`): a cancelled turn asks nothing again. */
+  const retryOf = (failure: LlmFailure | undefined) =>
+    failure === undefined || signal.aborted ? Effect.succeed(undefined) : nextRetry(failure, state.streak, settings);
+
+  /**
+   * Streams one model call. Returns the settled message; or, when the call failed, when it is to be asked again
+   * (`retry`) or how the turn ends.
+   */
+  const callModel = (stepId: string, request: LlmRequest, model: ModelInfo) =>
+    Effect.gen(function* () {
+      const startedAt = yield* Clock.currentTimeMillis;
+      let firstTokenAt: number | undefined;
+      let settled: Extract<StreamEvent, { type: "done" | "error" }> | undefined;
+      /** How the provider answered, before its body, and who shaped the headers: logged with what comes of the call. */
+      let answered: { readonly response?: ProviderAnswer; readonly credit?: ResultCredit } | undefined;
+      const partial = live.startStep(stepId, startedAt);
+      state.partial = partial;
+      state.partialStartedAt = startedAt;
+      const streamError = yield* llm.stream(request).pipe(
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            // Not model output: kept for the log, not streamed to clients.
+            if (event.type === "provider") {
+              answered = {
+                ...(event.status === undefined
+                  ? {}
+                  : { response: { status: event.status, ...(event.requestId === undefined ? {} : { requestId: event.requestId }) } }),
+                ...(event.credit === undefined ? {} : { credit: event.credit }),
+              };
+              return;
+            }
+            if (firstTokenAt === undefined && isFirstToken(event)) firstTokenAt = yield* Clock.currentTimeMillis;
+            const seq = live.apply(event);
+            if (event.type === "done" || event.type === "error") settled = event;
+            yield* events.publish(AssistantDelta, { sessionId, turnId, stepId, seq, event });
+          }),
+        ),
+        Effect.as(undefined),
+        Effect.catch((error) => Effect.succeed(error.message)),
+      );
+      const timing = { startedAt, ...(firstTokenAt === undefined ? {} : { firstTokenAt }), endedAt: yield* Clock.currentTimeMillis };
+      const answer = {
+        ...(answered?.response === undefined ? {} : { response: answered.response }),
+        ...(answered?.credit === undefined ? {} : { credit: answered.credit }),
+      };
+      // A call that failed as the core shut down failed because of it, maybe: asked again when the turn resumes, not logged.
+      if (settled === undefined || (settled.type === "error" && settled.message.stopReason !== "aborted")) yield* unlessClosing;
+      return yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          state.partial = undefined;
+          live.endStep();
+          if (settled === undefined) {
+            const error = streamError ?? "The model stream ended without a result";
+            yield* append({ type: "attempt", turnId, stepId, message: partial.message(model, "error", error, timing.endedAt), timing, ...answer });
+            return { ended: { reason: "error", error } satisfies Ended };
+          }
+          state.usage = addUsage(state.usage, settled.message.usage);
+          if (settled.type === "error") {
+            const aborted = settled.message.stopReason === "aborted";
+            const kept = aborted && settings.keepCancelled ? stopped(settled.message) : undefined;
+            if (kept !== undefined) {
+              yield* append({ type: "message", message: kept, turnId, stepId, timing, ...answer });
+              return { ended: { reason: "cancelled", error: kept.errorMessage ?? "Aborted" } satisfies Ended };
+            }
+            const failure = aborted ? undefined : settled.failure;
+            const retry = yield* retryOf(failure);
+            yield* append({
+              type: "attempt",
+              turnId,
+              stepId,
+              message: settled.message,
+              timing,
+              ...(failure === undefined ? {} : { failure }),
+              ...(retry === undefined ? {} : { retry }),
+              ...answer,
+            });
+            if (retry !== undefined && failure !== undefined) {
+              state.streak = retried(state.streak, failure, retry.attempt);
+              return { retry };
+            }
+            return {
+              ended: { reason: aborted ? "cancelled" : "error", error: settled.message.errorMessage ?? (aborted ? "Aborted" : "Model error") } satisfies Ended,
+            };
+          }
+          state.streak = noRetries;
+          yield* append({ type: "message", message: settled.message, turnId, stepId, timing, ...answer });
+          state.pending = settled.message.content.filter((block): block is ToolCall => block.type === "toolCall");
+          return { message: settled.message };
+        }),
+      );
+    });
+
+  /**
+   * Runs one tool call and logs its result. A call in `interrupted` (cut off by a restart, and not safe to repeat) is
+   * not run: the model is told so, with the output it had printed. `offer`: what the request offered, which holds the
+   * call to the tools declared to the model, and the tools it runs to those offered.
+   */
+  const runCall = (stepId: string, call: ToolCall, interrupted: ReadonlyMap<string, string | undefined>, offer?: Offer) =>
+    Effect.gen(function* () {
+      const startedAt = yield* Clock.currentTimeMillis;
+      const invocation = new ToolInvocation({
+        sessionId,
+        toolCallId: call.id,
+        name: call.name,
+        input: call.arguments,
+        cwd,
+        ...(offer === undefined ? {} : { offered: offer.offered, declared: offer.declared }),
+        ...(state.lastId === undefined ? {} : { leafId: state.lastId }),
+      });
+      // Run as the core shuts down, the call would fail for that alone (its tool not found, its guards closed).
+      if (!interrupted.has(call.id)) yield* unlessClosing;
+      let credit: ResultCredit | undefined;
+      const heard = (shaped: ResultCredit) => {
+        if (Object.keys(shaped).length > 0) credit = shaped;
+      };
+      const result = interrupted.has(call.id)
+        ? { content: [{ type: "text" as const, text: interruptedText(interrupted.get(call.id)) }], isError: true, details: undefined }
+        : yield* tools.execute(invocation, signal, { credit: heard }).pipe(
+            Effect.annotateSpans({ "tool.call.id": call.id, "tool.name": call.name }),
+            Effect.map((value) => ({ content: value.content, isError: value.isError ?? false, details: value.details })),
+            Effect.catch((error) =>
+              isCoreClosed(error)
+                ? Effect.die(error)
+                : Effect.succeed({ content: [{ type: "text" as const, text: error.message }], isError: true, details: undefined }),
+            ),
+            Effect.catchDefect((defect) =>
+              isCoreClosed(defect)
+                ? Effect.die(defect)
+                : Effect.succeed({
+                    content: [{ type: "text" as const, text: `Tool ${call.name} crashed: ${String(defect)}` }],
+                    isError: true,
+                    details: undefined,
+                  }),
+            ),
+          );
+      const message: ToolResultMessage = {
+        role: "toolResult",
+        toolCallId: call.id,
+        toolName: call.name,
+        content: result.content,
+        isError: result.isError,
+        timestamp: yield* Clock.currentTimeMillis,
+      };
+      yield* Effect.uninterruptible(
+        Effect.gen(function* () {
+          yield* append({
+            type: "message",
+            message,
+            turnId,
+            stepId,
+            timing: { startedAt, endedAt: message.timestamp },
+            ...(result.details === undefined ? {} : { details: result.details }),
+            ...(credit === undefined ? {} : { credit }),
+          });
+          state.pending = state.pending.filter((pending) => pending.id !== call.id);
+          live.toolEnded(call.id);
+        }),
+      );
+      return message;
+    });
+
+  /**
+   * Runs the pending tool calls, logging each result as it arrives: in order,
+   * except that a run of calls whose tools may run together (`parallel`) runs
+   * at once, up to `parallelTools` of them. Before calls run, an event names
+   * them (`TOOLS_STARTED`), so a restart can tell a call that began from one
+   * that never did. Returns the results in call order.
+   */
+  const runTools = (stepId: string, interrupted: ReadonlyMap<string, string | undefined> = new Map(), offer?: Offer) =>
+    Effect.gen(function* () {
+      const together = new Set((yield* tools.list).flatMap((tool) => (tool.parallel === "safe" ? [tool.spec.name] : [])));
+      const joins = (call: ToolCall) => together.has(call.name) && !interrupted.has(call.id);
+      const order = new Map(state.pending.map((call, index) => [call.id, index]));
+      const results: ToolResultMessage[] = [];
+      while (state.pending.length > 0) {
+        // `cancel` aborts before it interrupts; start nothing new in between. A stopping agent suspends here.
+        if (signal.aborted) return yield* Effect.interrupt;
+        yield* boundary;
+        // The next call, and when it may run together with others, those after it that may too.
+        const [first, ...rest] = state.pending as [ToolCall, ...ToolCall[]];
+        const group = [first];
+        if (joins(first)) {
+          for (const call of rest) {
+            if (!joins(call) || group.length >= settings.parallelTools) break;
+            group.push(call);
+          }
+        }
+        const running = group.filter((call) => !interrupted.has(call.id));
+        if (running.length > 0) {
+          yield* unlessClosing;
+          yield* append({ type: "custom", kind: TOOLS_STARTED, data: { turnId, stepId, toolCallIds: running.map((call) => call.id) } });
+          for (const call of running) state.started.add(call.id);
+        }
+        // Every call named starts now: none waits for another to finish first.
+        yield* Effect.forEach(
+          group,
+          (call) =>
+            Effect.map(runCall(stepId, call, interrupted, offer), (message) => {
+              results.push(message);
+            }),
+          { concurrency: "unbounded", discard: true },
+        );
+      }
+      return results.sort((a, b) => (order.get(a.toolCallId) ?? 0) - (order.get(b.toolCallId) ?? 0));
+    });
+
+  /** Answers each pending call, in order, with `text(call)`, without running it; a call leaves `pending` once its answer is logged. */
+  const answerPending = (stepId: string | undefined, text: (call: ToolCall) => string) =>
+    Effect.gen(function* () {
+      const results: ToolResultMessage[] = [];
+      while (state.pending.length > 0) {
+        const call = state.pending[0]!;
+        const message = toolResult(call, text(call), yield* Clock.currentTimeMillis);
+        yield* Effect.uninterruptible(
+          Effect.gen(function* () {
+            yield* append({ type: "message", message, turnId, ...(stepId === undefined ? {} : { stepId }) });
+            state.pending = state.pending.slice(1);
+            live.toolEnded(call.id);
+          }),
+        );
+        results.push(message);
+      }
+      return results;
+    });
+  /** A response cut off at its output limit: its tool calls may be cut off too, so none runs, and each is answered for the model to make again. */
+  const answerTruncated = (stepId: string) => answerPending(stepId, () => TRUNCATED_CALL);
+
+  /**
+   * Places queued steers after the turn's last event; returns how many. Each
+   * one logged leaves the queue whatever happens next: a cancel waits for
+   * that, so a steer is never both in the log and still queued.
+   */
+  const placeSteers = Effect.uninterruptible(
+    Effect.gen(function* () {
+      const steers = yield* input.inbox.steers;
+      const logged: string[] = [];
+      yield* Effect.forEach(steers, (steer) => userMessage(steer, () => void logged.push(steer.requestId)), {
+        discard: true,
+      }).pipe(Effect.ensuring(Effect.suspend(() => (logged.length === 0 ? Effect.void : input.inbox.placed(logged)))));
+      return steers.length;
+    }),
+  );
+
+  /** Whether the turn takes another step, why by default, and the handlers that weighed in (`step-end`'s `decision`). */
+  const decide = (step: number, outcome: StepOutcome) =>
+    Effect.gen(function* () {
+      const steps: HandlerStep<StepOutcome, "continue" | "stop">[] = [];
+      // What the policy saw, which a handler may have rewritten; none, when a handler answered itself.
+      let why = settings.policy.decide(outcome).why;
+      const result = yield* hooks
+        .invoke(
+          AgentContinueHook,
+          { sessionId, turnId, step, message: outcome.message, results: outcome.results },
+          (final) =>
+            Effect.sync(() => {
+              const decided = settings.policy.decide(final);
+              why = decided.why;
+              return decided.result;
+            }),
+          { onStep: (heard) => void steps.push(heard) },
+        )
+        .pipe(Effect.mapError(hookError("AgentContinueHook")));
+      // A handler changed the decision by what it returned, or by what it passed on.
+      const handlers = inChainOrder(steps).map((heard) =>
+        creditOf(heard, [
+          ...(heard.next !== undefined && heard.next.input !== heard.input ? ["input"] : []),
+          ...(heard.output !== undefined && heard.next?.output !== undefined && heard.output !== heard.next.output
+            ? [`${heard.next.output} → ${heard.output}`]
+            : []),
+        ]),
+      );
+      return { result, why, ...(handlers.length === 0 ? {} : { handlers }) };
+    });
+
+  /**
+   * After a step's `step-end`: whether the turn ends. Steers queued meanwhile
+   * join here and keep it going, unless it is out of steps (then they stay
+   * queued and start the next turn).
+   */
+  const afterStep = (step: number, decision: "continue" | "stop") =>
+    Effect.gen(function* () {
+      if (step >= settings.maxSteps) return { reason: decision === "stop" ? "done" : "max-steps" } satisfies Ended;
+      const steered = yield* placeSteers;
+      return steered === 0 && decision === "stop" ? ({ reason: "done" } satisfies Ended) : undefined;
+    });
+
+  /**
+   * Steps numbered from `first` until the turn ends. A failed call asked
+   * again closes its step and waits; the step that asks again keeps the
+   * number, so retries take no steps from the turn.
+   */
+  const steps = (first: number) =>
+    Effect.gen(function* () {
+      const asking = yield* asked;
+      for (let step = first; ;) {
+        // A resumed turn can come here out of steps: a cut-off call counted as one.
+        if (step > settings.maxSteps) return { reason: "max-steps" } satisfies Ended;
+        yield* boundary;
+        const stepId = services.newId();
+        // Every span of the step's work carries both, so a trace narrows to a step by either.
+        const next = yield* services.trace("agent.step", oneStep(step, stepId, asking)).pipe(Effect.annotateSpans({ "step.id": stepId, "step.index": step }));
+        if (typeof next === "object" && "retryAt" in next) {
+          yield* waitUntil(next.retryAt);
+          continue;
+        }
+        if (next !== "next") return next;
+        step++;
+      }
+    });
+
+  /**
+   * One step: its request, the model's answer, and the tools it asked for. Says whether the turn goes on (`next`), asks
+   * again from `retryAt` (a failed call, in a step that keeps the number), or how it ended.
+   */
+  const oneStep = (step: number, stepId: string, asking: ModelInfo) =>
+    Effect.gen(function* () {
+      yield* append({ type: "step-start", turnId, stepId });
+      state.step = { id: stepId, model: asking };
+      const { request, model, offer } = yield* services.trace("agent.request", prepareRequest(stepId, asking));
+      state.step = { id: stepId, model };
+      const outcome = yield* services.trace(
+        "agent.model",
+        Effect.andThen(Effect.annotateCurrentSpan("llm.model", model.ref), callModel(stepId, request, model)),
+      );
+      if ("retry" in outcome) {
+        yield* append({ type: "step-end", turnId, stepId });
+        state.step = undefined;
+        return { retryAt: outcome.retry.at };
+      }
+      if ("ended" in outcome) return outcome.ended;
+      const results =
+        outcome.message.stopReason === "length" ? yield* answerTruncated(stepId) : yield* services.trace("agent.tools", runTools(stepId, new Map(), offer));
+      const decision = yield* decide(step, { message: outcome.message, results });
+      yield* append({ type: "step-end", turnId, stepId, decision });
+      state.step = undefined;
+      return (yield* afterStep(step, decision.result)) ?? ("next" as const);
+    });
+
+  /**
+   * Continues a turn a restart cut off, from where it stopped: a cut-off model
+   * call is logged as an interrupted attempt and asked again in a new step (a
+   * failed one being retried is asked again once its wait is over); cut-off
+   * tool calls run again when their tool is safe to repeat, and otherwise
+   * tell the model they were interrupted, while calls that had not started
+   * run; a turn that was closing (cancelled, or failed) closes the same way.
+   */
+  const resumed = (resume: TurnResume) =>
+    Effect.gen(function* () {
+      const { plan, restored, cancelling } = resume;
+      const at = plan.at;
+      state.lastId = plan.lastId;
+      state.usage = plan.usage;
+      if (plan.retry !== undefined) {
+        state.streak = { retries: plan.retry.attempts, overflowed: plan.retry.overflowed, shorten: plan.retry.overflow };
+      }
+      // What closing the turn needs, set before anything is written, so a write that fails below (a full disk) still
+      // closes it as it should: the cut-off step, and the calls it left without results.
+      if (at.kind === "tools" || at.kind === "model" || at.kind === "before-request" || (at.kind === "failed" && !at.closed)) {
+        state.step = { id: at.stepId, model: input.model };
+      }
+      if (at.kind === "tools") {
+        state.pending = [...at.pending];
+        for (const id of at.started) state.started.add(id);
+      }
+      yield* append({ type: "custom", kind: RESUMED, data: { turnId } });
+      // One that ended places nothing more: its callers were answered as it ended.
+      if (resume.closing === undefined) for (const prompt of input.prompts) yield* userMessage(prompt);
+      const stepId = at.kind === "between" ? undefined : at.stepId;
+      const output = (toolCallId: string) => restored?.output.find((entry) => entry.toolCallId === toolCallId)?.output;
+      // What the cut-off call had produced, when the output file got that far.
+      const cutStep = restored?.step !== undefined && restored.step.stepId === stepId ? restored.step : undefined;
+      const now = yield* Clock.currentTimeMillis;
+      /** The model the cut-off call asked: the turn's, or, for one closing as cancelled with none, the one its request named, by name alone. */
+      const cutModel = (): ModelIdentity => {
+        if (input.model !== undefined) return input.model;
+        const ref = at.kind === "model" ? (at.model ?? "") : "";
+        const slash = ref.indexOf("/");
+        return { api: "", provider: ref.slice(0, Math.max(slash, 0)), id: ref.slice(slash + 1) };
+      };
+      const cutOff = () =>
+        partialMessage(cutStep?.content ?? [], cutModel(), cancelling ? "aborted" : "error", cancelling ? "Cancelled" : INTERRUPTED_CALL, now);
+      const timing = () => ({ startedAt: cutStep?.startedAt ?? now, endedAt: now });
+      /** The next step, once a retry's wait (cut short by the restart) is over. */
+      const again = () => Effect.andThen(plan.retry === undefined ? Effect.void : waitUntil(plan.retry.at), steps(plan.steps + 1));
+
+      if (at.kind === "failed") {
+        const aborted = at.attempt.stopReason === "aborted";
+        return { reason: aborted ? "cancelled" : "error", error: at.attempt.errorMessage ?? (aborted ? "Aborted" : "Model error") } satisfies Ended;
+      }
+      const closing = resume.closing ?? (cancelling ? ({ reason: "cancelled" } satisfies Ended) : undefined);
+      if (closing !== undefined) {
+        // The closing sequence logs the cut-off call and answers the pending tool calls (set above).
+        if (at.kind === "model" && !at.logged) yield* append({ type: "attempt", turnId, stepId: at.stepId, message: cutOff(), timing: timing() });
+        return closing;
+      }
+      switch (at.kind) {
+        case "model":
+          if (!at.logged) {
+            yield* append({
+              type: "attempt",
+              turnId,
+              stepId: at.stepId,
+              message: cutOff(),
+              timing: timing(),
+              retry: { reason: "restart", attempt: 1, at: now },
+            });
+          }
+          yield* append({ type: "step-end", turnId, stepId: at.stepId });
+          state.step = undefined;
+          return yield* again();
+        case "before-request":
+          yield* append({ type: "step-end", turnId, stepId: at.stepId });
+          state.step = undefined;
+          return yield* again();
+        case "tools": {
+          const listed = yield* tools.list;
+          const repeatable = new Set(listed.filter((tool) => tool.replay === "safe").map((tool) => tool.spec.name));
+          // A call that may have begun is run again only when that is safe; one that had not begun runs now.
+          const interrupted = new Map(
+            at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
+          );
+          // Held to what the step's request offered, as logged, as a call made before the restart was: a tool a
+          // profile or another handler took out is not there for it now either. A log from before the `nested` tools
+          // offered were logged has every one listed now.
+          const logged = requestState(yield* branchNow);
+          const declared = (logged.tools ?? []).map((spec) => spec.name);
+          const nested = logged.nested ?? listed.filter((tool) => tool.nested === true).map((tool) => tool.spec.name);
+          const resumedOffer: Offer = { declared, offered: [...declared, ...nested] };
+          // The rest of the cut-off step, traced as the step it is.
+          const ended = yield* services
+            .trace(
+              "agent.step",
+              Effect.andThen(
+                Effect.annotateCurrentSpan("step.resumed", true),
+                Effect.gen(function* () {
+                  const ran =
+                    at.message.stopReason === "length"
+                      ? yield* answerTruncated(at.stepId)
+                      : yield* services.trace("agent.tools", runTools(at.stepId, interrupted, resumedOffer));
+                  const decision = yield* decide(plan.steps, { message: at.message, results: [...at.results, ...ran] });
+                  yield* append({ type: "step-end", turnId, stepId: at.stepId, decision });
+                  state.step = undefined;
+                  return yield* afterStep(plan.steps, decision.result);
+                }),
+              ),
+            )
+            .pipe(Effect.annotateSpans({ "step.id": at.stepId, "step.index": plan.steps }));
+          return ended ?? (yield* steps(plan.steps + 1));
+        }
+        case "between": {
+          // Prompts already placed after the last step are what the model answers next.
+          if (at.outcome === undefined || at.steered) return yield* again();
+          // The decision its step-end logged is what the turn acts on; one logged before decisions were is made now.
+          const decision = at.decision ?? (yield* decide(plan.steps, at.outcome)).result;
+          return (yield* afterStep(plan.steps, decision)) ?? (yield* steps(plan.steps + 1));
+        }
+      }
+    });
+
+  /**
+   * Whether the turn stopped because the agent or the core is stopping, rather
+   * than ending: then it is left as it is in the log, to resume when the agent
+   * starts again. Interrupted otherwise, it was cancelled.
+   */
+  const leftOpen = (exit: Exit.Exit<Ended, AgentError>): Effect.Effect<boolean> => {
+    if (Exit.isSuccess(exit)) return Effect.succeed(false);
+    if (input.suspended() || closedCore(exit.cause)) return Effect.succeed(true);
+    return Cause.hasInterruptsOnly(exit.cause) ? Effect.succeed(false) : coreClosing;
+  };
+  /** Set by `finish`: the turn was left open. */
+  let open = false;
+  /** Set by `close`: the turn's `turn-end` is in the log. */
+  let closed = false;
+  /** Set by `finish`: the turn ended, but not in the log (`TurnInput.unclosed`). */
+  let unclosed = false;
+
+  /**
+   * Closes the turn whatever happened, unless it is left open: the partial
+   * output of an interrupted model call becomes an `attempt`, unanswered tool
+   * calls get error results so the next request is still valid, then
+   * `step-end` and `turn-end`. When that fails, the turn is left open in the
+   * log, for the agent to close later (`TurnInput.unclosed`).
+   */
+  const finish = (exit: Exit.Exit<Ended, AgentError>) =>
+    Effect.gen(function* () {
+      open = yield* leftOpen(exit);
+      if (open) return;
+      const ended: Ended = Exit.isSuccess(exit)
+        ? exit.value
+        : Cause.hasInterruptsOnly(exit.cause)
+          ? { reason: "cancelled" }
+          : { reason: "error", error: causeMessage(exit.cause) };
+      yield* close(ended).pipe(
+        Effect.catch((error) =>
+          closed
+            ? Effect.logWarning(`agent: could not check closed turn ${turnId} in session ${sessionId}: ${error.message}`)
+            : Effect.andThen(
+                Effect.sync(() => {
+                  unclosed = true;
+                  input.unclosed?.(ended);
+                }),
+                Effect.logWarning(
+                  `agent: could not close turn ${turnId} in session ${sessionId}: ${error.message}; it closes when the session is next taken up`,
+                ),
+              ),
+        ),
+      );
+    }).pipe(
+      Effect.ensuring(
+        Effect.suspend(() =>
+          open || unclosed
+            ? Effect.void
+            : events.publish(TurnEnded, {
+                sessionId,
+                turnId,
+                usage: state.usage,
+                reason: Exit.isSuccess(exit) ? exit.value.reason : Cause.hasInterruptsOnly(exit.cause) ? "cancelled" : "error",
+              }),
+        ),
+      ),
+    );
+
+  /** The closing sequence `finish` logs for a turn that ended so. */
+  const close = (ended: Ended) =>
+    Effect.gen(function* () {
+      const cancelled = ended.reason === "cancelled";
+      const step = state.step;
+      // Only a call in flight has output so far, and its step a model.
+      if (step?.model !== undefined && state.partial !== undefined) {
+        const endedAt = yield* Clock.currentTimeMillis;
+        const message = state.partial.message(step.model, cancelled ? "aborted" : "error", cancelled ? "Cancelled" : (ended.error ?? "Turn failed"), endedAt);
+        const timing = { startedAt: state.partialStartedAt, endedAt };
+        // What the user read of a reply they stopped is the model's to see next; anything else is kept for inspection.
+        const kept = cancelled && settings.keepCancelled ? stopped(message) : undefined;
+        yield* append(
+          kept === undefined
+            ? { type: "attempt", turnId, stepId: step.id, message, timing }
+            : { type: "message", message: kept, turnId, stepId: step.id, timing },
+        );
+        state.partial = undefined;
+      }
+      const failed = `the turn failed (${ended.error ?? "unknown error"})`;
+      yield* answerPending(step?.id, (call) =>
+        cancelled
+          ? "Tool execution was cancelled."
+          : state.started.has(call.id)
+            ? `Tool execution was stopped: ${failed}. It may or may not have finished; check before running it again.`
+            : `Tool was not executed: ${failed}.`,
+      );
+      if (step !== undefined) yield* append({ type: "step-end", turnId, stepId: step.id });
+      yield* append({ type: "turn-end", turnId, reason: ended.reason, ...(ended.error === undefined ? {} : { error: ended.error }) });
+      closed = true;
+      if (state.branch !== undefined) input.kept?.keep(state.branch);
+      // A closed turn has answered every call it made, or the next request would be malformed.
+      if (yield* Verify) {
+        const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! });
+        assert(unansweredCalls(branch) === undefined, `turn ${turnId} of session ${sessionId} closed with tool calls unanswered`);
+      }
+    });
+
+  return Effect.gen(function* () {
+    const resume = input.resume;
+    if (resume === undefined) {
+      yield* closeBranch;
+      yield* append({
+        type: "turn-start",
+        turnId,
+        model: (yield* asked).ref,
+        ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+        ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
+      });
+    }
+    yield* events.publish(TurnStarted, { sessionId, turnId, requestIds: resume === undefined ? input.prompts.map((prompt) => prompt.requestId) : [] });
+    const body =
+      resume !== undefined
+        ? resumed(resume)
+        : Effect.gen(function* () {
+            for (const prompt of input.prompts) yield* userMessage(prompt);
+            const first = input.prompts[0];
+            const title = input.title === undefined && first !== undefined ? titleFrom(first.content) : undefined;
+            if (title !== undefined) yield* append({ type: "title", title });
+            return yield* steps(1);
+          });
+    return yield* body.pipe(
+      Effect.onExit(finish),
+      Effect.map((ended): TurnOutcome => ended.reason),
+      Effect.catchCause((cause) => (open ? Effect.succeed("suspended" as const) : Effect.failCause(cause))),
+    );
+  }).pipe(
+    (turn) => services.trace("agent.turn", Effect.andThen(Effect.annotateCurrentSpan("turn.resumed", input.resume !== undefined), turn)),
+    // Every span of its work, the plugins' included, says whose turn it was.
+    Effect.annotateSpans({ "session.id": sessionId, "turn.id": turnId }),
+  );
+}

@@ -9,6 +9,8 @@ export interface KnownPlugin {
   readonly source: PluginSource;
   /** A local plugin whose id a bundled plugin also has; the local one loads. */
   readonly shadows?: boolean;
+  /** Folders of things other plugins read, by kind, as its package names them. */
+  readonly resources?: Readonly<Record<string, readonly string[]>>;
 }
 
 /** Runtime capabilities the core supplies to every plugin; not dependencies between plugins. */
@@ -192,7 +194,7 @@ export function catalog({
   pinned,
 }: CatalogInput): PluginInfo[] {
   const running = new Map(snapshots.map((snapshot) => [snapshot.id, snapshot]));
-  return known.map(({ plugin, source, shadows }) => {
+  return known.map(({ plugin, source, shadows, resources }) => {
     const snapshot = running.get(plugin.id);
     const needs = resolved.locked.get(plugin.id);
     const locked = pinned[plugin.id] ?? (needs === undefined ? undefined : `Needed by ${needs}`);
@@ -227,6 +229,9 @@ export function catalog({
       ...(locked === undefined ? {} : { locked }),
       provides: plugin.provides.map((tag) => tag.key),
       requires: plugin.requires.map((tag) => tag.key).filter((key) => !builtins.has(key)),
+      ...(plugin.uses === undefined ? {} : { uses: plugin.uses }),
+      ...(resources === undefined ? {} : { resources }),
+      ...(plugin.implements === undefined ? {} : { implements: plugin.implements }),
       ...(snapshot === undefined ? {} : { state: snapshot.state }),
       ...(snapshot?.fault === undefined ? {} : { fault: snapshot.fault }),
       ...(haltedBy === undefined ? {} : { haltedBy }),

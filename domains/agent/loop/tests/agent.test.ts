@@ -16,8 +16,8 @@ import type { ToolResultMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions from "@lemma/sessions-files";
-import { readJournals } from "../src/state.ts";
-import { BRANCHED_CALL, unansweredCalls } from "../src/turn.ts";
+import { readJournals } from "@lemma/agent/kit";
+import { BRANCHED_CALL, unansweredCalls } from "@lemma/agent/kit";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
 import type { AgentSetup } from "./fakes.ts";
 
@@ -332,6 +332,63 @@ describe("agent", () => {
     );
   });
 
+  it("ends the turn in error, naming the plugin, when a request handler hands on a request of the wrong shape", async () => {
+    // As a plugin written in JavaScript might: TypeScript never saw it.
+    const sloppy = definePlugin({
+      id: "sloppy",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) => owner.on(AgentRequestHook, (draft, next) => next({ ...draft, sections: "be brief" as never }))),
+      ),
+    });
+    await withAgent({ plugins: [sloppy], scripts: [reply("never sent")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const failed = yield* Effect.flip(Effect.flatMap(Agent, (a) => a.prompt(id, text("go"))));
+        expect(failed).toMatchObject({ reason: "Hook" });
+        expect(failed.message).toContain('plugin "sloppy"');
+        expect(failed.message).toContain("sections must be an array");
+        expect(requests).toEqual([]);
+        const ended = (yield* log(id)).find((event) => event.data.type === "turn-end")!.data;
+        expect(ended).toMatchObject({ reason: "error", error: failed.message });
+      }),
+    );
+  });
+
+  it("logs the plugins' choices a prompt carries with its turn, and hands them to its sections and request handlers", async () => {
+    const seen: unknown[] = [];
+    const watcher = definePlugin({
+      id: "watcher",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          yield* owner.add(PromptSections, { id: "watcher", text: (request) => void seen.push(["section", request.plugins]) });
+          yield* owner.on(
+            AgentRequestHook,
+            (draft, next) =>
+              Effect.andThen(
+                Effect.sync(() => seen.push(["request", draft.plugins])),
+                next(draft),
+              ),
+            {
+              phase: "select",
+            },
+          );
+        }),
+      ),
+    });
+    await withAgent({ plugins: [watcher], scripts: [reply("ok")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go"), { plugins: { "agent.profiles": "writing" } }));
+        expect(ofType(yield* log(id), "turn-start")[0]).toMatchObject({ plugins: { "agent.profiles": "writing" } });
+        expect(seen).toEqual([
+          ["section", { "agent.profiles": "writing" }],
+          ["request", { "agent.profiles": "writing" }],
+        ]);
+      }),
+    );
+  });
+
   it("refuses a call to a tool the request did not offer", async () => {
     const readOnly = definePlugin({
       id: "read-only",
@@ -620,7 +677,7 @@ describe("agent", () => {
     );
   });
 
-  it("cancels mid-stream: logs the partial output as an attempt and ends the turn cancelled", async () => {
+  it("cancels mid-stream: logs what the reply had written, which the model sees next, and ends the turn cancelled", async () => {
     await withAgent({ scripts: [hang("partial "), reply("after")] }, ({ requests, rec }) =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
@@ -635,19 +692,45 @@ describe("agent", () => {
         yield* Fiber.join(turn);
         expect(yield* a.busy(id)).toBe(false);
         const events = yield* log(id);
-        expect(types(events).slice(-3)).toEqual(["attempt", "step-end", "turn-end"]);
-        expect(ofType(events, "attempt")[0]!.message).toMatchObject({ stopReason: "aborted", content: text("partial ") });
+        expect(types(events).slice(-3)).toEqual(["message", "step-end", "turn-end"]);
+        // The log says it was stopped.
+        expect(ofType(events, "message").at(-1)!.message).toMatchObject({ role: "assistant", stopReason: "aborted", content: text("partial ") });
         expect(ofType(events, "turn-end")[0]!.reason).toBe("cancelled");
         yield* waitFor(
           Effect.sync(() => rec.ended.map((ended) => ended.reason)),
           (reasons) => reasons[0] === "cancelled",
         );
-        // The attempt is not model-visible: the next request sees only the two user prompts.
+        // The model sees what the user read of it, as a reply that ended there.
         yield* a.prompt(id, text("again"));
-        expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "user"]);
+        expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+        expect(requests[1]!.messages[1]).toMatchObject({ stopReason: "stop", content: text("partial ") });
         expectLogInvariant(yield* log(id), id, requests);
       }),
     );
+  });
+
+  it("keeps a stopped reply for inspection only with keepCancelled off, and with no text to keep", async () => {
+    for (const [config, script] of [
+      [{ keepCancelled: false }, hang("partial ")],
+      [{}, hang("")],
+    ] as const) {
+      await withAgent({ config, scripts: [script, reply("after")] }, ({ requests, rec }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          const a = yield* Agent;
+          const turn = yield* Effect.forkChild(a.prompt(id, text("go")));
+          yield* waitFor(
+            Effect.sync(() => rec.deltas.length + requests.length),
+            (n) => n >= 2,
+          );
+          yield* a.cancel(id);
+          yield* Fiber.join(turn);
+          expect(types(yield* log(id)).slice(-3)).toEqual(["attempt", "step-end", "turn-end"]);
+          yield* a.prompt(id, text("again"));
+          expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "user"]);
+        }),
+      );
+    }
   });
 
   it("cancels a turn whatever becomes of the call that asked: one interrupted while the journal is written still stops the turn", async () => {
@@ -1277,7 +1360,7 @@ describe("agent", () => {
           expect(requests[0]).toMatchObject({ model: "fake/m2", thinking: "high" });
           expect(requests[0]!.system!.startsWith("Custom base.\n\n<environment>")).toBe(true);
           expect(requests[0]!.system).toContain(`Lemma session: ${id}`);
-          expect(requests[0]!.system).toMatch(/^You are .*fake\/m2\)?, running in Lemma, a coding-agent harness\./m);
+          expect(requests[0]!.system).toMatch(/^You are .*fake\/m2\)?, running in Lemma, an agent harness\./m);
           expect(requests[0]!.system).not.toContain("Lemma CLI:");
         }),
     );

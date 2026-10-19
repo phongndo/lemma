@@ -1,9 +1,10 @@
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Effect } from "effect";
+import { Effect, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { makeCore, Registries } from "@lemma/core";
+import { Events, makeCore, Registries } from "@lemma/core";
+import { Notice } from "@lemma/contracts";
 import { PromptSections } from "@lemma/agent";
 import type { SectionRequest } from "@lemma/agent";
 import { pathsPlugin } from "@lemma/contracts/testing";
@@ -77,5 +78,34 @@ describe("project context", () => {
     expect(text).toContain(`<project_instructions path="${path.join(dir, "repo/AGENTS.md")}">\nUse tabs.\n</project_instructions>`);
     // No instructions where it is asked: no section.
     expect(empty).toBeUndefined();
+  });
+
+  it("tells a session in another project with config of its own that it does not apply to this host, once", async () => {
+    await put("other/.lemma/config.jsonc", "{}");
+    const paths = pathsPlugin(path.join(dir, "home"), { cwd: path.join(dir, "started") });
+    const request: SectionRequest = { sessionId: "s", turnId: "t", cwd: path.join(dir, "other"), model: "p/m", tools: [], branch: [] };
+    const heard = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths, projectContext]);
+          return yield* core.run(
+            Effect.gen(function* () {
+              const notices: string[] = [];
+              yield* Effect.forkScoped(Stream.runForEach((yield* Events).stream(Notice), (notice) => Effect.sync(() => notices.push(notice.message))));
+              yield* Effect.yieldNow;
+              const [section] = yield* Effect.flatMap(Registries, (registries) => registries.items(PromptSections));
+              const write = (cwd: string) => Effect.promise(async () => section!.item.text({ ...request, cwd }) as Promise<string | undefined>);
+              yield* write(request.cwd);
+              yield* write(request.cwd);
+              yield* write(path.join(dir, "started"));
+              yield* Effect.yieldNow;
+              return notices;
+            }),
+          );
+        }),
+      ),
+    );
+    expect(heard).toHaveLength(1);
+    expect(heard[0]).toContain(`${path.join(dir, "other")}/.lemma has config or plugins of its own`);
   });
 });

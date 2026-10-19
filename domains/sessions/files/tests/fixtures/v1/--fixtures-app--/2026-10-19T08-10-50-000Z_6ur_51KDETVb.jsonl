@@ -1,0 +1,16 @@
+{"type":"session","version":1,"id":"6ur_51KDETVb","cwd":"/fixtures/first","createdAt":1792397450000}
+{"type":"marks","cwd":"/fixtures/app","at":1792397450009}
+{"seq":1,"id":"vgvBRqwy","parent":null,"at":1792397450020,"data":{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Hello"}],"timestamp":1},"requestId":"fixture-1"}}
+{"seq":2,"id":"VwG9Kiyd","parent":"vgvBRqwy","at":1792397450028,"data":{"type":"title","title":"Hello"}}
+{"seq":3,"id":"PAIsQ453","parent":"VwG9Kiyd","at":1792397450031,"data":{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"Hi."}],"api":"openai-completions","provider":"fixture","model":"fixture-model","usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"totalTokens":2,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"total":0}},"stopReason":"stop","timestamp":2}}}
+{"type":"marks","pinned":true,"at":1792397450036}
+{"seq":4,"id":"pSFwaAPY","parent":"PAIsQ453","at":1792397450040,"data":{"type":"message","message":{"role":"user","content":[{"type":"text","text":"Again"}],"timestamp":3},"requestId":"fixture-2"}}
+{"seq":5,"id":"Yrz4oXQq","parent":"pSFwaAPY","at":1792397450043,"data":{"type":"compaction","summary":"The user said hello.","firstKeptId":"pSFwaAPY","tokensBefore":10,"source":"fixture"}}
+{"seq":6,"id":"ZK98yJnJ","parent":"Yrz4oXQq","at":1792397450046,"data":{"type":"turn-start","turnId":"t1","model":"fixture/fixture-model"}}
+{"seq":7,"id":"s5M6qTTl","parent":"ZK98yJnJ","at":1792397450049,"data":{"type":"step-start","turnId":"t1","stepId":"s1"}}
+{"seq":8,"id":"Wu14Af69","parent":"s5M6qTTl","at":1792397450051,"data":{"type":"request","turnId":"t1","stepId":"s1","model":"fixture/fixture-model","composition":"fixture","system":"You are a fixture.","tools":[],"contributions":[{"source":"agent.loop","kind":"system","label":"agent.base","chars":18}]}}
+{"seq":9,"id":"nbkFKcNN","parent":"Wu14Af69","at":1792397450054,"data":{"type":"step-end","turnId":"t1","stepId":"s1"}}
+{"seq":10,"id":"LMuX_AV6","parent":"nbkFKcNN","at":1792397450057,"data":{"type":"turn-end","turnId":"t1","reason":"done"}}
+{"type":"checkout","leaf":"vgvBRqwy","at":1792397450060}
+{"seq":11,"id":"ZwZEBAXl","parent":"vgvBRqwy","at":1792397450062,"data":{"type":"custom","kind":"fixture.note","data":{"branch":2}}}
+{"type":"marks","archived":true,"pinned":false,"at":1792397450065}

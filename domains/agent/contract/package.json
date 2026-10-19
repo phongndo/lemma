@@ -6,13 +6,16 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./prompt": "./src/prompt.ts"
+    "./prompt": "./src/prompt.ts",
+    "./testing": "./src/testing.ts",
+    "./kit": "./src/kit/index.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/cli": "workspace:*",
     "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",

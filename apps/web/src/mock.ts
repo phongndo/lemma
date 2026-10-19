@@ -1,7 +1,7 @@
 import type { ConnectionStatus, Host } from "@lemma/client";
 import { Effect, Schema } from "effect";
 import { HOST_API, HostError, configValues, describeConfig, providerOf, secret, wireCodec, withdrawnFrom } from "@lemma/contracts";
-import { AgentChannels } from "@lemma/agent";
+import { AgentChannels, ProfileChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
@@ -250,6 +250,13 @@ const MOCK_SKILLS = [
 
 const MOCK_COMMANDS = [
   {
+    id: "workspace.pull-request",
+    title: "Open pull request…",
+    category: "Git",
+    description: "Open a pull request from the current branch",
+    source: "workspace.commands",
+  },
+  {
     id: "workspace.new-branch",
     title: "Create branch…",
     category: "Git",
@@ -482,6 +489,7 @@ export const createMockHost = (): Host => {
     },
     "mcp.servers": { provides: ["lemma/Mcp"], requires: ["lemma/Paths"] },
     "context.compaction": { requires: ["lemma/Sessions", "lemma/Llm"] },
+    "agent.profiles": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["profile"] }] },
     "context.project": { requires: ["lemma/Paths"], contributes: [{ name: "lemma/agent.sections", items: 1, keys: ["project-context"] }] },
     "workspace.local": { provides: ["lemma/Workspace"], requires: ["lemma/Paths"] },
     "workspace.search-fff": { contributes: [{ name: "lemma/file-searchers", items: 1, keys: ["workspace.search-fff"] }] },
@@ -1314,6 +1322,14 @@ export const createMockHost = (): Host => {
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
   const served: Served[] = [
+    // The bundled profiles, as `agent.profiles` lists them for any directory.
+    serveCall("agent.profiles", ProfileChannels.list, async () => ({
+      profiles: [
+        { name: "coding", description: "A coding agent: reads, edits, and runs code in the project", source: "bundled" as const },
+        { name: "general", description: "A general assistant: answers, research, writing, and files, with every tool", source: "bundled" as const },
+      ],
+      default: "coding",
+    })),
     serveCall("sessions.files", SessionChannels.list, async ({ cwd }) =>
       [...sessions.values()]
         .map((session) => session.info)
@@ -1385,6 +1401,19 @@ export const createMockHost = (): Host => {
       session.info = { ...session.info, cwd };
       sessionChanges.publish({ type: "session-changed", info: session.info });
       return session.info;
+    }),
+    // The branch up to the event, copied into a new session in the same directory, as the host does.
+    serveCall("sessions.files", SessionChannels.fork, async ({ sessionId, eventId }) => {
+      const source = sessionOf(sessionId);
+      if (!source.events.some((event) => event.id === eventId)) throw notFound(eventId);
+      const info = create(source.info.cwd);
+      const events = branchOf(source.events, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
+      const title = events.flatMap((event) => (event.data.type === "title" ? [event.data.title] : [])).at(-1);
+      const forked = sessionOf(info.id);
+      forked.events = events;
+      forked.info = { ...info, leaf: eventId, lastSeq: events.length, ...(title === undefined ? {} : { title }) };
+      sessionChanges.publish({ type: "session-changed", info: forked.info });
+      return forked.info;
     }),
     serveCall("sessions.files", SessionChannels.delete, async ({ sessionId }) => {
       sessionOf(sessionId);
@@ -1673,6 +1702,27 @@ export const createMockHost = (): Host => {
             await sleep(250);
             currentBranch = answer.value.replace(/^origin\//, "");
             return { message: `Switched to ${currentBranch}` };
+          }
+          case "workspace.pull-request": {
+            // A form: its fields as a plugin's settings are described (`describeConfig`).
+            const answer = await ask({
+              type: "interaction",
+              request: {
+                type: "form",
+                id: id("i"),
+                title: "Open a pull request",
+                detail: `From ${currentBranch}`,
+                fields: [
+                  { key: "title", title: "Title", type: "string", optional: false },
+                  { key: "base", title: "Base", type: "enum", options: ["main", "develop"], optional: true, default: "main" },
+                  { key: "draft", title: "Draft", type: "boolean", optional: true, default: false },
+                ],
+              },
+            });
+            if (answer?.type !== "form") throw cancelled();
+            return {
+              message: `Opened "${String(answer.value["title"])}" into ${String(answer.value["base"] ?? "main")}${answer.value["draft"] === true ? " as a draft" : ""}`,
+            };
           }
           case "workspace.new-branch": {
             const answer = await ask({ type: "interaction", request: { type: "ask", id: id("i"), title: "New branch name", placeholder: "feature/name" } });

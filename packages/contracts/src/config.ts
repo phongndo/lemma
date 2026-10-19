@@ -103,14 +103,30 @@ function properties(schema: Schema.Top): { key: string; type: SchemaAST.AST; opt
     });
 }
 
-/** What the plugin decodes an empty config to, encoded again: its defaults. Undefined when `{}` is not a valid config. */
-const defaultsOf = (schema: Schema.Codec<any, any>): Record<string, unknown> | undefined => {
+/** What `schema` decodes an empty object to, encoded again. Undefined when `{}` does not decode. */
+const emptyDecoded = (schema: Schema.Codec<any, any>): Record<string, unknown> | undefined => {
   const decoded = Schema.decodeUnknownResult(schema)({});
   if (Result.isFailure(decoded)) return undefined;
   const encoded = Schema.encodeResult(schema)(decoded.success);
   return Result.isSuccess(encoded) && typeof encoded.success === "object" && encoded.success !== null
     ? (encoded.success as Record<string, unknown>)
     : undefined;
+};
+
+/**
+ * The plugin's defaults: what it decodes an empty config to, encoded again. A struct with a field that has none (a
+ * form's required field) gives each other field's own.
+ */
+const defaultsOf = (schema: Schema.Codec<any, any>): Record<string, unknown> | undefined => {
+  const whole = emptyDecoded(schema);
+  const fields = (schema as { readonly fields?: Schema.Struct.Fields }).fields;
+  if (whole !== undefined || fields === undefined) return whole;
+  return Object.fromEntries(
+    Object.entries(fields).flatMap(([key, field]) => {
+      const own = emptyDecoded(Schema.Struct({ [key]: field }) as unknown as Schema.Codec<any, any>);
+      return own !== undefined && key in own ? [[key, own[key]]] : [];
+    }),
+  );
 };
 
 /** The form for a config Schema: one field per top-level property. Empty for a Schema that is not a struct. */
@@ -218,4 +234,44 @@ export function parseConfigValue(field: ConfigField | undefined, text: string): 
     case "other":
       return json() ?? { error: `${field.key} takes JSON` };
   }
+}
+
+/** Why `value` is not of `field`'s type, or nothing. */
+const fieldProblem = (field: ConfigField, value: unknown): string | undefined => {
+  switch (field.type) {
+    case "string":
+      return typeof value === "string" ? undefined : `${field.key} must be text`;
+    case "number":
+      return typeof value === "number" && Number.isFinite(value) ? undefined : `${field.key} must be a number`;
+    case "integer":
+      return Number.isInteger(value) ? undefined : `${field.key} must be a whole number`;
+    case "boolean":
+      return typeof value === "boolean" ? undefined : `${field.key} must be true or false`;
+    case "enum":
+      return typeof value === "string" && field.options?.includes(value) ? undefined : `${field.key} must be one of ${field.options?.join(", ")}`;
+    case "strings":
+      return Array.isArray(value) && value.every((item) => typeof item === "string") ? undefined : `${field.key} must be a list of text`;
+    case "other":
+      return undefined;
+  }
+};
+
+/**
+ * A `form` question's answer from what was given for it (an object, as `lemma answer` takes one in JSON): each value
+ * of its field's type, a string read as `parseConfigValue` reads typed text, and every field the form needs there.
+ */
+export function formValues(fields: readonly ConfigField[], given: unknown): { readonly value: Record<string, unknown> } | { readonly error: string } {
+  if (typeof given !== "object" || given === null || Array.isArray(given)) return { error: "A form is answered with an object of its fields' values" };
+  const value: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(given)) {
+    const field = fields.find((candidate) => candidate.key === key);
+    if (field === undefined) return { error: `${key} is not one of its fields (${fields.map((candidate) => candidate.key).join(", ")})` };
+    const read = typeof raw === "string" && field.type !== "string" ? parseConfigValue(field, raw) : { value: raw };
+    if ("error" in read) return read;
+    const problem = fieldProblem(field, read.value);
+    if (problem !== undefined) return { error: problem };
+    value[key] = read.value;
+  }
+  const missing = fields.filter((field) => !field.optional && !(field.key in value));
+  return missing.length === 0 ? { value } : { error: `It needs ${missing.map((field) => field.key).join(", ")}` };
 }

@@ -2,10 +2,10 @@ import { isDeepStrictEqual } from "node:util";
 import { Clock, Data, Effect, Stream } from "effect";
 import { inChainOrder, Notice } from "@lemma/contracts";
 import { AgentInputHook, AgentRequestHook } from "@lemma/agent";
-import { CompactionError, CompactionHook } from "@lemma/context";
+import { CompactionError, CompactionHook, CONTEXT_CONTRACT } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Llm, LlmRequest } from "@lemma/llm";
-import { modelView, SessionRemoved } from "@lemma/sessions";
+import { modelEntries, modelView, SessionRemoved } from "@lemma/sessions";
 import { declaredTools } from "@lemma/tools";
 import type { PromptContent, RequestDraft } from "@lemma/agent";
 import type { ModelInfo, StreamEvent } from "@lemma/llm";
@@ -56,6 +56,7 @@ export const requestChars = (draft: Pick<RequestDraft, "sections" | "tools">): n
  */
 export default definePlugin({
   id: "context.compaction",
+  implements: [CONTEXT_CONTRACT],
   version: "0.1.0",
   config: Config,
   requires: { llm: Llm },
@@ -109,8 +110,11 @@ export default definePlugin({
         if (kept === undefined) return { kind: "skip", reason: `no event at ${asked.firstKept} to keep from` } as const;
         // A handler may have moved the cut (`next`): never between a tool call and its result, nor outside the view.
         if (!validCut(asked.branch, asked.firstKept)) return yield* new SummaryFailed({ message: `the history cannot be kept from event ${asked.firstKept}` });
-        const { start } = modelView(asked.branch);
-        const older = asked.branch.slice(start, asked.firstKept).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
+        // What the model saw before the cut, in the order it was logged.
+        const older = modelEntries(asked.branch)
+          .filter((entry) => entry.summary !== true && entry.index < asked.firstKept)
+          .sort((a, b) => a.index - b.index)
+          .map((entry) => entry.message);
         const writer = yield* llm.model(config.model ?? asked.model);
         // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
         const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));

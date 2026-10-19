@@ -52,6 +52,34 @@ describe("plugin-owned hooks", () => {
     );
   });
 
+  test("a hook's check refuses what a handler hands on or returns, naming the handler's plugin", async () => {
+    const checked = Hook.make<number, number, string>("test/checked", {
+      check: {
+        input: (value) => (Number.isInteger(value) ? undefined : "expected a whole number"),
+        output: (value) => (typeof value === "number" ? undefined : "expected a number"),
+      },
+    });
+    const on = (id: string, handler: Handler<number, number, string, PluginContext | Hooks>) =>
+      definePlugin({ id, layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (owner) => owner.on(checked, handler))) });
+    const call = (value: number) => Effect.flatMap(Hooks, (hooks) => hooks.invoke(checked, value, (input) => Effect.succeed(input + 1)));
+    await run(
+      Effect.gen(function* () {
+        const fine = yield* makeCore([on("fine", (input, next) => next(input * 2))]);
+        expect(yield* fine.run(call(2))).toBe(5);
+        // The caller's own input and the terminal's result are not checked: only handlers.
+        expect(yield* fine.run(call(2.5))).toBe(6);
+
+        const handsOn = yield* makeCore([on("halves", (input, next) => next(input / 3))]);
+        const refusedInput = failure(yield* Effect.exit(handsOn.run(call(2))));
+        expect(refusedInput).toMatchObject({ _tag: "HookError", reason: "InvalidInput", pluginId: "halves" });
+        expect((refusedInput as { message: string }).message).toContain("expected a whole number");
+
+        const returns = yield* makeCore([on("stringly", () => Effect.succeed("7" as unknown as number))]);
+        expect(failure(yield* Effect.exit(returns.run(call(2))))).toMatchObject({ _tag: "HookError", reason: "InvalidOutput", pluginId: "stringly" });
+      }),
+    );
+  });
+
   test("short circuit skips downstream handlers and the terminal", async () => {
     let called = false;
     await run(

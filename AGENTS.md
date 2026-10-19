@@ -1,6 +1,6 @@
 # Lemma
 
-Lemma is a coding-agent harness in which every part, including the agent loop
+Lemma is an agent harness in which every part, including the agent loop
 and the web app's views, is a plugin that can be turned off or replaced by id.
 The runtime is the API they are written against, provided by the host and the
 web app. The bundled plugins are defaults on the same footing as a user's
@@ -31,7 +31,9 @@ Use:
 - Offer an extension point in one of the five shapes ([Writing
   plugins](docs/plugins.md#the-five-shapes)): what plugins add is a registry or a
   slot in the domain's contract, not a service method. Name it in the domain's
-  README; `scripts/check-boundaries.ts` fails one it does not name.
+  README, and say how its handlers or items compose, and what a failing one
+  does, in an `@composition` line of its doc comment; `scripts/check-boundaries.ts`
+  fails one missing either.
 - Keep `@lemma/core` domain-neutral: application contracts, persistence,
   transports, and UI belong to plugins.
 - Add to the runtime only what no plugin could provide, since nothing replaces

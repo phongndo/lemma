@@ -41,6 +41,15 @@ README has the rest.
   ended or went on. `lemma sessions inspect <session> --request <r>` prints one request
   so, and `--rebuilt` the exact request the model was sent (`lemma --help`,
   and [the CLI](../apps/cli/README.md)).
+- **What a plugin costs** in the model's requests: a plugin's **Cost** tab on
+  the Plugins page, or `lemma sessions inspect <session> --request last
+  --plugins`, gives its sections and tools in the open thread's latest
+  request, in tokens, and which changed since the request before. A part that
+  changes from request to request costs the provider's prompt cache of
+  everything after it, so a plugin whose text changes each time is worth
+  moving into a `context` event. `lemma sessions cache` counts, over a
+  directory's sessions, the requests that changed the system prompt or tools,
+  and by which plugins.
 - **The trace** (the devtools' Trace panel) shows what ran in the host and
   the page, span by span, filtered by plugin, session, turn, step, tool, hook,
   status, or duration. A hook's span holds its handler's own time, and, for a

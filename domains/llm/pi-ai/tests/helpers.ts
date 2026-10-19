@@ -8,7 +8,8 @@ import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { HostControl, Interaction, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
-import type { ConfigScope, InteractionError, NoticePayload, PluginChange } from "@lemma/contracts";
+import { InteractionError } from "@lemma/contracts";
+import type { ConfigScope, NoticePayload, PluginChange } from "@lemma/contracts";
 import type { Credential } from "@lemma/credentials";
 import type { Llm } from "@lemma/llm";
 
@@ -50,6 +51,7 @@ export function fakeInteraction(answer: (question: Question) => Effect.Effect<st
     confirm: () => Effect.succeed(true),
     ask: (title, options) => respond({ type: "ask", title, ...options }),
     select: (title, options) => respond({ type: "select", title, options: options.map((option) => option.value) }) as Effect.Effect<never, InteractionError>,
+    form: (title) => Effect.fail(new InteractionError({ reason: "Unavailable", message: `No form is answered here: "${title}"` })),
   };
   const plugin = definePlugin({ id: "interaction", provides: [Interaction], layer: Layer.succeed(Interaction, service) });
   return { asked, origins, plugin };

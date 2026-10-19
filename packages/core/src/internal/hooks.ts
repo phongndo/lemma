@@ -179,6 +179,7 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
       const caller = servicesOf(yield* Effect.context<R>());
       const onStep = options?.onStep;
       const summary = hook.summary;
+      const check = hook.check;
       const dispatch = (index: number, value: I): Effect.Effect<O, E | HookError | CoreClosed> =>
         Effect.suspend(() => {
           if (this.closed) return Effect.fail(new CoreClosed());
@@ -207,6 +208,17 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
                 );
               }
               called = true;
+              const inputProblem = check?.input === undefined ? undefined : problemOf(check.input, nextInput);
+              if (inputProblem !== undefined) {
+                return Effect.fail(
+                  new HookError({
+                    reason: "InvalidInput",
+                    hook: hook.name,
+                    pluginId: registration.owner.identity.id,
+                    message: `What plugin "${registration.owner.identity.id}" handed on through hook "${hook.name}" is invalid: ${inputProblem}`,
+                  }),
+                );
+              }
               let rest = dispatch(index + 1, nextInput);
               // On the handler's span, not whichever is current: a handler may call next inside a span of its own.
               const traced = span;
@@ -248,6 +260,22 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
               }),
             ),
           );
+          if (check?.output !== undefined) {
+            const checkOutput = check.output;
+            run = Effect.flatMap(run, (output) => {
+              const problem = problemOf(checkOutput, output);
+              return problem === undefined
+                ? Effect.succeed(output)
+                : Effect.fail(
+                    new HookError({
+                      reason: "InvalidOutput",
+                      hook: hook.name,
+                      pluginId: registration.owner.identity.id,
+                      message: `What plugin "${registration.owner.identity.id}" returned from hook "${hook.name}" is invalid: ${problem}`,
+                    }),
+                  );
+            });
+          }
           if (onStep !== undefined && step !== undefined) {
             const handled = run;
             run = Clock.clockWith((clock) => {
@@ -373,5 +401,14 @@ function summarize<A>(prefix: string, describe: (value: A) => Summary, value: A)
     return Object.fromEntries(Object.entries(describe(value)).map(([key, entry]) => [prefix + key, entry]));
   } catch {
     return {};
+  }
+}
+
+/** A check's problem with `value`; a check that throws is itself the problem, said in one line. */
+function problemOf(check: (value: unknown) => string | undefined, value: unknown): string | undefined {
+  try {
+    return check(value);
+  } catch (error) {
+    return `its check threw: ${error instanceof Error ? error.message : String(error)}`;
   }
 }

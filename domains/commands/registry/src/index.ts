@@ -2,7 +2,7 @@ import { Cause, Effect, Stream } from "effect";
 import type { Context } from "effect";
 import { awaitable, definePlugin, Events, PluginContext, Registries } from "@lemma/core";
 import { changesSince, Channels, Inspectors, InteractionError, Paths, withContribution } from "@lemma/contracts";
-import { CommandError, CommandRunner, Commands, CommandsChanged, serveCommands } from "@lemma/commands";
+import { CommandError, CommandRunner, Commands, COMMANDS_CONTRACT, CommandsChanged, serveCommands } from "@lemma/commands";
 import type { Command, CommandInfo } from "@lemma/commands";
 
 type Service = Context.Service.Shape<typeof CommandRunner>;
@@ -110,6 +110,7 @@ const makeRegistry: Effect.Effect<Service, never, Events | PluginContext | Regis
  */
 export default definePlugin({
   id: "commands.registry",
+  implements: [COMMANDS_CONTRACT],
   version: "0.1.0",
   provides: { commands: CommandRunner },
   requires: { paths: Paths },

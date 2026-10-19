@@ -59,6 +59,9 @@ export interface WebPluginDefinition<Requires extends Capabilities, Provides ext
    * it needs, rather than run it against contracts it was not written for.
    */
   readonly api?: number;
+  /** The domain contracts it is written against, and implements, as `name@version` (`ContractVersions` in `@lemma/core`). */
+  readonly uses?: readonly string[];
+  readonly implements?: readonly string[];
   /**
    * The routes it shows pages at (its `Pages` items' routes). The app knows
    * them while the plugin is off or failed, so a link to one says the plugin
@@ -208,6 +211,8 @@ export function defineWebPlugin<const Requires extends Capabilities = {}, const 
     {
       id: definition.id,
       ...(definition.version === undefined ? {} : { version: definition.version }),
+      ...(definition.uses === undefined ? {} : { uses: definition.uses }),
+      ...(definition.implements === undefined ? {} : { implements: definition.implements }),
       ...(definition.config === undefined ? {} : { config: definition.config }),
       requires,
       ...(definition.provides === undefined ? {} : { provides: definition.provides }),

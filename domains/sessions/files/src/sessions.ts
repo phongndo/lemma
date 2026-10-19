@@ -19,11 +19,11 @@ import {
   searchWords,
 } from "@lemma/sessions";
 import type { SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
-import { errorCode, syncDirectory, syncParents } from "@lemma/contracts/fs";
+import { errorCode, syncDirectory, syncParents, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
-import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
-import { encodeCwd, encodeLine, EVENT_ID_BYTES, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
+import type { Damage, FiledAs, LastLine, Scanned, Writer } from "./file.ts";
+import { encodeCwd, encodeLine, EVENT_ID_BYTES, FORMAT_VERSION, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
 import type { Header, Line } from "./format.ts";
 import { readIndex, writeIndex } from "./listing.ts";
 import { acquireLock, REFRESH_MS, refreshLock, releaseLock } from "./lock.ts";
@@ -46,6 +46,8 @@ interface Open {
   /** The file through the last line read or written: what `list` knows of it once the session is unloaded. */
   tail: { readonly validBytes: number; readonly lines: number } & LastLine;
   writer?: Writer;
+  /** Where its log stops reading: it serves what came before, and refuses every write (`ReadOnly`). */
+  readonly damage?: Damage;
 }
 
 /** Every session file seen. `info` is cached for `list`; `scanned` is the file as last read, or as memory knew it when unloaded. */
@@ -91,7 +93,14 @@ const asRead = (event: SessionEvent): Result.Result<SessionEvent, string> => {
 const notFound = (sessionId: string, message: string) => new SessionError({ sessionId, reason: "NotFound", message });
 
 const infoOfOpen = (open: Open): SessionInfo =>
-  infoOf(open.header, { leaf: open.leaf, title: open.title, marks: open.marks, updatedAt: open.updatedAt, lastSeq: open.events.length });
+  infoOf(open.header, {
+    leaf: open.leaf,
+    title: open.title,
+    marks: open.marks,
+    updatedAt: open.updatedAt,
+    lastSeq: open.events.length,
+    ...(open.damage === undefined ? {} : { damage: open.damage }),
+  });
 
 /** What `list` knows of an open session's file, from memory and its `stat`: nothing is read. */
 const scannedOf = (open: Open, stat: { readonly size: number; readonly mtimeMs: number; readonly ino: number }): Scanned => ({
@@ -186,6 +195,8 @@ export const make = ({
     );
 
     const warn = (message: string) => events.publish(Notice, { level: "warning", message, source: "sessions.files" });
+    /** Damaged files this process has said so of once. */
+    const damageTold = new Set<string>();
     const changed = (entry: Entry) => events.publish(SessionChanged, { info: entry.info });
 
     const remember = (id: string, file: string, info: SessionInfo, scanned?: Scanned) =>
@@ -277,9 +288,16 @@ export const make = ({
         if (entries.get(entry.id) !== entry) return yield* notFound(entry.id, `Session ${entry.id} does not exist`);
         if (entry.open !== undefined) return entry.open;
         const { scanned, ...loaded } = yield* load(fs, entry.file, entry.id);
+        // A damaged log is served as it reads, and never written: confirming its last line would write.
+        if (loaded.damage !== undefined && !damageTold.has(entry.file)) {
+          damageTold.add(entry.file);
+          yield* warn(
+            `Session ${entry.id}: ${entry.file} is damaged at line ${loaded.damage.line} (${loaded.damage.reason}): it reads up to there, takes no writes, and can be forked from its last event`,
+          );
+        }
         // Served only once a crash cannot take it back: its last line and its name, which an earlier process may have
         // left unsynced on a failing disk.
-        if (!confirmed.has(entry.file)) {
+        if (loaded.damage === undefined && !confirmed.has(entry.file)) {
           yield* Effect.tryPromise({
             try: async () => {
               await confirmLast(fs, entry.file, scanned);
@@ -289,15 +307,18 @@ export const make = ({
           });
           confirmed.add(entry.file);
         }
-        if (loaded.size > loaded.validBytes) {
+        if (loaded.damage === undefined && loaded.size > loaded.validBytes) {
           const ignored = loaded.size - loaded.validBytes;
           yield* warn(`Session ${entry.id}: ignored the last ${ignored} bytes of ${entry.file}, a write a crash cut short; they are cut before the next write`);
         }
         const { validBytes, lines, lastStart, lastHash } = scanned;
         const open: Open = { ...loaded, tail: { validBytes, lines, lastStart, lastHash } };
+        const wasDamaged = entry.info.damaged !== undefined;
         entry.open = open;
         entry.info = infoOfOpen(open);
         record(entry, scanned);
+        // Damage the listing's cheap read did not see (a parent, an id): clients following sessions hear of it.
+        if (open.damage !== undefined && !wasDamaged) yield* changed(entry);
         return open;
       });
 
@@ -331,6 +352,13 @@ export const make = ({
     const commit = (entry: Entry, open: Open, line: Line, update: () => void, announce: Effect.Effect<void> = Effect.void) =>
       Effect.uninterruptible(
         Effect.gen(function* () {
+          if (open.damage !== undefined) {
+            return yield* new SessionError({
+              sessionId: entry.id,
+              reason: "ReadOnly",
+              message: `Session ${entry.id} is damaged at line ${open.damage.line} (${open.damage.reason}): it takes no writes; fork it to go on`,
+            });
+          }
           const writer = yield* writerOf(entry, open);
           const text = encodeLine(line);
           yield* writer.write(text);
@@ -349,7 +377,7 @@ export const make = ({
         const createdAt = yield* Clock.currentTimeMillis;
         let id = randomId(ids, SESSION_ID_BYTES);
         while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
-        const header: Header = { type: "session", version: 1, id, cwd, createdAt };
+        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt };
         const file = sessionFile(root, cwd, createdAt, id);
         const line = encodeLine(header);
         const bytes = Buffer.byteLength(line);
@@ -577,6 +605,46 @@ export const make = ({
       });
 
     /**
+     * `Sessions.fork`: the branch ending at `eventId`, written whole into a new file at once (a temporary file, synced,
+     * then linked into place), so a crash leaves the new session complete or absent, never part of it.
+     */
+    const fork: Service["fork"] = (sessionId, eventId) =>
+      Effect.gen(function* () {
+        const source = yield* opened(sessionId);
+        if (!source.byId.has(eventId)) return yield* notFound(sessionId, `Event ${eventId} is not in session ${sessionId}`);
+        const branch = branchOf(source.events, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
+        const cwd = source.marks.cwd ?? source.header.cwd;
+        const createdAt = yield* Clock.currentTimeMillis;
+        let id = randomId(ids, SESSION_ID_BYTES);
+        while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
+        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt };
+        const file = sessionFile(root, cwd, createdAt, id);
+        const text = [header, ...branch].map(encodeLine).join("");
+        const written = yield* Effect.tryPromise({
+          try: () => writeFileAtomic(file, text, { fs, mode: 0o644, dirMode: 0o755, sync: true, exclusive: true }),
+          catch: io(id, `Cannot write ${file}`),
+        });
+        if (!written) return yield* new SessionError({ sessionId: id, reason: "Io", message: `Cannot write ${file}: it exists` });
+        confirmed.add(file);
+        let title: string | undefined;
+        let updatedAt = createdAt;
+        for (const event of branch) {
+          if (event.data.type === "title") title = event.data.title;
+          updatedAt = Math.max(updatedAt, event.at);
+        }
+        const info = infoOf(header, {
+          leaf: eventId,
+          title,
+          marks: unfiled,
+          updatedAt,
+          lastSeq: branch.length,
+        });
+        const entry = yield* remember(id, file, info);
+        yield* changed(entry);
+        return entry.info;
+      });
+
+    /**
      * `Sessions.search`: the sessions with something in them, the most recently updated first, read a few at a time
      * until `limit` have matched. One loaded is read in memory; any other from its file, let go after, without counting
      * as a use or being made durable; one unreadable is passed over.
@@ -620,7 +688,9 @@ export const make = ({
       Effect.gen(function* () {
         const cutoff = (yield* Clock.currentTimeMillis) - emptyAfter * 1000;
         for (const info of yield* list()) {
-          if (info.lastSeq > 0 || info.kept === true || info.pinned === true || info.archived === true || info.createdAt > cutoff) continue;
+          // A damaged one may hold events past where it stops reading: never thrown away for looking empty.
+          if (info.lastSeq > 0 || info.damaged !== undefined || info.kept === true || info.pinned === true || info.archived === true || info.createdAt > cutoff)
+            continue;
           // One in use, or refused by a hook, stays.
           yield* Effect.ignore(remove(info.id));
         }
@@ -760,6 +830,7 @@ export const make = ({
       checkout,
       mark,
       relocate,
+      fork,
       search,
       hold,
       remove,

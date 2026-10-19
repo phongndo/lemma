@@ -189,18 +189,20 @@ describe("sessions", () => {
     );
   });
 
-  it("treats a damaged complete line as Corrupt and skips that session in list with a notice", async () => {
-    await run(
+  it("serves a session with a damaged complete line as it reads up to it, lists it as damaged, and says so once", async () => {
+    const id = await run(
       Effect.gen(function* () {
         const store = yield* Sessions;
         yield* store.create();
-        yield* store.create();
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        return id;
       }),
     );
-    const [bad] = await sessionFiles();
+    const bad = (await sessionFiles()).find((file) => idOfFile(file) === id)!;
     // Damage with a line after it, so not a write cut short at the end.
-    await fs.appendFile(bad!, `garbage\n${JSON.stringify({ seq: 1, id: "x1", parent: null, at: 1, data: custom(1) })}\n`);
-    const badId = idOfFile(bad!);
+    await fs.appendFile(bad, `garbage\n${JSON.stringify({ seq: 2, id: "x2", parent: null, at: 1, data: custom(2) })}\n`);
+    const before = await fs.readFile(bad, "utf8");
     await run(
       Effect.gen(function* () {
         const store = yield* Sessions;
@@ -208,32 +210,142 @@ describe("sessions", () => {
         const notices = yield* Effect.forkChild(Stream.runCollect(Stream.take(events.stream(Notice), 1)));
         yield* Effect.yieldNow;
         const listed = yield* store.list();
-        expect(listed.length).toBe(1);
-        expect(Array.from(yield* Fiber.join(notices))[0]!.message).toContain("line 2");
-        expect((yield* Effect.flip(store.events(badId))).reason).toBe("Corrupt");
+        expect(listed.length).toBe(2);
+        expect(listed.find((info) => info.id === id)).toMatchObject({ lastSeq: 1, damaged: { line: 3 } });
+        expect((yield* store.events(id)).map((event) => event.data)).toEqual([custom(1)]);
+        expect(Array.from(yield* Fiber.join(notices))[0]!.message).toContain("line 3");
+        // Read-only: no write lands, and the damage stays as it was for whoever looks at it.
+        expect((yield* Effect.flip(store.append(id, custom(3)))).reason).toBe("ReadOnly");
+        expect((yield* Effect.flip(store.mark(id, { pinned: true }))).reason).toBe("ReadOnly");
+      }),
+    );
+    expect(await fs.readFile(bad, "utf8")).toBe(before);
+  });
+
+  it("lists a session damaged by a line out of sequence as updated when the last event it reads was", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        return id;
+      }),
+    );
+    const file = (await sessionFiles()).find((name) => idOfFile(name) === id)!;
+    // A gap in the seqs, at a later time: reading stops there, so the session was not updated then.
+    const later = Date.now() + 86_400_000;
+    const line = (seq: number) => JSON.stringify({ seq, id: `x${seq}`, parent: null, at: later, data: custom(seq) });
+    await fs.appendFile(file, `${line(3)}\n${line(4)}\n`);
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const listed = (yield* store.list()).find((info) => info.id === id)!;
+        expect(listed).toMatchObject({ lastSeq: 1, damaged: { line: 3 } });
+        expect(listed.updatedAt).toBeLessThan(later);
       }),
     );
   });
 
-  it("skips a session with a complete null line in list instead of failing", async () => {
-    await run(
-      Effect.gen(function* () {
-        const store = yield* Sessions;
-        yield* store.create();
-        yield* store.create();
-      }),
-    );
+  it("reads a session with a complete null line up to it", async () => {
+    const id = await run(Effect.flatMap(Sessions, (store) => Effect.map(store.create(), (info) => info.id)));
     const [bad] = await sessionFiles();
     await fs.appendFile(bad!, "null\n");
-    const badId = idOfFile(bad!);
     await run(
       Effect.gen(function* () {
         const store = yield* Sessions;
-        expect((yield* store.list()).length).toBe(1);
-        expect((yield* Effect.flip(store.get(badId))).reason).toBe("Corrupt");
-        expect((yield* Effect.flip(store.events(badId))).reason).toBe("Corrupt");
+        expect((yield* store.list()).map((info) => info.damaged?.line)).toEqual([2]);
+        expect(yield* store.get(id)).toMatchObject({ lastSeq: 0, damaged: { line: 2 } });
+        expect(yield* store.events(id)).toEqual([]);
       }),
     );
+  });
+
+  /** A session with one event, then `lines` appended to its file by another program; what it reads as. */
+  const damagedBy = async (lines: (first: { readonly id: string }) => readonly unknown[]) => {
+    const { id, first } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const first = yield* store.append(id, custom(1));
+        return { id, first };
+      }),
+    );
+    const [file] = await sessionFiles();
+    await fs.appendFile(
+      file!,
+      lines(first)
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(""),
+    );
+    return run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const events = yield* store.events(id);
+        // Opened, it is known damaged however the listing read it (which checks only what costs nothing).
+        const listed = yield* store.get(id);
+        const write = yield* Effect.flip(store.append(id, custom(9)));
+        return { listed, events, write };
+      }),
+    );
+  };
+
+  it.each([
+    ["a seq gap", (first: { readonly id: string }) => [{ seq: 3, id: "gap00001", parent: first.id, at: 2, data: custom(2) }], "expected seq 2, found 3"],
+    ["a duplicate id", (first: { readonly id: string }) => [{ seq: 2, id: first.id, parent: first.id, at: 2, data: custom(2) }], "duplicate event id"],
+    ["an unknown parent", () => [{ seq: 2, id: "orphan01", parent: "nowhere1", at: 2, data: custom(2) }], "unknown parent nowhere1"],
+    ["a checkout to nowhere", () => [{ type: "checkout", leaf: "nowhere1", at: 2 }], "checkout to unknown event nowhere1"],
+  ])("stops reading at %s, naming it, and takes no writes", async (_, lines, reason) => {
+    const answer = await damagedBy(lines);
+    expect(answer.events.map((event) => event.data)).toEqual([custom(1)]);
+    expect(answer.listed?.damaged?.line).toBe(3);
+    expect(answer.listed?.damaged?.reason).toContain(reason);
+    expect(answer.write.reason).toBe("ReadOnly");
+  });
+
+  it("forks a session from an event into a new one that takes writes, a damaged one too", async () => {
+    const { id, second } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, title("forked"));
+        const second = yield* store.append(id, custom(2));
+        yield* store.append(id, custom(3));
+        return { id, second };
+      }),
+    );
+    const [file] = await sessionFiles();
+    await fs.appendFile(file!, "garbage\nnull\n");
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.get(id)).damaged).toBeDefined();
+        const forked = yield* store.fork(id, second.id);
+        expect(forked).toMatchObject({ cwd: "/work/app", title: "forked", leaf: second.id, lastSeq: 2 });
+        expect(forked.damaged).toBeUndefined();
+        const events = yield* store.events(forked.id);
+        expect(events.map((event) => [event.seq, event.data])).toEqual([
+          [1, title("forked")],
+          [2, custom(2)],
+        ]);
+        const next = yield* store.append(forked.id, custom(4));
+        expect(next).toMatchObject({ seq: 3, parent: second.id });
+        expect((yield* Effect.flip(store.fork(id, "nowhere1"))).reason).toBe("NotFound");
+      }),
+    );
+    // The fork survives a restart as it was written.
+    await run(
+      Effect.flatMap(Sessions, (store) => Effect.map(store.list(), (listed) => expect(listed.filter((info) => info.damaged === undefined)).toHaveLength(1))),
+    );
+  });
+
+  it("names the format version of a session written by another version", async () => {
+    const id = await run(Effect.flatMap(Sessions, (store) => Effect.map(store.create(), (info) => info.id)));
+    const [file] = await sessionFiles();
+    const [header, ...rest] = (await fs.readFile(file!, "utf8")).split("\n");
+    await fs.writeFile(file!, [JSON.stringify({ ...JSON.parse(header!), version: 2 }), ...rest].join("\n"));
+    const error = await run(Effect.flatMap(Sessions, (store) => Effect.flip(store.events(id))));
+    expect(error.reason).toBe("Corrupt");
+    expect(error.message).toContain("written in session format version 2; this Lemma reads version 1");
   });
 
   it("keeps the file and memory in step when an append is interrupted mid-write", async () => {
@@ -851,6 +963,24 @@ describe("the session file", () => {
         expect(error.reason).toBe("Corrupt");
         expect(error.message).toContain("data.note: Expected no excess property");
         expect((yield* store.get(id)).lastSeq).toBe(0);
+      }),
+    );
+  });
+
+  it("refuses context a provider would refuse, which would fail every later request of the session", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const refused = [
+          { type: "context", source: "test", content: [] },
+          { type: "context", source: "test", content: [{ type: "text", text: " \n" }] },
+          { type: "context", source: "test", content: [{ type: "image", data: "AAAA", mimeType: "image/svg+xml" }] },
+          { type: "context-edit", target: "e1", op: "replace", content: [], source: "test" },
+        ];
+        for (const data of refused) expect((yield* Effect.flip(store.append(id, data as EventData))).reason).toBe("Corrupt");
+        yield* store.append(id, { type: "context", source: "test", content: [{ type: "text", text: "seen" }] });
+        expect((yield* store.get(id)).lastSeq).toBe(1);
       }),
     );
   });

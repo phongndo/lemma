@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 import { definePlugin } from "@lemma/core/plain";
 import { PromptSections } from "@lemma/agent";
-import { Sessions } from "@lemma/sessions";
+import { latestDetails, Sessions } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import { ToolResult, Tools } from "@lemma/tools";
 
@@ -24,15 +24,10 @@ export interface Todo {
   readonly done: boolean;
 }
 
-/** The list on `branch`: the `details` of its last successful `todo` call, or none. */
+/** The list on `branch`: the `details` of its last successful `todo` call (`latestDetails`), or none. */
 export const todosOf = (branch: readonly SessionEvent[]): readonly Todo[] => {
-  for (let index = branch.length - 1; index >= 0; index--) {
-    const data = branch[index]!.data;
-    if (data.type !== "message" || data.message.role !== "toolResult" || data.message.toolName !== "todo" || data.message.isError) continue;
-    const todos = (data.details as { readonly todos?: unknown } | undefined)?.todos;
-    if (Array.isArray(todos)) return todos as Todo[];
-  }
-  return [];
+  const todos = (latestDetails(branch, "todo") as { readonly todos?: unknown } | undefined)?.todos;
+  return Array.isArray(todos) ? (todos as Todo[]) : [];
 };
 
 export const TodoInput = Schema.Struct({
@@ -69,6 +64,8 @@ export const reminder = (todos: readonly Todo[]): string | undefined => {
 export default definePlugin({
   id: "todo",
   version: "0.1.0",
+  // The contracts it is written against: after an incompatible change to one, it is left out, saying which.
+  uses: ["lemma/agent@1", "lemma/sessions@1", "lemma/tools@1"],
   requires: { sessions: Sessions },
   setup: ({ sessions }, { add }) => {
     add(Tools, {

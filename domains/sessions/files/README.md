@@ -47,6 +47,26 @@ line gave, and a marks line's `cwd` (written by `relocate`) moves the session to
 that directory, over the header's (a marks line moves neither the leaf nor
 `updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
 
+### Format versions
+
+The header's `version` is the file's format (`FORMAT_VERSION`, 1). A file of
+another version is refused as `Corrupt` with a message naming both versions,
+never taken for damage. The rules for changing the format, so no change makes a
+user's session unreadable:
+
+- Adding a member to `EventData` (`@lemma/sessions`) is not a new version: old
+  files hold none of it. Removing a member, narrowing one, or changing a line's
+  shape is, and the store reads every earlier version through migrations, one
+  per version (`vN` to `vN+1`), applied as a file is read.
+- A migration accepts at least everything the reader of its version accepted:
+  it may not refuse a field that reader ignored.
+- `tests/fixtures/v<N>/` holds session files version `N` wrote and how every
+  reader projected them (`projections.json`: per leaf, the model history's
+  digest; per `request` event, the rebuilt request's), and `tests/formats.test.ts`
+  reads each one back the same. `pnpm sim --fixtures <dir>` writes a new
+  version's corpus once; a version's corpus is never regenerated, so a change
+  that reads an old session differently fails the test.
+
 `<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
 to those bytes, and a hash of its last line. It is a cache, so deleting it only
@@ -80,10 +100,21 @@ costs re-reading the files.
   made durable so is not served (`Io`, "Cannot make … durable"); one whose file
   cannot be opened to write (read-only) is served as it is. `list` and `get` read
   without this, so a summary (its `lastSeq`, leaf, title) can describe a line a
-  power loss then takes back. Any other
-  complete line that does not decode, an unknown parent, a seq gap, or a checkout
-  to nowhere makes the session `Corrupt`. Skipping such a line would silently
-  change what the model saw.
+  power loss then takes back.
+- **Damage.** Any other complete line that does not decode, an unknown
+  parent, a seq gap, a duplicate id, or a checkout to nowhere damages the log
+  from there: reading on past it would silently change what the model saw, and
+  refusing the whole session would lose what came before. So the session is
+  what came before it, served as it reads and listed with `damaged` (the line,
+  and why), and it takes no writes (`ReadOnly`): an append past the damage
+  would bury it, and the file is never cut to drop it. The damage stays for
+  whoever looks at the file; a `Notice` says so once, and the empty-session
+  sweep never deletes a damaged one. `fork` copies a branch, from any event
+  that reads, into a new session that takes writes, and is how a damaged one
+  goes on (the web app's composer offers it). A file whose header does not read
+  is `Corrupt`, as nothing of it is known to be a session. The listing reads
+  without decoding, so it sees a seq gap at once and other damage once the
+  session is opened, which `SessionChanged` then announces.
 - **Validation.** `append` decodes the event's JSON against the schema first, so
   a line that could not be read back is never written, and memory holds the event
   exactly as a reload will. A field the schema lacks is refused (it would be
@@ -91,7 +122,8 @@ costs re-reading the files.
   it (`NaN` becomes `null`). `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file. A file whose
   size, mtime, and inode match the listing index is not read; one that grew is read
-  (with `JSON.parse` only) from where the last read stopped, since sessions are
+  (with `JSON.parse` only, checking only that `seq` runs on without a gap) from
+  where the last read stopped, since sessions are
   only appended to, once the line read last is found unchanged (a failed write's
   line may since have been replaced; if it was, the whole file is read). Sessions
   are indexed when created, read, unloaded, and when the plugin stops, those last
