@@ -1,14 +1,10 @@
 // The todo plugin's web half: how its calls show, and a Todos view of the thread (see README.md).
 // It needs no build step; package.json's `lemma` manifest names it beside the host half, todo.ts.
-export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews, Views }, solid: { createMemo, For, Show }, html }) => {
+export default ({ defineWebPlugin, contracts: { Icon, Slots, Threads, ToolViews, Views, latestDetails }, solid: { createMemo, For, Show }, html }) => {
   /** The list on a branch, as the host half reads it: the `details` of the last successful `todo` call. */
   const todosOf = (branch) => {
-    for (let index = branch.length - 1; index >= 0; index--) {
-      const { data } = branch[index];
-      if (data.type !== "message" || data.message.role !== "toolResult" || data.message.toolName !== "todo" || data.message.isError) continue;
-      if (Array.isArray(data.details?.todos)) return data.details.todos;
-    }
-    return [];
+    const todos = latestDetails(branch, "todo")?.todos;
+    return Array.isArray(todos) ? todos : [];
   };
 
   const styles = `

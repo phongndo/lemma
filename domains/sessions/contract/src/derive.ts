@@ -259,3 +259,37 @@ export function rebuildRequest(branch: readonly SessionEvent[], requestId: strin
   if (index === -1 || branch[index]!.data.type !== "request") return undefined;
   return requestFrom(requestState(branch.slice(0, index + 1)), deriveMessages(branch.slice(0, index)), branch[index]!, sessionId);
 }
+
+/*
+ * What a plugin reads back of its own state on a branch, the way the log keeps it: a tool's state in its results'
+ * `details` (so it follows the branch, and survives a restart with nothing stored), and a plugin's own data in
+ * `custom` events. The host and web halves read the same branch with these, rather than walking events by hand.
+ */
+
+/**
+ * The `details` of the latest successful result of the tool `toolName` on `branch`, or undefined: where a tool that
+ * keeps state in its results (a todo list) finds it, as of the branch's end.
+ */
+export function latestDetails(branch: readonly SessionEvent[], toolName: string): unknown {
+  for (let at = branch.length - 1; at >= 0; at--) {
+    const data = branch[at]!.data;
+    if (data.type !== "message" || data.message.role !== "toolResult" || data.message.toolName !== toolName || data.message.isError) continue;
+    if (data.details !== undefined) return data.details;
+  }
+  return undefined;
+}
+
+/** The data of the `custom` events of `kind` on `branch`, oldest first: a plugin's own records (`kind` namespaced by its id). */
+export function customEvents(branch: readonly SessionEvent[], kind: string): readonly unknown[] {
+  return branch.flatMap((event) => (event.data.type === "custom" && event.data.kind === kind ? [event.data.data] : []));
+}
+
+/** The text of the latest prompt on `branch` (its text parts, joined), or undefined when it has none. */
+export function lastPromptText(branch: readonly SessionEvent[]): string | undefined {
+  for (let at = branch.length - 1; at >= 0; at--) {
+    const data = branch[at]!.data;
+    if (data.type !== "message" || data.message.role !== "user") continue;
+    return data.message.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
+  }
+  return undefined;
+}

@@ -140,7 +140,9 @@ per session or agent: what it does for one session, it keys by the session
 one, it drops when the session goes (`SessionRemoved`). State about a session
 goes in the session's log:
 a tool's result carries it in `details`, and both halves read it back from
-the branch, so it follows the branch when the session is checked out
+the branch (`latestDetails(branch, tool)` in `@lemma/sessions`, which a web
+half has in `api.contracts`; `customEvents` reads a plugin's own records), so
+it follows the branch when the session is checked out
 elsewhere and survives a restart with nothing stored
 ([todo](../examples/todo/README.md)). Such a tool is `direct`, so a tool that
 runs others (`codemode`) does not call it and keep its result as its own, and

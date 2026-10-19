@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchOf, deriveMessages, messageOf, modelEntries, rebuildRequest, requestState } from "../src/derive.ts";
+import { branchOf, customEvents, deriveMessages, lastPromptText, latestDetails, messageOf, modelEntries, rebuildRequest, requestState } from "../src/derive.ts";
 import type { EventData, SessionEvent } from "../src/sessions.ts";
 import { emptyUsage } from "@lemma/llm";
 
@@ -249,6 +249,32 @@ describe("modelEntries", () => {
       content: [{ type: "text", text: "seen" }],
       timestamp: 1000,
     });
+  });
+});
+
+describe("reading a plugin's state back", () => {
+  const result = (toolName: string, details: unknown, isError = false): EventData => ({
+    type: "message",
+    message: { role: "toolResult", toolCallId: "c", toolName, content: [{ type: "text", text: "" }], isError, timestamp: 0 },
+    details,
+  });
+  it("finds the latest successful result's details of a tool, a plugin's custom data, and the latest prompt", () => {
+    const events = log(
+      user("first"),
+      result("todo", { todos: [1] }),
+      result("todo", { todos: [1, 2] }),
+      result("todo", { todos: "broken" }, true),
+      result("other", { x: 1 }),
+      { type: "custom", kind: "notes.note", data: "a" },
+      { type: "custom", kind: "other.thing", data: "b" },
+      { type: "custom", kind: "notes.note", data: "c" },
+      user("second"),
+    );
+    expect(latestDetails(events, "todo")).toEqual({ todos: [1, 2] });
+    expect(latestDetails(events, "absent")).toBeUndefined();
+    expect(customEvents(events, "notes.note")).toEqual(["a", "c"]);
+    expect(lastPromptText(events)).toBe("second");
+    expect(lastPromptText([])).toBeUndefined();
   });
 });
 
