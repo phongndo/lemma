@@ -45,7 +45,9 @@ export function messageOf(event: SessionEvent): Message | undefined {
   const data = event.data;
   switch (data.type) {
     case "message":
-      return data.message;
+      // A reply the user stopped, logged as far as it got: the model sees it as a reply that ended there, as the user
+      // read it (a provider drops a reply marked aborted).
+      return data.message.role === "assistant" && data.message.stopReason === "aborted" ? { ...data.message, stopReason: "stop" } : data.message;
     case "context":
       return { role: "user", content: data.content, timestamp: event.at };
     case "context-edit":

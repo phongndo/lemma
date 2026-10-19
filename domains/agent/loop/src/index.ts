@@ -61,6 +61,10 @@ const AgentConfig = Schema.Struct({
       description:
         "Seconds a stopping agent (the host stopping, or a reload) lets running tool calls and model calls finish before cutting them off. Turns resume when it starts again.",
     }),
+  keepCancelled: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+    description:
+      "What the model wrote before the user stopped its reply stays in what it sees next, as the user read it (text only). Off: logged only for inspection, as an attempt.",
+  }),
   parallelTools: Schema.Int.check(Schema.isGreaterThan(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 8)))
     .annotate({
@@ -240,6 +244,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
         retryDelay: config.retryDelay * 1000,
         maxRetryDelay: config.maxRetryDelay * 1000,
         parallelTools: config.parallelTools,
+        keepCancelled: config.keepCancelled,
       };
 
       // Turns belong to the plugin, not the caller: they outlive an interrupted `prompt`. They run in their own scope,

@@ -29,6 +29,7 @@ Effect.gen(function* () {
 | `maxRetryDelay` | `60`                                          | Seconds the wait between retries grows to, at most.                                                  |
 | `stopGrace`     | `5`                                           | Seconds (at most 20) a stopping agent lets running calls finish (see [Stopping](#stopping)).         |
 | `parallelTools` | `8`                                           | Calls of one response that run at once, when their tools may run together (`parallel: "safe"`).      |
+| `keepCancelled` | `true`                                        | What the model wrote before the user stopped its reply stays in what it sees next (see below).       |
 | `maxRunning`    | `16`                                          | Turns running at once, across sessions; another waits for a slot before its first event.             |
 
 ## Base prompt
@@ -99,7 +100,11 @@ their work, the plugins' hooks included, carries `session.id`, `turn.id`,
 ([devtools.trace](../../devtools/trace/README.md)) shows a turn's work by them.
 
 `turn-end` closes every turn the agent finishes. On cancellation or failure the
-closing sequence logs the partial model output as an `attempt`, answers every
+closing sequence logs the partial model output as an `attempt`, but for a reply
+the user stopped (`cancel`) that had written some text: that is logged as the
+assistant `message` it got as far as (its text, and thinking a provider can
+replay; no tool call), marked `aborted`, and the model sees it next as a reply
+that ended there, as the user read it (`keepCancelled`). It then answers every
 unanswered tool call with an error result (so the next request stays valid),
 then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed usage.
 A turn the agent is closing under (the host stopping, the plugin reloading) is

@@ -10,7 +10,19 @@ import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
 import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
-import type { Llm, LlmFailure, LlmRequest, ModelInfo, StreamEvent, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage } from "@lemma/llm";
+import type {
+  AssistantMessage,
+  Llm,
+  LlmFailure,
+  LlmRequest,
+  ModelInfo,
+  StreamEvent,
+  ThinkingLevel,
+  ToolCall,
+  ToolResultMessage,
+  ToolSpec,
+  Usage,
+} from "@lemma/llm";
 import type { Contribution, EventData, ProviderAnswer, RequestState, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
 import type { ToolRunner } from "@lemma/tools";
 import { handlerChanges } from "./credit.ts";
@@ -40,6 +52,8 @@ interface TurnServices {
 
 interface TurnSettings extends RetrySettings {
   readonly maxSteps: number;
+  /** A reply the user stopped is logged as a `message` of what it had written, which the model then sees (`stopped`). */
+  readonly keepCancelled: boolean;
   /** Calls of one response that run at once, at most, when their tools may run together. */
   readonly parallelTools: number;
 }
@@ -148,6 +162,15 @@ const interruptedText = (output: string | undefined) =>
   output === undefined || output === ""
     ? "Tool execution was interrupted: the host stopped while it ran. It may or may not have finished; check before running it again."
     : `Tool execution was interrupted: the host stopped while it ran. It may or may not have finished; check before running it again. Its output until then:\n${output}`;
+
+/**
+ * What a reply the user stopped keeps for the model: its text, and thinking a provider can replay (signed); never a
+ * tool call, which nothing will answer. Undefined when that leaves no text.
+ */
+export const stopped = (message: AssistantMessage): AssistantMessage | undefined => {
+  const content = message.content.filter((block) => block.type === "text" || (block.type === "thinking" && block.thinkingSignature !== undefined));
+  return content.some((block) => block.type === "text" && block.text.trim() !== "") ? { ...message, content } : undefined;
+};
 
 /** What a tool call the branch left without a result tells the model. */
 export const BRANCHED_CALL = "No result was recorded for this tool call: the conversation continued without it.";
@@ -564,6 +587,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           state.usage = addUsage(state.usage, settled.message.usage);
           if (settled.type === "error") {
             const aborted = settled.message.stopReason === "aborted";
+            const kept = aborted && settings.keepCancelled ? stopped(settled.message) : undefined;
+            if (kept !== undefined) {
+              yield* append({ type: "message", message: kept, turnId, stepId, timing, ...answer });
+              return { ended: { reason: "cancelled", error: kept.errorMessage ?? "Aborted" } satisfies Ended };
+            }
             const failure = aborted ? undefined : settled.failure;
             const retry = yield* retryOf(failure);
             yield* append({
@@ -1030,7 +1058,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       if (step?.model !== undefined && state.partial !== undefined) {
         const endedAt = yield* Clock.currentTimeMillis;
         const message = state.partial.message(step.model, cancelled ? "aborted" : "error", cancelled ? "Cancelled" : (ended.error ?? "Turn failed"), endedAt);
-        yield* append({ type: "attempt", turnId, stepId: step.id, message, timing: { startedAt: state.partialStartedAt, endedAt } });
+        const timing = { startedAt: state.partialStartedAt, endedAt };
+        // What the user read of a reply they stopped is the model's to see next; anything else is kept for inspection.
+        const kept = cancelled && settings.keepCancelled ? stopped(message) : undefined;
+        yield* append(
+          kept === undefined
+            ? { type: "attempt", turnId, stepId: step.id, message, timing }
+            : { type: "message", message: kept, turnId, stepId: step.id, timing },
+        );
         state.partial = undefined;
       }
       const failed = `the turn failed (${ended.error ?? "unknown error"})`;

@@ -642,7 +642,7 @@ describe("agent", () => {
     );
   });
 
-  it("cancels mid-stream: logs the partial output as an attempt and ends the turn cancelled", async () => {
+  it("cancels mid-stream: logs what the reply had written, which the model sees next, and ends the turn cancelled", async () => {
     await withAgent({ scripts: [hang("partial "), reply("after")] }, ({ requests, rec }) =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
@@ -657,19 +657,45 @@ describe("agent", () => {
         yield* Fiber.join(turn);
         expect(yield* a.busy(id)).toBe(false);
         const events = yield* log(id);
-        expect(types(events).slice(-3)).toEqual(["attempt", "step-end", "turn-end"]);
-        expect(ofType(events, "attempt")[0]!.message).toMatchObject({ stopReason: "aborted", content: text("partial ") });
+        expect(types(events).slice(-3)).toEqual(["message", "step-end", "turn-end"]);
+        // The log says it was stopped.
+        expect(ofType(events, "message").at(-1)!.message).toMatchObject({ role: "assistant", stopReason: "aborted", content: text("partial ") });
         expect(ofType(events, "turn-end")[0]!.reason).toBe("cancelled");
         yield* waitFor(
           Effect.sync(() => rec.ended.map((ended) => ended.reason)),
           (reasons) => reasons[0] === "cancelled",
         );
-        // The attempt is not model-visible: the next request sees only the two user prompts.
+        // The model sees what the user read of it, as a reply that ended there.
         yield* a.prompt(id, text("again"));
-        expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "user"]);
+        expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
+        expect(requests[1]!.messages[1]).toMatchObject({ stopReason: "stop", content: text("partial ") });
         expectLogInvariant(yield* log(id), id, requests);
       }),
     );
+  });
+
+  it("keeps a stopped reply for inspection only with keepCancelled off, and with no text to keep", async () => {
+    for (const [config, script] of [
+      [{ keepCancelled: false }, hang("partial ")],
+      [{}, hang("")],
+    ] as const) {
+      await withAgent({ config, scripts: [script, reply("after")] }, ({ requests, rec }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          const a = yield* Agent;
+          const turn = yield* Effect.forkChild(a.prompt(id, text("go")));
+          yield* waitFor(
+            Effect.sync(() => rec.deltas.length + requests.length),
+            (n) => n >= 2,
+          );
+          yield* a.cancel(id);
+          yield* Fiber.join(turn);
+          expect(types(yield* log(id)).slice(-3)).toEqual(["attempt", "step-end", "turn-end"]);
+          yield* a.prompt(id, text("again"));
+          expect(requests[1]!.messages.map((message) => message.role)).toEqual(["user", "user"]);
+        }),
+      );
+    }
   });
 
   it("cancels a turn whatever becomes of the call that asked: one interrupted while the journal is written still stops the turn", async () => {
