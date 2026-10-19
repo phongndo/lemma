@@ -1,4 +1,4 @@
-import type { ImageContent } from "@lemma/llm";
+import type { ImageContent, TextContent } from "@lemma/llm";
 import type { ThreadsService } from "@lemma/threads";
 
 type BranchEvent = ReturnType<ThreadsService["branch"]>[number];
@@ -9,18 +9,15 @@ export interface SentPrompt {
   readonly images: readonly ImageContent[];
 }
 
+/** A user message's content as the composer holds it: its text (its parts joined) and images. */
+export const promptOf = (content: readonly (TextContent | ImageContent)[]): SentPrompt => ({
+  text: content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n"),
+  images: content.flatMap((part) => (part.type === "image" ? [part] : [])),
+});
+
 /** The prompts on a thread's branch, oldest first: each user message's text (its parts joined) and images. */
 export const sentPrompts = (branch: readonly BranchEvent[]): readonly SentPrompt[] =>
-  branch.flatMap((event) => {
-    if (event.data.type !== "message" || event.data.message.role !== "user") return [];
-    const content = event.data.message.content;
-    return [
-      {
-        text: content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n\n"),
-        images: content.flatMap((part) => (part.type === "image" ? [part] : [])),
-      },
-    ];
-  });
+  branch.flatMap((event) => (event.data.type === "message" && event.data.message.role === "user" ? [promptOf(event.data.message.content)] : []));
 
 /**
  * Which of `count` sent prompts (oldest first) Up (`older`) or Down (`newer`) brings back from the one at `at`, which

@@ -1,3 +1,4 @@
+import { callFailed } from "@lemma/threads";
 import type { Block, Item } from "@lemma/threads";
 
 /**
@@ -107,7 +108,7 @@ export const workEntries = (items: readonly Item[], actionOf: ActionOf, least = 
           actionOf,
         ),
         tools: tools.map((row) => row.block.call.name),
-        failed: tools.filter((row) => row.block.result?.isError === true).length,
+        failed: tools.filter((row) => callFailed(row.block.result)).length,
         rows: run.slice(0, last + 1),
       });
       entries.push(...run.slice(last + 1));

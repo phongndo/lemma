@@ -324,6 +324,18 @@ const RedoIcon = (props: GlyphProps) => (
     <path d="M10 3.5l3 3-3 3M13 6.5H6.5a3.5 3.5 0 000 7H8" />
   </Icon>
 );
+const UndoIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M6 3.5l-3 3 3 3M3 6.5h6.5a3.5 3.5 0 010 7H8" />
+  </Icon>
+);
+/** Two chain links. */
+const LinkIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M6.7 9.3a2.9 2.9 0 004.1 0l2-2a2.9 2.9 0 00-4.1-4.1l-.9.9" />
+    <path d="M9.3 6.7a2.9 2.9 0 00-4.1 0l-2 2a2.9 2.9 0 004.1 4.1l.9-.9" />
+  </Icon>
+);
 const SkipIcon = (props: GlyphProps) => (
   <Icon class={props.class}>
     <path d="M4 3.5l6 4.5-6 4.5zM12.5 3.5v9" />
@@ -394,6 +406,8 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   palette: PaletteIcon,
   "arrow-left": ArrowLeftIcon,
   redo: RedoIcon,
+  undo: UndoIcon,
+  link: LinkIcon,
   skip: SkipIcon,
   maximize: MaximizeIcon,
   minimize: MinimizeIcon,

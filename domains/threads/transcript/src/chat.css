@@ -400,9 +400,22 @@
   padding-top: 22px;
 }
 
-.user-message {
-  align-self: flex-end;
+/*
+ * A prompt: over a steer a mark saying so, its message, and under a placed one when it was sent and its buttons. It
+ * hugs its message at the right, so the pointer on the message, not beside it, shows the buttons.
+ */
+.user-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  width: fit-content;
   max-width: 88%;
+  margin-left: auto;
+}
+
+.user-message {
+  max-width: 100%;
   padding: 9px 14px;
   border-radius: var(--radius-lg) var(--radius-lg) var(--radius-xs) var(--radius-lg);
   background: var(--bg-active);
@@ -422,7 +435,7 @@
   max-width: 88%;
 }
 
-.steer-pending .user-message {
+.steer-pending .user-prompt {
   max-width: 100%;
 }
 
@@ -446,14 +459,7 @@
   }
 }
 
-/* A steer: its prompt, under a quiet mark that it went into a running turn. The mark is not part of what was sent. */
-.user-steer {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 4px;
-}
-
+/* Over a steer, a quiet mark that it went into a running turn. The mark is not part of what was sent. */
 .steer-mark {
   display: flex;
   align-items: center;
@@ -467,6 +473,77 @@
 .steer-mark .icon {
   width: 12px;
   height: 12px;
+}
+
+/* Under a prompt: when it was sent and its buttons, out of the way until the reader points at it. */
+.prompt-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  margin: -2px -4px 0 0;
+  color: var(--text-3);
+  font-size: calc(11.5px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.prompt-time {
+  padding: 0 2px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+  cursor: default;
+}
+
+.prompt-actions {
+  display: flex;
+  align-items: center;
+}
+
+.prompt-actions .icon-button {
+  width: 22px;
+  height: 22px;
+  color: var(--text-3);
+}
+
+.prompt-actions .icon-button:hover {
+  color: var(--text);
+}
+
+.prompt-actions .icon-button[aria-disabled="true"] {
+  opacity: 0.45;
+  background: none;
+  color: var(--text-3);
+}
+
+.prompt-actions .icon {
+  width: 13px;
+  height: 13px;
+}
+
+@media (hover: hover) {
+  .prompt-footer {
+    opacity: 0;
+    transition: opacity 0.15s ease-out;
+  }
+  .user-prompt:hover .prompt-footer,
+  .prompt-footer:focus-within {
+    opacity: 1;
+  }
+}
+
+/* A prompt its link opened (`#prompt-<event id>`): ringed for a moment, so the eye finds it. */
+.prompt[data-linked] .user-message {
+  animation: prompt-linked 2s ease-out;
+}
+
+@keyframes prompt-linked {
+  from,
+  40% {
+    box-shadow: 0 0 0 2px var(--accent);
+  }
+  to {
+    box-shadow: 0 0 0 2px transparent;
+  }
 }
 
 .transcript > .steer-pending {
@@ -857,15 +934,20 @@
   }
 }
 
-/* Out of the way until the reader looks at the turn. */
+/*
+ * Out of the way until the pointer is on the turn's output (its prompts show their own buttons), or on the footer, or
+ * a key reaches it. It goes a moment after the pointer leaves, so crossing the gap to its buttons does not flicker.
+ */
 @media (hover: hover) {
   .turn-footer {
-    opacity: 0.55;
-    transition: opacity 0.15s ease-out;
+    opacity: 0;
+    transition: opacity 0.15s ease-out 0.15s;
   }
-  .turn:hover .turn-footer,
+  .turn > :not(.prompt):hover ~ .turn-footer,
+  .turn-footer:hover,
   .turn-footer:focus-within {
     opacity: 1;
+    transition-delay: 0s;
   }
 }
 

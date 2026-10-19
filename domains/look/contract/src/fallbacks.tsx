@@ -166,6 +166,8 @@ const GLYPHS: Readonly<Record<IconName, string>> = {
   palette: "◐",
   "arrow-left": "←",
   redo: "↷",
+  undo: "↶",
+  link: "∞",
   skip: "⏭",
   maximize: "⤢",
   minimize: "⤡",

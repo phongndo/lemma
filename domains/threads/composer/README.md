@@ -9,7 +9,8 @@ completion menu), `PromptCommands` (it runs those with `run`), and `ComposerTake
 then takes the text box and the send button, or its line above the box), all
 in [`@lemma/threads`](../contract/src/threads.ts). Its own
 pieces go through the same slots and parts: `composer.attach` in
-`ComposerActions`, `composer.answer` in `ComposerNotices` (what a plugin that
+`ComposerActions`, `composer.edit` in `PromptActions` (Edit from here, under a
+prompt in the transcript), `composer.answer` in `ComposerNotices` (what a plugin that
 handled or refused the last prompt said: `Threads.answer`), and the defaults of
 `ComposerQueuedPart` and `ComposerSuggestionPart`. Adds `composer.focus`
 (`ThreadsActionIds.focusComposer`, key `/`) to `Actions`, and its `send`,
@@ -87,6 +88,15 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   end and its completions dismissed, so they do not cover the notice saying why. A send asked for while one goes out
   waits, and goes once the first is accepted, if the composer still holds what
   it held when it was asked.
+- **Edit from here.** The undo button under a prompt in the transcript takes
+  the thread back to before the turn the prompt opened (`promptBases`,
+  `Threads.checkout`: the next prompt branches from there, and the turns since
+  stay on their branch), and puts the prompt back in the box with its images,
+  before what was written there, the cursor after it. Files stay as they are:
+  Lemma keeps no snapshots of them. A steer, a prompt placed with the one that
+  opened its turn, and the thread's first prompt (nothing comes before it) have
+  no button; while a turn runs it does nothing, and its tooltip says to stop
+  the turn first.
 - **Earlier prompts.** Up in an empty prompt brings back the last one sent in
   the thread, read from its branch (`Threads.branch`) with its images, and
   again the one before; Down goes newer, and past the newest empties the

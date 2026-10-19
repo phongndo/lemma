@@ -3,7 +3,7 @@ import type { Component, JSX } from "solid-js";
 import { formatDuration, formatTokens } from "@lemma/client/format";
 import { parseModelRef } from "@lemma/llm";
 import type { TextContent } from "@lemma/llm";
-import { formatElapsed, summarizeUsage } from "./format.ts";
+import { formatElapsed, sentTime, summarizeUsage } from "./format.ts";
 import {
   answerText,
   formatThroughput,
@@ -26,6 +26,7 @@ import {
   ChatWorkingPart,
   ChatWorkGroupPart,
   ChatWorkPart,
+  PromptActions,
   Threads,
   Views,
   ChatThinking,
@@ -52,7 +53,10 @@ import type {
   ChatWorkingProps,
   ChatWorkProps,
   QueuePlaces,
+  PromptActionProps,
+  PromptInfo,
   PromptMark,
+  ThreadsService,
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
 import { thoughtHeadline } from "./thought.ts";
@@ -60,7 +64,7 @@ import { workEntries } from "./work.ts";
 import type { WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
-import { Client, Router, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
+import { Client, Each, Router, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
 import { Actions } from "@lemma/actions";
@@ -75,33 +79,74 @@ import type { ToolState } from "./tools.tsx";
 /** The chat's scroll position, kept with each history entry. */
 const SCROLL_STATE = "chat.scroll";
 
-/** The default `chat.user` part: the prompt as sent, and over a steer a quiet mark saying so. */
+/** A prompt's text as written: its text parts, a blank line between them. */
+const textOf = (content: ChatUserProps["content"]): string =>
+  content
+    .filter((part): part is TextContent => part.type === "text")
+    .map((part) => part.text)
+    .join("\n\n");
+
+/**
+ * The default `chat.user` part: the prompt as sent, over a steer a quiet mark saying so, and under a placed one, while
+ * the pointer is on it, when it was sent and its `PromptActions`.
+ */
 function UserView(props: ChatUserProps) {
-  const text = () =>
-    props.content
-      .filter((part): part is TextContent => part.type === "text")
-      .map((part) => part.text)
-      .join("\n\n");
-  const message = () => (
-    <div class="user-message">
-      <Show when={text()}>
-        <div class="user-text">{text()}</div>
-      </Show>
-      <Images content={props.content} />
-    </div>
-  );
+  const text = () => textOf(props.content);
   return (
-    <Show when={props.steer} fallback={message()}>
-      <div class="user-steer">
+    <div class="user-prompt">
+      <Show when={props.steer}>
         <div class="steer-mark" data-tip="Steered the running turn">
           <RedoIcon />
           Steer
         </div>
-        {message()}
+      </Show>
+      <div class="user-message">
+        <Show when={text()}>
+          <div class="user-text">{text()}</div>
+        </Show>
+        <Images content={props.content} />
       </div>
+      <Show when={props.prompt}>{(prompt) => <PromptFooter prompt={prompt()} />}</Show>
+    </div>
+  );
+}
+
+/** When a prompt was sent, its full date in the tooltip, then its `PromptActions`. */
+function PromptFooter(props: { prompt: PromptInfo }) {
+  // Read once: a label from before midnight stays "today"'s until the transcript draws it again.
+  const time = createMemo(() => sentTime(props.prompt.at, Date.now()));
+  return (
+    <div class="prompt-footer">
+      {/* Focusable, so its tooltip, the full date, reaches a keyboard too. */}
+      <time class="prompt-time" dateTime={new Date(props.prompt.at).toISOString()} tabIndex={0} data-tip={time().full}>
+        {time().label}
+      </time>
+      <div class="prompt-actions">
+        <Each slot={PromptActions} props={{ prompt: props.prompt }} />
+      </div>
+    </div>
+  );
+}
+
+/** The transcript's own `PromptActions` item: copies the prompt's text. */
+function CopyPrompt(props: PromptActionProps) {
+  const text = () => textOf(props.prompt.content);
+  return (
+    <Show when={text()}>
+      <CopyButton text={text()} label="Copy prompt" />
     </Show>
   );
 }
+
+/** The fragment that names a prompt in its thread's address: what a prompt's link ends with. */
+const promptAnchor = (eventId: string) => `prompt-${eventId}`;
+
+/** The transcript's own `PromptActions` item: copies the address of the thread opened at the prompt (`promptAnchor`). */
+const copyLink = (threads: ThreadsService) =>
+  function CopyLink(props: PromptActionProps) {
+    const href = () => new URL(`${threads.href(props.prompt.sessionId)}#${promptAnchor(props.prompt.eventId)}`, window.location.href).href;
+    return <CopyButton text={href()} label="Copy link to this prompt" icon="link" />;
+  };
 
 /** A thought, through the `chat.thinking` part, opened and closed with the chat's other disclosures. */
 function Thinking(props: { chat: Chat; id: string; text: string; redacted?: boolean; live?: boolean }) {
@@ -160,7 +205,7 @@ function BlockView(props: { chat: Chat; block: Block; scope: string; turnEnded: 
         {(b) => {
           const toolState = (): ToolState => {
             const result = b().result;
-            if (result !== undefined) return result.isError ? "error" : "ok";
+            if (result !== undefined) return result.stopped ? "interrupted" : result.isError ? "error" : "ok";
             return props.turnEnded || !props.chat.threads.busy() ? "interrupted" : "running";
           };
           return <ToolCard chat={props.chat} id={b().call.id} name={b().call.name} args={b().call.arguments} result={b().result} state={toolState()} />;
@@ -191,14 +236,12 @@ function ErrorNote(props: { message: string }) {
   );
 }
 
+/** Why a message ended, when it is worth saying: a stop the person asked for is not. */
 function StopNote(props: { item: AssistantItem }) {
   return (
     <Switch>
       <Match when={props.item.message.stopReason === "error"}>
         <ErrorNote message={props.item.message.errorMessage ?? "The model request failed."} />
-      </Match>
-      <Match when={props.item.message.stopReason === "aborted"}>
-        <p class="note">Stopped</p>
       </Match>
       <Match when={props.item.message.stopReason === "length"}>
         <p class="note">Output hit the model's token limit</p>
@@ -207,18 +250,32 @@ function StopNote(props: { item: AssistantItem }) {
   );
 }
 
+/**
+ * A model call that did not finish: a failed one as a row that opens to what it wrote. One the person stopped shows
+ * what it had written, as it was, and nothing when it had not begun.
+ */
 function Attempt(props: { chat: Chat; item: AttemptItem }) {
+  return (
+    <Show
+      when={props.item.message.stopReason !== "aborted"}
+      fallback={<Blocks chat={props.chat} blocks={props.item.blocks} scope={props.item.id} turnEnded={true} />}
+    >
+      <FailedAttempt chat={props.chat} item={props.item} />
+    </Show>
+  );
+}
+
+function FailedAttempt(props: { chat: Chat; item: AttemptItem }) {
   const { isOpen, toggle } = props.chat;
   const open = () => isOpen(props.item.id, false);
   const hasContent = () => props.item.blocks.some((block) => block.kind !== "text" || block.text.trim() !== "");
-  const label = () => (props.item.message.stopReason === "aborted" ? "Attempt cancelled" : "Attempt failed");
   return (
     <div class="attempt" classList={{ open: open() }}>
       <button class="row-head attempt-head" aria-expanded={open()} disabled={!hasContent()} onClick={() => toggle(props.item.id, false)}>
         <span class="row-icon">
           <AlertIcon />
         </span>
-        <span class="attempt-label">{label()}</span>
+        <span class="attempt-label">Attempt failed</span>
         <span class="attempt-error">{props.item.message.errorMessage ?? ""}</span>
         <span class="attempt-time">{formatDuration(props.item.timing.endedAt - props.item.timing.startedAt)}</span>
       </button>
@@ -231,20 +288,26 @@ function Attempt(props: { chat: Chat; item: AttemptItem }) {
   );
 }
 
-/** `mark`: a steer's place on the prompt rail (`PromptMark.key`), which it marks. */
+/**
+ * `mark`: a steer's place on the prompt rail (`PromptMark.key`), which it marks. A prompt's element names its event
+ * (`data-prompt`), for its link (`promptAnchor`) to find.
+ */
 function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: boolean; mark?: string | undefined }): JSX.Element {
   return (
     <Switch>
       <Match when={props.item.kind === "user" && props.item}>
-        {(item) => (
-          <Show when={props.mark} fallback={<ChatUser content={item().content} steer={item().steer} />}>
-            {(mark) => (
-              <div data-mark={mark()}>
-                <ChatUser content={item().content} steer={item().steer} />
-              </div>
-            )}
-          </Show>
-        )}
+        {(item) => {
+          const prompt = createMemo((): PromptInfo | undefined => {
+            const sessionId = props.chat.threads.activeId();
+            const { id, at, content, steer } = item();
+            return sessionId === undefined ? undefined : { sessionId, eventId: id, at, content, steer: steer === true };
+          });
+          return (
+            <div class="prompt" data-prompt={item().id} data-mark={props.mark}>
+              <ChatUser content={item().content} steer={item().steer} prompt={prompt()} />
+            </div>
+          );
+        }}
       </Match>
       <Match when={props.item.kind === "assistant" && props.item}>
         {(item) => (
@@ -295,9 +358,7 @@ function TurnFooter(props: ChatTurnFooterProps) {
   return (
     <footer class="turn-footer">
       <Show when={answer()}>{(text) => <CopyButton text={text()} label="Copy response" class="turn-copy" />}</Show>
-      <Show when={reason() === "cancelled"}>
-        <span class="badge">cancelled</span>
-      </Show>
+      {/* A turn the person stopped has no badge: they know, and its section says so (`data-end`) for a style that would show it. */}
       <Show when={reason() === "max-steps"}>
         <span class="badge badge-warn">step limit</span>
       </Show>
@@ -485,7 +546,7 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
   // A fold makes new entries each time the turn changes: keyed by entry key, what stays in view stays mounted.
   const keyed = createMemo(() => (folded() ?? []).map((entry) => ({ key: entryKey(entry), entry })));
   return (
-    <section class="turn" data-turn={props.turn.key} data-mark={props.turn.key}>
+    <section class="turn" data-turn={props.turn.key} data-mark={props.turn.key} data-end={props.turn.end?.reason}>
       <Show
         when={folded()}
         fallback={<For each={props.turn.items}>{(item) => <ItemView chat={props.chat} item={item} turnEnded={ended()} mark={markOf(item)} />}</For>}
@@ -759,14 +820,36 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
       queueMicrotask(() => (restoring === undefined ? toBottom() : restore()));
     }),
   );
+  /** The prompt the address names (`#prompt-<event id>`, a prompt's link), which the view goes to once it shows it. */
+  const linked = createMemo(() => {
+    const hash = props.chat.router.location().hash;
+    return hash.startsWith(`#${promptAnchor("")}`) ? decodeURIComponent(hash.slice(1 + promptAnchor("").length)) : undefined;
+  });
+  /** Puts the linked prompt at the top of the view, marked for a moment; false while it is not drawn (not loaded, or not on the branch). */
+  const goToLinked = (): boolean => {
+    const id = linked();
+    const element = id === undefined ? null : content.querySelector<HTMLElement>(`[data-prompt="${CSS.escape(id)}"]`);
+    if (element === null) return false;
+    restoring = undefined;
+    heading = undefined;
+    scroller.scrollTop = lastTop = Math.min(Math.max(0, topOf(element) - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
+    setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80);
+    for (const marked of content.querySelectorAll<HTMLElement>("[data-linked]")) delete marked.dataset.linked;
+    // Read the layout between, so the mark starts over on a prompt marked before.
+    void element.offsetWidth;
+    element.dataset.linked = "";
+    return true;
+  };
   let settling = 0;
   createEffect(() => {
     cancelAnimationFrame(settling);
     if (!threads.log().loaded) return;
     // Two frames: the loaded transcript is laid out (and the resize observer has had its turn) before the wait ends.
-    settling = requestAnimationFrame(() => (settling = requestAnimationFrame(() => restore(true))));
+    settling = requestAnimationFrame(() => (settling = requestAnimationFrame(() => goToLinked() || restore(true))));
   });
   onCleanup(() => cancelAnimationFrame(settling));
+  // A link to a prompt of the thread shown, followed here: the address changes, and the thread stays.
+  createEffect(on(linked, () => untrack(() => threads.log().loaded) && goToLinked(), { defer: true }));
 
   const [finding, setFinding] = createSignal(false);
   let findInput: HTMLInputElement | undefined;
@@ -878,6 +961,9 @@ export default defineWebPlugin({
     part(ChatWorkGroupPart, workGroupView(slots));
     part(ChatWorkingPart, WorkingView);
     part(ChatTurnFooterPart, TurnFooter);
+    // Its own buttons under a prompt go through the slot other plugins add theirs to: the composer's "Edit from here" is 10.
+    slots.add(PromptActions, { id: "chat.copy-prompt", order: 20, component: CopyPrompt });
+    slots.add(PromptActions, { id: "chat.prompt-link", order: 30, component: copyLink(threads) });
     // Before a view added without an order (0), whatever its plugin's id: a thread opens on its transcript.
     slots.add(Views, {
       id: "transcript",
