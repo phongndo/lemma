@@ -524,6 +524,13 @@ export interface ToolView {
   readonly action?: readonly [verb: string, one: string, many: string];
   /** A call opened, in the chat and the trajectory. */
   readonly body?: Component<ToolBodyProps>;
+  /**
+   * What a call shows the reader beside the model's text (a page it drew), where they see it without opening anything:
+   * after the turn's folded work and above its answer, while the call's line stays in the fold; under the line in a turn
+   * shown unfolded. Drawn for a call with a result only, from it: a call a script made comes with its result and, of
+   * its arguments, only `title` (`Tool.display`). A call it draws nothing for takes no room in the turn.
+   */
+  readonly display?: Component<ToolBodyProps>;
 }
 
 export const ToolViews = defineSlot<ToolView>("chat.tools");

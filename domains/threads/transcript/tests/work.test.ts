@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EventData } from "@lemma/sessions";
-import { summarizeTools, workEntries } from "../src/work.ts";
+import { displayedCalls, summarizeTools, workEntries } from "../src/work.ts";
 import type { ActionOf, WorkEntry } from "../src/work.ts";
 import { assistant, branch, toolResult, transcriptOf, user } from "@lemma/threads/testing";
 
@@ -65,5 +65,21 @@ describe("workEntries", () => {
       actionOf,
     );
     expect(two[0]!.key).toBe(one[0]!.key);
+  });
+});
+
+describe("displayedCalls", () => {
+  it("picks the calls whose view shows something outside the fold, once each has a result, in order", () => {
+    const items = itemsOf(
+      { type: "message", turnId: "t1", stepId: "s1", message: assistant([call("c1", "html_render"), call("c2")]) },
+      toolResult("c1", "shown"),
+      toolResult("c2", "ok"),
+      { type: "message", turnId: "t1", stepId: "s2", message: assistant([call("c3", "html_render"), call("c4", "html_render")]) },
+      toolResult("c4", "shown"),
+    );
+    const shows = (name: string) => name === "html_render";
+    // c3 has no result yet (it runs), so it shows nothing yet.
+    expect(displayedCalls(items, shows).map((block) => block.call.id)).toEqual(["c1", "c4"]);
+    expect(displayedCalls(items, () => false)).toEqual([]);
   });
 });

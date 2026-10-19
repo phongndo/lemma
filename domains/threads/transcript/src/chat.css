@@ -789,6 +789,12 @@
   padding: 4px 0;
 }
 
+/* What a call shows the reader outside its line (`ToolViews`' `display`): the column's full width, in line with the text. */
+.tool-display {
+  min-width: 0;
+  margin: 4px 0;
+}
+
 .tool-args,
 .output pre,
 .diff {

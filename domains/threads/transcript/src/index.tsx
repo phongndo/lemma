@@ -60,7 +60,7 @@ import type {
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
 import { thoughtHeadline } from "./thought.ts";
-import { workEntries } from "./work.ts";
+import { displayedCalls, workEntries } from "./work.ts";
 import type { WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
@@ -72,7 +72,7 @@ import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
 import { PromptRail } from "./rail.tsx";
-import { Images, ToolCard, toolView } from "./tools.tsx";
+import { Images, ToolCard, ToolDisplay, toolView } from "./tools.tsx";
 import { FindBar } from "./find-bar.tsx";
 import type { ToolState } from "./tools.tsx";
 
@@ -188,9 +188,10 @@ function ThinkingView(props: ChatThinkingProps) {
 /**
  * One block of a message. `scope` names its step (the attempt's own id for a
  * failed attempt), so a thought opened while it streamed stays open once
- * the message is logged.
+ * the message is logged. A tool call draws its view's `display` under its line
+ * unless `displays` is false: inside a fold, which draws them after itself.
  */
-function BlockView(props: { chat: Chat; block: Block; scope: string; turnEnded: boolean }) {
+function BlockView(props: { chat: Chat; block: Block; scope: string; turnEnded: boolean; displays?: boolean | undefined }) {
   return (
     <Switch>
       <Match when={props.block.kind === "text" && props.block}>{(b) => <Markdown text={b().text} />}</Match>
@@ -208,7 +209,14 @@ function BlockView(props: { chat: Chat; block: Block; scope: string; turnEnded: 
             if (result !== undefined) return result.stopped ? "interrupted" : result.isError ? "error" : "ok";
             return props.turnEnded || !props.chat.threads.busy() ? "interrupted" : "running";
           };
-          return <ToolCard chat={props.chat} id={b().call.id} name={b().call.name} args={b().call.arguments} result={b().result} state={toolState()} />;
+          return (
+            <>
+              <ToolCard chat={props.chat} id={b().call.id} name={b().call.name} args={b().call.arguments} result={b().result} state={toolState()} />
+              <Show when={props.displays !== false}>
+                <ToolDisplay chat={props.chat} id={b().call.id} name={b().call.name} args={b().call.arguments} result={b().result} state={toolState()} />
+              </Show>
+            </>
+          );
         }}
       </Match>
     </Switch>
@@ -216,8 +224,12 @@ function BlockView(props: { chat: Chat; block: Block; scope: string; turnEnded: 
 }
 
 /** A message's blocks; see `BlockView`. */
-function Blocks(props: { chat: Chat; blocks: readonly Block[]; scope: string; turnEnded: boolean }) {
-  return <For each={props.blocks}>{(block) => <BlockView chat={props.chat} block={block} scope={props.scope} turnEnded={props.turnEnded} />}</For>;
+function Blocks(props: { chat: Chat; blocks: readonly Block[]; scope: string; turnEnded: boolean; displays?: boolean | undefined }) {
+  return (
+    <For each={props.blocks}>
+      {(block) => <BlockView chat={props.chat} block={block} scope={props.scope} turnEnded={props.turnEnded} displays={props.displays} />}
+    </For>
+  );
 }
 
 /** An error in the transcript, read for a person (see `errorView`), with a button that copies what it shows. */
@@ -281,7 +293,7 @@ function FailedAttempt(props: { chat: Chat; item: AttemptItem }) {
       </button>
       <Show when={open() && hasContent()}>
         <div class="attempt-body">
-          <Blocks chat={props.chat} blocks={props.item.blocks} scope={props.item.id} turnEnded={true} />
+          <Blocks chat={props.chat} blocks={props.item.blocks} scope={props.item.id} turnEnded={true} displays={false} />
         </div>
       </Show>
     </div>
@@ -290,9 +302,16 @@ function FailedAttempt(props: { chat: Chat; item: AttemptItem }) {
 
 /**
  * `mark`: a steer's place on the prompt rail (`PromptMark.key`), which it marks. A prompt's element names its event
- * (`data-prompt`), for its link (`promptAnchor`) to find.
+ * (`data-prompt`), for its link (`promptAnchor`) to find. `displays`: as `BlockView`'s.
  */
-function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: boolean; mark?: string | undefined }): JSX.Element {
+function ItemView(props: {
+  chat: Chat;
+  item: Item;
+  turnEnded: boolean;
+  note?: boolean;
+  mark?: string | undefined;
+  displays?: boolean | undefined;
+}): JSX.Element {
   return (
     <Switch>
       <Match when={props.item.kind === "user" && props.item}>
@@ -312,7 +331,7 @@ function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: bo
       <Match when={props.item.kind === "assistant" && props.item}>
         {(item) => (
           <div class="assistant">
-            <Blocks chat={props.chat} blocks={item().blocks} scope={item().stepId ?? item().id} turnEnded={props.turnEnded} />
+            <Blocks chat={props.chat} blocks={item().blocks} scope={item().stepId ?? item().id} turnEnded={props.turnEnded} displays={props.displays} />
             <Show when={props.note !== false}>
               <StopNote item={item()} />
             </Show>
@@ -404,9 +423,11 @@ function WorkRowView(props: { chat: Chat; row: WorkRow; turnEnded: boolean }) {
   return (
     <Show
       when={props.row.kind === "block" && props.row}
-      fallback={<ItemView chat={props.chat} item={(props.row as Extract<WorkRow, { kind: "item" }>).item} turnEnded={props.turnEnded} note={false} />}
+      fallback={
+        <ItemView chat={props.chat} item={(props.row as Extract<WorkRow, { kind: "item" }>).item} turnEnded={props.turnEnded} note={false} displays={false} />
+      }
     >
-      {(row) => <BlockView chat={props.chat} block={row().block} scope={row().scope} turnEnded={props.turnEnded} />}
+      {(row) => <BlockView chat={props.chat} block={row().block} scope={row().scope} turnEnded={props.turnEnded} displays={false} />}
     </Show>
   );
 }
@@ -422,45 +443,65 @@ function Keyed<T extends { readonly key: string }>(props: { each: readonly T[]; 
  * made one after another gathered under a `chat.work-group` line, and in the
  * running turn's live run, its streaming step at the end. Each run of a
  * running turn stays open until the turn ends, unless the reader closed it,
- * so a steer joining between two runs moves nothing above it.
+ * so a steer joining between two runs moves nothing above it. After it, open
+ * or closed, what its calls show the reader (`ToolViews`' `display`), above
+ * the answer.
  */
 function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }>; drafts: readonly StepDraft[]; running: boolean }) {
   const live = () => props.work.live === true;
   const entries = createMemo(() => workEntries(props.work.items, (name) => props.chat.toolView(name)?.action));
+  // Keyed by call, so a page drawn while the turn ran stays as it is (not loaded again) as the fold is made again.
+  const displays = createMemo(() =>
+    displayedCalls(props.work.items, (name) => props.chat.toolView(name)?.display !== undefined).map((block) => ({ key: block.call.id, block })),
+  );
   const duration = () => (live() ? Math.max(0, props.chat.now() - props.work.since) : props.work.duration);
   return (
-    <ChatWork
-      steps={props.work.items.filter((item) => item.kind !== "user" && item.kind !== "compaction").length}
-      tools={props.work.tools}
-      failed={props.work.failed}
-      duration={duration()}
-      live={live()}
-      open={props.chat.isOpen(props.work.key, props.running)}
-      onToggle={() => props.chat.toggle(props.work.key, props.running)}
-    >
-      <Keyed each={entries()}>
+    <>
+      <ChatWork
+        steps={props.work.items.filter((item) => item.kind !== "user" && item.kind !== "compaction").length}
+        tools={props.work.tools}
+        failed={props.work.failed}
+        duration={duration()}
+        live={live()}
+        open={props.chat.isOpen(props.work.key, props.running)}
+        onToggle={() => props.chat.toggle(props.work.key, props.running)}
+      >
+        <Keyed each={entries()}>
+          {(entry) => (
+            <Show
+              when={entry().kind === "group" && (entry() as Extract<WorkEntry, { kind: "group" }>)}
+              fallback={<WorkRowView chat={props.chat} row={entry() as WorkRow} turnEnded={!props.running} />}
+            >
+              {(group) => (
+                <ChatWorkGroup
+                  summary={group().summary}
+                  tools={group().tools}
+                  failed={group().failed}
+                  at={group().at}
+                  open={props.chat.isOpen(group().key, props.chat.config.expandTools)}
+                  onToggle={() => props.chat.toggle(group().key, props.chat.config.expandTools)}
+                >
+                  <Keyed each={group().rows}>{(row) => <WorkRowView chat={props.chat} row={row()} turnEnded={!props.running} />}</Keyed>
+                </ChatWorkGroup>
+              )}
+            </Show>
+          )}
+        </Keyed>
+        <Index each={live() ? props.drafts : []}>{(draft) => <Draft chat={props.chat} draft={draft()} />}</Index>
+      </ChatWork>
+      <Keyed each={displays()}>
         {(entry) => (
-          <Show
-            when={entry().kind === "group" && (entry() as Extract<WorkEntry, { kind: "group" }>)}
-            fallback={<WorkRowView chat={props.chat} row={entry() as WorkRow} turnEnded={!props.running} />}
-          >
-            {(group) => (
-              <ChatWorkGroup
-                summary={group().summary}
-                tools={group().tools}
-                failed={group().failed}
-                at={group().at}
-                open={props.chat.isOpen(group().key, props.chat.config.expandTools)}
-                onToggle={() => props.chat.toggle(group().key, props.chat.config.expandTools)}
-              >
-                <Keyed each={group().rows}>{(row) => <WorkRowView chat={props.chat} row={row()} turnEnded={!props.running} />}</Keyed>
-              </ChatWorkGroup>
-            )}
-          </Show>
+          <ToolDisplay
+            chat={props.chat}
+            id={entry().block.call.id}
+            name={entry().block.call.name}
+            args={entry().block.call.arguments}
+            result={entry().block.result}
+            state={entry().block.result?.isError ? "error" : "ok"}
+          />
         )}
       </Keyed>
-      <Index each={live() ? props.drafts : []}>{(draft) => <Draft chat={props.chat} draft={draft()} />}</Index>
-    </ChatWork>
+    </>
   );
 }
 
