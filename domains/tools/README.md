@@ -1,6 +1,6 @@
 # tools
 
-What the model can call, and how calls run. Its contract is [`@lemma/tools`](contract/src/tools.ts), with helpers for tools that bound their output, touch files or inline images (`/files`), draw pages in the chat or check them (`/html`), and test themselves (`/testing`).
+What the model can call, and how calls run. Its contract is [`@lemma/tools`](contract/src/tools.ts), with helpers for tools that bound their output, touch files or inline images (`/files`), show changes to text (`/diff`), draw pages in the chat or check them (`/html`), and test themselves (`/testing`).
 
 The file tools reach any path the host's user can, not only the project's:
 confining them is a policy, and `Guards` is where a plugin sets one
