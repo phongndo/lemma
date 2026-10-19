@@ -103,4 +103,19 @@ describe("configSetting", () => {
       dispose();
     });
   });
+
+  it("writes the running value back while another write settles, as a switch flipped twice does", async () => {
+    const { plugins, notify, writes } = harness();
+    await createRoot(async (dispose) => {
+      const count = configSetting<number>(plugins, notify, "p", "count");
+      count.set(5);
+      count.set(8);
+      expect(count.value()).toBe(8);
+      expect(writes.map((write) => write.values)).toEqual([{ count: 5 }, { count: null }]);
+      for (const write of writes) write.settle(true);
+      await settled();
+      expect(count.value()).toBe(8);
+      dispose();
+    });
+  });
 });

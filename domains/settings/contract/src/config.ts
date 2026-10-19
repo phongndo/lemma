@@ -26,14 +26,16 @@ export const configSetting = <T>(plugins: PluginsService, notify: NotifyService,
     const value = found.config?.values[key];
     return (value === undefined ? field()?.default : value) as T | undefined;
   };
+  const shown = (): T | undefined => {
+    const wanted = pending();
+    return wanted === undefined || same(wanted.value, running()) ? running() : wanted.value;
+  };
   return {
-    value: () => {
-      const wanted = pending();
-      return wanted === undefined || same(wanted.value, running()) ? running() : wanted.value;
-    },
+    value: shown,
     set: (value) => {
       const found = row();
-      if (found === undefined || same(value, running())) return;
+      // Against what shows: the running value written back while another write settles is a write of its own.
+      if (found === undefined || same(value, shown())) return;
       const fallback = field()?.default;
       const mine = { value };
       setPending(mine);
