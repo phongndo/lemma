@@ -12,7 +12,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
   "packages/contracts": 2_600,
-  "packages/host": 2_750,
+  "packages/host": 2_800,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,

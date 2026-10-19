@@ -435,9 +435,15 @@ importers:
       '@lemma/tools-bash':
         specifier: workspace:*
         version: link:../../domains/tools/bash
+      '@lemma/tools-codemode':
+        specifier: workspace:*
+        version: link:../../domains/tools/codemode
       '@lemma/tools-edit':
         specifier: workspace:*
         version: link:../../domains/tools/edit
+      '@lemma/tools-html':
+        specifier: workspace:*
+        version: link:../../domains/tools/html
       '@lemma/tools-read':
         specifier: workspace:*
         version: link:../../domains/tools/read
@@ -792,6 +798,87 @@ importers:
       '@lemma/sessions-files':
         specifier: workspace:*
         version: link:../../sessions/files
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../../tools/registry
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/browser/chromium:
+    dependencies:
+      '@lemma/browser':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../tools/contract
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      playwright-core:
+        specifier: 1.64.0
+        version: 1.64.0
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/browser/contract:
+    dependencies:
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/browser/tools:
+    dependencies:
+      '@lemma/browser':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../tools/contract
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@lemma/browser-chromium':
+        specifier: workspace:*
+        version: link:../chromium
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../tools/registry
@@ -2768,22 +2855,40 @@ importers:
       '@earendil-works/pi-codemode':
         specifier: 1.2.0
         version: 1.2.0
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
     devDependencies:
-      '@lemma/contracts':
+      '@lemma/sessions-files':
         specifier: workspace:*
-        version: link:../../../packages/contracts
+        version: link:../../sessions/files
       '@lemma/tools-bash':
         specifier: workspace:*
         version: link:../bash
@@ -2852,6 +2957,74 @@ importers:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
     devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/tools/html:
+    dependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
+  domains/tools/lemma:
+    dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/llm':
+        specifier: workspace:*
+        version: link:../../llm/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../contract
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../registry
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
@@ -3826,6 +3999,15 @@ importers:
       '@lemma/agent-profiles':
         specifier: workspace:*
         version: link:../../domains/agent/profiles
+      '@lemma/browser':
+        specifier: workspace:*
+        version: link:../../domains/browser/contract
+      '@lemma/browser-chromium':
+        specifier: workspace:*
+        version: link:../../domains/browser/chromium
+      '@lemma/browser-tools':
+        specifier: workspace:*
+        version: link:../../domains/browser/tools
       '@lemma/cli':
         specifier: workspace:*
         version: link:../../domains/cli/contract
@@ -3925,6 +4107,12 @@ importers:
       '@lemma/tools-edit':
         specifier: workspace:*
         version: link:../../domains/tools/edit
+      '@lemma/tools-html':
+        specifier: workspace:*
+        version: link:../../domains/tools/html
+      '@lemma/tools-lemma':
+        specifier: workspace:*
+        version: link:../../domains/tools/lemma
       '@lemma/tools-read':
         specifier: workspace:*
         version: link:../../domains/tools/read
