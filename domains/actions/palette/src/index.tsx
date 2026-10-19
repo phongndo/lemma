@@ -10,10 +10,12 @@ import { loadStrings, save } from "@lemma/web/storage";
 import { relativeTime, tildePath } from "@lemma/web/format";
 import { parseQuery, rank, remember } from "@lemma/web/match";
 import type { Searchable } from "@lemma/web/match";
-import { sessionTitle, Threads } from "@lemma/threads";
+import { isBlank, sessionTitle, Threads, ThreadWaits, waitingOn } from "@lemma/threads";
+import { SessionChannels } from "@lemma/sessions";
+import type { SessionInfo } from "@lemma/sessions";
 import { Commands } from "@lemma/commands/web";
 import { Dialogs, Layers } from "@lemma/frame";
-import { Client, Interactions, Slots, WebPlugins, defineWebPlugin, Isolated, Highlighted } from "@lemma/web";
+import { Client, Interactions, Slots, WebPlugins, defineWebPlugin, Isolated, Highlighted, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { PaletteItem, PaletteSource } from "@lemma/actions";
 import type { DialogsService } from "@lemma/frame";
@@ -56,6 +58,9 @@ interface Asking {
 const RECENT_KEY = "lemma.palette.recent";
 const SESSIONS_BROWSED = 8;
 const RESULTS = 60;
+/** A source's `search` is asked once this many letters are typed, and typing has paused this long (ms). */
+const SEARCH_MIN = 2;
+const SEARCH_PAUSE = 200;
 
 const loadRecent = (): string[] => loadStrings(RECENT_KEY);
 
@@ -200,10 +205,49 @@ function Palette(props: { deps: Deps }) {
     ),
   );
 
+  // ---------------------------------------------------------------- search
+
+  /** What the sources' `search` found for `text`, by source; `pending` until each has answered. */
+  interface Found {
+    readonly text: string;
+    readonly labels: readonly string[];
+    readonly groups: readonly { readonly label: string; readonly items: readonly Item[]; readonly error?: string }[];
+    readonly pending: boolean;
+  }
+  const [found, setFound] = createSignal<Found>();
+  const plugin = usePlugin();
+  createEffect(() => {
+    const { prefix, text } = parseQuery(query(), prefixes());
+    const typed = text.trim();
+    const searching = (prefix === undefined ? sources() : sources().filter((source) => source.prefix === prefix)).flatMap((source) =>
+      source.search === undefined ? [] : [{ label: source.searchLabel ?? source.label, search: source.search }],
+    );
+    if (asking() !== undefined || running() !== undefined || typed.length < SEARCH_MIN || searching.length === 0) return void setFound(undefined);
+    const labels = searching.map((source) => source.label);
+    setFound({ text: typed, labels, groups: [], pending: true });
+    const abort = new AbortController();
+    const cancel = plugin.after(SEARCH_PAUSE, () => {
+      const answers = searching.map((source) =>
+        source.search(typed, { signal: abort.signal }).then(
+          (items) => ({ label: source.label, items }),
+          (error: unknown) => ({ label: source.label, items: [], error: error instanceof Error ? error.message : String(error) }),
+        ),
+      );
+      void Promise.all(answers).then((groups) => {
+        if (!abort.signal.aborted) setFound({ text: typed, labels, groups, pending: false });
+      });
+    });
+    onCleanup(() => {
+      cancel();
+      abort.abort();
+    });
+  });
+
   // ---------------------------------------------------------------- rows
 
   type Row =
     | { readonly type: "heading"; readonly label: string }
+    | { readonly type: "note"; readonly label: string }
     | { readonly type: "item"; readonly item: Item; readonly matches: readonly number[]; readonly index: number };
 
   const rows = createMemo((): Row[] => {
@@ -218,7 +262,26 @@ function Palette(props: { deps: Deps }) {
     const { prefix, text } = parseQuery(query(), prefixes());
     let index = 0;
     const item = (entry: { item: Item; matches: readonly number[] }): Row => ({ type: "item", ...entry, index: index++ });
-    if (text.trim() !== "") return rank(pool(prefix), text, recent()).slice(0, RESULTS).map(item);
+    if (text.trim() !== "") {
+      const ranked = rank(pool(prefix), text, recent()).slice(0, RESULTS).map(item);
+      // Then what the sources found elsewhere (`search`), but for what is listed already.
+      const more = found();
+      if (more === undefined || more.text !== text.trim()) return ranked;
+      if (more.pending) return [...ranked, { type: "note", label: `Searching ${more.labels.join(" and ")}…` }];
+      const listed = new Set(ranked.flatMap((row) => (row.type === "item" ? [row.item.key] : [])));
+      return [
+        ...ranked,
+        ...more.groups.flatMap((group): Row[] => {
+          if (group.error !== undefined)
+            return [
+              { type: "heading", label: `In ${group.label}` },
+              { type: "note", label: group.error },
+            ];
+          const items = group.items.filter((entry) => !listed.has(entry.key));
+          return items.length === 0 ? [] : [{ type: "heading", label: `In ${group.label}` }, ...items.map((entry) => item({ item: entry, matches: [] }))];
+        }),
+      ];
+    }
     if (prefix !== undefined) return pool(prefix).map((entry) => item({ item: entry, matches: [] }));
     // Browsing: recent choices, then each source in order (commands, the latest threads, projects, and what plugins add).
     const all = pool(undefined);
@@ -408,6 +471,10 @@ function Palette(props: { deps: Deps }) {
                     <div class="palette-section" role="presentation">
                       {row.label}
                     </div>
+                  ) : row.type === "note" ? (
+                    <div class="palette-note" role="presentation">
+                      {row.label}
+                    </div>
                   ) : (
                     <div
                       id={`${listId}-${row.index}`}
@@ -564,23 +631,46 @@ export default defineWebPlugin({
         })),
       ],
     });
+    /** What a thread is doing that the person would want to know: waiting on them, or at work; archived, else when it was used. */
+    const stateOf = (session: SessionInfo) =>
+      waitingOn(slots.list(ThreadWaits), session.id) ??
+      (threads.running().includes(session.id) ? "Working" : session.archived === true ? "Archived" : relativeTime(session.updatedAt));
+    const threadItem = (session: SessionInfo, detail: string): PaletteItem => ({
+      key: `session:${session.id}`,
+      title: sessionTitle(session),
+      detail,
+      keywords: [
+        workspace.projectName(session.cwd),
+        basename(session.cwd),
+        session.id,
+        ...(session.pinned === true ? ["pinned"] : []),
+        ...(session.archived === true ? ["archived"] : []),
+      ],
+      current: session.id === threads.activeId(),
+      icon: ChatIcon,
+      run: () => void threads.select(session.id),
+    });
     source("palette.threads", 10, {
       label: "threads",
       heading: "Threads",
       prefix: "@",
       browse: SESSIONS_BROWSED,
       items: () =>
-        [...threads.list()]
+        threads
+          .list()
+          .filter((session) => !isBlank(session))
           .sort((a, b) => b.updatedAt - a.updatedAt)
-          .map((session) => ({
-            key: `session:${session.id}`,
-            title: sessionTitle(session),
-            detail: `${workspace.projectName(session.cwd)} · ${relativeTime(session.updatedAt)}`,
-            keywords: [workspace.projectName(session.cwd), basename(session.cwd), session.id],
-            current: session.id === threads.activeId(),
-            icon: ChatIcon,
-            run: () => void threads.select(session.id),
-          })),
+          .map((session) => threadItem(session, `${workspace.projectName(session.cwd)} · ${stateOf(session)}`)),
+      // What was said in them, the host's search: each thread its title doesn't already list, with the words around it.
+      searchLabel: "messages",
+      search: async (text, { signal }) => {
+        const matches = await client.channel.call(SessionChannels.search, { query: text }, { signal });
+        const byId = new Map(threads.list().map((session) => [session.id, session]));
+        return matches.flatMap((match) => {
+          const session = byId.get(match.sessionId);
+          return session === undefined ? [] : [threadItem(session, `${match.role === "user" ? "You: " : ""}${match.snippet}`)];
+        });
+      },
     });
     source("palette.projects", 20, {
       label: "projects",
@@ -593,7 +683,7 @@ export default defineWebPlugin({
           detail: tildePath(path, client.info()?.home),
           keywords: [path, basename(path)],
           icon: FolderIcon,
-          run: () => threads.newThread(path),
+          run: () => void threads.newThread(path, { inPlace: true }),
         }));
       },
     });

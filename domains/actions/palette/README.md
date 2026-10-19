@@ -13,11 +13,11 @@ command that asks goes on here. Requires `Client`, `Threads`
 (`@lemma/commands/web`), `Interactions`, `Dialogs`, `WebPlugins`, and `Slots`.
 No config.
 
-| Source             | Order | Prefix | What it lists                                                                                                                                                  |
-| ------------------ | ----- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `palette.commands` | 0     | `>`    | `Actions` not `hidden` whose `when` holds, each with its first key (the user's `bindings` over its own), then the host's commands (`Commands`), run `keepOpen` |
-| `palette.threads`  | 10    | `@`    | Threads, latest first, also found by project, folder, and id; 8 while browsing; picking one opens it                                                           |
-| `palette.projects` | 20    | `#`    | Projects, also found by path; picking one starts a new thread in it                                                                                            |
+| Source             | Order | Prefix | What it lists                                                                                                                                                                                                                                        |
+| ------------------ | ----- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `palette.commands` | 0     | `>`    | `Actions` not `hidden` whose `when` holds, each with its first key (the user's `bindings` over its own), then the host's commands (`Commands`), run `keepOpen`                                                                                       |
+| `palette.threads`  | 10    | `@`    | Threads, latest first, each with what it waits on (`ThreadWaits`) or whether it works; also found by project, folder, id, `pinned`, `archived`, and what was said in them (`sessions.search`, `In messages`); 8 while browsing; picking one opens it |
+| `palette.projects` | 20    | `#`    | Projects, also found by path; picking one starts a new thread in it                                                                                                                                                                                  |
 
 ## Behavior
 
@@ -25,6 +25,10 @@ No config.
   Recent, then each source in order without them, up to its `browse`, under
   its `heading`; a source without one (the commands) leads unnamed. A prefix
   alone lists its source's items as they come.
+- **Searching elsewhere.** A source's `search` (the threads' asks the host
+  what was said in them) is asked once two letters are typed and typing has
+  paused 200 ms: `Searching messages…` shows meanwhile, then what it found
+  under `In messages`, but for what the list already holds.
 - **Searching** is `rank` from `@lemma/web/match`: every word must match an
   item's title or, more weakly, its keywords. The 20 choices last made, kept
   in this browser (`lemma.palette.recent`), rank a little higher. At most 60

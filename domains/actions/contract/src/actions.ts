@@ -21,6 +21,11 @@ export interface Action {
   readonly global?: boolean;
   /** Its keys work in a text field; keys with `mod` always do. */
   readonly whileTyping?: boolean;
+  /**
+   * Its keys reach the app even while a web page in it has focus (the browser view's, in the desktop app), as a browser
+   * keeps its tab keys from the page it shows; a page keeps the others (⌘B, ⌘I, ⌘K for its editors).
+   */
+  readonly inPages?: boolean;
   /** Not listed in the palette. */
   readonly hidden?: boolean;
   /**
@@ -69,6 +74,15 @@ export interface PaletteSource {
   /** While browsing, at most this many of its items. */
   readonly browse?: number;
   readonly items: () => readonly PaletteItem[];
+  /**
+   * More items for what is typed, found elsewhere (the host's search), after its own: asked once typing pauses on two
+   * or more letters, and again as the text changes; `signal` aborts once the answer is no longer wanted. They show in
+   * the order given, under `searchHeading`, but for those whose `key` the results already hold. A rejection's message
+   * shows in their place.
+   */
+  readonly search?: ((text: string, context: { readonly signal: AbortSignal }) => Promise<readonly PaletteItem[]>) | undefined;
+  /** What its `search` looks through, as the heading its results show under, and in `Searching …`: `messages`. */
+  readonly searchLabel?: string | undefined;
 }
 
 export const PaletteSources = defineSlot<PaletteSource>("palette.sources");
