@@ -13,10 +13,15 @@ import {
   SessionRemoved,
   SessionRemoveHook,
   Sessions,
-} from "@lemma/sessions";
-import type { EventData, SessionEvent } from "@lemma/sessions";
+} from "./sessions.ts";
+import type { EventData, SessionEvent } from "./sessions.ts";
 
 type Store = Context.Service.Shape<typeof Sessions>;
+
+/*
+ * `@lemma/sessions/testing`: the `Sessions` contract as a Vitest suite, which a plugin replacing `sessions.files` runs
+ * to meet the same bar (`sessionsConformance`). Imports `vitest`: for tests only.
+ */
 
 /**
  * The provider's deletions of a session's stored data, which the suite holds

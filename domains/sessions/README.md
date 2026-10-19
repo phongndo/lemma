@@ -7,6 +7,8 @@ The session log, the source of truth every request is rebuilt from, and its stor
 | [`sessions.files`](files/README.md) | host   | Stores each session as a JSONL file: provides `Sessions`, and serves it as the `sessions.*` channels |
 | [`sessions.cli`](cli/README.md)     | host   | The `lemma` command's `sessions …`, `inspect` among them: adds them to `CliCommands`                 |
 
+A plugin replacing `sessions.files` runs `sessionsConformance` from `@lemma/sessions/testing`: the tests `sessions.files` passes, against the contract alone.
+
 ## Extending it
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):

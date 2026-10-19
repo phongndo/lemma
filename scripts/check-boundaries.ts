@@ -140,9 +140,13 @@ for (const [name, pkg] of contractPackages) {
     if (!contractAllowed(dependency))
       contractProblems.push(`${home}/package.json: runtime dependency "${dependency}" (a contract depends on the runtime's packages and other contracts)`);
   }
+  // Its `./testing` export is test support (a conformance suite's recorder), which may define plugins of its own.
+  const exports = pkg.manifest.exports as Readonly<Record<string, string>> | string | undefined;
+  const testing = typeof exports === "object" && exports["./testing"] !== undefined ? resolve(pkg.dir, exports["./testing"]) : undefined;
   for (const file of walk(join(pkg.dir, "src")).filter((path) => /\.(ts|tsx|mts)$/.test(path))) {
     const text = readFileSync(file, "utf8");
-    if (/\bdefine(Web)?Plugin\s*\(/.test(text)) contractProblems.push(`${relative(root, file)}: defines a plugin (a contract declares; its plugins implement)`);
+    if (file !== testing && /\bdefine(Web)?Plugin\s*\(/.test(text))
+      contractProblems.push(`${relative(root, file)}: defines a plugin (a contract declares; its plugins implement)`);
     for (const match of text.matchAll(importPattern)) {
       const specifier = match[1]!;
       const escapes = specifier.startsWith(".") && !inside(pkg.dir, resolve(dirname(file), specifier));

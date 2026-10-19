@@ -37,6 +37,11 @@ regular files and directories, POSIX paths.
 
 ## Conformance suites
 
+The suites live with the contracts they check, where a plugin replacing a
+provider finds them: `@lemma/sessions/testing`, `@lemma/llm/testing`, and
+`@lemma/tools/testing`. This package re-exports them for the repository's own
+tests.
+
 `sessionsConformance(name, compose)` registers the `Sessions` contract as Vitest
 tests, against whatever plugins `compose` returns: the sessions plugin runs it
 on a simulated and a real disk, and a plugin written to replace it can run the

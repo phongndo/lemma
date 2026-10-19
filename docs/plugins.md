@@ -213,6 +213,12 @@ run its tool through `tools.registry` against a fake `Sessions`. A tool alone
 runs with `@lemma/tools/testing`. A folder plugin is a workspace package of
 its own when it lives in this repository, as the examples are.
 
+A plugin that replaces a provider runs its contract's conformance suite, the
+same tests the bundled provider passes: `sessionsConformance` from
+`@lemma/sessions/testing` for a `Sessions`, `llmConformance` from
+`@lemma/llm/testing` for an `Llm`, and `toolsConformance` from
+`@lemma/tools/testing` for a `ToolRunner`.
+
 `lemma plugins check [path]` runs a plugin file or folder as a host would
 before you install it. It starts a host in a home of its own with the plugin
 linked in, and reports:

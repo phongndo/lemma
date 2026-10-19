@@ -22,6 +22,8 @@ while it runs (`outputFile`).
 | [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show           |
 | [`tools.ask`](ask/README.md)               | host + web | The `ask_user` tool: questions for the user, answered above the composer            |
 
+A plugin replacing `tools.registry` runs `toolsConformance` from `@lemma/tools/testing`: the tests `tools.registry` passes, against the contract alone.
+
 ## Extending it
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):
