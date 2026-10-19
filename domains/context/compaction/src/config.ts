@@ -18,5 +18,9 @@ export const Config = Schema.Struct({
     title: "Summary model",
     description: "The model that writes summaries, as provider/model; the turn's model when unset.",
   }),
+  review: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
+    title: "Review summaries",
+    description: "Have a model that sees only the summary ask what it leaves out, and the turn's model answer: two more model calls per summary.",
+  }),
 });
 export type Config = typeof Config.Type;

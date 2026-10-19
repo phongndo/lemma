@@ -22,13 +22,13 @@ export const makeRequestIndex = (sessions: Context.Service.Shape<typeof Sessions
     }
     return known;
   };
-  /** Adds the requests `log` places, and counts the session as read. */
+  /** Adds the requests `log` places (a person's user messages, and the `context` a plugin's notice became), and counts the session as read. */
   const index = (sessionId: string, log: readonly SessionEvent[]) => {
     const known = of(sessionId);
     for (const event of log) {
-      if (event.data.type === "message" && event.data.message.role === "user" && event.data.requestId !== undefined && !known.has(event.data.requestId)) {
-        known.set(event.data.requestId, event.data.turnId);
-      }
+      const data = event.data;
+      const placed = (data.type === "message" && data.message.role === "user") || data.type === "context" ? data : undefined;
+      if (placed?.requestId !== undefined && !known.has(placed.requestId)) known.set(placed.requestId, placed.turnId);
     }
     loaded.add(sessionId);
   };

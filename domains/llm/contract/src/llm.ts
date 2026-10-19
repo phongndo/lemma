@@ -383,6 +383,14 @@ export class LlmRequest extends Schema.Class<LlmRequest>("lemma/LlmRequest")({
   model: ModelRef,
   system: Schema.optional(Schema.String),
   messages: Schema.Array(Message),
+  /**
+   * Thinking in the messages before this index was made under another system prompt, tools, or start of history than
+   * this request's (its caller declared them afresh since: a compaction, another model, a new tool). A model that
+   * binds a reply's thinking to the request it answered (Anthropic's adaptive-thinking models reject it once anything
+   * before it changed) leaves that thinking out, even a tool round's in flight; one that does not sends it. Absent: all
+   * of it was made under this request's prefix.
+   */
+  thinkingFrom: Schema.optional(Schema.Number),
   tools: Schema.optional(Schema.Array(ToolSpec)),
   thinking: Schema.optional(ThinkingLevel),
   maxTokens: Schema.optional(Schema.Number),

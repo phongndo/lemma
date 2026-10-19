@@ -31,7 +31,7 @@ that put something in it (`pluginShares`). Requires `Threads` and the runtime's
 - **Following.** Sorted by time, the table keeps its newest row in view as rows
   arrive, until the reader scrolls up; Follow brings it back. Grouping by turn
   holds in time order only: a table sorted otherwise is flat.
-- **The pipeline**, from the log: for a model call, the compactions before its
+- **The pipeline**, from the log: for a model call, the compactions and prompt updates before its
   request, the `AgentRequestHook` handlers (each one's own time and what it
   changed), the failed attempts and when each was asked again, the answer, the
   `LlmProviderHeadersHook` handlers, and why the turn went on or stopped

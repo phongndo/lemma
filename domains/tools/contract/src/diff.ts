@@ -1,4 +1,9 @@
-/** A minimal line diff and unified patch writer, enough for showing an edit. */
+/**
+ * `@lemma/tools/diff`: the unified diff of a change to a text file (`unifiedPatch`), as the bundled `edit` and
+ * `apply_patch` put it in their results' details, for the chat to show.
+ */
+
+// A minimal line diff and unified patch writer, enough for showing a change.
 
 type Op = { readonly kind: "same" | "del" | "add"; readonly line: string };
 
@@ -56,14 +61,18 @@ function diffLines(a: readonly string[], b: readonly string[]): Op[] {
 
 const render = (prefix: string, line: string) => (line.endsWith("\n") ? `${prefix}${line}` : `${prefix}${line}\n\\ No newline at end of file\n`);
 
-export interface Patch {
+export interface UnifiedPatch {
   /** Standard unified diff (`---`/`+++` headers, `@@` hunks). Empty when nothing changed. */
   readonly patch: string;
   /** First changed line in the new file, for editor navigation. */
   readonly firstChangedLine?: number;
 }
 
-export function unifiedPatch(file: string, before: string, after: string, context = 4): Patch {
+/**
+ * The unified diff from `before` to `after`, with `context` lines around each change. `file` names both sides, or each
+ * (`{ from, to }`: a moved file, or `/dev/null` for one added or deleted).
+ */
+export function unifiedPatch(file: string | { readonly from: string; readonly to: string }, before: string, after: string, context = 4): UnifiedPatch {
   const ops = diffLines(splitLines(before), splitLines(after));
   const oldBefore: number[] = [];
   const newBefore: number[] = [];
@@ -79,7 +88,8 @@ export function unifiedPatch(file: string, before: string, after: string, contex
   });
   if (changes.length === 0) return { patch: "" };
 
-  let out = `--- ${file}\n+++ ${file}\n`;
+  const { from, to } = typeof file === "string" ? { from: file, to: file } : file;
+  let out = `--- ${from}\n+++ ${to}\n`;
   for (let c = 0; c < changes.length;) {
     const start = Math.max(0, changes[c]! - context);
     let end = Math.min(ops.length, changes[c]! + 1 + context);

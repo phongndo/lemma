@@ -22,6 +22,7 @@
     "@lemma/testing": "workspace:*",
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
+    "@lemma/tools-patch": "workspace:*",
     "@lemma/tools-read": "workspace:*",
     "@lemma/tools-write": "workspace:*",
     "@types/node": "24.19.2",

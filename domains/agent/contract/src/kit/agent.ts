@@ -9,7 +9,7 @@ import type { IdSource, ResultCredit } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { InProgress } from "@lemma/cli";
-import { Agent, AgentError, PromptSections, QueueChanged, serveAgent } from "../agent.ts";
+import { Agent, AgentError, ModelNotice, PromptSections, QueueChanged, serveAgent } from "../agent.ts";
 import type { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved } from "@lemma/sessions";
 import type { Sessions } from "@lemma/sessions";
@@ -31,7 +31,7 @@ import { admission, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from ".
 import type { Item, QueuedTurn, SessionState, Suspended } from "./queue.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, runTurn, toolLoop } from "./turn.ts";
-import type { Ended, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
+import type { Ended, Placed, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
 
 /** The agent's settings: its row's `config`, for `agent.loop` and any loop built on the kit. */
 export const AgentConfig = Schema.Struct({
@@ -141,6 +141,15 @@ const ID_BYTES = 6;
  * used: a bound on the memory they hold, which may be events the store has let go of (kept branches do not expire).
  */
 const BRANCHES_KEPT = 16;
+
+/** A queued prompt as a turn places it: what its user message carries, or a plugin's `context` event. */
+const placedOf = ({ requestId, content, credit, source, display }: QueuedPrompt): Placed => ({
+  requestId,
+  content,
+  ...(credit === undefined ? {} : { credit }),
+  ...(source === undefined ? {} : { source }),
+  ...(display === undefined ? {} : { display }),
+});
 
 export { MAX_QUEUED, WITHDRAWN_KEPT } from "./queue.ts";
 
@@ -374,6 +383,8 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
             ...(Object.keys(turnOptions).length === 0 ? {} : { options: turnOptions }),
             at: yield* Clock.currentTimeMillis,
             ...(credit === undefined ? {} : { credit }),
+            ...(options.source === undefined ? {} : { source: options.source }),
+            ...(options.source === undefined || options.display === undefined ? {} : { display: options.display }),
           },
           done: yield* Deferred.make<void, AgentError>(),
           placing: false,
@@ -389,11 +400,7 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
             .queue.filter((item) => item.prompt.mode === "steer")
             .map((item) => {
               item.placing = true;
-              return {
-                requestId: item.prompt.requestId,
-                content: item.prompt.content,
-                ...(item.prompt.credit === undefined ? {} : { credit: item.prompt.credit }),
-              };
+              return placedOf(item.prompt);
             }),
         ),
       ),
@@ -474,7 +481,7 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
       return runTurn(services, settings, {
         ...turnInput(sessionId, entry, info),
         model,
-        prompts: entry.prompts.map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
+        prompts: entry.prompts.map(placedOf),
         ...(thinking === undefined ? {} : { thinking }),
         ...(plugins === undefined ? {} : { plugins }),
       });
@@ -511,9 +518,7 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
         return yield* runTurn(services, settings, {
           ...turnInput(sessionId, entry, info),
           ...(model === undefined ? {} : { model }),
-          prompts: entry.prompts
-            .filter((prompt) => !plan.placed.has(prompt.requestId))
-            .map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
+          prompts: entry.prompts.filter((prompt) => !plan.placed.has(prompt.requestId)).map(placedOf),
           resume: turnResume,
           ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
           ...(plan.plugins === undefined ? {} : { plugins: plan.plugins }),
@@ -658,6 +663,7 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
             };
             state.restored = true;
             state.held = state.queue.length > 0 && !runsOn(unclosed.reason);
+            state.ranToEnd = runsOn(unclosed.reason);
             for (const item of state.queue) item.placing = false;
             yield* persistOrWarn(sessionId);
             return yield* settle;
@@ -667,6 +673,7 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
           // Steers this turn took but did not place (it ended first) can be withdrawn again.
           for (const item of state.queue) item.placing = false;
           const reason: TurnOutcome = Exit.isSuccess(exit) ? exit.value : interrupted ? "cancelled" : "error";
+          state.ranToEnd = runsOn(reason);
           const next = state.queue[0];
           // One that only closes ended before: the queue runs on unless that held it, and a prompt since let it go.
           if (next !== undefined && (entry.closing === undefined ? runsOn(reason) : !state.held)) {
@@ -733,8 +740,9 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
                 const admitting = admission(sessionId, state, { requestId, whenBusy }, requests.of(sessionId));
                 switch (admitting.kind) {
                   case "queued":
-                    // Held after a failed or cancelled turn: the retry starts it, as a new prompt would.
-                    if (admitting.start) {
+                    // Held after a failed or cancelled turn: the retry starts it, as a new prompt would (not a
+                    // plugin's, which waits with it).
+                    if (admitting.start && placingOptions.source === undefined) {
                       const lease = yield* holdFor(sessionId);
                       yield* start(sessionId, newId(), state.queue, lease, { taking: (taken) => setQueue(taken, []) });
                     }
@@ -754,9 +762,9 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
                       Effect.andThen(
                         setQueue(queued, [...queued.queue, item]),
                         Effect.sync(() => {
-                          // Behind a turn that only closes one that ended before, a new prompt lets go of a queue that
-                          // ended held, as it would have had the turn closed then.
-                          if (queued.turn?.closing !== undefined) queued.held = false;
+                          // Behind a turn that only closes one that ended before, a person's new prompt lets go of a
+                          // queue that ended held, as it would have had the turn closed then. A plugin's does not.
+                          if (queued.turn?.closing !== undefined && placingOptions.source === undefined) queued.held = false;
                         }),
                       ),
                     );
@@ -764,6 +772,19 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
                     return item.done;
                   }
                   case "start": {
+                    // A plugin's prompt starts a turn only after one that ran to its end, with nothing held: one the
+                    // user stopped, or that failed, stays stopped, and the prompt waits, held, for theirs.
+                    if (placingOptions.source !== undefined && !(state.ranToEnd && state.queue.length === 0)) {
+                      const item = yield* makeItem(placing, placingOptions, "follow-up", credit);
+                      yield* recorded(sessionId, (queued) =>
+                        Effect.andThen(
+                          setQueue(queued, [...queued.queue, item]),
+                          Effect.sync(() => void (queued.held = true)),
+                        ),
+                      );
+                      yield* queueChanged(sessionId);
+                      return item.done;
+                    }
                     const lease = yield* holdFor(sessionId);
                     // Prompts held after a failed or cancelled turn go first, then this one.
                     const item = yield* makeItem(placing, placingOptions, "follow-up", credit);
@@ -1061,6 +1082,44 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
     // that a call into the store is made under (not `admit`). One deleted while no instance listened (between two,
     // say) is found gone when the next starts.
     yield* owner.observe(SessionRemoved, ({ sessionId }) => removed(sessionId), { overflow: "suspend" });
+    /**
+     * The model and thinking the session's last turn ran with, for a turn a notice starts: a notice chooses none, and
+     * the agent's default may be another model, whose turn would also declare the prompt afresh.
+     */
+    const lastTurnOptions = (sessionId: string): Effect.Effect<TurnOptions> =>
+      sessions.branch(sessionId).pipe(
+        Effect.map((branch): TurnOptions => {
+          for (let i = branch.length - 1; i >= 0; i--) {
+            const data = branch[i]!.data;
+            if (data.type !== "turn-start") continue;
+            return { ...(data.model === undefined ? {} : { model: data.model }), ...(data.thinking === undefined ? {} : { thinking: data.thinking }) };
+          }
+          return {};
+        }),
+        Effect.catch(() => Effect.succeed({})),
+      );
+    // A plugin's notice for the model, placed as its `context`: steering the running turn, or starting one after a turn
+    // that ran to its end (else waiting for the user's next prompt; see `PromptOptions.source`). Forked with the turns,
+    // so the observer does not wait for the turn, and the agent closing stops the wait.
+    yield* owner.observe(
+      ModelNotice,
+      ({ sessionId, id, source, content, display }) =>
+        Effect.asVoid(
+          Effect.forkIn(
+            Effect.flatMap(lastTurnOptions(sessionId), (options) =>
+              prompt(sessionId, content, {
+                ...options,
+                whenBusy: "steer",
+                requestId: `${source}:${id}`,
+                source,
+                ...(display === undefined ? {} : { display }),
+              }),
+            ).pipe(Effect.catch((error) => Effect.logWarning(`agent: ${source}'s notice for session ${sessionId} was not placed: ${error.message}`))),
+            turns,
+          ),
+        ),
+      { overflow: "suspend" },
+    );
 
     // What the last instance left: each session's journal becomes its state, as it was, its turn suspended.
     const journals = yield* readJournals(files);

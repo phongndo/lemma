@@ -43,7 +43,10 @@ Effect.gen(function* () {
 The `agent.base` section ([`kit/prompt.ts`](../contract/src/kit/prompt.ts)) says how the agent
 works, not how to use any tool: that is in each tool's own description, so a
 replaced or removed tool takes its advice with it, and the section's text is the
-same for every request.
+same for every request. What a thread's agent is for (coding, writing) is its
+profile's ([`agent.profiles`](../profiles/README.md)). Every line of a prompt
+moves results, either way, so each is worth measuring against the
+[eval](../../../evals/harbor/README.md).
 
 ## A turn
 
@@ -77,6 +80,18 @@ same for every request.
    appends (`requestFrom`), which is `rebuildRequest` over the branch ending at
    that event: where `Verify` is on (every simulated run), each request is
    checked against a rebuild from the store's branch.
+
+   A request extends the previous one on the branch (see [Append-only
+   requests](#append-only-requests)): it sends that request's system prompt and
+   declared tools again, and a `prompt-update` event, appended before it, tells
+   the model what changed in the sections and which declared tools it no longer
+   offers. It declares them afresh (`restart` on the `request` event) when it
+   cannot extend it: the first request on the branch (`start`), the first after
+   a compaction (`compaction`) or after a `context-edit` changed what the model
+   sees of earlier events (`edit`), one asking another model (`model`), or one
+   declaring a tool the previous did not, or one whose declaration changed
+   (`tools`).
+
 4. `Llm.stream`: every event is published as `AssistantDelta`. `done` appends the
    assistant `message` with timing (`firstTokenAt` = first text, thinking, or
    tool-call delta). `error` appends an `attempt` with the call's `failure`, and
@@ -115,6 +130,44 @@ unanswered tool call with an error result (so the next request stays valid),
 then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed usage.
 A turn the agent is closing under (the host stopping, the plugin reloading) is
 left open instead, to resume (see [Stopping](#stopping)).
+
+## Append-only requests
+
+A provider caches a request's prefix: its system prompt, its tools, then its
+history. Agent loops are mostly that prefix read again (in the Terminal-Bench
+4.0 runs on its [leaderboard](https://www.tbench.ai/leaderboard), 90–97% of
+input tokens were cache reads, read 2026-10-19), so a change anywhere in it, a
+date rolling over or an `AGENTS.md` edited, makes every later token of it
+uncached. Anthropic's newest models go further: a reply's thinking is bound to
+the request it answered, and the API rejects it, or drops it at about two thirds
+more output to think it again, once anything before it changed ([preserved
+thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking),
+read 2026-10-19).
+
+So each request is the previous one with more appended, until one has to
+declare its prompt afresh:
+
+- **Sections** are asked for every request, as before, and compared with what
+  the model was last told (`RequestState.sections`). Each that changed, or went,
+  is in a `prompt-update` event, which the model reads as a message from the
+  harness where it stands (`promptUpdateText`), until a request declares the
+  prompt afresh and says it all again (`modelEntries` leaves it out from then
+  on). Unlike a plugin's `context` event, which stays: it is what was said, not
+  what the prompt is.
+- **Tools** the request no longer offers (a mode that withholds `write`, a
+  plugin turned off) stay declared, and the registry refuses their calls
+  (`ToolInvocation.offered`); the `prompt-update` event names them. A tool the
+  previous request did not declare cannot be, so it declares them afresh.
+- **Thinking** made before a request that declared them afresh is marked by
+  `LlmRequest.thinkingFrom`: a model that binds thinking to its prefix
+  (Anthropic's adaptive-thinking ones) leaves it out, rather than have it
+  refused, or dropped with every thinking block after it. Its budget-thinking
+  models bind nothing, and need a tool round's thinking sent back, so they get
+  all of it.
+
+Every simulated run checks the rule: a request without `restart` that does not
+extend the previous one on its branch, as `rebuildRequest` rebuilds both, is a
+violation (`brokenPrefix` in `packages/sim`).
 
 ## Retries
 
@@ -187,6 +240,26 @@ running turn's model output so far (`draft`, through the stream event numbered
 `seq`), running tools' output (the tail, and how much each printed), and the
 queue. `AssistantDelta` carries the same numbering and `ToolOutput` an offset,
 so a client seeded from `view` skips what it already shows.
+
+## Notices
+
+A plugin that publishes a `ModelNotice` (a background command that exited, from
+`tools.bash`) has it placed as that plugin's `context` event, with the notice's
+`display`, as a prompt is placed: `whenBusy: "steer"`, so it joins the running
+turn after its current step; its `requestId` is `<source>:<id>`, logged on the
+event, so a notice heard twice is placed once; and as a `context` event, not a
+user message, clients show it as the plugin's, and `ask_user` does not take it
+for the user's reply. A plugin could append a `context` event itself, but the
+model would read it only once a turn's next request did: a notice reaches it
+now.
+
+With no turn running, it starts one only if the last turn this instance saw
+ran to its end (`done` or `max-steps`) and nothing is queued, on the model and
+thinking that turn had (its `turn-start`), not the agent's default. After a turn the
+user cancelled, or one that failed, the notice waits in the queue, held, and
+goes with the user's next prompt: a command finishing does not restart work
+the user stopped, nor send the prompts held after it. A notice published while
+no agent runs (one reloading) is lost.
 
 ## Durability
 

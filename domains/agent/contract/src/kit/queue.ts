@@ -84,6 +84,11 @@ export interface SessionState<T extends QueuedTurn> {
   revision: number;
   /** The last turn failed or was cancelled: queued prompts wait for the next one rather than starting a turn. */
   held: boolean;
+  /**
+   * The last turn this instance saw end ran to its end (`done` or `max-steps`), so a plugin's prompt may start the next
+   * (`PromptOptions.source`). Not journaled: an instance that has seen none lets a plugin's prompt wait.
+   */
+  ranToEnd: boolean;
   /** Request ids withdrawn from the queue, the latest last, at most `WITHDRAWN_KEPT` (journaled). */
   withdrawn: readonly string[];
 }
@@ -159,7 +164,17 @@ export const makeQueues = <T extends QueuedTurn>(files: StateFiles, base: number
   const of = (sessionId: string): SessionState<T> => {
     let state = states.get(sessionId);
     if (state === undefined) {
-      state = { turn: undefined, suspended: undefined, restored: false, unchecked: false, queue: [], revision: base, held: false, withdrawn: [] };
+      state = {
+        turn: undefined,
+        suspended: undefined,
+        restored: false,
+        unchecked: false,
+        queue: [],
+        revision: base,
+        held: false,
+        ranToEnd: false,
+        withdrawn: [],
+      };
       states.set(sessionId, state);
     }
     return state;

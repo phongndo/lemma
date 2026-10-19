@@ -147,9 +147,9 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
    */
   offered: Schema.optional(Schema.Array(Schema.String)),
   /**
-   * For the model's own call: the tools, by name, the request declared to it (`declaredTools`), the only ones it may
-   * call; the rest of `offered` only a tool that runs others calls. Absent: a call a tool makes, or one made outside
-   * a turn.
+   * For the model's own call: the tools, by name, the request declared to it, those of `offered` it may call; the rest
+   * of `offered` only a tool that runs others calls. It may name tools `offered` does not: the agent keeps a prompt's
+   * declarations while it lasts, and those are refused. Absent: a call a tool makes, or one made outside a turn.
    */
   declared: Schema.optional(Schema.Array(Schema.String)),
   /**

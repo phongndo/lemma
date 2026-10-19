@@ -81,14 +81,18 @@ type Send = typeof ComposerConfig.Type.send;
 type WhenBusy = typeof ComposerConfig.Type.whenBusy;
 type Stop = typeof ComposerConfig.Type.stop;
 
-/** A queued prompt in a line: its text, whitespace collapsed, or what it attaches. */
-const preview = (content: QueuedPrompt["content"]): string => {
-  const text = content
+/**
+ * A queued prompt in a line: its text, whitespace collapsed, or what it attaches. A plugin's notice, held for the next
+ * prompt, is its plugin's, then what it shows (`QueuedPrompt.display`).
+ */
+const preview = (prompt: QueuedPrompt): string => {
+  const text = prompt.content
     .flatMap((part) => (part.type === "text" ? [part.text] : []))
     .join(" ")
     .replace(/\s+/g, " ")
     .trim();
-  const images = content.filter((part) => part.type === "image").length;
+  if (prompt.source !== undefined) return `${prompt.source} · ${prompt.display ?? text}`;
+  const images = prompt.content.filter((part) => part.type === "image").length;
   return text || (images === 1 ? "An image" : `${images} images`);
 };
 
@@ -789,7 +793,7 @@ function QueuedRow(props: ComposerQueuedProps) {
   return (
     <li class="menu-item queued">
       <ChatIcon />
-      <span class="queued-text">{preview(props.prompt.content)}</span>
+      <span class="queued-text">{preview(props.prompt)}</span>
       <Show when={props.promote}>
         {(promote) => (
           <button

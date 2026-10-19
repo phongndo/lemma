@@ -7,16 +7,17 @@ import { ToolInvocation, ToolResult, ToolRunner, Tools } from "@lemma/tools";
 import { tempDir, textOf } from "@lemma/tools/testing";
 import bash from "@lemma/tools-bash";
 import edit from "@lemma/tools-edit";
+import patch from "@lemma/tools-patch";
 import read from "@lemma/tools-read";
 import write from "@lemma/tools-write";
 import tools from "../src/index.ts";
 
 /** The bundled tools but `codemode`, whose own tests run it through a registry. */
-const builtin = [read, write, edit, bash];
+const builtin = [read, write, edit, patch, bash];
 
 describe("the bundled tools", () => {
   it("adds one tool per plugin under the tool's name, with clean schemas", async () => {
-    expect(builtin.map((plugin) => plugin.id)).toEqual(["tools.read", "tools.write", "tools.edit", "tools.bash"]);
+    expect(builtin.map((plugin) => plugin.id)).toEqual(["tools.read", "tools.write", "tools.edit", "tools.patch", "tools.bash"]);
     const listed = await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -26,6 +27,7 @@ describe("the bundled tools", () => {
       ),
     );
     expect(listed.map((tool) => [tool.spec.name, tool.source])).toEqual([
+      ["apply_patch", "tools.patch"],
       ["bash", "tools.bash"],
       ["edit", "tools.edit"],
       ["read", "tools.read"],
@@ -34,6 +36,13 @@ describe("the bundled tools", () => {
     const editSpec = listed.find((tool) => tool.spec.name === "edit")!.spec.parameters;
     expect(editSpec).toMatchObject({ type: "object", required: ["path", "edits"], additionalProperties: false });
     expect(Object.keys(editSpec["properties"] as object)).toEqual(["path", "edits"]);
+    // Codex's one string parameter, as models trained on its `apply_patch` send it.
+    expect(listed.find((tool) => tool.spec.name === "apply_patch")!.spec.parameters).toEqual({
+      type: "object",
+      properties: { input: { type: "string", description: "The entire contents of the apply_patch command" } },
+      required: ["input"],
+      additionalProperties: false,
+    });
     expect(JSON.stringify(listed)).not.toContain("$schema");
   });
 

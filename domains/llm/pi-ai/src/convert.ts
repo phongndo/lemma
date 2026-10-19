@@ -125,10 +125,36 @@ type AsPi<T> = unknown extends T
  */
 const piMessages = (messages: LlmRequest["messages"]): Pi.Message[] => messages as AsPi<LlmRequest["messages"]>;
 
-export function toContext(request: LlmRequest): Pi.Context {
+/**
+ * Whether the model binds a reply's thinking to the request it answered: Anthropic's adaptive-thinking models
+ * (directly and through Bedrock), which reject a thinking block, or drop it with every later one, once anything before
+ * it changed. Leaving out the thinking of a tool round in flight is allowed in adaptive mode. Not its budget-thinking
+ * models, which bind nothing and reject a request continuing a tool round whose thinking was left out. Not other
+ * providers, which take reasoning back whatever came before it (OpenAI's needs it beside the reply it produced).
+ *
+ * pi-ai says which Claude models think adaptively only inside its providers; its thinking levels say the same: the
+ * `max` effort is adaptive thinking's alone (every Claude model of pi-ai 1.2.0's catalogs agrees).
+ */
+export function bindsThinking(model: Pi.Model<Pi.Api>): boolean {
+  if (model.api !== "anthropic-messages" && model.api !== "bedrock-converse-stream") return false;
+  return getSupportedThinkingLevels(model).includes("max");
+}
+
+/** `messages`, without the thinking of those before `from` (`LlmRequest.thinkingFrom`). */
+const withoutThinkingBefore = (messages: LlmRequest["messages"], from: number): LlmRequest["messages"] =>
+  messages.map((message, index) =>
+    index >= from || message.role !== "assistant" || !message.content.some((block) => block.type === "thinking")
+      ? message
+      : { ...message, content: message.content.filter((block) => block.type !== "thinking") },
+  );
+
+/** The request as pi-ai's context, for `model`. */
+export function toContext(request: LlmRequest, model: Pi.Model<Pi.Api>): Pi.Context {
+  const messages =
+    request.thinkingFrom !== undefined && bindsThinking(model) ? withoutThinkingBefore(request.messages, request.thinkingFrom) : request.messages;
   return {
     ...(request.system === undefined ? {} : { systemPrompt: request.system }),
-    messages: piMessages(request.messages),
+    messages: piMessages(messages),
     ...(request.tools === undefined
       ? {}
       : {

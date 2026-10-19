@@ -183,6 +183,29 @@ describe("ask_user", () => {
       }),
     ));
 
+  it("waits on through a plugin's notice queued as a steer: it is not the user replying", () =>
+    run(({ call, watch, answer, publish }) =>
+      Effect.gen(function* () {
+        const notice: QueuedPrompt = {
+          requestId: "tools.bash:job-1",
+          content: [{ type: "text", text: "the background command exited" }],
+          mode: "steer",
+          at: 0,
+          source: "tools.bash",
+        };
+        // Queued before the call, and while it waits.
+        yield* publish({ sessionId: "s", queue: [notice], revision: 1 });
+        yield* settled;
+        const open = yield* watch;
+        const asked = yield* Effect.forkChild(call({ questions: QUESTIONS.slice(0, 1) }));
+        yield* open.until(has("c1"));
+        yield* publish({ sessionId: "s", queue: [notice, { ...notice, requestId: "tools.bash:job-2" }], revision: 2 });
+        yield* settled;
+        yield* answer("c1", [{ kind: "answered", selected: ["JSON files"] }]);
+        expect(detailsOf(yield* Fiber.join(asked)).outcome).toMatchObject({ kind: "answered" });
+      }),
+    ));
+
   it("makes a follow-up sent while it waits a steer, so the message reaches the turn it answers", () =>
     run(({ call, watch, prompt }) =>
       Effect.gen(function* () {

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { boundOutput, outputFile, replaceFile } from "../src/files.ts";
+import { boundOutput, outputFile, realPath, replaceFile } from "../src/files.ts";
 import { tempDir } from "../src/testing.ts";
 
 let dir: string;
@@ -31,12 +31,14 @@ describe("replaceFile", () => {
     expect(await modeOf(at("a/b/new.txt"))).toBe(0o666 & ~process.umask());
   });
 
-  it("keeps an existing file's mode", async () => {
+  it("keeps an existing file's mode, and gives a new one the mode asked for, with its content", async () => {
     await fs.writeFile(at("run.sh"), "old");
     await fs.chmod(at("run.sh"), 0o750);
-    await replaceFile(at("run.sh"), "new");
+    await replaceFile(at("run.sh"), "new", { mode: 0o700 });
     expect(await fs.readFile(at("run.sh"), "utf8")).toBe("new");
     expect(await modeOf(at("run.sh"))).toBe(0o750);
+    await replaceFile(at("bin/moved.sh"), "moved", { mode: 0o751 });
+    expect(await modeOf(at("bin/moved.sh"))).toBe(0o751);
   });
 
   it("writes a symlink's target and leaves the link in place, through a chain and to a missing target", async () => {
@@ -148,5 +150,18 @@ describe("boundOutput", () => {
     expect(await fs.readFile(fullOutputPath!, "utf8")).toBe(long);
     expect(await modeOf(fullOutputPath!)).toBe(0o600);
     expect(content[0]).toMatchObject({ type: "text", text: expect.stringContaining(`[Full output: ${fullOutputPath} (read with offset/limit)]`) });
+  });
+});
+
+describe("realPath", () => {
+  it("names a file one way, through symlinks to it or to a directory it is in, whether or not it exists yet", async () => {
+    await fs.mkdir(at("real"));
+    await fs.writeFile(at("real/file.txt"), "x");
+    await fs.symlink(at("real"), at("dir-link"));
+    await fs.symlink(at("real/file.txt"), at("file-link"));
+    const real = await realPath(at("real/file.txt"));
+    expect(await realPath(at("file-link"))).toBe(real);
+    expect(await realPath(at("dir-link/file.txt"))).toBe(real);
+    expect(await realPath(at("dir-link/new/later.txt"))).toBe(path.join(await realPath(at("real")), "new", "later.txt"));
   });
 });

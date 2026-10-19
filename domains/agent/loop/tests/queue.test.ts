@@ -36,6 +36,7 @@ const empty = (): SessionState<QueuedTurn> => ({
   queue: [],
   revision: 0,
   held: false,
+  ranToEnd: false,
   withdrawn: [],
 });
 

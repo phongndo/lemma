@@ -444,6 +444,9 @@ importers:
       '@lemma/tools-html':
         specifier: workspace:*
         version: link:../../domains/tools/html
+      '@lemma/tools-patch':
+        specifier: workspace:*
+        version: link:../../domains/tools/patch
       '@lemma/tools-read':
         specifier: workspace:*
         version: link:../../domains/tools/read
@@ -2824,9 +2827,15 @@ importers:
 
   domains/tools/bash:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
@@ -3035,6 +3044,34 @@ importers:
         specifier: 5.0.4
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/tools/patch:
+    dependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/threads':
+        specifier: workspace:*
+        version: link:../../threads/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   domains/tools/read:
     dependencies:
       '@lemma/core':
@@ -3093,6 +3130,9 @@ importers:
       '@lemma/tools-edit':
         specifier: workspace:*
         version: link:../edit
+      '@lemma/tools-patch':
+        specifier: workspace:*
+        version: link:../patch
       '@lemma/tools-read':
         specifier: workspace:*
         version: link:../read
@@ -4113,6 +4153,9 @@ importers:
       '@lemma/tools-lemma':
         specifier: workspace:*
         version: link:../../domains/tools/lemma
+      '@lemma/tools-patch':
+        specifier: workspace:*
+        version: link:../../domains/tools/patch
       '@lemma/tools-read':
         specifier: workspace:*
         version: link:../../domains/tools/read

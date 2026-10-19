@@ -66,6 +66,19 @@ const ShownContent = Schema.Array(Schema.Union([TextContent, ImageContent])).che
   }),
 );
 
+/**
+ * Why a request declares its system prompt and tools afresh rather than continuing the previous request's (see the
+ * `request` event): the branch had none (`start`), a compaction replaced the start of the history (`compaction`), a
+ * `context-edit` changed what the model sees of earlier events (`edit`), it asks another model (`model`), or it
+ * declares a tool the previous one did not, or one that changed (`tools`).
+ */
+export const RequestRestart = Schema.Literals(["start", "compaction", "edit", "model", "tools"]);
+export type RequestRestart = typeof RequestRestart.Type;
+
+/** A system prompt section's new text, told to the model in a `prompt-update` event: "" when the section is gone. */
+export const SectionUpdate = Schema.Struct({ id: Schema.String, source: Schema.String, text: Schema.String });
+export type SectionUpdate = typeof SectionUpdate.Type;
+
 export const EventData = Schema.Union([
   /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
   Schema.Struct({
@@ -106,6 +119,12 @@ export const EventData = Schema.Union([
    * `system` is the text of the `system` contributions, in order, with empty
    * ones dropped, joined by a blank line (`"\n\n"`); `chars` is each text's
    * length, so `trajectory` can split it back into sections.
+   *
+   * A request without `restart` continues the previous one on the branch: the
+   * same system prompt and tools, and its history with more appended, so a
+   * provider's cache of that prefix serves it. What changed in the prompt's
+   * sections since is told in `prompt-update` events instead. One with `restart`
+   * declares them afresh, as its sections and tools now are.
    */
   Schema.Struct({
     type: Schema.Literal("request"),
@@ -122,6 +141,8 @@ export const EventData = Schema.Union([
      * `tools`, what its calls may reach (`ToolInvocation.offered`), so a call resumed after a restart is held to it.
      */
     nested: Schema.optional(Schema.Array(Schema.String)),
+    /** It declares its system prompt and tools afresh, and why (see above); absent on a request an older agent logged. */
+    restart: Schema.optional(RequestRestart),
     contributions: Schema.Array(Contribution),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),
@@ -176,6 +197,24 @@ export const EventData = Schema.Union([
     turnId: Schema.optional(Schema.String),
     /** What writing the summary cost. */
     usage: Schema.optional(Usage),
+    /**
+     * The files the history it replaces read and changed (the previous compaction's lists, with the history after it),
+     * shown with the summary, so the model knows what to read again rather than trust a summary of it.
+     */
+    files: Schema.optional(Schema.Struct({ read: Schema.Array(Schema.String), modified: Schema.Array(Schema.String) })),
+  }),
+  /**
+   * What changed in the system prompt since the request that declared it (`restart`), told to the model as a message
+   * where this event stands (`promptUpdateText`) rather than by rewriting the prompt. Model-visible until a later
+   * request declares the prompt afresh, which says it all again; unlike a `context` event, which stays.
+   */
+  Schema.Struct({
+    type: Schema.Literal("prompt-update"),
+    turnId: Schema.optional(Schema.String),
+    /** Sections whose text differs from what the model was last told, each with its new text and the plugin that wrote it. */
+    sections: Schema.Array(SectionUpdate),
+    /** When it changed: every declared tool a call to which is refused now, as the request no longer offers it ([] once each is offered again). */
+    unavailable: Schema.optional(Schema.Array(Schema.String)),
   }),
   /**
    * Something a plugin tells the model where it was appended (an email that arrived, a document attached, a reading),
@@ -192,6 +231,8 @@ export const EventData = Schema.Union([
     display: Schema.optional(Schema.String),
     turnId: Schema.optional(Schema.String),
     stepId: Schema.optional(Schema.String),
+    /** One the agent placed for a plugin (`ModelNotice`): its submission's id, as a prompt's, so it is placed once. */
+    requestId: Schema.optional(Schema.String),
   }),
   /**
    * Changes what the model sees of an earlier event on the branch, which stays in the log as it was: `omit` leaves it

@@ -4,7 +4,7 @@ import { AssistantDelta, QueueChanged } from "@lemma/agent";
 import type { PromptOutcome, QueuedPrompt } from "@lemma/agent";
 import { branchOf, deriveMessages, rebuildRequest, requestState, SessionAppended, splitSystem } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
-import type { Message } from "@lemma/llm";
+import type { LlmRequest, Message } from "@lemma/llm";
 import { ToolExecuted, ToolOutput } from "@lemma/tools";
 import type { ModelCall } from "./model.ts";
 import type { ToolRecord } from "./tools.ts";
@@ -55,6 +55,8 @@ export function transcriptProblems(events: readonly SessionEvent[]): string[] {
     seen.add(event.id);
     const data = event.data;
     if (data.type === "compaction" && data.source.trim() === "") problems.push(`compaction ${event.id} names no source`);
+    if (data.type === "prompt-update")
+      for (const section of data.sections) if (section.source.trim() === "") problems.push(`prompt-update ${event.id}: ${section.id} names no source`);
     if (data.type !== "request") continue;
     for (const part of data.contributions) if (part.source.trim() === "") problems.push(`request ${event.id}: ${part.label} names no source`);
     const { system, tools } = requestState(branchOf(events, event.id));
@@ -64,6 +66,20 @@ export function transcriptProblems(events: readonly SessionEvent[]): string[] {
         problems.push(`request ${event.id}: tool ${tool.name} is not attributed`);
   }
   return problems;
+}
+
+/**
+ * Why `request` does not extend `previous`, the request before it on its branch, when it says it does (it has no
+ * `restart`): another system prompt or tools, thinking cut elsewhere, or a history that is not the previous one's with
+ * more after it. Undefined when it does, so a provider's cache of the previous request serves it.
+ */
+export function brokenPrefix(previous: LlmRequest, request: LlmRequest): string | undefined {
+  if (previous.system !== request.system) return "its system prompt differs from the previous request's";
+  if (canonical(previous.tools ?? []) !== canonical(request.tools ?? [])) return "its tools differ from the previous request's";
+  if (previous.thinkingFrom !== request.thinkingFrom) return "it cuts thinking elsewhere than the previous request";
+  if (request.messages.length < previous.messages.length) return "it has fewer messages than the previous request";
+  const changed = previous.messages.findIndex((message, index) => canonical(message) !== canonical(request.messages[index]));
+  return changed === -1 ? undefined : `its message ${changed} differs from the previous request's`;
 }
 
 /** What one call of `Agent.prompt` came to, as its client saw it. */
@@ -279,11 +295,22 @@ export class Checker {
       this.survived(sessionId, events);
       for (const event of events) {
         if (event.data.type === "request") {
-          const rebuilt = rebuildRequest(branchOf(events, event.id), event.id, sessionId);
+          const branch = branchOf(events, event.id);
+          const rebuilt = rebuildRequest(branch, event.id, sessionId);
           if (rebuilt === undefined) this.violation(`session ${sessionId}: request ${event.id} does not rebuild`);
           else for (const problem of malformed(rebuilt.messages)) this.violation(`session ${sessionId}: request ${event.id}: ${problem}`);
-          this.count("request");
+          // A request that does not declare its prompt afresh extends the previous one's prefix, as sent.
+          const previous = branch
+            .slice(0, -1)
+            .reverse()
+            .find((earlier) => earlier.data.type === "request");
+          if (rebuilt !== undefined && previous !== undefined && event.data.restart === undefined) {
+            const broken = brokenPrefix(rebuildRequest(branch, previous.id, sessionId)!, rebuilt);
+            if (broken !== undefined) this.violation(`session ${sessionId}: request ${event.id} has no restart, but ${broken}`);
+          }
+          this.count(event.data.restart === undefined ? "request" : `request ${event.data.restart}`);
         }
+        if (event.data.type === "prompt-update") this.count("prompt-update");
         if (event.data.type === "turn-end") {
           // The calls the closed turn left on its branch: none without a result.
           const branch = branchOf(events, event.id);

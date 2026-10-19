@@ -1,8 +1,9 @@
 /**
  * Node only: `@lemma/tools/files`. What a tool that reads or writes files needs to behave as the bundled file tools
  * do: paths resolved against the session's directory (`~` expanded, a leading `@` dropped), messages for failed file
- * operations, one write at a time per file, and writes that replace a file whole or not at all (`replaceFile`); and for
- * a tool with output too long to return whole, a private temp file holding it (`outputFile`, `boundOutput`).
+ * operations, one write at a time per file (`withFileLock`, and `withFileLocks` for several), and writes that replace
+ * a file whole or not at all (`replaceFile`); and for a tool with output too long to return whole, a private temp file
+ * holding it (`outputFile`, `boundOutput`).
  */
 import { randomBytes } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync } from "node:fs";
@@ -66,11 +67,42 @@ export function fsMessage(cause: unknown, display: string): string {
 const queues = new Map<string, Promise<void>>();
 
 /**
+ * The file `file` names, as one name for it: its real path, symlinks resolved; for one that does not exist yet, its
+ * nearest existing directory's real path with the rest of the name. So two names of one file, through a symlink to it
+ * or to a directory it is in, are one. What a file's lock is keyed by, and how a change to several files tells that
+ * two of its names are one file.
+ */
+export async function realPath(file: string): Promise<string> {
+  const absolute = path.resolve(file);
+  const real = await realpath(absolute).catch(() => undefined);
+  if (real !== undefined) return real;
+  const parent = path.dirname(absolute);
+  return parent === absolute ? absolute : path.join(await realPath(parent), path.basename(absolute));
+}
+
+/** A file's queue: its real path, so symlinks share one. */
+const lockKey = realPath;
+
+/**
  * Serializes writes and edits to one file (across sessions too); different
  * files proceed in parallel. Keyed by real path so symlinks share a queue.
  */
 export async function withFileLock<T>(file: string, work: () => Promise<T>): Promise<T> {
-  const key = await realpath(file).catch(() => path.resolve(file));
+  return lockOn(await lockKey(file), work);
+}
+
+/**
+ * `withFileLock` for several files at once, as a change to them together needs: each held until `work` settles, taken
+ * one at a time in one order, so two calls naming the same files never each hold one the other waits for. Names of
+ * one file (a symlink and its target) take its lock once.
+ */
+export async function withFileLocks<T>(files: readonly string[], work: () => Promise<T>): Promise<T> {
+  const keys = [...new Set(await Promise.all(files.map(lockKey)))].sort();
+  const take = (index: number): Promise<T> => (index === keys.length ? work() : lockOn(keys[index]!, () => take(index + 1)));
+  return take(0);
+}
+
+async function lockOn<T>(key: string, work: () => Promise<T>): Promise<T> {
   const previous = queues.get(key) ?? Promise.resolve();
   let release!: () => void;
   const current = previous.then(
@@ -111,14 +143,14 @@ const NO_TEMP = new Set(["EACCES", "EPERM", "EROFS"]);
 /**
  * Writes `content` to `file` whole or not at all, creating its parent directories: synced to disk before it is renamed
  * into place, so a crash, a power loss, or a full disk mid-write leaves the old file, never a truncated one. The file
- * keeps its mode (a new one gets the umask's), and a symlink keeps pointing where it did, its target written. A file
- * with other hard links is replaced under this name only.
+ * keeps its mode (a new one gets `options.mode`, else the umask's), and a symlink keeps pointing where it did, its
+ * target written. A file with other hard links is replaced under this name only.
  *
  * Replacing a file makes it anew, owned by this process's user, without the old one's ACLs or extended attributes. So
  * a file another user owns, or one in a directory this user cannot create files in, is written in place instead,
  * which a crash mid-write can leave cut short.
  */
-export async function replaceFile(file: string, content: string): Promise<void> {
+export async function replaceFile(file: string, content: string, options: { readonly mode?: number } = {}): Promise<void> {
   const target = await linkTarget(file);
   await mkdir(path.dirname(target), { recursive: true });
   const existing = await stat(target).catch(missing);
@@ -126,7 +158,8 @@ export async function replaceFile(file: string, content: string): Promise<void> 
   const user = process.getuid?.();
   if (existing !== undefined && user !== undefined && existing.uid !== user) return writeFile(target, content, "utf8");
   try {
-    await writeFileAtomic(target, content, { mode: existing === undefined ? 0o666 & ~process.umask() : existing.mode & 0o7777, sync: true });
+    const mode = existing === undefined ? (options.mode ?? 0o666 & ~process.umask()) : existing.mode & 0o7777;
+    await writeFileAtomic(target, content, { mode, sync: true });
   } catch (cause) {
     if (existing === undefined || !NO_TEMP.has(errorCode(cause) ?? "")) throw cause;
     await writeFile(target, content, "utf8");

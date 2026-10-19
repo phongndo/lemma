@@ -48,7 +48,8 @@ interface Pending {
 /**
  * The `ask_user` tool: questions for the user, held open until a client answers them through the `ask.*` channels,
  * which its web half draws above the composer. A message sent to the session meanwhile joins the turn as a steer and
- * answers them as a reply. With no client that answers connected, the model is told nobody is available.
+ * answers them as a reply; a plugin's notice does not. With no client that answers connected, the model is told nobody
+ * is available.
  */
 export default definePlugin({
   id: "tools.ask",
@@ -59,7 +60,10 @@ export default definePlugin({
     const open = yield* SubscriptionRef.make<readonly OpenQuestions[]>([]);
     /** Clients with `ask.open` open: those that can answer. */
     const watchers = yield* SubscriptionRef.make(0);
-    /** Sessions with a steer queued: a question asked now would hold it back, so the steer answers it. */
+    /**
+     * Sessions with a person's steer queued: a question asked now would hold it back, so the steer answers it. A plugin's
+     * notice (`QueuedPrompt.source`) answers nothing: it waits behind the questions.
+     */
     const steering = new Set<string>();
 
     const settle = (key: string, outcome: AskOutcome) =>
@@ -148,7 +152,7 @@ export default definePlugin({
     );
     yield* owner.observe(QueueChanged, ({ sessionId, queue }) =>
       Effect.suspend(() => {
-        if (!queue.some((prompt) => prompt.mode === "steer")) {
+        if (!queue.some((prompt) => prompt.mode === "steer" && prompt.source === undefined)) {
           steering.delete(sessionId);
           return Effect.void;
         }

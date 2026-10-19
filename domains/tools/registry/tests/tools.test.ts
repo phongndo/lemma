@@ -483,6 +483,15 @@ describe("execute", () => {
         expect(refused.reason).toBe("NotFound");
         expect(refused.message).toContain("Available tools: read");
         expect(JSON.parse(textOf(yield* invoke(["context", "read"])))).toEqual({ offered: ["context", "read"], maxResultChars: 100_000 });
+        // The model's own call of a tool its prompt still declares, which the request no longer offers.
+        const kept = yield* Effect.flip(
+          registry.execute(
+            new ToolInvocation({ sessionId: "s", toolCallId: "c2", name: "context", input: {}, cwd: "/tmp", offered: ["read"], declared: ["context", "read"] }),
+            new AbortController().signal,
+          ),
+        );
+        expect(kept.reason).toBe("NotFound");
+        expect(kept.message).toContain("Available tools: read");
       }),
     );
   });

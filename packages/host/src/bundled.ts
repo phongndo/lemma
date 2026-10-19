@@ -28,6 +28,7 @@ import toolsCodemode from "@lemma/tools-codemode";
 import toolsEdit from "@lemma/tools-edit";
 import toolsHtml from "@lemma/tools-html";
 import toolsLemma from "@lemma/tools-lemma";
+import toolsPatch from "@lemma/tools-patch";
 import toolsRead from "@lemma/tools-read";
 import toolsRegistry from "@lemma/tools-registry";
 import toolsSearchFff from "@lemma/tools-search-fff";
@@ -59,6 +60,7 @@ export const bundled: readonly Plugin[] = [
   toolsRead,
   toolsWrite,
   toolsEdit,
+  toolsPatch,
   toolsBash,
   toolsCodemode,
   toolsSearchFff,
@@ -149,6 +151,7 @@ export const bundledWeb: readonly string[] = [
   "tools.codemode",
   "tools.edit",
   "tools.html",
+  "tools.patch",
   "tools.read",
   "tools.search-fff",
   "tools.write",

@@ -1,18 +1,27 @@
-import { spawn } from "node:child_process";
-import type { ChildProcess } from "node:child_process";
 import { constants as fsConstants } from "node:fs";
 import { access } from "node:fs/promises";
-import { constants as osConstants } from "node:os";
 import { Schema } from "effect";
 import { ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
+import type { Jobs } from "./jobs.ts";
 import { OutputAccumulator, ScriptOutput } from "./output.ts";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "@lemma/tools";
+import { exitCodeOf, killTree, spawnShell, waitForExit } from "./process.ts";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "@lemma/tools";
 import type { Truncation } from "@lemma/tools";
 
-export const BashInput = Schema.Struct({
+const foreground = {
   command: Schema.String.annotate({ description: "Bash command to execute" }),
   timeout: Schema.optional(Schema.Number.annotate({ description: "Timeout in seconds (optional; the tool description names the default)" })),
+};
+/** The input of a `bash` with no jobs, which runs nothing in the background: it is not offered `background`. */
+const ForegroundInput = Schema.Struct(foreground);
+export const BashInput = Schema.Struct({
+  ...foreground,
+  background: Schema.optional(
+    Schema.Boolean.annotate({
+      description: "Run it without waiting for it: for servers, watchers, and long builds. You get its pid and output file at once, and are told when it exits",
+    }),
+  ),
 });
 export type BashInput = typeof BashInput.Type;
 
@@ -25,111 +34,51 @@ export const BashOutput = Schema.Struct({
   timedOut: Schema.optional(Schema.Boolean),
   aborted: Schema.optional(Schema.Boolean),
   wallTimeSeconds: Schema.Number,
+  background: Schema.optional(
+    Schema.Struct({ id: Schema.String, pid: Schema.Number }).annotate({
+      description: "Run in the background: its job and pid; the model is told when it exits, and `fullOutputPath` has its output as it is written",
+    }),
+  ),
 });
 export type BashOutput = typeof BashOutput.Type;
 
 export interface BashDetails {
-  /** Null when the command did not finish (timeout, abort). */
+  /** Null when the command did not finish (timeout, abort), or runs on in the background. */
   readonly exitCode: number | null;
   readonly timedOut?: boolean;
   readonly aborted?: boolean;
   readonly truncation?: Truncation;
-  /** The complete output, when it was truncated. */
+  /** The complete output, when it was truncated, or for a background command, as it is written. */
   readonly fullOutputPath?: string;
+  /** A background command: it runs on, as job `id` (`Job.id`) with `pid`, and its exit is told to the model. */
+  readonly background?: { readonly id: string; readonly pid: number };
 }
 
 /** setTimeout's ceiling. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
 /** Seconds a command runs when the model names no timeout: long enough for a build, short enough that a server started in the foreground does not hold the turn forever. */
 export const DEFAULT_BASH_TIMEOUT = 600;
-/** After exit, how long pipes held by a background descendant may stay idle before reading stops. */
-const EXIT_STDIO_GRACE_MS = 100;
-
-/** Kills the shell's whole process group: the shell leads its own group because it was spawned detached. */
-const killTree = (child: ChildProcess) => {
-  if (child.pid === undefined) return;
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch {
-    try {
-      child.kill("SIGKILL");
-    } catch {
-      /* already gone */
-    }
-  }
-};
 
 /**
- * Resolves with the exit code once the process exited and its pipes closed, or
- * once the pipes stayed idle for a grace period after exit: a detached
- * descendant that inherited them must not hang the tool, but output it is
- * still writing is not cut off (pi's `waitForChildProcess`).
+ * The `bash` tool; a command without a timeout of its own stops after `defaultTimeout` seconds (0: never). With `jobs`
+ * (the plugin's), it runs commands in the background too; without, it is not offered `background`, and is told to put
+ * a long-lived process in the background itself.
  */
-function waitForExit(child: ChildProcess): Promise<number | null> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let exited = false;
-    let code: number | null = null;
-    let idle: NodeJS.Timeout | undefined;
-    let stdoutEnded = child.stdout === null;
-    let stderrEnded = child.stderr === null;
-    const finish = (value: number | null) => {
-      if (settled) return;
-      settled = true;
-      if (idle !== undefined) clearTimeout(idle);
-      child.stdout?.destroy();
-      child.stderr?.destroy();
-      resolve(value);
-    };
-    const armIdle = () => {
-      if (idle !== undefined) clearTimeout(idle);
-      idle = setTimeout(() => finish(code), EXIT_STDIO_GRACE_MS);
-    };
-    const maybeFinish = () => {
-      if (exited && stdoutEnded && stderrEnded) finish(code);
-    };
-    child.stdout?.once("end", () => {
-      stdoutEnded = true;
-      maybeFinish();
-    });
-    child.stderr?.once("end", () => {
-      stderrEnded = true;
-      maybeFinish();
-    });
-    child.stdout?.on("data", () => {
-      if (exited && !settled) armIdle();
-    });
-    child.stderr?.on("data", () => {
-      if (exited && !settled) armIdle();
-    });
-    child.once("error", (error) => {
-      if (settled) return;
-      settled = true;
-      reject(error);
-    });
-    child.once("exit", (value) => {
-      exited = true;
-      code = value;
-      maybeFinish();
-      if (!settled) armIdle();
-    });
-    child.once("close", (value) => finish(value));
-  });
-}
-
-/** The `bash` tool; a command without a timeout of its own stops after `defaultTimeout` seconds (0: never). */
-export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Tool<BashInput> => ({
+export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs?: Jobs): Tool<BashInput> => ({
   name: "bash",
-  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Prefer the dedicated tools for reading, searching, and editing files when they are offered. Output is truncated to last ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). If truncated, full output is saved to a temp file. Optionally provide a timeout in seconds${
-    defaultTimeout > 0
-      ? `; without one, the command is stopped after ${defaultTimeout} seconds. Run long-lived processes such as servers in the background (with nohup and &, redirecting their output to a file)`
-      : ""
-  }.`,
-  input: BashInput,
+  description: `Execute a bash command in the current working directory. Returns stdout and stderr. Prefer the dedicated tools for reading, searching, and editing files when they are offered. Long output keeps its first and last ${DEFAULT_MAX_LINES / 2} lines or ${DEFAULT_MAX_BYTES / 2048}KB (whichever is hit first), and the full output is saved to a temp file. Optionally provide a timeout in seconds${
+    defaultTimeout > 0 ? `; without one, the command is stopped after ${defaultTimeout} seconds` : ""
+  }.${
+    jobs === undefined
+      ? " Run long-lived processes such as servers in the background (with nohup and &, redirecting their output to a file)."
+      : " Set background for a long-lived process (a server, a watcher, a long build): it runs on, and you are told when it exits, with its output's start and end; read its output file to check on it meanwhile, and stop it with `kill -- -<pid>`. A timeout you give still applies to it."
+  }`,
+  // Its decoded input is a `BashInput` with no `background`.
+  input: jobs === undefined ? (ForegroundInput as unknown as typeof BashInput) : BashInput,
   output: BashOutput,
-  execute: async ({ command, timeout: requested }, { cwd, signal, update }) => {
+  execute: async ({ command, timeout: requested, background }, { sessionId, toolCallId, cwd, signal, update }) => {
     const started = performance.now();
-    const timeout = requested ?? (defaultTimeout > 0 ? defaultTimeout : undefined);
+    const timeout = requested ?? (defaultTimeout > 0 && background !== true ? defaultTimeout : undefined);
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) throw new Error("Invalid timeout: must be a finite number of seconds");
     if (timeout !== undefined && timeout * 1000 > MAX_TIMEOUT_MS) throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_MS / 1000} seconds`);
     if (signal.aborted) throw new Error("Command aborted");
@@ -138,12 +87,41 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
     } catch {
       throw new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`);
     }
+    if (background === true) {
+      if (jobs === undefined) throw new Error("This bash runs no command in the background: run it in the foreground");
+      if (signal.aborted) throw new Error("Command aborted");
+      const job = await jobs.start({ sessionId, toolCallId, command, cwd, ...(timeout === undefined ? {} : { timeout }) });
+      const output = job.outputPath === undefined ? "Its output could not be saved." : `Its output goes to ${job.outputPath}.`;
+      const details: BashDetails = {
+        exitCode: null,
+        background: { id: job.id, pid: job.pid },
+        ...(job.outputPath === undefined ? {} : { fullOutputPath: job.outputPath }),
+      };
+      const structured: BashOutput = {
+        output: "",
+        exitCode: null,
+        truncated: false,
+        ...(job.outputPath === undefined ? {} : { fullOutputPath: job.outputPath }),
+        wallTimeSeconds: Math.round(performance.now() - started) / 1000,
+        background: { id: job.id, pid: job.pid },
+      };
+      return new ToolResult({
+        content: [
+          {
+            type: "text",
+            text: `Started in the background as job ${job.id}, pid ${job.pid}. ${output} You will be told when it exits; stop it with \`kill -- -${job.pid}\`.`,
+          },
+        ],
+        details,
+        structured,
+      });
+    }
     // Recheck after the lookup; from here to installing the abort listener runs synchronously.
     if (signal.aborted) throw new Error("Command aborted");
 
     const output = new OutputAccumulator("lemma-bash");
     const script = new ScriptOutput();
-    const child = spawn("bash", ["-c", command], { cwd, detached: true, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawnShell(command, cwd);
     // Streaming decode: a character split across chunks is held until its last byte arrives.
     const live = new TextDecoder();
     const onData = (data: Buffer) => {
@@ -170,9 +148,7 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
 
     let exitCode: number | null;
     try {
-      exitCode = await waitForExit(child);
-      // A signal-killed shell has no exit code; use the shell convention so it never reads as success.
-      if (exitCode === null && child.signalCode !== null) exitCode = 128 + (osConstants.signals[child.signalCode] ?? 0);
+      exitCode = exitCodeOf(child, await waitForExit(child));
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
@@ -182,19 +158,7 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
     await output.close();
 
     const { truncation, fullOutputPath } = snapshot;
-    let body = snapshot.content;
-    const full = fullOutputPath === undefined ? "Full output could not be saved" : `Full output: ${fullOutputPath}`;
-    if (truncation.truncated) {
-      const startLine = truncation.totalLines - truncation.outputLines + 1;
-      const endLine = truncation.totalLines;
-      if (truncation.lastLinePartial) {
-        body += `\n\n[Showing last ${formatSize(truncation.outputBytes)} of line ${endLine} (line is ${formatSize(output.lastLineBytes)}). ${full}]`;
-      } else if (truncation.truncatedBy === "lines") {
-        body += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines}. ${full}]`;
-      } else {
-        body += `\n\n[Showing lines ${startLine}-${endLine} of ${truncation.totalLines} (${formatSize(DEFAULT_MAX_BYTES)} limit). ${full}]`;
-      }
-    }
+    const body = output.shown(snapshot, fullOutputPath === undefined ? "Full output could not be saved" : `Full output: ${fullOutputPath}`);
     const status = aborted
       ? "Command aborted"
       : timedOut

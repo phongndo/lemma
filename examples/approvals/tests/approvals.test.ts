@@ -11,7 +11,7 @@ import type { Tool } from "@lemma/tools";
 import tools from "@lemma/tools-registry";
 import approvals, { question } from "../approvals.ts";
 
-const defaults = { ask: ["bash"], outsideProject: ["write", "edit"] };
+const defaults = { ask: ["bash"], outsideProject: ["write", "edit", "apply_patch"] };
 const call = (name: string, input: unknown, sessionId = "s1") => new ToolInvocation({ sessionId, toolCallId: "c1", name, input, cwd: "/work/project" });
 
 describe("which calls ask", () => {
@@ -25,6 +25,18 @@ describe("which calls ask", () => {
     expect(question(call("write", { path: "/work/projects-evil/a.ts" }), defaults)?.detail).toBe("/work/projects-evil/a.ts");
     expect(question(call("read", { path: "/etc/passwd" }), defaults)).toBeUndefined();
     expect(question(call("read", { path: "/etc/passwd" }), { ...defaults, outsideProject: ["read"] })?.detail).toBe("/etc/passwd");
+  });
+
+  test("a patch that names any file outside the session's directory, a move's too", () => {
+    const patch = (...lines: string[]) => ({ input: ["*** Begin Patch", ...lines, "*** End Patch"].join("\n") });
+    expect(question(call("apply_patch", patch("*** Add File: src/a.ts", "+x", "*** Update File: b.ts", "-y")), defaults)).toBeUndefined();
+    expect(question(call("apply_patch", patch("*** Update File: src/a.ts", "*** Move to: ../out.ts", "*** Delete File: ~/.bashrc")), defaults)).toEqual({
+      title: "Allow apply_patch outside the project?",
+      detail: ["/work/out.ts", join(homedir(), ".bashrc")].join("\n"),
+    });
+    // Whether or not the patch parses: a header the tool would not take still counts.
+    expect(question(call("apply_patch", { input: "*** Delete File: /etc/hosts" }), defaults)?.detail).toBe("/etc/hosts");
+    expect(question(call("apply_patch", {}), defaults)).toBeUndefined();
   });
 
   test("resolves a path as the file tools do: `~` is home and a leading `@` is dropped; `..name` is a name", () => {
