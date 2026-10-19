@@ -754,6 +754,13 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForSelector(".drop-verb:has-text('Unpin')", { timeout: 5_000 })
     .catch(() => assert.fail("a pinned thread dragged among the rest does not say it unpins"));
+  // The name of the section it is in takes the accent, and a section, empty or not, is its name alone.
+  assert.deepEqual(
+    await page.$$eval(".thread-section.sorted .thread-head-label.target", (labels) => labels.map((label) => label.textContent)),
+    ["Active"],
+    "the section a dragged thread is in is not the one marked",
+  );
+  assert.equal(await page.locator(".thread-section.sorted .thread-head-slot").count(), 0, "an empty section offers a box to drop in");
   await page.mouse.up();
   const dropped = async () => {
     const now = await sorted();

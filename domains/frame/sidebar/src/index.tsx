@@ -599,16 +599,21 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
   /** The dragged thread is over the archived panel: dropping it archives it. */
   const [toArchive, setToArchive] = createSignal(false);
   /**
-   * The sections' names and empty places show a frame after a drag starts: the dragged row is placed under the pointer
-   * first, so the rows they push down move under it rather than taking it with them.
+   * The sections' names show a frame after a drag starts: the dragged row is placed under the pointer first, so the
+   * rows they push down move under it rather than taking it with them.
    */
   const [heads, setHeads] = createSignal(false);
   const items = () => arranged() ?? listed();
+  /** The section the dragged thread is in now, where dropping it puts it: its name takes the accent. */
+  const target = (): Section | undefined => {
+    const current = drag();
+    if (current === undefined) return undefined;
+    return toArchive() ? "archived" : sectionIn(items(), current.id);
+  };
   /** What dropping the dragged thread where it is now would do. */
   const verb = () => {
     const current = drag();
-    if (current === undefined) return undefined;
-    return dropVerb(sectionIn(current.initial, current.id), toArchive() ? "archived" : sectionIn(items(), current.id));
+    return current === undefined ? undefined : dropVerb(sectionIn(current.initial, current.id), target());
   };
   /** The items with the dragged thread among the archived (after their head, last): what dropping on the panel does. */
   const archivedWith = (id: string) => [...items().filter((item) => item !== id), id];
@@ -680,12 +685,6 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
         </section>
       </Show>
     );
-  };
-  const emptyIn = (section: "pinned" | "active" | "archived") => {
-    const all = items();
-    const start = all.indexOf(Heads[section]);
-    const next = all[start + 1];
-    return next === undefined || next === Heads.active || next === Heads.archived;
   };
   const sessionOf = (id: string) => byId().get(id);
   /** Each item's section, where it is now (`data-section` on its row). */
@@ -791,10 +790,9 @@ function Sidebar(props: { deps: Deps; onPick: () => void }) {
                   >
                     <SortableItem id={id} index={index()} section={sectionsOf().get(id)} head class={`thread-head ${id.slice("head:".length)}`}>
                       <Show when={heads()}>
-                        <span class="thread-head-label">{id === Heads.pinned ? "Pinned" : "Active"}</span>
-                      </Show>
-                      <Show when={heads() && emptyIn(id === Heads.pinned ? "pinned" : "active")}>
-                        <span class="thread-head-slot">{id === Heads.pinned ? "Drop here to pin" : "Drop here"}</span>
+                        <span class="thread-head-label" classList={{ target: target() === sectionsOf().get(id) }}>
+                          {id === Heads.pinned ? "Pinned" : "Active"}
+                        </span>
                       </Show>
                     </SortableItem>
                   </Show>

@@ -383,15 +383,36 @@
   font-size: calc(13px * var(--text-scale));
 }
 
-/* While a thread is dragged, each section's name, with a place to drop when it is empty. */
+/*
+ * While a thread is dragged, each section's name over a rule, as the archived panel's head; the one it is in now takes
+ * the accent. An empty section is its name alone: the thread dragged over it goes past it, into the section.
+ */
 .thread-head-label {
-  display: block;
-  padding: 6px 10px 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 24px;
+  padding: 0 10px;
   color: var(--text-3);
-  font-size: calc(11px * var(--text-scale));
-  font-weight: 500;
+  font-size: calc(12px * var(--text-scale));
 }
 
+.thread-head-label::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.thread-head-label.target {
+  color: var(--accent-text);
+}
+
+.thread-head-label.target::after {
+  background: var(--accent);
+}
+
+/* The folded archived panel's place to drop, while a thread is dragged. */
 .thread-head-slot {
   display: block;
   margin: 2px 0;
@@ -403,10 +424,10 @@
   text-align: center;
 }
 
-/* The thread being dragged: raised, and saying what dropping it here does. */
+/* The thread being dragged: raised, ringed in the accent, and saying what dropping it here does. */
 .drag-source .thread-row {
   background: var(--bg-raised);
-  box-shadow: var(--shadow-lg);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
 .drop-verb {
@@ -464,8 +485,17 @@
   background: var(--accent-soft);
 }
 
-.archived-panel.target .archived-head {
+.archived-panel.target .archived-head,
+.archived-panel.target .thread-head-slot {
   color: var(--accent-text);
+}
+
+.archived-panel.target .archived-rule {
+  background: var(--accent);
+}
+
+.archived-panel.target .thread-head-slot {
+  border-color: var(--accent);
 }
 
 .archived-rows {
