@@ -11,8 +11,9 @@ composer under it), and the defaults of the chat's parts in the phase
 prompt to `PromptActions`: `chat.copy-prompt` and `chat.prompt-link`. A tool's calls show as its
 `ToolViews` item says. It reads `Threads.branch`, `Threads.live`, and `Threads.queue`, the first two through the
 contract's projections (`createProjector`, `foldTurn`, `foldRunning`,
-`draftEntries`, `queuePlaces`), which another view can share. Requires `Threads` and the
-runtime's `Client`, `Router`, and `Slots`.
+`draftEntries`, `queuePlaces`), which another view can share. Adds its settings to Settings › General ›
+Conversation (`SettingsGroups`). Requires `Threads` and the runtime's `Client`, `Router`, `Slots`, `WebPlugins`, and
+`Notify`.
 
 | Config        | Default | What it does                                                                                                                                                        |
 | ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

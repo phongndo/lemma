@@ -25,9 +25,10 @@ You help the user write. Keep their voice; say what you changed and why.
 - **Choosing.** The web half's picker, before the model picker, sends the
   thread's profile with each prompt (`TurnOptions.plugins["agent.profiles"]`,
   through `TurnOptionSources`). A thread keeps the one its latest turn was
-  taken with; a new thread starts with this browser's last pick. Picking one
-  picks its `model` and `thinking` too, which the model picker then shows and
-  can change. With none chosen, the configured `default` applies.
+  taken with; a new thread starts with this browser's last pick, which
+  Settings › General › New threads also sets. Picking one picks its `model` and
+  `thinking` too, which the model picker then shows and can change. With none
+  chosen, the configured `default` applies.
 - **What it does.** Its body is the `profile` section of the system prompt. In
   `AgentRequestHook`'s `select` phase, after every plugin has added its tools
   and sections, it keeps those its `tools` and `sections` allow: names, globs

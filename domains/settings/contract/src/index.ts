@@ -89,4 +89,5 @@ export const PluginsFacts = defineSlot<PluginsFact>("plugins.facts");
  * and `plugins` with the Plugins page.
  */
 export const SectionIds = { general: "general", appearance: "appearance", keyboard: "keyboard", plugins: "plugins" } as const;
+export * from "./config.ts";
 export { SETTINGS_CONTRACT } from "./version.ts";

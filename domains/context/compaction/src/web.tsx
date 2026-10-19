@@ -5,10 +5,11 @@ import type { ModelsService } from "@lemma/llm/web";
 import { ComposerActions, PromptCommands, Threads } from "@lemma/threads";
 import { ArchiveIcon } from "@lemma/look";
 import type { ThreadsService } from "@lemma/threads";
-import { Slots, defineWebPlugin } from "@lemma/web";
+import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import { measuredTokens } from "./compact.ts";
 import { Config } from "./config.ts";
 import { lastCacheHit, percent } from "./meter.ts";
+import { addSettings } from "./settings.tsx";
 import styles from "./meter.css?inline";
 
 /** How far below `at` the ring starts to warn that a summary is near. */
@@ -80,14 +81,15 @@ function ContextMeter(props: { threads: ThreadsService; models: ModelsService; a
 /**
  * `context.compaction`'s web half: how full the open thread's context is, as the host half measures it, against the
  * window of the selected model (where the next prompt goes) and its `at`, and how much of the last call the
- * provider's cache served, beside it. In the composer's row, before its buttons, while a thread is open.
+ * provider's cache served, beside it. In the composer's row, before its buttons, while a thread is open. Its `at`
+ * is a setting in General › Agent.
  */
 export default defineWebPlugin({
   id: "context.compaction",
   config: Config,
   styles,
-  requires: { threads: Threads, models: Models, slots: Slots },
-  setup: ({ threads, models, slots }, plugin) => {
+  requires: { threads: Threads, models: Models, slots: Slots, webPlugins: WebPlugins, notify: Notify },
+  setup: ({ threads, models, slots, webPlugins, notify }, plugin) => {
     plugin.onCleanup(
       slots.add(ComposerActions, {
         id: "context-meter",
@@ -99,6 +101,7 @@ export default defineWebPlugin({
         ),
       }),
     );
+    addSettings(slots, webPlugins, notify, plugin.id, () => plugin.config.at);
     // Sent as typed: the host half answers it (`compactAsked`).
     plugin.onCleanup(
       slots.add(PromptCommands, {

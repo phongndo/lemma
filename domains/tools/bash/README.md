@@ -1,7 +1,8 @@
 # tools.bash
 
 The `bash` tool: a shell command in the session's directory. Adds it to `Tools`.
-Its web half (`./web`) shows a call as its command, as a shell line.
+Its web half (`./web`) shows a call as its command, as a shell line, and offers
+its `timeout` in Settings › General › Agent (through `HostPlugins`).
 
 | Input                           | Behavior                                                                                                                                                                                                                                                                                                                                                                         |
 | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

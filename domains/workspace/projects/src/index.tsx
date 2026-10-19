@@ -1,32 +1,29 @@
 import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js";
 import type { JSX } from "solid-js";
-import type { SessionInfo } from "@lemma/sessions";
-import { copyAndTell } from "@lemma/web/clipboard";
-import { tildePath } from "@lemma/web/format";
+import { tildePath, relativeTime } from "@lemma/web/format";
+import { createNow } from "@lemma/web/now";
 import { folderName, ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import { Actions } from "@lemma/actions";
 import { Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
+import type { SettingsEntry } from "@lemma/settings";
 import { Threads } from "@lemma/threads";
-import { Client, Notify, Slots, defineWebPlugin } from "@lemma/web";
+import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
+import type { SlotsService, ClientService } from "@lemma/web";
 import type { ThreadsService } from "@lemma/threads";
-import type { ClientService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { CheckIcon, ChevronDownIcon, CopyIcon, Dialog, FolderIcon, FolderPlusIcon, GearIcon, Popover, Segmented, SettingRow, TrashIcon } from "@lemma/look";
+import { CopyButton, Dialog, FolderIcon, FolderPlusIcon, GearIcon, PenSquareIcon, Segmented, SettingRow, TrashIcon } from "@lemma/look";
+import { initialOf, projectStats, threadCount, threadsIn } from "./model.ts";
+import type { ProjectStats } from "./model.ts";
 import styles from "./projects-page.css?inline";
 
 const SECTION = "projects";
 const DELETE_DIALOG = "projects-page.delete";
 
-const threadCount = (n: number) => `${n} thread${n === 1 ? "" : "s"}`;
-
-/** A project's threads, archived ones included. */
-const threadsIn = (threads: ThreadsService, cwd: string): SessionInfo[] => threads.list().filter((session) => session.cwd === cwd);
-
 /** Asks before deleting a project's threads, saying what goes and what stays. */
 function DeleteProjectDialog(props: { client: ClientService; threads: ThreadsService; workspace: WorkspaceService; cwd: string; close: () => void }) {
   const { threads, workspace } = props;
-  const inProject = () => threadsIn(threads, props.cwd);
+  const inProject = () => threadsIn(threads.list(), props.cwd);
   const archived = () => inProject().filter((session) => session.archived === true).length;
   const running = () => inProject().filter((session) => threads.running().includes(session.id)).length;
   const remove = () => {
@@ -67,12 +64,162 @@ function DeleteProjectDialog(props: { client: ClientService; threads: ThreadsSer
   );
 }
 
-/** Settings for one project at a time: its name, where it is, how new threads start there, and removing it. */
+/** A project's mark: its initial on a tile. */
+function Mark(props: { name: string; large?: boolean }) {
+  return (
+    <span class="project-mark" classList={{ large: props.large === true }} aria-hidden="true">
+      {initialOf(props.name)}
+    </span>
+  );
+}
+
+/** What a project holds, in a line: its threads, those running and archived, and when it was last used. */
+function statsLine(stats: ProjectStats, now: number): string {
+  if (stats.threads === 0) return "No threads yet";
+  return [
+    threadCount(stats.threads),
+    ...(stats.running > 0 ? [`${stats.running} running`] : []),
+    ...(stats.archived > 0 ? [`${stats.archived} archived`] : []),
+    ...(stats.lastActive === undefined ? [] : [`active ${relativeTime(stats.lastActive, now)}`]),
+  ].join(" · ");
+}
+
+interface Deps {
+  readonly client: ClientService;
+  readonly threads: ThreadsService;
+  readonly workspace: WorkspaceService;
+  readonly slots: SlotsService;
+  /** The project shown, and choosing another. */
+  readonly current: () => string | undefined;
+  readonly choose: (cwd: string) => void;
+  readonly path: (cwd: string) => string;
+  readonly stats: (cwd: string) => ProjectStats;
+  readonly now: () => number;
+  /** Adding a project, while a plugin offers it. */
+  readonly addAction: () => { readonly run: () => unknown } | undefined;
+}
+
+/** The section's groups from every plugin, in order, for the project shown; groups with the same title merge. */
+function Groups(props: { slots: SlotsService }) {
+  const groups = createMemo(() => {
+    const merged: { title?: string; entries: SettingsEntry[] }[] = [];
+    for (const group of props.slots.list(SettingsGroups)) {
+      if (group.section !== SECTION) continue;
+      const same = merged.find((candidate) => candidate.title === group.title);
+      if (same === undefined) merged.push({ ...(group.title === undefined ? {} : { title: group.title }), entries: [...group.entries()] });
+      else same.entries.push(...group.entries());
+    }
+    return merged.filter((group) => group.entries.length > 0);
+  });
+  return (
+    <For each={groups()}>
+      {(group) => (
+        <section class="settings-group">
+          <Show when={group.title}>{(title) => <h3 class="settings-group-title">{title()}</h3>}</Show>
+          <div class="settings-rows">
+            <For each={group.entries}>{(entry) => entry.view()}</For>
+          </div>
+        </section>
+      )}
+    </For>
+  );
+}
+
+/** The project chosen: its mark, name, and where it is, what it holds, a new thread in it, then its settings. */
+function Detail(props: { deps: Deps; cwd: string }) {
+  const { deps } = props;
+  const name = () => deps.workspace.projectName(props.cwd);
+  return (
+    <div class="project-detail">
+      <header class="project-head">
+        <Mark name={name()} large />
+        <div class="project-head-text">
+          <h2>{name()}</h2>
+          <div class="project-head-path">
+            <code data-tip={props.cwd}>{deps.path(props.cwd)}</code>
+            <CopyButton text={props.cwd} label="Copy path" />
+          </div>
+          <span class="project-head-stats">{statsLine(deps.stats(props.cwd), deps.now())}</span>
+        </div>
+        <button class="button small" onClick={usePlugin().action("new thread", () => deps.threads.newThread(props.cwd))}>
+          <PenSquareIcon /> New thread
+        </button>
+      </header>
+      <Groups slots={deps.slots} />
+    </div>
+  );
+}
+
+/** Every project beside the one chosen; none yet, a way to add one. */
+function ProjectsPage(props: { deps: Deps }) {
+  const { deps } = props;
+  return (
+    <Show
+      when={deps.workspace.projects().length > 0}
+      fallback={
+        <div class="projects-empty">
+          <FolderIcon />
+          <h2>No projects yet</h2>
+          <p class="muted">A project is a folder on the host that threads work in. It shows here once a thread starts in it, or once you add it.</p>
+          <Show when={deps.addAction()}>
+            {(action) => (
+              <button class="button" onClick={() => action().run()}>
+                <FolderPlusIcon /> Add project
+              </button>
+            )}
+          </Show>
+        </div>
+      }
+    >
+      <div class="projects">
+        <nav class="projects-list" aria-label="Projects">
+          <For each={deps.workspace.projects()}>
+            {(cwd) => {
+              const stats = () => deps.stats(cwd);
+              return (
+                <button
+                  type="button"
+                  class="project-item"
+                  aria-current={deps.current() === cwd ? "true" : undefined}
+                  data-tip={deps.path(cwd)}
+                  onClick={() => deps.choose(cwd)}
+                >
+                  <Mark name={deps.workspace.projectName(cwd)} />
+                  <span class="project-item-text">
+                    <span class="project-item-name">{deps.workspace.projectName(cwd)}</span>
+                    <span class="project-item-path">{deps.path(cwd)}</span>
+                  </span>
+                  <Show when={stats().running > 0}>
+                    <span class="project-item-running" aria-label={`${stats().running} running`} />
+                  </Show>
+                  <span class="project-item-count" aria-label={threadCount(stats().threads)}>
+                    {stats().threads}
+                  </span>
+                </button>
+              );
+            }}
+          </For>
+        </nav>
+        <div class="projects-detail">
+          <Show when={deps.current()} keyed>
+            {(cwd) => <Detail deps={deps} cwd={cwd} />}
+          </Show>
+        </div>
+      </div>
+    </Show>
+  );
+}
+
+/**
+ * Settings › Projects: every project in a list beside the one chosen, which shows where it is, what it holds, a new
+ * thread in it, and its settings: its name, how new threads start there, and deleting it. Other plugins add rows for
+ * the project chosen to the section's groups.
+ */
 export default defineWebPlugin({
   id: "workspace.projects",
   styles,
-  requires: { client: Client, threads: Threads, workspace: Workspace, settings: Settings, dialogs: Dialogs, notify: Notify, slots: Slots },
-  setup: ({ client, threads, workspace, settings, dialogs, notify, slots }, plugin) => {
+  requires: { client: Client, threads: Threads, workspace: Workspace, settings: Settings, dialogs: Dialogs, slots: Slots },
+  setup: ({ client, threads, workspace, settings, dialogs, slots }) => {
     /** The project chosen, in the address (`?project=<directory>`). */
     const chosen = () => (settings.section() === SECTION ? settings.params().project : undefined);
     const setChosen = (cwd: string) => settings.setParams({ project: cwd });
@@ -94,62 +241,30 @@ export default defineWebPlugin({
       dialogs.open(DELETE_DIALOG);
     };
     const path = (cwd: string) => tildePath(cwd, client.info()?.home);
-
-    const picker = () => (
-      <Show when={current()}>
-        {(cwd) => (
-          <div class="settings-rows project-picker-row">
-            <SettingRow title="Project" description="The project these settings apply to.">
-              <Popover
-                label="Choose a project"
-                tip={path(cwd())}
-                trigger={
-                  <>
-                    <span class="project-picker-label">{workspace.projectName(cwd())}</span>
-                    <ChevronDownIcon />
-                  </>
-                }
-                triggerClass="button small project-picker"
-                placement="bottom-end"
-              >
-                {(close) => (
-                  <For each={workspace.projects()}>
-                    {(project) => (
-                      <button
-                        class="menu-item"
-                        role="menuitemradio"
-                        aria-checked={project === cwd()}
-                        onClick={() => {
-                          setChosen(project);
-                          close();
-                        }}
-                      >
-                        <span class="menu-check">
-                          <Show when={project === cwd()}>
-                            <CheckIcon />
-                          </Show>
-                        </span>
-                        <span class="menu-label">{workspace.projectName(project)}</span>
-                        <span class="menu-hint">{path(project)}</span>
-                      </button>
-                    )}
-                  </For>
-                )}
-              </Popover>
-            </SettingRow>
-          </div>
-        )}
-      </Show>
-    );
+    const stats = (cwd: string) => projectStats(threads.list(), threads.running(), cwd);
+    // "Active 3m ago" moves on while the page shows.
+    const now = createNow(30_000, () => settings.section() === SECTION);
+    const addAction = () => slots.get(Actions, WorkspaceActionIds.addProject);
+    const deps: Deps = {
+      client,
+      threads,
+      workspace,
+      slots,
+      current,
+      choose: setChosen,
+      path,
+      stats,
+      now,
+      addAction,
+    };
 
     slots.add(SettingsSections, {
       id: SECTION,
-      order: 40,
+      order: 25,
       title: "Projects",
       icon: FolderIcon,
-      intro: picker,
       actions: () => (
-        <Show when={slots.get(Actions, WorkspaceActionIds.addProject)}>
+        <Show when={addAction()}>
           {(action) => (
             <button class="button small" onClick={() => action().run()}>
               <FolderPlusIcon /> Add project
@@ -157,7 +272,7 @@ export default defineWebPlugin({
           )}
         </Show>
       ),
-      empty: () => <p class="settings-empty">No projects yet. Add one to start threads in it.</p>,
+      body: () => <ProjectsPage deps={deps} />,
     });
 
     /** A settings group about the current project; none while there is no project. */
@@ -173,9 +288,9 @@ export default defineWebPlugin({
         },
       });
 
-    group("projects-page.general", 0, undefined, (cwd) => [
+    group("projects-page.project", 0, "Project", (cwd) => [
       {
-        text: `project name rename ${workspace.projectName(cwd)}`,
+        text: `project name rename title ${workspace.projectName(cwd)}`,
         view: () => {
           let input!: HTMLInputElement;
           return (
@@ -188,25 +303,16 @@ export default defineWebPlugin({
                 placeholder={folderName(cwd)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter") input.blur();
+                  if (event.key === "Escape") {
+                    input.value = workspace.projectSettings(cwd).name ?? "";
+                    input.blur();
+                  }
                 }}
                 onBlur={() => workspace.configureProject(cwd, { name: input.value })}
               />
             </SettingRow>
           );
         },
-      },
-      {
-        text: `project location path folder directory ${cwd}`,
-        view: () => (
-          <SettingRow title="Location" description={cwd === client.info()?.cwd ? "The host's own directory." : "The folder on the host that threads work in."}>
-            <div class="project-location">
-              <code>{path(cwd)}</code>
-              <button class="icon-button" aria-label="Copy path" data-tip="Copy path" onClick={plugin.action("copy path", () => copyAndTell(notify, cwd))}>
-                <CopyIcon />
-              </button>
-            </div>
-          </SettingRow>
-        ),
       },
     ]);
 
@@ -221,7 +327,7 @@ export default defineWebPlugin({
           return (
             <SettingRow
               title="Start in a new worktree"
-              description="In a git repository, gives each new thread its own branch. Default follows General › New threads."
+              description={`In a git repository, gives each new thread its own branch. Default follows General › New threads (${workspace.worktree().enabled ? "on" : "off"}).`}
             >
               <Segmented
                 label="Start in a new worktree"
@@ -239,11 +345,11 @@ export default defineWebPlugin({
       },
     ]);
 
-    group("projects-page.danger", 20, "Danger zone", (cwd) => [
+    group("projects-page.danger", 90, "Danger zone", (cwd) => [
       {
         text: "project delete remove forget threads",
         view: () => {
-          const count = () => threadsIn(threads, cwd).length;
+          const count = () => threadsIn(threads.list(), cwd).length;
           return (
             <SettingRow
               title="Delete project"

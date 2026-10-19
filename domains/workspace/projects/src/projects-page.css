@@ -1,35 +1,206 @@
-.project-picker-row {
-  margin-bottom: 8px;
+/* The projects beside the one chosen, flat on the page, filling the section's body; each side scrolls on its own. */
+.projects {
+  flex: 1 1 0;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
 }
 
-.project-picker {
-  gap: 6px;
-  max-width: 260px;
+.projects-list {
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 10px 12px 0;
+  border-right: 1px solid var(--border);
 }
 
-.project-picker-label {
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 10px 7px 8px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-item:hover {
+  background: var(--bg-hover);
+}
+
+.project-item[aria-current="true"] {
+  background: var(--bg-active);
+}
+
+/* A project's initial on a tile: in its row, and larger at the head of its details. */
+.project-mark {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1;
+}
+
+.project-item[aria-current="true"] .project-mark {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.project-mark.large {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius);
+  font-size: calc(19px * var(--text-scale));
+  color: var(--text);
+}
+
+.project-item-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.project-item-name,
+.project-item-path {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.project-item-name {
+  font-size: calc(13.5px * var(--text-scale));
+  font-weight: 500;
+}
+
+.project-item-path {
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-3);
+}
+
+.project-item-count {
+  flex: none;
+  min-width: 18px;
+  font-size: calc(12px * var(--text-scale));
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.project-item-running {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+}
+
+.projects-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0 32px 28px;
+}
+
+.project-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.project-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.project-head-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.project-head h2 {
+  margin: 0;
+  overflow: hidden;
+  font-size: calc(18px * var(--text-scale));
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-head-path {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.project-head-path code {
+  overflow: hidden;
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-head-path .icon-button {
+  width: 24px;
+  height: 24px;
+}
+
+.project-head-stats {
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--text-3);
 }
 
 .project-name {
   width: 240px;
 }
 
-.project-location {
+.projects-empty {
+  max-width: 440px;
+  margin: 48px auto 0;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 4px;
-  min-width: 0;
+  gap: 8px;
+  text-align: center;
+  color: var(--text-2);
 }
 
-.project-location code {
-  overflow: hidden;
-  color: var(--text-2);
-  font-size: calc(12px * var(--text-scale));
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.projects-empty > .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.projects-empty h2 {
+  margin: 0;
+  font-size: calc(15px * var(--text-scale));
+  color: var(--text);
+}
+
+.projects-empty p {
+  margin: 0 0 8px;
 }
 
 .delete-project-dialog code {
@@ -38,4 +209,26 @@
 
 .delete-project-running {
   color: var(--warn);
+}
+
+@media (max-width: 760px) {
+  .projects {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto;
+  }
+
+  .projects-list {
+    max-height: 40vh;
+    padding-right: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .projects-detail {
+    padding: 16px 0 32px;
+  }
+
+  .project-head {
+    flex-wrap: wrap;
+  }
 }

@@ -980,7 +980,7 @@ export default defineWebPlugin({
     const failed = () => [...host.list(), ...webPlugins.list()].filter((candidate) => candidate.state === "failed").length;
     slots.add(SettingsSections, {
       id: SECTION,
-      order: 30,
+      order: 90,
       title: "Plugins",
       icon: PuzzleIcon,
       badge: () => (failed() > 0 ? `${failed()} failed` : undefined),

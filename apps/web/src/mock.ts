@@ -435,6 +435,18 @@ export const createMockHost = (): Host => {
       maxSteps: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 200))).annotate({
         description: "Model calls allowed in one turn before it ends with max-steps.",
       }),
+      keepCancelled: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+        description: "What the model wrote before the user stopped its reply stays in what it sees next.",
+      }),
+      maxRunning: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 16))).annotate({
+        description: "Turns running at once, across sessions; another waits for one to end.",
+      }),
+    }),
+    "tools.bash": Schema.Struct({
+      timeout: Schema.Number.pipe(Schema.check(Schema.isGreaterThanOrEqualTo(0)), Schema.withDecodingDefaultType(Effect.sync(() => 600))).annotate({
+        title: "Default timeout",
+        description: "Seconds a command may run when the model names no timeout; 0 for none.",
+      }),
     }),
     "tools.registry": Schema.Struct({
       maxResultChars: Schema.Int.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 100_000))).annotate({

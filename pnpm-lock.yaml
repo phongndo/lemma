@@ -273,6 +273,9 @@ importers:
       '@lemma/agent':
         specifier: workspace:*
         version: link:../../domains/agent/contract
+      '@lemma/agent-loop':
+        specifier: workspace:*
+        version: link:../../domains/agent/loop
       '@lemma/agent-profiles':
         specifier: workspace:*
         version: link:../../domains/agent/profiles
@@ -721,15 +724,27 @@ importers:
       '@lemma/llm':
         specifier: workspace:*
         version: link:../../llm/contract
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/tools':
         specifier: workspace:*
         version: link:../../tools/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
     devDependencies:
       '@lemma/sessions-files':
         specifier: workspace:*
@@ -773,6 +788,9 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
@@ -1015,6 +1033,9 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
@@ -2392,6 +2413,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
@@ -2614,6 +2638,9 @@ importers:
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../contract
@@ -2740,6 +2767,12 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract
@@ -2752,6 +2785,9 @@ importers:
       effect:
         specifier: 4.0.4
         version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
     devDependencies:
       '@types/node':
         specifier: 24.19.2

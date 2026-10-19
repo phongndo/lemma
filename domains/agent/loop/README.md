@@ -7,6 +7,11 @@ its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and
 `agent.activity`, its live output and each turn's and queue's change.
 
+Its web half (`./web`) offers `maxSteps`, `maxRunning`, and `keepCancelled` in
+Settings › General › Agent, read from and written to its host half's row through
+`HostPlugins`, as the Plugins page would; a change restarts the loop, which
+suspends running turns and resumes them.
+
 It is the agent kit's (`@lemma/agent/kit`) `makeAgent` with the kit's own
 policy, `toolLoop`: what follows is the kit's behavior, which a loop built on
 it shares. A loop of another kind gives `makeAgent` its own `TurnPolicy`

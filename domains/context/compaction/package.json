@@ -21,6 +21,7 @@
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/sessions": "workspace:*",
+    "@lemma/settings": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",

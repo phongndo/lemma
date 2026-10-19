@@ -4,10 +4,15 @@ Paints the look its config chooses on the page, through `@lemma/web/paint`,
 from what the `Themes`, `Accents`, and `Fonts` slots offer
 ([`@lemma/look`](../contract/src/look.ts)). Adds Lemma's own choices to those
 slots as any plugin adds its: the themes `lemma-light` and `lemma-dark` (the
-stylesheet's own colors), the accents `blue`, `violet`, `pink`, `red`,
-`orange`, and `green`, and the fonts `inter`, `geist`, and `ibm-plex-sans`
-for the interface and `jetbrains-mono`, `geist-mono`, and `berkeley-mono` for
-code. Requires `Slots`. It draws nothing: `look.appearance-page` edits its
+stylesheet's own colors) and, beside them, well-known palettes with their code
+colors (`paper`, `github-light`, `solarized-light`, `catppuccin-latte`, and
+`rose-pine-dawn` for the light scheme; `github-dark`, `nord`, `tokyo-night`,
+`catppuccin-mocha`, `gruvbox-dark`, `rose-pine`, and `solarized-dark` for the
+dark), the accents `blue`, `violet`, `pink`, `red`, `orange`, `green`, and
+`teal`, and the fonts `inter`, `geist`, `ibm-plex-sans`, `source-sans`, and
+`atkinson-hyperlegible` for the interface and `jetbrains-mono`, `geist-mono`,
+`berkeley-mono`, `fira-code`, `ibm-plex-mono`, `iosevka`, and `cascadia-code`
+for code. Requires `Slots`. It draws nothing: `look.appearance-page` edits its
 config, as `lemma plugins config look.appearance …` or any plugin may
 ([The look](../../../apps/web/README.md#the-look)). Its config Schema is
 `AppearanceConfig` in [the contract](../contract/src/appearance.ts).

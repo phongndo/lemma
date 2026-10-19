@@ -1,6 +1,15 @@
 /** Where a search goes when nothing else says: `%s` is what was typed. */
 export const SEARCH = "https://duckduckgo.com/?q=%s";
 
+/** Search engines to offer by name, the default first; any other is an address of one's own with `%s` in it. */
+export const ENGINES: readonly { readonly title: string; readonly url: string }[] = [
+  { title: "DuckDuckGo", url: SEARCH },
+  { title: "Google", url: "https://www.google.com/search?q=%s" },
+  { title: "Kagi", url: "https://kagi.com/search?q=%s" },
+  { title: "Brave Search", url: "https://search.brave.com/search?q=%s" },
+  { title: "Bing", url: "https://www.bing.com/search?q=%s" },
+];
+
 /** This machine, a numbered address, or a machine named without a domain and given a port (`devbox:8080`): served over plain http, as a dev server is. */
 const PLAIN = /^(?:(?:localhost|\[[0-9a-f:]+\]|\d{1,3}(?:\.\d{1,3}){3})(?::\d+)?|[a-z0-9-]+:\d+)$/i;
 /** A dotted name ending in letters (`example.com`). */

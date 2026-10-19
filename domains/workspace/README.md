@@ -8,7 +8,7 @@ Projects, git, directories, and file search. Its contract is [`@lemma/workspace`
 | [`workspace.search-fff`](search-fff/README.md) | host   | Searches files with fff: an entry of `FileSearchers`                                              |
 | [`workspace.commands`](commands/README.md)     | host   | Git commands: switch branch, create a branch                                                      |
 | [`workspace.client`](client/)                  | web    | Projects and the directory the composer works in: provides the web app's `Workspace`              |
-| [`workspace.projects`](projects/)              | web    | A project's threads, archived ones included                                                       |
+| [`workspace.projects`](projects/)              | web    | Settings › Projects: every project beside the one chosen, its settings, and deleting it           |
 | [`workspace.add-project`](add-project/)        | web    | Pick a folder on the host by typing its path                                                      |
 | [`workspace.bar`](bar/)                        | web    | The strip under the composer                                                                      |
 | [`workspace.file-mentions`](file-mentions/)    | web    | Mentions of the project's files in the prompt                                                     |

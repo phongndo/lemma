@@ -407,7 +407,7 @@ export default defineWebPlugin({
     const items = () => slots.list(IntegrationKinds).flatMap((kind) => kind.items());
     slots.add(SettingsSections, {
       id: IntegrationsSection,
-      order: 22,
+      order: 30,
       title: "Integrations",
       icon: PlugIcon,
       badge: () => {

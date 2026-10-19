@@ -16,6 +16,8 @@ divider. Requires `Llm`.
 | `keepRecent` | `20000` | Tokens of the latest conversation kept word for word (at most 30% of the window)  |
 | `model`      | unset   | The model that writes summaries (`provider/model`); the turn's model when unset   |
 
+- **Its setting.** Its web half offers `at` in Settings › General › Agent
+  (Summarize at), written to its row as the Plugins page would.
 - **The meter.** Its web half adds a ring to the composer's row, beside its buttons
   (`ComposerActions`), so how full the open thread's context is stays in
   view. It measures as the estimate below

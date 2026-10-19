@@ -6,7 +6,7 @@ How everything looks: the scheme, themes, accents, fonts, and sizes, and the sha
 | ------------------------------------------ | ------ | ------------------------------------------------------------------------------------- |
 | [`look.kit`](kit/)                         | web    | The shared parts' defaults                                                            |
 | [`look.appearance`](appearance/)           | web    | Paints the look its config chooses, from the themes, accents, and fonts plugins offer |
-| [`look.appearance-page`](appearance-page/) | web    | Settings › Appearance                                                                 |
+| [`look.appearance-page`](appearance-page/) | web    | Settings › Appearance, with switches for the look's optional plugins (`LOOK_PLUGINS`) |
 | [`look.highlight`](highlight/)             | web    | Syntax highlighting for fenced code                                                   |
 | [`look.diagrams`](diagrams/)               | web    | Mermaid diagrams for ```mermaid blocks                                                |
 | [`look.file-icons`](file-icons/)           | web    | Each file's type as its icon                                                          |

@@ -19,6 +19,7 @@
     "@lemma/llm": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/sessions": "workspace:*",
+    "@lemma/settings": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/web": "workspace:*",
     "effect": "4.0.4",

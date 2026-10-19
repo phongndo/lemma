@@ -64,7 +64,7 @@ import { workEntries } from "./work.ts";
 import type { WorkEntry, WorkRow } from "./work.ts";
 import { JUMP_MARGIN, jumpOver, locate as locatePrompts } from "./prompt-rail.ts";
 import { createNow } from "@lemma/web/now";
-import { Client, Each, Router, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
+import { Client, Each, Notify, Router, Slots, WebPlugins, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, Part } from "@lemma/web";
 import { AlertIcon, ChatIcon, ChevronDownIcon, ChevronIcon, BrainIcon, Icon, Markdown, RedoIcon, SearchIcon, Spinner, CopyButton, XIcon } from "@lemma/look";
 import { Actions } from "@lemma/actions";
@@ -72,6 +72,7 @@ import styles from "./chat.css?inline";
 import { ChatConfig } from "./config.ts";
 import type { Chat } from "./config.ts";
 import { PromptRail } from "./rail.tsx";
+import { addSettings } from "./settings.tsx";
 import { Images, ToolCard, toolView } from "./tools.tsx";
 import { FindBar } from "./find-bar.tsx";
 import type { ToolState } from "./tools.tsx";
@@ -925,8 +926,8 @@ export default defineWebPlugin({
   id: "threads.transcript",
   styles,
   config: ChatConfig,
-  requires: { client: Client, threads: Threads, router: Router, slots: Slots },
-  setup: ({ client, threads, router, slots }, plugin) => {
+  requires: { client: Client, threads: Threads, router: Router, slots: Slots, webPlugins: WebPlugins, notify: Notify },
+  setup: ({ client, threads, router, slots, webPlugins, notify }, plugin) => {
     // Expanded/collapsed choices survive re-renders and session switches while the plugin runs.
     const [expanded, setExpanded] = createSignal<ReadonlyMap<string, boolean>>(new Map());
     let projector = createProjector();
@@ -982,6 +983,7 @@ export default defineWebPlugin({
       composer: true,
       component: () => <ChatView chat={chat} turns={() => transcript().turns} findWith={(open) => setFind(() => open)} />,
     });
+    addSettings(slots, webPlugins, notify, plugin.id, plugin.config);
     slots.add(Actions, {
       id: "thread.find",
       order: 15,

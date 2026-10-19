@@ -2,7 +2,23 @@ import { For, Show, createSignal, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
 import { fontAvailable } from "./fonts.ts";
 import { onLookChange, tokenColor } from "@lemma/web/paint";
-import { CORNERS, SCHEMES, TEXT_SIZES, WIDTHS, defaultTheme, themeFor, themeTokens, Markdown, Segmented, SendIcon, SettingRow } from "@lemma/look";
+import {
+  CORNERS,
+  SCHEMES,
+  TEXT_SIZES,
+  WIDTHS,
+  defaultTheme,
+  themeFor,
+  themeTokens,
+  CheckIcon,
+  ChevronDownIcon,
+  Markdown,
+  Popover,
+  Segmented,
+  SendIcon,
+  SettingRow,
+  Toggle,
+} from "@lemma/look";
 import type { AppearanceSettings, Field, Look, Scheme, Accent, Font, Theme } from "@lemma/look";
 import { usePlugin } from "@lemma/web";
 import type { SlotItem } from "@lemma/web";
@@ -22,8 +38,6 @@ export interface Deps {
   readonly choices: Accessor<Choices>;
   /** The look the settings choose, as the `appearance` plugin paints it. */
   readonly look: Accessor<Look>;
-  /** The tokens `scheme` shows with, for a preview of it. */
-  readonly tokensFor: (scheme: Scheme) => Record<string, string>;
 }
 
 const SAMPLE = [
@@ -61,77 +75,90 @@ export function Preview(props: { readonly deps: Deps }) {
   );
 }
 
-/** A window in `scheme` with `tokens`, in miniature. */
-function Window(props: { readonly scheme: Scheme; readonly tokens: Record<string, string> }) {
-  return (
-    <div data-theme={props.scheme} style={props.tokens} class="tw:grid tw:flex-1 tw:content-start tw:gap-1.5 tw:bg-bg tw:p-2.5">
-      <div class="tw:h-1.5 tw:w-2/5 tw:rounded-full tw:bg-accent" />
-      <div class="tw:h-1.5 tw:rounded-full tw:bg-border-strong" />
-      <div class="tw:h-1.5 tw:w-3/4 tw:rounded-full tw:bg-border-strong" />
-    </div>
-  );
-}
-
-/** System, light, or dark, each drawn in the theme it would show. */
+/** System, light, or dark. */
 export function SchemePicker(props: { readonly deps: Deps }) {
-  const current = () => props.deps.settings().scheme ?? "system";
   return (
-    <div role="radiogroup" aria-label="Scheme" class="tw:grid tw:grid-cols-3 tw:gap-3 tw:py-3">
-      <For each={SCHEMES}>
-        {(option) => (
-          <button
-            role="radio"
-            aria-checked={current() === option.value}
-            onClick={() => props.deps.set("scheme", option.value)}
-            class="tw:group tw:grid tw:justify-items-center tw:gap-1.5 tw:border-0 tw:bg-transparent tw:p-0 tw:text-sm tw:text-text-2 tw:aria-checked:text-text"
-          >
-            <div class="tw:flex tw:h-[72px] tw:w-full tw:overflow-hidden tw:rounded tw:border tw:border-border-strong tw:outline-2 tw:outline-offset-2 tw:outline-transparent tw:group-aria-checked:outline-text-3">
-              <Show when={option.value !== "dark"}>
-                <Window scheme="light" tokens={props.deps.tokensFor("light")} />
-              </Show>
-              <Show when={option.value !== "light"}>
-                <Window scheme="dark" tokens={props.deps.tokensFor("dark")} />
-              </Show>
-            </div>
-            {option.label}
-          </button>
-        )}
-      </For>
-    </div>
+    <SettingRow title="Scheme" description="System follows your computer's light or dark setting as it changes.">
+      <Segmented label="Scheme" value={props.deps.settings().scheme ?? "system"} options={SCHEMES} onChange={(next) => props.deps.set("scheme", next)} />
+    </SettingRow>
   );
 }
 
-/** The themes offered for `scheme`, for when a plugin offers more than Lemma's own. */
+/** A theme in miniature: its background, and its own accent beside it. */
+function Swatch(props: { readonly scheme: Scheme; readonly theme: SlotItem<Theme> | undefined }) {
+  return (
+    <span
+      data-theme={props.scheme}
+      style={themeTokens(props.theme)}
+      aria-hidden="true"
+      class="tw:flex tw:h-4 tw:w-6 tw:shrink-0 tw:overflow-hidden tw:rounded-xs tw:border tw:border-border-strong"
+    >
+      <span class="tw:flex-1 tw:bg-bg" />
+      <span class="tw:w-2 tw:bg-accent" />
+    </span>
+  );
+}
+
+/** The themes offered for `scheme`, as a menu, each with its swatch. */
 export function ThemeChoice(props: { readonly deps: Deps; readonly scheme: Scheme }) {
   const field = props.scheme === "light" ? "lightTheme" : "darkTheme";
   const offered = () => props.deps.choices().themes.filter((theme) => theme.scheme === props.scheme);
-  const current = () => themeFor(props.deps.settings(), props.deps.choices().themes, props.scheme)?.id;
+  const shown = () => themeFor(props.deps.settings(), props.deps.choices().themes, props.scheme);
   const fallback = () => defaultTheme(props.deps.choices().themes, props.scheme);
   const title = props.scheme === "light" ? "Light theme" : "Dark theme";
+  const description = () =>
+    missingNote(props.deps, field, fallback()?.title ?? "the stylesheet's own") ??
+    (props.scheme === "light"
+      ? "Shown in the light scheme, and by day when following the system."
+      : "Shown in the dark scheme, and by night when following the system.");
   return (
-    <SettingRow title={title} description={missingNote(props.deps, field, fallback()?.title ?? "the stylesheet's own")}>
-      <div role="radiogroup" aria-label={title} class="tw:flex tw:flex-wrap tw:justify-end tw:gap-2">
-        <For each={offered()}>
-          {(theme) => (
-            <button
-              role="radio"
-              aria-checked={current() === theme.id}
-              onClick={() => props.deps.set(field, theme.id === fallback()?.id ? undefined : theme.id)}
-              class="tw:flex tw:items-center tw:gap-2 tw:rounded-sm tw:border tw:border-border tw:bg-transparent tw:py-1 tw:pr-2.5 tw:pl-1 tw:text-sm tw:text-text-2 tw:aria-checked:border-text-3 tw:aria-checked:text-text"
-            >
-              <span
-                data-theme={props.scheme}
-                style={themeTokens(theme)}
-                class="tw:flex tw:h-5 tw:w-7 tw:overflow-hidden tw:rounded-sm tw:border tw:border-border-strong"
+    <SettingRow title={title} description={description()}>
+      <Popover
+        label={title}
+        tip={title}
+        placement="bottom-end"
+        triggerClass="field tw:flex tw:h-[30px] tw:w-50 tw:items-center tw:gap-2 tw:text-md tw:text-text"
+        trigger={
+          <>
+            <Swatch scheme={props.scheme} theme={shown()} />
+            <span class="tw:min-w-0 tw:flex-1 tw:truncate tw:text-left">{shown()?.title ?? "None"}</span>
+            <ChevronDownIcon />
+          </>
+        }
+      >
+        {(close) => (
+          <For each={offered()}>
+            {(theme) => (
+              <button
+                class="menu-item"
+                role="menuitemradio"
+                aria-checked={shown()?.id === theme.id}
+                onClick={() => {
+                  props.deps.set(field, theme.id === fallback()?.id ? undefined : theme.id);
+                  close();
+                }}
               >
-                <span class="tw:flex-1 tw:bg-bg" />
-                <span class="tw:w-2 tw:bg-accent" />
-              </span>
-              {theme.title}
-            </button>
-          )}
-        </For>
-      </div>
+                <span class="menu-check">
+                  <Show when={shown()?.id === theme.id}>
+                    <CheckIcon />
+                  </Show>
+                </span>
+                <Swatch scheme={props.scheme} theme={theme} />
+                <span class="menu-label">{theme.title}</span>
+              </button>
+            )}
+          </For>
+        )}
+      </Popover>
+    </SettingRow>
+  );
+}
+
+/** A plugin of the look's, on or off: what it draws, and its switch. Gone while no plugin has its id. */
+export function PluginSwitch(props: { readonly title: string; readonly description: string; readonly on: boolean; readonly onChange: (on: boolean) => void }) {
+  return (
+    <SettingRow title={props.title} description={props.description}>
+      <Toggle label={props.title} checked={props.on} onChange={props.onChange} />
     </SettingRow>
   );
 }

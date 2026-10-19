@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { Show, createMemo } from "solid-js";
 import { FILE_GLYPHS } from "./file-glyphs.ts";
 import { DEFAULT_FILE_TYPE, fileType, parseFileTypeRules } from "./file-icons.ts";
-import { FileIconPart, Icon } from "@lemma/look";
+import { FileIconPart, Icon, LOOK_PLUGINS } from "@lemma/look";
 import { Slots, defineWebPlugin } from "@lemma/web";
 import type { FileIconProps } from "@lemma/look";
 import styles from "./file-icons.css?inline";
@@ -22,7 +22,7 @@ const FileIconsConfig = Schema.Struct({
  * Colors are tokens in its stylesheet, and `rules` add matches of the user's.
  */
 export default defineWebPlugin({
-  id: "look.file-icons",
+  id: LOOK_PLUGINS.fileIcons,
   styles,
   config: FileIconsConfig,
   requires: { slots: Slots },
