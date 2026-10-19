@@ -92,7 +92,8 @@ const SILENT_OVERFLOW = "The request filled the model's context window, leaving 
 /**
  * One answer as it streams: the message it builds, and the `StreamEvent`s it sends as each part arrives. It keeps the
  * protocol whatever the provider does: `start` first, exactly one `done` or `error` last, nothing after it. A wire
- * adapter adds blocks and deltas; the plugin ends it.
+ * adapter adds blocks and deltas, and what it builds from several (`settle`); the plugin ends it, when the stream ends
+ * or drops, or as it stalls, so the answer holds everything that arrived however it ends.
  */
 export class Output {
   readonly model: Model;
@@ -107,6 +108,7 @@ export class Output {
   private readonly emit: (events: StreamEvent[]) => void;
   private readonly timestamp = Date.now();
   private readonly buffers = new Map<number, string>();
+  private readonly settlers: (() => void)[] = [];
   private started = false;
   private ended = false;
 
@@ -136,6 +138,19 @@ export class Output {
     this.stopReason = "error";
     this.errorMessage = message;
     this.stopFailure = failure;
+  }
+
+  /**
+   * What the adapter builds from parts as they arrive (a signature from pieces), written onto the blocks by `write`
+   * once, as the answer ends however it does: an answer the provider had finished stays whole when the connection
+   * then drops or stalls.
+   */
+  settle(write: () => void): void {
+    this.settlers.push(write);
+  }
+
+  private settled(): void {
+    for (const write of this.settlers.splice(0)) write();
   }
 
   /** The answer has begun: the provider accepted the request. */
@@ -230,13 +245,16 @@ export class Output {
   }
 
   /**
-   * Ends the answer as the provider finished it: tool calls still streaming end with what arrived, and a stop the
-   * provider called an error fails it. Cut off at its limit having said nothing, its input filling the context window,
-   * it is an overflow: some providers cut a request too long to fit instead of refusing it.
+   * Ends the answer as the provider finished it: tool calls still streaming end with what arrived, an answer that
+   * stopped with tool calls stopped for them, and a stop the provider called an error fails it. Cut off at its limit
+   * having said nothing, its input filling the context window, it is an overflow: some providers cut a request too long
+   * to fit instead of refusing it.
    */
   finish(): void {
     if (this.ended) return;
+    this.settled();
     for (const index of this.buffers.keys()) this.endToolCall(index);
+    if (this.stopReason === "stop" && this.content.some((block) => block.type === "toolCall")) this.stopReason = "toolUse";
     const stopReason = this.stopReason;
     if (stopReason === undefined) return this.end(new Error("The provider ended the response without a stop reason"), { kind: "transient" });
     if (stopReason === "error" || stopReason === "aborted") {
@@ -263,6 +281,7 @@ export class Output {
 
   private end(error: unknown, failure: LlmFailure | undefined, aborted = false): void {
     if (this.ended) return;
+    this.settled();
     for (const [index, buffer] of this.buffers) {
       const block = this.content[index];
       if (block?.type === "toolCall") block.arguments = parseArguments(buffer);

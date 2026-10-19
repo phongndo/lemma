@@ -254,7 +254,12 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
       const error = response.error;
       out.errorMessage =
         error?.message === undefined ? `The response ${response.status}` : error.code === undefined ? error.message : `${error.code}: ${error.message}`;
-    } else out.stopReason = out.content.some((block) => block.type === "toolCall") ? "toolUse" : "stop";
+    } else {
+      out.stopReason = "stop";
+      // The agent runs every call of a finished answer: one whose arguments never finished arriving is not one to run.
+      const open = out.content.find((block, index) => block.type === "toolCall" && out.open(index));
+      if (open?.type === "toolCall") out.stopWith(`The response ended with an unfinished tool call: ${open.name} (${open.id})`, undefined);
+    }
   };
   for await (const event of events) {
     // A gateway may end the stream as Chat Completions does.
@@ -322,12 +327,6 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     if (ended) break;
   }
   if (!ended) throw new Error("The provider's stream ended before the response did");
-  // The agent runs every call of a finished answer: one whose arguments never finished arriving is not one to run.
-  for (const [index, block] of out.content.entries()) {
-    if (block.type === "toolCall" && out.open(index) && out.stopReason === "toolUse") {
-      return out.stopWith(`The response ended with an unfinished tool call: ${block.name} (${block.id})`, undefined);
-    }
-  }
 }
 
 export const openaiResponses: Wire = { build, read };

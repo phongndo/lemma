@@ -309,6 +309,10 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
   let details: Detail[] | undefined;
   let finished = false;
   const calls = new Map<number | string, number>();
+  out.settle(() => {
+    const block = thinking === undefined ? undefined : out.content[thinking];
+    if (details !== undefined && block?.type === "thinking") block.thinkingSignature = JSON.stringify(details);
+  });
   const count = (usage: Usage) => {
     // Servers put the cache's hits in different places: OpenAI's details, DeepSeek's own field, Kimi's top level.
     const cacheRead = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? usage.cached_tokens ?? 0;
@@ -397,12 +401,7 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
       else out.stopWith(`The provider stopped: ${choice.finish_reason}`, stopFailure(choice.finish_reason));
     }
   }
-  if (details !== undefined && thinking !== undefined) {
-    const block = out.content[thinking];
-    if (block?.type === "thinking") block.thinkingSignature = JSON.stringify(details);
-  }
   if (!finished) throw new Error("The provider's stream ended without a finish reason");
-  if (out.stopReason === "stop" && out.content.some((block) => block.type === "toolCall")) out.stopReason = "toolUse";
 }
 
 export const openaiCompletions: Wire = { build, read };

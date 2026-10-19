@@ -782,6 +782,42 @@ describe("openai-completions", () => {
     });
   });
 
+  it("keeps an answer the provider finished whole though the connection drops or stalls before the stream ends", async () => {
+    const details = [{ type: "reasoning.encrypted", data: "enc" }];
+    const finished = [
+      { id: "c1", choices: [{ delta: { reasoning_details: details } }] },
+      { id: "c1", choices: [{ delta: { tool_calls: [{ index: 0, id: "t1", function: { name: "read", arguments: '{"path":"a"}' } }] } }] },
+      // Some servers say `stop` for an answer of tool calls: its calls are still to run.
+      { id: "c1", choices: [{ delta: {}, finish_reason: "stop" }] },
+    ];
+    const whole = {
+      type: "done",
+      message: {
+        stopReason: "toolUse",
+        content: [
+          { type: "thinking", thinkingSignature: JSON.stringify(details) },
+          { type: "toolCall", id: "t1", arguments: { path: "a" } },
+        ],
+      },
+    };
+    expect(last(await parseCut(openaiCompletions, model(), finished))).toMatchObject(whole);
+    // Stalled: the plugin ends the answer while the adapter still waits for the stream's end.
+    const events: StreamEvent[] = [];
+    const out = new Output(model(), (more) => events.push(...more));
+    out.start();
+    let read!: () => void;
+    const delivered = new Promise<void>((resolve) => (read = resolve));
+    async function* stalled() {
+      yield* sse(new Response(sseBody(finished)).body!);
+      read();
+      await new Promise(() => {});
+    }
+    void openaiCompletions.read(stalled(), out, call(model(), {}), () => {});
+    await delivered;
+    out.fail(new Error("The provider sent nothing for 300s"), { kind: "transient" });
+    expect(last(events)).toMatchObject(whole);
+  });
+
   it("fails mid-answer as the provider says, by the status it names", async () => {
     const failed = await parse(
       openaiCompletions,
