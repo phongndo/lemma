@@ -68,35 +68,59 @@ export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () =>
 };
 
 /**
- * Where to cut the model's view so about `keep` tokens of it stay word for
- * word: the index on `branch` of the first event kept. A cut falls on a
- * prompt or a response, never between a tool call and its result, and leaves
- * at least one message to summarize. Undefined when there is no such place.
+ * The view's messages in the order of their events on the branch, which is what a cut divides (a `context` entry the
+ * view moved after a response's tool results is before them on the branch), with where each tool call is made.
  */
+const inBranchOrder = (branch: readonly SessionEvent[]) => {
+  const entries = modelEntries(branch)
+    .filter((entry) => entry.summary !== true)
+    .sort((a, b) => a.index - b.index);
+  const callAt = new Map<string, number>();
+  for (const entry of entries) {
+    if (entry.message.role !== "assistant") continue;
+    for (const block of entry.message.content) if (block.type === "toolCall") callAt.set(block.id, entry.index);
+  }
+  return { entries, callAt };
+};
+
 /**
  * Whether the history may be kept from `index`: a message in the model's view after one at least (so a summary has
- * something to stand for), and not a tool result, whose call the summary would take from it.
+ * something to stand for), neither a tool result nor one after which a result is kept whose call the summary would
+ * take from it.
  */
 export const validCut = (branch: readonly SessionEvent[], index: number): boolean => {
-  const entries = modelEntries(branch).filter((entry) => entry.summary !== true);
+  const { entries, callAt } = inBranchOrder(branch);
   const at = entries.find((entry) => entry.index === index);
-  if (at === undefined || at.message.role === "toolResult") return false;
-  return entries.some((entry) => entry.index < index);
+  if (at === undefined || at.message.role === "toolResult" || !entries.some((entry) => entry.index < index)) return false;
+  return !entries.some((entry) => entry.index > index && entry.message.role === "toolResult" && (callAt.get(entry.message.toolCallId) ?? index) < index);
 };
 
 /** The tokens of the messages in the model's view, about (what a cut divides). */
 export const viewTokens = (branch: readonly SessionEvent[]): number => entriesTokens(modelEntries(branch));
 
+/**
+ * Where to cut the model's view so about `keep` tokens of it stay word for
+ * word: the index on `branch` of the first event kept. A cut falls on a
+ * prompt or a response, never between a tool call and its result, and leaves
+ * at least one message to summarize. Undefined when there is no such place.
+ */
 export const chooseCut = (branch: readonly SessionEvent[], keep: number): number | undefined => {
-  const seen = modelEntries(branch).filter((entry) => entry.summary !== true);
+  const { entries, callAt } = inBranchOrder(branch);
   let tail = 0;
   let smallest: number | undefined;
-  for (let at = seen.length - 1; at >= 1; at--) {
-    tail += tokensOf(messageChars(seen[at]!.message));
-    if (seen[at]!.message.role === "toolResult") continue;
+  // The earliest call a kept result answers: a cut after it would summarize the call and keep its result.
+  let earliestCall = Infinity;
+  for (let at = entries.length - 1; at >= 1; at--) {
+    const entry = entries[at]!;
+    tail += tokensOf(messageChars(entry.message));
+    if (entry.message.role === "toolResult") {
+      earliestCall = Math.min(earliestCall, callAt.get(entry.message.toolCallId) ?? Infinity);
+      continue;
+    }
+    if (earliestCall < entry.index) continue;
     // The latest place keeping at least `keep`; failing that, the earliest, keeping the most.
-    if (tail >= keep) return seen[at]!.index;
-    smallest = seen[at]!.index;
+    if (tail >= keep) return entry.index;
+    smallest = entry.index;
   }
   return smallest;
 };
