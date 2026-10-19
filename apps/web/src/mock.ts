@@ -5,7 +5,7 @@ import { AgentChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
-import { SessionChannels } from "@lemma/sessions";
+import { branchOf, SessionChannels, searchLog, searchWords } from "@lemma/sessions";
 import { matches, selectSpans, TraceChannels } from "@lemma/devtools";
 import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
@@ -927,6 +927,29 @@ export const createMockHost = (): Host => {
     create(CWD, t0 - 86400_000);
   }
 
+  // Sessions made while the page ran are kept across a reload, as a host keeps them: what it made before comes back,
+  // and ids go on after theirs.
+  const KEPT = "lemma.mock.sessions";
+  const kept = new Set<string>();
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(KEPT) ?? "[]") as { info: SessionInfo; events: SessionEvent[] }[];
+    for (const session of saved) {
+      sessions.set(session.info.id, session);
+      kept.add(session.info.id);
+      for (const made of [session.info.id, ...session.events.map((event) => event.id)]) idSeq = Math.max(idSeq, parseInt(made.slice(1), 36) || 0);
+    }
+  } catch {
+    // Nothing kept: the seeded history alone.
+  }
+  const keepSessions = () => {
+    try {
+      sessionStorage.setItem(KEPT, JSON.stringify([...kept].flatMap((made) => sessions.get(made) ?? [])));
+    } catch {
+      // Storage off: a reload forgets them.
+    }
+  };
+  addEventListener("pagehide", keepSessions);
+
   const status: ConnectionStatus = { state: "connected", generation: 1, attempts: 0 };
 
   /** Streams `message` as its step's deltas, numbered from 1 as the agent numbers them, keeping the draft `agent.view` shows. */
@@ -1277,9 +1300,21 @@ export const createMockHost = (): Host => {
         .filter((info) => cwd === undefined || info.cwd === cwd)
         .sort((a, b) => b.updatedAt - a.updatedAt),
     ),
+    serveCall("sessions.files", SessionChannels.search, async ({ query, limit }) => {
+      await sleep(80);
+      const words = searchWords(query);
+      return [...sessions.values()]
+        .sort((a, b) => b.info.updatedAt - a.info.updatedAt)
+        .flatMap((session) => {
+          const match = searchLog(session.info.id, branchOf(session.events, session.info.leaf), words);
+          return match === undefined ? [] : [match];
+        })
+        .slice(0, limit ?? 20);
+    }),
     serveCall("sessions.files", SessionChannels.get, async ({ sessionId }) => sessionOf(sessionId).info),
     serveCall("sessions.files", SessionChannels.create, async ({ cwd }) => {
       const info = create(cwd);
+      kept.add(info.id);
       sessionChanges.publish({ type: "session-changed", info });
       return info;
     }),
@@ -1312,12 +1347,22 @@ export const createMockHost = (): Host => {
       append(sessionId, { type: "title", title });
       return sessionOf(sessionId).info;
     }),
-    serveCall("sessions.files", SessionChannels.mark, async ({ sessionId, pinned: pin, archived: archive }) => {
+    serveCall("sessions.files", SessionChannels.mark, async ({ sessionId, pinned: pin, archived: archive, kept: keep }) => {
       const session = sessionOf(sessionId);
-      const { pinned: _pinned, archived: _archived, ...rest } = session.info;
+      const { pinned: _pinned, archived: _archived, kept: _kept, ...rest } = session.info;
       const pinned = pin ?? session.info.pinned === true;
       const archived = archive ?? session.info.archived === true;
-      session.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}) };
+      const kept = keep ?? session.info.kept === true;
+      session.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}), ...(kept ? { kept } : {}) };
+      sessionChanges.publish({ type: "session-changed", info: session.info });
+      return session.info;
+    }),
+    serveCall("sessions.files", SessionChannels.relocate, async ({ sessionId, cwd }) => {
+      const session = sessionOf(sessionId);
+      if (session.events.length > 0)
+        throw new HostError({ code: "NotEmpty", subject: sessionId, message: `Session ${sessionId} has events: only an empty session moves` });
+      if (running.has(sessionId)) throw new HostError({ code: "Busy", subject: sessionId, message: "This session is in use" });
+      session.info = { ...session.info, cwd };
       sessionChanges.publish({ type: "session-changed", info: session.info });
       return session.info;
     }),

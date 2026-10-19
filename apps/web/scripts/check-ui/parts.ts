@@ -2,32 +2,22 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { Page } from "playwright";
-import { boot, checkPlugin, expose, root, settled, switchTo, url } from "./shared.ts";
+import { atBlankThread, boot, checkPlugin, expose, root, settled, switchTo, url } from "./shared.ts";
 
 // 4–7: a part replaced, what plugins add to the extension slots, and the address.
 export const parts = async (): Promise<string> => {
   const { page, errors, expectNoErrors } = await boot();
-  // The open threads are tabs across the top by default, and down the sidebar when frame.sidebar's `tabs` says so.
-  await page.waitForSelector(".tab-strip", { timeout: 5_000 }).catch(() => assert.fail("the open threads did not show as tabs across the top"));
-  const tabsAt = (tabs: "top" | "side") =>
-    page.evaluate(async (where) => {
-      const { Client } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      await (await (window as any).lemma.service(Client)).configure({ "frame.sidebar": { values: { tabs: where } } });
-    }, tabs);
-  // A sidebar collapsed is remembered across a reload: once the threads move to it, it opens again and draws.
+  // The threads are listed down the sidebar. A sidebar collapsed is remembered across a reload, and opened again it draws.
+  await page.waitForSelector(".sidebar .thread-row", { timeout: 5_000 }).catch(() => assert.fail("the threads are not listed down the sidebar"));
   await page.evaluate(() => localStorage.setItem("lemma.sidebar.collapsed", "1"));
   await page.reload();
   await settled(page);
   await page.waitForFunction(() => "lemma" in window && (window as any).lemma.plugins.list().length > 0);
-  await tabsAt("side");
-  await page.waitForSelector(".tab-strip", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("the open threads did not move to the sidebar"));
   await page.keyboard.press("ControlOrMeta+b");
   await page
     .waitForSelector(".sidebar .sidebar-head", { timeout: 5_000 })
     .catch(() => assert.fail("the sidebar did not draw after a reload with it collapsed"));
   expectNoErrors("a reload with the sidebar collapsed");
-  await tabsAt("top");
-  await page.waitForSelector(".tab-strip", { timeout: 5_000 }).catch(() => assert.fail("the open threads did not move back to the top"));
   await checkPlugin(page);
 
   // 4. A replaced part renders instead of the default, everywhere, and the default returns.
@@ -376,7 +366,7 @@ export const parts = async (): Promise<string> => {
     const threads = await (window as any).lemma.service(Threads);
     return threads.list().find((session: any) => session.id !== created && session.lastSeq > 0 && session.archived !== true).id;
   }, created);
-  await page.click(`.session-open[href^="/threads/${seeded}"]`);
+  await page.click(`.thread-open[href^="/threads/${seeded}?"]`);
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   const thread = await where();
   await page.reload();
@@ -413,11 +403,12 @@ export const parts = async (): Promise<string> => {
       { timeout: 5_000 },
     )
     .catch(() => assert.fail("an unreachable saved position kept the chat from remembering scrolls"));
-  // A view is in the address, and back returns to the one before.
-  // The trajectory opens at its newest row, and scrolling up stops following it until Follow; a short window makes it scroll.
+  // The trajectory opens in the thread's inspection pane, beside the chat, which stays. It opens at its newest row, and
+  // scrolling up stops following it until Follow; a short window makes it scroll.
   await page.setViewportSize({ width: 1200, height: 320 });
   await showView(page, "trajectory");
-  await page.waitForFunction(() => location.pathname.endsWith("/trajectory"));
+  await page.waitForSelector(".thread-inspector .trj");
+  assert.equal(await page.locator(".thread-chat .chat-view").count(), 1, "the chat went away when the trace opened beside it");
   const atNewest = (failure: string) =>
     page
       .waitForFunction(
@@ -451,7 +442,93 @@ export const parts = async (): Promise<string> => {
   await page.click(".trj tr[data-kind=tool] >> nth=0");
   await page.click("[aria-label='Event details'] [role=tab] >> text=Pipeline");
   await page.waitForSelector("[aria-label=Guards] tr:has(td:text-is('plan-mode')) >> text=allowed");
+  // Its + opens a view in a new tab, by the view's letter too, and another of one already open; only the tab shown is
+  // drawn.
+  const titles = () => page.locator(".thread-inspector-open").allTextContents();
+  await page.click(".thread-inspector-head [aria-label='Open a view']");
+  // The menu takes focus once it has opened, a frame after the click.
+  await page.waitForFunction(() => document.activeElement?.closest(".popover") != null);
+  await page.keyboard.press("b");
+  await page.waitForSelector(".thread-inspector-view .browser-view");
+  assert.equal(await page.locator(".thread-inspector .trj").count(), 0, "a tab not shown is still drawn");
+  // A page lies over its place in the tab, drawn from the app's top.
+  await page.fill(".browser-address", "about:blank");
+  await page.keyboard.press("Enter");
+  await page
+    .waitForFunction(
+      () => {
+        const place = document.querySelector(".browser-place")!.getBoundingClientRect();
+        const shown = document.querySelector(".browser-page")?.getBoundingClientRect();
+        return shown !== undefined && [place.x, place.y, place.width, place.height].join() === [shown.x, shown.y, shown.width, shown.height].join();
+      },
+      undefined,
+      { timeout: 5_000 },
+    )
+    .catch(() => assert.fail("a browser page is not over its place in the pane"));
+  await page.click(".thread-inspector-head [aria-label='Open a view']");
+  await page.click(".popover [role=menuitem] >> text=Trace");
+  await page.waitForFunction(() => document.querySelectorAll(".thread-inspector-open").length === 3);
+  assert.deepEqual(await titles(), ["Trace", "Browser", "Trace"]);
+  // A tab dragged past its neighbor's middle takes its place on the drop.
+  const [dragged, target] = [
+    await page.locator(".thread-inspector-tab >> nth=1").boundingBox(),
+    await page.locator(".thread-inspector-tab >> nth=0").boundingBox(),
+  ];
+  await page.mouse.move(dragged!.x + dragged!.width - 10, dragged!.y + dragged!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target!.x + 10, target!.y + target!.height / 2, { steps: 8 });
+  await page.mouse.up();
+  await page
+    .waitForFunction(() => [...document.querySelectorAll(".thread-inspector-open")].map((tab) => tab.textContent).join() === "Browser,Trace,Trace", undefined, {
+      timeout: 5_000,
+    })
+    .catch(async () => assert.fail(`dragging a pane tab left them as ${(await titles()).join(", ")}`));
+  // Its right-click menu closes the others; with focus in the pane, ⌘W closes its tab, and the last one the pane, the
+  // thread staying.
+  await page.click(".thread-inspector-open >> nth=2", { button: "right" });
+  await page.click(".popover [role=menuitem] >> text=Close others");
+  assert.deepEqual(await titles(), ["Trace"]);
+  await page.focus(".thread-inspector-open");
+  await page.keyboard.press("ControlOrMeta+w");
+  await page.waitForSelector(".thread-inspector", { state: "detached" });
+  assert.equal(await where(), thread, "⌘W in the pane closed the thread");
+  // Opened with no tab, it offers the views, by letter too.
+  await page.click("[aria-label='Open inspection pane']");
+  await page.waitForSelector(".thread-inspector-empty >> text=Open a view");
+  await page.keyboard.press("t");
+  await page.waitForSelector(".thread-inspector-view .trj");
+  // Maximized, it fills the page, the chat out of sight; restored, the chat is back.
+  await page.click("[aria-label='Maximize inspection pane']");
+  await page.waitForFunction(() => document.querySelector(".thread-chat")!.getBoundingClientRect().width === 0);
+  await page.click("[aria-label='Restore inspection pane']");
+  await page.waitForFunction(() => document.querySelector(".thread-chat")!.getBoundingClientRect().width > 0);
+  // An address naming a view shows the thread's tab of it, rather than another, then names the thread alone.
+  const threadPath = await page.evaluate(async () => {
+    const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const path = location.pathname;
+    (await (window as any).lemma.service(Router)).navigate(`${path}/trajectory`);
+    return path;
+  });
+  await page.waitForFunction((path) => location.pathname === path, threadPath);
+  assert.deepEqual(await titles(), ["Trace"], "an address naming a view opened another tab of it");
+  // The pane is the thread's: another shows its own, and this one's is as it was on coming back.
+  const other: string = await page.evaluate(async (current) => {
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const threads = await (window as any).lemma.service(Threads);
+    const next = threads.list().find((session: { id: string; lastSeq: number }) => !current.includes(session.id) && session.lastSeq > 0).id;
+    await threads.select(next);
+    return next;
+  }, thread);
+  await page.waitForFunction((id) => location.pathname === `/threads/${id}`, other);
+  assert.equal(await page.locator(".thread-inspector").count(), 0, "another thread showed this one's pane");
   await page.goBack();
+  await page.waitForSelector(".thread-inspector .trj");
+  // Its switch closes it; the header's opens it again at the tab it showed.
+  await page.click("[aria-label='Close inspection pane']");
+  await page.waitForSelector(".thread-inspector", { state: "detached" });
+  await page.click("[aria-label='Open inspection pane']");
+  await page.waitForSelector(".thread-inspector .trj");
+  await page.click("[aria-label='Close inspection pane']");
   await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread);
   await page.waitForSelector(".turn");
   // Settings reloaded, then another section: closing still returns to the thread.
@@ -464,7 +541,14 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
     .catch(async () => assert.fail(`closing settings after a reload went to ${await where()}`));
-  // An archived thread opened from History, the button where the tabs end: the thread opens, and back returns to History.
+  // The sidebar's foot leads to settings (which take the sidebar while open); Escape comes back.
+  await page.click(".sidebar-foot [aria-label=Settings]");
+  await page.waitForFunction(() => location.pathname.startsWith("/settings"));
+  await page.keyboard.press("Escape");
+  await page
+    .waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 })
+    .catch(async () => assert.fail(`closing settings opened from the sidebar went to ${await where()}`));
+  // An archived thread opens from the sidebar's archived fold.
   const archive = (archived: boolean) =>
     page.evaluate(
       async ({ id, archived }) => {
@@ -474,25 +558,16 @@ export const parts = async (): Promise<string> => {
       { id: seeded, archived },
     );
   await archive(true);
-  await page.click(".tab-foot [aria-label=History]");
-  await page.waitForFunction(() => location.pathname === "/history");
-  await page.click(".history-nav-item >> text=Archived");
-  await page.click(
-    `.history-row:has-text("${await page.evaluate(async (id) => {
-      const { Threads, sessionTitle } = (await import("/src/ui/api.ts" as string)).api.contracts;
-      return sessionTitle((await (window as any).lemma.service(Threads)).list().find((session: any) => session.id === id));
-    }, seeded)}") .history-open`,
-  );
+  await page.evaluate(async () => {
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    void (await (window as any).lemma.service(Threads)).select(undefined);
+  });
+  await page.click(".archived-head");
+  await page.click(`[data-section=archived] [data-session-row][href^="/threads/${seeded}?"]`);
   await page
     .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
-    .catch(async () => assert.fail(`opening an archived thread from History ended on ${await where()}`));
-  await page.goBack();
-  await page
-    .waitForFunction(() => location.pathname === "/history", undefined, { timeout: 5_000 })
-    .catch(async () => assert.fail(`back from an archived thread went to ${await where()}, not History`));
-  // Escape closes History, back where it was opened from.
-  await page.keyboard.press("Escape");
-  await page.waitForFunction(() => location.pathname !== "/history");
+    .catch(async () => assert.fail(`opening an archived thread from the sidebar ended on ${await where()}`));
+  await page.click(".archived-head");
   await archive(false);
   await page.evaluate(async (id) => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
@@ -500,37 +575,247 @@ export const parts = async (): Promise<string> => {
   }, seeded);
   await page.waitForFunction((id) => location.pathname === `/threads/${id}`, seeded);
   await page.waitForSelector(".turn");
-  // Unarchived while shown, the thread is a tab again.
-  await page.waitForSelector(`.tab-list [data-session-row][href^="/threads/${seeded}"]`);
-  // A closed tab comes back with ⌘Z, where it stood.
-  const tabs = () => page.$$eval(".tab-list [data-session-row]", (rows) => rows.map((row) => row.getAttribute("href")));
-  const before = await tabs();
-  await page.keyboard.press("ControlOrMeta+w");
-  await page.waitForFunction((id) => !location.pathname.endsWith(id), seeded);
-  await page.locator(".tab-strip").click({ position: { x: 1, y: 1 } });
-  await page.keyboard.press("ControlOrMeta+z");
+  // Unarchived while shown, the thread is listed again.
+  const listedRow = (id: string) => `.thread-section.sorted li:not([data-section=archived]) [data-session-row][href^="/threads/${id}?"]`;
+  await page.waitForSelector(listedRow(seeded));
+  // Archived from under the pointer, it goes below among the archived and the next thread shows; unarchived from there,
+  // it is on top again.
+  const listed = () =>
+    page.$$eval(".thread-section.sorted li:not([data-section=archived]) [data-session-row]", (rows) =>
+      rows.map((row) => new URL(row.getAttribute("href")!, "http://x").pathname),
+    );
+  await page.hover(listedRow(seeded));
+  await page.click(`.thread-row:has([data-session-row][href^="/threads/${seeded}?"]) .thread-archive`);
   await page
-    .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
-    .catch(async () => assert.fail(`⌘Z after closing a tab ended on ${await where()}`));
-  assert.deepEqual(await tabs(), before, "a reopened tab returns where it stood");
-  // A tab dragged past its neighbor's middle takes its place, and the drag's end opens nothing.
-  const openRows = page.locator(".tab-list > [data-open-row]");
-  const order = await openRows.evaluateAll((rows) => rows.map((row) => row.querySelector("a")!.getAttribute("href")));
-  assert.ok(order.length >= 2, "two open tabs to reorder");
-  const [from, to] = [await openRows.nth(0).boundingBox(), await openRows.nth(1).boundingBox()];
-  const shownBefore = await page.evaluate(() => location.pathname);
-  await page.mouse.move(from!.x + 20, from!.y + from!.height / 2);
-  await page.mouse.down();
-  await page.mouse.move(to!.x + to!.width - 10, to!.y + to!.height / 2, { steps: 8 });
-  await page.mouse.up();
+    .waitForFunction((id) => !location.pathname.endsWith(id), seeded, { timeout: 5_000 })
+    .catch(async () => assert.fail(`archiving the thread shown stayed on ${await where()}`));
+  assert(!(await listed()).includes(`/threads/${seeded}`), "an archived thread stayed among the active");
+  await page.click(".archived-head");
+  await page.hover(`[data-section=archived] [data-session-row][href^="/threads/${seeded}?"]`);
+  await page.click(`[data-section=archived] .thread-row:has([data-session-row][href^="/threads/${seeded}?"]) .thread-archive`);
   await page
     .waitForFunction(
-      (want) => JSON.stringify([...document.querySelectorAll(".tab-list > [data-open-row] a")].map((a) => a.getAttribute("href")).slice(0, 2)) === want,
-      JSON.stringify([order[1], order[0]]),
+      (id) =>
+        document
+          .querySelector(".thread-section.sorted li:not([data-section=archived]) [data-session-row]")
+          ?.getAttribute("href")
+          ?.startsWith(`/threads/${id}?`),
+      seeded,
+      {
+        timeout: 5_000,
+      },
+    )
+    .catch(async () => assert.fail(`an unarchived thread is not on top: ${(await listed()).join(", ")}`));
+  // The fold closed again, while it is there (nothing archived, it goes).
+  if ((await page.locator(".archived-head[aria-expanded=true]").count()) > 0) await page.click(".archived-head");
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
+  // A new thread is a session at once, not listed until it has a prompt; asked for again while it shows, it is the same
+  // one; left with nothing written in it, it goes, as a tab closed does.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyO");
+  await atBlankThread(page);
+  const blankId = new URL(page.url()).pathname.split("/")[2]!;
+  assert.equal(await page.locator(`.thread-list [href^="/threads/${blankId}?"]`).count(), 0, "a thread with nothing sent is listed");
+  await page.evaluate(() => (window as any).blankThreads.newThread());
+  assert.equal(new URL(page.url()).pathname.split("/")[2], blankId, "a second new thread was made beside an empty one");
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
+  await page
+    .waitForFunction((id) => !(window as any).blankThreads.list().some((session: any) => session.id === id), blankId, { timeout: 5_000 })
+    .catch(() => assert.fail("an empty new thread, left, stays"));
+  // One with a tab in its pane is kept: left, it stays, marked kept on the host so its sweep passes it over.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyO");
+  await atBlankThread(page);
+  const paneId = new URL(page.url()).pathname.split("/")[2]!;
+  await showView(page, "trajectory");
+  await page.waitForSelector(".thread-inspector");
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
+  await page
+    .waitForFunction((id) => (window as any).blankThreads.list().find((session: any) => session.id === id)?.kept === true, paneId, { timeout: 5_000 })
+    .catch(async () =>
+      assert.fail(
+        `a blank thread with a pane tab is not kept: ${JSON.stringify(await page.evaluate((id) => (window as any).blankThreads.list().find((session: any) => session.id === id), paneId))}`,
+      ),
+    );
+  await page.evaluate((id) => (window as any).blankThreads.remove(id), paneId);
+  const threadIds = () => page.evaluate(() => ((window as any).blankThreads.list() as { id: string }[]).map((session) => session.id));
+  // ⌘Enter runs the prompt in a new thread in the background: it is listed, and the thread shown stays.
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
+  const known = await threadIds();
+  await page.fill("textarea", "look into it elsewhere");
+  // Held between its steps, so it is still at work when its card is measured below.
+  await page.evaluate(() => (window as any).lemmaMock.holdSteers());
+  await page.keyboard.press("ControlOrMeta+Enter");
+  const background: string = await page
+    .waitForFunction((known) => (window as any).blankThreads.list().find((session: any) => !known.includes(session.id))?.id, known, { timeout: 5_000 })
+    .then((handle) => handle.jsonValue() as Promise<string>)
+    .catch(async () => assert.fail(`⌘Enter started no thread; ${JSON.stringify(await threadIds())}`));
+  await page.waitForSelector(`.thread-list a[href^="/threads/${background}?"]`);
+  // A card at work is as tall as one at rest, and stays so under the pointer: what it shows never changes its size, so
+  // a pointer resting at its foot does not leave and find it again, over and over.
+  const workingRow = `.thread-section.sorted .thread-row:has([data-session-row][href^="/threads/${background}?"])`;
+  // Away from the list first: a card under the pointer shows its buttons where its state goes.
+  await page.mouse.move(900, 400);
+  await page
+    .waitForSelector(`${workingRow} .thread-state[data-state=working]`, { timeout: 5_000 })
+    .catch(() => assert.fail("a thread at work does not say so on its card"));
+  const atRest = (await page.locator(workingRow).boundingBox())!;
+  const idle = (await page.locator(`.thread-section.sorted .thread-row:not(.running):not(.slim)`).first().boundingBox())!;
+  assert.equal(atRest.height, idle.height, `a card at work is ${atRest.height}px tall, one at rest ${idle.height}px`);
+  await page.mouse.move(atRest.x + 40, atRest.y + atRest.height - 2);
+  await page.waitForFunction((selector) => document.querySelector(selector)?.matches(":hover") === true, workingRow);
+  assert.equal((await page.locator(workingRow).boundingBox())!.height, atRest.height, "a card at work changes its height under the pointer");
+  await page.mouse.move(atRest.x + atRest.width + 400, atRest.y);
+  await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
+  assert.equal(await where(), thread, "⌘Enter left the thread shown");
+  assert.equal(await page.inputValue("textarea"), "", "⌘Enter left the prompt in the composer");
+  // mod+1 goes to the first thread listed.
+  const first = await page.getAttribute(".thread-section.sorted [data-session-row] >> nth=0", "href");
+  await page.keyboard.press("ControlOrMeta+Digit1");
+  await page
+    .waitForFunction((path) => `${location.pathname}${location.search}` === path, first, { timeout: 5_000 })
+    .catch(async () => assert.fail(`⌘1 went to ${await where()}, not ${first}`));
+  // A prompt written in a new thread and left there is held as a draft above the threads, across a reload; opened, the
+  // composer has it again; discarded from its row, the thread goes with it.
+  await page.keyboard.press("ControlOrMeta+Shift+KeyO");
+  await atBlankThread(page);
+  const draftId = new URL(page.url()).pathname.split("/")[2]!;
+  await page.fill("textarea", "hold this prompt");
+  await page.click(`.thread-list a[href="${thread}"]`);
+  const draftRow = `.drafts [data-session-row][href^="/threads/${draftId}?"]`;
+  await page.waitForSelector(draftRow, { timeout: 5_000 }).catch(() => assert.fail("a prompt left in a new thread is not held as a draft"));
+  await page.reload();
+  await page.waitForSelector(draftRow, { timeout: 10_000 }).catch(() => assert.fail("a draft is gone after a reload"));
+  await page.click(draftRow);
+  await page
+    .waitForFunction(() => document.querySelector("textarea")?.value === "hold this prompt", undefined, { timeout: 5_000 })
+    .catch(async () => assert.fail(`a draft opened has ${JSON.stringify(await page.inputValue("textarea"))} in the composer`));
+  assert.equal(await page.locator(draftRow).count(), 1, "a draft opened left the drafts");
+  await page.keyboard.press("ControlOrMeta+Shift+KeyO");
+  await page
+    .waitForFunction((id) => location.pathname.startsWith("/threads/") && !location.pathname.endsWith(id), draftId, { timeout: 5_000 })
+    .catch(() => assert.fail("a new thread asked for went back to the draft"));
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
+  await page.hover(draftRow);
+  await page.click(`.drafts .thread-row:has(${draftRow.slice(".drafts ".length)}) [aria-label^=Discard]`);
+  await page.waitForSelector(draftRow, { state: "detached", timeout: 5_000 }).catch(() => assert.fail("a discarded draft is still listed"));
+  await expose(page, "Threads");
+  await page
+    .waitForFunction((id) => !(window as any).services.Threads.list().some((session: any) => session.id === id), draftId, { timeout: 5_000 })
+    .catch(() => assert.fail("a discarded draft's thread is still there"));
+  // Pinned from under the pointer, a thread goes to the top. Dragged down past the first of the others, it goes there,
+  // unpinned, and keeps that place across a reload.
+  const sorted = () =>
+    page.$$eval(".thread-section.sorted li:not([data-section=archived]) [data-session-row]", (rows) =>
+      rows.map((row) => new URL(row.getAttribute("href")!, "http://x").pathname.split("/")[2]!),
+    );
+  const rowOf = (id: string) => `.thread-section.sorted .thread-row:has([data-session-row][href^="/threads/${id}?"])`;
+  const before = await sorted();
+  const pinning = before.at(-1)!;
+  await page.hover(rowOf(pinning));
+  await page.click(`${rowOf(pinning)} [aria-label^="Pin "]`);
+  await page
+    .waitForFunction(
+      (id) => document.querySelector(".thread-section.sorted [data-session-row]")?.getAttribute("href")?.startsWith(`/threads/${id}?`),
+      pinning,
+      {
+        timeout: 5_000,
+      },
+    )
+    .catch(async () => assert.fail(`a thread pinned is not on top: ${(await sorted()).join(", ")}`));
+  const next = (await sorted())[1]!;
+  const from = (await page.locator(rowOf(pinning)).boundingBox())!;
+  await page.mouse.move(from.x + 40, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 40, from.y + from.height / 2 + 10, { steps: 4 });
+  // The sections' names show once it is picked up; then it is aimed below the next thread.
+  await page.waitForSelector(".thread-head-label", { timeout: 5_000 }).catch(() => assert.fail("a thread picked up shows no sections"));
+  const onto = (await page.locator(rowOf(next)).boundingBox())!;
+  await page.mouse.move(from.x + 40, onto.y + onto.height - 4, { steps: 20 });
+  await page
+    .waitForSelector(".drop-verb:has-text('Unpin')", { timeout: 5_000 })
+    .catch(() => assert.fail("a pinned thread dragged among the rest does not say it unpins"));
+  await page.mouse.up();
+  const dropped = async () => {
+    const now = await sorted();
+    return now.indexOf(pinning) === now.indexOf(next) + 1;
+  };
+  await page
+    .waitForFunction(
+      ({ id, next }) => {
+        const rows = [...document.querySelectorAll(".thread-section.sorted li:not([data-section=archived]) [data-session-row]")].map(
+          (row) => new URL(row.getAttribute("href")!, "http://x").pathname.split("/")[2],
+        );
+        return (
+          rows.indexOf(id) === rows.indexOf(next) + 1 && (window as any).services.Threads.list().find((session: any) => session.id === id)?.pinned !== true
+        );
+      },
+      { id: pinning, next },
       { timeout: 5_000 },
     )
-    .catch(async () => assert.fail(`dragging a tab left them in ${JSON.stringify(await tabs())}`));
-  assert.equal(await page.evaluate(() => location.pathname), shownBefore, "the drag's end opens nothing");
+    .catch(async () => assert.fail(`a thread dragged below another is not there, unpinned: ${(await sorted()).join(", ")}`));
+  await page.reload();
+  await page.waitForSelector(rowOf(pinning));
+  assert(await dropped(), `a dragged thread's place is lost on a reload: ${(await sorted()).join(", ")}`);
+  // The sidebar's head: the toggle, and across from it search and a new thread.
+  assert.deepEqual(
+    await page.$$eval(".sidebar-head button", (buttons) => buttons.map((button) => button.getAttribute("aria-label"))),
+    ["Toggle sidebar", "Search threads", "New thread"],
+    "the sidebar's head is not the toggle, search, and a new thread",
+  );
+  // A thread a plugin says waits on the person shows it where its time goes.
+  await checkPlugin(page);
+  await page.evaluate(async (id) => {
+    const { ThreadWaits } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    (window as any).removeWait = (window as any).checkSlots.add(ThreadWaits, {
+      id: "check.wait",
+      waiting: (sessionId: string) => (sessionId === id ? "Needs input" : undefined),
+    });
+  }, pinning);
+  await page
+    .waitForSelector(`${rowOf(pinning)} .thread-state[data-state=waiting]:has-text('Needs input')`, { timeout: 5_000 })
+    .catch(() => assert.fail("a thread waiting on the person does not say so"));
+  await page.evaluate(() => (window as any).removeWait());
+  // Search floats: the head's button opens the palette's thread search, which finds what was said in threads too.
+  await page.click(".sidebar-head [aria-label='Search threads']");
+  await page.waitForFunction(() => (document.querySelector(".palette input") as HTMLInputElement | null)?.value === "@", undefined, { timeout: 5_000 });
+  await page.keyboard.type("depend each");
+  await page
+    .waitForSelector(".palette-section:has-text('In messages') + .palette-row", { timeout: 5_000 })
+    .catch(() => assert.fail("searching threads does not find what was said in them"));
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".palette input", { state: "detached" });
+  // Adding a project: Tab goes into the highlighted folder, and Enter then opens that folder, not the one above it.
+  await page.evaluate(async () => {
+    const { Dialogs } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    (await (window as any).lemma.service(Dialogs)).open("add-project");
+  });
+  const folderPath = () => page.inputValue("[aria-label='Folder path']");
+  await page.waitForFunction(() => (document.querySelector("[aria-label='Folder path']") as HTMLInputElement | null)?.value === "~/");
+  await page.fill("[aria-label='Folder path']", "~/code/lem");
+  await page.keyboard.press("Tab");
+  await page.waitForFunction(() => (document.querySelector("[aria-label='Folder path']") as HTMLInputElement).value === "~/code/lemma/");
+  await page.waitForSelector(".palette-row[data-active=true] >> text=Open");
+  await page.keyboard.press("Enter");
+  await page
+    .waitForSelector("[aria-label='Folder path']", { state: "detached", timeout: 5_000 })
+    .catch(async () => assert.fail(`Enter in a folder gone into left the picker at ${await folderPath()}`));
+  await atBlankThread(page);
+  assert.equal(await page.evaluate(() => (window as any).blankThreads.active().cwd), "~/code/lemma/", "Enter in a folder gone into opened another");
+  // The project goes again, so the checks after see what they did.
+  await page.evaluate(async () => {
+    const { Workspace } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    (await (window as any).lemma.service(Workspace)).remove("~/code/lemma/");
+  });
+  // The background thread goes once its turn is done, so the checks after see the threads they did.
+  await page.waitForFunction((id) => !(window as any).blankThreads.running().includes(id), background, { timeout: 20_000 });
+  await page.evaluate((id) => (window as any).blankThreads.remove(id), background);
+  await page.click(`.thread-list a[href="${thread}"]`);
+  await page.waitForFunction((path) => `${location.pathname}${location.search}` === path, thread, { timeout: 5_000 });
   // The thread page's plugin off: the address stays and says so, naming the plugin that declares the route; back on,
   // the thread returns.
   await switchTo(page, "threads.view", false);
@@ -557,6 +842,7 @@ export const parts = async (): Promise<string> => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     void (await (window as any).lemma.service(Threads)).select(undefined);
   });
+  await atBlankThread(page);
   await page.fill("textarea", "doomed");
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => location.pathname.startsWith("/threads/"));
@@ -580,10 +866,18 @@ export const parts = async (): Promise<string> => {
     { timeout: 5_000 },
   );
   assert.match(new URL(page.url()).pathname, /^\/settings/, "deleting the thread under settings closed them");
-  // Closing them returns to the deleted thread's address, which leaves for a new thread.
+  // Closing them returns to the deleted thread's address, which leaves for the new-thread page, and that for a blank
+  // thread.
   await page.keyboard.press("Escape");
   await page
-    .waitForFunction(() => location.pathname === "/", undefined, { timeout: 5_000 })
+    .waitForFunction(
+      (id) => {
+        const shown = (window as any).services.Threads.active();
+        return location.pathname !== `/threads/${id}` && shown !== undefined && shown.lastSeq === 0;
+      },
+      doomed,
+      { timeout: 5_000 },
+    )
     .catch(async () => assert.fail(`closing settings over a deleted thread went to ${await where()}`));
   // Resting on a thread's row fetches its log; opening it follows the log on from there rather than reading it again.
   await page.evaluate(async () => {
@@ -602,7 +896,7 @@ export const parts = async (): Promise<string> => {
     };
   });
   const reads = (id: string) => page.evaluate((id) => (window as any).fetched.filter(([, session]: any) => session === id), id);
-  const row = page.locator(`.session-open[href^="/threads/${seeded}"]`);
+  const row = page.locator(`.thread-open[href^="/threads/${seeded}?"]`);
   await row.hover();
   await page
     .waitForFunction((id) => (window as any).fetched.some(([kind, session]: any) => kind === "events" && session === id), seeded, { timeout: 2_000 })
@@ -613,7 +907,8 @@ export const parts = async (): Promise<string> => {
   const [preloaded, followed, ...more] = await reads(seeded);
   assert.deepEqual([preloaded[0], followed[0], more], ["events", "log", []], "opening a preloaded thread read its log again");
   assert(followed[2] > 0, "opening a preloaded thread followed its log from the start rather than from what the preload read");
-  // Unsent text: closing or reloading the tab asks first, while settings show too; sent or cleared, it does not.
+  // Unsent text comes back after a reload (`Threads.drafts`), so closing or reloading the tab does not ask for it; an
+  // attached image, which would be lost, makes it ask first, while settings show too; removed, it does not.
   const unloadAsks = () =>
     page.evaluate(() => {
       const event = new Event("beforeunload", { cancelable: true });
@@ -626,18 +921,20 @@ export const parts = async (): Promise<string> => {
       (await (window as any).lemma.service(Settings)).open(section);
     }, section);
   await page.fill("textarea", "half a thought");
-  assert.equal(await unloadAsks(), true, "unsent text did not make leaving the page ask");
+  assert.equal(await unloadAsks(), false, "unsent text, which comes back, made leaving the page ask");
   // An attached image stays with the prompt while settings show in the composer's place.
   const pixel = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
   await page.setInputFiles('.composer input[type="file"]', { name: "pixel.png", mimeType: "image/png", buffer: Buffer.from(pixel, "base64") });
   await page.waitForSelector(".attachment");
+  assert.equal(await unloadAsks(), true, "an unsent image did not make leaving the page ask");
   await settings("general");
   await page.waitForFunction(() => location.pathname.startsWith("/settings"));
-  assert.equal(await unloadAsks(), true, "unsent text did not make leaving the page ask while settings show");
+  assert.equal(await unloadAsks(), true, "an unsent image did not make leaving the page ask while settings show");
   await settings(undefined);
   await page.waitForSelector(".attachment", { timeout: 5_000 }).catch(() => assert.fail("closing settings lost the attached image"));
   assert.equal(await page.inputValue("textarea"), "half a thought", "closing settings lost the unsent text");
   await page.click(".attachment-remove");
+  assert.equal(await unloadAsks(), false, "a removed image still made leaving the page ask");
   // A file dropped that is no image is not attached, and the composer says so.
   await page.evaluate(() => {
     const data = new DataTransfer();
@@ -732,7 +1029,7 @@ export const parts = async (): Promise<string> => {
   await page.waitForSelector(".page-missing >> text=This page failed");
   await page.waitForSelector(".page-missing >> text=check boom");
   await page.waitForSelector(".toast >> text=match the same addresses");
-  assert(await page.locator(".tab-strip").isVisible(), "a failing page took the tabs with it");
+  assert(await page.locator(".sidebar .thread-list").isVisible(), "a failing page took the thread list with it");
   // Readers run again as the router takes the address in (all at once): once it has, their count is final.
   await expose(page, "Router");
   const reruns = async (navigate: string) => {
@@ -822,9 +1119,9 @@ export const parts = async (): Promise<string> => {
   return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
 };
 
-/** Shows a view of the open thread by its id, as its palette command does (the header has no switch), once the thread has loaded. */
+/** Shows a view of the open thread by its id in its pane, as its palette command does, once the thread has loaded. */
 async function showView(page: Page, id: string): Promise<void> {
-  // The thread's menu shows once it has loaded; a view chosen before then gives way to the address it loads at.
+  // The thread's menu shows once it has loaded: the pane is the thread's, so a view is shown in it once there is one.
   await page.waitForSelector(".main-head [aria-label='Thread actions']", { timeout: 10_000 });
   await page.waitForFunction(
     async (view) => {
@@ -836,5 +1133,4 @@ async function showView(page: Page, id: string): Promise<void> {
     id,
     { timeout: 10_000 },
   );
-  await page.waitForFunction((view) => location.pathname.endsWith(`/${view}`), id, { timeout: 10_000 });
 }
