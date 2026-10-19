@@ -624,6 +624,28 @@ describe("model catalogs", () => {
     expect(sent[0]).toMatchObject({ reasoning: { enabled: true } });
   });
 
+  it("keeps OpenRouter's models as they are while its list of those that must reason is out of reach", async () => {
+    const fetchImpl: typeof fetch = async (input) => {
+      if (String(input) !== "https://models.dev/api.json") throw new Error("offline in tests");
+      const toggles = { tool_call: true, reasoning: true, reasoning_options: [{ type: "toggle" }] };
+      return Response.json({ openrouter: { npm: "@openrouter/ai-sdk-provider", models: { "openai/o3": toggles } } });
+    };
+    // As the committed catalog has it, from the list when it was read.
+    const o3 = catalogModel("openai/o3", { reasoning: true, thinking: { kind: "toggle", levels: ["high"] } });
+    const openrouter = faux({ id: "openrouter", apis: { "openai-completions": "https://openrouter.ai/api/v1" }, env: ["OPENROUTER_API_KEY"], models: [o3] });
+    const { plugins } = setup({ fetch: fetchImpl, providers: [openrouter], env: { OPENROUTER_API_KEY: "sk-or" } });
+    const levels = await runWith(
+      plugins,
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        // A logout returns once its refresh, after the one at startup, is done.
+        yield* llm.logout("openrouter");
+        return (yield* llm.models()).map((model) => model.thinkingLevels);
+      }),
+    );
+    expect(levels).toEqual([["high"]]);
+  });
+
   it("tells clients when a refresh changed a model's limits, though it serves the same models", async () => {
     const heard = Deferred.makeUnsafe<void>();
     const listener = definePlugin({

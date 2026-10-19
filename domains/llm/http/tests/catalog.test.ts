@@ -137,7 +137,7 @@ describe("mustThinkSource", () => {
     const signal = new AbortController().signal;
     expect(await read("openrouter", signal)).toEqual(new Set(["openai/o3"]));
     expect(await read("openrouter", signal)).toEqual(new Set(["openai/o3"]));
-    expect(await read("faux", signal)).toBeUndefined();
+    expect(await read("faux", signal)).toEqual(new Set());
     expect(reads).toBe(1);
     expect(mustThinkOf({ error: "nope" })).toBeUndefined();
   });

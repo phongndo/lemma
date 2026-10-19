@@ -166,12 +166,15 @@ export function mustThinkOf(list: unknown): ReadonlySet<string> | undefined {
   return new Set(ids);
 }
 
-/** Each provider's `MUST_THINK_LISTS` list over the network, read at most once an hour; undefined for none, or out of reach. */
+/**
+ * Each provider's `MUST_THINK_LISTS` list over the network, read at most once an hour: none for a provider without
+ * one, and undefined while it is out of reach, as a catalog read without it would ask its models to stop.
+ */
 export function mustThinkSource(fetchImpl: typeof fetch): (provider: string, signal: AbortSignal) => Promise<ReadonlySet<string> | undefined> {
   const cached = new Map<string, { at: number; ids: Promise<ReadonlySet<string> | undefined> }>();
   return (provider, signal) => {
     const url = MUST_THINK_LISTS[provider];
-    if (url === undefined) return Promise.resolve(undefined);
+    if (url === undefined) return Promise.resolve(new Set());
     const known = cached.get(provider);
     if (known !== undefined && Date.now() - known.at <= DEV_TTL) return known.ids;
     const ids = fetchJson(fetchImpl, url, {}, signal).then(mustThinkOf, () => undefined);

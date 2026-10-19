@@ -218,9 +218,10 @@ export function makeLlmPlugin(options: Options = {}) {
           // Signed out of a plan, the API's list returns at once, before anything waits on the network.
           if (!(yield* signedInWithChatGPT(provider))) provider.models = apiModels.get(provider.id) ?? provider.models;
           if (config.liveCatalogs) {
+            // Read from models.dev and the provider's word on which models must reason: either out of reach, the list stands.
             const listing = (yield* Effect.promise(() => dev(signal)))?.[provider.id];
             const mustThink = listing === undefined ? undefined : yield* Effect.promise(() => mustThinkOfProvider(provider.id, signal));
-            const fresh = listing === undefined ? [] : liveModels(provider, listing, mustThink);
+            const fresh = listing === undefined || mustThink === undefined ? [] : liveModels(provider, listing, mustThink);
             if (fresh.length > 0) apiModels.set(provider.id, fresh);
           }
           const api = apiModels.get(provider.id) ?? provider.models;
