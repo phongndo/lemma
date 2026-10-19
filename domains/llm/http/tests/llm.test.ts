@@ -504,6 +504,25 @@ describe("model catalogs", () => {
     expect(models[1]).toMatchObject({ name: "Plain", contextWindow: 50_000, maxTokens: 4_000 });
   });
 
+  it("tells clients when a refresh changed a model's limits, though it serves the same models", async () => {
+    const heard = Deferred.makeUnsafe<void>();
+    const listener = definePlugin({
+      id: "listener",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (context) => context.observe(ModelsChanged, () => Deferred.succeed(heard, undefined)))),
+    });
+    // The same two models, `plain` with a smaller window than this version's catalog says.
+    const source = dev({ plain: { tool_call: true, limit: { context: 50_000, output: 8_000 } }, thinker: { tool_call: true } });
+    const { plugins } = setup({ fetch: source.fetch, providers: [faux({ models: [catalogModel("plain"), catalogModel("thinker")] })] });
+    const window = await runWith(
+      [listener, ...plugins],
+      Effect.gen(function* () {
+        yield* Deferred.await(heard);
+        return (yield* (yield* Llm).model("faux/plain")).contextWindow;
+      }),
+    );
+    expect(window).toBe(50_000);
+  });
+
   it("keeps this version's catalog with liveCatalogs off", async () => {
     const source = dev({ fresh: { tool_call: true } });
     const { plugins } = setup({ fetch: source.fetch });

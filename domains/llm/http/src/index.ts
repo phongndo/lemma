@@ -27,7 +27,7 @@ import { devSource, planModels, planSource } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { headerRecord } from "./http.ts";
 import { identityHeaders } from "./identity.ts";
-import { isWireApi, levelFor, modelRef, toModelInfo } from "./model.ts";
+import { isWireApi, levelFor, toModelInfo } from "./model.ts";
 import type { Model } from "./model.ts";
 import { Output } from "./output.ts";
 import { builtin, builtinProviders, customEntry, customProvider, liveModels, selectProviders } from "./providers.ts";
@@ -188,7 +188,8 @@ export function makeLlmPlugin(options: Options = {}) {
             : Effect.succeed(entry);
         });
 
-      const listed = () => [...providers.values()].flatMap((provider) => provider.models.map(modelRef)).join("\n");
+      /** What `models` lists, whole: a refresh that changes a model's limits, prices, or levels changes what clients show. */
+      const listed = () => JSON.stringify([...providers.values()].flatMap((provider) => provider.models.map(toModelInfo)));
       /** Clients hear that what `providers` and `models` list changed, and list them again. */
       const announce = events.publish(ModelsChanged, {});
 
