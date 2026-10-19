@@ -1,0 +1,63 @@
+.codemode-code {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.codemode-calls {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: calc(12px * var(--text-scale));
+  max-height: 240px;
+  overflow: auto;
+}
+
+.codemode-call {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 1px 0;
+  color: var(--text-2);
+}
+
+.codemode-mark {
+  width: 1em;
+  flex: none;
+}
+
+.codemode-ok .codemode-mark {
+  color: var(--ok);
+}
+
+.codemode-error .codemode-mark {
+  color: var(--err);
+}
+
+.codemode-name {
+  color: var(--text);
+  flex: none;
+}
+
+.codemode-args {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-3);
+}
+
+.codemode-time {
+  flex: none;
+  color: var(--text-3);
+  margin-left: auto;
+}
