@@ -1,6 +1,6 @@
-import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@lemma/llm";
+import type { AssistantMessage, ImageContent, TextContent, ThinkingLevel, ToolResultMessage } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
-import { effortOf, THINKING_BUDGETS } from "./model.ts";
+import { THINKING_BUDGETS } from "./model.ts";
 import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
@@ -89,28 +89,26 @@ function messages(call: WireCall, cache: Block | undefined): Block[] {
 }
 
 function build(call: WireCall) {
-  const { model, request, level } = call;
+  const { model, request, think } = call;
   const options = passedOn(request.providerOptions);
   const cache = { type: "ephemeral", ...(call.cacheRetention === "long" ? { ttl: "1h" } : {}) };
   let limit = maxTokens(model, request);
   const body: Record<string, unknown> = { model: model.id, stream: true };
   const betas: string[] = [];
   const thinking = model.thinking;
-  // Whether the model is asked to think: at a level other than off, or at an effort the config maps `off` to.
-  const effort = thinking?.kind === "effort" && level !== undefined ? effortOf(model, level) : undefined;
-  const on = level !== undefined && (level !== "off" || effort !== undefined);
-  if (thinking !== undefined && level !== undefined) {
+  const on = think?.on === true;
+  if (thinking !== undefined && think !== undefined) {
     if (thinking.kind === "effort") {
       // Adaptive thinking: the model decides how much, at the effort asked. Off is said, as these models think when
-      // nothing is: only one that can stop has `off` among its levels, as one that always thinks refuses it. An `off`
-      // the config maps to an effort is asked at that effort.
-      if (effort !== undefined) {
+      // nothing is: only one that can stop has `off` among its levels, as one that always thinks refuses it.
+      if (on) {
         body.thinking = { type: "adaptive", display: "summarized" };
-        body.output_config = { effort };
+        body.output_config = { effort: think.effort };
       } else body.thinking = { type: "disabled" };
     } else if (on) {
-      // The budget comes out of the response's limit: a request's own limit is for the answer, so it grows by it.
-      const budget = THINKING_BUDGETS[level] ?? THINKING_BUDGETS.high!;
+      // The budget comes out of the response's limit: a request's own limit is for the answer, so it grows by it. A
+      // level mapped to another thinks in that one's budget.
+      const budget = THINKING_BUDGETS[think.effort as ThinkingLevel] ?? THINKING_BUDGETS.high!;
       if (request.maxTokens !== undefined) limit = maxTokens(model, request, Math.min(request.maxTokens + budget, model.maxTokens));
       // What the limit leaves the answer room for; failing that, the least budget, below the limit; a limit too short for
       // even that (a context window nearly full) thinks not at all, as a budget there would refuse the request.

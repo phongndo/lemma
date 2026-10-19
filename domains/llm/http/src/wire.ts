@@ -1,6 +1,6 @@
-import type { LlmRequest, ThinkingLevel } from "@lemma/llm";
+import type { LlmRequest } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
-import type { Model } from "./model.ts";
+import type { Model, Think } from "./model.ts";
 import type { Output } from "./output.ts";
 
 /** The key a request authenticates with, and whether it is a signed-in account's token rather than an API key. */
@@ -14,8 +14,8 @@ export interface WireCall {
   readonly model: Model;
   /** The request, its history already as the model can take it back (`history`). */
   readonly request: LlmRequest;
-  /** The level to think at, clamped to the model's (`levelFor`); undefined: nothing about thinking is sent. */
-  readonly level: ThinkingLevel | undefined;
+  /** How it asks the model to think (`thinkFor`); undefined: nothing about thinking is sent. */
+  readonly think: Think | undefined;
   readonly auth: Auth;
   /** How long the provider keeps the prompt cache: `long` is an hour where offered. */
   readonly cacheRetention: "short" | "long";

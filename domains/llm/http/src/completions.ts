@@ -1,7 +1,6 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import { ProviderError, withUpstream } from "./http.ts";
 import type { SseEvent } from "./http.ts";
-import { effortOf } from "./model.ts";
 import type { Model } from "./model.ts";
 import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
@@ -223,7 +222,7 @@ function withCacheControl(messages: Record<string, unknown>[], tools: Record<str
 }
 
 function build(call: WireCall) {
-  const { model, request, level, auth } = call;
+  const { model, request, think, auth } = call;
   const compat = compatOf(model);
   const options = passedOn(request.providerOptions);
   const body: Record<string, unknown> = { model: model.id, messages: messages(call, compat), stream: true };
@@ -241,9 +240,8 @@ function build(call: WireCall) {
     withCacheControl(body.messages as Record<string, unknown>[], tools, { type: "ephemeral", ...(call.cacheRetention === "long" ? { ttl: "1h" } : {}) });
   }
   const thinking = model.thinking;
-  if (thinking !== undefined && level !== undefined) {
-    const on = level !== "off";
-    const value = effortOf(model, level);
+  if (thinking !== undefined && think !== undefined) {
+    const { on, effort: value } = think;
     if (compat.thinkingFormat === "openrouter") {
       if (thinking.kind === "toggle") body.reasoning = { enabled: on };
       else if (value !== undefined) body.reasoning = { effort: value };

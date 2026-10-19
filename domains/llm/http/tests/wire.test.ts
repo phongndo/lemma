@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { emptyUsage, LlmRequest } from "@lemma/llm";
-import type { AssistantMessage, Message, StreamEvent } from "@lemma/llm";
+import type { AssistantMessage, Message, StreamEvent, ThinkingLevel } from "@lemma/llm";
 import { anthropicMessages } from "../src/anthropic.ts";
 import { openaiCompletions } from "../src/completions.ts";
 import { errorText, ProviderError, sse } from "../src/http.ts";
+import { thinkFor } from "../src/model.ts";
 import type { Model } from "../src/model.ts";
 import { classifyFailure } from "../src/failure.ts";
 import { Output } from "../src/output.ts";
@@ -50,10 +51,15 @@ const result = (toolCallId: string, text: string, image = false): Message => ({
   timestamp: 1,
 });
 
-const call = (target: Model, request: Partial<ConstructorParameters<typeof LlmRequest>[0]>, extra: Partial<WireCall> = {}): WireCall => ({
+/** A call to `target`; `level`, the thinking level the request asks for, as the plugin asks it (`thinkFor`). */
+const call = (
+  target: Model,
+  request: Partial<ConstructorParameters<typeof LlmRequest>[0]>,
+  { level, ...extra }: Partial<WireCall> & { readonly level?: ThinkingLevel } = {},
+): WireCall => ({
   model: target,
   request: new LlmRequest({ model: `${target.provider}/${target.id}`, messages: [user("hi")], ...request }),
-  level: undefined,
+  think: level === undefined ? undefined : thinkFor(target, level),
   auth: { key: "sk", oauth: false },
   cacheRetention: "short",
   ...extra,
@@ -675,6 +681,23 @@ describe("openai-completions", () => {
         },
       ],
     });
+  });
+
+  it("turns thinking on for an `off` the config maps to an effort, behind every format's switch", () => {
+    const at = (target: Model) => openaiCompletions.build(call(target, {}, { level: "off" })).body;
+    const mapped = { reasoning: true, thinking: { kind: "effort" as const, levels: ["off", "low"] as const, values: { off: "low" } } };
+    expect(at(model({ provider: "deepseek", baseUrl: "https://api.deepseek.com", ...mapped }))).toMatchObject({
+      thinking: { type: "enabled" },
+      reasoning_effort: "low",
+    });
+    expect(at(model({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", ...mapped })).reasoning).toEqual({ effort: "low" });
+    const toggle = { reasoning: true, thinking: { kind: "toggle" as const, levels: ["off", "high"] as const, values: { off: "high" } } };
+    expect(at(model({ provider: "openrouter", baseUrl: "https://openrouter.ai/api/v1", ...toggle })).reasoning).toEqual({ enabled: true });
+    // Unmapped, or mapped to `none`, off is off.
+    const plain = { reasoning: true, thinking: { kind: "effort" as const, levels: ["off", "low"] as const } };
+    expect(at(model({ provider: "deepseek", baseUrl: "https://api.deepseek.com", ...plain }))).toMatchObject({ thinking: { type: "disabled" } });
+    const none = { reasoning: true, thinking: { ...plain.thinking, values: { off: "none" } } };
+    expect(at(model({ provider: "deepseek", baseUrl: "https://api.deepseek.com", ...none })).thinking).toEqual({ type: "disabled" });
   });
 
   it("speaks DeepSeek's thinking switch and takes its reasoning back as reasoning_content", () => {

@@ -1,7 +1,6 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
 import { socketError } from "./socket.ts";
-import { effortOf } from "./model.ts";
 import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
@@ -143,7 +142,7 @@ export const answerItems = (model: WireCall["model"], content: AssistantMessage[
   assistantItems({ content, provider: model.provider, api: model.api, model: model.id }, model, -1);
 
 function build(call: WireCall) {
-  const { model, request, level, auth } = call;
+  const { model, request, think, auth } = call;
   const options = passedOn(request.providerOptions);
   const body: Record<string, unknown> = { model: model.id, input: input(call), stream: true, store: false };
   if (request.sessionId !== undefined) body.prompt_cache_key = Array.from(request.sessionId).slice(0, PROMPT_CACHE_KEY_MAX).join("");
@@ -155,14 +154,12 @@ function build(call: WireCall) {
   }
   const tools = request.tools ?? [];
   if (tools.length > 0) body.tools = tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters }));
-  const effort = model.thinking !== undefined && level !== undefined ? effortOf(model, level) : undefined;
-  // `none` is the API's word for no reasoning; at any other effort (an `off` a config maps to one too) the model reasons,
-  // and its reasoning comes back encrypted, as `store: false` keeps nothing for it to go back as otherwise.
-  if (effort === "none") body.reasoning = { effort };
-  else if (effort !== undefined) {
-    body.reasoning = { effort, summary: "auto" };
+  // A model that reasons is asked for its reasoning encrypted, as `store: false` keeps nothing for it to go back as
+  // otherwise; at `none`, the API's word for no reasoning, the effort alone is said.
+  if (think?.on === true) {
+    body.reasoning = { effort: think.effort, summary: "auto" };
     body.include = ["reasoning.encrypted_content"];
-  }
+  } else if (think?.effort !== undefined) body.reasoning = { effort: think.effort };
   return {
     url: `${model.baseUrl}/responses`,
     body: merged(body, options.samplingParams),

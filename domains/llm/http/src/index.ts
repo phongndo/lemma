@@ -27,7 +27,7 @@ import { devSource, planModels, planSource } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { headerRecord } from "./http.ts";
 import { identityHeaders } from "./identity.ts";
-import { isWireApi, levelFor, toModelInfo } from "./model.ts";
+import { isWireApi, thinkFor, toModelInfo } from "./model.ts";
 import type { Model } from "./model.ts";
 import { Output } from "./output.ts";
 import { builtin, builtinProviders, customEntry, customProvider, liveModels, selectProviders } from "./providers.ts";
@@ -334,7 +334,7 @@ export function makeLlmPlugin(options: Options = {}) {
             ]),
           );
           const where = { ...(request.sessionId === undefined ? {} : { sessionId: request.sessionId }), provider: model.provider, model: request.model };
-          const level = levelFor(model, request.thinking);
+          const think = thinkFor(model, request.thinking);
           return Stream.callback<StreamEvent>((queue) =>
             Effect.acquireRelease(
               Effect.sync(() => {
@@ -396,7 +396,7 @@ export function makeLlmPlugin(options: Options = {}) {
                       const message = `${provider.name} is not authenticated. Run /login ${provider.id} or set its API key environment variable.`;
                       return output.fail(new Error(message), { kind: "fatal" });
                     }
-                    await send({ model, request, level, auth, cacheRetention: config.cacheRetention }, output, {
+                    await send({ model, request, think, auth, cacheRetention: config.cacheRetention }, output, {
                       fetch: fetchImpl,
                       headers,
                       signal: controller.signal,
