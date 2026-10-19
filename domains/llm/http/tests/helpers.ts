@@ -231,6 +231,8 @@ export interface FakeSocket {
   closed: boolean;
   /** Sends the client `event`, as the provider would. */
   readonly receive: (event: unknown) => void;
+  /** The connection drops, as a network cuts it. */
+  readonly drop: () => void;
 }
 
 /**
@@ -262,6 +264,7 @@ export function fakeSockets(answer: (request: Record<string, unknown>, socket: F
       sent: [],
       closed: false,
       receive: (event) => queueMicrotask(() => handle.onmessage?.({ data: JSON.stringify(event) })),
+      drop: () => queueMicrotask(() => handle.onclose?.()),
     };
     opened.push(fake);
     queueMicrotask(() => (options.refuse === true ? handle.onerror?.() : handle.onopen?.()));

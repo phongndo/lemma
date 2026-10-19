@@ -1,6 +1,6 @@
 import { anthropicMessages } from "./anthropic.ts";
 import { openaiCompletions } from "./completions.ts";
-import { post, sse } from "./http.ts";
+import { ConnectionError, post, sse } from "./http.ts";
 import type { SseEvent } from "./http.ts";
 import type { WireApi } from "./model.ts";
 import type { Output } from "./output.ts";
@@ -77,8 +77,9 @@ export async function send(call: WireCall, out: Output, options: SendOptions): P
 
 /**
  * Sends a Responses request over the session's socket (`socket.ts`): after the session's last response, only what is
- * new. False, for HTTP instead, when it has no session, or no connection can be had before anything is sent. The
- * provider no longer holding the last response, or an error before any output, asks once more with the whole input.
+ * new. False, for HTTP instead, when it has no session, no connection can be had, or the connection is lost or reaches
+ * its hour before the provider sent anything for it. The provider no longer holding the last response asks once more
+ * with the whole input.
  */
 async function overSocket(call: WireCall, out: Output, options: SendOptions, sockets: SocketPool): Promise<boolean> {
   const session = call.request.sessionId;
@@ -101,8 +102,15 @@ async function overSocket(call: WireCall, out: Output, options: SendOptions, soc
         ...(after === undefined ? {} : { previous_response_id: after.previous, input: (body.input as readonly unknown[]).slice(after.from) }),
       };
       const events = connection.request(event, options.signal);
-      const first = await events.next();
-      if (first.done === true) throw new Error("The provider sent nothing for the request");
+      let first: IteratorResult<SseEvent>;
+      try {
+        first = await events.next();
+      } catch (error) {
+        // Lost before anything arrived (an idle connection a network dropped as it was reused): HTTP instead.
+        if (error instanceof ConnectionError) return false;
+        throw error;
+      }
+      if (first.done === true) throw new ConnectionError("The provider sent nothing for the request");
       options.alive();
       // The connection reached the provider's hour: this request goes over HTTP, and the session's next opens another.
       if (first.value.data.includes("websocket_connection_limit_reached")) {

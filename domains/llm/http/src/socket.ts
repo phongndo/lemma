@@ -1,4 +1,4 @@
-import { abortError, ProviderError } from "./http.ts";
+import { abortError, ConnectionError, ProviderError } from "./http.ts";
 import type { SseEvent } from "./http.ts";
 
 /**
@@ -57,17 +57,18 @@ export class Connection {
     socket.onmessage = (event) => this.deliver?.(typeof event.data === "string" ? event.data : String(event.data));
     socket.onclose = () => {
       this.closed = true;
-      this.ended?.(new Error("The provider closed the connection before the response ended"));
+      this.ended?.(new ConnectionError("The provider closed the connection before the response ended"));
     };
     socket.onerror = () => {
       this.closed = true;
-      this.ended?.(new Error("The connection to the provider failed"));
+      this.ended?.(new ConnectionError("The connection to the provider failed"));
     };
   }
 
   /** Opens a connection; rejects when it cannot be opened within the timeout or `signal` aborts. */
   static open(factory: SocketFactory, url: string, headers: Readonly<Record<string, string>>, key: string, signal: AbortSignal): Promise<Connection> {
     return new Promise((resolve, reject) => {
+      if (signal.aborted) return reject(abortError());
       const socket = factory(url, headers);
       const fail = (error: Error) => {
         clearTimeout(timer);
@@ -131,7 +132,9 @@ export class Connection {
     };
     signal.addEventListener("abort", stop, { once: true });
     try {
-      if (this.closed) throw new Error("The connection to the provider closed");
+      // Stopped before it was sent: nothing is, so the provider generates nothing nobody reads.
+      if (signal.aborted) throw abortError();
+      if (this.closed) throw new ConnectionError("The connection to the provider closed");
       this.socket.send(JSON.stringify(event));
       for (;;) {
         const message = queue.shift();
@@ -198,8 +201,11 @@ export function socketError(data: Readonly<Record<string, unknown>>): Error {
 export class SocketPool {
   private readonly factory: SocketFactory;
   private readonly sessions = new Map<string, Connection>();
+  /** Sessions whose connection is opening: another request of theirs goes over HTTP meanwhile; closing stops it. */
+  private readonly opening = new Map<string, AbortController>();
   /** Endpoints a connection could not be opened to, and until when their requests go over HTTP. */
   private readonly backoff = new Map<string, number>();
+  private closed = false;
 
   constructor(factory: SocketFactory) {
     this.factory = factory;
@@ -207,10 +213,11 @@ export class SocketPool {
 
   /**
    * `session`'s connection to `url` with `headers`, opened if it has none that is usable; undefined, for HTTP
-   * instead, when it is answering another request or one cannot be opened. A connection opened with other headers
-   * (a handler of the headers hook changed them) is replaced.
+   * instead, when it is answering another request, is opening for one, or cannot be opened. A connection opened with
+   * other headers (a handler of the headers hook changed them) is replaced.
    */
   async acquire(session: string, url: string, headers: Readonly<Record<string, string>>, signal: AbortSignal): Promise<Connection | undefined> {
+    if (this.closed || this.opening.has(session)) return undefined;
     const key = `${url}\n${JSON.stringify(Object.entries(headers).sort(([a], [b]) => a.localeCompare(b)))}`;
     const current = this.sessions.get(session);
     if (current?.busy === true && !current.closed) return undefined;
@@ -222,22 +229,27 @@ export class SocketPool {
     current?.close();
     this.sessions.delete(session);
     if ((this.backoff.get(url) ?? 0) > Date.now()) return undefined;
+    // Held from before the handshake, so the session's next request cannot open a second connection meanwhile.
+    const pending = new AbortController();
+    this.opening.set(session, pending);
     try {
-      const connection = await Connection.open(this.factory, url, headers, key, signal);
+      const connection = await Connection.open(this.factory, url, headers, key, AbortSignal.any([signal, pending.signal]));
       connection.busy = true;
       this.sessions.set(session, connection);
       return connection;
     } catch (error) {
       if (signal.aborted) throw error;
-      this.backoff.set(url, Date.now() + BACKOFF_MS);
+      if (!pending.signal.aborted) this.backoff.set(url, Date.now() + BACKOFF_MS);
       return undefined;
+    } finally {
+      this.opening.delete(session);
     }
   }
 
   /** The request on `connection` ended: kept for the session's next one, or closed. */
   release(session: string, connection: Connection, keep: boolean): void {
     connection.busy = false;
-    if (!keep || connection.closed) {
+    if (!keep || connection.closed || this.closed) {
       connection.close();
       if (this.sessions.get(session) === connection) this.sessions.delete(session);
       return;
@@ -247,7 +259,10 @@ export class SocketPool {
     });
   }
 
+  /** Closes every connection, and stops those opening: requests from now on go over HTTP. */
   closeAll(): void {
+    this.closed = true;
+    for (const pending of this.opening.values()) pending.abort();
     for (const connection of this.sessions.values()) connection.close();
     this.sessions.clear();
   }

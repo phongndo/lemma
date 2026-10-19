@@ -4,6 +4,7 @@ import { Effect, Stream } from "effect";
 import { Llm, LlmRequest } from "@lemma/llm";
 import type { AssistantMessage, Message, StreamEvent } from "@lemma/llm";
 import { makeLlmPlugin } from "../src/index.ts";
+import { SocketPool } from "../src/socket.ts";
 import {
   catalogModel,
   fakeCredentials,
@@ -137,6 +138,58 @@ describe("OpenAI's WebSocket mode", () => {
       }),
     );
     expect(sockets.opened[1]!.sent[0]).not.toHaveProperty("previous_response_id");
+  });
+
+  it("opens one connection for a session though two requests ask at once, and stops one opening when closed", async () => {
+    const sockets = fakeSockets(answering);
+    const pool = new SocketPool(sockets.factory);
+    const signal = new AbortController().signal;
+    const [first, second] = await Promise.all([pool.acquire("s1", "wss://x", {}, signal), pool.acquire("s1", "wss://x", {}, signal)]);
+    // The second goes over HTTP while the first opens.
+    expect([first !== undefined, second === undefined]).toEqual([true, true]);
+    expect(sockets.opened).toHaveLength(1);
+    // Closed while another session's connection opens: it is stopped, and nothing opens after.
+    const opening = pool.acquire("s2", "wss://x", {}, signal);
+    pool.closeAll();
+    expect(await opening).toBeUndefined();
+    expect(await pool.acquire("s3", "wss://x", {}, signal)).toBeUndefined();
+    expect(sockets.opened).toHaveLength(2);
+    expect(sockets.opened.every((socket) => socket.closed)).toBe(true);
+  });
+
+  it("goes over HTTP when the connection drops before anything arrived, and fails an answer it cut off as transient", async () => {
+    let cut = false;
+    const sockets = fakeSockets((_, socket) => {
+      if (!cut) return socket.drop();
+      for (const event of responseEvents("resp_c", "half").slice(0, 3)) socket.receive(event);
+      socket.drop();
+    });
+    const { fetch, sent } = scriptedFetch(() => sseResponse(sseBody(responseEvents("resp_h", "over http"))));
+    const run = setup(sockets, fetch);
+    const [dropped, half] = (await run(
+      Effect.gen(function* () {
+        const dropped = yield* collect(ask([user("hi")]));
+        cut = true;
+        return [dropped, yield* collect(ask([user("hi")]))];
+      }),
+    )) as [StreamEvent[], StreamEvent[]];
+    expect(answer(dropped).content[0]).toMatchObject({ text: "over http" });
+    expect(sent).toHaveLength(1);
+    expect(half.at(-1)).toMatchObject({ type: "error", failure: { kind: "transient" }, message: { content: [{ type: "text", text: "half" }] } });
+  });
+
+  it("sends nothing for a request stopped before it was sent", async () => {
+    const sockets = fakeSockets(answering);
+    const pool = new SocketPool(sockets.factory);
+    const connection = (await pool.acquire("s1", "wss://x", {}, new AbortController().signal))!;
+    const stopped = new AbortController();
+    stopped.abort();
+    await expect(connection.request({ type: "response.create" }, stopped.signal).next()).rejects.toThrow("aborted");
+    expect(sockets.opened[0]!.sent).toEqual([]);
+    const refused = new AbortController();
+    refused.abort();
+    await expect(pool.acquire("s2", "wss://x", {}, refused.signal)).rejects.toThrow("aborted");
+    expect(sockets.opened).toHaveLength(1);
   });
 
   it("fails an answer the provider refuses over the socket by its status", async () => {

@@ -56,6 +56,14 @@ export function withUpstream(message: string, error: object): string {
   return message.includes(text) ? message : `${message}\n${text.length > MAX_BODY ? `${text.slice(0, MAX_BODY)}...` : text}`;
 }
 
+/** The connection to the provider was lost or could not be had: the request did nothing wrong, and asked again may pass. */
+export class ConnectionError extends Error {
+  constructor(message: string, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "ConnectionError";
+  }
+}
+
 /** A connection's failure, named by Node's code for it (`fetch failed (ECONNREFUSED)`). */
 export function networkError(error: unknown): ProviderError {
   const cause = error instanceof Error ? (error.cause as { code?: unknown; message?: unknown } | undefined) : undefined;

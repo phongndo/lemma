@@ -1,6 +1,6 @@
 import { emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, LlmFailure, StreamEvent, ToolCall, Usage } from "@lemma/llm";
-import { ProviderError } from "./http.ts";
+import { ConnectionError, ProviderError } from "./http.ts";
 import type { Model } from "./model.ts";
 
 type Text = { type: "text"; text: string; textSignature?: string };
@@ -124,6 +124,7 @@ const PASSING =
  */
 export function classifyFailure(error: unknown, message: string): LlmFailure {
   const after = error instanceof ProviderError && error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {};
+  if (error instanceof ConnectionError) return { kind: "transient" };
   if (!RATE_LIMIT.test(message) && OVERFLOW.some((pattern) => pattern.test(message))) return { kind: "overflow" };
   if (NEVER_PASSES.test(message)) return { kind: "fatal" };
   const status = error instanceof ProviderError ? error.status : undefined;
