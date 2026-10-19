@@ -33,6 +33,8 @@ import { Output } from "./output.ts";
 import { builtin, builtinProviders, customEntry, customProvider, liveModels, selectProviders } from "./providers.ts";
 import type { BuiltinProvider, CustomProvider, LoginContext, Provider } from "./providers.ts";
 import { send } from "./request.ts";
+import { nodeSocket, SocketPool } from "./socket.ts";
+import type { SocketFactory } from "./socket.ts";
 import type { Auth } from "./wire.ts";
 
 const Config = Schema.Struct({
@@ -58,6 +60,11 @@ const Config = Schema.Struct({
       title: "Prompt cache retention",
       description: "How long providers keep a session's prompt cache: short (about 5 minutes) or long (an hour, where offered; writing it costs more).",
     }),
+  webSocket: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
+    title: "OpenAI over WebSocket",
+    description:
+      "Send OpenAI's Responses requests over its WebSocket mode: a connection per session, each request sending only what is new since the last. Falls back to HTTP when no connection can be had.",
+  }),
   providerEvents: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
     title: "Provider events",
     description: "Publish each event of a provider's stream as it sent it (LlmProviderStreamEvent), for debugging an adapter. Costly; off by default.",
@@ -84,6 +91,8 @@ export interface Options {
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** How requests, sign-ins, and catalogs are fetched; default the global `fetch`. */
   readonly fetch?: typeof fetch;
+  /** How WebSockets are opened (`webSocket`); default Node's. */
+  readonly socket?: SocketFactory;
 }
 
 /** Runs an Effect as a promise: a typed failure rejects with the error itself, an interruption with the signal's reason. */
@@ -126,6 +135,8 @@ export function makeLlmPlugin(options: Options = {}) {
       /** Runs `effect` in the plugin's scope, its caller waiting: a caller stopped meanwhile leaves it to finish. */
       const detached = <A, E>(effect: Effect.Effect<A, E>) => Effect.flatMap(Effect.forkIn(effect, scope), Fiber.join);
       const authOf = (provider: Provider) => resolveAuth(provider, credentials, env, fetchImpl, detached);
+      const sockets = config.webSocket ? new SocketPool(options.socket ?? nodeSocket) : undefined;
+      if (sockets !== undefined) yield* Effect.addFinalizer(() => Effect.sync(() => sockets.closeAll()));
 
       /** Every provider served, by id: the built-ins, the user's (one with a built-in's id replaces it), then those plugins add. */
       const providers = new Map<string, Provider>();
@@ -385,8 +396,13 @@ export function makeLlmPlugin(options: Options = {}) {
                       fetch: fetchImpl,
                       headers,
                       signal: controller.signal,
-                      // Before its body: told to the caller, logged with the answer, and published.
+                      // Before its body: told to the caller, logged with the answer, and published. Over a socket there is no
+                      // response to a request of its own: who shaped its headers is told all the same.
                       answered: (response) => {
+                        if (response === undefined) {
+                          if (handlers.length > 0) answer = { type: "provider", credit: { handlers } };
+                          return;
+                        }
                         const requestId = requestIdOf(response.headers);
                         answer = {
                           type: "provider",
@@ -398,6 +414,7 @@ export function makeLlmPlugin(options: Options = {}) {
                       },
                       raw: config.providerEvents ? (data) => void Effect.runFork(events.publish(LlmProviderStreamEvent, { ...where, data })) : () => {},
                       alive: arm,
+                      ...(sockets !== undefined && provider.webSocket === true ? { sockets } : {}),
                     });
                     output.finish();
                   } catch (error) {

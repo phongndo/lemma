@@ -1,5 +1,6 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
+import { socketError } from "./socket.ts";
 import { levelValue } from "./model.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
@@ -127,6 +128,13 @@ function assistantItems(
   }
   return items;
 }
+
+/**
+ * An answer `model` just gave, as the next request sends it back: what a connection holding that answer already has
+ * (`socket.ts`), after the request's own input.
+ */
+export const answerItems = (model: WireCall["model"], content: AssistantMessage["content"]): Record<string, unknown>[] =>
+  assistantItems({ content, provider: model.provider, api: model.api, model: model.id }, model, -1);
 
 function build(call: WireCall) {
   const { model, request, level, auth } = call;
@@ -299,8 +307,9 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
       case "response.failed":
         finish(data.response as Response);
         break;
+      // Over HTTP the event names its code and message; over the socket, its status and an error object.
       case "error":
-        throw new Error(`${(data.code as string | undefined) ?? "error"}: ${(data.message as string | undefined) ?? event.data}`);
+        throw socketError(data);
     }
   }
   if (!ended) throw new Error("The provider's stream ended before the response did");

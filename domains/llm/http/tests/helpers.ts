@@ -12,6 +12,7 @@ import type { Llm } from "@lemma/llm";
 import { makeLlmPlugin } from "../src/index.ts";
 import type { BuiltinProvider } from "../src/index.ts";
 import type { CatalogModel } from "../src/model.ts";
+import type { Socket, SocketFactory } from "../src/socket.ts";
 
 export function fakeCredentials(initial: Record<string, Credential> = {}) {
   const store = new Map<string, Credential>(Object.entries(initial));
@@ -220,4 +221,63 @@ export function setup(options: { readonly providers?: readonly BuiltinProvider[]
   const interaction = fakeInteraction(() => Effect.succeed("sk-test"));
   const llm = makeLlmPlugin({ fetch: options.fetch ?? offline, providers: () => options.providers ?? [faux()], env: options.env ?? { FAUX_KEY: "sk-faux" } });
   return { credentials, interaction, plugins: [credentials.plugin, interaction.plugin, llm] as const };
+}
+
+/** A socket a test plays the provider's side of: what it was sent, and a way to answer. */
+export interface FakeSocket {
+  readonly url: string;
+  readonly headers: Readonly<Record<string, string>>;
+  readonly sent: Record<string, unknown>[];
+  closed: boolean;
+  /** Sends the client `event`, as the provider would. */
+  readonly receive: (event: unknown) => void;
+}
+
+/**
+ * Opens sockets that `answer` plays: each request the client sends (`response.create`) is handed to it with the socket,
+ * to answer through `receive`. `refuse` makes every socket fail to open, as an endpoint without the mode does.
+ */
+export function fakeSockets(answer: (request: Record<string, unknown>, socket: FakeSocket) => void, options: { readonly refuse?: boolean } = {}) {
+  const opened: FakeSocket[] = [];
+  const factory: SocketFactory = (url, headers) => {
+    const handle: Socket = {
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+      send: (data) => {
+        const request = JSON.parse(data) as Record<string, unknown>;
+        fake.sent.push(request);
+        queueMicrotask(() => answer(request, fake));
+      },
+      close: () => {
+        if (fake.closed) return;
+        fake.closed = true;
+        queueMicrotask(() => handle.onclose?.());
+      },
+    };
+    const fake: FakeSocket = {
+      url,
+      headers,
+      sent: [],
+      closed: false,
+      receive: (event) => queueMicrotask(() => handle.onmessage?.({ data: JSON.stringify(event) })),
+    };
+    opened.push(fake);
+    queueMicrotask(() => (options.refuse === true ? handle.onerror?.() : handle.onopen?.()));
+    return handle;
+  };
+  return { opened, factory };
+}
+
+/** A Responses answer of `text`, as the provider streams it: its item, its delta, and its completion under `id`. */
+export function responseEvents(id: string, text: string): unknown[] {
+  const item = { type: "message", id: `msg_${id}`, role: "assistant", content: [{ type: "output_text", text }] };
+  return [
+    { type: "response.created", response: { id } },
+    { type: "response.output_item.added", output_index: 0, item: { type: "message", id: `msg_${id}` } },
+    { type: "response.output_text.delta", output_index: 0, delta: text },
+    { type: "response.output_item.done", output_index: 0, item },
+    { type: "response.completed", response: { id, status: "completed", usage: { input_tokens: 10, output_tokens: 2 } } },
+  ];
 }

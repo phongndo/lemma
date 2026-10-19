@@ -66,12 +66,16 @@ export interface Provider {
   readonly apis: Readonly<Partial<Record<WireApi, string>>>;
   /** Its catalog is models.dev's provider of this id, refreshed live. */
   readonly live: boolean;
+  /** Its Responses API also speaks OpenAI's WebSocket mode. */
+  readonly webSocket?: boolean;
   models: readonly Model[];
 }
 
 /** What a built-in provider is: its endpoints, how else it is signed in to, and its models in the snapshot. */
 export interface BuiltinProvider extends Endpoint {
   readonly oauth?: OAuthMethod;
+  /** Its Responses API also speaks OpenAI's WebSocket mode (`socket.ts`), which the `webSocket` config turns on. */
+  readonly webSocket?: boolean;
   readonly headers?: (sessionId: string | undefined) => Record<string, string>;
   /** Its models before a live catalog is read. */
   readonly models: readonly CatalogModel[];
@@ -83,8 +87,8 @@ const catalog = snapshot as unknown as Readonly<Record<string, readonly CatalogM
 const opencodeSession = (sessionId: string | undefined) => ({ "x-opencode-session": sessionId ?? randomUUID() });
 
 /** What each built-in provider adds to its endpoints: a sign-in, the headers its requests need. */
-const extras: Readonly<Record<string, Pick<BuiltinProvider, "oauth" | "headers">>> = {
-  openai: { oauth: chatgpt },
+const extras: Readonly<Record<string, Pick<BuiltinProvider, "oauth" | "headers" | "webSocket">>> = {
+  openai: { oauth: chatgpt, webSocket: true },
   opencode: { headers: opencodeSession },
   "opencode-go": { headers: opencodeSession },
 };
@@ -109,6 +113,7 @@ export const builtin = (definition: BuiltinProvider): Provider => ({
   ...(definition.headers === undefined ? {} : { headers: definition.headers }),
   apis: definition.apis,
   live: true,
+  ...(definition.webSocket === true ? { webSocket: true } : {}),
   models: placed(definition, definition.models),
 });
 
