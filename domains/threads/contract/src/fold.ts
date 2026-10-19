@@ -1,4 +1,4 @@
-import type { AssistantItem, Item, TurnView } from "./transcript.ts";
+import type { AssistantItem, Item, ToolResultView, TurnView } from "./transcript.ts";
 
 /**
  * A turn as the reader wants it back: its prompt, the work behind the answer
@@ -54,6 +54,9 @@ export const endingText = (items: readonly Item[]): string => {
     .join("\n\n");
 };
 
+/** The call failed on its own: an error the stop did not cause (`ToolResultView.stopped`). */
+export const callFailed = (result: ToolResultView | undefined): boolean => result?.isError === true && result.stopped !== true;
+
 const tally = (items: readonly Item[]) => {
   let tools = 0;
   let failed = 0;
@@ -65,7 +68,7 @@ const tally = (items: readonly Item[]) => {
       for (const block of item.blocks) {
         if (block.kind !== "tool") continue;
         tools++;
-        if (block.result?.isError) failed++;
+        if (callFailed(block.result)) failed++;
       }
     }
   }

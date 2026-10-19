@@ -804,12 +804,13 @@ export default defineWebPlugin({
         },
         checkout: async (eventId: string) => {
           const sessionId = activeId();
-          if (sessionId === undefined) return;
+          if (sessionId === undefined) return false;
           try {
             upsert(await client.channel.call(SessionChannels.checkout, { sessionId, eventId }));
-            notify.toast({ level: "info", message: "The next prompt continues from the chosen event, on a new branch." });
+            return true;
           } catch (error) {
             notify.report(error, "Could not branch the session");
+            return false;
           }
         },
       },

@@ -7,7 +7,8 @@ cost, and time. Adds the `transcript` view to `Views` (order -10, first, with th
 composer under it), and the defaults of the chat's parts in the phase
 `default`: `ChatUserPart`, `ChatThinkingPart`, `ChatToolPart`,
 `ChatWorkPart`, `ChatWorkGroupPart`, `ChatWorkingPart`, and `ChatTurnFooterPart`
-([`@lemma/threads`](../contract/src/parts.tsx)). A tool's calls show as its
+([`@lemma/threads`](../contract/src/parts.tsx)), and its own buttons under a
+prompt to `PromptActions`: `chat.copy-prompt` and `chat.prompt-link`. A tool's calls show as its
 `ToolViews` item says. It reads `Threads.branch`, `Threads.live`, and `Threads.queue`, the first two through the
 contract's projections (`createProjector`, `foldTurn`, `foldRunning`,
 `draftEntries`, `queuePlaces`), which another view can share. Requires `Threads` and the
@@ -39,10 +40,28 @@ runtime's `Client`, `Router`, and `Slots`.
   timed from the steer), so a steer stays where it showed once placed and once
   the turn ends, in the log's order. Which waiting prompts show here is `queuePlaces`' `joining`:
   the composer shows the rest, what a stopped turn left among them.
+- **Footers on hover.** A turn's footer (model, tokens, speed, cost, time,
+  copy) shows while the pointer is on the turn's output or on the footer, and
+  a prompt's while it is on the prompt: each where nothing points, and while
+  it holds focus. Both keep their room, so nothing moves when they show.
+- **Prompts.** Under a prompt, while the pointer is on it, are when it was sent (the time
+  today, the day too before then, and the full date in its tooltip) and what
+  plugins add to `PromptActions`, in order: the composer's "Edit from here",
+  then copying the prompt and copying a link to it. The link is the thread's
+  address ending `#prompt-<event id>`: opened, the chat shows that prompt at
+  its top, ringed for a moment, rather than where it was left.
+- **Stopped turns.** A turn the person stopped ends quietly: no badge, and no
+  note on its last message. Its last step's calls that failed failed by the
+  stop (`ToolResultView.stopped`), so they are not counted as failed, and show
+  "stopped" rather than "failed" (`state` `interrupted`); a model call the stop
+  cut off shows what it had written, as it was, and nothing when it had not
+  begun. The turn's section says how it ended (`data-end`), for a stylesheet
+  that would show it.
 - **Open and closed.** What the reader opens or closes stays so across thread
   switches, for as long as the plugin runs.
 - **Tool results.** A call with no result once its turn has ended, or with no
-  turn running, shows "no result" (`state` `interrupted`). The default body
+  turn running, shows "no result" (`state` `interrupted`), and one a stop cut
+  short "stopped". The default body
   reads a result's `details` as the bundled tools write them: a unified diff in
   `diff` or `patch` (drawn in place of a successful call's output, its added
   and removed lines counted on the call's line), `exitCode` (shown when not 0),

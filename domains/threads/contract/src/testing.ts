@@ -36,8 +36,14 @@ export const user = (text: string, turnId?: string): EventData => ({
   ...(turnId === undefined ? {} : { turnId }),
 });
 
-export const toolResult = (toolCallId: string, text: string, extra: { isError?: boolean; details?: unknown } = {}): EventData => ({
+export const toolResult = (
+  toolCallId: string,
+  text: string,
+  extra: { isError?: boolean; details?: unknown; turnId?: string; stepId?: string } = {},
+): EventData => ({
   type: "message",
   message: { role: "toolResult", toolCallId, toolName: "bash", content: [{ type: "text", text }], isError: extra.isError ?? false, timestamp: 0 },
   ...(extra.details === undefined ? {} : { details: extra.details }),
+  ...(extra.turnId === undefined ? {} : { turnId: extra.turnId }),
+  ...(extra.stepId === undefined ? {} : { stepId: extra.stepId }),
 });

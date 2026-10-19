@@ -169,7 +169,7 @@ export const toolView = (deps: { readonly client: ClientService; readonly thread
               <span class="tool-fail">failed</span>
             </Show>
             <Show when={props.state === "interrupted"}>
-              <span>no result</span>
+              <span>{props.result === undefined ? "no result" : "stopped"}</span>
             </Show>
             <Show when={duration() !== undefined && duration()! >= 1000}>
               <span class="tool-time">{formatDuration(duration()!)}</span>

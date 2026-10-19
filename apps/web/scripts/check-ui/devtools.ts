@@ -318,7 +318,7 @@ export const devtools = async (): Promise<string> => {
     .catch(async () => assert.fail(`the prompt rail has ${(await railTicks()).length} ticks for a prompt and two steers`));
   assert.deepEqual(await railTicks(), ["start a turn", "steer it", "steer after all @README.md"], "the prompt rail does not hold every prompt in the chat");
   assert.deepEqual(
-    await page.locator(".turn .user-steer:has(.steer-mark) .user-text").allTextContents(),
+    await page.locator(".turn .user-prompt:has(.steer-mark) .user-text").allTextContents(),
     ["steer it", "steer after all @README.md"],
     "the steers are not marked as steers, or the prompt is",
   );
@@ -440,7 +440,8 @@ export const devtools = async (): Promise<string> => {
   assert(!(await escapes([false, false])), "a second Escape counts as a first");
   // The turn ends cancelled once it goes on to its steers.
   await page.evaluate(() => (window as any).lemmaMock.releaseSteers());
-  await page.waitForSelector(".turn-footer .badge:text-is('cancelled')", { timeout: 20_000 }).catch(() => assert.fail("a second Escape did not stop the turn"));
+  await page.waitForSelector(".turn[data-end='cancelled'] .turn-footer", { timeout: 20_000 }).catch(() => assert.fail("a second Escape did not stop the turn"));
+  assert.equal(await page.locator(".turn[data-end='cancelled'] .badge").count(), 0, "a stopped turn is marked as cancelled");
   await page.waitForSelector(".queued:has-text('held for the next')").catch(() => assert.fail("a stopped turn's steer is not with the queue"));
   assert.equal(await page.locator(".steer-pending").count(), 0, "a stopped turn's steer still shows as joining it");
   await page.click(".queued:has-text('held for the next') .queued-remove");

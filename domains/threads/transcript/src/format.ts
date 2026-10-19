@@ -35,3 +35,30 @@ export const formatElapsed = (ms: number): string => {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
 };
+
+/**
+ * When a prompt was sent, as the line under it says (`label`): the time today, the day too before then ("Yesterday",
+ * a date, and the year when not this one); and the moment in full (`full`), as its tooltip says. In local time.
+ */
+export const sentTime = (at: number, now: number, locale?: string): { readonly label: string; readonly full: string } => {
+  const date = new Date(at);
+  const today = new Date(now);
+  const days = Math.round((midnight(today) - midnight(date)) / 86_400_000);
+  const time = date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+  const label =
+    days === 0
+      ? time
+      : days === 1
+        ? `Yesterday ${time}`
+        : date.toLocaleString(locale, {
+            month: "short",
+            day: "numeric",
+            ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }),
+            hour: "numeric",
+            minute: "2-digit",
+          });
+  return { label, full: date.toLocaleString(locale, { dateStyle: "full", timeStyle: "short" }) };
+};
+
+/** The local midnight starting `date`'s day: days between two count whole, across a daylight-saving change too. */
+const midnight = (date: Date): number => new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();

@@ -1094,7 +1094,27 @@ export const createMockHost = (): Host => {
       turn.output.set(call.id, printed + line);
       activity.publish({ type: "tool-output", sessionId, toolCallId: call.id, chunk: line, offset: printed.length });
     }
-    if (cancelled.has(sessionId)) return end("cancelled");
+    if (cancelled.has(sessionId)) {
+      // Stopped while the command ran: the call is answered as the host's tools answer one cut off, and its step ends.
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: step1,
+        timing: { startedAt: Date.now() - 900, endedAt: Date.now() },
+        message: {
+          role: "toolResult",
+          toolCallId: call.id,
+          toolName: "bash",
+          isError: true,
+          timestamp: Date.now(),
+          content: [{ type: "text", text: 'Tool "bash" was cancelled' }],
+        },
+      });
+      listing.end("interrupted");
+      span1.end("interrupted");
+      append(sessionId, { type: "step-end", turnId, stepId: step1 });
+      return end("cancelled");
+    }
     append(sessionId, {
       type: "message",
       turnId,

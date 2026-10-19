@@ -1,7 +1,7 @@
 import { createSignal, onCleanup } from "solid-js";
 import { copyText } from "@lemma/web/clipboard";
 import type { CopyButtonProps } from "@lemma/look";
-import { CheckIcon, CopyIcon, XIcon } from "@lemma/look";
+import { CheckIcon, Icon, XIcon } from "@lemma/look";
 
 /** An icon button that copies its text, then shows for a moment whether that worked. */
 export function CopyButton(props: CopyButtonProps) {
@@ -22,7 +22,7 @@ export function CopyButton(props: CopyButtonProps) {
       data-tip={copied() === undefined ? props.label : copied() ? "Copied" : "Copy failed"}
       onClick={copy}
     >
-      {copied() === undefined ? <CopyIcon /> : copied() ? <CheckIcon /> : <XIcon />}
+      {copied() === undefined ? <Icon name={props.icon ?? "copy"} /> : copied() ? <CheckIcon /> : <XIcon />}
     </button>
   );
 }

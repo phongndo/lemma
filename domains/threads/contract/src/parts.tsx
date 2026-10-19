@@ -3,7 +3,7 @@ import type { ImageContent, TextContent } from "@lemma/llm";
 import type { SessionInfo } from "@lemma/sessions";
 import { definePart, partView } from "@lemma/web";
 import type { JSX } from "solid-js";
-import type { ComposerSuggestion, ThreadAction, ToolBodyProps } from "./threads.ts";
+import type { ComposerSuggestion, PromptInfo, ThreadAction, ToolBodyProps } from "./threads.ts";
 import type { TurnView } from "./transcript.ts";
 
 export interface ComposerQueuedProps {
@@ -41,9 +41,11 @@ export interface ChatUserProps {
   readonly content: readonly (TextContent | ImageContent)[];
   /** A steer: sent into the running turn, which places it (or will) after its current step. */
   readonly steer?: boolean | undefined;
+  /** The prompt as placed, which its time and its buttons (`PromptActions`) are drawn from; absent for a steer not yet placed. */
+  readonly prompt?: PromptInfo | undefined;
 }
 
-/** A prompt in the transcript. */
+/** A prompt in the transcript; its default shows, under it, when it was sent and its `PromptActions` while the pointer is on it. */
 export const ChatUserPart = definePart<ChatUserProps>("chat.user");
 
 export interface ChatThinkingProps {

@@ -18,7 +18,15 @@ export interface ToolResultView {
   readonly isError: boolean;
   readonly details?: unknown;
   readonly timing?: Timing;
+  /**
+   * The person stopped the turn while the call ran or before it ran: an error in the last step of a turn that ended
+   * cancelled, which the stop cut short or answered unrun. Not a failure of the tool's.
+   */
+  readonly stopped?: true;
 }
+
+/** What a cached block or item holding `result` changes with: which result it is, and whether the stop caused it. */
+const resultSignature = (result: ToolResultView | undefined): string => (result === undefined ? "" : `${result.eventId}${result.stopped ? ":stopped" : ""}`);
 
 export type Block =
   | { readonly kind: "text"; readonly key: string; readonly text: string }
@@ -199,7 +207,7 @@ const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, resu
       case "toolCall": {
         const result = results.get(part.id);
         blocks.push(
-          cache.get(key, result?.eventId ?? "", () => (result === undefined ? { kind: "tool", key, call: part } : { kind: "tool", key, call: part, result })),
+          cache.get(key, resultSignature(result), () => (result === undefined ? { kind: "tool", key, call: part } : { kind: "tool", key, call: part, result })),
         );
         break;
       }
@@ -213,20 +221,36 @@ const blocksOf = (cache: Cache, eventId: string, message: AssistantMessage, resu
  * to keep identities stable; the plain function builds everything fresh.
  */
 const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
+  // A turn the person stopped was cut short in its last step: the errors there are the stop's (`ToolResultView.stopped`).
+  const lastSteps = new Map<string, string>();
+  const stoppedTurns = new Set<string>();
+  for (const event of branch) {
+    const data = event.data;
+    if (data.type === "step-start") lastSteps.set(data.turnId, data.stepId);
+    else if (data.type === "turn-end" && data.reason === "cancelled") stoppedTurns.add(data.turnId);
+  }
   // Tool results pair with calls by id; the last result for an id wins.
   const results = new Map<string, ToolResultView>();
   const callIds = new Set<string>();
   for (const event of branch) {
     const data = event.data;
     if (data.type === "message" && data.message.role === "toolResult") {
+      const message = data.message;
+      const stopped =
+        message.isError &&
+        data.turnId !== undefined &&
+        stoppedTurns.has(data.turnId) &&
+        data.stepId !== undefined &&
+        data.stepId === lastSteps.get(data.turnId);
       results.set(
-        data.message.toolCallId,
-        cache.get(`result:${event.id}`, "", () => ({
+        message.toolCallId,
+        cache.get(`result:${event.id}`, stopped ? "stopped" : "", () => ({
           eventId: event.id,
-          content: (data.message as ToolResultMessage).content,
-          isError: (data.message as ToolResultMessage).isError,
+          content: message.content,
+          isError: message.isError,
           ...(data.details === undefined ? {} : { details: data.details }),
           ...(data.timing === undefined ? {} : { timing: data.timing }),
+          ...(stopped ? { stopped: true as const } : {}),
         })),
       );
     }
@@ -302,7 +326,7 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
           turn.items.push(cache.get(event.id, "", (): UserItem => ({ kind: "user", id: event.id, at: event.at, content: message.content })));
         } else if (message.role === "assistant") {
           const turn = ensure(event);
-          const resultIds = message.content.map((part) => (part.type === "toolCall" ? (results.get(part.id)?.eventId ?? "") : "")).join(",");
+          const resultIds = message.content.map((part) => (part.type === "toolCall" ? resultSignature(results.get(part.id)) : "")).join(",");
           turn.items.push(
             cache.get(event.id, resultIds, (): AssistantItem => ({
               kind: "assistant",
@@ -392,6 +416,25 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
 export const createProjector = (): ((branch: readonly SessionEvent[]) => Transcript) => {
   const cache = makeCache();
   return (branch) => project(branch, cache);
+};
+
+/**
+ * Where the thread goes back to for each prompt to be written again ("Edit from here", `Threads.checkout`): the event
+ * before the turn the prompt opened, by the prompt's event id. A steer, a prompt placed with the one that opened its
+ * turn, and the thread's first prompt (nothing comes before it) have none.
+ */
+export const promptBases = (branch: readonly SessionEvent[]): ReadonlyMap<string, string> => {
+  const bases = new Map<string, string>();
+  branch.forEach((event, index) => {
+    const data = event.data;
+    if (data.type !== "message" || data.message.role !== "user") return;
+    const previous = branch[index - 1]?.data;
+    const opens = previous?.type === "turn-start" && previous.turnId === data.turnId;
+    // A prompt in an older log has no turn id, and comes before its turn's start.
+    const start = opens ? index - 1 : data.turnId === undefined ? index : 0;
+    if (start > 0) bases.set(event.id, branch[start - 1]!.id);
+  });
+  return bases;
 };
 
 /** Tool calls in a transcript that have no result yet. */
