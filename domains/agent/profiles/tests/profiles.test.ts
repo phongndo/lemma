@@ -75,8 +75,10 @@ describe("in a turn", () => {
     plugins: Readonly<Record<string, unknown>> | undefined,
     config: Readonly<Record<string, unknown>> = {},
     known: readonly PluginInfo[] | undefined = undefined,
+    /** Run between a first and a second prompt in the same host. */
+    between?: () => Promise<void>,
   ) => {
-    const llm = fakeLlm([reply("ok")]);
+    const llm = fakeLlm([reply("ok"), reply("ok")]);
     const toolset = testTools();
     return Effect.runPromise(
       Effect.scoped(
@@ -93,8 +95,10 @@ describe("in a turn", () => {
               yield* Effect.forkScoped(Stream.runForEach((yield* Events).stream(Notice), (notice) => Effect.sync(() => notices.push(notice.message))));
               yield* Effect.yieldNow;
               const { id } = yield* (yield* Sessions).create();
-              yield* (yield* Agent).prompt(id, [{ type: "text", text: "go" }], plugins === undefined ? {} : { plugins });
-              return { request: llm.requests[0]!, notices };
+              const prompt = (yield* Agent).prompt(id, [{ type: "text", text: "go" }], plugins === undefined ? {} : { plugins });
+              yield* prompt;
+              if (between !== undefined) yield* Effect.andThen(Effect.promise(between), prompt);
+              return { request: llm.requests[0]!, later: llm.requests[1], notices };
             }),
           );
         }),
@@ -133,6 +137,14 @@ describe("in a turn", () => {
       const off = await turn({ "agent.profiles": "triage" }, {}, [stopped]);
       expect(off.request.system).not.toContain("Sort the inbox.");
     }
+  });
+
+  it("reads a profile edited while the host runs", async () => {
+    const { request, later } = await turn({ "agent.profiles": "reader" }, {}, undefined, () =>
+      fs.writeFile(path.join(home, "profiles", "reader.md"), "You only read, and carefully.\n"),
+    );
+    expect(request.system).toContain("You only read.");
+    expect(later?.system).toContain("You only read, and carefully.");
   });
 
   it("gives a thread with none chosen the default, and says so when a profile named is not there", async () => {

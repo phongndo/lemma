@@ -24,18 +24,30 @@ export type Config = typeof Config.Type;
 /** The profiles that ship with Lemma. */
 const BUNDLED = fileURLToPath(new URL("../profiles", import.meta.url));
 
-/** The `.md` files of `dir` as profiles; a directory that is not there has none. */
-const readDir = async (dir: string, source: Profile["source"]): Promise<Profile[]> => {
-  const names = await fs.readdir(dir).catch(() => [] as string[]);
-  const found = await Promise.all(
-    names
-      .filter((name) => name.endsWith(".md"))
-      .map(async (name) => {
-        const text = await fs.readFile(path.join(dir, name), "utf8").catch(() => undefined);
-        return text === undefined ? undefined : parseProfile(name.slice(0, -3), text, source);
-      }),
-  );
-  return found.filter((profile) => profile !== undefined);
+/**
+ * Reads the `.md` files of a directory as profiles, caching each by its size and mtime, so finding a request's profile
+ * costs a directory listing and a `stat` a profile, as finding skills does. A directory that is not there has none.
+ */
+const profileReader = () => {
+  const cache = new Map<string, { readonly mtimeMs: number; readonly size: number; readonly profile: Profile }>();
+  const read = async (dir: string, name: string, source: Profile["source"]): Promise<Profile | undefined> => {
+    const file = path.join(dir, name);
+    const key = `${source}:${file}`;
+    const stat = await fs.stat(file).catch(() => undefined);
+    if (stat?.isFile() !== true) return void cache.delete(key);
+    const hit = cache.get(key);
+    if (hit !== undefined && hit.mtimeMs === stat.mtimeMs && hit.size === stat.size) return hit.profile;
+    const text = await fs.readFile(file, "utf8").catch(() => undefined);
+    if (text === undefined) return void cache.delete(key);
+    const profile = parseProfile(name.slice(0, -3), text, source);
+    cache.set(key, { mtimeMs: stat.mtimeMs, size: stat.size, profile });
+    return profile;
+  };
+  return async (dir: string, source: Profile["source"]): Promise<Profile[]> => {
+    const names = await fs.readdir(dir).catch(() => [] as string[]);
+    const found = await Promise.all(names.filter((name) => name.endsWith(".md")).map((name) => read(dir, name, source)));
+    return found.filter((profile) => profile !== undefined);
+  };
 };
 
 /**
@@ -56,6 +68,7 @@ export default definePlugin({
     const config = owner.config;
     const events = yield* Events;
     const user = path.join(paths.home, "profiles");
+    const readDir = profileReader();
     const load = (cwd: string) =>
       Effect.flatMap(host.plugins, (plugins) =>
         Effect.promise(async () =>
