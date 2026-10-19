@@ -7,6 +7,8 @@ import snapshot from "./catalog.json" with { type: "json" };
 import { catalogOf } from "./catalog.ts";
 import type { DevProvider } from "./catalog.ts";
 import { chatgpt } from "./chatgpt.ts";
+import { thinkingFormat } from "./completions.ts";
+import type { ThinkingFormat } from "./completions.ts";
 import { ENDPOINTS } from "./endpoints.ts";
 import type { Endpoint } from "./endpoints.ts";
 import { BUDGET_LEVELS, WIRE_APIS } from "./model.ts";
@@ -173,21 +175,25 @@ function protocolThinking(api: WireApi, compat: Readonly<Record<string, unknown>
 
 /**
  * How a model of the user's thinks: as the catalog says for a model it knows on the protocol (a proxy serving Claude
- * Sonnet 5.5 is asked as Anthropic would be), else as the protocol's do (`protocolThinking`); its `thinkingLevelMap`
- * then adjusts that, never replacing how it is asked: a level mapped to `null` is one it lacks, one mapped to a value
- * is one it takes, sent as that value. A Chat Completions server whose config says it takes no reasoning effort has
- * no level to set.
+ * Sonnet 5.5 is asked as Anthropic would be), where its server can ask so, else as the protocol's do
+ * (`protocolThinking`); its `thinkingLevelMap` then adjusts that, never replacing how it is asked: a level mapped to
+ * `null` is one it lacks, one mapped to a value is one it takes, sent as that value. A Chat Completions server whose
+ * config says it takes no reasoning effort has no level to set.
  */
 function customThinking(
   api: WireApi,
   map: ProviderModelSpec["thinkingLevelMap"],
   compat: Readonly<Record<string, unknown>> | undefined,
   catalogued: CatalogModel | undefined,
+  format: ThinkingFormat | undefined,
 ): Thinking | undefined {
   if (api === "openai-completions" && compat?.supportsReasoningEffort === false) return undefined;
   // The config's word that an Anthropic model thinks adaptively wins over the catalog's.
   const adaptive = api === "anthropic-messages" && compat?.forceAdaptiveThinking === true;
-  const base = (adaptive && catalogued?.thinking?.kind !== "effort" ? undefined : catalogued?.thinking) ?? protocolThinking(api, compat);
+  const known = adaptive && catalogued?.thinking?.kind !== "effort" ? undefined : catalogued?.thinking;
+  // A switch only where the server's format has one: OpenAI's `reasoning_effort` has none, so a model the catalog
+  // has toggling behind OpenRouter is asked by an effort on such a server.
+  const base = (known?.kind === "toggle" && format === "openai" ? undefined : known) ?? protocolThinking(api, compat);
   if (map === undefined) return base;
   const values: Partial<Record<ThinkingLevel, string>> = { ...base.values };
   for (const [level, value] of Object.entries(map)) if (typeof value === "string") values[level as ThinkingLevel] = value;
@@ -200,7 +206,11 @@ function customModel(config: CustomProvider, model: ProviderModelSpec): Model {
   const compat = config.compat === undefined && model.compat === undefined ? undefined : { ...config.compat, ...model.compat };
   const reasoning = model.reasoning ?? false;
   const catalogued = known.get(`${config.api} ${model.id}`);
-  const thinking = reasoning ? customThinking(config.api, model.thinkingLevelMap, compat, catalogued) : undefined;
+  const format =
+    config.api === "openai-completions"
+      ? thinkingFormat({ provider: config.id, baseUrl: config.baseUrl, id: model.id, ...(compat === undefined ? {} : { compat }) })
+      : undefined;
+  const thinking = reasoning ? customThinking(config.api, model.thinkingLevelMap, compat, catalogued, format) : undefined;
   return {
     provider: config.id,
     id: model.id,

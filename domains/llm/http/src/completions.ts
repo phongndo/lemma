@@ -43,9 +43,12 @@ const isOpenCode = (model: Pick<Model, "provider" | "baseUrl">) =>
 const isDeepSeek = (model: Pick<Model, "provider" | "baseUrl" | "id">) =>
   model.provider === "deepseek" || model.baseUrl.toLowerCase().includes("deepseek.com") || (isOpenCode(model) && model.id.startsWith("deepseek"));
 
-/** How a server at `baseUrl` of `provider` takes `id`'s thinking. */
-export const thinkingFormat = (model: Pick<Model, "provider" | "baseUrl" | "id">): ThinkingFormat =>
-  isOpenRouter(model) ? "openrouter" : isDeepSeek(model) ? "deepseek" : "openai";
+/** How a server at `baseUrl` of `provider` takes `id`'s thinking: as its `compat.thinkingFormat` says, else as detected. */
+export function thinkingFormat(model: Pick<Model, "provider" | "baseUrl" | "id" | "compat">): ThinkingFormat {
+  const given = model.compat?.thinkingFormat;
+  if (given === "openai" || given === "openrouter" || given === "deepseek") return given;
+  return isOpenRouter(model) ? "openrouter" : isDeepSeek(model) ? "deepseek" : "openai";
+}
 
 /** What `model`'s server takes: detected from where it is, then its `compat` field by field. */
 export function compatOf(model: Model): Compat {
@@ -65,13 +68,12 @@ export function compatOf(model: Model): Compat {
   };
   const given = model.compat ?? {};
   const flag = (name: string, fallback: boolean) => (typeof given[name] === "boolean" ? (given[name] as boolean) : fallback);
-  const format = given.thinkingFormat;
   return {
     developerRole: flag("supportsDeveloperRole", detected.developerRole),
     store: flag("supportsStore", detected.store),
     reasoningEffort: flag("supportsReasoningEffort", detected.reasoningEffort),
     maxTokensField: given.maxTokensField === "max_tokens" || given.maxTokensField === "max_completion_tokens" ? given.maxTokensField : detected.maxTokensField,
-    thinkingFormat: format === "openai" || format === "openrouter" || format === "deepseek" ? format : detected.thinkingFormat,
+    thinkingFormat: detected.thinkingFormat,
     reasoningContent: flag("requiresReasoningContentOnAssistantMessages", detected.reasoningContent),
     cacheControl: given.cacheControlFormat === undefined ? detected.cacheControl : given.cacheControlFormat === "anthropic",
     usageInStreaming: flag("supportsUsageInStreaming", detected.usageInStreaming),

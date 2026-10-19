@@ -475,6 +475,25 @@ describe("providers", () => {
     expect(sent[0]!.body).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
   });
 
+  it("asks a model the catalog has toggling behind OpenRouter by an effort on a server with no switch", async () => {
+    const { fetch, sent } = scriptedFetch(() => new Response("no", { status: 400 }));
+    const { plugins } = setup({ providers: [], fetch });
+    const ask = (model: string) => collect(new LlmRequest({ model, messages: [user("hi")], thinking: "high" }));
+    const gateway = (id: string, compat?: Record<string, unknown>) => ({
+      id,
+      api: "openai-completions",
+      baseUrl: "https://gateway.test/v1",
+      ...(compat === undefined ? {} : { compat }),
+      models: [{ id: "openai/o3", reasoning: true }],
+    });
+    await runWith(plugins, Effect.all([ask("gateway/openai/o3"), ask("router/openai/o3")]), {
+      "llm.http": { providers: [gateway("gateway"), gateway("router", { thinkingFormat: "openrouter" })] },
+    });
+    expect(sent[0]!.body).toMatchObject({ reasoning_effort: "high" });
+    // A server whose config says it takes OpenRouter's format has the switch.
+    expect(sent[1]!.body).toMatchObject({ reasoning: { enabled: true } });
+  });
+
   it("asks a provider whose base URL ends in a slash at its paths, as one without", async () => {
     const { fetch, sent } = scriptedFetch(() => sseResponse(completion("ok")));
     const { plugins } = setup({ providers: [], fetch });
