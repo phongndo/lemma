@@ -771,6 +771,18 @@ export default defineWebPlugin({
             notify.report(error, "Could not update the session");
           }
         },
+        fork: async (eventId?: string) => {
+          const from = active();
+          const at = eventId ?? from?.leaf;
+          if (from === undefined || at === undefined) return;
+          try {
+            const forked = await client.channel.call(SessionChannels.fork, { sessionId: from.id, eventId: at });
+            upsert(forked);
+            await select(forked.id);
+          } catch (error) {
+            notify.report(error, "Could not fork the thread");
+          }
+        },
         remove,
         send,
         queue: activeQueue,

@@ -929,6 +929,14 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           const log = yield* sessions.events(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
           yield* admit.withPermits(1)(reconcile(sessionId, log));
           const info = yield* sessions.get(sessionId).pipe(Effect.mapError(failedAs(sessionId, "Session")));
+          // A damaged log takes no writes: its turn cannot close, nor its queue run, until it is forked.
+          if (info.damaged !== undefined) {
+            return yield* new AgentError({
+              sessionId,
+              reason: "Session",
+              message: `Session ${sessionId} is damaged at line ${info.damaged.line} (${info.damaged.reason}), so it takes no turns; fork it to go on`,
+            });
+          }
           if (suspended === undefined) return { info };
           const resume = planResume(log, suspended.turnId, suspended.marked);
           if (resume.kind === "ended") return { info, turn: { suspended, resumption: resume } };

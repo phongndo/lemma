@@ -108,6 +108,11 @@ export interface ThreadsService {
   readonly cancel: () => void;
   /** Moves the active session's leaf: the next prompt branches from `eventId`. */
   readonly checkout: (eventId: string) => Promise<void>;
+  /**
+   * Copies the active thread's branch up to `eventId` (its leaf when absent) into a new thread (`sessions.fork`), and
+   * goes to it: how a thread whose log is damaged (`SessionInfo.damaged`) goes on. Failures are reported.
+   */
+  readonly fork: (eventId?: string) => Promise<void>;
 }
 
 export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-web/Threads") {}

@@ -84,6 +84,28 @@ export function sessionsConformance(name: string, compose: (deletions: Deletions
         }),
       ));
 
+    test("fork copies the branch up to an event into a new session in the same directory, which goes on from there", () =>
+      run((store) =>
+        Effect.gen(function* () {
+          const { id } = yield* store.create({ cwd: "/work/a" });
+          yield* store.append(id, { type: "title", title: "Original" });
+          const kept = yield* store.append(id, note("kept"));
+          yield* store.append(id, note("left behind"));
+          const forked = yield* store.fork(id, kept.id);
+          expect(forked).toMatchObject({ cwd: "/work/a", title: "Original", leaf: kept.id, lastSeq: 2 });
+          expect(forked.id).not.toBe(id);
+          const events = yield* store.events(forked.id);
+          expect(events.map((event) => [event.seq, event.id, event.data])).toEqual([
+            [1, events[0]!.id, { type: "title", title: "Original" }],
+            [2, kept.id, note("kept")],
+          ]);
+          expect(yield* store.append(forked.id, note("on"))).toMatchObject({ seq: 3, parent: kept.id });
+          // The original is as it was.
+          expect((yield* store.get(id)).lastSeq).toBe(3);
+          expect(reason(yield* Effect.result(store.fork(id, "nothere")))).toBe("NotFound");
+        }),
+      ));
+
     test("a title event names the session", () =>
       run((store) =>
         Effect.gen(function* () {

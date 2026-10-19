@@ -1366,6 +1366,19 @@ export const createMockHost = (): Host => {
       sessionChanges.publish({ type: "session-changed", info: session.info });
       return session.info;
     }),
+    // The branch up to the event, copied into a new session in the same directory, as the host does.
+    serveCall("sessions.files", SessionChannels.fork, async ({ sessionId, eventId }) => {
+      const source = sessionOf(sessionId);
+      if (!source.events.some((event) => event.id === eventId)) throw notFound(eventId);
+      const info = create(source.info.cwd);
+      const events = branchOf(source.events, eventId).map((event, index) => ({ ...event, seq: index + 1 }));
+      const title = events.flatMap((event) => (event.data.type === "title" ? [event.data.title] : [])).at(-1);
+      const forked = sessionOf(info.id);
+      forked.events = events;
+      forked.info = { ...info, leaf: eventId, lastSeq: events.length, ...(title === undefined ? {} : { title }) };
+      sessionChanges.publish({ type: "session-changed", info: forked.info });
+      return forked.info;
+    }),
     serveCall("sessions.files", SessionChannels.delete, async ({ sessionId }) => {
       sessionOf(sessionId);
       if (running.has(sessionId))

@@ -100,10 +100,21 @@ costs re-reading the files.
   made durable so is not served (`Io`, "Cannot make … durable"); one whose file
   cannot be opened to write (read-only) is served as it is. `list` and `get` read
   without this, so a summary (its `lastSeq`, leaf, title) can describe a line a
-  power loss then takes back. Any other
-  complete line that does not decode, an unknown parent, a seq gap, or a checkout
-  to nowhere makes the session `Corrupt`. Skipping such a line would silently
-  change what the model saw.
+  power loss then takes back.
+- **Damage.** Any other complete line that does not decode, an unknown
+  parent, a seq gap, a duplicate id, or a checkout to nowhere damages the log
+  from there: reading on past it would silently change what the model saw, and
+  refusing the whole session would lose what came before. So the session is
+  what came before it, served as it reads and listed with `damaged` (the line,
+  and why), and it takes no writes (`ReadOnly`): an append past the damage
+  would bury it, and the file is never cut to drop it. The damage stays for
+  whoever looks at the file; a `Notice` says so once, and the empty-session
+  sweep never deletes a damaged one. `fork` copies a branch, from any event
+  that reads, into a new session that takes writes, and is how a damaged one
+  goes on (the web app's composer offers it). A file whose header does not read
+  is `Corrupt`, as nothing of it is known to be a session. The listing reads
+  without decoding, so it sees a seq gap at once and other damage once the
+  session is opened, which `SessionChanged` then announces.
 - **Validation.** `append` decodes the event's JSON against the schema first, so
   a line that could not be read back is never written, and memory holds the event
   exactly as a reload will. A field the schema lacks is refused (it would be

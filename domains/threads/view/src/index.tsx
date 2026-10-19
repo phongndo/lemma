@@ -4,7 +4,7 @@ import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
 import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
-import { sessionTitle, ComposerRegion, Pane, ThreadActions, ThreadHeader, Threads, ThreadsActionIds, Views } from "@lemma/threads";
+import { sessionTitle, ComposerRegion, ComposerTakeovers, Pane, ThreadActions, ThreadHeader, Threads, ThreadsActionIds, Views } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { ActionMenu, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
@@ -388,6 +388,32 @@ export default defineWebPlugin({
         </main>
       );
     }
+    // A thread whose log is damaged reads up to the damage and takes no prompts: the composer says so, and goes on in a
+    // fork of it, from its last event that reads (`sessions.fork`).
+    const damaged = () => threads.active()?.damaged;
+    slots.add(ComposerTakeovers, {
+      id: "thread-view.damaged",
+      sessionId: () => (damaged() === undefined ? undefined : threads.activeId()),
+      key: () => `damaged:${threads.activeId() ?? ""}`,
+      banner: () => (
+        <div class="thread-damaged" role="status">
+          <strong>This thread's log is damaged</strong>
+          <span class="muted">
+            {" "}
+            at line {damaged()?.line} ({damaged()?.reason}). It reads up to there and takes no prompts; fork it to go on from its last event.
+          </span>
+        </div>
+      ),
+      waiting: () => <span class="muted">This thread's log is damaged: it takes no prompts.</span>,
+      text: () => "",
+      setText: () => {},
+      placeholder: () => "Read-only",
+      readOnly: () => true,
+      submit: () => void threads.fork(),
+      submitLabel: () => "Fork and go on",
+      canSubmit: () => threads.active()?.leaf !== undefined,
+    });
+
     slots.add(Pages, { id: "thread-view.new", route: NewThreadRoute, component: Main });
     slots.add(Pages, {
       id: "thread-view",

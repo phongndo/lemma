@@ -210,6 +210,11 @@ export const SessionInfo = Schema.Struct({
   archived: Schema.optional(Schema.Boolean),
   /** Set by `mark`, present only when true: kept though nothing has gone into it (see `SessionMarks.kept`). */
   kept: Schema.optional(Schema.Boolean),
+  /**
+   * Its log is damaged from line `line` on (`reason`): it reads up to the event before (`lastSeq` counts what reads),
+   * and takes no writes (`ReadOnly`). `fork` copies it, from any event that reads, into a session that does.
+   */
+  damaged: Schema.optional(Schema.Struct({ line: Schema.Number, reason: Schema.String })),
 });
 export type SessionInfo = typeof SessionInfo.Type;
 
@@ -217,9 +222,10 @@ export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
   /**
    * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler
-   * refused it. `NotEmpty`: `relocate` refused, as something has gone into the session.
+   * refused it. `NotEmpty`: `relocate` refused, as something has gone into the session. `ReadOnly`: a write refused, as
+   * the session's log is damaged (`SessionInfo.damaged`): `fork` it to go on.
    */
-  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty";
+  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty" | "ReadOnly";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -334,6 +340,13 @@ export class Sessions extends Context.Service<
      * it is held.
      */
     readonly relocate: (sessionId: string, cwd: string) => Effect.Effect<SessionInfo, SessionError>;
+    /**
+     * A new session in the same directory holding the branch that ends at `eventId`, as it reads: the same events,
+     * ids, and times, numbered from 1, its leaf at `eventId`, filed as new (no marks). How a session goes on from a
+     * point without changing it: one that is damaged (`SessionInfo.damaged`), from its last event that reads. Fails
+     * `NotFound` for an event not in the session.
+     */
+    readonly fork: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
     /**
      * Holds the session while the scope lasts, so it is not removed: work that
      * writes to it holds it from before it starts until it has stopped, as the
@@ -480,6 +493,14 @@ export const SessionChannels = {
     payload: Schema.Struct({ ...sessionField, cwd: Schema.String }),
     success: SessionInfo,
   }),
+  fork: defineChannel({
+    kind: "call",
+    id: "sessions.fork",
+    title: "Fork a session",
+    description: "A new session holding the branch that ends at an event (eventId), as it reads; how a damaged session goes on",
+    payload: Schema.Struct({ ...sessionField, eventId: Schema.String }),
+    success: SessionInfo,
+  }),
   /** `Sessions.search`: what was said in sessions. It reads sessions' logs, so a client asks once the query has settled. */
   search: defineChannel({
     kind: "call",
@@ -583,6 +604,7 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
     }),
   ),
   serveChannel(SessionChannels.relocate, ({ sessionId, cwd }) => sessions.relocate(sessionId, cwd)),
+  serveChannel(SessionChannels.fork, ({ sessionId, eventId }) => sessions.fork(sessionId, eventId)),
   serveChannel(SessionChannels.search, ({ query, limit }) => sessions.search(query, limit === undefined ? undefined : { limit })),
   serveChannel(SessionChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
   serveChannel(SessionChannels.changes, () =>

@@ -64,6 +64,9 @@ export const formatSession = (info: SessionInfo, branch: readonly SessionEvent[]
     ["created", time(info.createdAt)],
     ["updated", time(info.updatedAt)],
     ["events", `${info.lastSeq} (${branch.length} on the current branch)`],
+    ...(info.damaged === undefined
+      ? []
+      : [["damaged", `at line ${info.damaged.line} (${info.damaged.reason}): read-only; lemma sessions fork ${info.id} goes on from its last event`] as const]),
   ]);
   const body = branch.flatMap(eventLines);
   return body.length ? `${header}\n\n${body.join("\n")}` : header;

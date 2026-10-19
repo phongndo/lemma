@@ -167,6 +167,19 @@ export const sessionCommands = (registries: Reader) => [
       })),
   }),
   defineCliCommand({
+    path: ["sessions", "fork"],
+    summary: "Copy a session's branch up to an event into a new session; how a damaged one goes on",
+    args: [...session, { name: "event", description: "The event to fork from (default: the session's leaf)" }],
+    run: ({ args }) =>
+      Effect.gen(function* () {
+        const sessionId = args.id;
+        const eventId = args.event ?? (yield* callHere(registries, SessionChannels.get, { sessionId })).leaf;
+        if (eventId === undefined) return { text: `${sessionId} has no events to fork from`, json: { forked: false } };
+        const info = yield* callHere(registries, SessionChannels.fork, { sessionId, eventId });
+        return { json: info, text: `forked ${sessionId} at ${eventId} into ${info.id}` };
+      }),
+  }),
+  defineCliCommand({
     path: ["sessions", "open"],
     summary: "Open a session in the web app, in a view such as trajectory; prints its address",
     description: "With --json it prints the address's path and opens nothing.",

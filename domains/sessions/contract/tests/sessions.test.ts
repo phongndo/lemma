@@ -46,6 +46,7 @@ const recording = () => {
     checkout: answer("checkout", info),
     mark: answer("mark", info),
     relocate: answer("relocate", info),
+    fork: answer("fork", info),
     search: answer("search", []),
     hold: answer("hold", undefined),
     remove: answer("remove", undefined),
