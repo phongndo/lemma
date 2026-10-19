@@ -266,7 +266,7 @@ export const sessionCommands = (registries: Reader) => [
           const running = turns.at(-1)?.end === undefined;
           let records = ledger(turns).filter(parseLedgerFilter(flags.filter ?? ""));
           if (range !== undefined && records.length > 0) {
-            const origin = Math.min(...ledger(turns).map(recordStart));
+            const origin = ledger(turns).reduce((earliest, record) => Math.min(earliest, recordStart(record)), Infinity);
             records = recordsBetween(records, origin + (range.from ?? 0), range.to === undefined ? Infinity : origin + range.to);
           }
           records = sortRecords(records, (flags.sort ?? "time") as LedgerSort, flags.desc, running);

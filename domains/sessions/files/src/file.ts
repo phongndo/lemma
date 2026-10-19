@@ -377,13 +377,14 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
       marks = applyMarks(marks, line);
       return undefined;
     }
-    if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
     if (line.type === "checkout") {
+      if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
       leaf = line.leaf;
       return undefined;
     }
     // The one check `load` makes that costs nothing here: a gap would have `list` describe events `load` refuses.
     if (line.seq !== lastSeq + 1) return `line ${n}: expected seq ${lastSeq + 1}, found ${String(line.seq)}`;
+    if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
     leaf = line.id;
     lastSeq = line.seq;
     if (line.data?.type === "title") title = line.data.title;

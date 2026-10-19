@@ -627,12 +627,16 @@ export const make = ({
         if (!written) return yield* new SessionError({ sessionId: id, reason: "Io", message: `Cannot write ${file}: it exists` });
         confirmed.add(file);
         let title: string | undefined;
-        for (const event of branch) if (event.data.type === "title") title = event.data.title;
+        let updatedAt = createdAt;
+        for (const event of branch) {
+          if (event.data.type === "title") title = event.data.title;
+          updatedAt = Math.max(updatedAt, event.at);
+        }
         const info = infoOf(header, {
           leaf: eventId,
           title,
           marks: unfiled,
-          updatedAt: Math.max(createdAt, ...branch.map((event) => event.at)),
+          updatedAt,
           lastSeq: branch.length,
         });
         const entry = yield* remember(id, file, info);

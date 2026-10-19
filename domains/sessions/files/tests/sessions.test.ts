@@ -222,6 +222,30 @@ describe("sessions", () => {
     expect(await fs.readFile(bad, "utf8")).toBe(before);
   });
 
+  it("lists a session damaged by a line out of sequence as updated when the last event it reads was", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, custom(1));
+        return id;
+      }),
+    );
+    const file = (await sessionFiles()).find((name) => idOfFile(name) === id)!;
+    // A gap in the seqs, at a later time: reading stops there, so the session was not updated then.
+    const later = Date.now() + 86_400_000;
+    const line = (seq: number) => JSON.stringify({ seq, id: `x${seq}`, parent: null, at: later, data: custom(seq) });
+    await fs.appendFile(file, `${line(3)}\n${line(4)}\n`);
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const listed = (yield* store.list()).find((info) => info.id === id)!;
+        expect(listed).toMatchObject({ lastSeq: 1, damaged: { line: 3 } });
+        expect(listed.updatedAt).toBeLessThan(later);
+      }),
+    );
+  });
+
   it("reads a session with a complete null line up to it", async () => {
     const id = await run(Effect.flatMap(Sessions, (store) => Effect.map(store.create(), (info) => info.id)));
     const [bad] = await sessionFiles();
