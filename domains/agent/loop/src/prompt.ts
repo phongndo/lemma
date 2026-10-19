@@ -4,8 +4,9 @@ import type { ModelRef } from "@lemma/llm";
 
 /**
  * The default base prompt, short and in opencode's shape: how the agent works, with no role line, which the model does
- * not need. How to use each tool is left to the tool's own description, so replacing or removing a tool takes its
- * advice with it, and the text stays the same from request to request.
+ * not need, and nothing of any one kind of work: what a thread's agent is for (coding, writing) is its profile's
+ * (`agent.profiles`). How to use each tool is left to the tool's own description, so replacing or removing a tool
+ * takes its advice with it, and the text stays the same from request to request.
  */
 const BASE_PROMPT = `# Harness
 - Responses are rendered as GitHub-flavored Markdown.
@@ -14,12 +15,7 @@ const BASE_PROMPT = `# Harness
 
 # Communication
 - Refer to files by clear paths, as path:line.
-- Keep responses clear and concise. Do not say something works unless you ran it.
-
-# Working in codebases
-- Keep changes consistent with the structure, naming, style, and patterns of the surrounding code.
-- Treat unfamiliar files or changes as potential user work and investigate before deleting or overwriting them.
-- Check changes in proportion to their risk.
+- Keep responses clear and concise. Do not claim something works unless you checked it.
 - Ask before destructive or outward-facing actions the user did not request.`;
 
 interface EnvironmentFacts {
@@ -48,7 +44,7 @@ function environment(facts: EnvironmentFacts): string {
   const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
   return [
     "<environment>",
-    `You are ${facts.modelName === undefined || facts.modelName === facts.model ? facts.model : `${facts.modelName} (${facts.model})`}, running in Lemma, a coding-agent harness. When asked what model you are, answer with this, not with what your training suggests.`,
+    `You are ${facts.modelName === undefined || facts.modelName === facts.model ? facts.model : `${facts.modelName} (${facts.model})`}, running in Lemma, an agent harness. When asked what model you are, answer with this, not with what your training suggests.`,
     `Current working directory: ${facts.cwd}`,
     `Current date: ${date}`,
     `Platform: ${facts.platform}`,

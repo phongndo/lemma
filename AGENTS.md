@@ -1,6 +1,6 @@
 # Lemma
 
-Lemma is a coding-agent harness in which every part, including the agent loop
+Lemma is an agent harness in which every part, including the agent loop
 and the web app's views, is a plugin that can be turned off or replaced by id.
 The runtime is the API they are written against, provided by the host and the
 web app. The bundled plugins are defaults on the same footing as a user's

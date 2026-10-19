@@ -14,7 +14,7 @@ export type { Profile } from "./profile.ts";
 
 /** Its row in config.jsonc's `plugins`. */
 export const Config = Schema.Struct({
-  default: Schema.String.pipe(Schema.withDecodingDefaultType(Effect.sync(() => "general"))).annotate({
+  default: Schema.String.pipe(Schema.withDecodingDefaultType(Effect.sync(() => "coding"))).annotate({
     title: "Default profile",
     description: "The profile a thread has until one is chosen for it.",
   }),

@@ -38,9 +38,13 @@ You help the user write. Keep their voice; say what you changed and why.
 - **A name not found** (deleted, mistyped) gives the thread no profile, said
   once as a `Notice`.
 
-| Config    | Default   | What it does                                        |
-| --------- | --------- | --------------------------------------------------- |
-| `default` | `general` | The profile a thread has until one is chosen for it |
+| Config    | Default  | What it does                                        |
+| --------- | -------- | --------------------------------------------------- |
+| `default` | `coding` | The profile a thread has until one is chosen for it |
+
+Two ship with Lemma: `coding` (how to work in a codebase), the default, and
+`general` (no guidance of a kind of work, every tool). With this plugin off,
+the agent has its base prompt alone: what makes it a coding agent is a profile.
 
 Serves `profiles.list` (`ProfileChannels` in `@lemma/agent`): the profiles a
 thread in a directory can be given, and the default.

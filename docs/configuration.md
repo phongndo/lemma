@@ -2,7 +2,10 @@
 
 With no config, every bundled plugin runs but a few that start off until a
 row turns them on (`"enabled": true`): `context.prune`. `~/.lemma/config.jsonc` and
-`<project>/.lemma/config.jsonc` patch that by plugin id:
+`<project>/.lemma/config.jsonc` patch that by plugin id. The project's is the
+one in the directory the host was started in; a session in another project
+with config of its own is told it does not apply there, while that project's
+`AGENTS.md`, skills, and profiles do.
 
 ```jsonc
 {

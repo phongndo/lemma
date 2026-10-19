@@ -1,7 +1,9 @@
 # Lemma
 
-Lemma is a coding-agent harness in which every part, including the agent loop
-and the web app's views, is a plugin that can be turned off or replaced by id.
+Lemma is an agent harness in which every part, including the agent loop and
+the web app's views, is a plugin that can be turned off or replaced by id.
+What a thread's agent is for is its profile: coding by default, or writing,
+research, or anything a profile of yours describes.
 The plugins are written against a runtime the host and the web app provide, so
 a plugin of yours stands where a bundled one does.
 

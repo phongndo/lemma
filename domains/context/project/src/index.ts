@@ -1,7 +1,8 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
-import { definePlugin } from "@lemma/core";
-import { Paths } from "@lemma/contracts";
+import { Effect } from "effect";
+import { definePlugin, Events } from "@lemma/core";
+import { Notice, Paths } from "@lemma/contracts";
 import { PromptSections } from "@lemma/agent";
 
 /** Per directory, the first of these that is a file wins (pi's order: AGENTS first, CLAUDE as the fallback). */
@@ -84,11 +85,40 @@ export default definePlugin({
   requires: { paths: Paths },
   setup: function* ({ paths }, owner) {
     const load = makeLoader(paths.home);
+    const events = yield* Events;
+    const told = new Set<string>();
+    /**
+     * A project's `.lemma/config.jsonc` and `.lemma/plugins` apply to a host started in it (they are read once, from
+     * where the host starts): a session in another project with its own is told so, once a directory, so its user is
+     * not left wondering why its rows do not apply.
+     */
+    const tellIfOwnConfig = async (cwd: string) => {
+      const dir = path.resolve(cwd);
+      if (told.has(dir) || dir === path.resolve(paths.cwd)) return;
+      told.add(dir);
+      const own = await Promise.all(
+        [fs.stat(path.join(dir, ".lemma", "config.jsonc")), fs.stat(path.join(dir, ".lemma", "plugins"))].map((found) =>
+          found.then(
+            () => true,
+            () => false,
+          ),
+        ),
+      );
+      if (!own.includes(true)) return;
+      await Effect.runPromise(
+        events.publish(Notice, {
+          level: "info",
+          source: owner.id,
+          message: `${dir}/.lemma has config or plugins of its own, which apply only to a host started there (this one started in ${paths.cwd}); its AGENTS.md, skills, and profiles apply here`,
+        }),
+      );
+    };
     yield* owner.add(
       PromptSections,
       {
         id: "project-context",
         text: async ({ cwd }) => {
+          await tellIfOwnConfig(cwd).catch(() => undefined);
           const files = await load(cwd);
           return files.length === 0 ? undefined : renderSection(files);
         },
