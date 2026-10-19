@@ -717,6 +717,7 @@ const reach = {
 const seamed: Readonly<Record<string, readonly (keyof typeof reach)[]>> = {
   "domains/sessions/files/src": ["clock", "random", "timer", "disk"],
   "domains/agent/loop/src": ["clock", "random", "timer", "disk"],
+  "domains/agent/contract/src/kit": ["clock", "random", "timer", "disk"],
   "domains/tools/registry/src": ["clock", "random", "timer"],
   "domains/context/compaction/src": ["clock", "random", "timer"],
   // A step's timing is logged as its credit.

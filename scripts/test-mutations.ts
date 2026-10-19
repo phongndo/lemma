@@ -38,7 +38,7 @@ const mutations = [
   },
   {
     id: "unsafe-reexecuted",
-    file: "domains/agent/loop/src/turn.ts",
+    file: "domains/agent/contract/src/kit/turn.ts",
     from: 'listed.filter((tool) => tool.replay === "safe")',
     to: "listed.filter(() => true)",
     test: "domains/agent/loop/tests/crash.test.ts",
@@ -46,7 +46,7 @@ const mutations = [
   },
   {
     id: "queue-revision-backwards",
-    file: "domains/agent/loop/src/state.ts",
+    file: "domains/agent/contract/src/kit/state.ts",
     from: "(last ?? 0) + 1",
     to: "(last ?? 0) + 0",
     test: "domains/agent/loop/tests/simulated.test.ts",

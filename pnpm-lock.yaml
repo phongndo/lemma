@@ -669,6 +669,9 @@ importers:
 
   domains/agent/contract:
     dependencies:
+      '@lemma/cli':
+        specifier: workspace:*
+        version: link:../../cli/contract
       '@lemma/client':
         specifier: workspace:*
         version: link:../../../packages/client

@@ -1,6 +1,6 @@
 import { join } from "node:path";
 import { Data, Effect, Option, Schema } from "effect";
-import { QueuedPrompt } from "@lemma/agent";
+import { QueuedPrompt } from "../agent.ts";
 import { AssistantMessage } from "@lemma/llm";
 import { TurnEndReason } from "@lemma/sessions";
 import { errorCode, readJsonFile, removeFile, writeFileAtomic } from "@lemma/contracts/fs";

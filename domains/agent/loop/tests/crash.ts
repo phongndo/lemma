@@ -12,7 +12,7 @@ import type { Tool } from "@lemma/tools";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import agent from "../src/index.ts";
-import { TOOLS_STARTED } from "../src/resume.ts";
+import { TOOLS_STARTED } from "@lemma/agent/kit";
 import { call, failWith, fakeLlm, host, paths, reply, tempDir, testTools, useTools, waitFor } from "./fakes.ts";
 import type { Script } from "./fakes.ts";
 

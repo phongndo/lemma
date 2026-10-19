@@ -3,13 +3,13 @@ import { Cause, Clock, Effect, Exit, Option, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
 import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
-import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
+import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "../agent.ts";
 import { addUsage, emptyUsage } from "@lemma/llm";
 import { deriveMessages, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
 import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
-import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "@lemma/agent";
+import type { PromptContent, RequestDraft, RequestPlan, SectionRequest, SystemSection } from "../agent.ts";
 import type {
   AssistantMessage,
   Llm,
@@ -50,7 +50,33 @@ interface TurnServices {
   readonly newId: () => string;
 }
 
+/**
+ * Whether a turn takes another step after one, before `AgentContinueHook`'s handlers have their say: the loop's shape.
+ * `decide` sees the step as the hook's terminal does, and says why, which the step's `step-end` logs.
+ */
+export interface TurnPolicy {
+  readonly decide: (outcome: { readonly message: AssistantMessage; readonly results: readonly ToolResultMessage[] }) => {
+    readonly result: "continue" | "stop";
+    readonly why: string;
+  };
+}
+
+/**
+ * The agent's own: another step while the model asked for tools, or tools answered it (results it has not read
+ * yet keep it going, whatever the provider called its stop); else it stops.
+ */
+export const toolLoop: TurnPolicy = {
+  decide: (outcome) =>
+    outcome.message.stopReason === "toolUse"
+      ? { result: "continue", why: "the model asked for tools" }
+      : outcome.results.length > 0
+        ? { result: "continue", why: "tool results to read" }
+        : { result: "stop", why: `the model stopped (${outcome.message.stopReason})` },
+};
+
 interface TurnSettings extends RetrySettings {
+  /** The loop's shape: whether a turn takes another step (`toolLoop` for the agent's own). */
+  readonly policy: TurnPolicy;
   readonly maxSteps: number;
   /** A reply the user stopped is logged as a `message` of what it had written, which the model then sees (`stopped`). */
   readonly keepCancelled: boolean;
@@ -786,23 +812,17 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   const decide = (step: number, outcome: StepOutcome) =>
     Effect.gen(function* () {
       const steps: HandlerStep<StepOutcome, "continue" | "stop">[] = [];
-      // Tool results the model has not read yet keep it going too, whatever the provider called its stop.
-      const reason = (seen: StepOutcome) =>
-        seen.message.stopReason === "toolUse"
-          ? "the model asked for tools"
-          : seen.results.length > 0
-            ? "tool results to read"
-            : `the model stopped (${seen.message.stopReason})`;
-      // What the default saw, which a handler may have rewritten; none, when a handler answered itself.
-      let why = reason(outcome);
+      // What the policy saw, which a handler may have rewritten; none, when a handler answered itself.
+      let why = settings.policy.decide(outcome).why;
       const result = yield* hooks
         .invoke(
           AgentContinueHook,
           { sessionId, turnId, step, message: outcome.message, results: outcome.results },
           (final) =>
             Effect.sync(() => {
-              why = reason(final);
-              return final.message.stopReason === "toolUse" || final.results.length > 0 ? ("continue" as const) : ("stop" as const);
+              const decided = settings.policy.decide(final);
+              why = decided.why;
+              return decided.result;
             }),
           { onStep: (heard) => void steps.push(heard) },
         )

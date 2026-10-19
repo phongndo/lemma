@@ -4,8 +4,8 @@ import type { Context } from "effect";
 import type { Hooks, HandlerStep } from "@lemma/core";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { ResultCredit } from "@lemma/contracts";
-import { AgentError, AgentInputHook } from "@lemma/agent";
-import type { PromptContent, PromptDecision, PromptInput, PromptOptions, PromptOutcome } from "@lemma/agent";
+import { AgentError, AgentInputHook } from "../agent.ts";
+import type { PromptContent, PromptDecision, PromptInput, PromptOptions, PromptOutcome } from "../agent.ts";
 
 /** How many prompts `AgentInputHook` handled or refused the agent remembers, for a retry to be answered the same. */
 const ANSWERS_KEPT = 1024;

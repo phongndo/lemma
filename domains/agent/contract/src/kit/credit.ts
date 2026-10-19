@@ -1,6 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import type { HandlerStep } from "@lemma/core";
-import type { RequestDraft, RequestPlan } from "@lemma/agent";
+import type { RequestDraft, RequestPlan } from "../agent.ts";
 
 /** What a request is, for telling two apart. */
 type Shape = Pick<RequestPlan, "model" | "thinking" | "sections" | "tools" | "providerOptions">;

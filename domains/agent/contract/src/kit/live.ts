@@ -1,5 +1,5 @@
 import { emptyUsage } from "@lemma/llm";
-import type { AgentView } from "@lemma/agent";
+import type { AgentView } from "../agent.ts";
 import type { AssistantMessage, ModelInfo, StreamEvent } from "@lemma/llm";
 import type { LiveFile } from "./state.ts";
 

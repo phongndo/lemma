@@ -1,5 +1,5 @@
 import { Clock, Effect } from "effect";
-import type { PromptContent, PromptSection } from "@lemma/agent";
+import type { PromptContent, PromptSection } from "../agent.ts";
 import type { ModelRef } from "@lemma/llm";
 
 /**

@@ -7,6 +7,12 @@ its turns, before the new instance resumes them. Serves the `agent.*` channels
 (`AgentChannels`, through `serveAgent`): the calls clients make, and
 `agent.activity`, its live output and each turn's and queue's change.
 
+It is the agent kit's (`@lemma/agent/kit`) `makeAgent` with the kit's own
+policy, `toolLoop`: what follows is the kit's behavior, which a loop built on
+it shares. A loop of another kind gives `makeAgent` its own `TurnPolicy`
+(whether a turn takes another step), or builds on the kit's parts: `runTurn`,
+`planResume`, the journal, the queue's rules, and the live view.
+
 ```ts
 Effect.gen(function* () {
   const agent = yield* Agent;
@@ -34,7 +40,7 @@ Effect.gen(function* () {
 
 ## Base prompt
 
-The `agent.base` section ([`src/prompt.ts`](src/prompt.ts)) says how the agent
+The `agent.base` section ([`kit/prompt.ts`](../contract/src/kit/prompt.ts)) says how the agent
 works, not how to use any tool: that is in each tool's own description, so a
 replaced or removed tool takes its advice with it, and the section's text is the
 same for every request.

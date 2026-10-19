@@ -10,7 +10,7 @@ import type { LlmRequest, ToolResultMessage } from "@lemma/llm";
 import type { SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions from "@lemma/sessions-files";
-import { TOOLS_STARTED } from "../src/resume.ts";
+import { TOOLS_STARTED } from "@lemma/agent/kit";
 import { call, failWith, gated, log, newSession, ofType, paths, reply, respond, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
 import type { AgentSetup } from "./fakes.ts";
 

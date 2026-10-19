@@ -2,8 +2,8 @@ import { Effect, Random } from "effect";
 import { TestClock } from "effect/testing";
 import { describe, expect, it } from "vitest";
 import type { LlmFailure } from "@lemma/llm";
-import { longestWait, nextRetry, noRetries, retried } from "../src/retry.ts";
-import type { RetryStreak } from "../src/retry.ts";
+import { longestWait, nextRetry, noRetries, retried } from "@lemma/agent/kit";
+import type { RetryStreak } from "@lemma/agent/kit";
 
 const settings = { retries: 3, retryDelay: 2_000, maxRetryDelay: 60_000 };
 

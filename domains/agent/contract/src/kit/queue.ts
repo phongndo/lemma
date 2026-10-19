@@ -1,7 +1,7 @@
 import { Deferred, Effect, Semaphore } from "effect";
 import { assert } from "@lemma/core";
-import { AgentError } from "@lemma/agent";
-import type { QueuedPrompt } from "@lemma/agent";
+import { AgentError } from "../agent.ts";
+import type { QueuedPrompt } from "../agent.ts";
 import { removeState, writeJournal } from "./state.ts";
 import type { Journal, StateFiles } from "./state.ts";
 import type { Ended } from "./turn.ts";
