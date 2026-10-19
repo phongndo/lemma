@@ -76,6 +76,9 @@ export interface FileSearcher {
  * unless it names a phase, or by its being turned off. With none, searches fail
  * `Unavailable`, and nothing else stops: `searchFiles` and `files.search` read
  * this rather than requiring it.
+ *
+ * @composition the first contribution by phase (`replace`, then `default`) and `order` answers; the others are not
+ * asked. One that fails fails the search.
  */
 export const FileSearchers = Registry.make<FileSearcher>("lemma/file-searchers", {
   key: (searcher) => searcher.id,

@@ -124,6 +124,9 @@ export const defineCliCommand = <const Args extends readonly ArgSpec[] = readonl
  * adding it fails `Conflict`), and a plugin's replacement takes over its
  * paths. The `lemma` command's own commands come first: a plugin's command
  * with the same path is never reached. `CliRunner` lists and runs them.
+ *
+ * @composition all commands, one per path (another plugin adding a path fails `Conflict`); the `lemma` command's own
+ * come first. A command whose `run` fails reports its failure as the command's result.
  */
 export const CliCommands = Registry.make<CliCommand>("lemma/cli-commands", {
   key: (command) => command.path.join(" "),
@@ -158,6 +161,12 @@ export interface CliCheck {
   readonly run: () => Awaitable<CheckOutcome, unknown>;
 }
 
+/**
+ * The checks `lemma doctor` runs: `PluginContext.add(CliChecks, check)`.
+ *
+ * @composition every check runs, at once; one that fails, throws, or takes longer than its timeout reports `fail`
+ * with why, and the rest still report.
+ */
 export const CliChecks = Registry.make<CliCheck>("lemma/cli-checks", {
   key: (check) => check.id,
   check: (value) => {
@@ -188,6 +197,12 @@ export interface InProgressReporter {
   readonly items: Effect.Effect<readonly string[]> | (() => Awaitable<readonly string[]>);
 }
 
+/**
+ * Work that stopping the host would cut off, as `lemma stop`, `lemma status`, and the desktop app's quit show it:
+ * `PluginContext.add(InProgress, reporter)`.
+ *
+ * @composition every reporter is asked, at once; one that fails reports nothing, and the rest still report.
+ */
 export const InProgress = Registry.make<InProgressReporter>("lemma/cli-in-progress", { key: (reporter) => reporter.id });
 
 /** A reporter's work as clients see it (`cli.in-progress`): `source` is the plugin that added it. */

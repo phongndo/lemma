@@ -17,6 +17,7 @@ const HookTypeId: unique symbol = Symbol("@lemma/core/Hook");
 export interface Hook<Input, Output, Error = never> extends PhaseOptions {
   readonly name: string;
   readonly summary?: HookSummary<Input, Output>;
+  readonly check?: HookCheck;
   readonly [HookTypeId]: {
     readonly input: (_: Input) => Input;
     readonly output: (_: Output) => Output;
@@ -37,6 +38,18 @@ export interface HookSummary<Input, Output> {
 }
 
 /**
+ * What a hook checks of its handlers at run time, for handlers TypeScript never saw (a plugin written in JavaScript):
+ * `input`, what a handler hands `next`; `output`, what a handler returns. Each answers a one-line problem, or
+ * `undefined` when the value is fine. A problem fails the operation with `HookError` (`InvalidInput`,
+ * `InvalidOutput`) naming the handler's plugin, so a wrong shape is the plugin's fault where it was made, not a crash
+ * further on. The value the hook's own caller passes in, and its terminal's result, are not checked.
+ */
+export interface HookCheck {
+  readonly input?: (value: unknown) => string | undefined;
+  readonly output?: (value: unknown) => string | undefined;
+}
+
+/**
  * Named places in order, which a token's owner declares (a hook's for its handlers, a registry's for its items): a
  * contributor names the one it belongs in (`phase`), and comes after everything in an earlier phase and before
  * everything in a later one, whatever their `order`, which orders it within its phase. So a handler that must see what
@@ -51,12 +64,16 @@ export interface PhaseOptions {
 
 export const Hook = {
   /** Throws when `phases` cannot order anything: none, one named twice, or no `defaultPhase` among them. */
-  make<Input, Output, Error = never>(name: string, options?: { readonly summary?: HookSummary<Input, Output> } & PhaseOptions): Hook<Input, Output, Error> {
+  make<Input, Output, Error = never>(
+    name: string,
+    options?: { readonly summary?: HookSummary<Input, Output>; readonly check?: HookCheck } & PhaseOptions,
+  ): Hook<Input, Output, Error> {
     checkPhases("Hook", name, options ?? {});
     return token(
       Object.freeze({
         name,
         ...(options?.summary === undefined ? {} : { summary: options.summary }),
+        ...(options?.check === undefined ? {} : { check: Object.freeze({ ...options.check }) }),
         ...(options?.phases === undefined ? {} : { phases: Object.freeze([...options.phases]), defaultPhase: options.defaultPhase! }),
       }),
     ) as Hook<Input, Output, Error>;

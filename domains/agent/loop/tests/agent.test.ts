@@ -332,6 +332,28 @@ describe("agent", () => {
     );
   });
 
+  it("ends the turn in error, naming the plugin, when a request handler hands on a request of the wrong shape", async () => {
+    // As a plugin written in JavaScript might: TypeScript never saw it.
+    const sloppy = definePlugin({
+      id: "sloppy",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) => owner.on(AgentRequestHook, (draft, next) => next({ ...draft, sections: "be brief" as never }))),
+      ),
+    });
+    await withAgent({ plugins: [sloppy], scripts: [reply("never sent")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const failed = yield* Effect.flip(Effect.flatMap(Agent, (a) => a.prompt(id, text("go"))));
+        expect(failed).toMatchObject({ reason: "Hook" });
+        expect(failed.message).toContain('plugin "sloppy"');
+        expect(failed.message).toContain("sections must be an array");
+        expect(requests).toEqual([]);
+        const ended = (yield* log(id)).find((event) => event.data.type === "turn-end")!.data;
+        expect(ended).toMatchObject({ reason: "error", error: failed.message });
+      }),
+    );
+  });
+
   it("refuses a call to a tool the request did not offer", async () => {
     const readOnly = definePlugin({
       id: "read-only",

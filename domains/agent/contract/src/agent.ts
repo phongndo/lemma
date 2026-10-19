@@ -1,5 +1,5 @@
-import { Context, Data, Effect, Schema, Stream } from "effect";
-import { Event, Hook, Registry } from "@lemma/core";
+import { Context, Data, Effect, Predicate, Schema, Stream } from "effect";
+import { Event, Hook, Registry, schemaCheck } from "@lemma/core";
 import type { Awaitable, Events } from "@lemma/core";
 import { defineChannel, eventFeed, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
@@ -138,6 +138,10 @@ export interface PromptSection {
  * handlers change or drop sections. Its phases are `base` (the agent's base prompt), `body` (where a section naming no
  * phase goes, ordered within it by `order`), and `environment` (the agent's, last): a section in `body` keeps the
  * prompt's stable prefix long, as `environment`'s date changes daily.
+ *
+ * @composition every section is written for each request, in phase order (`base`, `body`, `environment`, then
+ * `order`), one per id (another plugin adding an id fails `Conflict`); a section whose text fails fails the request,
+ * and an empty one is left out.
  */
 export const PromptSections = Registry.make<PromptSection>("lemma/agent.sections", {
   key: (section) => section.id,
@@ -211,6 +215,58 @@ export type PromptDecision =
   | { readonly kind: "handle"; readonly message?: string }
   | { readonly kind: "refuse"; readonly reason: string };
 
+const contentProblem = (content: unknown): string | undefined =>
+  Array.isArray(content) && content.every((part) => Predicate.isObject(part) && (part.type === "text" || part.type === "image"))
+    ? undefined
+    : "content must be an array of text and image parts";
+
+/** What a handler of `AgentInputHook` hands on: the prompt, its content and options. */
+const promptInputProblem = (value: unknown): string | undefined =>
+  !Predicate.isObject(value)
+    ? "expected a prompt"
+    : typeof value.sessionId !== "string"
+      ? "sessionId must be a string"
+      : (contentProblem(value.content) ?? (Predicate.isObject(value.options) ? undefined : "options must be an object"));
+
+/** What a handler of `AgentInputHook` returns: a `PromptDecision`. */
+const decisionProblem = (value: unknown): string | undefined => {
+  if (!Predicate.isObject(value)) return "expected a decision: { kind: place | handle | refuse }";
+  switch (value.kind) {
+    case "place":
+      return contentProblem(value.content) ?? (Predicate.isObject(value.options) ? undefined : "a placed prompt's options must be an object");
+    case "handle":
+      return value.message === undefined || typeof value.message === "string" ? undefined : "a handled prompt's message must be a string";
+    case "refuse":
+      return typeof value.reason === "string" ? undefined : "a refusal needs a reason string";
+    default:
+      return `unknown decision kind ${JSON.stringify(value.kind)}: expected place, handle, or refuse`;
+  }
+};
+
+const thinkingProblem = schemaCheck(ThinkingLevel);
+
+/** What a handler of `AgentRequestHook` hands on or returns: the request's model, sections, and tools. */
+const planProblem = (value: unknown): string | undefined => {
+  if (!Predicate.isObject(value)) return "expected a request plan";
+  if (typeof value.model !== "string") return "model must be a string (<provider>/<model>)";
+  if (value.thinking !== undefined) {
+    const problem = thinkingProblem(value.thinking);
+    if (problem !== undefined) return `thinking: ${problem}`;
+  }
+  if (!Array.isArray(value.sections)) return "sections must be an array";
+  const section = value.sections.findIndex(
+    (each) => !Predicate.isObject(each) || typeof each.id !== "string" || typeof each.source !== "string" || typeof each.text !== "string",
+  );
+  if (section !== -1) return `sections[${section}] must be { id, source, text }, all strings`;
+  if (!Array.isArray(value.tools)) return "tools must be an array";
+  const tool = value.tools.findIndex(
+    (each) => !Predicate.isObject(each) || !Predicate.isObject(each.spec) || typeof each.spec.name !== "string" || typeof each.source !== "string",
+  );
+  if (tool !== -1) return `tools[${tool}] must be a tool contribution: { spec: { name, … }, source }`;
+  if (value.providerOptions !== undefined && !Predicate.isObject(value.providerOptions)) return "providerOptions must be an object";
+  return undefined;
+};
+
 /**
  * Around every new prompt, before the agent places it: rewrite it (`next` with other content or options, such as its
  * model), handle it, or refuse it. A retry of a prompt with the same request id does not run it again: one placed
@@ -218,8 +274,14 @@ export type PromptDecision =
  * restart it is asked again), as does one still being decided. Who rewrote a prompt is logged with the user message
  * (its `credit`); who handled or refused one, in the prompt's outcome (`PromptOutcome`): the outermost handler whose
  * answer differs from the one it was handed.
+ *
+ * @composition a chain, outermost first: each handler places, rewrites (by calling `next` with other content),
+ * handles, or refuses the prompt; one that returns without `next` answers for all after it. A handler that fails
+ * fails `Agent.prompt` with `Hook`, and nothing is placed. Checked: what a handler hands on is a prompt, what it
+ * returns a `PromptDecision`.
  */
 export const AgentInputHook = Hook.make<PromptInput, PromptDecision, AgentError>("lemma/agent.input", {
+  check: { input: promptInputProblem, output: decisionProblem },
   summary: {
     input: (input) => ({ parts: input.content.length, whenBusy: input.options.whenBusy ?? "follow-up" }),
     output: (decision) => ({ decision: decision.kind }),
@@ -230,8 +292,14 @@ export const AgentInputHook = Hook.make<PromptInput, PromptDecision, AgentError>
  * Runs before every model call. Skills, project context, and prompt plugins contribute here. Its phases are `shape`
  * (where a handler naming no phase goes: it adds and changes sections and tools) and `fit` (after every `shape` handler,
  * so it sees the request they made: compaction sizes it against the model's window).
+ *
+ * @composition a chain in phase order (`shape`, then `fit`): each handler changes the draft it hands `next` and sees
+ * what later handlers made in what `next` returns; one that returns without `next` sends what it returns. A handler
+ * that fails ends the turn in error, logged with its message, and the prompt that started it fails with `Hook`.
+ * Checked: what a handler hands on and returns has a model, sections, and tools of the right shape.
  */
 export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request", {
+  check: { input: planProblem, output: planProblem },
   phases: ["shape", "fit"],
   defaultPhase: "shape",
   summary: {
@@ -252,7 +320,15 @@ export interface StepOutcome {
   readonly message: AssistantMessage;
   readonly results: readonly ToolResultMessage[];
 }
+/**
+ * Whether a turn takes another step after `StepOutcome`.
+ *
+ * @composition a chain: the terminal is the default decision, and each handler may keep or change what `next`
+ * returns, the outermost having the last word. A handler that fails ends the turn in error. Checked: it returns
+ * `continue` or `stop`.
+ */
 export const AgentContinueHook = Hook.make<StepOutcome, "continue" | "stop", AgentError>("lemma/agent.continue", {
+  check: { output: (value) => (value === "continue" || value === "stop" ? undefined : `expected "continue" or "stop", got ${JSON.stringify(value)}`) },
   summary: { input: (outcome) => ({ step: outcome.step, results: outcome.results.length }), output: (decision) => ({ decision }) },
 });
 

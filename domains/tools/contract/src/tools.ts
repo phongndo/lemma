@@ -1,6 +1,6 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
-import { Event, Hook, Registry } from "@lemma/core";
+import { Event, Hook, Registry, schemaCheck } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "@lemma/llm";
 import type { ResultCredit } from "@lemma/contracts";
@@ -107,8 +107,14 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
 /**
  * Around every execution: timeouts, rewrites, logging. A handler that does not
  * call `next` skips the tool and supplies the result itself.
+ *
+ * @composition a chain around every call, then the guards, then the tool: a handler rewrites the call it hands
+ * `next`, changes the result `next` returns, or answers without `next` (no guard or tool runs). A handler that fails
+ * becomes an error result the model reads. Checked: what a handler hands on is a `ToolInvocation`, what it returns a
+ * `ToolResult`.
  */
 export const ToolExecuteHook = Hook.make<ToolInvocation, ToolResult, ToolError>("lemma/tool.execute", {
+  check: { input: schemaCheck(ToolInvocation), output: schemaCheck(ToolResult) },
   summary: {
     input: (call) => ({ tool: call.name, call: call.toolCallId }),
     output: (result) => ({ error: result.isError === true, parts: result.content.length }),
@@ -136,6 +142,10 @@ export interface ToolGuard {
  * The tools the model may call: `PluginContext.add(Tools, tool)`. A tool belongs to the plugin that added it, which its
  * calls are attributed to, and leaves with it; a name is one plugin's at a time (another adding it fails `Conflict`),
  * and a plugin's replacement takes over its names. `ToolRunner` lists and runs them.
+ *
+ * @composition all tools, one per name (another plugin adding a name fails `Conflict`); a throw or failure from
+ * `execute` becomes an error result the model reads. Checked when added: a name, a description, a Schema input, an
+ * `execute` function.
  */
 export const Tools = Registry.make<Tool>("lemma/tools", {
   key: (tool) => tool.name,
@@ -152,7 +162,12 @@ export const Tools = Registry.make<Tool>("lemma/tools", {
   },
 });
 
-/** The guards every call passes before its tool runs: `PluginContext.add(Guards, { tool, guard })`. */
+/**
+ * The guards every call passes before its tool runs: `PluginContext.add(Guards, { tool, guard })`.
+ *
+ * @composition every guard for the call's tool and for `*` runs, and any `deny` wins; a guard that fails denies, so a
+ * broken guard never lets a call through.
+ */
 export const Guards = Registry.make<ToolGuard>("lemma/tools.guards", {
   check: (value) => {
     const item = value as Partial<ToolGuard> | null;

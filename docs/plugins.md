@@ -79,6 +79,12 @@ so an item that names no phase shows instead of the bundled default. An
 `order` places an item within its phase ([the core](../packages/core/README.md#plugin-defined-hooks)
 says how).
 
+Each hook and registry says how its handlers or items compose, what a
+failing one does, and what it checks of them, in the `@composition` line of
+its doc comment, where your editor shows it. A hook checks the shape of what
+a handler hands on and returns where TypeScript cannot (a plugin written in
+JavaScript), so a wrong shape fails as that plugin's fault.
+
 What a plugin adds, intercepts, or observes belongs to it and leaves when it
 stops, so it cleans up nothing itself but what it holds outside them (a
 timer, a socket: `onCleanup`). Settings › Plugins shows each plugin's wiring

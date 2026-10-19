@@ -1,6 +1,6 @@
-import { Context, Data, Effect, Schema, Stream } from "effect";
+import { Context, Data, Effect, Predicate, Schema, Stream } from "effect";
 import type { Scope } from "effect";
-import { Event, Hook } from "@lemma/core";
+import { Event, Hook, schemaCheck } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
 import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
@@ -211,6 +211,9 @@ export const SessionRemoved = Event.make<{ readonly sessionId: string }>("lemma/
  * `Sessions` runs each removal through it, so a handler's rule holds for every
  * client and every plugin. Work that writes to the session holds it instead
  * (see `Sessions.hold`).
+ *
+ * @composition a chain: a handler refuses by failing instead of calling `next`, which fails `remove` with its error
+ * and keeps the session; one that calls `next` and then fails reports its failure after the session is gone.
  */
 export const SessionRemoveHook = Hook.make<{ readonly sessionId: string }, void, SessionError>("lemma/session.remove");
 
@@ -225,8 +228,22 @@ export interface CheckoutRequest {
  * Around every `Sessions.checkout`, whoever calls it; the terminal moves the leaf. A handler refuses a checkout by
  * failing instead of calling `next` (a plugin keeping a session on its branch while it works there), or acts on one
  * after `next` succeeded. A provider of `Sessions` runs each checkout through it.
+ *
+ * @composition a chain: a handler refuses by failing instead of calling `next`, which fails `checkout` with its error
+ * and leaves the leaf where it was. Checked: what a handler hands on is a checkout request, what it returns a
+ * `SessionInfo`.
  */
 export const SessionCheckoutHook = Hook.make<CheckoutRequest, SessionInfo, SessionError>("lemma/session.checkout", {
+  check: {
+    input: (value) =>
+      Predicate.isObject(value) &&
+      typeof value.sessionId === "string" &&
+      typeof value.eventId === "string" &&
+      (value.from === undefined || typeof value.from === "string")
+        ? undefined
+        : "expected a checkout: { sessionId, eventId, from? }, all strings",
+    output: (value) => schemaCheck(SessionInfo)(value),
+  },
   summary: { input: (request) => ({ session: request.sessionId, to: request.eventId }) },
 });
 

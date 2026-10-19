@@ -1,4 +1,4 @@
-import { Cause, Context, Data, Deferred, Effect, Equal, Exit, Fiber, Result, Schema, Stream } from "effect";
+import { Cause, Context, Data, Deferred, Effect, Equal, Exit, Fiber, Predicate, Result, Schema, Stream } from "effect";
 import type { Scope } from "effect";
 import { Event, Hook, Registry } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
@@ -314,6 +314,10 @@ const decodeProvider = Schema.decodeUnknownResult(ProviderSpec);
  * a company gateway, a local server. A provider belongs to the plugin that added it and leaves with it; an id is one
  * plugin's at a time, and one a built-in or the user's provider has is left out, with a warning, as is one speaking a
  * protocol the llm plugin does not know.
+ *
+ * @composition all providers, one per id (another plugin adding an id fails `Conflict`); one whose id a built-in or
+ * the user's provider has, or whose protocol the llm plugin does not know, is left out with a warning. Checked
+ * against `ProviderSpec` when added.
  */
 export const Providers = Registry.make<ProviderSpec>("lemma/llm.providers", {
   key: (provider) => provider.id,
@@ -425,8 +429,14 @@ export class LlmError extends Data.TaggedError("LlmError")<{
  * fails one a handler changed, sending nothing (`streamThroughHook`). A change to the request, routing it to another
  * model among them, belongs where it is logged and credited: `AgentRequestHook` (`@lemma/agent`). The terminal is the
  * provider.
+ *
+ * @composition a chain around the model call: a handler times, gates, or answers it (returning a stream of its own
+ * without `next`), or wraps the stream `next` returns. A handler that fails fails the call as a provider error would.
+ * Checked: it returns a stream.
  */
-export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, LlmError>, LlmError>("lemma/llm.request");
+export const LlmRequestHook = Hook.make<LlmRequest, Stream.Stream<StreamEvent, LlmError>, LlmError>("lemma/llm.request", {
+  check: { output: (value) => (Stream.isStream(value) ? undefined : "expected the call's stream (an Effect Stream)") },
+});
 
 /**
  * `LlmRequestHook` around `terminal`, as a provider of `Llm` runs it in `stream`: `terminal` gets the request as it was
@@ -477,8 +487,17 @@ export interface ProviderHeaders {
  * as the stream's `provider` event, and logged with the answer or the failed attempt; values never are, as headers
  * carry credentials. So headers are the provider's transport, not part of the request the log rebuilds
  * (`rebuildRequest`): what changes the model's behavior goes in `LlmRequest` (its `providerOptions`).
+ *
+ * @composition a chain: each handler returns the headers `next` gave it, changed (`null` drops one). A handler that
+ * fails fails the call before it is sent. Checked: it returns a record of strings and nulls.
  */
 export const LlmProviderHeadersHook = Hook.make<ProviderHeaders, Readonly<Record<string, string | null>>>("lemma/llm.provider-headers", {
+  check: {
+    output: (value) =>
+      Predicate.isObject(value) && Object.values(value).every((header) => header === null || typeof header === "string")
+        ? undefined
+        : "expected headers: { [name]: string | null }",
+  },
   summary: { input: (input) => ({ provider: input.provider, headers: Object.keys(input.headers).length }) },
 });
 

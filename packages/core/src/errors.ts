@@ -61,8 +61,12 @@ export class EventError extends Data.TaggedError("EventError")<{
   readonly message: string;
 }> {}
 
+/**
+ * `InvalidInput`: what a handler handed `next` failed the hook's `check.input`. `InvalidOutput`: what a handler returned
+ * failed its `check.output`. Either names the handler's plugin.
+ */
 export class HookError extends Data.TaggedError("HookError")<{
-  readonly reason: "PointConflict" | "InvalidOrder" | "OwnerClosed" | "NextAlreadyCalled" | "InvocationEnded";
+  readonly reason: "PointConflict" | "InvalidOrder" | "OwnerClosed" | "NextAlreadyCalled" | "InvocationEnded" | "InvalidInput" | "InvalidOutput";
   readonly hook: string;
   readonly pluginId?: string;
   readonly message: string;

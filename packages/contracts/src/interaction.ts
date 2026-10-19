@@ -1,6 +1,6 @@
 import { Context, Data, Schema } from "effect";
 import type { Effect } from "effect";
-import { Hook } from "@lemma/core";
+import { Hook, schemaCheck } from "@lemma/core";
 
 /**
  * Who is asking, so a client answers only the questions it caused: `session:<id>`
@@ -68,8 +68,14 @@ export class InteractionError extends Data.TaggedError("InteractionError")<{
  * fiber interrupts the handler chain, which withdraws the question (a login
  * callback that arrives first cancels a paste-the-code prompt; the transport
  * then tells clients to close it).
+ *
+ * @composition a chain: the first handler that can ask someone answers without `next`; one with nobody to ask passes
+ * it on, and the terminal fails `Unavailable`. A handler that fails fails the question. Checked: what a handler hands
+ * on is an `InteractionRequest`, what it returns an `InteractionAnswer`.
  */
-export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, InteractionError>("lemma/interaction.request");
+export const InteractionHook = Hook.make<InteractionRequest, InteractionAnswer, InteractionError>("lemma/interaction.request", {
+  check: { input: schemaCheck(InteractionRequest), output: schemaCheck(InteractionAnswer) },
+});
 
 /**
  * Questions for the human, provided by the host itself. Each runs

@@ -18,12 +18,14 @@ export {
 } from "./errors.ts";
 export { Event, Events } from "./events.ts";
 export type { Observer, ObserveOptions } from "./events.ts";
+export { schemaCheck } from "./checks.ts";
 export { Hook, Hooks, PluginContext } from "./hooks.ts";
 export type {
   BackgroundOptions,
   FaultOptions,
   HandlerStep,
   Handler,
+  HookCheck,
   HookOptions,
   HookSummary,
   InvokeOptions,

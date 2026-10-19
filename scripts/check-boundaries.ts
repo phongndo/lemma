@@ -272,6 +272,31 @@ for (const heading of ["## What to plug into", "## Coming from Pi"]) {
 }
 report("Domain READMEs missing what their contracts offer", docProblems, "domain docs: ok");
 
+// Every hook and registry a contract declares says how its handlers or items compose, and what a failing one does,
+// where it is declared: an `@composition` line in the doc comment right above it. A plugin author reads it there, in
+// their editor, rather than learning it from the code that reads the registry or invokes the hook.
+const compositionPoint = /^export const ([A-Z]\w*)\s*=\s*(?:Hook|Registry)\.make\b/;
+const compositionProblems: string[] = [];
+for (const dir of [...domainPackages.filter((pkg) => pkg.dir.endsWith("/contract")).map((pkg) => join(pkg.dir, "src")), join(root, "packages/contracts/src")]) {
+  for (const file of walk(dir).filter((path) => /\.(ts|tsx)$/.test(path))) {
+    const lines = readFileSync(file, "utf8").split("\n");
+    lines.forEach((line, index) => {
+      const name = compositionPoint.exec(line)?.[1];
+      if (name === undefined) return;
+      let start = index - 1;
+      if (!(lines[start] ?? "").trim().endsWith("*/")) {
+        compositionProblems.push(`${relative(root, file)}:${index + 1}: \`${name}\` has no doc comment saying how it composes (\`@composition\`)`);
+        return;
+      }
+      while (start > 0 && !lines[start]!.trim().startsWith("/**")) start--;
+      if (!lines.slice(start, index).some((each) => each.includes("@composition"))) {
+        compositionProblems.push(`${relative(root, file)}:${index + 1}: \`${name}\`'s doc comment does not say how it composes (\`@composition\`)`);
+      }
+    });
+  }
+}
+report("Extension points that do not say how they compose", compositionProblems, "composition docs: ok");
+
 const pluginProblems: string[] = [];
 for (const pkg of pluginPackages) {
   const home = relative(root, pkg.dir);

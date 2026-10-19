@@ -62,6 +62,9 @@ export interface Command extends Omit<CommandInfo, "source"> {
  * The commands clients list and run: `PluginContext.add(Commands, command)`. A command belongs to the plugin that added
  * it and leaves with it; an id is one plugin's at a time (another adding it fails `Conflict`), and a plugin's
  * replacement takes over its ids. `CommandRunner` lists and runs them.
+ *
+ * @composition all commands, one per id (another plugin adding an id fails `Conflict`); a command whose `run` fails
+ * reports its failure to whoever ran it.
  */
 export const Commands = Registry.make<Command>("lemma/commands", {
   key: (command) => command.id,
