@@ -149,8 +149,11 @@ export function makeLlmPlugin(options: Options = {}) {
         else yield* Effect.logWarning(`llm: the configured provider "${entry.id}" speaks "${entry.api}", which this plugin does not`);
       }
       for (const entry of custom.values()) providers.set(entry.id, customProvider(entry));
-      /** Each built-in's catalog of the API's models, which a ChatGPT plan's list replaces while signed in. */
-      const apiModels = new Map(builtins.map((provider) => [provider.id, provider.models]));
+      /**
+       * Each built-in's catalog of the API's models, which a ChatGPT plan's list replaces while signed in. Only those
+       * served: one the user's provider replaced has none, so nothing (a logout) puts its models on the user's.
+       */
+      const apiModels = new Map(builtins.filter((provider) => providers.get(provider.id) === provider).map((provider) => [provider.id, provider.models]));
 
       /**
        * Saves a change to this plugin's own `providers` list, in the config file its config comes from. The change

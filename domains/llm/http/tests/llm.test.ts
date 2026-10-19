@@ -621,6 +621,20 @@ describe("model catalogs", () => {
     expect(source.served()).toBe(0);
   });
 
+  it("keeps the user's provider that replaces a built-in its own models after a logout", async () => {
+    const { plugins } = setup();
+    const refs = await runWith(
+      plugins,
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        yield* llm.logout("faux");
+        return (yield* llm.models()).map((model) => model.ref);
+      }),
+      { "llm.http": { providers: [{ id: "faux", api: "openai-completions", baseUrl: "https://private.test/v1", models: [{ id: "private" }] }] } },
+    );
+    expect(refs).toEqual(["faux/private"]);
+  });
+
   it("tells clients after a login or logout, though the models stayed the same", async () => {
     const { plugins } = setup();
     const heard = await runWith(
