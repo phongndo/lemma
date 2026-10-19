@@ -1,0 +1,25 @@
+{
+  "name": "@lemma/example-isolated",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tools whose code runs in a worker thread, apart from the host: a stuck one is stopped, and a reload frees its code",
+  "type": "module",
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./isolated.ts"
+  }
+}

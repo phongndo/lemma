@@ -3548,6 +3548,31 @@ importers:
         specifier: 5.0.4
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  examples/isolated:
+    dependencies:
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../domains/tools/contract
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@lemma/tools-registry':
+        specifier: workspace:*
+        version: link:../../domains/tools/registry
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   examples/notes:
     dependencies:
       '@lemma/agent':
