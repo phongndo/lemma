@@ -98,7 +98,9 @@ describe("in a turn", () => {
       "# Cache misses\n\n- The date in the prompt changes daily (agent.ts)\n\n- Tools added mid-session\n",
     );
     expect(requests[0]!.system).not.toContain("Your research notes");
-    expect(requests[3]!.system).toContain("- cache-misses: Cache misses");
+    // The notes section is told as an update where it changed, as the prompt the model was given stays.
+    expect(requests[3]!.system).toBe(requests[0]!.system);
+    expect(JSON.stringify(requests[3]!.messages)).toContain("- cache-misses: Cache misses");
     expect(JSON.stringify(requests[4]!.messages)).toContain("cache-misses:3: - The date in the prompt changes daily (agent.ts)");
   });
 

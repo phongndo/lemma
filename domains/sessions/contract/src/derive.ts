@@ -1,6 +1,7 @@
 import type { Message, ThinkingLevel, ToolSpec } from "@lemma/llm";
 import { LlmRequest } from "@lemma/llm";
-import type { SessionEvent } from "./sessions.ts";
+import type { Contribution, EventData, SectionUpdate, SessionEvent } from "./sessions.ts";
+import { splitSystem } from "./trajectory.ts";
 
 /**
  * Pure projections over session events. Every reader (the agent loop, the
@@ -50,6 +51,8 @@ export function messageOf(event: SessionEvent): Message | undefined {
       return data.message.role === "assistant" && data.message.stopReason === "aborted" ? { ...data.message, stopReason: "stop" } : data.message;
     case "context":
       return { role: "user", content: data.content, timestamp: event.at };
+    case "prompt-update":
+      return { role: "user", content: [{ type: "text", text: promptUpdateText(data) }], timestamp: event.at };
     case "context-edit":
     case "turn-start":
     case "turn-end":
@@ -64,6 +67,42 @@ export function messageOf(event: SessionEvent): Message | undefined {
     default:
       return unknownEvent(data);
   }
+}
+
+/** A `prompt-update` event as the model reads it: a user message, from the harness. */
+export function promptUpdateText(data: Extract<EventData, { readonly type: "prompt-update" }>): string {
+  const lines = ["<system-update>", "From Lemma, the harness, not from the user."];
+  if (data.sections.length > 0) lines.push("Each section below replaces the part of your system prompt it corresponds to.");
+  for (const section of data.sections) {
+    lines.push(section.text === "" ? `<section id="${section.id}" removed="true"/>` : `<section id="${section.id}">\n${section.text}\n</section>`);
+  }
+  if (data.unavailable !== undefined) {
+    lines.push(
+      data.unavailable.length === 0
+        ? "Every tool declared to you is available again."
+        : `These tools are not available now, and calls to them are refused: ${data.unavailable.join(", ")}.`,
+    );
+  }
+  lines.push("</system-update>");
+  return lines.join("\n");
+}
+
+/** A `compaction` event as the model reads it, in place of the history it replaces: its summary. */
+export function summaryText(data: Extract<EventData, { readonly type: "compaction" }>): string {
+  return `<summary>\nThe conversation so far, summarized:\n\n${data.summary}\n</summary>`;
+}
+
+/**
+ * The index on `branch` of the latest request in the model's view that declared the prompt afresh (`restart`), or -1
+ * for none: a `prompt-update` event at or before it is no longer sent, as that request said it all again.
+ */
+export function restartedAt(branch: readonly SessionEvent[]): number {
+  const { start } = modelView(branch);
+  for (let i = branch.length - 1; i >= start; i--) {
+    const data = branch[i]!.data;
+    if (data.type === "request" && data.restart !== undefined) return i;
+  }
+  return -1;
 }
 
 const unknownEvent = (data: never): undefined => {
@@ -82,32 +121,36 @@ export interface ModelEntry {
   readonly context?: true;
 }
 
+/** What the model's view is derived for (`modelEntries`). */
+export interface ViewOptions {
+  /**
+   * For a request that declares its system prompt afresh (`restart`), not yet on the branch: it says every section
+   * again, so no `prompt-update` before it is sent.
+   */
+  readonly restart?: boolean;
+}
+
 /**
  * The model's view of a branch, message by message, each with the event it comes from: the latest `compaction`'s
  * summary in place of everything before its `firstKeptId`, then each event's message (`messageOf`) from there, tool
- * results in the order the model made their calls. `deriveMessages` is its messages.
+ * results in the order the model made their calls. A `prompt-update` is in it until a request declares the prompt
+ * afresh (`restartedAt`, or `options.restart` for the request to come). `deriveMessages` is its messages.
  */
-export function modelEntries(branch: readonly SessionEvent[]): ModelEntry[] {
+export function modelEntries(branch: readonly SessionEvent[], options: ViewOptions = {}): ModelEntry[] {
   const { start, compaction } = modelView(branch);
+  const declared = options.restart === true ? branch.length : restartedAt(branch);
   const summary = compaction === undefined ? undefined : branch[compaction]!;
   const entries: ModelEntry[] =
     summary?.data.type !== "compaction"
       ? []
-      : [
-          {
-            message: {
-              role: "user",
-              content: [{ type: "text", text: `<summary>\nThe conversation so far, summarized:\n\n${summary.data.summary}\n</summary>` }],
-              timestamp: summary.at,
-            },
-            index: compaction!,
-            summary: true,
-          },
-        ];
+      : [{ message: { role: "user", content: [{ type: "text", text: summaryText(summary.data) }], timestamp: summary.at }, index: compaction!, summary: true }];
   for (let index = start; index < branch.length; index++) {
     const event = branch[index]!;
+    if (event.data.type === "prompt-update" && index <= declared) continue;
     const message = messageOf(event);
-    if (message !== undefined) entries.push(event.data.type === "context" ? { message, index, context: true } : { message, index });
+    if (message === undefined) continue;
+    // A prompt update is the harness's context: after a response's results too, so the calls keep them.
+    entries.push(event.data.type === "context" || event.data.type === "prompt-update" ? { message, index, context: true } : { message, index });
   }
   return inCallOrder(afterResults(edited(branch, entries)));
 }
@@ -195,8 +238,30 @@ function afterResults(entries: ModelEntry[]): ModelEntry[] {
  * Model history for a branch: `modelEntries`' messages. The latest `compaction` replaces everything before its
  * `firstKeptId` with a summary message.
  */
-export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
-  return modelEntries(branch).map((entry) => entry.message);
+export function deriveMessages(branch: readonly SessionEvent[], options: ViewOptions = {}): Message[] {
+  return modelEntries(branch, options).map((entry) => entry.message);
+}
+
+/** The model's history before a request, and from where its thinking was made under the request's prefix. */
+export interface History {
+  readonly messages: Message[];
+  /**
+   * Thinking in the messages before this index was made under another system prompt, tools, or start of history (a
+   * request has declared them afresh since): `LlmRequest.thinkingFrom`. Absent when nothing before it has thinking.
+   */
+  readonly thinkingFrom?: number;
+}
+
+/** `deriveMessages`, with where the thinking made under another prefix ends (`History.thinkingFrom`). */
+export function deriveHistory(branch: readonly SessionEvent[], options: ViewOptions = {}): History {
+  const entries = modelEntries(branch, options);
+  // The latest request that declared the prompt afresh: the messages before it were made under another prefix.
+  const declared = options.restart === true ? branch.length : restartedAt(branch);
+  const before = entries.filter((entry) => entry.index < declared).length;
+  const thinking = entries
+    .slice(0, before)
+    .some((entry) => entry.message.role === "assistant" && entry.message.content.some((block) => block.type === "thinking"));
+  return { messages: entries.map((entry) => entry.message), ...(thinking ? { thinkingFrom: before } : {}) };
 }
 
 /**
@@ -231,22 +296,69 @@ export interface RequestState {
   readonly tools?: readonly ToolSpec[];
   /** The `nested` tools offered beside `tools`; undefined when the log predates their being logged. */
   readonly nested?: readonly string[];
+  /** The last request's contributions: who made its system prompt and tools. */
+  readonly contributions?: readonly Contribution[];
+  /**
+   * Each section as the model was last told it: the system prompt's, as the request that declared it splits by its
+   * sizes (`splitSystem`), then each `prompt-update` event's since. Absent when the logged prompt does not split so.
+   */
+  readonly sections?: readonly SectionUpdate[];
+  /** The declared tools a call to which is refused, as the latest `prompt-update` since the prompt was declared said. */
+  readonly unavailable?: readonly string[];
 }
 
-/** The request state after `event`: a `request` event's header, its omitted fields kept from `state`; any other, `state`. */
+/** The non-empty sections `system` is made of, by its request's contributions; undefined when it does not split by them. */
+function sectionsOf(system: string | undefined, contributions: readonly Contribution[]): SectionUpdate[] | undefined {
+  const texts = splitSystem(system, contributions);
+  if (texts === undefined) return undefined;
+  return contributions
+    .filter((contribution) => contribution.kind === "system")
+    .flatMap((contribution, i) => (texts[i] === "" ? [] : [{ id: contribution.label, source: contribution.source, text: texts[i]! }]));
+}
+
+/** `sections` with `updates` made: a section with new text replaces its namesake, or comes last; one with none goes. */
+function updated(sections: readonly SectionUpdate[], updates: readonly SectionUpdate[]): SectionUpdate[] {
+  const next = [...sections];
+  for (const update of updates) {
+    const at = next.findIndex((section) => section.id === update.id);
+    if (update.text === "") {
+      if (at !== -1) next.splice(at, 1);
+    } else if (at === -1) next.push(update);
+    else next[at] = update;
+  }
+  return next;
+}
+
+/**
+ * The request state after `event`: a `request` event's header, its omitted fields kept from `state`; a
+ * `prompt-update` event's sections and unavailable tools; any other, `state`.
+ */
 export function nextRequestState(state: RequestState, event: SessionEvent): RequestState {
   const data = event.data;
+  if (data.type === "prompt-update") {
+    return {
+      ...state,
+      ...(state.sections === undefined ? {} : { sections: updated(state.sections, data.sections) }),
+      ...(data.unavailable === undefined ? {} : { unavailable: data.unavailable }),
+    };
+  }
   if (data.type !== "request") return state;
+  const system = data.system ?? state.system;
+  const declared = data.restart !== undefined || data.system !== undefined || state.sections === undefined;
+  const sections = declared ? sectionsOf(system, data.contributions) : state.sections;
   return {
     model: data.model,
     ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
-    ...(data.system !== undefined ? { system: data.system } : state.system === undefined ? {} : { system: state.system }),
+    ...(system === undefined ? {} : { system }),
     ...(data.tools !== undefined ? { tools: data.tools } : state.tools === undefined ? {} : { tools: state.tools }),
     ...(data.nested !== undefined ? { nested: data.nested } : state.nested === undefined ? {} : { nested: state.nested }),
+    contributions: data.contributions,
+    ...(sections === undefined ? {} : { sections }),
+    ...(data.restart === undefined && state.unavailable !== undefined ? { unavailable: state.unavailable } : {}),
   };
 }
 
-/** System prompt and tools in effect after the last `request` on the branch, resolving omitted (unchanged) fields. */
+/** System prompt, tools, and sections in effect after the last `request` on the branch, and the `prompt-update`s since. */
 export function requestState(branch: readonly SessionEvent[]): RequestState {
   let state: RequestState = {};
   for (const event of branch) state = nextRequestState(state, event);
@@ -255,17 +367,18 @@ export function requestState(branch: readonly SessionEvent[]): RequestState {
 
 /**
  * The request a `request` event sent: its header resolved (`state`, after the event), the model's history before it
- * (`messages`, `deriveMessages` of the branch before it), and what the event logged beside them. What
- * `rebuildRequest` returns, for a caller that keeps `state` and `messages` as it goes rather than deriving them anew.
- * Built from logged events, which were checked as they were logged and as they are read, so not checked again: a
- * long history's messages would be, on every request.
+ * (`history`, `deriveHistory` of the branch before it, with the event's `restart`), and what the event logged beside
+ * them. What `rebuildRequest` returns, for a caller that keeps `state` and `history` as it goes rather than deriving
+ * them anew. Built from logged events, which were checked as they were logged and as they are read, so not checked
+ * again: a long history's messages would be, on every request.
  */
-export function requestFrom(state: RequestState, messages: readonly Message[], logged: SessionEvent, sessionId?: string): LlmRequest {
+export function requestFrom(state: RequestState, history: History, logged: SessionEvent, sessionId?: string): LlmRequest {
   const providerOptions = logged.data.type === "request" ? logged.data.providerOptions : undefined;
   return new LlmRequest(
     {
       model: state.model!,
-      messages,
+      messages: history.messages,
+      ...(history.thinkingFrom === undefined ? {} : { thinkingFrom: history.thinkingFrom }),
       ...(state.system === undefined ? {} : { system: state.system }),
       ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
       ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
@@ -283,8 +396,14 @@ export function requestFrom(state: RequestState, messages: readonly Message[], l
  */
 export function rebuildRequest(branch: readonly SessionEvent[], requestId: string, sessionId?: string): LlmRequest | undefined {
   const index = branch.findIndex((event) => event.id === requestId);
-  if (index === -1 || branch[index]!.data.type !== "request") return undefined;
-  return requestFrom(requestState(branch.slice(0, index + 1)), deriveMessages(branch.slice(0, index)), branch[index]!, sessionId);
+  const data = branch[index]?.data;
+  if (data?.type !== "request") return undefined;
+  return requestFrom(
+    requestState(branch.slice(0, index + 1)),
+    deriveHistory(branch.slice(0, index), { restart: data.restart !== undefined }),
+    branch[index]!,
+    sessionId,
+  );
 }
 
 /*

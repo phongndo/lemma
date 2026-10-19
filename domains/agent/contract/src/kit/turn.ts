@@ -5,7 +5,7 @@ import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "../agent.ts";
 import { addUsage, emptyUsage } from "@lemma/llm";
-import { deriveMessages, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
+import { deriveHistory, deriveMessages, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
 import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
@@ -23,7 +23,17 @@ import type {
   ToolSpec,
   Usage,
 } from "@lemma/llm";
-import type { Contribution, EventData, ProviderAnswer, RequestState, SessionEvent, Sessions, TurnEndReason } from "@lemma/sessions";
+import type {
+  Contribution,
+  EventData,
+  ProviderAnswer,
+  RequestRestart,
+  RequestState,
+  SectionUpdate,
+  SessionEvent,
+  Sessions,
+  TurnEndReason,
+} from "@lemma/sessions";
 import type { ToolRunner } from "@lemma/tools";
 import { handlerChanges } from "./credit.ts";
 import { partialMessage } from "./live.ts";
@@ -101,8 +111,56 @@ const specChars = (spec: ToolSpec): number => {
 /** The same spec objects, in the same order: unchanged without comparing their contents. */
 const sameSpecs = (logged: readonly ToolSpec[] | undefined, specs: readonly ToolSpec[]): boolean =>
   logged !== undefined && logged.length === specs.length && logged.every((spec, index) => spec === specs[index]);
+
+/**
+ * Why a request declares its prompt and tools afresh (`RequestRestart`), or undefined when it extends the previous
+ * request on `branch`: that request said what it asked of `model` with the same tools (`specs` it declared, or fewer),
+ * and no compaction has replaced the start of its history since.
+ */
+function restartOf(branch: readonly SessionEvent[], previous: RequestState, model: string, specs: readonly ToolSpec[]): RequestRestart | undefined {
+  // None it can continue: the branch has no request, or one whose prompt does not split into its sections.
+  if (previous.model === undefined || previous.system === undefined || previous.sections === undefined || previous.contributions === undefined) return "start";
+  for (let i = branch.length - 1; i >= 0; i--) {
+    const type = branch[i]!.data.type;
+    if (type === "request") break;
+    if (type === "compaction") return "compaction";
+    // What the model sees of earlier events changed: no longer the previous request's history with more after it.
+    if (type === "context-edit") return "edit";
+  }
+  if (model !== previous.model) return "model";
+  const declared = new Map((previous.tools ?? []).map((spec) => [spec.name, spec]));
+  const added = specs.some((spec) => {
+    const was = declared.get(spec.name);
+    return was === undefined || (was !== spec && !isDeepStrictEqual(was, spec));
+  });
+  return added ? "tools" : undefined;
+}
+
+/**
+ * What a request that extends the previous one tells the model in a `prompt-update` event: each section whose text differs
+ * from what the model was last told (`RequestState.sections`), with "" for one gone; and, when that changed, the declared
+ * tools it no longer offers (`offered`, by name: the registry refuses those, `ToolInvocation.offered`; a tool now only
+ * nested is offered still, and runs). Undefined when nothing changed.
+ */
+function promptUpdate(
+  previous: RequestState,
+  sections: readonly SystemSection[],
+  offeredNames: readonly string[],
+): { readonly sections: SectionUpdate[]; readonly unavailable?: string[] } | undefined {
+  const told = previous.sections ?? [];
+  const now = sections.filter((section) => section.text.length > 0);
+  const changed: SectionUpdate[] = [
+    ...now.filter((section) => told.find((known) => known.id === section.id)?.text !== section.text).map(({ id, source, text }) => ({ id, source, text })),
+    ...told.filter((known) => !now.some((section) => section.id === known.id)).map(({ id, source }) => ({ id, source, text: "" })),
+  ];
+  const offered = new Set(offeredNames);
+  const unavailable = (previous.tools ?? []).map((spec) => spec.name).filter((name) => !offered.has(name));
+  const toolsChanged = !isDeepStrictEqual(unavailable, previous.unavailable ?? []);
+  if (changed.length === 0 && !toolsChanged) return undefined;
+  return { sections: changed, ...(toolsChanged ? { unavailable } : {}) };
+}
 /** A prompt as a turn places it: a user message carrying the submission's id. */
-interface Placed {
+export interface Placed {
   readonly requestId: string;
   readonly content: PromptContent;
   /** Who shaped it (`AgentInputHook`'s handlers), logged with it. */
@@ -512,24 +570,45 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         .pipe(Effect.mapError(hookError("AgentRequestHook")));
       const handlers = inChainOrder(steps).map((step) => creditOf(step, handlerChanges(step, appended.get(step.pluginId) ?? [])));
       const model = plan.model === asking.ref ? asking : yield* llm.model(plan.model).pipe(Effect.mapError(failedAs(sessionId, "NoModel")));
-      const system = plan.sections
-        .map((section) => section.text)
-        .filter((text) => text.length > 0)
-        .join("\n\n");
       // A nested tool is offered but not declared, when a tool that runs others is there to call it.
       const declared = declaredTools(plan.tools);
       const specs: ToolSpec[] = declared.map((tool) => tool.spec);
-      const contributions: Contribution[] = [
-        ...plan.sections.map((section): Contribution => ({ source: section.source, kind: "system", label: section.id, chars: section.text.length })),
-        ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: specChars(tool.spec) })),
-      ];
       // The branch as handlers left it (one may have appended a compaction), and what the request before it said.
-      const before = yield* branchNow;
+      let before = yield* branchNow;
       const previous = state.request!;
-      const history = deriveMessages(before);
-      const unchanged = sameSpecs(state.loggedSpecs, specs) || isDeepStrictEqual(previous.tools ?? [], specs);
+      // The prompt and tools stay as the request that declared them sent them, so this one extends its prefix (and the
+      // provider's cache of it); what changed in the sections is told in a `prompt-update` event. Unless it cannot extend it.
+      const restart = restartOf(before, previous, plan.model, specs);
+      if (restart === undefined) {
+        const update = promptUpdate(
+          previous,
+          plan.sections,
+          plan.tools.map((tool) => tool.spec.name),
+        );
+        if (update !== undefined) {
+          yield* append({ type: "prompt-update", turnId, ...update });
+          before = yield* branchNow;
+        }
+      }
+      const system =
+        restart === undefined
+          ? previous.system!
+          : plan.sections
+              .map((section) => section.text)
+              .filter((text) => text.length > 0)
+              .join("\n\n");
+      const sent = restart === undefined ? (previous.tools ?? []) : specs;
+      const contributions: readonly Contribution[] =
+        restart === undefined
+          ? previous.contributions!
+          : [
+              ...plan.sections.map((section): Contribution => ({ source: section.source, kind: "system", label: section.id, chars: section.text.length })),
+              ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: specChars(tool.spec) })),
+            ];
+      const history = deriveHistory(before, { restart: restart !== undefined });
+      const unchanged = sameSpecs(state.loggedSpecs, sent) || isDeepStrictEqual(previous.tools ?? [], sent);
       // Offered beside them, logged so a call resumed after a restart is held to them (the first request logs none too).
-      const declaredNames = new Set(specs.map((spec) => spec.name));
+      const declaredNames = new Set(sent.map((spec) => spec.name));
       const nested = plan.tools.flatMap((tool) => (declaredNames.has(tool.spec.name) ? [] : [tool.spec.name]));
       const composition = yield* host.composition;
       const logged = yield* append({
@@ -540,13 +619,14 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
         composition: composition.id,
         ...(previous.system === system ? {} : { system }),
-        ...(unchanged ? {} : { tools: specs }),
+        ...(unchanged ? {} : { tools: [...sent] }),
         ...(isDeepStrictEqual(previous.nested, nested) ? {} : { nested }),
+        ...(restart === undefined ? {} : { restart }),
         contributions,
         ...(handlers.length === 0 ? {} : { handlers }),
         ...(plan.providerOptions === undefined ? {} : { providerOptions: plan.providerOptions }),
       });
-      state.loggedSpecs = specs;
+      state.loggedSpecs = sent;
       // Send what the log says was sent: the request as the branch now ending at the request event rebuilds it, from
       // the state kept as the turn appended. Checked against a rebuild from the store's branch where it is `Verify`d.
       const request =
@@ -565,7 +645,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           );
         }
       }
-      const offer: Offer = { offered: plan.tools.map((tool) => tool.spec.name), declared: specs.map((spec) => spec.name) };
+      // A tool the prompt declares that the request no longer offers is refused (`ToolInvocation.offered`), as the
+      // `prompt-update` event told the model.
+      const offer: Offer = { offered: plan.tools.map((tool) => tool.spec.name), declared: sent.map((spec) => spec.name) };
       return { request, model, offer };
     });
 

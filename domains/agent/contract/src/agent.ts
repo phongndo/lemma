@@ -144,8 +144,9 @@ export interface PromptSection {
 /**
  * The system prompt's sections, in order: the agent asks each for its text, then runs `AgentRequestHook`, whose
  * handlers change or drop sections. Its phases are `base` (the agent's base prompt), `body` (where a section naming no
- * phase goes, ordered within it by `order`), and `environment` (the agent's, last): a section in `body` keeps the
- * prompt's stable prefix long, as `environment`'s date changes daily.
+ * phase goes, ordered within it by `order`), and `environment` (the agent's, last). A section whose text changes
+ * between requests does not rewrite the prompt the model was sent: the agent tells the model its new text in a
+ * `prompt-update` event (`@lemma/sessions`), and the next request that declares the prompt afresh carries it.
  *
  * @composition every section is written for each request, in phase order (`base`, `body`, `environment`, then
  * `order`), one per id (another plugin adding an id fails `Conflict`); a section whose text fails fails the request,

@@ -9,10 +9,10 @@ import { Paths } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
 import type { PromptDecision, PromptInput } from "@lemma/agent";
-import { emptyUsage, LlmRequest, LlmRequestHook } from "@lemma/llm";
+import { contentText, emptyUsage, LlmRequest, LlmRequestHook } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
-import type { ToolResultMessage } from "@lemma/llm";
+import type { ToolResultMessage, UserMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
 import sessions from "@lemma/sessions-files";
@@ -443,6 +443,25 @@ describe("agent", () => {
       );
     });
 
+    it("is not told to the model as refused when it becomes nested, as it is still offered and its calls run", async () => {
+      const flip: Tool = { ...nested, name: "flip", nested: undefined as unknown as true };
+      await withAgent({ tools: [flip, runner], scripts: [reply("first"), useTools(call("c1", "flip", {})), reply("ok")] }, ({ requests }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          const a = yield* Agent;
+          yield* a.prompt(id, text("go"));
+          expect(requests[0]!.tools?.map((tool) => tool.name)).toEqual(["echo", "flip", "runner"]);
+          // Its spec unchanged, it is now for the runner only: no longer declared afresh, but still offered.
+          (flip as { nested?: true }).nested = true;
+          yield* a.prompt(id, text("again"));
+          const events = yield* log(id);
+          expect(ofType(events, "request").map((request) => request.restart)).toEqual(["start", undefined, undefined]);
+          expect(ofType(events, "prompt-update").flatMap((update) => update.unavailable ?? [])).toEqual([]);
+          expect([resultOf(requests, "c1").isError, JSON.stringify(resultOf(requests, "c1").content)]).toEqual([false, '[{"type":"text","text":"reached"}]']);
+        }),
+      );
+    });
+
     it("is declared to the model when no tool that runs others is offered, as nothing else would call it", async () => {
       await withAgent({ tools: [nested], scripts: [useTools(call("c1", "nested", {})), reply("ok")] }, ({ requests }) =>
         Effect.gen(function* () {
@@ -560,7 +579,7 @@ describe("agent", () => {
     );
   });
 
-  it("records contributions with plugin ids and omits unchanged system and tools", async () => {
+  it("records contributions with plugin ids, omits unchanged system and tools, and tells a changed section in a prompt update", async () => {
     let calls = 0;
     const context = definePlugin({
       id: "project-notes",
@@ -605,10 +624,71 @@ describe("agent", () => {
           expect(logged[0]!.tools!.map((tool) => tool.name)).toEqual(["echo"]);
           expect(logged[1]!.system).toBeUndefined();
           expect(logged[1]!.tools).toBeUndefined();
-          expect(logged[2]!.system!.endsWith("Notes v2")).toBe(true);
+          // The prompt stays as declared, so the third request extends the second's prefix; the change is told after it.
+          expect(logged[2]!.system).toBeUndefined();
           expect(logged[2]!.tools).toBeUndefined();
-          expect(requests.map((request) => request.system!.slice(-8))).toEqual(["Notes v1", "Notes v1", "Notes v2"]);
+          expect(logged.map((request) => request.restart)).toEqual(["start", undefined, undefined]);
+          expect(ofType(events, "prompt-update")).toEqual([
+            { type: "prompt-update", turnId: expect.any(String), sections: [{ id: "notes", source: "project-notes", text: "Notes v2" }] },
+          ]);
+          expect(requests.map((request) => request.system!.slice(-8))).toEqual(["Notes v1", "Notes v1", "Notes v1"]);
+          expect(requests[2]!.messages.slice(0, requests[1]!.messages.length)).toEqual(requests[1]!.messages);
+          expect(contentText((requests[2]!.messages.at(-1) as UserMessage).content)).toContain('<section id="notes">\nNotes v2\n</section>');
           expect(requests.every((request) => request.tools?.length === 1)).toBe(true);
+          expectLogInvariant(events, id, requests);
+        }),
+    );
+  });
+
+  it("keeps the tools a request declared, refusing one it no longer offers, and declares them afresh for a new tool or model", async () => {
+    let calls = 0;
+    const shout: Tool<{ readonly text: string }> = {
+      name: "shout",
+      description: "Shouts text back.",
+      input: Schema.Struct({ text: Schema.String }),
+      execute: async ({ text: said }) => new ToolResult({ content: [{ type: "text", text: said.toUpperCase() }] }),
+    };
+    // The first turn's second request offers no echo, as a plan mode would; shout is offered from the second turn on.
+    const modes = definePlugin({
+      id: "modes",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          yield* owner.on(AgentRequestHook, (draft, next) => {
+            calls++;
+            const tools = draft.tools.filter((tool) => (calls <= 3 ? tool.spec.name !== "shout" : true) && (calls === 2 ? tool.spec.name !== "echo" : true));
+            return next({ ...draft, tools });
+          });
+        }),
+      ),
+    });
+    await withAgent(
+      {
+        plugins: [modes],
+        tools: [shout],
+        models: ["fake/m1", "fake/m2"],
+        scripts: [useTools(call("c1", "echo", { text: "x" })), useTools(call("c2", "echo", { text: "y" })), reply("one"), reply("two"), reply("three")],
+      },
+      ({ requests, executed }) =>
+        Effect.gen(function* () {
+          const { id } = yield* newSession;
+          const a = yield* Agent;
+          yield* a.prompt(id, text("first"));
+          yield* a.prompt(id, text("second"));
+          yield* a.prompt(id, text("third"), { model: "fake/m2" });
+          const events = yield* log(id);
+          expect(ofType(events, "request").map((request) => request.restart)).toEqual(["start", undefined, undefined, "tools", "model"]);
+          expect(ofType(events, "prompt-update").map((update) => update.unavailable)).toEqual([["echo"], []]);
+          // Still declared, so the prefix holds; the model is told, and its call refused.
+          expect(requests[1]!.tools!.map((tool) => tool.name)).toEqual(["echo"]);
+          expect(contentText((requests[1]!.messages.at(-1) as UserMessage).content)).toContain("refused: echo.");
+          expect(executed).toEqual(["x"]);
+          const refused = ofType(events, "message").find((logged) => logged.message.role === "toolResult" && logged.message.toolCallId === "c2")!;
+          expect(refused.message).toMatchObject({ isError: true });
+          for (const i of [1, 2]) expect(requests[i]!.messages.slice(0, requests[i - 1]!.messages.length)).toEqual(requests[i - 1]!.messages);
+          expect(requests[3]!.tools!.map((tool) => tool.name)).toEqual(["echo", "shout"]);
+          expect(requests[4]!.model).toBe("fake/m2");
+          expect(requests[4]!.system).toContain("fake/m2");
           expectLogInvariant(events, id, requests);
         }),
     );

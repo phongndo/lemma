@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { branchOf, customEvents, deriveMessages, lastPromptText, latestDetails, messageOf, modelEntries, rebuildRequest, requestState } from "../src/derive.ts";
+import {
+  branchOf,
+  customEvents,
+  deriveHistory,
+  deriveMessages,
+  lastPromptText,
+  latestDetails,
+  messageOf,
+  modelEntries,
+  promptUpdateText,
+  rebuildRequest,
+  requestState,
+} from "../src/derive.ts";
 import type { EventData, SessionEvent } from "../src/sessions.ts";
-import { emptyUsage } from "@lemma/llm";
+import { contentText, emptyUsage } from "@lemma/llm";
+import type { Message } from "@lemma/llm";
 
 function log(...items: readonly (EventData | { readonly data: EventData; readonly parent: string })[]): SessionEvent[] {
   const events: SessionEvent[] = [];
@@ -290,7 +303,7 @@ describe("request reconstruction", () => {
   it("resolves omitted system and tools from earlier requests", () => {
     const tool = { name: "read", description: "Read", parameters: {} };
     const events = log(user("one"), request({ system: "SYS", tools: [tool] }), assistant("r1"), user("two"), request({ thinking: "high" }));
-    expect(requestState(events)).toEqual({ model: "p/m", thinking: "high", system: "SYS", tools: [tool] });
+    expect(requestState(events)).toEqual({ model: "p/m", thinking: "high", system: "SYS", tools: [tool], contributions: [] });
 
     const second = rebuildRequest(events, "e5", "sid")!;
     expect(second.system).toBe("SYS");
@@ -301,5 +314,160 @@ describe("request reconstruction", () => {
     const first = rebuildRequest(events, "e2")!;
     expect(first.messages).toHaveLength(1);
     expect(rebuildRequest(events, "e1")).toBeUndefined();
+  });
+});
+
+const thinker = (text: string): EventData => ({
+  type: "message",
+  message: {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking: "hmm", thinkingSignature: "sig" },
+      { type: "text", text },
+    ],
+    api: "anthropic-messages",
+    provider: "p",
+    model: "m",
+    usage: emptyUsage,
+    stopReason: "stop",
+    timestamp: 0,
+  },
+});
+/** A request that declared `system`, made of the sections `parts` (id and text, from plugin `p`). */
+const declared = (parts: readonly (readonly [string, string])[], extra: Partial<Extract<EventData, { type: "request" }>> = {}): EventData =>
+  request({
+    system: parts.map(([, text]) => text).join("\n\n"),
+    contributions: parts.map(([id, text]) => ({ source: "p", kind: "system", label: id, chars: text.length })),
+    restart: "start",
+    ...extra,
+  });
+const promptUpdate = (sections: readonly (readonly [string, string])[], unavailable?: readonly string[]): EventData => ({
+  type: "prompt-update",
+  sections: sections.map(([id, text]) => ({ id, source: "p", text })),
+  ...(unavailable === undefined ? {} : { unavailable }),
+});
+const texts = (messages: readonly Message[]) => messages.map((message) => (message.role === "toolResult" ? "" : contentText(message.content)));
+
+describe("prompt-update events", () => {
+  it("are the model's messages where they stand, saying each changed section and the tools refused", () => {
+    const events = log(
+      user("one"),
+      declared([
+        ["base", "B"],
+        ["env", "date 1"],
+      ]),
+      assistant("r1"),
+      promptUpdate(
+        [
+          ["env", "date 2"],
+          ["notes", ""],
+        ],
+        ["bash"],
+      ),
+      user("two"),
+    );
+    const messages = deriveMessages(events);
+    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user", "user"]);
+    const update = texts(messages)[2]!;
+    expect(update).toBe(promptUpdateText(events[3]!.data as Extract<EventData, { type: "prompt-update" }>));
+    expect(update).toContain("not from the user");
+    expect(update).toContain('<section id="env">\ndate 2\n</section>');
+    expect(update).toContain('<section id="notes" removed="true"/>');
+    expect(update).toContain("refused: bash.");
+    expect(promptUpdateText({ type: "prompt-update", sections: [], unavailable: [] })).toContain("available again");
+  });
+
+  it("fold into the request state: sections as last told, and the tools refused until the prompt is declared again", () => {
+    const events = log(
+      user("one"),
+      declared([
+        ["base", "B"],
+        ["env", "date 1"],
+      ]),
+      promptUpdate(
+        [
+          ["env", "date 2"],
+          ["notes", "N"],
+        ],
+        ["bash"],
+      ),
+      request(),
+    );
+    expect(requestState(events).sections).toEqual([
+      { id: "base", source: "p", text: "B" },
+      { id: "env", source: "p", text: "date 2" },
+      { id: "notes", source: "p", text: "N" },
+    ]);
+    expect(requestState(events).unavailable).toEqual(["bash"]);
+    const again = log(
+      ...events.map((event) => event.data),
+      declared(
+        [
+          ["base", "B"],
+          ["env", "date 2"],
+        ],
+        { restart: "tools" },
+      ),
+    );
+    expect(requestState(again).sections).toEqual([
+      { id: "base", source: "p", text: "B" },
+      { id: "env", source: "p", text: "date 2" },
+    ]);
+    expect(requestState(again).unavailable).toBeUndefined();
+  });
+
+  it("are left out once a request declares the prompt again, and the rebuilt request says so too", () => {
+    const events = log(
+      user("one"),
+      declared([["env", "date 1"]]),
+      assistant("r1"),
+      promptUpdate([["env", "date 2"]]),
+      user("two"),
+      declared([["env", "date 2"]], { restart: "tools" }),
+    );
+    expect(texts(deriveMessages(events))).toEqual(["one", "r1", "two"]);
+    // Built for the restarting request itself: the update it says again is not shown before it either.
+    expect(texts(rebuildRequest(events, "e6")!.messages)).toEqual(["one", "r1", "two"]);
+    // A request before it saw the update.
+    expect(texts(deriveMessages(events.slice(0, 5)))).toEqual(["one", "r1", texts(deriveMessages(events.slice(0, 4)))[2], "two"]);
+  });
+});
+
+describe("thinkingFrom", () => {
+  it("marks the thinking made before the latest request that declared the prompt afresh", () => {
+    const events = log(
+      user("one"),
+      declared([["base", "B"]]),
+      thinker("r1"),
+      user("two"),
+      declared([["base", "B"]], { restart: "model" }),
+      thinker("r2"),
+      user("three"),
+    );
+    expect(deriveHistory(events).thinkingFrom).toBe(3);
+    expect(rebuildRequest(events, "e5")!.thinkingFrom).toBe(3);
+    // Within the first prefix every thinking block was made under it.
+    expect(deriveHistory(events.slice(0, 4)).thinkingFrom).toBeUndefined();
+    expect(rebuildRequest(events, "e2")!.thinkingFrom).toBeUndefined();
+  });
+
+  it("is absent when nothing before the restart thinks", () => {
+    const events = log(user("one"), declared([["base", "B"]]), assistant("r1"), declared([["base", "B"]], { restart: "model" }));
+    expect(rebuildRequest(events, "e4")!.thinkingFrom).toBeUndefined();
+  });
+
+  it("counts the summary and the kept messages before a compaction's restart", () => {
+    const events = log(
+      user("one"),
+      declared([["base", "B"]]),
+      thinker("r1"),
+      user("two"),
+      thinker("r2"),
+      { type: "compaction", summary: "S", firstKeptId: "e4", tokensBefore: 1, source: "c" },
+      declared([["base", "B"]], { restart: "compaction" }),
+    );
+    const rebuilt = rebuildRequest(events, "e7")!;
+    expect(texts(rebuilt.messages)).toEqual([expect.stringContaining("S"), "two", "r2"]);
+    expect(rebuilt.thinkingFrom).toBe(3);
   });
 });

@@ -31,7 +31,12 @@ const REACHED = [
   "tool fail",
   "tool slow",
   "tool output",
-  ...["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail", "requestContext"].map((kind) => `hook ${kind}`),
+  ...["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail", "requestContext", "requestShape"].map((kind) => `hook ${kind}`),
+  // Requests that extend the one before, that declare the prompt afresh, and what changed told between them.
+  "request",
+  "request start",
+  "request compaction",
+  "prompt-update",
   ...["write", "sync", "truncate", "rename", "open"].map((operation) => `disk ${operation}`),
   "crash",
   "crash mid-write",

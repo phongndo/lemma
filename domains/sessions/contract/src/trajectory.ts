@@ -2,7 +2,7 @@ import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
 import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
 import { editApplies, messageOf } from "./derive.ts";
-import type { Contribution, EventData, ProviderAnswer, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
+import type { Contribution, EventData, ProviderAnswer, RequestRestart, SectionUpdate, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
  * The trajectory of a branch: per turn, per step, what the model was sent,
@@ -40,6 +40,8 @@ export interface TrajectoryRequest {
   readonly composition: string;
   /** Messages in the model's history for this call. */
   readonly messages: number;
+  /** It declared its system prompt and tools afresh, and why; absent when it extends the previous request's prefix. */
+  readonly restart?: RequestRestart;
   readonly system?: string;
   readonly sections: readonly TrajectorySection[];
   readonly tools: readonly TrajectoryTool[];
@@ -58,6 +60,14 @@ export interface TrajectoryCompaction {
   readonly tokensBefore: number;
   readonly summary: string;
   readonly usage?: Usage;
+}
+
+/** What a step told the model had changed in its system prompt before its request (a `prompt-update` event). */
+export interface TrajectoryPromptUpdate {
+  readonly eventId: string;
+  readonly at: number;
+  readonly sections: readonly SectionUpdate[];
+  readonly unavailable?: readonly string[];
 }
 
 /** What `AgentContinueHook` decided after a step, and why (the `step-end` event's `decision`). */
@@ -112,6 +122,8 @@ export interface TrajectoryStep {
   readonly tools: readonly TrajectoryToolRun[];
   /** Compactions its request made, before it was logged. */
   readonly compactions: readonly TrajectoryCompaction[];
+  /** What changed in the system prompt that its request told the model, before it was logged. */
+  readonly promptUpdates: readonly TrajectoryPromptUpdate[];
   /** What `AgentContinueHook` decided after it; the turn may still have ended at its step limit, or gone on for steers. */
   readonly decision?: StepDecision;
   /** What the turn did after it, as the log goes on: another step, or its end. Absent while the turn runs. */
@@ -250,6 +262,7 @@ interface MutableStep {
   earlier: TrajectoryAttempt[];
   tools: { -readonly [K in keyof TrajectoryToolRun]: TrajectoryToolRun[K] }[];
   compactions: TrajectoryCompaction[];
+  promptUpdates: TrajectoryPromptUpdate[];
   decision?: StepDecision;
   after?: NonNullable<TrajectoryStep["after"]>;
 }
@@ -282,13 +295,18 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   const messagesBefore = [0];
   // Where each tool call's results are, so a response a `context-edit` omits takes its results out of the count too.
   const resultsOf = new Map<string, number[]>();
+  // `prompt-update` events count apart: from the latest request that declared the prompt afresh (`restart`) on.
+  const updatesBefore = [0];
   branch.forEach((event, position) => {
-    const message = messageOf(event);
+    const update = event.data.type === "prompt-update";
+    const message = update ? undefined : messageOf(event);
     messagesBefore.push(messagesBefore.at(-1)! + (message === undefined ? 0 : 1));
+    updatesBefore.push(updatesBefore.at(-1)! + (update ? 1 : 0));
     if (message?.role === "toolResult") resultsOf.set(message.toolCallId, [...(resultsOf.get(message.toolCallId) ?? []), position]);
   });
   let viewStart = 0;
   let summarized = 0;
+  let declaredAt = -1;
   // The events `context-edit`s so far omit, by position: per target, as the latest that applies to it says.
   const omitted = new Set<number>();
   /** The messages before `position` in the view that an omit leaves out: each omitted event's, and its calls' results. */
@@ -316,7 +334,17 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
     const previous = turn.steps.at(-1);
     const retried = previous !== undefined && previous.response === undefined && previous.attempts.at(-1)?.retry !== undefined;
     const earlier = retried ? [...previous.earlier, ...previous.attempts] : [];
-    const step: MutableStep = { stepId, turnId, index: turn.steps.length + 1, startedAt: at, attempts: [], earlier, tools: [], compactions: [] };
+    const step: MutableStep = {
+      stepId,
+      turnId,
+      index: turn.steps.length + 1,
+      startedAt: at,
+      attempts: [],
+      earlier,
+      tools: [],
+      compactions: [],
+      promptUpdates: [],
+    };
     if (previous !== undefined) previous.after = { kind: "step" };
     turn.steps.push(step);
     stepById.set(stepId, step);
@@ -387,6 +415,8 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         ];
         previousSections = new Map(sections.map((section) => [section.id, section.text ?? section.chars]));
         previousTools = new Map(tools.map((tool) => [tool.name, tool.spec === undefined ? String(tool.chars) : JSON.stringify(tool.spec)]));
+        const told = data.restart === undefined ? updatesBefore[position]! - updatesBefore[Math.max(viewStart, declaredAt + 1)]! : 0;
+        if (data.restart !== undefined) declaredAt = position;
         const step = stepFor(data.turnId, data.stepId, event.at);
         if (step === undefined) return;
         step.request = {
@@ -395,7 +425,8 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           model: data.model,
           ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
           composition: data.composition,
-          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]! - omittedBefore(position),
+          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]! - omittedBefore(position) + told,
+          ...(data.restart === undefined ? {} : { restart: data.restart }),
           ...(system === undefined ? {} : { system }),
           sections,
           tools,
@@ -431,6 +462,19 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
         if (target === undefined || message === undefined || !editApplies(data, message)) return;
         if (data.op === "omit") omitted.add(target);
         else omitted.delete(target);
+        return;
+      }
+      case "prompt-update": {
+        // Told by the request of the step open in its turn.
+        const open = data.turnId === undefined ? undefined : turnById.get(data.turnId)?.steps.at(-1);
+        if (open !== undefined && open.endedAt === undefined) {
+          open.promptUpdates.push({
+            eventId: event.id,
+            at: event.at,
+            sections: data.sections,
+            ...(data.unavailable === undefined ? {} : { unavailable: data.unavailable }),
+          });
+        }
         return;
       }
       case "attempt": {

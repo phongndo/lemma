@@ -77,6 +77,18 @@ same for every request.
    appends (`requestFrom`), which is `rebuildRequest` over the branch ending at
    that event: where `Verify` is on (every simulated run), each request is
    checked against a rebuild from the store's branch.
+
+   A request extends the previous one on the branch (see [Append-only
+   requests](#append-only-requests)): it sends that request's system prompt and
+   declared tools again, and a `prompt-update` event, appended before it, tells
+   the model what changed in the sections and which declared tools it no longer
+   offers. It declares them afresh (`restart` on the `request` event) when it
+   cannot extend it: the first request on the branch (`start`), the first after
+   a compaction (`compaction`) or after a `context-edit` changed what the model
+   sees of earlier events (`edit`), one asking another model (`model`), or one
+   declaring a tool the previous did not, or one whose declaration changed
+   (`tools`).
+
 4. `Llm.stream`: every event is published as `AssistantDelta`. `done` appends the
    assistant `message` with timing (`firstTokenAt` = first text, thinking, or
    tool-call delta). `error` appends an `attempt` with the call's `failure`, and
@@ -115,6 +127,44 @@ unanswered tool call with an error result (so the next request stays valid),
 then `step-end` and `turn-end`. `TurnStarted`/`TurnEnded` carry the summed usage.
 A turn the agent is closing under (the host stopping, the plugin reloading) is
 left open instead, to resume (see [Stopping](#stopping)).
+
+## Append-only requests
+
+A provider caches a request's prefix: its system prompt, its tools, then its
+history. Agent loops are mostly that prefix read again (in the Terminal-Bench
+4.0 runs on its [leaderboard](https://www.tbench.ai/leaderboard), 90–97% of
+input tokens were cache reads, read 2026-10-19), so a change anywhere in it, a
+date rolling over or an `AGENTS.md` edited, makes every later token of it
+uncached. Anthropic's newest models go further: a reply's thinking is bound to
+the request it answered, and the API rejects it, or drops it at about two thirds
+more output to think it again, once anything before it changed ([preserved
+thinking](https://platform.claude.com/docs/en/build-with-claude/preserved-thinking),
+read 2026-10-19).
+
+So each request is the previous one with more appended, until one has to
+declare its prompt afresh:
+
+- **Sections** are asked for every request, as before, and compared with what
+  the model was last told (`RequestState.sections`). Each that changed, or went,
+  is in a `prompt-update` event, which the model reads as a message from the
+  harness where it stands (`promptUpdateText`), until a request declares the
+  prompt afresh and says it all again (`modelEntries` leaves it out from then
+  on). Unlike a plugin's `context` event, which stays: it is what was said, not
+  what the prompt is.
+- **Tools** the request no longer offers (a mode that withholds `write`, a
+  plugin turned off) stay declared, and the registry refuses their calls
+  (`ToolInvocation.offered`); the `prompt-update` event names them. A tool the
+  previous request did not declare cannot be, so it declares them afresh.
+- **Thinking** made before a request that declared them afresh is marked by
+  `LlmRequest.thinkingFrom`: a model that binds thinking to its prefix
+  (Anthropic's adaptive-thinking ones) leaves it out, rather than have it
+  refused, or dropped with every thinking block after it. Its budget-thinking
+  models bind nothing, and need a tool round's thinking sent back, so they get
+  all of it.
+
+Every simulated run checks the rule: a request without `restart` that does not
+extend the previous one on its branch, as `rebuildRequest` rebuilds both, is a
+violation (`brokenPrefix` in `packages/sim`).
 
 ## Retries
 
