@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { Effect, Schema } from "effect";
 import { definePlugin } from "@lemma/core/plain";
 import { AgentRequestHook } from "@lemma/agent";
-import { customEvents } from "@lemma/sessions";
+import { customEvents, deriveMessages } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import { ToolResult, Tools } from "@lemma/tools";
 
@@ -118,7 +118,8 @@ export default definePlugin({
       async (draft, next) => {
         const shown = shownOn(draft.branch);
         const fresh = (await readInbox(inbox(draft.cwd))).filter((message) => !shown.has(message.id));
-        if (fresh.length > 0) {
+        if (fresh.length === 0) return next(draft);
+        const appended = [
           await run(
             draft.append({
               type: "context",
@@ -127,10 +128,12 @@ export default definePlugin({
               display: fresh.length === 1 ? "1 new message" : `${fresh.length} new messages`,
               turnId: draft.turnId,
             }),
-          );
-          await run(draft.append({ type: "custom", kind: SHOWN, data: { ids: fresh.map((message) => message.id) } }));
-        }
-        return next(draft);
+          ),
+          await run(draft.append({ type: "custom", kind: SHOWN, data: { ids: fresh.map((message) => message.id) } })),
+        ];
+        // Handed on with what it appended, so the handlers after it size and select the request it is part of.
+        const branch = [...draft.branch, ...appended];
+        return next({ ...draft, branch, history: deriveMessages(branch) });
       },
       { phase: "shape" },
     );

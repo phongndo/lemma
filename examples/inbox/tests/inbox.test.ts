@@ -5,9 +5,11 @@ import { Effect } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
 import { makeCore } from "@lemma/core";
+import type { Plugin } from "@lemma/core";
+import { definePlugin } from "@lemma/core/plain";
 import type { PluginInfo } from "@lemma/contracts";
 import { hostControlPlugin, pathsPlugin } from "@lemma/contracts/testing";
-import { Agent } from "@lemma/agent";
+import { Agent, AgentRequestHook } from "@lemma/agent";
 import agent from "@lemma/agent-loop";
 import profiles from "@lemma/agent-profiles";
 import { callTools, reply, scriptedLlm, SCRIPTED_MODEL, toolCall } from "@lemma/llm/testing";
@@ -57,7 +59,11 @@ describe("messages", () => {
 
 describe("in a turn", () => {
   /** Prompts once per entry of `turns` (each played by its scripts), and returns the requests and the session's log. */
-  const run = (turns: readonly { readonly before?: () => Promise<void>; readonly scripts: readonly Script[] }[], profile?: string) => {
+  const run = (
+    turns: readonly { readonly before?: () => Promise<void>; readonly scripts: readonly Script[] }[],
+    profile?: string,
+    extra: readonly Plugin[] = [],
+  ) => {
     // As the host lists this package when it is in a plugins directory: its profiles folder in its status.
     const known: PluginInfo[] = [
       {
@@ -84,6 +90,7 @@ describe("in a turn", () => {
               profiles,
               llm.plugin,
               inbox,
+              ...extra,
             ],
             { configs: { "agent.loop": { defaultModel: SCRIPTED_MODEL.ref } } },
           );
@@ -123,6 +130,25 @@ describe("in a turn", () => {
     ]);
     expect([...shownOn(log)]).toEqual(["1.md", "2.md"]);
     expect(log.some((event) => event.data.type === "custom" && event.data.kind === SHOWN)).toBe(true);
+  });
+
+  it("hands the handlers after it the request with what it announced, as compaction must size it", async () => {
+    await deliver("1.md", "ann", "Lunch?", "Are you free on Friday?");
+    const seen: string[] = [];
+    const fit = definePlugin({
+      id: "fit-observer",
+      setup: (_deps, { on }) =>
+        on(
+          AgentRequestHook,
+          (draft, next) => {
+            seen.push(JSON.stringify(draft.history.at(-1)));
+            return next(draft);
+          },
+          { phase: "fit" },
+        ),
+    });
+    await run([{ scripts: [reply("Noted.")] }], undefined, [fit]);
+    expect(seen[0]).toContain('<message id=\\"1.md\\"');
   });
 
   it("brings the triage profile, which narrows the agent to the inbox's tools", async () => {
