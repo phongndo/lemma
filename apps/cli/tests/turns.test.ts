@@ -64,6 +64,10 @@ describe("turns against a running host", () => {
     }[];
     expect(shares.find((share) => share.tools.includes("bash"))?.source).toBe("tools.bash");
     expect(shares.some((share) => share.source === "agent.loop")).toBe(true);
+    // How the session kept the provider's cache: its requests, none of them changing the prompt or tools mid-session.
+    const [cache] = JSON.parse((await invoke(["sessions", "cache", session, "--json"], home)).out) as { readonly requests: number; readonly changed: number }[];
+    expect(cache).toMatchObject({ session, changed: 0 });
+    expect(cache!.requests).toBeGreaterThanOrEqual(2);
     expect((await invoke(["agent", "cancel", session], home)).code).toBe(ExitCode.ok);
   }, 30_000);
 

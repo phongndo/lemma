@@ -1,6 +1,16 @@
 import { parseModelRef } from "@lemma/llm";
 import { RECORD_KIND_LABEL, recordDuration, recordName, recordStatus } from "@lemma/sessions";
-import type { LedgerRecord, PluginShare, SectionDiff, SessionEvent, SessionInfo, TrajectoryRequest, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
+import type {
+  CacheReport,
+  LedgerRecord,
+  PluginShare,
+  SectionDiff,
+  SessionEvent,
+  SessionInfo,
+  TrajectoryRequest,
+  TrajectoryStep,
+  TrajectoryTurn,
+} from "@lemma/sessions";
 import { formatDuration, formatTokens, formatUsage, table as pad, time } from "@lemma/cli";
 
 /** Human-readable views of sessions; `--json` prints the contract shapes instead. */
@@ -272,6 +282,36 @@ export const formatShares = (shares: readonly PluginShare[], first: boolean): st
         "",
         "Tokens are estimated at four characters each. A provider caches a prompt up to its first change: what changed costs the cache of everything after it.",
       ].join("\n");
+
+const percent = (part: number, whole: number) => (whole === 0 ? "" : `${Math.round((part / whole) * 100)}%`);
+
+/** Each session's cache report, a row each, then their totals. */
+export const formatCache = (reports: readonly (CacheReport & { readonly session: string })[]): string => {
+  if (reports.length === 0) return "No sessions.";
+  const by = (changedBy: Readonly<Record<string, number>>) =>
+    Object.entries(changedBy)
+      .sort(([, a], [, b]) => b - a)
+      .map(([source, count]) => `${source} ${count}`)
+      .join(", ");
+  const total: Record<string, number> = {};
+  for (const report of reports) for (const [source, count] of Object.entries(report.changedBy)) total[source] = (total[source] ?? 0) + count;
+  const sum = (key: "requests" | "changed" | "input" | "cacheRead") => reports.reduce((all, report) => all + report[key], 0);
+  return [
+    pad([
+      ["session", "requests", "changed", "cache read", "changed by"],
+      ...reports.map((report) => [
+        report.session,
+        String(report.requests),
+        String(report.changed),
+        percent(report.cacheRead, report.input),
+        by(report.changedBy),
+      ]),
+      ...(reports.length > 1 ? [["all", String(sum("requests")), String(sum("changed")), percent(sum("cacheRead"), sum("input")), by(total)]] : []),
+    ]),
+    "",
+    "changed: requests after a session's first that changed the system prompt or the tools, which a provider caches ahead of the history, so they lose its cache too.",
+  ].join("\n");
+};
 
 /** Section-by-section changes to the system prompt, as unified-style lines. */
 export const formatDiff = (diff: readonly SectionDiff[], first: boolean): string => {

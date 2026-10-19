@@ -3,7 +3,7 @@ import { emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, ToolSpec } from "@lemma/llm";
 import type { Contribution, EventData, SessionEvent } from "../src/sessions.ts";
 import { deriveMessages } from "../src/derive.ts";
-import { latestRequest, pluginShares, splitSystem, trajectory } from "../src/trajectory.ts";
+import { cacheReport, latestRequest, pluginShares, splitSystem, trajectory } from "../src/trajectory.ts";
 
 function log(...items: readonly EventData[]): SessionEvent[] {
   return items.map((data, i) => ({ seq: i + 1, id: `e${i + 1}`, parent: i === 0 ? null : `e${i}`, at: 1000 + i, data }));
@@ -273,6 +273,14 @@ describe("trajectory", () => {
       { source: "agent", systemChars: "BASE".length + "ENV 2".length, toolChars: 0, sections: ["base", "environment"], tools: [], changed: ["environment"] },
     ]);
     expect(latestRequest([])).toBeUndefined();
+  });
+
+  it("reports the requests that changed the system prompt or tools, by the plugin that changed them", () => {
+    const report = cacheReport(turns);
+    // The first request is everything new; the next unchanged; the third changed the environment and dropped bash.
+    expect(report).toMatchObject({ requests: 3, changed: 1, changedBy: { agent: 1, "(removed)": 1 } });
+    expect(report.input).toBeGreaterThan(0);
+    expect(cacheReport([])).toEqual({ requests: 0, changed: 0, changedBy: {}, input: 0, cacheRead: 0 });
   });
 
   it("keeps failed attempts and counts their usage", () => {

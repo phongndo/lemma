@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ledger, pluginShares, promptDiff, trajectory } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
-import { formatDiff, formatRecords, formatSession, formatShares, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
+import { formatCache, formatDiff, formatRecords, formatSession, formatShares, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
 import { findStep, parseOffset } from "../src/index.ts";
 
 describe("formatSession", () => {
@@ -157,6 +157,28 @@ describe("inspect formatting", () => {
     ]);
     expect(formatShares([{ ...shares[1]!, changed: ["base"] }], false)).toContain("agent   ≈1             base");
     expect(formatShares([], false)).toBe("No plugin put anything in this request.");
+  });
+
+  test("the cache report has a row a session, then the totals", () => {
+    const report = (session: string, changed: number, changedBy: Record<string, number>) => ({
+      session,
+      requests: 10,
+      changed,
+      changedBy,
+      input: 1000,
+      cacheRead: 600,
+    });
+    expect(
+      formatCache([report("s1", 2, { "agent.loop": 2 }), report("s2", 1, { mcp: 1, "agent.loop": 1 })])
+        .split("\n")
+        .slice(0, 4),
+    ).toEqual([
+      "session  requests  changed  cache read  changed by",
+      "s1       10        2        60%         agent.loop 2",
+      "s2       10        1        60%         mcp 1, agent.loop 1",
+      "all      20        3        60%         agent.loop 3, mcp 1",
+    ]);
+    expect(formatCache([])).toBe("No sessions.");
   });
 
   test("a step names the plugin behind every part of the request", () => {

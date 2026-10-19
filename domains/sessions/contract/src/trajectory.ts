@@ -174,6 +174,38 @@ export function pluginShares(request: TrajectoryRequest): readonly PluginShare[]
     .sort((a, b) => b.systemChars + b.toolChars - (a.systemChars + a.toolChars) || a.source.localeCompare(b.source));
 }
 
+/**
+ * How a branch's requests kept the provider's prompt cache. A provider caches a request's prefix, and sends the tools
+ * and the system prompt ahead of the history: a request that changes either loses the cache of all that follows,
+ * the history included.
+ */
+export interface CacheReport {
+  readonly requests: number;
+  /** Requests after the branch's first that changed the system prompt or the tools. */
+  readonly changed: number;
+  /** For each plugin, the requests in which it changed a part of its own; `(removed)` counts those that dropped one. */
+  readonly changedBy: Readonly<Record<string, number>>;
+  /** Input tokens over the branch's answers and failed calls, and of them those the provider read from its cache. */
+  readonly input: number;
+  readonly cacheRead: number;
+}
+
+/** `turns`' cache report (`CacheReport`). */
+export function cacheReport(turns: readonly TrajectoryTurn[]): CacheReport {
+  const requests = turns.flatMap((turn) => turn.steps.flatMap((step) => (step.request === undefined ? [] : [step.request])));
+  const changedBy: Record<string, number> = {};
+  let changed = 0;
+  for (const request of requests.slice(1)) {
+    const sources = new Set([...request.sections, ...request.tools].filter((part) => part.changed).map((part) => part.source));
+    if (request.removed.length > 0) sources.add("(removed)");
+    if (sources.size === 0) continue;
+    changed++;
+    for (const source of sources) changedBy[source] = (changedBy[source] ?? 0) + 1;
+  }
+  const input = turns.reduce((sum, turn) => sum + turn.usage.input + turn.usage.cacheRead + turn.usage.cacheWrite, 0);
+  return { requests: requests.length, changed, changedBy, input, cacheRead: turns.reduce((sum, turn) => sum + turn.usage.cacheRead, 0) };
+}
+
 /** The latest request among `turns`: the last that a step logged. */
 export function latestRequest(turns: readonly TrajectoryTurn[]): TrajectoryRequest | undefined {
   for (const turn of [...turns].reverse()) for (const step of [...turn.steps].reverse()) if (step.request !== undefined) return step.request;

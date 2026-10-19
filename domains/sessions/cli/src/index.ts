@@ -4,6 +4,7 @@ import type { Context } from "effect";
 import { definePlugin, Registries } from "@lemma/core";
 import {
   branchOf,
+  cacheReport,
   LEDGER_SORTS,
   ledger,
   parseLedgerFilter,
@@ -20,7 +21,18 @@ import {
 } from "@lemma/sessions";
 import type { LedgerSort, SessionLogUpdate, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
 import { callHere, CliCommandError, CliCommands, defineCliCommand, followHere, usageError } from "@lemma/cli";
-import { formatDiff, formatRecords, formatShares, formatSession, formatSessions, formatStep, formatSystem, formatTools, formatTrajectory } from "./format.ts";
+import {
+  formatCache,
+  formatDiff,
+  formatRecords,
+  formatShares,
+  formatSession,
+  formatSessions,
+  formatStep,
+  formatSystem,
+  formatTools,
+  formatTrajectory,
+} from "./format.ts";
 
 type Reader = Context.Service.Shape<typeof Registries>;
 
@@ -297,6 +309,28 @@ export const sessionCommands = (registries: Reader) => [
           case undefined:
             return { json: { info, turn: found.turn.index, step: found.step }, text: formatStep(found.turn, found.step) };
         }
+      }),
+  }),
+  defineCliCommand({
+    path: ["sessions", "cache"],
+    summary: "How sessions kept the provider's prompt cache: the requests that changed the system prompt or tools, by plugin",
+    description:
+      "For each session in a directory (default: here; --all for every one), or the one named: its requests, those after the first that changed the system prompt or the tools (a provider caches them ahead of the history, so such a request loses the history's cache too), the plugins whose parts changed, and the share of input the provider read from its cache.",
+    args: [{ name: "id", description: "One session's id (lemma sessions list)" }],
+    flags: {
+      cwd: { type: "string", placeholder: "dir", description: "The directory (on the host's machine) whose sessions to report" },
+      all: { type: "boolean", description: "Every session, wherever it is" },
+    },
+    run: ({ cwd, args, flags }) =>
+      Effect.gen(function* () {
+        if (flags.all && flags.cwd !== undefined) return yield* usageError("Use either --all or --cwd");
+        const dir = flags.all ? undefined : resolve(cwd, flags.cwd ?? ".");
+        const ids =
+          args.id !== undefined ? [args.id] : (yield* callHere(registries, SessionChannels.list, dir === undefined ? {} : { cwd: dir })).map((info) => info.id);
+        const reports = yield* Effect.forEach(ids, (sessionId) =>
+          Effect.map(readSession(registries, sessionId), ([info, events]) => ({ session: sessionId, ...cacheReport(trajectory(branchOf(events, info.leaf))) })),
+        );
+        return { json: reports, text: formatCache(reports) };
       }),
   }),
   defineCliCommand({

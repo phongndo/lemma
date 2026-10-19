@@ -47,7 +47,9 @@ README has the rest.
   request, in tokens, and which changed since the request before. A part that
   changes from request to request costs the provider's prompt cache of
   everything after it, so a plugin whose text changes each time is worth
-  moving later in the prompt, or into a `context` event.
+  moving into a `context` event. `lemma sessions cache` counts, over a
+  directory's sessions, the requests that changed the system prompt or tools,
+  and by which plugins.
 - **The trace** (the devtools' Trace panel) shows what ran in the host and
   the page, span by span, filtered by plugin, session, turn, step, tool, hook,
   status, or duration. A hook's span holds its handler's own time, and, for a
