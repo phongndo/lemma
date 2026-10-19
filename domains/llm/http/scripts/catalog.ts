@@ -1,0 +1,30 @@
+/**
+ * Writes `src/catalog.json`: each built-in provider's models as models.dev lists them now, the catalog this version
+ * serves before it reads models.dev itself (and serves offline, or with `liveCatalogs: false`). Run it to refresh the
+ * snapshot, then `pnpm format`:
+ *
+ *   node domains/llm/http/scripts/catalog.ts
+ */
+import { writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { catalogOf, MODELS_DEV } from "../src/catalog.ts";
+import type { DevCatalog } from "../src/catalog.ts";
+import { ENDPOINTS } from "../src/endpoints.ts";
+
+const response = await fetch(MODELS_DEV);
+if (!response.ok) throw new Error(`${MODELS_DEV}: HTTP ${response.status}`);
+const dev = (await response.json()) as DevCatalog;
+const catalog = Object.fromEntries(
+  ENDPOINTS.map((endpoint) => {
+    const listing = dev[endpoint.id];
+    if (listing === undefined) throw new Error(`models.dev lists no provider "${endpoint.id}"`);
+    return [endpoint.id, catalogOf(endpoint, listing)];
+  }),
+);
+const path = fileURLToPath(new URL("../src/catalog.json", import.meta.url));
+writeFileSync(path, `${JSON.stringify(catalog, null, 2)}\n`);
+console.log(
+  Object.entries(catalog)
+    .map(([id, models]) => `${id}: ${models.length}`)
+    .join(", "),
+);

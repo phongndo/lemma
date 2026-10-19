@@ -149,7 +149,7 @@ describe("against a running host", () => {
       expect((await rows(userConfig))["context.project"]).toEqual({ enabled: false });
       expect(await find("context.project")).toMatchObject({ enabled: false, state: "disabled", scope: "user", source: "bundled" });
       // Only what the host pins is locked: the transport needs nothing but the runtime, which no plugin provides.
-      expect((await find("llm.pi-ai")).locked).toBeUndefined();
+      expect((await find("llm.http")).locked).toBeUndefined();
       expect((await invoke(["plugins"], home)).out).toContain("off in the user config");
 
       // The pinned plugin refuses, and the file is left as it was; nor can it be restarted by force while it runs.
@@ -163,17 +163,17 @@ describe("against a running host", () => {
       expect(JSON.parse(forced.err).error.message).toContain("cannot be restarted while running");
 
       // Any other plugin restarts by force and turns off, what needs it with it, while the transport serves on.
-      expect(JSON.parse((await invoke(["plugins", "restart", "llm.pi-ai", "--force", "--json"], home)).out)).toEqual({ restarted: "llm.pi-ai" });
-      const llmOff = await invoke(["plugins", "disable", "llm.pi-ai", "--json"], home);
+      expect(JSON.parse((await invoke(["plugins", "restart", "llm.http", "--force", "--json"], home)).out)).toEqual({ restarted: "llm.http" });
+      const llmOff = await invoke(["plugins", "disable", "llm.http", "--json"], home);
       expect(llmOff.code).toBe(ExitCode.ok);
-      expect(JSON.parse(llmOff.out)).toMatchObject({ disabled: "llm.pi-ai", stopped: expect.arrayContaining(["llm.pi-ai", "agent.loop"]) });
-      expect((await rows(userConfig))["llm.pi-ai"].enabled).toBe(false);
-      expect(await find("agent.loop")).toMatchObject({ enabled: true, state: "disabled", haltedBy: "llm.pi-ai" });
+      expect(JSON.parse(llmOff.out)).toMatchObject({ disabled: "llm.http", stopped: expect.arrayContaining(["llm.http", "agent.loop"]) });
+      expect((await rows(userConfig))["llm.http"].enabled).toBe(false);
+      expect(await find("agent.loop")).toMatchObject({ enabled: true, state: "disabled", haltedBy: "llm.http" });
       // With no agent, nothing reports the turns running: the host still answers.
       expect(await invoke(["status"], home)).toMatchObject({ code: ExitCode.ok, out: expect.stringMatching(/\nin progress +nothing/) });
-      const llmOn = await invoke(["plugins", "enable", "llm.pi-ai", "--json"], home);
-      expect(JSON.parse(llmOn.out)).toMatchObject({ enabled: "llm.pi-ai", started: expect.arrayContaining(["llm.pi-ai", "agent.loop"]) });
-      expect((await rows(userConfig))["llm.pi-ai"].enabled).toBeUndefined();
+      const llmOn = await invoke(["plugins", "enable", "llm.http", "--json"], home);
+      expect(JSON.parse(llmOn.out)).toMatchObject({ enabled: "llm.http", started: expect.arrayContaining(["llm.http", "agent.loop"]) });
+      expect((await rows(userConfig))["llm.http"].enabled).toBeUndefined();
 
       // The project file is only written for a trusted project.
       const untrusted = await invoke(["plugins", "disable", "tools.bash", "--project", "--json"], home);
@@ -205,7 +205,7 @@ describe("against a running host", () => {
     expect(shown.code).toBe(ExitCode.ok);
     // Clients reach it through its channels: no plugin needs it.
     expect(shown.out).toContain("Agent  used by no plugin");
-    expect(shown.out).toContain("Llm  from llm.pi-ai");
+    expect(shown.out).toContain("Llm  from llm.http");
     expect(shown.out).toContain("HostControl  from the host");
     // What a plugin adds to other plugins' registries: bash its tool, and the section listing its background commands.
     expect((await invoke(["plugins", "show", "tools.bash"], home)).out).toContain("Contributes\n  lemma/agent.sections  tools.bash.jobs\n  lemma/tools  bash");
@@ -248,12 +248,12 @@ describe("against a running host", () => {
     // The bundled domains serve theirs; a plugin file's are below, and examples/ticker uses one in a real host.
     const text = (await invoke(["channels"], home)).out;
     expect(text).toMatch(/^sessions\.list +call +List sessions +sessions\.files /m);
-    expect(text).toMatch(/\nllm\.login\s+call\s+Log in\s+llm\.pi-ai\s+Runs a provider's login flow/);
+    expect(text).toMatch(/\nllm\.login\s+call\s+Log in\s+llm\.http\s+Runs a provider's login flow/);
     expect(text).toMatch(/\ncommands\.run\s+call\s+Run command\s+commands\.registry\s+Runs a command/);
     const listed = JSON.parse((await invoke(["channels", "--json"], home)).out) as { id: string; source: string }[];
     const servedBy = (source: string) => listed.filter((channel) => channel.source === source).map((channel) => channel.id);
     expect(servedBy("sessions.files")).toContain("sessions.list");
-    expect(servedBy("llm.pi-ai")).toEqual([
+    expect(servedBy("llm.http")).toEqual([
       "llm.providers",
       "llm.models",
       "llm.login",

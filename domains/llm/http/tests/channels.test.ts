@@ -11,7 +11,7 @@ import type { Core, CoreOptions, Plugin } from "@lemma/core";
 import transport from "@lemma/transport-server";
 import { settled } from "../../../../scripts/e2e.ts";
 import { makeLlmPlugin } from "../src/index.ts";
-import { envContext, fakeCredentials, fakeHost, fakeInteraction, offline } from "./helpers.ts";
+import { fakeCredentials, fakeHost, fakeInteraction, offline } from "./helpers.ts";
 
 /**
  * Runs `plugins` behind the transport and a fake host, which gives the
@@ -56,7 +56,7 @@ const gateway = {
 const gatewayLlm = (answer: Parameters<typeof fakeInteraction>[0]) => {
   const credentials = fakeCredentials();
   const interaction = fakeInteraction(answer);
-  const llm = makeLlmPlugin({ fetch: offline, providers: () => [], authContext: envContext() });
+  const llm = makeLlmPlugin({ fetch: offline, providers: () => [], env: {} });
   return { credentials, interaction, plugins: [credentials.plugin, interaction.plugin, llm] };
 };
 
@@ -97,15 +97,15 @@ describe("llm's channels, through the transport", () => {
         const host = await client();
         const listed = await host.channel.list();
         expect(listed.map((channel) => [channel.id, channel.kind, channel.source])).toEqual([
-          ["llm.providers", "call", "llm.pi-ai"],
-          ["llm.models", "call", "llm.pi-ai"],
-          ["llm.login", "call", "llm.pi-ai"],
-          ["llm.cancel-login", "call", "llm.pi-ai"],
-          ["llm.logout", "call", "llm.pi-ai"],
-          ["llm.add-custom", "call", "llm.pi-ai"],
-          ["llm.remove-custom", "call", "llm.pi-ai"],
-          ["llm.set-logo", "call", "llm.pi-ai"],
-          ["llm.changes", "stream", "llm.pi-ai"],
+          ["llm.providers", "call", "llm.http"],
+          ["llm.models", "call", "llm.http"],
+          ["llm.login", "call", "llm.http"],
+          ["llm.cancel-login", "call", "llm.http"],
+          ["llm.logout", "call", "llm.http"],
+          ["llm.add-custom", "call", "llm.http"],
+          ["llm.remove-custom", "call", "llm.http"],
+          ["llm.set-logo", "call", "llm.http"],
+          ["llm.changes", "stream", "llm.http"],
         ]);
         expect(listed.every((channel) => channel.title !== undefined && channel.description !== undefined)).toBe(true);
         expect(await host.channel.call(LlmChannels.providers, undefined)).toEqual([
@@ -114,7 +114,7 @@ describe("llm's channels, through the transport", () => {
         expect((await host.channel.call(LlmChannels.models, {})).map((model) => model.ref)).toEqual(["gateway/m"]);
         expect(await host.channel.call(LlmChannels.models, { available: true })).toEqual([]);
       },
-      { "llm.pi-ai": gateway },
+      { "llm.http": gateway },
     );
   }, 30_000);
 
@@ -148,7 +148,7 @@ describe("llm's channels, through the transport", () => {
         await host.channel.call(LlmChannels.logout, { provider: "gateway" });
         expect(credentials.store.has("gateway")).toBe(false);
       },
-      { "llm.pi-ai": gateway },
+      { "llm.http": gateway },
     );
   }, 30_000);
 
@@ -167,7 +167,7 @@ describe("llm's channels, through the transport", () => {
         expect(withdrawn).toBe(true);
         expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(false);
       },
-      { "llm.pi-ai": gateway },
+      { "llm.http": gateway },
     );
   }, 30_000);
 
@@ -205,7 +205,7 @@ describe("llm's channels, through the transport", () => {
         expect(interaction.asked).toHaveLength(1);
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-late" });
       },
-      { "llm.pi-ai": gateway },
+      { "llm.http": gateway },
     );
   }, 30_000);
 
@@ -224,7 +224,7 @@ describe("llm's channels, through the transport", () => {
         await until(() => interaction.asked.length === 1);
         // The transport needs nothing llm provides, so the connection stays: llm alone restarts.
         const started = Date.now();
-        await Effect.runPromise(core.restart("llm.pi-ai", { force: true }));
+        await Effect.runPromise(core.restart("llm.http", { force: true }));
         expect(await login).toMatchObject({ code: "Withdrawn", subject: "llm.login" });
         expect(Date.now() - started).toBeLessThan(5_000);
         expect(withdrawn).toBe(true);
@@ -232,7 +232,7 @@ describe("llm's channels, through the transport", () => {
         expect(interaction.asked).toHaveLength(2);
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-again" });
       },
-      { "llm.pi-ai": gateway },
+      { "llm.http": gateway },
       { dispose: Duration.seconds(30) },
     );
   }, 30_000);
@@ -253,16 +253,16 @@ describe("llm's channels, through the transport", () => {
         await user.channel.call(LlmChannels.removeCustom, { provider: "gateway" });
         // Each one saved: the host's reload would list the change.
         const [added, logo, cleared, removed, ...rest] = host.saved;
-        expect(added).toEqual({ "llm.pi-ai": { add: { providers: [expect.objectContaining({ id: "local", api: "openai-completions" })] } } });
+        expect(added).toEqual({ "llm.http": { add: { providers: [expect.objectContaining({ id: "local", api: "openai-completions" })] } } });
         expect(logo).toEqual({
-          "llm.pi-ai": { add: { providers: [expect.objectContaining({ id: "gateway", baseUrl: "http://127.0.0.1:9/v1", logo: "<svg>new</svg>" })] } },
+          "llm.http": { add: { providers: [expect.objectContaining({ id: "gateway", baseUrl: "http://127.0.0.1:9/v1", logo: "<svg>new</svg>" })] } },
         });
-        expect(cleared?.["llm.pi-ai"]?.add?.providers).toEqual([expect.objectContaining({ id: "gateway", baseUrl: "http://127.0.0.1:9/v1" })]);
-        expect(cleared?.["llm.pi-ai"]?.add?.providers?.[0]).not.toHaveProperty("logo");
-        expect(removed).toEqual({ "llm.pi-ai": { remove: { providers: ["gateway"] } } });
+        expect(cleared?.["llm.http"]?.add?.providers).toEqual([expect.objectContaining({ id: "gateway", baseUrl: "http://127.0.0.1:9/v1" })]);
+        expect(cleared?.["llm.http"]?.add?.providers?.[0]).not.toHaveProperty("logo");
+        expect(removed).toEqual({ "llm.http": { remove: { providers: ["gateway"] } } });
         expect(rest).toEqual([]);
       },
-      { "llm.pi-ai": { providers: [{ ...gateway.providers[0], logo: "<svg>old</svg>" }] } },
+      { "llm.http": { providers: [{ ...gateway.providers[0], logo: "<svg>old</svg>" }] } },
     );
   }, 30_000);
 
@@ -289,7 +289,7 @@ describe("llm's channels, through the transport", () => {
         expect(await available()).toEqual([]);
         close();
       },
-      { "llm.pi-ai": gateway },
+      { "llm.http": gateway },
     );
   }, 30_000);
 });

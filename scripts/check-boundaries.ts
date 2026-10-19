@@ -647,7 +647,6 @@ const waitCeilings: Readonly<Record<string, number>> = {
   "domains/context/compaction/tests/compaction.test.ts": 1,
   "domains/credentials/file/tests/credentials.test.ts": 1,
   "domains/workspace/search-fff/tests/file-search.test.ts": 1,
-  "domains/llm/pi-ai/tests/llm.test.ts": 2,
   "domains/sessions/files/tests/sessions.test.ts": 7,
   "domains/sessions/files/tests/simulation.test.ts": 1,
   "domains/tools/bash/tests/bash.test.ts": 2,

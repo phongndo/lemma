@@ -41,7 +41,7 @@
     "@lemma/llm": "workspace:*",
     "@lemma/llm-cli": "workspace:*",
     "@lemma/llm-commands": "workspace:*",
-    "@lemma/llm-pi-ai": "workspace:*",
+    "@lemma/llm-http": "workspace:*",
     "@lemma/mcp": "workspace:*",
     "@lemma/mcp-servers": "workspace:*",
     "@lemma/sessions": "workspace:*",

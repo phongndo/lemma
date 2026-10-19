@@ -5,7 +5,7 @@ import { join } from "node:path";
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
- * This installation's stable ID (pi-ai's device ID), kept in `<home>/device-id` and made on first use. OpenAI's
+ * This installation's stable ID, kept in `<home>/device-id` and made on first use. OpenAI's
  * ChatGPT sign-in names the installation by it, so every later login must send the same one.
  */
 export function deviceId(home: string): string {

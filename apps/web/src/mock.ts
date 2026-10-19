@@ -400,42 +400,18 @@ export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
   const oauth = (name: string) => ({ type: "oauth", name, interactive: true }) as const;
-  /** The real llm plugin's providers (pi-ai's built-ins), as `Llm.providers` reports them. */
+  /** The real llm plugin's providers (`llm.http`'s built-ins), as `Llm.providers` reports them. */
   const providers: ProviderInfo[] = [
-    ["amazon-bedrock", "Amazon Bedrock", [key]],
-    ["ant-ling", "Ant Ling", [key]],
-    // As in the real llm plugin: Anthropic's subscription OAuth (Claude Pro/Max) is excluded by policy.
     ["anthropic", "Anthropic", [key]],
-    ["azure-openai-responses", "Azure OpenAI", [key]],
-    ["baseten", "Baseten", [key]],
-    ["cerebras", "Cerebras", [key]],
-    ["cloudflare-workers-ai", "Cloudflare Workers AI", [key]],
-    ["deepseek", "DeepSeek", [key]],
-    ["fireworks", "Fireworks", [key]],
-    ["github-copilot", "GitHub Copilot", [oauth("GitHub Copilot"), key]],
-    ["google", "Google", [key]],
-    ["google-vertex", "Google Vertex AI", [key]],
-    ["groq", "Groq", [key]],
-    ["huggingface", "Hugging Face", [key]],
-    ["kimi-coding", "Kimi For Coding", [oauth("Kimi Code (subscription)"), key]],
-    ["meta", "Meta", [oauth("Meta (Muse subscription)"), key]],
-    ["minimax", "MiniMax", [key]],
-    ["mistral", "Mistral", [key]],
-    ["moonshotai", "Moonshot AI", [key]],
-    ["nvidia", "NVIDIA", [key]],
-    // As in the real llm plugin: OpenAI signs in with ChatGPT itself, and the legacy OpenAI Codex is left out.
+    // As in the real llm plugin: OpenAI takes a key, or signs in with ChatGPT.
     ["openai", "OpenAI", [key, oauth("Sign in with ChatGPT")]],
+    ["openrouter", "OpenRouter", [key]],
     ["opencode", "OpenCode Zen", [key]],
     ["opencode-go", "OpenCode Go", [key]],
-    ["openrouter", "OpenRouter", [oauth("OpenRouter OAuth"), key]],
-    ["qwen-token-plan", "Qwen Token Plan", [key]],
-    ["radius", "Radius", [oauth("Radius"), key]],
-    ["together", "Together", [key]],
-    ["typesafe", "TypeSafe", [key]],
-    ["vercel-ai-gateway", "Vercel AI Gateway", [key]],
-    ["xai", "xAI", [oauth("xAI (Grok/X subscription)"), key]],
-    ["xiaomi", "Xiaomi", [key]],
-    ["zai", "Z.AI", [key]],
+    // Not `llm.http`'s: logins another provider of `Llm` can run, a device code and a question with documentation, so
+    // the Providers page's ways of showing them stay checked (`ui:check`).
+    ["github-copilot", "GitHub Copilot", [oauth("GitHub Copilot"), key]],
+    ["amazon-bedrock", "Amazon Bedrock", [key]],
   ].map(([id, name, auth]) => ({ id: id as string, name: name as string, auth: auth as ProviderInfo["auth"], configured: false }));
   const bundled = (id: string, extra: Partial<PluginStatus> = {}): PluginStatus => ({
     id,
@@ -504,7 +480,7 @@ export const createMockHost = (): Host => {
   // (`HOST_PLUGINS`); one not described here is a plugin that provides, requires, and adds nothing.
   const described: Readonly<Record<string, Partial<PluginStatus>>> = {
     "credentials.file": { provides: ["lemma/Credentials"], requires: ["lemma/Paths"] },
-    "llm.pi-ai": { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] },
+    "llm.http": { provides: ["lemma/Llm"], requires: ["lemma/Credentials", "lemma/Interaction"] },
     "llm.commands": {
       requires: ["lemma/Interaction", "lemma/Llm"],
       contributes: [{ name: "lemma/commands", items: 1, keys: ["llm.logout"] }],
@@ -1509,7 +1485,7 @@ export const createMockHost = (): Host => {
     };
   };
   /** As the llm plugin does after saving a change to its providers: it restarts, once the call asking for it has answered. */
-  const reloadLlm = () => setTimeout(() => restart("llm.pi-ai"), 50);
+  const reloadLlm = () => setTimeout(() => restart("llm.http"), 50);
   const noCustom = (provider: string) =>
     new HostError({ code: "UnknownProvider", message: `No provider "${provider}" was added by the user`, subject: provider });
 
@@ -1669,12 +1645,12 @@ export const createMockHost = (): Host => {
       return activity.subscribe(send);
     }),
 
-    serveCall("llm.pi-ai", LlmChannels.providers, async () => providers.slice()),
-    serveCall("llm.pi-ai", LlmChannels.models, async ({ available }) =>
+    serveCall("llm.http", LlmChannels.providers, async () => providers.slice()),
+    serveCall("llm.http", LlmChannels.models, async ({ available }) =>
       available === true ? MODELS.filter((model) => providers.find((p) => p.id === model.provider)?.configured) : MODELS.slice(),
     ),
     serveCall(
-      "llm.pi-ai",
+      "llm.http",
       LlmChannels.login,
       async ({ provider, type }) => {
         const p = providers.find((x) => x.id === provider);
@@ -1690,7 +1666,7 @@ export const createMockHost = (): Host => {
           return ask({ type: "interaction", request }).finally(() => cancel.signal.removeEventListener("abort", withdraw));
         };
         const notice = (notice: Omit<NoticePayload, "level" | "source" | "origin">) =>
-          emit({ type: "notice", notice: { level: "info", source: "llm.pi-ai", origin, ...notice } });
+          emit({ type: "notice", notice: { level: "info", source: "llm.http", origin, ...notice } });
         /** Resolves after `ms`, or rejects once the login is cancelled. */
         const wait = (ms: number) =>
           new Promise<void>((resolve, reject) => {
@@ -1763,12 +1739,12 @@ export const createMockHost = (): Host => {
       },
       { waits: true },
     ),
-    serveCall("llm.pi-ai", LlmChannels.cancelLogin, async ({ provider }) => {
+    serveCall("llm.http", LlmChannels.cancelLogin, async ({ provider }) => {
       const running = logins.get(provider);
       running?.abort();
       return running !== undefined;
     }),
-    serveCall("llm.pi-ai", LlmChannels.logout, async ({ provider }) => {
+    serveCall("llm.http", LlmChannels.logout, async ({ provider }) => {
       const i = providers.findIndex((x) => x.id === provider);
       if (i === -1) throw new HostError({ code: "UnknownProvider", subject: provider, message: `No provider "${provider}"` });
       const { source: _source, ...rest } = providers[i]!;
@@ -1776,7 +1752,7 @@ export const createMockHost = (): Host => {
       modelChanges.publish({ type: "models-changed" });
     }),
     // Like the llm plugin: an id from the name, free among the providers; listed once its config has reloaded.
-    serveCall("llm.pi-ai", LlmChannels.addCustom, async ({ spec }) => {
+    serveCall("llm.http", LlmChannels.addCustom, async ({ spec }) => {
       await sleep(300);
       const base =
         spec.name
@@ -1796,14 +1772,14 @@ export const createMockHost = (): Host => {
       reloadLlm();
       return id;
     }),
-    serveCall("llm.pi-ai", LlmChannels.removeCustom, async ({ provider }) => {
+    serveCall("llm.http", LlmChannels.removeCustom, async ({ provider }) => {
       await sleep(300);
       const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
       if (at === -1) throw noCustom(provider);
       providers.splice(at, 1);
       reloadLlm();
     }),
-    serveCall("llm.pi-ai", LlmChannels.setLogo, async ({ provider, svg }) => {
+    serveCall("llm.http", LlmChannels.setLogo, async ({ provider, svg }) => {
       await sleep(200);
       const at = providers.findIndex((candidate) => candidate.id === provider && candidate.custom);
       if (at === -1) throw noCustom(provider);
@@ -1811,7 +1787,7 @@ export const createMockHost = (): Host => {
       providers[at] = svg === undefined ? rest : { ...rest, logo: svg };
       reloadLlm();
     }),
-    serveStream("llm.pi-ai", LlmChannels.changes, (_, send) => {
+    serveStream("llm.http", LlmChannels.changes, (_, send) => {
       send({ type: "subscribed" });
       return modelChanges.subscribe(send);
     }),

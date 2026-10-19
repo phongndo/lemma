@@ -1,18 +1,18 @@
 {
-  "name": "@lemma/llm-pi-ai",
+  "name": "@lemma/llm-http",
   "version": "0.1.0",
   "private": true,
-  "description": "Models and providers through pi-ai",
+  "description": "Models and providers over their HTTP APIs",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "catalog": "node scripts/catalog.ts"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "1.2.0",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/credentials": "workspace:*",

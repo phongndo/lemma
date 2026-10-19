@@ -160,7 +160,7 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
       JSON.stringify({
         plugins: {
           "transport.server": { config: { port: 0 } },
-          "llm.pi-ai": { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: url, models: [{ id: "scripted" }] }] } },
+          "llm.http": { config: { providers: [{ id: "mock", api: "openai-completions", baseUrl: url, models: [{ id: "scripted" }] }] } },
           ...options.plugins,
         },
       }),

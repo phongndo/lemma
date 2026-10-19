@@ -18,7 +18,7 @@ import credentialsFile from "@lemma/credentials-file";
 import devtoolsTrace from "@lemma/devtools-trace";
 import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
-import llmPiAi from "@lemma/llm-pi-ai";
+import llmHttp from "@lemma/llm-http";
 import mcpServers from "@lemma/mcp-servers";
 import sessionsCli from "@lemma/sessions-cli";
 import sessionsFiles from "@lemma/sessions-files";
@@ -54,7 +54,7 @@ export const cliCommand = `node --conditions=lemma-source ${fileURLToPath(new UR
  */
 export const bundled: readonly Plugin[] = [
   credentialsFile,
-  llmPiAi,
+  llmHttp,
   llmCommands,
   toolsRegistry,
   toolsRead,

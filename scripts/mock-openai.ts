@@ -13,7 +13,7 @@ import { createInterface } from "node:readline";
  * meanwhile can tell whether the call ran twice. Each tool call has an
  * id of its own (`call_<n>`). Configure it as a keyless custom provider:
  *
- *   { "plugins": { "llm.pi-ai": { "config": { "providers": [{ "id": "mock", "api": "openai-completions",
+ *   { "plugins": { "llm.http": { "config": { "providers": [{ "id": "mock", "api": "openai-completions",
  *     "baseUrl": "http://127.0.0.1:7499/v1", "models": [{ "id": "scripted" }] }] } } } }
  *
  * It listens on `PORT` (default 7499; 0 picks a free one) and prints its base
