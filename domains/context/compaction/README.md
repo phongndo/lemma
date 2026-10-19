@@ -16,16 +16,17 @@ divider. Requires `Llm`.
 | `keepRecent` | `20000` | Tokens of the latest conversation kept word for word (at most 30% of the window)  |
 | `model`      | unset   | The model that writes summaries (`provider/model`); the turn's model when unset   |
 
-- **The meter.** Its web half adds a ring to the composer's toolbar
-  (`ComposerControls`), beside the model and reasoning pickers, so how full the
-  open thread's context is stays in view. It measures as the estimate below
+- **The meter.** Its web half adds a ring to the composer's row, beside its buttons
+  (`ComposerActions`), so how full the open thread's context is stays in
+  view. It measures as the estimate below
   does (`measuredTokens`), against the selected model's window, since that is
   the model the next prompt goes to, and reads `at` from the same row. It turns
   the warning color within 10 points of `at`, and the error color past the
   window. It is not measured before the first reply, or after a summary until
   the next reply (the system prompt and tools are sized only on the host). Beside
-  it is the share of the last reply's input the provider's cache served; a
-  provider that reports no caching shows 0%. Turning the plugin off removes both.
+  it is the share of the last reply's input the provider's cache served
+  (`82% CH`, spelled out in its tooltip); a provider that reports no caching shows
+  0%. Turning the plugin off removes both.
 - **The estimate.** The last response after the latest compaction reports the
   tokens of the context it was given and of its output; messages since then are
   estimated at four characters a token (an image as 1,200). Without such a

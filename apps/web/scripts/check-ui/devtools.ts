@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { boot, checkPlugin, drawn, settled, url } from "./shared.ts";
+import { atBlankThread, boot, checkPlugin, drawn, settled, url } from "./shared.ts";
 
 // 8–9: the devtools, and a turn while it runs.
 export const devtools = async (): Promise<string> => {
@@ -14,7 +14,8 @@ export const devtools = async (): Promise<string> => {
   });
   await page.keyboard.press("ControlOrMeta+Shift+d");
   await page.waitForSelector(".devtools");
-  const appHeight = () => page.evaluate(() => document.querySelector(".app")!.getBoundingClientRect().height);
+  // Where the app ends: the window's bottom with nothing docked under it (a bar across the top leaves its height as it is).
+  const appHeight = () => page.evaluate(() => document.querySelector(".app")!.getBoundingClientRect().bottom);
   // On every page, and across a reload: what covers the app (settings) leaves what is docked under it in view.
   const dockOnTop = () =>
     page.evaluate(() => {
@@ -25,13 +26,21 @@ export const devtools = async (): Promise<string> => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     return (await (window as any).lemma.service(Threads)).list()[0].id;
   });
-  const sections = ["general", "appearance", "keyboard", "providers", "plugins", "projects", "archived"].map((section) => `/settings/${section}`);
+  const sections = ["general", "appearance", "keyboard", "providers", "plugins", "projects"].map((section) => `/settings/${section}`);
   for (const path of ["/", `/threads/${firstThread}`, `/threads/${firstThread}/trajectory`, ...sections, "/nowhere"]) {
     await page.evaluate(async (path) => {
       const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
       (await (window as any).lemma.service(Router)).navigate(path);
     }, path);
-    await page.waitForFunction((path) => location.pathname === path, path);
+    // The new-thread page goes on to a blank thread; a thread's address naming a view opens it in the thread's pane, and
+    // then names the thread.
+    if (path === "/") await atBlankThread(page);
+    else if (path.endsWith("/trajectory"))
+      await page.waitForFunction(
+        (path) => location.pathname === path.replace(/\/trajectory$/, "") && document.querySelector(".thread-inspector .trj") !== null,
+        path,
+      );
+    else await page.waitForFunction((path) => location.pathname === path, path);
     await drawn(page);
     assert(await dockOnTop(), `the devtools are hidden at ${path}`);
   }
@@ -43,7 +52,7 @@ export const devtools = async (): Promise<string> => {
     const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (await (window as any).lemma.service(Router)).navigate("/");
   });
-  await page.waitForFunction(() => location.pathname === "/");
+  await atBlankThread(page);
   assert((await appHeight()) < 900 - 100, "the app did not make room for the devtools");
   // Routes: why an address shows what it does, and who shows each route.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Routes");
@@ -71,7 +80,7 @@ export const devtools = async (): Promise<string> => {
     return id;
   });
   await page.click(`[aria-label=Events] a >> text=${pinned}`);
-  await page.waitForFunction((id) => location.pathname === `/threads/${id}/trajectory`, pinned);
+  await page.waitForFunction((id) => location.pathname === `/threads/${id}` && document.querySelector(".thread-inspector .trj") !== null, pinned);
   await page.waitForSelector(".devtools");
   // Channels: what host plugins serve, each with the plugin that answers for it.
   await page.click("[aria-label='Devtools panels'] [role=tab] >> text=Channels");
@@ -220,6 +229,20 @@ export const devtools = async (): Promise<string> => {
   assert.equal(await page.locator(".steer-pending:has-text('steer it')").count(), 0, "a steer went out before the prompt before it was taken");
   await page.evaluate(() => (window as any).lemmaMock.releaseTurnStarted());
   await page.waitForSelector(".steer-pending:has-text('steer it')").catch(() => assert.fail("a steer sent while a turn runs is not shown where it will join"));
+  // Not yet placed, it is on the prompt rail already, as any prompt the chat shows.
+  const railTicks = () =>
+    page
+      .locator("nav[aria-label='Prompts'] .prompt-tick")
+      .evaluateAll((ticks) => ticks.map((tick) => tick.getAttribute("aria-label")?.replace(/^Prompt \d+ of \d+: /, "")));
+  await page
+    .waitForFunction(
+      () => [...document.querySelectorAll("nav[aria-label='Prompts'] .prompt-tick")].some((tick) => tick.getAttribute("aria-label")?.endsWith(": steer it")),
+      undefined,
+      {
+        timeout: 5_000,
+      },
+    )
+    .catch(async () => assert.fail(`a steer not yet placed has no tick on the prompt rail: ${(await railTicks()).join(", ")}`));
   assert.equal(await page.locator(".queued").count(), 0, "a steer has a row in the composer's queue");
   assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
   // Until the turn takes it, a steer can be withdrawn from beside it.
@@ -289,6 +312,11 @@ export const devtools = async (): Promise<string> => {
     [["start a turn", "steer it", "steer after all @README.md"]],
     "the steers are not shown in the turn they joined",
   );
+  // Every prompt the chat shows has its tick on the prompt rail, alike: the turn's, then each steer where it joined.
+  await page
+    .waitForFunction(() => document.querySelectorAll("nav[aria-label='Prompts'] .prompt-tick").length === 3, undefined, { timeout: 5_000 })
+    .catch(async () => assert.fail(`the prompt rail has ${(await railTicks()).length} ticks for a prompt and two steers`));
+  assert.deepEqual(await railTicks(), ["start a turn", "steer it", "steer after all @README.md"], "the prompt rail does not hold every prompt in the chat");
   assert.deepEqual(
     await page.locator(".turn .user-steer:has(.steer-mark) .user-text").allTextContents(),
     ["steer it", "steer after all @README.md"],
@@ -318,7 +346,7 @@ export const devtools = async (): Promise<string> => {
     const { Router } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (await (window as any).lemma.service(Router)).navigate("/");
   });
-  await page.waitForFunction(() => location.pathname === "/");
+  await atBlankThread(page);
   await page.goBack();
   await page.waitForFunction((path) => location.pathname === path, turnPath);
   await page.evaluate(async () => {
@@ -357,11 +385,11 @@ export const devtools = async (): Promise<string> => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
     void (await (window as any).lemma.service(Threads)).select(undefined);
   });
-  await page.waitForFunction(() => location.pathname === "/");
+  await atBlankThread(page);
   await page.fill("textarea", "retry me");
   await page.keyboard.press("Enter");
   await page.waitForFunction(() => (window as any).sentIds.length === 1);
-  // The send created its thread and moved there; the refused prompt is back in the composer.
+  // The refused prompt is back in the composer, in the blank thread it was written in.
   await page.waitForFunction(
     () => location.pathname.startsWith("/threads/") && (document.querySelector("textarea") as HTMLTextAreaElement).value === "retry me",
   );

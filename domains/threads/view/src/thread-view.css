@@ -2,8 +2,222 @@
   flex: 1;
   min-height: 0;
   display: flex;
+  position: relative;
+}
+
+/* The chat: its header, its view, and the composer over the view's bottom. */
+.thread-chat {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
   flex-direction: column;
   position: relative;
+}
+
+/* Beside the chat, another view of the thread, at the width its edge was dragged to. */
+.thread-inspector {
+  flex: none;
+  min-width: 0;
+  max-width: calc(100% - 360px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  border-left: 1px solid var(--border);
+}
+
+/* Its left edge, with room either side of the hairline to take the pointer: over a page a view draws on the pane (the browser's, at 8). */
+.thread-inspector-edge {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 9px;
+  z-index: 9;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.thread-inspector-edge:hover,
+.resizing .thread-inspector-edge {
+  background: linear-gradient(var(--border-strong), var(--border-strong)) center / 1px 100% no-repeat;
+}
+
+/* A frame takes no pointer, and nothing is selected, while the edge is dragged. */
+.resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
+.resizing iframe {
+  pointer-events: none;
+}
+
+.main-head.thread-inspector-head {
+  padding: 0 12px;
+}
+
+.thread-inspector-tabs {
+  display: flex;
+  gap: 2px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+/* A view open in the pane: its icon, which is its × under the pointer, then its name. Pressing and dragging it moves it, not a text selection. */
+.thread-inspector-tab {
+  position: relative;
+  flex: none;
+  display: flex;
+  align-items: center;
+  max-width: 160px;
+  height: 26px;
+  padding-left: 3px;
+  border-radius: var(--radius-sm);
+  color: var(--text-3);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.thread-inspector-tab:hover,
+.thread-inspector-tab.shown {
+  color: var(--text);
+}
+
+.thread-inspector-tab.shown {
+  background: var(--bg-hover);
+}
+
+.thread-inspector-tab.dragging {
+  z-index: 1;
+  color: var(--text);
+  background: var(--bg-active);
+}
+
+.thread-inspector-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: inherit;
+}
+
+.thread-inspector-close .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.thread-inspector-close:hover {
+  background: var(--bg-active);
+}
+
+.thread-inspector-close > .icon,
+.thread-inspector-tab:hover .thread-inspector-kind,
+.thread-inspector-close:focus-visible .thread-inspector-kind {
+  display: none;
+}
+
+.thread-inspector-tab:hover .thread-inspector-close > .icon,
+.thread-inspector-close:focus-visible > .icon {
+  display: block;
+}
+
+.thread-inspector-kind {
+  display: grid;
+  place-items: center;
+}
+
+.thread-inspector-open {
+  min-width: 0;
+  height: 100%;
+  padding: 0 10px 0 4px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: calc(13px * var(--text-scale));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Its right-click menu opens from here; the trigger is never seen. */
+.thread-inspector-menu-anchor {
+  position: absolute;
+  left: 4px;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  visibility: hidden;
+}
+
+/* The tab shown: one view at a time. */
+.thread-inspector-view {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* With no tab, the views it can open, by letter too. */
+.thread-inspector-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 16px;
+}
+
+.thread-inspector-empty h2 {
+  font-size: calc(14px * var(--text-scale));
+  font-weight: 500;
+}
+
+.thread-inspector-choices {
+  width: min(260px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  outline: none;
+}
+
+.thread-inspector-key {
+  margin-left: auto;
+  padding-left: 10px;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(12px * var(--text-scale));
+}
+
+/* Filling the page, the chat out of sight but kept as it was. */
+.main.maximized .thread-chat {
+  flex: none;
+  width: 0;
+  overflow: hidden;
+}
+
+.main.maximized .thread-inspector {
+  flex: 1;
+  max-width: none;
+  border-left: 0;
+}
+
+/* At the window's left edge, its head makes room for the window's controls, as the chat's does. */
+.main.maximized .main-head.thread-inspector-head {
+  padding-left: max(12px, var(--titlebar-inset, 0px));
 }
 
 /* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
@@ -23,8 +237,8 @@
 .main-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  height: 48px;
+  gap: 2px;
+  height: var(--head-height);
   padding: 0 16px 0 max(16px, var(--titlebar-inset, 0px));
   flex: none;
 }
@@ -33,7 +247,17 @@
   app-region: drag;
 }
 
+/* The head at the window's right edge (the chat's, else the pane's) makes room for the controls there (Windows, Linux). */
+.thread-chat:last-child > .main-head {
+  padding-right: max(16px, var(--titlebar-inset-end, 0px));
+}
+
+.thread-inspector > .main-head.thread-inspector-head {
+  padding-right: max(12px, var(--titlebar-inset-end, 0px));
+}
+
 .main-title {
+  margin: 0 8px 0 6px;
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -63,6 +287,7 @@
 }
 
 .busy-chip {
+  margin-right: 8px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -70,14 +295,8 @@
   color: var(--accent-text);
 }
 
-/* View switch: bare icon buttons, the selected one on a quiet fill. */
-.view-tabs {
-  display: flex;
-  gap: 2px;
-  flex: none;
-}
-
-.view-tab {
+/* The header's buttons: one quiet row, evenly spaced, coloured only by state; a fill shows only under the pointer. */
+.main-head .icon-button {
   display: grid;
   place-items: center;
   width: 28px;
@@ -89,19 +308,40 @@
   color: var(--text-3);
 }
 
-.view-tab:hover {
-  color: var(--text-2);
-  background: var(--bg-hover);
+/* The sidebar's glyph, mirrored: a pane on the right. */
+.inspect-toggle svg {
+  transform: scaleX(-1);
 }
 
-.view-tab[aria-selected="true"] {
+.main-head .icon-button:hover,
+.main-head .icon-button[aria-pressed="true"],
+.main-head .icon-button[aria-expanded="true"] {
   color: var(--text);
-  background: var(--bg-active);
+  background: var(--bg-hover);
 }
 
 @media (max-width: 820px) {
   .main-head {
     padding: 0 8px 0 max(8px, var(--titlebar-inset, 0px));
+  }
+
+  /* Too narrow for both: the inspection pane covers the chat until closed. */
+  .thread-inspector {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    width: auto !important;
+    max-width: none;
+    border-left: 0;
+    background: var(--bg);
+  }
+
+  .thread-inspector-edge {
+    display: none;
+  }
+
+  .main-head.thread-inspector-head {
+    padding-left: max(8px, var(--titlebar-inset, 0px));
   }
 }
 
@@ -116,4 +356,17 @@
   font-size: calc(20px * var(--text-scale));
   font-weight: 600;
   margin-bottom: 8px;
+}
+
+.main-rename {
+  min-width: 0;
+  width: 32ch;
+  height: 26px;
+  padding: 0 6px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-xs);
+  background: var(--bg-raised);
+  outline: none;
+  font: inherit;
+  font-weight: 600;
 }

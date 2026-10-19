@@ -1,6 +1,6 @@
 import { Show, createMemo, createSignal, untrack } from "solid-js";
 import { Actions } from "@lemma/actions";
-import { ComposerTakeovers, Threads, ThreadsActionIds, ToolViews } from "@lemma/threads";
+import { ComposerTakeovers, Threads, ThreadsActionIds, ThreadWaits, ToolViews } from "@lemma/threads";
 import { ChatIcon, ChevronDownIcon, XIcon } from "@lemma/look";
 import { Client, Notify, Slots, defineWebPlugin } from "@lemma/web";
 import { dropped, makeAsking } from "./asking.ts";
@@ -71,6 +71,10 @@ export default defineWebPlugin({
         fresh = true;
       }),
     );
+
+    // Every thread with a question open waits on the person: the sidebar says so.
+    const asked = createMemo(() => new Set(open().map((entry) => entry.sessionId)));
+    slots.add(ThreadWaits, { id: "tools.ask", waiting: (sessionId) => (asked().has(sessionId) ? "Needs input" : undefined) });
 
     // The open thread's call, kept while it stays open: a list sent anew (another thread's question came or went) keeps it.
     const currentKey = createMemo(() => {

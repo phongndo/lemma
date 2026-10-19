@@ -58,7 +58,7 @@ export interface PopoverProps {
   readonly children: (close: () => void) => JSX.Element;
 }
 
-/** A button that opens a menu of `menuitem`/`option` elements. */
+/** A button that opens a menu of `menuitem`/`option` elements; an item whose `aria-keyshortcuts` is a letter is picked by that letter. */
 export const PopoverPart = definePart<PopoverProps>("popover");
 
 export interface SearchFieldProps {
@@ -168,7 +168,11 @@ export type IconName =
   | "star"
   | "more"
   | "pin"
+  | "pin-off"
+  | "question"
   | "archive"
+  | "history"
+  | "grid"
   | "trash"
   | "pencil"
   | "brain"
@@ -183,6 +187,8 @@ export type IconName =
   | "arrow-left"
   | "redo"
   | "skip"
+  | "maximize"
+  | "minimize"
   | "spinner";
 
 export interface IconProps {
@@ -307,7 +313,15 @@ export const MoreIcon = () => <Icon name="more" />;
 
 export const PinIcon = () => <Icon name="pin" />;
 
+export const PinOffIcon = () => <Icon name="pin-off" />;
+
+export const QuestionIcon = () => <Icon name="question" />;
+
 export const ArchiveIcon = () => <Icon name="archive" />;
+
+export const HistoryIcon = () => <Icon name="history" />;
+
+export const GridIcon = () => <Icon name="grid" />;
 
 export const TrashIcon = () => <Icon name="trash" />;
 
@@ -336,5 +350,9 @@ export const ArrowLeftIcon = () => <Icon name="arrow-left" />;
 export const RedoIcon = () => <Icon name="redo" />;
 
 export const SkipIcon = () => <Icon name="skip" />;
+
+export const MaximizeIcon = () => <Icon name="maximize" />;
+
+export const MinimizeIcon = () => <Icon name="minimize" />;
 
 export const Spinner = () => <Icon name="spinner" />;

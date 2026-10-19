@@ -2,7 +2,7 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, utilityProcess } from "electron";
 import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME, deepLinkPath } from "@lemma/contracts";
@@ -12,6 +12,7 @@ import { callChannel, makeHostRpcHttp } from "@lemma/client";
 import { CliChannels } from "@lemma/cli";
 import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
 import { hostFiles, resolvePaths } from "@lemma/host/paths";
+import { hostBrowser } from "./browser.ts";
 
 // The desktop app is the web app in a window: it shows what the host's transport serves, so the two never differ.
 // It finds its host like the CLI does: one on another machine (`LEMMA_URL`, or the default environment), else a running local
@@ -166,11 +167,18 @@ const stopHost = () => {
 /** Set once the app starts quitting: nothing starts a host after that. */
 let quitting = false;
 
+/**
+ * The app's own windows, each showing the web app: not the windows a browser page opens (a sign-in, `browser.ts`),
+ * which are no window of the app's to reload, to show a link in, or to keep it running for.
+ */
+const appWindows = new Set<BrowserWindow>();
+const windows = () => [...appWindows].filter((window) => !window.isDestroyed());
+
 /** Each window again at its address, from the host now serving; one that fails does not keep the rest from it. */
 const reloadWindows = async () => {
   const failed: string[] = [];
   await Promise.all(
-    BrowserWindow.getAllWindows().map(async (page) => {
+    windows().map(async (page) => {
       if (page.isDestroyed()) return;
       let path = "/";
       try {
@@ -209,6 +217,25 @@ ipcMain.handle("lemma:reload", async (event) => {
   }
 });
 
+/**
+ * The page's heads (`--head-height`, the sidebar's and the page's bars): the window's title bar, whose controls sit
+ * in them, centered. On macOS the traffic lights' middle is 7px below their position (measured: at y 13 it sat at
+ * 20), so y 17 puts it on the heads' middle, 24, level with their buttons; on Windows and Linux the controls overlay
+ * is as tall as a head, and takes the page's colors (`lemma:title-bar`).
+ */
+const HEAD_HEIGHT = 48;
+const mac = process.platform === "darwin";
+/** The controls' colors until the page says its own: its default dark or light background and muted text. */
+const overlayColors = () => (nativeTheme.shouldUseDarkColors ? { color: "#0b0b0b", symbolColor: "#a5a5a5" } : { color: "#fafafa", symbolColor: "#5c5c5c" });
+
+// The page's colors for the window's controls (Windows, Linux), as its look changes. Only a window's own page says.
+ipcMain.on("lemma:title-bar", (event, color: unknown, symbolColor: unknown) => {
+  const window = BrowserWindow.fromWebContents(event.sender);
+  const hex = (value: unknown): value is string => typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+  if (mac || window === null || event.senderFrame !== event.sender.mainFrame || !hex(color) || !hex(symbolColor)) return;
+  window.setTitleBarOverlay({ color, symbolColor, height: HEAD_HEIGHT });
+});
+
 const openWindow = (url: string) => {
   const window = new BrowserWindow({
     width: 1280,
@@ -218,19 +245,29 @@ const openWindow = (url: string) => {
     title: "lemma",
     icon,
     show: false,
-    // No native title bar: the controls overlay the page, which reads where (Window Controls Overlay) and makes
-    // its own 48px top bars the title bar; centered in one at y 17.
+    // No native title bar: the controls overlay the page, which reads where (Window Controls Overlay) and makes its
+    // heads the title bar, the controls level with the heads' buttons (`HEAD_HEIGHT`).
     titleBarStyle: "hidden",
-    titleBarOverlay: true,
-    trafficLightPosition: { x: 17, y: 17 },
+    titleBarOverlay: mac ? true : { height: HEAD_HEIGHT, ...overlayColors() },
+    trafficLightPosition: { x: 17, y: HEAD_HEIGHT / 2 - 7 },
     webPreferences: {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
       preload: fileURLToPath(new URL("preload.cjs", import.meta.url)),
       additionalArguments: ownsHost ? ["--lemma-owns-host"] : [],
+      // The browser view's pages (`browser.ts`); page fullscreen fills the page's place, not the window.
+      webviewTag: true,
+      disableHtmlFullscreenWindowResize: true,
     },
   });
+  appWindows.add(window);
+  window.once("closed", () => {
+    appWindows.delete(window);
+    // Off macOS the app goes with its last window, whatever a page left open (its windows close with it).
+    if (appWindows.size === 0 && process.platform !== "darwin") app.quit();
+  });
+  hostBrowser(window);
   window.once("ready-to-show", () => window.show());
   // Links leave for the system browser, as they would leave the app's tab.
   const external = (target: string) => {
@@ -255,7 +292,7 @@ const openWindow = (url: string) => {
  * into it, else in a new window, or once the page is known.
  */
 const openLink = (path: string) => {
-  const [window] = BrowserWindow.getAllWindows();
+  const [window] = windows();
   if (window === undefined) {
     const url = pageAt(path);
     if (url === undefined) pending = path;
@@ -293,7 +330,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on("second-instance", (_event, argv) => {
     const link = linkIn(argv);
     if (link !== undefined) return openLink(link);
-    const [window] = BrowserWindow.getAllWindows();
+    const [window] = windows();
     if (window === undefined) {
       const url = pageAt();
       if (url !== undefined) openWindow(url);
@@ -303,11 +340,43 @@ if (!app.requestSingleInstanceLock()) {
     window.focus();
   });
 
+  /**
+   * Electron's default menu, less what the page binds itself: ⌘W closes the pane's tab and ⌘N starts a thread (the web
+   * app's Actions), so no menu item takes them first. Quitting closes the window.
+   */
+  const menu: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin" ? [{ role: "appMenu" as const }] : []),
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    {
+      label: "Window",
+      submenu: [
+        { role: "minimize" },
+        { role: "zoom" },
+        ...(process.platform === "darwin" ? [{ type: "separator" as const }, { role: "front" as const }] : [{ role: "quit" as const }]),
+      ],
+    },
+  ];
+
   app
     .whenReady()
     .then(async () => {
       // Windows and Linux take the window's `icon`; the macOS Dock takes the app's.
       app.dock?.setIcon(icon);
+      Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
       // Without the dev server the window would be blank, and a host started for it would serve nothing.
       if (
         webUrl !== undefined &&
@@ -343,7 +412,7 @@ if (!app.requestSingleInstanceLock()) {
   // macOS keeps an app running with no windows; the Dock icon opens a new one.
   app.on("activate", () => {
     const url = pageAt();
-    if (url !== undefined && BrowserWindow.getAllWindows().length === 0) openWindow(url);
+    if (url !== undefined && windows().length === 0) openWindow(url);
   });
   app.on("window-all-closed", () => {
     if (process.platform !== "darwin") app.quit();
@@ -374,7 +443,7 @@ if (!app.requestSingleInstanceLock()) {
         if (response !== 0) {
           // Kept running: a quit that came from closing the last window leaves none, and off macOS nothing else opens one.
           const url = pageAt();
-          if (url !== undefined && BrowserWindow.getAllWindows().length === 0) openWindow(url);
+          if (url !== undefined && windows().length === 0) openWindow(url);
           return;
         }
       }

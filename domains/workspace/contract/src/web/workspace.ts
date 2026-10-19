@@ -54,7 +54,7 @@ export interface WorkspaceService {
 
 export class Workspace extends Context.Service<Workspace, WorkspaceService>()("lemma-web/Workspace") {}
 
-/** An item in a project's menu in the sidebar, by the project's directory. New thread and copy path are the sidebar's defaults; project settings and delete, the projects page's. */
+/** An item in a project's menu, by the project's directory: project settings and delete are the projects page's. */
 export type ProjectAction = MenuAction<string>;
 
 export const ProjectActions = defineSlot<ProjectAction>("project.actions");

@@ -52,10 +52,10 @@ function WorkspaceBar(props: { deps: Deps }) {
   );
 }
 
-/** Local checkout or a new worktree; fixed once the chat exists. */
+/** Local checkout or a new worktree; fixed once the chat's first prompt is sent. */
 function ModePicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]> }) {
   const { threads, workspace } = props.deps;
-  const isNew = () => threads.activeId() === undefined;
+  const isNew = threads.blank;
   const worktree = () => workspace.worktree().enabled;
   const workingDir = workspace.workingDir;
   const setNewWorktree = workspace.setWorktree;
@@ -138,12 +138,13 @@ function ModePicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]
 
 function ProjectPicker(props: { deps: Deps }) {
   const { threads, workspace, slots } = props.deps;
-  const isNew = () => threads.activeId() === undefined;
+  const isNew = threads.blank;
   const projects = workspace.projects;
   const current = () => workspace.workingDir() ?? "";
   const addProject = () => slots.get(Actions, WorkspaceActionIds.addProject);
   const standalone = () => workspace.isStandalone(current());
   const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
+  const pick = usePlugin().action("start the chat in the project picked", (path: string) => threads.newThread(path, { inPlace: true }));
   const label = () => (
     <Show
       when={!standalone()}
@@ -189,7 +190,7 @@ function ProjectPicker(props: { deps: Deps }) {
                   role="menuitemradio"
                   aria-checked={path === current()}
                   onClick={() => {
-                    threads.newThread(path);
+                    pick(path);
                     close();
                   }}
                 >
@@ -274,7 +275,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
     return needle === "" ? branches() : branches().filter((branch) => branch.name.toLowerCase().includes(needle));
   });
   /** A new chat headed for a new worktree: the menu picks the branch it starts from instead of switching. */
-  const baseMode = () => threads.activeId() === undefined && workspace.worktree().enabled;
+  const baseMode = () => threads.blank() && workspace.worktree().enabled;
   const base = () => workspace.worktree().base ?? props.git.branch ?? undefined;
   const canCreate = () => {
     if (baseMode()) return false;
@@ -312,7 +313,7 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
     if (branch.worktree !== undefined) {
       close();
       // git keeps a branch in one worktree at a time; go to where it is instead.
-      if (threads.activeId() === undefined) threads.newThread(branch.worktree);
+      if (threads.blank()) void threads.newThread(branch.worktree, { inPlace: true });
       else notify.toast({ level: "info", message: `${branch.name} is checked out in the worktree at ${branch.worktree}` });
       return;
     }

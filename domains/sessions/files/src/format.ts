@@ -4,7 +4,7 @@ import { SessionEvent } from "@lemma/sessions";
 
 /**
  * One JSONL file per session. Line 1 is the header; every later line is a
- * `SessionEvent`, a checkout record, or a marks record. Events have no top-level
+ * `SessionEvent`, a checkout record, or a marks record (which may move it). Events have no top-level
  * `type`, so the kinds of line cannot be confused. The file is only ever appended to,
  * except that a torn final line (a crash mid-write) is cut off before the next
  * append.
@@ -26,11 +26,16 @@ export const Checkout = Schema.Struct({
 });
 export type Checkout = typeof Checkout.Type;
 
-/** Pins or archives the session, written by `mark`; each field present overrides earlier ones. Not an event: it leaves the leaf alone. */
+/**
+ * Pins, archives, or keeps the session, written by `mark`, or moves it to another directory (`cwd`), written by `relocate`;
+ * each field present overrides earlier ones. Not an event: it leaves the leaf alone.
+ */
 export const Marks = Schema.Struct({
   type: Schema.Literal("marks"),
   pinned: Schema.optional(Schema.Boolean),
   archived: Schema.optional(Schema.Boolean),
+  kept: Schema.optional(Schema.Boolean),
+  cwd: Schema.optional(Schema.String),
   at: Schema.Number,
 });
 export type Marks = typeof Marks.Type;
@@ -59,7 +64,10 @@ export function decodeRecord(json: unknown, header: boolean): Result.Result<Line
 export const SESSION_ID_BYTES = 9;
 export const EVENT_ID_BYTES = 6;
 
-/** Directory for a working directory, pi-style: `/home/me/app` → `--home-me-app--`. The header's `cwd` stays authoritative. */
+/**
+ * Directory for a working directory, pi-style: `/home/me/app` → `--home-me-app--`. The file's `cwd` (the last marks
+ * record's, else the header's) stays authoritative.
+ */
 export const encodeCwd = (cwd: string): string => `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
 
 const fileName = (createdAt: number, id: string): string => `${new Date(createdAt).toISOString().replace(/[:.]/g, "-")}_${id}.jsonl`;

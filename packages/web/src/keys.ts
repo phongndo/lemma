@@ -1,11 +1,17 @@
 /** macOS writes app shortcuts with ⌘; Windows and Linux with Ctrl. */
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad|iPod/.test(navigator.platform || navigator.userAgent);
 
+/** What bindings read of a key press: a DOM `KeyboardEvent`, or another's in its terms (the desktop app's pages'). */
+export type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
+
+const modHeld = (event: Pick<KeyEvent, "metaKey" | "ctrlKey">, mac: boolean): boolean =>
+  mac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+
 /**
  * Whether the platform's shortcut modifier is held: ⌘ on macOS, Ctrl elsewhere.
  * On macOS, Ctrl stays with text fields (Ctrl+K deletes to the end of the line).
  */
-export const modKey = (event: KeyboardEvent): boolean => (isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey);
+export const modKey = (event: Pick<KeyEvent, "metaKey" | "ctrlKey">): boolean => modHeld(event, isMac);
 
 const MAC: Readonly<Record<string, string>> = { mod: "⌘", shift: "⇧", alt: "⌥", ctrl: "⌃" };
 const OTHER: Readonly<Record<string, string>> = { mod: "Ctrl", shift: "Shift", alt: "Alt", ctrl: "Ctrl" };
@@ -37,8 +43,6 @@ const NAMES: Readonly<Record<string, string>> = {
   end: "End",
 };
 
-type KeyEvent = Pick<KeyboardEvent, "key" | "code" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey">;
-
 /**
  * The key pressed, lowercase, as bindings name it. Letters and digits come from
  * the physical key, so ⌥K on a Mac (which types ˚) is still `k`; other keys
@@ -61,7 +65,7 @@ export const bindingOf = (event: KeyEvent): string | undefined => {
   const key = keyOf(event);
   if (MODIFIERS.has(key) || key === "dead" || key === "unidentified") return undefined;
   const named = key.length > 1 || /^[a-z0-9]$/.test(key);
-  const parts = [...(modKey(event as KeyboardEvent) ? ["mod"] : []), ...(event.shiftKey && named ? ["shift"] : []), ...(event.altKey ? ["alt"] : []), key];
+  const parts = [...(modKey(event) ? ["mod"] : []), ...(event.shiftKey && named ? ["shift"] : []), ...(event.altKey ? ["alt"] : []), key];
   return parts.join("+");
 };
 
@@ -74,16 +78,35 @@ export const formatKeys = (binding: string): string => {
 /** A label with the shortcut that does the same, when there is one: `Settings · ⌘,`. */
 export const withKeys = (label: string, binding: string | undefined): string => (binding === undefined ? label : `${label} · ${formatKeys(binding)}`);
 
+/** The symbol on a key, by its place (US layout): `]` on the key that types `}` with Shift. */
+const SYMBOLS: Readonly<Record<string, string>> = {
+  BracketLeft: "[",
+  BracketRight: "]",
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  Backquote: "`",
+  Minus: "-",
+  Equal: "=",
+};
+
 /**
  * Whether `event` presses `binding`. Shift must match for letters and when the
  * binding names it; for other keys it is whatever the layout needs to type
- * them (`/`, `?`).
+ * them (`/`, `?`). A symbol the key does not type with Shift held (`mod+shift+]`
+ * types `}`) is known by the key's place, Shift counting. `mac`: whether `mod`
+ * is ⌘, as on this platform when not said; the desktop app's main process,
+ * matching its pages' keys, says.
  */
-export const matchesKeys = (binding: string, event: KeyboardEvent): boolean => {
+export const matchesKeys = (binding: string, event: KeyEvent, mac = isMac): boolean => {
   const { key, mod, shift, alt } = parse(binding);
-  if (keyOf(event) !== key || modKey(event) !== mod || event.altKey !== alt) return false;
+  if (modHeld(event, mac) !== mod || event.altKey !== alt) return false;
   if (!mod && (event.ctrlKey || event.metaKey)) return false;
-  return shift || /^[a-z0-9]$/.test(key) || key.length > 1 ? event.shiftKey === shift : true;
+  if (keyOf(event) === key) return shift || /^[a-z0-9]$/.test(key) || key.length > 1 ? event.shiftKey === shift : true;
+  return shift && event.shiftKey && SYMBOLS[event.code] === key;
 };
 
 /** A binding with no modifier types into a text field, so it waits until focus leaves one. */
@@ -109,7 +132,7 @@ export type ListKey = { readonly move: 1 | -1 } | { readonly pick: number };
  */
 export const listKey = (event: KeyEvent): ListKey | undefined => {
   const key = keyOf(event);
-  if (modKey(event as KeyboardEvent) && !event.altKey && !event.shiftKey && /^[1-9]$/.test(key)) return { pick: Number(key) - 1 };
+  if (modKey(event) && !event.altKey && !event.shiftKey && /^[1-9]$/.test(key)) return { pick: Number(key) - 1 };
   if (event.altKey || event.shiftKey || event.metaKey) return undefined;
   if (key === "arrowdown" && !event.ctrlKey) return { move: 1 };
   if (key === "arrowup" && !event.ctrlKey) return { move: -1 };

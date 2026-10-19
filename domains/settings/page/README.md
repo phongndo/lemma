@@ -5,7 +5,7 @@ plugins add to `SettingsSections`, each showing the `SettingsGroups` entries
 for it, and a search across all of them. Provides `Settings`
 ([`@lemma/settings`](../contract/src/index.ts)). Adds the page to `Pages`; the
 General section (`SectionIds.general`), which has no entries of its own and
-holds what other plugins add to it; a settings button to `SidebarFooter`; and
+holds what other plugins add to it; and
 `settings.open` (`mod+,`), `settings.close` (Escape or `mod+,`, while settings
 show), and `settings.search` (`/`) to `Actions`. Requires `Slots`, `Router`,
 `WebPlugins`, and `Layout` ([`@lemma/frame`](../../frame/contract/src/index.ts)).

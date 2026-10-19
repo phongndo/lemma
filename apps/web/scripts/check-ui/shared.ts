@@ -60,6 +60,18 @@ export const expose = (page: Page, ...names: string[]) =>
     (window as any).services = Object.fromEntries(await Promise.all(names.map(async (name) => [name, await lemma.service(contracts[name])])));
   }, names);
 
+/** Waits for the new-thread page (`/`) to have gone on to a blank thread, as it does once the app knows where one starts. */
+export const atBlankThread = async (page: Page) => {
+  await page.evaluate(async () => {
+    const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    (window as any).blankThreads = await (window as any).lemma.service(Threads);
+  });
+  await page.waitForFunction(() => {
+    const threads = (window as any).blankThreads;
+    return location.pathname.startsWith("/threads/") && threads.active() !== undefined && threads.blank();
+  });
+};
+
 /** Every page opened, traced, so that a failure can leave its trace and a screenshot behind. */
 const pages: Page[] = [];
 export const open = async () => {

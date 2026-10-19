@@ -1,5 +1,5 @@
 import { For, Show, createComputed, createEffect, on, onMount } from "solid-js";
-import { CheckIcon, ChevronDownIcon, Markdown, SkipIcon, XIcon } from "@lemma/look";
+import { CheckIcon, ChevronDownIcon, SkipIcon, XIcon } from "@lemma/look";
 import type { Asking } from "./asking.ts";
 import { answerOf, describeAnswer, emptyDraft } from "./draft.ts";
 import { displayLabel } from "./questions.ts";
@@ -91,11 +91,6 @@ export function QuestionCard(props: { readonly asking: Asking; readonly release:
   });
 
   const answered = (index: number) => answerOf(asking.drafts()[index] ?? emptyDraft) !== undefined;
-  const preview = () => {
-    const current = asking.question();
-    if (current === undefined || !current.options.some((option) => option.preview !== undefined)) return undefined;
-    return current.options[asking.active() ?? 0]?.preview ?? "";
-  };
 
   return (
     <section class="ask" ref={card} aria-label="The agent's questions" onKeyDown={onKeyDown}>
@@ -183,7 +178,7 @@ export function QuestionCard(props: { readonly asking: Asking; readonly release:
         }
       >
         {(current) => (
-          <div class="ask-body" classList={{ "ask-with-preview": preview() !== undefined }}>
+          <div class="ask-body">
             <div class="ask-main">
               <p class="ask-question" id={`ask-q-${asking.open.toolCallId}`}>
                 {current.question}
@@ -227,13 +222,6 @@ export function QuestionCard(props: { readonly asking: Asking; readonly release:
                 </For>
               </div>
             </div>
-            <Show when={preview() !== undefined}>
-              <div class="ask-preview" aria-label="Preview of the focused option">
-                <Show when={preview() !== ""} fallback={<p class="muted small">No preview for this option.</p>}>
-                  <Markdown text={preview()!} />
-                </Show>
-              </div>
-            </Show>
           </div>
         )}
       </Show>

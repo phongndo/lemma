@@ -14,6 +14,7 @@
     "./paint": "./src/paint.ts",
     "./match": "./src/match.ts",
     "./format": "./src/format.ts",
+    "./drag": "./src/drag.ts",
     "./vitest": "./vitest.web.ts"
   },
   "scripts": {

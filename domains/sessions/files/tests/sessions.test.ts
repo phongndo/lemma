@@ -30,7 +30,7 @@ const resolvable = () => {
 };
 
 /** Runs `body` against a fresh core over the same directory, as a restarted host would. */
-const run = <A, E>(body: Effect.Effect<A, E, Sessions | Events>, config?: { readonly unloadAfter?: number }) =>
+const run = <A, E>(body: Effect.Effect<A, E, Sessions | Events>, config?: { readonly unloadAfter?: number; readonly emptyAfter?: number }) =>
   Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -375,6 +375,133 @@ describe("sessions", () => {
         expect(next.parent).toBe(before.leaf);
       }),
     );
+  });
+
+  it("moves an empty session to another directory, its file with it, and keeps it there across a restart", async () => {
+    const id = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const info = yield* store.create();
+        yield* store.mark(info.id, { pinned: true });
+        const moved = yield* store.relocate(info.id, "/work/other");
+        expect(moved).toMatchObject({ id: info.id, cwd: "/work/other", pinned: true, lastSeq: 0 });
+        expect((yield* store.list({ cwd: "/work/other" })).map((session) => session.id)).toEqual([info.id]);
+        expect(yield* store.list({ cwd: "/work/app" })).toEqual([]);
+        // Written to where it now is.
+        yield* store.append(info.id, custom(1));
+        return info.id;
+      }),
+    );
+    const files = await sessionFiles();
+    expect(files).toHaveLength(1);
+    expect(path.basename(path.dirname(files[0]!))).toBe(encodeCwd("/work/other"));
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect(yield* store.get(id)).toMatchObject({ cwd: "/work/other", pinned: true, lastSeq: 1 });
+        expect((yield* store.events(id)).length).toBe(1);
+      }),
+    );
+  });
+
+  it("moves a session whose new name a failing disk cannot yet make durable: it is where it moved, and takes appends", async () => {
+    const handles = await fileHandles();
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const info = yield* store.create();
+        // Directory syncs fail from here: the rename lands, making it durable does not.
+        const sync = vi.spyOn(handles, "sync").mockRejectedValue(Object.assign(new Error("EIO: i/o error"), { code: "EIO" }));
+        const moved = yield* store.relocate(info.id, "/work/other");
+        sync.mockRestore();
+        expect(moved.cwd).toBe("/work/other");
+        yield* store.append(info.id, custom(1));
+        expect(yield* store.get(info.id)).toMatchObject({ cwd: "/work/other", lastSeq: 1 });
+      }),
+    );
+    const files = await sessionFiles();
+    expect(path.basename(path.dirname(files[0]!))).toBe(encodeCwd("/work/other"));
+  });
+
+  it("refuses to move a session something has gone into, or one held", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const used = yield* store.create();
+        yield* store.append(used.id, custom(1));
+        const refused = yield* Effect.flip(store.relocate(used.id, "/work/other"));
+        expect(refused.reason).toBe("NotEmpty");
+        const held = yield* store.create();
+        const busy = yield* Effect.scoped(Effect.andThen(store.hold(held.id), Effect.flip(store.relocate(held.id, "/work/other"))));
+        expect(busy.reason).toBe("Busy");
+        expect((yield* store.get(held.id)).cwd).toBe("/work/app");
+      }),
+    );
+  });
+
+  it("searches what was said, the newest sessions first, reading one not loaded without loading it", async () => {
+    const said = (role: "user", text: string): EventData => ({ type: "message", message: { role, content: [{ type: "text", text }], timestamp: 0 } });
+    const ids = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const one = yield* store.create();
+        yield* store.append(one.id, said("user", "deploy the docs site"));
+        const other = yield* store.create();
+        yield* store.append(other.id, said("user", "the docs are out of date"));
+        yield* store.create();
+        // The newer by `updatedAt` (they may share a millisecond: then as listed).
+        const [newer, older] = (yield* store.list()).filter((info) => info.lastSeq > 0).map((info) => info.id);
+        return { older: older!, newer: newer!, deploy: one.id };
+      }),
+    );
+    // A restarted host: nothing loaded. Searching only reads the files: none is opened to write (or made durable).
+    const flags: unknown[] = [];
+    const open = fs.open;
+    vi.spyOn(fs, "open").mockImplementation(async (file, how, mode) => {
+      if (String(file).endsWith(".jsonl")) flags.push(how);
+      return open(file, how, mode);
+    });
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.search("DOCS")).map((match) => match.sessionId)).toEqual([ids.newer, ids.older]);
+        expect((yield* store.search("docs", { limit: 1 })).map((match) => match.sessionId)).toEqual([ids.newer]);
+        expect(yield* store.search("docs deploy")).toMatchObject([{ sessionId: ids.deploy, role: "user" }]);
+        expect(yield* store.search("  ")).toEqual([]);
+      }),
+      { unloadAfter: 0 },
+    );
+    expect(flags.length).toBeGreaterThan(0);
+    expect(flags.every((how) => how === "r" || how === undefined)).toBe(true);
+  });
+
+  it("deletes a session left empty past emptyAfter, but not one kept, filed, or with something in it", async () => {
+    const ids = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const left = yield* store.create();
+        const kept = yield* store.create();
+        yield* store.mark(kept.id, { kept: true });
+        const pinned = yield* store.create();
+        yield* store.mark(pinned.id, { pinned: true });
+        const used = yield* store.create();
+        yield* store.append(used.id, custom(1));
+        expect((yield* store.get(kept.id)).kept).toBe(true);
+        return { left: left.id, kept: kept.id, pinned: pinned.id, used: used.id };
+      }),
+      { emptyAfter: 0 },
+    );
+    // Started again with a millisecond's grace: the sweep runs as it starts, while listing goes on beside it.
+    const listed = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        for (let tries = 0; tries < 500 && (yield* store.list()).some((info) => info.id === ids.left); tries++);
+        return (yield* store.list()).map((info) => info.id);
+      }),
+      { emptyAfter: 0.001 },
+    );
+    expect(listed).not.toContain(ids.left);
+    expect(listed).toEqual(expect.arrayContaining([ids.kept, ids.pinned, ids.used]));
   });
 
   it("removes a session from disk and memory and publishes its removal", async () => {

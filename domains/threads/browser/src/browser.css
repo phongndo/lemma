@@ -1,0 +1,132 @@
+.browser-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 40px;
+  padding: 0 8px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+}
+
+.browser-address {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  margin: 0 4px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunk);
+  color: var(--text-2);
+  font-size: calc(13px * var(--text-scale));
+  outline: none;
+}
+
+.browser-address:focus {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.browser-bar .icon-button {
+  color: var(--text-3);
+}
+
+.browser-bar .icon-button[aria-pressed="true"] {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.browser-bar .icon-button:disabled {
+  opacity: 0.4;
+}
+
+/* The arrow back, turned: forward. */
+.browser-forward svg {
+  transform: scaleX(-1);
+}
+
+/* A thin bar under the toolbar, running while the page loads. */
+.browser-progress {
+  flex: none;
+  height: 2px;
+  margin-top: -2px;
+  overflow: hidden;
+}
+
+.browser-progress.loading::after {
+  content: "";
+  display: block;
+  width: 30%;
+  height: 100%;
+  background: var(--accent);
+  animation: browser-progress 1.1s ease-in-out infinite;
+}
+
+@keyframes browser-progress {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(340%);
+  }
+}
+
+/* Where the page shows: it is drawn over this from the app's top, so what is here shows only while it does not. */
+.browser-place {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.browser-note {
+  max-width: 380px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  font-size: calc(13px * var(--text-scale));
+  text-align: center;
+}
+
+.browser-note h2 {
+  font-size: calc(15px * var(--text-scale));
+  font-weight: 600;
+}
+
+.browser-note-url {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text-2);
+  word-break: break-all;
+}
+
+/* A page, over its tab's place (`pages.tsx`): above the pane it shows in (7 where it covers the chat), under the pane's edge (9), the app's drawer, menus, and dialogs. A page that sets no background is white, as in a browser, whatever the app's theme. */
+.browser-page {
+  --browser-canvas: #fff;
+  position: fixed;
+  z-index: 8;
+  display: flex;
+  background: var(--browser-canvas);
+}
+
+.browser-page > webview,
+.browser-page > iframe {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+/* While an edge is dragged (the pane's, the sidebar's) the page takes no pointer, so the drag goes on over it. */
+body:has(.resizing) .browser-page {
+  pointer-events: none;
+}

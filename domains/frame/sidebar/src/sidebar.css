@@ -1,4 +1,11 @@
 .sidebar {
+  /* Text too long for its line fades out at its end rather than breaking off with an ellipsis. */
+  --fade-end: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  /* A prompt written and not sent tints its row. */
+  --draft-tint: color-mix(in srgb, var(--warn) 6%, transparent);
+  --draft-tint-hover: color-mix(in srgb, var(--warn) 11%, transparent);
+  /* The archived panel's top edge under the pointer: a line in the accent across its middle. */
+  --edge-line: linear-gradient(transparent 3px, var(--accent) 3px, var(--accent) 4px, transparent 4px);
   flex: 1;
   min-width: 0;
   display: flex;
@@ -8,215 +15,519 @@
 }
 
 .sidebar-head {
-  padding: 10px 8px 6px;
   display: flex;
   align-items: center;
-  gap: 4px;
+  height: var(--head-height);
+  padding: 0 8px;
+  flex: none;
 }
 
-/* In a desktop window: the actions share the title bar with the window's controls; search goes below. */
+/* In a desktop window: the head shares the title bar with the window's controls, and drags it. */
 [data-titlebar] .sidebar-head {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-areas: ". actions" "search search";
-  row-gap: 4px;
-  padding-top: 0;
+  padding-left: max(8px, var(--titlebar-inset, 0px));
   app-region: drag;
 }
 
-[data-titlebar] .sidebar-head .search-box {
-  grid-area: search;
+[data-titlebar] .sidebar-head > :not(.spacer) {
+  app-region: no-drag;
 }
 
-[data-titlebar] .sidebar-head .sidebar-actions {
-  grid-area: actions;
-  height: 48px;
+.sidebar-head .spacer {
+  flex: 1;
 }
 
 .sidebar-actions {
   display: flex;
   align-items: center;
-  flex: none;
 }
 
-.sidebar-actions .icon-button.active {
+.sidebar-head .icon-button {
+  width: 28px;
+  height: 28px;
+}
+
+/* The threads, which scroll, over the archived, in a panel of their own at the foot. */
+.thread-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.thread-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 8px;
+}
+
+.thread-section {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.thread-section > li {
+  position: relative;
+}
+
+/* New threads left mid-prompt, above the rest. */
+.drafts-rule {
+  flex: none;
+  height: 1px;
+  margin: 6px 10px;
+  background: var(--border);
+}
+
+/* A thread: a card of two lines (its title and state, then its project and branch), or one line once archived. */
+.thread-row {
+  position: relative;
+  /* A row is a control: pressing it opens the thread, not a text selection. */
+  user-select: none;
+  -webkit-user-select: none;
+  border-radius: var(--radius);
+  color: var(--text-2);
+}
+
+.thread-row:hover {
+  background: var(--bg-hover);
+}
+
+.thread-row.drafted,
+.thread-row.draft {
+  background: var(--draft-tint);
+}
+
+.thread-row.drafted:hover,
+.thread-row.draft:hover {
+  background: var(--draft-tint-hover);
+}
+
+.thread-row.active {
+  background: var(--bg-active);
   color: var(--text);
 }
 
-.session-groups {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 6px 12px;
+.thread-open {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 10px;
+  border-radius: inherit;
+  color: inherit;
+  text-decoration: none;
+  cursor: default;
+  font-size: calc(13px * var(--text-scale));
 }
 
-.sidebar-empty {
-  color: var(--text-3);
-  font-size: calc(12.5px * var(--text-scale));
-  padding: 8px 10px;
-}
-
-.session-group + .session-group {
-  margin-top: 10px;
-}
-
-.group-head {
+/* Each line exactly one height, whatever it holds or the pointer shows: a card never changes size under the pointer. */
+.thread-line {
   display: flex;
   align-items: center;
-  height: 26px;
-  padding-right: 4px;
+  gap: 6px;
+  min-width: 0;
+  height: 20px;
+}
+
+.thread-project {
+  flex: none;
+  max-width: 60%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Under the title: the project and the branch its folder has checked out, then its age or state at the end. */
+.thread-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 20px;
   color: var(--text-3);
   font-size: calc(12px * var(--text-scale));
 }
 
-.group-toggle {
+.thread-place {
+  flex: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex: 1;
+  gap: 5px;
   min-width: 0;
-  height: 100%;
-  padding: 0 8px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: none;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
+  overflow: hidden;
+  /* The project and branch fade at their end: only what reaches it. */
+  mask-image: var(--fade-end);
 }
 
-.group-toggle:hover .group-name {
+.thread-place .icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-left: 3px;
+}
+
+.thread-pin,
+.thread-drafted {
+  flex: none;
+  display: grid;
+  color: var(--text-3);
+}
+
+.thread-drafted {
+  color: var(--warn);
+}
+
+.thread-pin .icon,
+.thread-drafted .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.thread-when {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+.thread-when .icon {
+  width: 12px;
+  height: 12px;
+}
+
+/*
+ * What it is doing that matters, where the time goes: waiting on the person, at work, done and not yet seen. Named by
+ * `data-state`, not a class another stylesheet might also style.
+ */
+.thread-state {
+  font-weight: 500;
+}
+
+.thread-state[data-state="waiting"] {
+  color: var(--warn);
+}
+
+.thread-state[data-state="working"] {
+  color: var(--accent-text);
+}
+
+.thread-state[data-state="done"] {
+  color: var(--ok);
+}
+
+.thread-state .spinner {
+  width: 11px;
+  height: 11px;
+}
+
+.thread-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  mask-image: var(--fade-end);
+  white-space: nowrap;
+  color: var(--text);
+  font-weight: 500;
+}
+
+.thread-title.untitled {
+  color: var(--text-3);
+}
+
+.thread-branch {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+/* Archived: one muted line. */
+.thread-row.slim .thread-open {
+  padding: 4px 10px;
+}
+
+.thread-row.slim .thread-title {
+  flex: 1;
+  color: var(--text-3);
+  font-weight: 400;
+}
+
+/*
+ * Under the pointer, the age or state gives way to the row's buttons, on the same line (a card's second, a slim row's
+ * one): a pin (or unpin), then Archive (Unarchive once archived, Discard for a draft) in plain words; that line ends
+ * before them (`--hover-room`, set on the row), and the title stays whole.
+ */
+.thread-hover {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  display: none;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+}
+
+.thread-row.slim .thread-hover {
+  bottom: 4px;
+}
+
+.thread-hover-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 2px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(12px * var(--text-scale));
+}
+
+.thread-hover-button .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.thread-hover-button:hover {
   color: var(--text);
 }
 
-.group-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text-2);
-  font-weight: 600;
-  white-space: nowrap;
+.thread-row:hover .thread-hover,
+.thread-row:focus-within .thread-hover:has(:focus-visible) {
+  display: inline-flex;
 }
 
-.group-button {
-  width: 22px;
-  height: 22px;
-  opacity: 0;
+/* Its pin gives way to the button that unpins it. */
+.thread-row:hover .thread-when,
+.thread-row:hover .thread-pin {
+  display: none;
 }
 
-.group-head:hover .group-button,
-.group-button:focus-visible,
-.group-button.active,
-.group-button[aria-expanded="true"] {
-  opacity: 1;
+.thread-row:hover .thread-meta,
+.thread-row.slim:hover .thread-line {
+  padding-right: var(--hover-room, 0px);
 }
 
-.session-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.session-row {
-  position: relative;
+/* A row's details, beside the sidebar while it is pointed at. */
+.thread-details {
+  position: fixed;
+  z-index: var(--z-menu);
+  width: max-content;
+  max-width: 300px;
+  padding: 10px 12px;
   display: flex;
-  align-items: center;
-  height: 30px;
-  border-radius: var(--radius-sm);
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-2);
+  font-size: calc(13px * var(--text-scale));
+  pointer-events: none;
 }
 
-.session-open {
-  flex: 1;
-  min-width: 0;
+.thread-details-title {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.thread-details-line {
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 100%;
-  padding: 0 8px;
-  border: 0;
-  border-radius: inherit;
-  background: transparent;
-  color: inherit;
-  text-align: left;
-  font: inherit;
-  font-size: calc(13px * var(--text-scale));
-  text-decoration: none;
-  cursor: pointer;
 }
 
-/* The time gives way to the ⋯ menu while the row is hovered, focused, or its menu is open. */
-.session-more {
+.thread-details-line .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+}
+
+.thread-details .muted {
+  color: var(--text-3);
+}
+
+.thread-details .waiting {
+  color: var(--warn);
+}
+
+/* Its right-click menu opens from here; the trigger is never seen. */
+.thread-menu-anchor {
   position: absolute;
-  right: 4px;
-  width: 24px;
-  height: 24px;
-  opacity: 0;
-}
-
-.session-row:hover .session-more,
-.session-row:focus-within .session-more,
-.session-more[aria-expanded="true"] {
-  opacity: 1;
-}
-
-.session-row:hover .session-time,
-.session-row:focus-within .session-time,
-.session-row:has(.session-more[aria-expanded="true"]) .session-time {
+  left: 8px;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
   visibility: hidden;
 }
 
-@media (hover: none) {
-  .session-more {
-    opacity: 1;
-  }
-
-  .session-time {
-    visibility: hidden;
-  }
-}
-
-.session-row:hover {
-  background: var(--bg-hover);
-}
-
-.session-row.active {
-  background: var(--bg-active);
-}
-
-.session-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.session-title.untitled {
-  color: var(--text-2);
-}
-
-.session-time {
-  flex: none;
-  color: var(--text-3);
-  font-size: calc(11.5px * var(--text-scale));
-}
-
-.running-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--accent);
-  flex: none;
-  animation: pulse 1.4s ease-in-out infinite;
-}
-
-.session-rename {
+.thread-rename {
   width: 100%;
-  height: 30px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
+  height: 32px;
+  padding: 0 10px;
+  border-radius: var(--radius);
   border: 1px solid var(--accent);
   background: var(--bg-raised);
   outline: none;
   font-size: calc(13px * var(--text-scale));
+}
+
+/* While a thread is dragged, each section's name, with a place to drop when it is empty. */
+.thread-head-label {
+  display: block;
+  padding: 6px 10px 2px;
+  color: var(--text-3);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 500;
+}
+
+.thread-head-slot {
+  display: block;
+  margin: 2px 0;
+  padding: 9px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  text-align: center;
+}
+
+/* The thread being dragged: raised, and saying what dropping it here does. */
+.drag-source .thread-row {
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-lg);
+}
+
+.drop-verb {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: calc(11px * var(--text-scale));
+  font-weight: 500;
+}
+
+.drop-verb .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.drag-source .thread-when,
+.drag-source .thread-pin,
+.drag-source .thread-drafted,
+.thread-list.dragging .thread-hover,
+.thread-list.dragging .thread-details {
+  display: none;
+}
+
+.thread-list.dragging .thread-row:not(.active):hover {
+  background: transparent;
+}
+
+/*
+ * The archived: a panel at the foot, its head the fold. Opened, it is as tall as its top edge was dragged to (kept), and
+ * its rows scroll in it; a thread dragged over it lights it, as dropping it there archives it.
+ */
+.archived-panel {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  /* The list above keeps room (`LIST_MIN`), whatever height was kept. */
+  max-height: calc(100% - 120px);
+  padding: 4px 8px;
+}
+
+.archived-panel.open {
+  border-top: 1px solid var(--border);
+}
+
+.archived-panel.target {
+  background: var(--accent-soft);
+}
+
+.archived-panel.target .archived-head {
+  color: var(--accent-text);
+}
+
+.archived-rows {
+  min-height: 0;
+}
+
+.archived-panel.open .archived-rows {
+  flex: 1;
+  overflow-y: auto;
+}
+
+/* Its top edge, dragged (or ↑ and ↓ while focused) to resize it; a double-click puts it back. */
+.archived-edge {
+  position: absolute;
+  top: -4px;
+  left: 0;
+  right: 0;
+  z-index: 1;
+  height: 7px;
+  cursor: row-resize;
+}
+
+.archived-edge:hover,
+.archived-edge:focus-visible {
+  outline: none;
+  background: var(--edge-line);
+}
+
+.archived-head {
+  flex: none;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: calc(12px * var(--text-scale));
+}
+
+.archived-head:hover {
+  color: var(--text-2);
+}
+
+.archived-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.archived-head .icon {
+  width: 14px;
+  height: 14px;
+  transform: rotate(180deg);
+}
+
+.archived-head[aria-expanded="true"] .icon {
+  transform: none;
 }
 
 .sidebar-foot {
@@ -224,13 +535,11 @@
   align-items: center;
   gap: 2px;
   padding: 8px 12px 8px 8px;
-  border-top: 1px solid var(--border);
+  flex: none;
 }
 
-.menu-item.menu-danger {
-  color: var(--err);
-}
-
-.menu-item.menu-danger[data-active="true"] {
-  color: var(--err);
+@media (hover: none) {
+  .thread-row .thread-hover {
+    display: inline-flex;
+  }
 }

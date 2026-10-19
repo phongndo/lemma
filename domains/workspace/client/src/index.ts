@@ -59,7 +59,7 @@ export default defineWebPlugin({
         if (dir === undefined) return;
         try {
           if (!(await statusOf(dir)).exists) await client.channel.call(WorkspaceChannels.createDirectory, { path: dir });
-          if (!onlyIfIdle) threads.newThread(dir);
+          if (!onlyIfIdle) await threads.newThread(dir, { inPlace: true });
           else if (threads.activeId() === undefined && threads.pendingCwd() === undefined) threads.startIn(dir);
         } catch (error) {
           notify.report(error, "Could not start a thread without a project");
@@ -145,7 +145,7 @@ export default defineWebPlugin({
               return false;
             }
             add(found.path);
-            threads.newThread(found.path);
+            await threads.newThread(found.path, { inPlace: true });
             return true;
           } catch (error) {
             notify.report(error, "Could not open the folder");

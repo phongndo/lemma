@@ -297,6 +297,35 @@ export default defineWebPlugin({
       when: () => section() === undefined,
       run: () => open("general"),
     });
+    // The sidebar's foot: the way to settings, marked with how many need attention, and opening at the first that does.
+    const attention = () => {
+      const found = slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
+      return found === undefined ? undefined : { id: found.id, title: found.title, badge: found.badge!()! };
+    };
+    const openKeys = () => {
+      const action = slots.get(Actions, "settings.open");
+      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
+    };
+    slots.add(SidebarFooter, {
+      id: "settings",
+      component: (props) => (
+        <button
+          class="icon-button with-badge"
+          classList={{ active: section() !== undefined }}
+          aria-label="Settings"
+          aria-pressed={section() !== undefined}
+          data-tip={withKeys(attention() === undefined ? "Settings" : `Settings · ${attention()!.title}: ${attention()!.badge}`, openKeys())}
+          onClick={() => {
+            if (section() !== undefined) open(undefined);
+            else open(attention()?.id ?? SectionIds.general);
+            props.onPick();
+          }}
+        >
+          <GearIcon />
+          <Show when={attention()}>{(shown) => <span class="count-badge">{Number.parseInt(shown().badge, 10) || "!"}</span>}</Show>
+        </button>
+      ),
+    });
     slots.add(PromptCommands, {
       id: "settings",
       order: 40,
@@ -338,25 +367,6 @@ export default defineWebPlugin({
       order: -10,
       when: () => section() !== undefined && focus() !== undefined,
       run: () => focus()?.(),
-    });
-    // A section needing attention is the likeliest reason to open settings, so the button goes straight to it.
-    const attention = () => slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
-    slots.add(SidebarFooter, {
-      id: "settings",
-      component: (props) => (
-        <button
-          class="icon-button with-badge"
-          aria-label="Settings"
-          data-tip={attention() === undefined ? withKeys("Settings", keysOf("settings.open")) : `Settings · ${attention()!.title}: ${attention()!.badge!()}`}
-          onClick={() => {
-            open(attention()?.id ?? "general");
-            props.onPick();
-          }}
-        >
-          <GearIcon />
-          <Show when={attention()?.badge?.()}>{(badge) => <span class="count-badge">{Number.parseInt(badge(), 10) || "!"}</span>}</Show>
-        </button>
-      ),
     });
     return { settings: { section, open, params, setParams } };
   },

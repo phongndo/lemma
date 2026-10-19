@@ -60,7 +60,7 @@
     "@lemma/skills": "workspace:*",
     "@lemma/skills-files": "workspace:*",
     "@lemma/threads": "workspace:*",
-    "@lemma/threads-archived": "workspace:*",
+    "@lemma/threads-browser": "workspace:*",
     "@lemma/threads-client": "workspace:*",
     "@lemma/threads-composer": "workspace:*",
     "@lemma/threads-prompt-commands": "workspace:*",

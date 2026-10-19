@@ -1,34 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { HostError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
-import { appendLog, applySessionsChange, fileSessions, groupSessions, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/list.ts";
+import { appendLog, applySessionsChange, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/list.ts";
 
 const info = (id: string, cwd: string, updatedAt: number, lastSeq = 0): SessionInfo => ({ id, cwd, createdAt: 0, updatedAt, lastSeq });
 const ev = (id: string, parent: string | null, seq: number): SessionEvent => ({ seq, id, parent, at: seq, data: { type: "title", title: id } });
-
-describe("groupSessions", () => {
-  it("groups by cwd with newest groups and sessions first", () => {
-    const groups = groupSessions([info("a", "/x", 1), info("b", "/y", 5), info("c", "/x", 9), info("d", "/y", 2)]);
-    expect(groups.map((g) => [g.cwd, g.sessions.map((s) => s.id)])).toEqual([
-      ["/x", ["c", "a"]],
-      ["/y", ["b", "d"]],
-    ]);
-  });
-});
-
-describe("fileSessions", () => {
-  it("lifts pinned sessions out of their projects and leaves archived ones out, pinned or not", () => {
-    const filed = fileSessions([
-      { ...info("a", "/x", 1), pinned: true },
-      info("b", "/x", 5),
-      { ...info("c", "/y", 9), pinned: true },
-      { ...info("d", "/y", 7), archived: true },
-      { ...info("e", "/z", 8), archived: true, pinned: true },
-    ]);
-    expect(filed.pinned.map((s) => s.id)).toEqual(["c", "a"]);
-    expect(filed.groups.map((g) => [g.cwd, g.sessions.map((s) => s.id)])).toEqual([["/x", ["b"]]]);
-  });
-});
 
 describe("upsertSession", () => {
   it("inserts new sessions first and never steps back", () => {

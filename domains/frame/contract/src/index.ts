@@ -12,6 +12,8 @@ export interface DialogsService {
 export class Dialogs extends Context.Service<Dialogs, DialogsService>()("lemma-web/Dialogs") {}
 
 export interface LayoutService {
+  /** There is a sidebar, and it is out of view: collapsed, or a closed drawer on a narrow screen. */
+  readonly sidebarHidden: Accessor<boolean>;
   readonly toggleSidebar: () => void;
   /** On a narrow screen the sidebar is a drawer; picking something in it closes it. */
   readonly closeDrawer: () => void;
@@ -20,8 +22,8 @@ export interface LayoutService {
 export class Layout extends Context.Service<Layout, LayoutService>()("lemma-web/Layout") {}
 
 /**
- * Mounted over the whole app in order: dialogs (the bundled ones at orders 10 to 40), questions (50), toasts (100),
- * tooltips (200). Each shows itself when it should.
+ * Mounted over the whole app in order: the browser view's pages (0, each over its place in the pane), dialogs (the
+ * bundled ones at orders 10 to 40), questions (50), toasts (100), tooltips (200). Each shows itself when it should.
  */
 export const Layers = defineSlot<Region>("layers");
 
@@ -32,7 +34,14 @@ export const SidebarRegion = defineSlot<Region<{ readonly onPick: () => void }>>
 
 export const MainRegion = defineSlot<Region>("main", { shows: "first" });
 
-/** Buttons in the sidebar's head beside its search: add project and new chat are its defaults. `onPick` closes the drawer on narrow screens. */
+/**
+ * A bar across the window's top, over the sidebar and the main region: horizontal tabs. In a desktop window it is the
+ * title bar, beside the window's controls (`--titlebar-inset` is their width); what it draws drags the window unless
+ * it is a control.
+ */
+export const TopRegion = defineSlot<Region>("top", { shows: "first" });
+
+/** Buttons at the end of the sidebar's head, across from its toggle: the sidebar's search and new thread are its defaults. `onPick` closes the drawer on narrow screens. */
 export const SidebarActions = defineSlot<Region<{ readonly onPick: () => void }>>("sidebar.actions");
 
 /** Items at the foot of the sidebar: the settings button, the connection badge. `onPick` closes the drawer on narrow screens. */
@@ -51,3 +60,5 @@ export interface MenuAction<Subject, Control = undefined> {
   readonly section?: boolean;
   readonly run: (subject: Subject, control: Control) => void;
 }
+
+export { ActionMenu } from "./menu.tsx";

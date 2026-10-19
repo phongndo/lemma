@@ -11,6 +11,7 @@ interface Placed {
   readonly prompt: Outgoing;
   readonly content: PromptContent;
   readonly whenBusy: WhenBusy;
+  readonly background: boolean;
   readonly key: string;
   /** Answers the placing: taken (`true`), refused (`false`), or failed (an Error). */
   readonly answer: (result: boolean | Error) => void;
@@ -34,6 +35,7 @@ const harness = (key = "t1") => {
     drafts,
     outgoing,
     key: () => state.key,
+    home: (written) => (written === "" ? state.key : written),
     read: () => state.composer,
     write: (prompt) => hold(prompt.text, prompt.images),
     sending: () => state.sending,
@@ -41,9 +43,16 @@ const harness = (key = "t1") => {
     connected: () => state.connected,
     newRequestId: () => `r${++state.ids}`,
     starting: () => {},
-    place: (prompt, content, whenBusy) =>
+    place: (prompt, content, whenBusy, background) =>
       new Promise((resolve, reject) => {
-        placed.push({ prompt, content, whenBusy, key: state.key, answer: (result) => (result instanceof Error ? reject(result) : resolve(result)) });
+        placed.push({
+          prompt,
+          content,
+          whenBusy,
+          background,
+          key: state.key,
+          answer: (result) => (result instanceof Error ? reject(result) : resolve(result)),
+        });
       }),
     report: (error) => void reported.push(error),
     settled: () => void state.settled++,
@@ -149,6 +158,17 @@ describe("createSender", () => {
     expect(h.drafts.get("created")).toEqual({ text: "start", images: [], requestId: "r1" });
     expect(h.drafts.get("")).toEqual({ text: "", images: [] });
     expect(h.state.composer.text).toBe("start");
+  });
+
+  test("one sent in the background goes as such, and refused, returns to the thread shown", async () => {
+    const h = harness();
+    h.type("look into the flake");
+    const sending = h.sender.send("steer", true);
+    expect(h.placed.map((p) => [p.prompt.text, p.background])).toEqual([["look into the flake", true]]);
+    expect(h.state.composer.text).toBe("");
+    h.placed[0]!.answer(false);
+    await sending;
+    expect(h.state.composer.text).toBe("look into the flake");
   });
 
   test("a send asked for while one goes out follows it once taken, if the composer holds the same still", async () => {

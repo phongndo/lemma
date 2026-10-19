@@ -218,10 +218,37 @@ const PinIcon = (props: GlyphProps) => (
     <path d="M6 2.5h4M6.75 2.5v4L4.5 9.25h7L9.25 6.5v-4M8 9.25v4.25" />
   </Icon>
 );
+/** A question in a circle: something waits on an answer. */
+const QuestionIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <circle cx="8" cy="8" r="5.75" />
+    <path d="M6.4 6.5a1.7 1.7 0 113 1.1c-.6.5-1.4.8-1.4 1.8" />
+    <circle cx="8" cy="11.25" r=".6" fill="currentColor" stroke="none" />
+  </Icon>
+);
+/** A pin struck through: unpin it. */
+const PinOffIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M6 2.5h4M6.75 2.5v4L4.5 9.25h7L9.25 6.5v-4M8 9.25v4.25M2.5 2.5l11 11" />
+  </Icon>
+);
 const ArchiveIcon = (props: GlyphProps) => (
   <Icon class={props.class}>
     <rect x="2.5" y="3" width="11" height="3" rx=".75" />
     <path d="M3.5 6v6a1 1 0 001 1h7a1 1 0 001-1V6M6.5 8.5h3" />
+  </Icon>
+);
+const HistoryIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M2.8 8a5.2 5.2 0 101.5-3.7M2.5 2.5v2.3h2.3M8 5.2V8l2 1.3" />
+  </Icon>
+);
+const GridIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="2.5" width="4.5" height="4.5" rx="1" />
+    <rect x="2.5" y="9" width="4.5" height="4.5" rx="1" />
+    <rect x="9" y="9" width="4.5" height="4.5" rx="1" />
   </Icon>
 );
 const TrashIcon = (props: GlyphProps) => (
@@ -302,6 +329,18 @@ const SkipIcon = (props: GlyphProps) => (
     <path d="M4 3.5l6 4.5-6 4.5zM12.5 3.5v9" />
   </Icon>
 );
+/** Corners pointing out: something fills the page. */
+const MaximizeIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M9.5 3H13v3.5M13 3L9 7M6.5 13H3V9.5M3 13l4-4" />
+  </Icon>
+);
+/** Corners pointing in: it gives the page back. */
+const MinimizeIcon = (props: GlyphProps) => (
+  <Icon class={props.class}>
+    <path d="M13 7H9.5V3.5M9.5 7L13.5 3M3 9h3.5v3.5M6.5 9l-4 4" />
+  </Icon>
+);
 
 /** The default icons by name. */
 export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
@@ -337,7 +376,11 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   star: StarIcon,
   more: MoreIcon,
   pin: PinIcon,
+  "pin-off": PinOffIcon,
+  question: QuestionIcon,
   archive: ArchiveIcon,
+  history: HistoryIcon,
+  grid: GridIcon,
   trash: TrashIcon,
   pencil: PencilIcon,
   brain: BrainIcon,
@@ -352,6 +395,8 @@ export const icons: Readonly<Record<IconName, Component<GlyphProps>>> = {
   "arrow-left": ArrowLeftIcon,
   redo: RedoIcon,
   skip: SkipIcon,
+  maximize: MaximizeIcon,
+  minimize: MinimizeIcon,
   spinner: Spinner,
 };
 

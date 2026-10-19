@@ -13,11 +13,11 @@ contract's projections (`createProjector`, `foldTurn`, `foldRunning`,
 `draftEntries`, `queuePlaces`), which another view can share. Requires `Threads` and the
 runtime's `Client`, `Router`, and `Slots`.
 
-| Config        | Default | What it does                                                                                                                               |
-| ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `expandTools` | `false` | Opens every tool call, and every run of calls in folded work, to its arguments and output, instead of one line                             |
-| `foldWork`    | `true`  | Folds a turn's thinking, tool calls, and failed attempts into one line above its answer, the running turn's as it goes                     |
-| `promptRail`  | `true`  | A tick per prompt along the chat's left edge, with two prompts or more and a mouse or trackpad: pointing previews one, clicking goes there |
+| Config        | Default | What it does                                                                                                                                                        |
+| ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `expandTools` | `false` | Opens every tool call, and every run of calls in folded work, to its arguments and output, instead of one line                                                      |
+| `foldWork`    | `true`  | Folds a turn's thinking, tool calls, and failed attempts into one line above its answer, and one more after each steer or compaction, the running turn's as it goes |
+| `promptRail`  | `true`  | A tick per prompt along the chat's left edge, with two prompts or more and a mouse or trackpad: pointing previews one, clicking goes there                          |
 
 ## Behavior
 
@@ -33,9 +33,11 @@ runtime's `Client`, `Router`, and `Slots`.
   turn, where it will join, as it will look once the turn places it after its
   current step: the prompt as sent under a quiet "Steer" mark
   (`ChatUserPart`'s `steer`), which is not part of what was sent. Until the
-  turn takes it, a button beside it withdraws it. A running turn's steers show
-  after its live fold, never inside it, where they stay once placed and once
-  the turn ends. Which waiting prompts show here is `queuePlaces`' `joining`:
+  turn takes it, a button beside it withdraws it. The step under way finishes
+  above it; the work after it, which the model did having read it, folds on
+  its own below it (each stretch of work between steers is a fold of its own,
+  timed from the steer), so a steer stays where it showed once placed and once
+  the turn ends, in the log's order. Which waiting prompts show here is `queuePlaces`' `joining`:
   the composer shows the rest, what a stopped turn left among them.
 - **Open and closed.** What the reader opens or closes stays so across thread
   switches, for as long as the plugin runs.

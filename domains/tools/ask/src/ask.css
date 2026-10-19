@@ -116,10 +116,6 @@
   overflow-y: auto;
 }
 
-.ask-with-preview {
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
-}
-
 .ask-main {
   min-width: 0;
 }
@@ -194,20 +190,6 @@
   color: var(--accent-text);
 }
 
-/* As tall as the options beside it, never taller: what does not fit scrolls. */
-.ask-preview {
-  min-width: 0;
-  height: 0;
-  min-height: 100%;
-  overflow: auto;
-  font-size: calc(12px * var(--text-scale));
-}
-
-.ask-preview pre {
-  margin: 0;
-  white-space: pre;
-}
-
 .ask-review {
   display: flex;
   flex-direction: column;
@@ -261,15 +243,4 @@
 .ask-record-answer {
   display: block;
   font-weight: 500;
-}
-
-@media (max-width: 640px) {
-  .ask-with-preview {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .ask-preview {
-    height: auto;
-    max-height: 10rem;
-  }
 }

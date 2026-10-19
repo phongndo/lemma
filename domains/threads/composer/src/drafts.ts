@@ -1,4 +1,5 @@
 import type { ImageContent } from "@lemma/llm";
+import { written } from "@lemma/threads";
 
 /** A prompt being written. */
 export interface Draft {
@@ -17,8 +18,36 @@ export type Prompt = Pick<Draft, "text" | "images">;
  */
 export type Drafts = Map<string, Draft>;
 
-/** Holds something to send: text other than whitespace, or an image. */
-export const unsent = (prompt: Prompt): boolean => prompt.text.trim() !== "" || prompt.images.length > 0;
+/**
+ * The composer's drafts, each thread's passed on as it changes (`publish`: `Threads.setDraft`, which keeps them across
+ * reloads and lets the sidebar show them), seeded from what was `kept`. `""`, written with no thread shown, stays here.
+ */
+export class SharedDrafts extends Map<string, Draft> {
+  private readonly publish: (key: string, prompt: Prompt | undefined) => void;
+
+  constructor(kept: Iterable<readonly [string, Prompt]>, publish: (key: string, prompt: Prompt | undefined) => void) {
+    super();
+    this.publish = publish;
+    for (const [key, prompt] of kept) super.set(key, { text: prompt.text, images: prompt.images });
+  }
+
+  override set(key: string, draft: Draft): this {
+    super.set(key, draft);
+    if (key !== "") this.publish(key, { text: draft.text, images: draft.images });
+    return this;
+  }
+
+  override delete(key: string): boolean {
+    if (key !== "") this.publish(key, undefined);
+    return super.delete(key);
+  }
+}
+
+/** What a reload would lose: images (only the text is kept), a send that did not get through, or a prompt written with no thread shown. */
+export const lostOnReload = (key: string, draft: Draft): boolean => unsent(draft) && (draft.images.length > 0 || draft.requestId !== undefined || key === "");
+
+/** Holds something to send: text other than whitespace, or an image; as `Threads.drafts` counts one (`written`). */
+export const unsent = (prompt: Prompt): boolean => written(prompt);
 
 /**
  * Keeps what the composer holds as the thread's draft, with the retry id it had: every change is kept, for when the

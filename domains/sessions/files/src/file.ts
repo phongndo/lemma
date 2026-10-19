@@ -194,18 +194,25 @@ export const confirmLast = async (fs: FileSystem, file: string, from: Pick<Scann
   }
 };
 
-/** Where a session is filed: the latest value of each mark. */
+/** Where a session is filed: the latest value of each mark, and the directory it was moved to, if it was. */
 export interface FiledAs {
   readonly pinned: boolean;
   readonly archived: boolean;
+  readonly kept: boolean;
+  readonly cwd?: string;
 }
 
-export const unfiled: FiledAs = { pinned: false, archived: false };
+export const unfiled: FiledAs = { pinned: false, archived: false, kept: false };
 
-export const applyMarks = (filed: FiledAs, marks: Pick<Marks, "pinned" | "archived">): FiledAs => ({
-  pinned: marks.pinned ?? filed.pinned,
-  archived: marks.archived ?? filed.archived,
-});
+export const applyMarks = (filed: FiledAs, marks: Pick<Marks, "pinned" | "archived" | "kept" | "cwd">): FiledAs => {
+  const cwd = marks.cwd ?? filed.cwd;
+  return {
+    pinned: marks.pinned ?? filed.pinned,
+    archived: marks.archived ?? filed.archived,
+    kept: marks.kept ?? filed.kept,
+    ...(cwd === undefined ? {} : { cwd }),
+  };
+};
 
 interface Loaded {
   readonly header: Header;
@@ -313,7 +320,9 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
     from === undefined ? undefined : { type: "session", version: 1, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
   let leaf = from?.info.leaf;
   let title = from?.info.title;
-  let marks: FiledAs = from === undefined ? unfiled : { pinned: from.info.pinned === true, archived: from.info.archived === true };
+  // A moved session's directory is already the header's here (`info.cwd`).
+  let marks: FiledAs =
+    from === undefined ? unfiled : { pinned: from.info.pinned === true, archived: from.info.archived === true, kept: from.info.kept === true };
   let updatedAt = from?.info.updatedAt ?? 0;
   let lastSeq = from?.info.lastSeq ?? 0;
   const visit = (json: unknown, n: number): string | undefined => {
@@ -334,6 +343,8 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
       data?: { type?: string; title?: string };
       pinned?: boolean;
       archived?: boolean;
+      kept?: boolean;
+      cwd?: string;
     };
     if (line.type === "marks") {
       marks = applyMarks(marks, line);
@@ -374,7 +385,7 @@ export const infoOf = (
   },
 ): SessionInfo => ({
   id: header.id,
-  cwd: header.cwd,
+  cwd: state.marks.cwd ?? header.cwd,
   createdAt: header.createdAt,
   updatedAt: state.updatedAt,
   ...(state.title === undefined ? {} : { title: state.title }),
@@ -382,6 +393,7 @@ export const infoOf = (
   lastSeq: state.lastSeq,
   ...(state.marks.pinned ? { pinned: true } : {}),
   ...(state.marks.archived ? { archived: true } : {}),
+  ...(state.marks.kept ? { kept: true } : {}),
 });
 
 /**

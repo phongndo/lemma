@@ -1,7 +1,9 @@
 import { Show, createSignal, onCleanup } from "solid-js";
 import { load, save } from "@lemma/web/storage";
+import { dragEdge } from "@lemma/web/drag";
+import { onLookChange, tokenColor } from "@lemma/web/paint";
 import { Actions } from "@lemma/actions";
-import { Docks, Layers, Layout, MainRegion, SidebarRegion } from "@lemma/frame";
+import { Docks, Layers, Layout, MainRegion, SidebarRegion, TopRegion } from "@lemma/frame";
 import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
 import { SidebarIcon } from "@lemma/look";
 import styles from "./shell.css?inline";
@@ -20,14 +22,17 @@ interface ControlsOverlay extends EventTarget {
   readonly visible: boolean;
 }
 const controlsOverlay = (navigator as { windowControlsOverlay?: ControlsOverlay }).windowControlsOverlay;
+/** The desktop app's window controls (Windows, Linux), which take the page's colors. */
+const titleBarBridge = (window as Window & { lemmaDesktop?: { readonly titleBar?: { readonly setColors: (background: string, symbols: string) => void } } })
+  .lemmaDesktop?.titleBar;
 
 const clampWidth = (width: number) => Math.round(Math.max(MIN_WIDTH, Math.min(width, MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - MIN_MAIN))));
 
 /**
- * The page's frame: the sidebar region (resizable, collapsible, a drawer on
- * narrow screens), the main region, and every layer over them. It fills the
- * `root` slot; each region is whatever plugin fills it, so any can be left
- * empty or replaced.
+ * The page's frame: a bar across the top, the sidebar region (resizable,
+ * collapsible, a drawer on narrow screens), the main region, and every layer
+ * over them. It fills the `root` slot; each region is whatever plugin fills
+ * it, so any can be left empty or replaced.
  */
 export default defineWebPlugin({
   id: "frame.shell",
@@ -42,6 +47,17 @@ export default defineWebPlugin({
     const [collapsed, setCollapsed] = createSignal(load(COLLAPSED_KEY) === "1");
     const [resizing, setResizing] = createSignal(false);
     const [titlebar, setTitlebar] = createSignal(controlsOverlay?.visible === true);
+    // The window's controls look like the heads they sit in: the page's background and muted text, as its look changes.
+    if (titleBarBridge !== undefined) {
+      const bridge = titleBarBridge;
+      const tell = () => bridge.setColors(tokenColor("--bg"), tokenColor("--text-2"));
+      tell();
+      plugin.onCleanup(onLookChange(tell));
+    }
+    const narrowQuery = window.matchMedia(NARROW);
+    const [narrow, setNarrow] = createSignal(narrowQuery.matches);
+    plugin.listen(narrowQuery, "change", () => setNarrow(narrowQuery.matches));
+    const sidebarHidden = () => slots.first(SidebarRegion) !== undefined && (narrow() ? !drawer() : collapsed());
     const width = () => {
       viewport();
       return clampWidth(chosen());
@@ -51,7 +67,7 @@ export default defineWebPlugin({
       save(COLLAPSED_KEY, value ? "1" : undefined);
     };
     /** On narrow screens the sidebar is a drawer; otherwise it collapses in place. */
-    const toggleSidebar = () => (window.matchMedia(NARROW).matches ? setDrawer(!drawer()) : setCollapsedSaved(!collapsed()));
+    const toggleSidebar = () => (narrow() ? setDrawer(!drawer()) : setCollapsedSaved(!collapsed()));
     const closeDrawer = () => setDrawer(false);
 
     slots.add(Actions, {
@@ -75,23 +91,16 @@ export default defineWebPlugin({
     });
 
     const startResize = (event: PointerEvent) => {
-      event.preventDefault();
-      const handle = event.currentTarget as HTMLElement;
-      handle.setPointerCapture(event.pointerId);
       const startX = event.clientX;
       const startWidth = width();
-      setResizing(true);
-      const move = (next: PointerEvent) => setChosen(clampWidth(startWidth + next.clientX - startX));
-      const end = () => {
-        setResizing(false);
-        save(WIDTH_KEY, String(chosen()));
-        handle.removeEventListener("pointermove", move);
-        handle.removeEventListener("pointerup", end);
-        handle.removeEventListener("pointercancel", end);
-      };
-      handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", end);
-      handle.addEventListener("pointercancel", end);
+      const started = dragEdge(event, {
+        move: (next) => setChosen(clampWidth(startWidth + next.clientX - startX)),
+        end: () => {
+          setResizing(false);
+          save(WIDTH_KEY, String(chosen()));
+        },
+      });
+      if (started) setResizing(true);
     };
     const resetWidth = () => {
       setChosen(DEFAULT_WIDTH);
@@ -105,13 +114,22 @@ export default defineWebPlugin({
       if (controlsOverlay !== undefined) onCleanup(plugin.listen(controlsOverlay, "geometrychange", onGeometry));
       const sidebar = () => slots.first(SidebarRegion);
       const main = () => slots.first(MainRegion);
+      const top = () => slots.first(TopRegion);
       return (
         <div class="frame">
+          <Show when={top()} keyed>
+            {(region) => (
+              // A bar across the top takes the title bar, so what is under it no longer makes room for the window's controls.
+              <div class="top-slot" data-titlebar={titlebar() ? "" : undefined}>
+                <Contained slot={TopRegion} item={region} component={region.component} />
+              </div>
+            )}
+          </Show>
           <div
             class="app"
             classList={{ "drawer-open": drawer(), "sidebar-collapsed": collapsed() || sidebar() === undefined, resizing: resizing() }}
             style={{ "--sidebar": `${width()}px` }}
-            data-titlebar={titlebar() ? "" : undefined}
+            data-titlebar={titlebar() && top() === undefined ? "" : undefined}
           >
             <Show when={sidebar()} keyed>
               {(region) => (
@@ -148,6 +166,6 @@ export default defineWebPlugin({
       );
     }
     slots.add(Root, { id: "shell", phase: "default", component: Shell });
-    return { layout: { toggleSidebar, closeDrawer } };
+    return { layout: { sidebarHidden, toggleSidebar, closeDrawer } };
   },
 });

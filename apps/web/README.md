@@ -280,11 +280,11 @@ boot's `appRoutes`), and the plugins that show them list them in their
 desktop app's `lemma://` links and `lemma open`, and settings' in
 [`@lemma/settings`](../../domains/settings/contract/src/index.ts):
 
-| Address                                 | Shows                                                                                 |
-| --------------------------------------- | ------------------------------------------------------------------------------------- |
-| `/`                                     | A new thread                                                                          |
-| `/threads/<id>`, `/threads/<id>/<view>` | A thread, in its first view or the one named (`trajectory`, or any `Views` item's id) |
-| `/settings/<section>?…`                 | A settings section; the search is the section's own state                             |
+| Address                                 | Shows                                                                                        |
+| --------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `/`                                     | A new thread                                                                                 |
+| `/threads/<id>`, `/threads/<id>/<view>` | A thread; with a view (`trajectory`, or any `Views` item's id), that view opened in its pane |
+| `/settings/<section>?…`                 | A settings section; the search is the section's own state                                    |
 
 A plugin adds a page with `api.defineRoute` and a `Pages` item, routed by
 [`@lemma/router`](../../packages/router/README.md), and lists the route in its

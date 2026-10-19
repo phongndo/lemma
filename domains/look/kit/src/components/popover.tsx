@@ -38,7 +38,8 @@ const position = (anchor: DOMRect, menu: HTMLElement, placement: Placement) => {
  * item (focus stays in a search field if there is one, which then names the
  * active item to screen readers), as do Ctrl+N/P and Ctrl+J/K; Enter picks it,
  * mod+1 … mod+9 picks the item at that place (labelled while mod is held),
- * typing a letter jumps to a matching item, Escape closes and returns focus.
+ * a letter an item names as its `aria-keyshortcuts` picks it, typing another
+ * letter jumps to a matching item, Escape closes and returns focus.
  *
  * Items are elements with role `menuitem`, `menuitemradio`, or `option`.
  */
@@ -188,8 +189,14 @@ export function Popover(props: PopoverProps) {
         all[index]!.click();
         return;
     }
-    // Type-ahead when there is no search field to type into.
+    // An item's own letter, then type-ahead, when there is no search field to type into.
     if (!inField && event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const own = all.find((item) => item.getAttribute("aria-keyshortcuts")?.toLowerCase() === event.key.toLowerCase());
+      if (own !== undefined) {
+        event.preventDefault();
+        own.click();
+        return;
+      }
       const now = Date.now();
       typed = now - typedAt > 600 ? event.key.toLowerCase() : typed + event.key.toLowerCase();
       typedAt = now;

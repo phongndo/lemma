@@ -18,11 +18,11 @@ handled or refused the last prompt said: `Threads.answer`), and the defaults of
 ([`@lemma/workspace/web`](../../workspace/contract/src/web/workspace.ts)), and
 the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
 
-| Config     | Default          | What it does                                                                                                                                                                                   |
-| ---------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `send`     | `"enter"`        | `"enter"`: Enter sends and Shift+Enter starts a new line. `"mod+enter"`: ⌘Enter on macOS (Ctrl+Enter elsewhere) sends and Enter starts a new line                                              |
-| `whenBusy` | `"steer"`        | What sending does while a turn runs. `"steer"`: it joins the running turn after its current step. `"queue"`: the prompt waits, and goes as the next turn. Alt with the send key does the other |
-| `stop`     | `"escape-twice"` | `"escape-twice"`: Escape in the prompt twice within a second stops the running turn. `"escape"`: once does                                                                                     |
+| Config     | Default          | What it does                                                                                                                                                                                                                            |
+| ---------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `send`     | `"enter"`        | `"enter"`: Enter sends and Shift+Enter starts a new line. `"mod+enter"`: ⌘Enter on macOS (Ctrl+Enter elsewhere) sends and Enter starts a new line. ⌘Enter, or ⌘⇧Enter while it sends, runs the prompt in a new thread in the background |
+| `whenBusy` | `"steer"`        | What sending does while a turn runs. `"steer"`: it joins the running turn after its current step. `"queue"`: the prompt waits, and goes as the next turn. Alt with the send key does the other                                          |
+| `stop`     | `"escape-twice"` | `"escape-twice"`: Escape in the prompt twice within a second stops the running turn. `"escape"`: once does                                                                                                                              |
 
 ## Behavior
 
@@ -62,16 +62,29 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   dropped are refused, as what is written is text only. A box that changed
   under someone's keys would send their words to the wrong place, which is why
   their own prompt keeps it rather than a pause in their typing.
-- **Every prompt** goes with `Models.turnOptions()`. A new thread's first
-  prompt creates it in the directory `Workspace.newChatDir` gives: a fresh
-  worktree named from the prompt, when one is chosen.
-- **Drafts.** An unsent prompt is kept per thread, and one for a new thread,
-  across switching threads and the composer leaving the page (settings), in
-  memory: closing or reloading the tab while any thread has one asks first.
+- **Every prompt** goes with `Models.turnOptions()`. A blank thread's first
+  prompt goes in the directory `Workspace.newChatDir` gives: a fresh worktree
+  named from the prompt, when one is chosen, where a thread takes the blank
+  one's place (`Threads.send`).
+- **In the background.** ⌘Enter (Ctrl+Enter elsewhere; ⌘⇧Enter while ⌘Enter
+  sends) runs the prompt in a new thread, as a link opened in the background: in
+  the shown thread's directory, or where its first prompt would go while it is
+  blank, and the shown thread stays. A command runs as Enter would run it.
+- **Drafts.** An unsent prompt is kept per thread, and one for the
+  new-thread page, across switching threads and the composer leaving the page
+  (settings). Each thread's is told to `Threads.setDraft` as it changes, which
+  keeps its text across a reload and lets the sidebar show it; the composer
+  starts from what it kept (`Threads.drafts`). Closing or reloading the tab asks
+  first only for what a reload would lose: a draft's images, a send that did
+  not get through, or one written with no thread shown. What was written on
+  the new-thread page before its thread arrived goes to the blank thread it
+  lands on; a deleted thread's draft goes with it.
 - **Sending again.** The composer clears as a prompt goes out. One that was
-  not sent returns to the thread it was written in, with its request id, ahead
+  not sent returns to the thread it was written in (for a new thread's, the
+  one placing it created), with its request id, ahead
   of whatever was typed there since, so sending it again unchanged cannot place
-  it twice; an edit makes it a new prompt. A send asked for while one goes out
+  it twice; an edit makes it a new prompt. It comes back with the cursor at its
+  end and its completions dismissed, so they do not cover the notice saying why. A send asked for while one goes out
   waits, and goes once the first is accepted, if the composer still holds what
   it held when it was asked.
 - **Earlier prompts.** Up in an empty prompt brings back the last one sent in

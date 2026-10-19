@@ -45,6 +45,8 @@ const recording = () => {
     branch: answer("branch", []),
     checkout: answer("checkout", info),
     mark: answer("mark", info),
+    relocate: answer("relocate", info),
+    search: answer("search", []),
     hold: answer("hold", undefined),
     remove: answer("remove", undefined),
   };
@@ -83,6 +85,10 @@ describe("serveSessions", () => {
         yield* called(channels, "sessions.events", { sessionId: "s1", after: 2 });
         yield* called(channels, "sessions.mark", { sessionId: "s1", pinned: true });
         yield* called(channels, "sessions.checkout", { sessionId: "s1", eventId: "e1" });
+        yield* called(channels, "sessions.relocate", { sessionId: "s1", cwd: "/work/other" });
+        yield* called(channels, "sessions.mark", { sessionId: "s1", kept: true });
+        yield* called(channels, "sessions.search", { query: "docs" });
+        yield* called(channels, "sessions.search", { query: "docs", limit: 5 });
         yield* called(channels, "sessions.delete", { sessionId: "s1" });
         expect(asked).toEqual([
           ["create", undefined],
@@ -92,6 +98,10 @@ describe("serveSessions", () => {
           ["events", "s1", { after: 2 }],
           ["mark", "s1", { pinned: true }],
           ["checkout", "s1", "e1"],
+          ["relocate", "s1", "/work/other"],
+          ["mark", "s1", { kept: true }],
+          ["search", "docs", undefined],
+          ["search", "docs", { limit: 5 }],
           ["remove", "s1"],
         ]);
       }),

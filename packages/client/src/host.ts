@@ -73,8 +73,8 @@ export interface Host {
      * big for it (`tooLarge`), which the call may have sent, and would again.
      */
     readonly call: {
-      <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload): Promise<Success>;
-      (id: string, payload?: unknown): Promise<unknown>;
+      <Payload, Success>(channel: ChannelDeclaration<"call", Payload, Success>, payload: Payload, options?: CallOptions): Promise<Success>;
+      (id: string, payload?: unknown, options?: CallOptions): Promise<unknown>;
     };
     /**
      * Opens a stream, typed by its declaration or by id with JSON, as `call`:
@@ -163,9 +163,19 @@ export interface ConnectOptions {
 
 export const defaultBackoff = (attempt: number): number => Math.min(5_000, 250 * 2 ** Math.max(0, attempt - 1));
 
-/** Runs an effect to a promise that rejects with the squashed failure rather than a FiberFailure wrapper. */
-export const runPromise = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
-  Effect.runPromiseExit(effect).then((exit) => (Exit.isSuccess(exit) ? exit.value : Promise.reject(toError(Cause.squash(exit.cause)))));
+/**
+ * What a call is made with: `signal` cancels it, as a call no longer wanted (a search the next keystroke replaced) is;
+ * the host stops its handler, and the call rejects.
+ */
+export interface CallOptions {
+  readonly signal?: AbortSignal | undefined;
+}
+
+/** Runs an effect to a promise that rejects with the squashed failure rather than a FiberFailure wrapper; `signal` interrupts it. */
+export const runPromise = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal): Promise<A> =>
+  Effect.runPromiseExit(effect, signal === undefined ? undefined : { signal }).then((exit) =>
+    Exit.isSuccess(exit) ? exit.value : Promise.reject(toError(Cause.squash(exit.cause))),
+  );
 
 const toError = (error: unknown): HostError | Error => {
   if (error instanceof HostError || error instanceof Error) return error;
@@ -270,7 +280,7 @@ const drain = <A>(stream: Stream.Stream<A, unknown>, onElement: (element: A) => 
 /** `Host.channel` over the connection's Effect client: what `connect` gives. */
 const channelsOver = (rpc: HostRpcClient): Host["channel"] => ({
   list: () => runPromise(rpc["Channel.List"]()),
-  call: (target: string | ChannelDeclaration, payload?: unknown) => runPromise(callOver(rpc, target, payload)),
+  call: (target: string | ChannelDeclaration, payload?: unknown, options?: CallOptions) => runPromise(callOver(rpc, target, payload), options?.signal),
   open: (target: string | ChannelDeclaration, payload: unknown, onElement: (element: any) => void, onEnd?: StreamEnd) =>
     drain(openOver(raw(rpc), target, payload), onElement, onEnd, `Channel "${typeof target === "string" ? target : target.id}" listener failed`),
 });
@@ -434,13 +444,13 @@ export const connect = async (options: ConnectOptions): Promise<Host> => {
   const channels = channelsOver(rpc);
   const channel: Host["channel"] = {
     ...channels,
-    call: async (target: string | ChannelDeclaration, payload?: unknown) => {
+    call: async (target: string | ChannelDeclaration, payload?: unknown, options?: CallOptions) => {
       for (;;) {
         const { generation } = status;
         try {
-          return await runPromise(callOver(rpc, target, payload));
+          return await runPromise(callOver(rpc, target, payload), options?.signal);
         } catch (error) {
-          if (typeof target === "string" || target.repeatable !== true || !dropped(error) || tooLarge(error)) throw error;
+          if (typeof target === "string" || target.repeatable !== true || !dropped(error) || tooLarge(error) || options?.signal?.aborted === true) throw error;
           await connectedAfter(generation);
         }
       }

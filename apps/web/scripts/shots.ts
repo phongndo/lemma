@@ -71,8 +71,9 @@ try {
     await page.click("[aria-label=Spans] tbody tr[data-row] .trc-name >> nth=4");
     await shot(page, `${theme}-19-devtools-trace-open`);
     await page.keyboard.press("ControlOrMeta+Shift+d");
-    // The thread's Trajectory, and a request selected in it.
-    await page.click(".view-tab[aria-label=Trajectory]");
+    // The thread's Trajectory, opened in the inspection pane, and a request selected in it.
+    await page.keyboard.press("ControlOrMeta+i");
+    await page.click(".thread-inspector-choice >> text=Trace");
     await page.waitForSelector(".trj-table tbody tr[data-record]");
     await shot(page, `${theme}-20-trajectory`);
     await page.click(".trj-table tbody tr[data-record]");

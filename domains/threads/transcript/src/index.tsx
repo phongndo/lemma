@@ -16,6 +16,8 @@ import {
   createProjector,
   pendingToolCalls,
   promptMarks,
+  promptText,
+  markKey,
   queuePlaces,
   ChatThinkingPart,
   ChatToolPart,
@@ -50,6 +52,7 @@ import type {
   ChatWorkingProps,
   ChatWorkProps,
   QueuePlaces,
+  PromptMark,
 } from "@lemma/threads";
 import { errorView } from "./error.ts";
 import { thoughtHeadline } from "./thought.ts";
@@ -228,10 +231,21 @@ function Attempt(props: { chat: Chat; item: AttemptItem }) {
   );
 }
 
-function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: boolean }): JSX.Element {
+/** `mark`: a steer's place on the prompt rail (`PromptMark.key`), which it marks. */
+function ItemView(props: { chat: Chat; item: Item; turnEnded: boolean; note?: boolean; mark?: string | undefined }): JSX.Element {
   return (
     <Switch>
-      <Match when={props.item.kind === "user" && props.item}>{(item) => <ChatUser content={item().content} steer={item().steer} />}</Match>
+      <Match when={props.item.kind === "user" && props.item}>
+        {(item) => (
+          <Show when={props.mark} fallback={<ChatUser content={item().content} steer={item().steer} />}>
+            {(mark) => (
+              <div data-mark={mark()}>
+                <ChatUser content={item().content} steer={item().steer} />
+              </div>
+            )}
+          </Show>
+        )}
+      </Match>
       <Match when={props.item.kind === "assistant" && props.item}>
         {(item) => (
           <div class="assistant">
@@ -334,14 +348,16 @@ function Keyed<T extends { readonly key: string }>(props: { each: readonly T[]; 
 }
 
 /**
- * Folded work, through the `chat.work` part: its rows, with calls made one
- * after another gathered under a `chat.work-group` line, and while the turn
- * runs, its streaming step at the end.
+ * A run of folded work, through the `chat.work` part: its rows, with calls
+ * made one after another gathered under a `chat.work-group` line, and in the
+ * running turn's live run, its streaming step at the end. Each run of a
+ * running turn stays open until the turn ends, unless the reader closed it,
+ * so a steer joining between two runs moves nothing above it.
  */
-function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }>; drafts: readonly StepDraft[]; startedAt: number }) {
+function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }>; drafts: readonly StepDraft[]; running: boolean }) {
   const live = () => props.work.live === true;
   const entries = createMemo(() => workEntries(props.work.items, (name) => props.chat.toolView(name)?.action));
-  const duration = () => (live() ? Math.max(0, props.chat.now() - props.startedAt) : props.work.duration);
+  const duration = () => (live() ? Math.max(0, props.chat.now() - props.work.since) : props.work.duration);
   return (
     <ChatWork
       steps={props.work.items.filter((item) => item.kind !== "user" && item.kind !== "compaction").length}
@@ -349,14 +365,14 @@ function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }
       failed={props.work.failed}
       duration={duration()}
       live={live()}
-      open={props.chat.isOpen(props.work.key, live())}
-      onToggle={() => props.chat.toggle(props.work.key, live())}
+      open={props.chat.isOpen(props.work.key, props.running)}
+      onToggle={() => props.chat.toggle(props.work.key, props.running)}
     >
       <Keyed each={entries()}>
         {(entry) => (
           <Show
             when={entry().kind === "group" && (entry() as Extract<WorkEntry, { kind: "group" }>)}
-            fallback={<WorkRowView chat={props.chat} row={entry() as WorkRow} turnEnded={!live()} />}
+            fallback={<WorkRowView chat={props.chat} row={entry() as WorkRow} turnEnded={!props.running} />}
           >
             {(group) => (
               <ChatWorkGroup
@@ -367,13 +383,13 @@ function WorkFold(props: { chat: Chat; work: Extract<TurnEntry, { kind: "work" }
                 open={props.chat.isOpen(group().key, props.chat.config.expandTools)}
                 onToggle={() => props.chat.toggle(group().key, props.chat.config.expandTools)}
               >
-                <Keyed each={group().rows}>{(row) => <WorkRowView chat={props.chat} row={row()} turnEnded={!live()} />}</Keyed>
+                <Keyed each={group().rows}>{(row) => <WorkRowView chat={props.chat} row={row()} turnEnded={!props.running} />}</Keyed>
               </ChatWorkGroup>
             )}
           </Show>
         )}
       </Keyed>
-      <Index each={props.drafts}>{(draft) => <Draft chat={props.chat} draft={draft()} />}</Index>
+      <Index each={live() ? props.drafts : []}>{(draft) => <Draft chat={props.chat} draft={draft()} />}</Index>
     </ChatWork>
   );
 }
@@ -442,7 +458,7 @@ const workGroupView = (slots: SlotsService) =>
 /** The default `chat.working` part. */
 function WorkingView(props: ChatWorkingProps) {
   return (
-    <div class="working">
+    <div class="chat-working">
       <span class="pulse" />
       Working
       <Show when={props.startedAt}>{(started) => <span class="working-time">{formatElapsed(props.now - started())}</span>}</Show>
@@ -451,8 +467,9 @@ function WorkingView(props: ChatWorkingProps) {
 }
 
 /**
- * A turn; `running` when it is the one the session is running now, whose live fold shows its streaming steps (`drafts`).
- * The last turn ends with the steers sent and not yet placed (`steers`), unless its streaming steps are drawn after it.
+ * A turn; `running` when it is the one the session is running now, whose live run of work shows its streaming steps
+ * (`drafts`). The last turn ends with the steers sent and not yet placed (`steers`), after the step under way, where
+ * the turn places them once that step ends, unless its streaming steps are drawn after it.
  */
 function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: readonly StepDraft[]; steers: QueuePlaces["joining"] }) {
   const ended = () => props.turn.end !== undefined;
@@ -462,22 +479,29 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
     return last?.message.stopReason === "error" ? last.message.errorMessage : undefined;
   };
   const folded = createMemo(() => (props.chat.config.foldWork ? (foldTurn(props.turn) ?? (props.running ? foldRunning(props.turn) : undefined)) : undefined));
+  /** The prompt that starts the turn: the user items after it are steers, each with its own place on the prompt rail. */
+  const opening = createMemo(() => props.turn.items.find((item) => item.kind === "user")?.id);
+  const markOf = (item: Item) => (item.kind === "user" && item.id !== opening() ? markKey(props.turn, item) : undefined);
   // A fold makes new entries each time the turn changes: keyed by entry key, what stays in view stays mounted.
   const keyed = createMemo(() => (folded() ?? []).map((entry) => ({ key: entryKey(entry), entry })));
   return (
-    <section class="turn" data-turn={props.turn.key}>
-      <Show when={folded()} fallback={<For each={props.turn.items}>{(item) => <ItemView chat={props.chat} item={item} turnEnded={ended()} />}</For>}>
+    <section class="turn" data-turn={props.turn.key} data-mark={props.turn.key}>
+      <Show
+        when={folded()}
+        fallback={<For each={props.turn.items}>{(item) => <ItemView chat={props.chat} item={item} turnEnded={ended()} mark={markOf(item)} />}</For>}
+      >
         <Keyed each={keyed()}>
           {(keyedEntry) => {
             const entry = () => keyedEntry().entry;
             return entry().kind === "work" ? (
-              <WorkFold chat={props.chat} work={entry() as Extract<TurnEntry, { kind: "work" }>} drafts={props.drafts} startedAt={props.turn.startedAt} />
+              <WorkFold chat={props.chat} work={entry() as Extract<TurnEntry, { kind: "work" }>} drafts={props.drafts} running={props.running} />
             ) : (
               <ItemView
                 chat={props.chat}
                 item={(entry() as Extract<TurnEntry, { kind: "item" }>).item}
                 turnEnded={ended()}
                 note={(entry() as Extract<TurnEntry, { kind: "item" }>).note}
+                mark={markOf((entry() as Extract<TurnEntry, { kind: "item" }>).item)}
               />
             );
           }}
@@ -494,11 +518,14 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
   );
 }
 
+/** The prompt rail's key for a steer sent and not yet placed. */
+const pendingMark = (requestId: string) => `steer:${requestId}`;
+
 /** A steer sent and not yet placed, where it will join, as it will show once placed; until then it can be withdrawn. */
 function PendingSteer(props: { chat: Chat; steer: QueuePlaces["joining"][number] }) {
   const withdraw = usePlugin().action("withdraw a steer", () => props.chat.threads.withdraw(props.steer.requestId));
   return (
-    <div class="steer-pending">
+    <div class="steer-pending" data-mark={pendingMark(props.steer.requestId)}>
       <button
         type="button"
         class="icon-button steer-withdraw"
@@ -602,7 +629,11 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   let scroller!: HTMLDivElement;
   let content!: HTMLDivElement;
   const [stuck, setStuck] = createSignal(true);
-  const marks = createMemo(() => promptMarks(props.turns()));
+  // Every prompt the chat shows: each turn's, its steers, and the steers sent and not yet placed, at the end.
+  const marks = createMemo((): readonly PromptMark[] => [
+    ...promptMarks(props.turns()),
+    ...queuePlaces(threads).joining.map((steer) => ({ key: pendingMark(steer.requestId), prompt: promptText(steer.content), reply: "" })),
+  ]);
   const [current, setCurrent] = createSignal(0);
   const [steps, setSteps] = createSignal<{ previous: number | undefined; next: number | undefined }>(
     { previous: undefined, next: undefined },
@@ -613,7 +644,10 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   });
   /** The space beside the transcript's text, where the prompt rail goes. */
   const [room, setRoom] = createSignal(0);
-  const turnElement = (key: string) => content.querySelector<HTMLElement>(`[data-turn="${CSS.escape(key)}"]`);
+  /** A prompt's place: its turn, or the steer (`data-mark`). */
+  const markElement = (key: string) => content.querySelector<HTMLElement>(`[data-mark="${CSS.escape(key)}"]`);
+  /** Where `element` starts in the scrolled transcript, as `scrollTop` counts: a steer is inside its turn. */
+  const topOf = (element: HTMLElement) => element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + scroller.scrollTop;
   /** Where a jump is taking the view, until the scroll gets there or the reader takes it elsewhere. */
   let heading: number | undefined;
   /**
@@ -623,10 +657,10 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
    * starting above and below where the view is (or is going), for stepping.
    */
   const locate = () => {
-    const turns = new Map<string | undefined, number>();
-    for (const element of content.querySelectorAll<HTMLElement>("[data-turn]")) turns.set(element.dataset.turn, element.offsetTop);
+    const places = new Map<string | undefined, number>();
+    for (const element of content.querySelectorAll<HTMLElement>("[data-mark]")) places.set(element.dataset.mark, topOf(element));
     const found = locatePrompts(
-      marks().map((mark) => turns.get(mark.key)),
+      marks().map((mark) => places.get(mark.key)),
       { top: scroller.scrollTop, height: scroller.clientHeight, scrollHeight: scroller.scrollHeight },
       heading,
     );
@@ -640,9 +674,9 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
     locating = requestAnimationFrame(locate);
   };
   const jump = (key: string) => {
-    const element = turnElement(key);
+    const element = markElement(key);
     if (element === null) return;
-    const target = Math.min(Math.max(0, element.offsetTop - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
+    const target = Math.min(Math.max(0, topOf(element) - JUMP_MARGIN), scroller.scrollHeight - scroller.clientHeight);
     heading = Math.abs(target - scroller.scrollTop) < 2 ? undefined : target;
     scroller.scrollTo({ top: target, behavior: "smooth" });
     locate();
@@ -754,7 +788,6 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
     returnTo = null;
   };
 
-  const empty = () => props.turns().length === 0;
   return (
     <div class="chat-view">
       <Show when={finding()}>
@@ -762,19 +795,11 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
       </Show>
       <div class="scroller" ref={scroller} onScroll={onScroll}>
         <div class="content" ref={content}>
-          <Switch>
-            <Match when={threads.activeId() !== undefined && !threads.log().loaded}>
-              <div class="loading">
-                <Spinner /> Loading session…
-              </div>
-            </Match>
-            <Match when={empty() && !threads.busy()}>
-              <div class="empty-state">
-                <h2>{threads.activeId() === undefined ? "What are we working on?" : "This session is empty"}</h2>
-                <p class="muted">The agent can read, edit, and run commands in the project below.</p>
-              </div>
-            </Match>
-          </Switch>
+          <Show when={threads.activeId() !== undefined && !threads.log().loaded}>
+            <div class="loading">
+              <Spinner /> Loading session…
+            </div>
+          </Show>
           <Transcript chat={props.chat} turns={props.turns()} />
           <Show when={threads.log().error}>
             <div class="callout callout-error">Could not load the full session: {threads.log().error}</div>
@@ -857,7 +882,7 @@ export default defineWebPlugin({
     slots.add(Views, {
       id: "transcript",
       order: -10,
-      title: "Transcript",
+      title: "Thread",
       icon: ChatIcon,
       composer: true,
       component: () => <ChatView chat={chat} turns={() => transcript().turns} findWith={(open) => setFind(() => open)} />,

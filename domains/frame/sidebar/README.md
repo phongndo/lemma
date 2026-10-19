@@ -1,45 +1,70 @@
 # frame.sidebar
 
-The threads list: pinned threads first, then the rest by project, with a
-search over their titles, a menu for each thread and project, and buttons in
-its head. Adds it to `SidebarRegion`, where it draws `SidebarActions` beside
-its search and `SidebarFooter` at its foot
-([`@lemma/frame`](../contract/src/index.ts)). Each thread is a
-`SidebarRowPart` and its menu the `ThreadActions`
-([`@lemma/threads`](../../threads/contract/src/index.ts)); a project's menu is
-the `ProjectActions`
-([`@lemma/workspace/web`](../../workspace/contract/src/web/index.ts)). Requires
-`Threads`, `Workspace`, `Client`, `Notify`, `Slots`, and `WebPlugins`. No
-config.
-
-Its own items go through the slots a user's plugin adds to (`SidebarRegion`,
-`SidebarActions`, `ThreadActions`, `ProjectActions`, `SidebarRowPart`, and
-`Actions`), so another plugin's sit among them by `order`; their ids and orders
-are in [its source](src/index.tsx).
+Every thread down the side (in `SidebarRegion`): new threads left mid-prompt
+on top, then the pinned and the active ones in an order dragged into, and the
+archived folded away below. Its head has the toggle, and across from it the
+`SidebarActions` ([`@lemma/frame`](../contract/src/index.ts)), whose defaults
+it adds: Search, which opens the palette's thread search
+(`ActionIds.searchThreads`, while a plugin offers it), and New thread. Its foot
+has the `SidebarFooter`. Each thread is a `SidebarRowPart` and its menu the
+`ThreadActions` ([`@lemma/threads`](../../threads/contract/src/index.ts)).
+Adds to `ThreadWaits` the threads a host question waits in (`Interactions`,
+asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
+`Threads`, `Slots`, `WebPlugins`, `Layout`, `Workspace`, `Client`, and
+`Interactions`.
 
 ## Behavior
 
-- **What it lists.** Archived threads are not listed (`fileSessions` in
-  `@lemma/threads`), and the list says so when every thread is archived.
-  Threads in no project (`Workspace.isStandalone`) are a "No project" section,
-  whose new-thread button starts another in no project and which has no
-  project menu.
-- **Folded sections** stay folded across reloads, kept in this browser
-  (`lemma.sidebar.folded`; whether the whole sidebar is collapsed is
-  `frame.shell`'s).
-- **Search** matches titles, ignoring case, and opens every folded section
-  while it runs; Escape clears it.
-- **The projects button** (`sidebar.projects`) narrows the list to one
-  project's threads, for the page's life; a project that loses its last thread
-  lets go.
-- **Buttons for other plugins' actions.** The palette and add-project buttons
-  run the `Actions` items `ActionIds.palette` and
-  `WorkspaceActionIds.addProject`, and show only while one is there, so a
-  plugin replacing either keeps its button.
-- **The default row** shows the title, a dot while a turn runs, and the time,
-  which gives way to the menu's button on hover; a double-click renames the
-  thread, and a right-click opens its menu.
-- **Keys.** Next and previous thread (`mod+alt+arrowdown`, `mod+alt+arrowup`)
-  go through the threads in the sidebar's order, wrapping, whatever the search
-  or project shows. Pin or unpin (`mod+alt+p`), archive (`mod+alt+a`), and
-  delete (no key) act on the open thread. Settings › Keyboard rebinds them.
+- **Drafts.** A new thread with a prompt written in it and not sent
+  (`Threads.drafts`) is held on top, newest first, tinted: the prompt's first
+  line and its project. Opening one keeps it there while it shows; under the
+  pointer, Discard deletes it. The thread shown is not among them unless it was
+  one when opened, and a thread with nothing sent and nothing written is not
+  listed. A listed thread with a prompt unsent in it (not the one shown) is
+  tinted and marked with a pen.
+- **Pinned threads** come first, in the order they were dragged into; a thread
+  newly pinned, here or elsewhere (its menu, `mod+alt+p`), goes on top of them.
+- **Active threads** follow: new and unarchived ones on top, newest first,
+  above those dragged into an order. A running thread does not move.
+- **Archived threads** are in a panel of their own at the sidebar's foot,
+  folded away, their count on the fold. Opened, it scrolls apart from the list
+  above, and its top edge resizes it: dragged, with ↑ and ↓ while focused, or
+  back to its first height with a double-click; the height is kept, and the
+  list above always keeps some room. Every archived thread is there, the latest
+  archived first. The open thread shows even while the fold is closed.
+- **A card** is two lines of one height each, so nothing it shows, or the
+  pointer, changes its size. The first is its title alone, which nothing cuts
+  short; a title too long fades out. The second is its project and the branch
+  its folder has checked out (asked of the host a few folders at a time, once
+  per folder, again when a turn in it ends; marked when the folder is a
+  worktree), then at its end its state, the most pressing first, as T3 Code
+  shows it: what it waits on the person for (`ThreadWaits`: `Needs input`),
+  `Working` and how long while a turn runs, `Done` once one finished unseen,
+  else how long ago it was used. An archived thread is one slim line.
+- **Under the pointer** a card's state gives way to buttons to pin it (or
+  unpin it) and to archive it, and an archived row's age to Unarchive;
+  `mod+alt+a` archives the thread shown. Archiving the thread shown goes on to
+  the next in the list. A running thread archives too: its turn goes on, and
+  its archived row says what it is doing (`Working`, `Needs input`, `Done`)
+  where its age goes.
+- **Dragging.** A thread dragged up and down the list goes where it is
+  dropped: among the pinned it is pinned there, among the active it is unpinned
+  there (and the active ones keep that order), and onto the archived panel it
+  is archived, first of them. While it is dragged, the sections are named, an
+  empty one offers a place to drop, the panel lights while it is over it, and
+  the thread says what dropping it there does (Pin, Unpin, Archive). Only the
+  pointer moves it, so the names appearing under a still pointer move nothing.
+  Drafts and archived threads do not drag: one comes back with Unarchive.
+- **Details.** A moment's pointing at a card shows its title, project, branch,
+  and state beside the sidebar; the next card pointed at shows its own at
+  once.
+- **Search** is the palette's, floating over the page: threads by title,
+  project, and what was said in them.
+- **Keys.** `mod+1` … `mod+9` go to the thread at that place, pinned ones
+  first; `mod+shift+]` and `mod+shift+[` go to the next and previous, stopping
+  at the ends. A right-click opens a thread's menu and a double-click renames
+  it. Settings › Keyboard rebinds them all.
+- **Kept in this browser** (`lemma.frame.sidebar.marks`): the pinned and
+  active orders, and when threads were archived and unarchived, which order the
+  list beyond when each was made; and whether the archived fold is open, and
+  how tall.

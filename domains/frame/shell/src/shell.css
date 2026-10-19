@@ -9,6 +9,19 @@
   height: 100%;
 }
 
+.top-slot {
+  flex: none;
+  display: flex;
+  min-width: 0;
+}
+
+/* In a desktop window the bar is the title bar: as tall as it, beside the window's controls, at its left or right. */
+.top-slot[data-titlebar] {
+  --titlebar-inset: env(titlebar-area-x, 0px);
+  --titlebar-inset-end: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
+  min-height: env(titlebar-area-height, 0px);
+}
+
 .app {
   position: relative;
   display: flex;
@@ -69,10 +82,17 @@
   flex-direction: column;
 }
 
-/* In a desktop window, the column whose top-left the window's controls cover makes room for them. */
+/*
+ * In a desktop window, the column whose top-left the window's controls cover (macOS) makes room for them at its
+ * left; the main column, whose top-right they cover on Windows and Linux, at its right.
+ */
 [data-titlebar] .sidebar-slot,
 [data-titlebar].sidebar-collapsed .main-col {
   --titlebar-inset: env(titlebar-area-x, 0px);
+}
+
+[data-titlebar] .main-col {
+  --titlebar-inset-end: max(0px, calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw)));
 }
 
 @media (max-width: 820px) {

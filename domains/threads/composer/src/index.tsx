@@ -5,7 +5,7 @@ import { newRequestId } from "@lemma/agent/prompt";
 import { IMAGE_TYPES } from "@lemma/llm";
 import type { QueuedPrompt } from "@lemma/agent";
 import type { ImageContent } from "@lemma/llm";
-import { formatKeys, listKey, modKey, quickKey } from "@lemma/web/keys";
+import { formatKeys, listKey, matchesKeys, modKey, quickKey } from "@lemma/web/keys";
 import { createQuickHold } from "@lemma/web/quick-pick";
 import {
   applySuggestion,
@@ -36,7 +36,7 @@ import type { WorkspaceService } from "@lemma/workspace/web";
 import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
 import { commandTurn } from "./command.ts";
 import { createCompletion, ghostText } from "./completion.ts";
-import { dropRetry, keepDraft, unsent } from "./drafts.ts";
+import { SharedDrafts, dropRetry, keepDraft, lostOnReload, unsent } from "./drafts.ts";
 import type { Draft, Drafts } from "./drafts.ts";
 import { recallTarget, sentPrompts } from "./history.ts";
 import type { SentPrompt } from "./history.ts";
@@ -71,6 +71,8 @@ const ComposerConfig = Schema.Struct({
 
 /** What each setting is when its row leaves it out. */
 const CONFIG_DEFAULTS = Schema.decodeUnknownSync(ComposerConfig)({});
+
+const noPrompt = { text: "", images: [] } as const;
 
 type Send = typeof ComposerConfig.Type.send;
 type WhenBusy = typeof ComposerConfig.Type.whenBusy;
@@ -165,7 +167,14 @@ function Composer(props: { deps: Deps }) {
   createEffect(
     on(
       threads.activeId,
-      () => {
+      (id, before) => {
+        // Written on the new-thread page before its thread was there (the list loading, the thread being made): the
+        // blank thread it lands on takes it.
+        const early = drafts.get("");
+        if (before === undefined && id !== undefined && early !== undefined && unsent(early) && threads.blank() && !unsent(drafts.get(id) ?? noPrompt)) {
+          drafts.set(id, early);
+          drafts.delete("");
+        }
         const draft = drafts.get(draftKey());
         setRecalled(undefined);
         setText(draft?.text ?? "");
@@ -220,10 +229,21 @@ function Composer(props: { deps: Deps }) {
     drafts,
     outgoing,
     key: draftKey,
+    home: (key) => (key === "" ? draftKey() : key),
     read: () => ({ text: text(), images: images() }),
+    // A refused prompt comes back with the cursor at its end and its completions dismissed, as Escape does, so they do
+    // not cover the notice saying why; when the Enter that sent it comes up no longer decides.
     write: (prompt) => {
-      setText(prompt.text);
-      setImages(prompt.images);
+      batch(() => {
+        setText(prompt.text);
+        setImages(prompt.images);
+        setCursor(prompt.text.length);
+      });
+      completion.dismiss();
+      queueMicrotask(() => {
+        input.setSelectionRange(prompt.text.length, prompt.text.length);
+        resize();
+      });
     },
     sending,
     setSending,
@@ -235,10 +255,10 @@ function Composer(props: { deps: Deps }) {
       const waiting = holder();
       if (waiting !== undefined) setChoices((current) => releasing(current, waiting.key()));
     },
-    place: async (sent, content, whenBusy) => {
-      // A new chat may start in its own worktree, named from the prompt.
-      const cwd = threads.activeId() === undefined ? await workspace.newChatDir(sent.text) : undefined;
-      return threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy });
+    place: async (sent, content, whenBusy, background) => {
+      // A new chat may start in its own worktree, named from the prompt: one in the background, as one sent from here would.
+      const cwd = threads.blank() ? await workspace.newChatDir(sent.text) : undefined;
+      return threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy, background });
     },
     report: (error) => notify.report(error, "Could not create a session"),
     settled: () => queueMicrotask(resize),
@@ -250,6 +270,12 @@ function Composer(props: { deps: Deps }) {
     if (item === undefined) return (await runCommand()) ? undefined : sender.send(whenBusy);
     if (item.canSubmit?.() !== false) item.submit();
   };
+  /** The prompt goes to a new thread in the background, as a link opened in a new tab, and this one stays shown. */
+  const runElsewhere = async () => {
+    if (taken() === undefined) return (await runCommand()) ? undefined : sender.send(busyMode(), true);
+  };
+  /** What runs the prompt elsewhere: mod with Enter, or with Shift too while mod+Enter sends. */
+  const elsewhereKeys = () => (props.deps.config.send === "mod+enter" ? "mod+shift+enter" : "mod+enter");
   /**
    * A prompt that is a command running here runs instead of going out (`commandTurn`): the box clears first, as the
    * command may go to another thread, and gets the prompt back if it fails. True when the prompt was a command.
@@ -409,7 +435,10 @@ function Composer(props: { deps: Deps }) {
       return;
     }
     const sends = props.deps.config.send === "mod+enter" ? modKey(event) : !modKey(event) && !event.ctrlKey && !event.metaKey;
-    if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing) {
+    if (!event.isComposing && taken() === undefined && matchesKeys(elsewhereKeys(), event)) {
+      event.preventDefault();
+      void runElsewhere();
+    } else if (event.key === "Enter" && sends && !event.shiftKey && !event.isComposing) {
       // Alt does what `whenBusy` does not; with no turn running, Alt+Enter is left to the field.
       if (event.altKey && !threads.busy()) return;
       event.preventDefault();
@@ -453,7 +482,7 @@ function Composer(props: { deps: Deps }) {
       const other = formatKeys(props.deps.config.send === "mod+enter" ? "alt+mod+enter" : "alt+enter");
       return busyMode() === "steer" ? `Steer it, or ${other} to queue for after it` : `Queue for after it, or ${other} to steer it`;
     }
-    return threads.activeId() === undefined ? "Ask anything, or describe a task" : "Reply…";
+    return threads.blank() ? "Ask anything, or describe a task" : "Reply…";
   };
 
   return (
@@ -673,7 +702,13 @@ function Composer(props: { deps: Deps }) {
               when={threads.busy()}
               fallback={
                 <Show when={taken() === undefined}>
-                  <button type="submit" class="send" disabled={!canSend()} aria-label="Send" data-tip="Send">
+                  <button
+                    type="submit"
+                    class="send"
+                    disabled={!canSend()}
+                    aria-label="Send"
+                    data-tip={`Send (${formatKeys(elsewhereKeys())}: in a new thread, in the background)`}
+                  >
                     <SendIcon />
                   </button>
                 </Show>
@@ -764,7 +799,10 @@ function SuggestionRow(props: ComposerSuggestionProps) {
 /** Which keys send, on the Keyboard page. */
 function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
   return (
-    <SettingRow title="Send a message" description="The other one starts a new line, as does Shift+Enter.">
+    <SettingRow
+      title="Send a message"
+      description={`The other one starts a new line, as does Shift+Enter. ${formatKeys("mod+enter")}, or ${formatKeys("mod+shift+enter")} while it sends, runs it in a new thread in the background.`}
+    >
       <Segmented
         label="Send a message with"
         value={props.send}
@@ -877,15 +915,30 @@ export default defineWebPlugin({
   setup: (use, plugin) => {
     const [focus, setFocus] = createSignal<() => void>();
     const [queueOpen, setQueueOpen] = createSignal(true);
-    const drafts = new Map<string, Draft>();
+    const drafts = new SharedDrafts(use.threads.drafts(), use.threads.setDraft);
     const outgoing = new Set<Draft>();
-    const deps: Deps = { ...use, config: plugin.config, drafts, outgoing, setFocus: (next) => setFocus(() => next), queueOpen, setQueueOpen };
-    // An unsent prompt in any thread, shown or not, or one still going out: closing or reloading the tab asks first.
-    // Switching threads keeps drafts, so only an unload does.
+    // A deleted thread (a blank tab closed) takes its draft with it, so closing the app does not ask about it.
+    createEffect(() => {
+      if (!use.threads.loaded()) return;
+      const known = new Set(use.threads.list().map((session) => session.id));
+      for (const key of drafts.keys()) if (key !== "" && !known.has(key)) drafts.delete(key);
+    });
+    const deps: Deps = {
+      ...use,
+      config: plugin.config,
+      drafts,
+      outgoing,
+      setFocus: (next) => setFocus(() => next),
+      queueOpen,
+      setQueueOpen,
+    };
+    // An unsent prompt a reload would lose (its images, a send that did not get through), in any thread, or one still
+    // going out: closing or reloading the tab asks first. Drafts' text comes back (`Threads.drafts`), so it does not ask.
     plugin.onCleanup(
-      use.router.block((transition) => transition.action !== "unload" || (outgoing.size === 0 && ![...drafts.values()].some(unsent)), {
-        label: "composer: an unsent prompt asks before the tab closes",
-      }),
+      use.router.block(
+        (transition) => transition.action !== "unload" || (outgoing.size === 0 && ![...drafts].some(([key, draft]) => lostOnReload(key, draft))),
+        { label: "composer: an unsent prompt a reload would lose asks before the tab closes" },
+      ),
     );
     use.slots.add(ComposerRegion, { id: "composer", phase: "default", component: () => <Composer deps={deps} /> });
     use.slots.add(ComposerNotices, { id: "composer.answer", order: 50, component: () => <PromptAnswerNotice threads={use.threads} /> });
@@ -909,7 +962,7 @@ export default defineWebPlugin({
       title: "Composer",
       entries: () => [
         {
-          text: "Composer: send a message with Enter or Mod+Enter; the other one, or Shift+Enter, starts a new line",
+          text: "Composer: send a message with Enter or Mod+Enter; the other one, or Shift+Enter, starts a new line; Mod+Enter (Mod+Shift+Enter while it sends) runs it in a new thread in the background",
           view: () => <SendSetting send={plugin.config.send} onChange={(send) => setOption("send", send)} />,
         },
         {

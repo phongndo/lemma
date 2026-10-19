@@ -17,8 +17,44 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   `select` navigates and the active thread follows, so a link, back and
   forward, and a reload open the thread they name. An id no listed thread has
   opens nothing, and a page that is not a thread's (settings) keeps the thread
-  it was opened over. A deleted thread's address goes to a new thread, and an
-  address from before threads had paths (`/#<id>`) becomes the thread's own.
+  it was opened over. A deleted thread's address goes to the new-thread page,
+  and an address from before threads had paths (`/#<id>`) becomes the
+  thread's own.
+- **Threads exist before their first prompt**, as a browser's tabs do:
+  `newThread` creates an empty session (`isBlank`, with no prompt on its way)
+  in the shown thread's directory unless told another, and goes to it; one
+  this tab made and still empty in that directory (nothing written in it
+  either) is gone to instead, so there is one new thread per directory. Asked
+  for with nowhere to start one yet (the workspace not yet known), it goes to
+  the new-thread page instead of starting one in the host's directory. The
+  new-thread page (`/`, where the app opens) shows the newest blank thread this
+  tab made with nothing written in it, or creates one in `pendingCwd` once
+  that is set, so opening the app does not pile them up; until then, its first
+  prompt creates it. Asked for again while one is being made in that
+  directory, it waits for that one.
+- **This tab's blank threads.** The blank threads a tab made are its own (kept
+  in the tab's storage, across its reloads): only those it lands on, moves, or
+  deletes, never one another tab, window, or `lemma sessions new` made. One
+  moves rather than being made again (`sessions.relocate`, keeping its id,
+  address, draft, and pane): `newThread` with `inPlace` (another project
+  picked), or a first prompt `send` gives another `cwd` (its own worktree); for
+  one it did not make, a new thread there takes the prompt. Left with nothing
+  kept for it (no draft, nothing a plugin holds for it: `ThreadHolds`, as a
+  page in its pane), it is deleted, as a tab closed is. While something is
+  kept for it, it is marked `kept` on the host, so the host's sweep of empty
+  sessions (one a closed tab left) passes it over.
+- **Drafts.** `drafts` holds each thread's unsent prompt as the composer
+  writes it (`setDraft`). Lists hear at once when a thread gains or loses
+  one, and its text a moment after the last change. Its text is kept in the
+  browser (`lemma.threads.client.drafts`), written a moment after the last
+  change and as the page goes, merged with what other tabs wrote, whose own
+  changes arrive as they save them; it comes back after a reload, and its
+  images last while the page does. A deleted thread's goes with it.
+- **Sending in the background.** `send` with `background` creates a thread
+  (in `cwd`, else the shown thread's directory) and sends to it without going
+  there. Refused, the answer shows where the prompt was written (the
+  new-thread page's, with no thread shown), and the thread made for it is
+  deleted.
 - **Only the open thread is followed.** Its log, streaming drafts, running
   tools' output, and queue are held; opening another drops them and reads its
   log beside what the agent has of it (`agent.view`), so a thread opened or

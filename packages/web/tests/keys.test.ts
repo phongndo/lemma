@@ -38,6 +38,13 @@ describe("matchesKeys", () => {
     }
   });
 
+  it("knows a symbol Shift types another one on by the key's place", () => {
+    // Ctrl+Shift+] types } on a US layout: the binding names ] and Shift.
+    expect(matchesKeys("mod+shift+]", press("}", "BracketRight", { ctrl: true, shift: true }))).toBe(true);
+    expect(matchesKeys("mod+]", press("}", "BracketRight", { ctrl: true, shift: true }))).toBe(false);
+    expect(matchesKeys("mod+]", press("]", "BracketRight", { ctrl: true }))).toBe(true);
+  });
+
   it("needs the exact modifiers", () => {
     expect(matchesKeys("mod+k", press("k", "KeyK", { ctrl: true, shift: true }))).toBe(false);
     expect(matchesKeys("mod+k", press("k", "KeyK"))).toBe(false);
