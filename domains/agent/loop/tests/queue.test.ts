@@ -135,7 +135,8 @@ describe("journalOf and restore", () => {
     const { queues } = onDisk();
     queues.restore(
       new Map([
-        ["running", { turn: { turnId: "t1", prompts: [prompt("p")], closing: { reason: "done" as const } }, queue: [prompt("q")], held: true }],
+        ["running", { turn: { turnId: "t1", prompts: [prompt("p")] }, queue: [prompt("q")], held: true }],
+        ["ended", { turn: { turnId: "t2", prompts: [prompt("p")], closing: { reason: "done" as const } }, queue: [] }],
         ["withdrawn", { queue: [], withdrawn: ["w"] }],
       ]),
     );
@@ -144,8 +145,10 @@ describe("journalOf and restore", () => {
       unchecked: true,
       held: true,
       queue: [{ prompt: prompt("q"), placing: false }],
-      suspended: { turnId: "t1", prompts: [{ prompt: prompt("p") }], marked: false, cancelling: false, closing: { reason: "done" } },
+      suspended: { turnId: "t1", prompts: [{ prompt: prompt("p") }], marked: false, cancelling: false },
     });
+    // One that ended only closes: its callers were answered, so it keeps no prompts (an older agent's journal lists them).
+    expect(queues.get("ended")).toMatchObject({ restored: true, suspended: { turnId: "t2", prompts: [], closing: { reason: "done" } } });
     // Nothing to take up: only what was withdrawn is kept.
     expect(queues.get("withdrawn")).toMatchObject({ restored: false, unchecked: false, withdrawn: ["w"] });
   });

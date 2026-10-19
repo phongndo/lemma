@@ -247,7 +247,9 @@ parents, so titles a rename hung off the turn meanwhile do not mislead it.
   hear how it ended, `TurnEnded` waits, and it closes the way it ended, asking
   nothing, when its session is next taken up (prompted, cancelled, or at the
   next start). The queue then runs on as it would have when the turn ended, or
-  at once behind a prompt sent meanwhile.
+  at once behind a prompt sent meanwhile. It keeps none of its prompts, as any
+  turn that ended: one sent again with its `requestId` is found in the log if
+  the turn placed it, and is a new prompt if not.
 
 The model is the one the turn was started with (`turn-start`), else the default.
 After the resumed turn, the queue runs on. Prompts a client sent before the
