@@ -246,6 +246,40 @@ export const ClassifierResult = Schema.Struct({
 });
 export type ClassifierResult = typeof ClassifierResult.Type;
 
+/** An image model: one that makes images from text and images, such as Gemini's image models. `Llm.generateImages` runs it. */
+export const ImageModelInfo = Schema.Struct({
+  /** `<provider>/<model>` */
+  ref: ModelRef,
+  provider: Schema.String,
+  id: Schema.String,
+  name: Schema.String,
+  api: Schema.String,
+  input: Schema.Array(Schema.Literals(["text", "image"])),
+  /** Always includes `"image"`; `"text"`: it may answer with text blocks too. */
+  output: Schema.Array(Schema.Literals(["text", "image"])),
+  /** USD per million tokens. */
+  cost: Schema.Struct({ input: Schema.Number, output: Schema.Number }),
+});
+export type ImageModelInfo = typeof ImageModelInfo.Type;
+
+/** What `Llm.generateImages` is asked: the prompt as text blocks, and images to edit or work from. */
+export const ImagesContext = Schema.Struct({
+  input: Schema.Array(Schema.Union([TextContent, ImageContent])),
+});
+export type ImagesContext = typeof ImagesContext.Type;
+
+/** What an image model made. A provider's failure is `stopReason: "error"` with its `errorMessage`. */
+export const ImagesResult = Schema.Struct({
+  provider: Schema.String,
+  model: Schema.String,
+  /** The images, and text blocks from a model that answers with text too. */
+  output: Schema.Array(Schema.Union([TextContent, ImageContent])),
+  usage: Schema.optional(Usage),
+  stopReason: Schema.Literals(["stop", "error", "aborted"]),
+  errorMessage: Schema.optional(Schema.String),
+});
+export type ImagesResult = typeof ImagesResult.Type;
+
 export const AuthType = Schema.Literals(["api_key", "oauth"]);
 export type AuthType = typeof AuthType.Type;
 
@@ -547,6 +581,14 @@ export class Llm extends Context.Service<
      * model request: it is not logged as one, and `LlmRequestHook` does not run around it.
      */
     readonly classify: (ref: ModelRef, context: ClassifierContext) => Effect.Effect<ClassifierResult, LlmError>;
+    /** Every known image model, or only those whose provider is configured. */
+    readonly imageModels: (options?: { readonly available?: boolean }) => Effect.Effect<readonly ImageModelInfo[]>;
+    /**
+     * Makes images with the image model `ref` names; an unknown one fails `UnknownModel`. A provider's failure, missing
+     * auth included, is the result's `error`. It can take minutes; interrupting it aborts the provider request. Not a
+     * model request, as `classify` is not.
+     */
+    readonly generateImages: (ref: ModelRef, context: ImagesContext) => Effect.Effect<ImagesResult, LlmError>;
     /** Runs the provider's login flow through `Interaction` and stores the credential. */
     readonly login: (provider: string, type: AuthType) => Effect.Effect<void, LlmError>;
     readonly logout: (provider: string) => Effect.Effect<void, LlmError>;
