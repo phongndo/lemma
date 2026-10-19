@@ -103,7 +103,7 @@ export const drawSwarm = (prng: Prng, focus: Focus = prng.pick(FOCUSES)): Swarm 
       focus === "model",
     ),
     tools: rates(prng, ["fail", "slow"], 0.4, focus === "tools"),
-    hooks: rates(prng, ["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail"], 0.3),
+    hooks: rates(prng, ["inputSlow", "inputFail", "inputAnswer", "requestSlow", "requestFail", "requestContext"], 0.3),
     disk: rates(prng, ["write", "sync", "truncate", "rename", "open"], focus === "disk" ? 0.5 : 0.1, focus === "disk"),
   };
 };

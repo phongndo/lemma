@@ -46,6 +46,8 @@ export function messageOf(event: SessionEvent): Message | undefined {
   switch (data.type) {
     case "message":
       return data.message;
+    case "context":
+      return { role: "user", content: data.content, timestamp: event.at };
     case "turn-start":
     case "turn-end":
     case "step-start":
@@ -73,6 +75,8 @@ export interface ModelEntry {
   readonly message: Message;
   readonly index: number;
   readonly summary?: true;
+  /** From a `context` event: a plugin's, which a response's tool results go before. */
+  readonly context?: true;
 }
 
 /**
@@ -98,10 +102,42 @@ export function modelEntries(branch: readonly SessionEvent[]): ModelEntry[] {
           },
         ];
   for (let index = start; index < branch.length; index++) {
-    const message = messageOf(branch[index]!);
-    if (message !== undefined) entries.push({ message, index });
+    const event = branch[index]!;
+    const message = messageOf(event);
+    if (message !== undefined) entries.push(event.data.type === "context" ? { message, index, context: true } : { message, index });
   }
-  return inCallOrder(entries);
+  return inCallOrder(afterResults(entries));
+}
+
+/**
+ * Moves each `context` entry that lands among a response's tool results to after them: a provider wants a response's
+ * results right after it. The results a response waits for are those of its calls; the run ends at the first entry
+ * that is neither one of them nor context.
+ */
+function afterResults(entries: ModelEntry[]): ModelEntry[] {
+  if (!entries.some((entry) => entry.context === true)) return entries;
+  for (let i = 0; i < entries.length; i++) {
+    const message = entries[i]!.message;
+    if (message.role !== "assistant") continue;
+    const calls = new Set(message.content.flatMap((block) => (block.type === "toolCall" ? [block.id] : [])));
+    if (calls.size === 0) continue;
+    let end = i + 1;
+    while (end < entries.length) {
+      const entry = entries[end]!;
+      if (entry.context === true || (entry.message.role === "toolResult" && calls.has(entry.message.toolCallId))) end++;
+      else break;
+    }
+    const run = entries.slice(i + 1, end);
+    const context = run.filter((entry) => entry.context === true);
+    if (context.length === 0) continue;
+    // Context after the last result is in place already; only context before one moves.
+    let lastResult = run.length - 1;
+    while (lastResult >= 0 && run[lastResult]!.context === true) lastResult--;
+    if (lastResult === -1 || run.slice(0, lastResult).every((entry) => entry.context !== true)) continue;
+    entries.splice(i + 1, run.length, ...run.filter((entry) => entry.context !== true), ...context);
+    i = end - 1;
+  }
+  return entries;
 }
 
 /**

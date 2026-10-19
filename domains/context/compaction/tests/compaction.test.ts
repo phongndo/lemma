@@ -61,6 +61,16 @@ describe("the estimate", () => {
   });
 });
 
+describe("context a plugin told the model", () => {
+  it("counts in the estimate, and is a place the history may be kept from", () => {
+    const told: EventData = { type: "context", source: "mail", content: [{ type: "text", text: "z".repeat(80) }] };
+    const log = branch(message(user("x".repeat(400))), message(answer([{ type: "text", text: "ok" }], 900, 100)), told);
+    // 1,000 reported, then 20 for what the plugin told it.
+    expect(estimateTokens(log, () => 0)).toBe(1020);
+    expect(chooseCut(log, 1)).toBe(2);
+  });
+});
+
 describe("the request's own size", () => {
   it("counts the tools the model is sent, not those only a tool that runs others calls", () => {
     const tool = (name: string, description: string, flags: { readonly nested?: true; readonly nests?: true }) => ({

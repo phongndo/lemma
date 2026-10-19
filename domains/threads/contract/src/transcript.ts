@@ -78,7 +78,17 @@ export interface CompactionItem {
   readonly tokensBefore: number;
 }
 
-export type Item = UserItem | AssistantItem | AttemptItem | OrphanResultItem | CompactionItem;
+/** What a plugin told the model (a `context` event): its source, and what a transcript shows of it. */
+export interface ContextItem {
+  readonly kind: "context";
+  readonly id: string;
+  readonly at: number;
+  readonly source: string;
+  /** The event's `display`, else its content's text. */
+  readonly text: string;
+}
+
+export type Item = UserItem | AssistantItem | AttemptItem | OrphanResultItem | CompactionItem | ContextItem;
 
 export interface TurnView {
   /** `turnId`, or the first event id for history outside a turn. */
@@ -350,6 +360,12 @@ const project = (branch: readonly SessionEvent[], cache: Cache): Transcript => {
             tokensBefore: data.tokensBefore,
           })),
         );
+        break;
+      }
+      case "context": {
+        const turn = ensure(event);
+        const text = data.display ?? data.content.map((part) => (part.type === "text" ? part.text : "[image]")).join("\n");
+        turn.items.push(cache.get(event.id, "", (): ContextItem => ({ kind: "context", id: event.id, at: event.at, source: data.source, text })));
         break;
       }
       case "title":

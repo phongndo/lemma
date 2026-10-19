@@ -45,6 +45,8 @@ const eventLines = (event: SessionEvent): string[] => {
       return [`── failed model call (${data.message.stopReason})${data.message.errorMessage === undefined ? "" : `: ${data.message.errorMessage}`}`];
     case "compaction":
       return [`── compacted ${data.tokensBefore} tokens (${data.source})`, clip(data.summary)];
+    case "context":
+      return [`── context from ${data.source}`, clip(data.display ?? texts(data.content))];
     case "turn-end":
       return data.reason === "done" ? [] : [`── turn ended: ${data.reason}${data.error === undefined ? "" : ` — ${data.error}`}`];
     default:

@@ -18,9 +18,11 @@ export interface HookFaults {
   readonly requestSlow: number;
   /** Around a request: fails it, and so the turn. */
   readonly requestFail: number;
+  /** Around a request: tells the model something first (a `context` event, appended on the turn's branch). */
+  readonly requestContext: number;
 }
 
-export const NO_HOOK_FAULTS: HookFaults = { inputSlow: 0, inputFail: 0, inputAnswer: 0, requestSlow: 0, requestFail: 0 };
+export const NO_HOOK_FAULTS: HookFaults = { inputSlow: 0, inputFail: 0, inputAnswer: 0, requestSlow: 0, requestFail: 0, requestContext: 0 };
 
 /** A plugin handling `AgentInputHook` and `AgentRequestHook` as `faults` draws, passing each on otherwise. */
 export const simHooks = (prng: Prng, faults: HookFaults, count: (what: string) => void = () => {}) =>
@@ -55,6 +57,16 @@ export const simHooks = (prng: Prng, faults: HookFaults, count: (what: string) =
           if (prng.chance(faults.requestFail)) {
             count("hook requestFail");
             return yield* new AgentError({ sessionId: draft.sessionId, reason: "Hook", message: "sim.hooks failed the request" });
+          }
+          if (prng.chance(faults.requestContext)) {
+            count("hook requestContext");
+            yield* draft.append({
+              type: "context",
+              source: "sim.hooks",
+              content: [{ type: "text", text: `A reading: ${prng.between(0, 100)}` }],
+              display: "a reading",
+              turnId: draft.turnId,
+            });
           }
           return yield* next(draft);
         }),

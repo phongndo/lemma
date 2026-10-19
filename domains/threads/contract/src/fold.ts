@@ -113,7 +113,7 @@ const runs = (turn: TurnView, endedAt: number | undefined, final?: Final): TurnE
     answer = undefined;
   };
   turn.items.forEach((item, index) => {
-    if (item.kind === "user" || item.kind === "compaction") {
+    if (item.kind === "user" || item.kind === "compaction" || item.kind === "context") {
       close(item.at, false);
       entries.push({ kind: "item", item, note: true });
       // The prompts that open the turn come before its first run, which keeps the turn's key and start.

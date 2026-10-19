@@ -5,7 +5,7 @@ import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
 import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
-import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
+import { AssistantMessage, ImageContent, LlmFailure, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 import { SessionSearchMatch } from "./search.ts";
 
 /**
@@ -146,6 +146,22 @@ export const EventData = Schema.Union([
     turnId: Schema.optional(Schema.String),
     /** What writing the summary cost. */
     usage: Schema.optional(Usage),
+  }),
+  /**
+   * Something a plugin tells the model where it was appended (an email that arrived, a document attached, a reading),
+   * which the model reads as a user message with `content`, word for word. `source` is the plugin; `display` is what a
+   * transcript shows of it, in place of its content. Logged like any event, so a request with it still rebuilds from
+   * the log. One placed among a response's tool results is seen after them, so the calls keep their results next to
+   * them. During a turn, append it through `AgentRequestHook`'s `append` (with the turn's id), as the turn's later
+   * events follow its own last one; between turns, with `Sessions.append`.
+   */
+  Schema.Struct({
+    type: Schema.Literal("context"),
+    source: Schema.String,
+    content: Schema.Array(Schema.Union([TextContent, ImageContent])),
+    display: Schema.optional(Schema.String),
+    turnId: Schema.optional(Schema.String),
+    stepId: Schema.optional(Schema.String),
   }),
   Schema.Struct({ type: Schema.Literal("title"), title: Schema.String }),
   /** Plugin-owned data; `kind` is namespaced by the plugin id. Not model-visible. */

@@ -152,9 +152,54 @@ describe("modelEntries", () => {
     expect(modelEntries(events).map((entry) => entry.index)).toEqual([0, 1, 3, 2]);
   });
 
+  it("shows a context event to the model as a user message, after the tool results of a response it lands among", () => {
+    const call = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
+    const result = (toolCallId: string): EventData => ({
+      type: "message",
+      message: { role: "toolResult", toolCallId, toolName: "read", content: [{ type: "text", text: toolCallId }], isError: false, timestamp: 0 },
+    });
+    const calls: EventData = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [call("c1"), call("c2")],
+        api: "test",
+        provider: "p",
+        model: "m",
+        usage: emptyUsage,
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+    };
+    const context = (text: string): EventData => ({ type: "context", source: "mail", content: [{ type: "text", text }], display: "1 new email" });
+    const events = log(user("go"), calls, result("c1"), context("An email arrived"), result("c2"), context("Another"), assistant("done"));
+    const roles = deriveMessages(events).map((message) =>
+      message.role === "toolResult" ? message.toolCallId : message.role === "user" ? JSON.stringify(message.content[0]) : message.role,
+    );
+    expect(roles).toEqual([
+      JSON.stringify({ type: "text", text: "go" }),
+      "assistant",
+      "c1",
+      "c2",
+      JSON.stringify({ type: "text", text: "An email arrived" }),
+      JSON.stringify({ type: "text", text: "Another" }),
+      "assistant",
+    ]);
+    expect(
+      modelEntries(events)
+        .filter((entry) => entry.context === true)
+        .map((entry) => entry.index),
+    ).toEqual([3, 5]);
+  });
+
   it("takes a message only from a message event", () => {
     const events = log(user("hi"), { type: "custom", kind: "x.y", data: 1 }, { type: "turn-start", turnId: "t" });
     expect(events.map((event) => messageOf(event) !== undefined)).toEqual([true, false, false]);
+    expect(messageOf(log({ type: "context", source: "x", content: [{ type: "text", text: "seen" }] })[0]!)).toEqual({
+      role: "user",
+      content: [{ type: "text", text: "seen" }],
+      timestamp: 1000,
+    });
   });
 });
 
