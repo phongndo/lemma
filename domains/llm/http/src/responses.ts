@@ -93,20 +93,23 @@ function assistantItems(
   // Another model of the same provider made it: its item ids are its own, and would be refused paired with ours.
   const otherModel = !same && message.provider === model.provider && message.api === model.api;
   let texts = 0;
+  // A reasoning item left out: the items it led to go without the ids the API pairs with it, until the next one.
+  let orphaned = false;
   for (const block of message.content) {
     if (block.type === "thinking") {
       if (block.thinkingSignature === undefined) continue;
       try {
         const item = JSON.parse(block.thinkingSignature) as Record<string, unknown>;
         // With `store: false` the provider keeps nothing to find one by its id: one without its content is refused.
-        if (item.encrypted_content != null) items.push(item);
+        orphaned = item.encrypted_content == null;
+        if (!orphaned) items.push(item);
       } catch {
         // Not a reasoning item: nothing to send back.
       }
     } else if (block.type === "text") {
       const signature = textSignature(block.textSignature);
       let id = signature?.id ?? `msg_${at}_${texts}`;
-      if (id.length > 64) id = `msg_${shortHash(id)}`;
+      if (orphaned || id.length > 64) id = `msg_${shortHash(id)}`;
       texts++;
       items.push({
         type: "message",
@@ -120,7 +123,7 @@ function assistantItems(
       const [callId, itemId] = block.id.split("|");
       items.push({
         type: "function_call",
-        ...(otherModel || !itemId?.startsWith("fc_") ? {} : { id: itemId }),
+        ...(otherModel || orphaned || !itemId?.startsWith("fc_") ? {} : { id: itemId }),
         call_id: callId,
         name: block.name,
         arguments: JSON.stringify(block.arguments),

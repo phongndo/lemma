@@ -487,6 +487,29 @@ describe("openai-responses", () => {
       }),
     ).body.input as { type?: string; id?: string }[];
     expect(input.filter((item) => item.type === "reasoning").map((item) => item.id)).toEqual(["rs_1"]);
+    // What the item left out led to goes without the ids the API would look for it beside; what follows a kept one keeps them.
+    const after = openaiResponses.build(
+      call(gpt, {
+        messages: [
+          user("go"),
+          answer(gpt, [
+            reasoning("rs_1", null),
+            { type: "text", text: "Looking", textSignature: '{"v":1,"id":"msg_1"}' },
+            { type: "toolCall", id: "call_1|fc_1", name: "read", arguments: {} },
+            reasoning("rs_2"),
+            { type: "toolCall", id: "call_2|fc_2", name: "read", arguments: {} },
+          ]),
+          result("call_1", "a"),
+          result("call_2", "b"),
+        ],
+      }),
+    ).body.input as { type?: string; id?: string }[];
+    expect(after.filter((item) => item.type !== undefined && item.type !== "function_call_output").map((item) => [item.type, item.id])).toEqual([
+      ["message", expect.not.stringMatching(/^msg_1$/)],
+      ["function_call", undefined],
+      ["reasoning", "rs_2"],
+      ["function_call", "fc_2"],
+    ]);
   });
 
   it("asks for reasoning's encrypted content at every effort but `none`, an `off` the config maps to one too", () => {
