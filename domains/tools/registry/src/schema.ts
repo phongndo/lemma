@@ -73,17 +73,8 @@ const isNumberEncoding = (node: Json): boolean => {
   );
 };
 
-/**
- * Provider-friendly JSON Schema (draft-07) for a tool input's encoded side:
- * `$schema`, ids, and titles removed, and every `$ref` inlined (sibling
- * keywords such as a field's description override the definition's). A
- * recursive reference cannot be inlined and becomes an unconstrained schema.
- * Objects are closed (`additionalProperties: false`), optional fields are
- * offered as their value type, and numbers as plain `number`. The root is
- * always an object schema with `properties`, which every major provider
- * requires.
- */
-export function toolParameters(schema: Schema.Top): JsonSchema {
+/** A schema's encoded side as cleaned JSON Schema (see `toolParameters`), its root as it is. */
+function jsonSchemaOf(schema: Schema.Top): Json {
   const { representation, references } = SchemaRepresentation.toRepresentation(schema.ast);
   const document = EffectJsonSchema.toDocumentDraft07(
     SchemaRepresentation.toJsonSchemaDocument(
@@ -125,9 +116,26 @@ export function toolParameters(schema: Schema.Top): JsonSchema {
     return out;
   };
 
-  const cleaned = clean(document.schema, new Set()) as Json;
+  return clean(document.schema, new Set()) as Json;
+}
+
+/**
+ * Provider-friendly JSON Schema (draft-07) for a tool input's encoded side:
+ * `$schema`, ids, and titles removed, and every `$ref` inlined (sibling
+ * keywords such as a field's description override the definition's). A
+ * recursive reference cannot be inlined and becomes an unconstrained schema.
+ * Objects are closed (`additionalProperties: false`), optional fields are
+ * offered as their value type, and numbers as plain `number`. The root is
+ * always an object schema with `properties`, which every major provider
+ * requires.
+ */
+export function toolParameters(schema: Schema.Top): JsonSchema {
+  const cleaned = jsonSchemaOf(schema);
   const composite = "anyOf" in cleaned || "oneOf" in cleaned || "allOf" in cleaned;
   if (cleaned["type"] === undefined && !composite) cleaned["type"] = "object";
   if (cleaned["type"] === "object" && cleaned["properties"] === undefined) cleaned["properties"] = {};
   return cleaned;
 }
+
+/** A tool's `output` as JSON Schema, cleaned as `toolParameters` cleans an input, whatever its root (a string, a union). */
+export const toolOutput = (schema: Schema.Top): JsonSchema => jsonSchemaOf(schema);

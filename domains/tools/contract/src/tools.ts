@@ -3,6 +3,7 @@ import type { Effect } from "effect";
 import { Event, Hook, Registry, schemaCheck } from "@lemma/core";
 import type { Awaitable } from "@lemma/core";
 import { ImageContent, TextContent, ToolSpec } from "@lemma/llm";
+import type { JsonSchema } from "@lemma/llm";
 import type { ResultCredit } from "@lemma/contracts";
 
 export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
@@ -10,7 +11,26 @@ export class ToolResult extends Schema.Class<ToolResult>("lemma/ToolResult")({
   isError: Schema.optional(Schema.Boolean),
   /** Structured data for UIs (diffs, exit codes); logged, never sent to the model. */
   details: Schema.optional(Schema.Unknown),
+  /**
+   * What the call resolves to in a script of a tool that runs others (`codemode`), of the shape the tool's `output`
+   * declares: a command's whole output and exit code, an image as a block. Neither logged nor sent to the model, so it
+   * may hold more than `content` (a megabyte of output the model would see the tail of).
+   */
+  structured: Schema.optional(Schema.Unknown),
 }) {}
+
+/**
+ * An image as a script holds it: what `read` resolves to for an image, what a screenshot is, and what a script hands to
+ * a classifier or shows with `image()`. `data` is base64.
+ */
+export const ImageBlock = Schema.Struct({
+  type: Schema.Literal("image"),
+  data: Schema.String,
+  mimeType: Schema.String,
+  /** What goes with it, as the model would read it: a size, a resize. */
+  note: Schema.optional(Schema.String),
+});
+export type ImageBlock = typeof ImageBlock.Type;
 
 export interface ToolContext {
   readonly sessionId: string;
@@ -77,7 +97,40 @@ export interface Tool<Input = any> {
   readonly nested?: true;
   /** `true`: it runs other tools (`codemode`), so a request offering it leaves the `nested` ones for it to call. */
   readonly nests?: true;
+  /**
+   * The shape of its results' `structured`, which a script's call resolves to instead of the result's text, and which
+   * the script's declaration of the tool names. A tool declaring one resolves on an error result too when it set
+   * `structured` (a command that exited non-zero), so the script reads what happened. Absent: a call resolves to the
+   * result's text, or `{ text, images }` when it has images, and an error result rejects.
+   */
+  readonly output?: Schema.Top;
+  /**
+   * The `ToolNamespaces` entry it belongs to (`browser`, an MCP server's): scripts search and list tools by it, and
+   * read what the namespace says of them all at once.
+   */
+  readonly namespace?: string;
+  /**
+   * `true`: a call shows the person something beside the model's text (a page drawn in the chat), drawn from its
+   * result, so a tool that runs others keeps each call of it that succeeds, its result and its input's `title`, in its
+   * own result, for the chat to show as this tool's calls show.
+   */
+  readonly display?: true;
   readonly execute: (input: Input, context: ToolContext) => Awaitable<ToolResult, unknown>;
+}
+
+/**
+ * A group of tools scripts reach together (`browser`, an MCP server's): what they are for, and how to use them, which a
+ * script reads with `describeNamespace` instead of every request carrying it. Tools name theirs as `Tool.namespace`.
+ */
+export interface ToolNamespace {
+  /** An identifier: letters, digits, `_`, `-`. */
+  readonly name: string;
+  /** What its tools are for, in a sentence; searching ranks its tools by it too. */
+  readonly description: string;
+  /** How to use its tools together, read on demand: the order calls go in, what a ref is. */
+  readonly instructions?: string;
+  /** Other names scripts may use for it (an MCP server's name as configured). */
+  readonly aliases?: readonly string[];
 }
 
 export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvocation")({
@@ -160,7 +213,32 @@ export const Tools = Registry.make<Tool>("lemma/tools", {
     if (!Schema.isSchema(tool.input)) return `Tool "${tool.name}" needs an input Schema`;
     if (tool.direct === true && tool.nested === true)
       return `Tool "${tool.name}" cannot be both direct (only the model calls it) and nested (only tools call it)`;
+    if (tool.output !== undefined && !Schema.isSchema(tool.output)) return `Tool "${tool.name}" has an output that is not a Schema`;
+    if (tool.namespace !== undefined && typeof tool.namespace !== "string") return `Tool "${tool.name}" has a namespace that is not a name`;
     return typeof tool.execute === "function" ? undefined : `Tool "${tool.name}" needs an execute function`;
+  },
+});
+
+/**
+ * The namespaces tools belong to (`Tool.namespace`): `PluginContext.add(ToolNamespaces, namespace)`, by the plugin
+ * adding the tools.
+ *
+ * @composition all namespaces, one per name (another plugin adding a name fails `Conflict`). Checked when added: a name
+ * of letters, digits, `_` and `-`, a description, and instructions and aliases, when given, of text.
+ */
+export const ToolNamespaces = Registry.make<ToolNamespace>("lemma/tools.namespaces", {
+  key: (namespace) => namespace.name,
+  unique: true,
+  check: (value) => {
+    const namespace = value as Partial<ToolNamespace> | null;
+    if (typeof namespace !== "object" || namespace === null) return "A namespace is an object";
+    if (typeof namespace.name !== "string" || !/^[A-Za-z0-9_-]+$/.test(namespace.name)) return "A namespace needs a name of letters, digits, _ and -";
+    if (typeof namespace.description !== "string") return `Namespace "${namespace.name}" needs a description`;
+    if (namespace.instructions !== undefined && typeof namespace.instructions !== "string")
+      return `Namespace "${namespace.name}" has instructions that are not text`;
+    if (namespace.aliases !== undefined && (!Array.isArray(namespace.aliases) || namespace.aliases.some((alias) => typeof alias !== "string")))
+      return `Namespace "${namespace.name}" has aliases that are not a list of names`;
+    return undefined;
   },
 });
 
@@ -208,6 +286,12 @@ export interface ToolContribution {
   readonly nested?: true;
   /** The tool's `nests`. */
   readonly nests?: true;
+  /** The tool's `output`, as JSON Schema: what a script's call resolves to. */
+  readonly output?: JsonSchema;
+  /** The tool's `namespace`. */
+  readonly namespace?: string;
+  /** The tool's `display`. */
+  readonly display?: true;
 }
 
 /**

@@ -2,11 +2,12 @@
   "name": "@lemma/tools",
   "version": "0.1.0",
   "private": true,
-  "description": "The tools domain's contract: the tools and guards plugins add, the runner the agent calls, and their hook and events; helpers for tools that bound their output (`truncateHead`, `truncateTail`), touch files or spill long output to one (`/files`), and test themselves (`/testing`)",
+  "description": "The tools domain's contract: the tools, namespaces, and guards plugins add, the runner the agent calls, and their hook and events; helpers for tools that bound their output (`truncateHead`, `truncateTail`), touch files, inline images, or spill long output to one (`/files`), draw pages (`/html`), and test themselves (`/testing`)",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
     "./files": "./src/files.ts",
+    "./html": "./src/html.ts",
     "./testing": "./src/testing.ts"
   },
   "scripts": {
