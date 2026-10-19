@@ -7,7 +7,7 @@ import type { ReportedFault } from "@lemma/core";
 import { compositionHistory, faultHistory, planComposition } from "@lemma/composition";
 import type { PluginRow, WebComposition } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
-import { appDefaults, bundled, bundledCode, bundledWeb } from "./bundled.ts";
+import { appDefaults, bundled, bundledCode, bundledWeb, optIn } from "./bundled.ts";
 import { loadComposition, projectPluginsDir, readConfigText, updateConfig } from "./config.ts";
 import { makeHostChanges } from "./control.ts";
 import type { HostChanges, Read } from "./control.ts";
@@ -154,7 +154,7 @@ const EMPTY_WEB: WebComposition = { plugins: {}, enabledIn: {}, configIn: {}, fi
 
 /** Reads config files and local plugins into the next composition (see `planComposition`), with every diagnostic. */
 const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
-  const input = { bundled, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
+  const input = { bundled, optIn, pinned: Object.keys(pinned), defaults: appDefaults, provided, localRequired: true };
   if (safe) {
     const planned = planComposition({ ...input, local: [], rows: withOverrides({}) });
     // The bundled plugins as shipped: only an error in them is said, as it stops the start.

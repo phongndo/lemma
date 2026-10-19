@@ -25,6 +25,8 @@ export interface PlanInput {
   readonly rows: Readonly<Record<string, PluginRow>>;
   /** Plugins that always run, with everything they need; a problem in one stops the start. */
   readonly pinned?: readonly string[];
+  /** Bundled plugins that start off: each runs once a row turns it on (`enabled: true`). */
+  readonly optIn?: ReadonlySet<string>;
   /** Config the app supplies beneath a row's `config`, key by key (the host's `staticDir`). */
   readonly defaults?: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
   /** Whether plugins from files must start unless their row says `required: false` (the host's policy). */
@@ -111,9 +113,10 @@ export function planComposition(input: PlanInput): Plan {
   const known = [...byId.values()];
 
   const plugins: Record<string, PluginEntry> = {};
-  for (const { plugin } of known) {
+  for (const { plugin, source } of known) {
     const base = input.defaults?.[plugin.id];
-    plugins[plugin.id] = base === undefined ? {} : { config: base };
+    const off = source === "bundled" && input.optIn?.has(plugin.id) === true;
+    plugins[plugin.id] = { ...(base === undefined ? {} : { config: base }), ...(off ? { enabled: false } : {}) };
   }
   for (const { plugin, source } of known) {
     if (source === "bundled" || rows[plugin.id]?.enabled === false) continue;

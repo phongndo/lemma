@@ -163,6 +163,21 @@ export const EventData = Schema.Union([
     turnId: Schema.optional(Schema.String),
     stepId: Schema.optional(Schema.String),
   }),
+  /**
+   * Changes what the model sees of an earlier event on the branch, which stays in the log as it was: `omit` leaves it
+   * out (a response with its tool results, so calls keep their results), `replace` puts `content` in its place (a
+   * prompt, a tool result, or a `context` event; never a response, whose calls its results answer). The latest edit of
+   * an event wins. One that cannot apply (its target not on the branch, or already summarized away by a compaction,
+   * or omitting a lone tool result, or replacing a response) changes nothing. Append it as `context` says.
+   */
+  Schema.Struct({
+    type: Schema.Literal("context-edit"),
+    target: Schema.String,
+    op: Schema.Literals(["omit", "replace"]),
+    content: Schema.optional(Schema.Array(Schema.Union([TextContent, ImageContent]))),
+    source: Schema.String,
+    turnId: Schema.optional(Schema.String),
+  }),
   Schema.Struct({ type: Schema.Literal("title"), title: Schema.String }),
   /** Plugin-owned data; `kind` is namespaced by the plugin id. Not model-visible. */
   Schema.Struct({ type: Schema.Literal("custom"), kind: Schema.String, data: Schema.Unknown }),

@@ -179,6 +179,14 @@ describe("planComposition", () => {
     expect(running(appProvided)).toContain("later");
   });
 
+  test("an opt-in bundled plugin starts off, and a row turns it on", () => {
+    const extra = definePlugin({ id: "extra", layer: Layer.empty });
+    expect(running(plan({ bundled: [...bundled, extra], optIn: new Set(["extra"]) }))).not.toContain("extra");
+    expect(running(plan({ bundled: [...bundled, extra], optIn: new Set(["extra"]), rows: { extra: { enabled: true } } }))).toContain("extra");
+    // A row's config alone does not turn it on.
+    expect(running(plan({ bundled: [...bundled, extra], optIn: new Set(["extra"]), rows: { extra: { config: {} } } }))).not.toContain("extra");
+  });
+
   test("a plugin written for another version of a domain's contract is left out with both versions named", () => {
     const provider = definePlugin({ id: "store", implements: ["lemma/store@2"], layer: Layer.empty });
     const old = definePlugin({ id: "old", uses: ["lemma/store@1"], layer: Layer.empty });

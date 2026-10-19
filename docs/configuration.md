@@ -1,6 +1,7 @@
 # Configuration
 
-With no config, every bundled plugin runs. `~/.lemma/config.jsonc` and
+With no config, every bundled plugin runs but a few that start off until a
+row turns them on (`"enabled": true`): `context.prune`. `~/.lemma/config.jsonc` and
 `<project>/.lemma/config.jsonc` patch that by plugin id:
 
 ```jsonc

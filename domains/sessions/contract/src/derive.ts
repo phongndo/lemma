@@ -48,6 +48,7 @@ export function messageOf(event: SessionEvent): Message | undefined {
       return data.message;
     case "context":
       return { role: "user", content: data.content, timestamp: event.at };
+    case "context-edit":
     case "turn-start":
     case "turn-end":
     case "step-start":
@@ -106,7 +107,31 @@ export function modelEntries(branch: readonly SessionEvent[]): ModelEntry[] {
     const message = messageOf(event);
     if (message !== undefined) entries.push(event.data.type === "context" ? { message, index, context: true } : { message, index });
   }
-  return inCallOrder(afterResults(entries));
+  return inCallOrder(afterResults(edited(branch, entries)));
+}
+
+/** `entries` with the branch's `context-edit`s applied, the latest per target; one that cannot apply changes nothing. */
+function edited(branch: readonly SessionEvent[], entries: ModelEntry[]): ModelEntry[] {
+  const edits = new Map<string, Extract<SessionEvent["data"], { type: "context-edit" }>>();
+  for (const event of branch) if (event.data.type === "context-edit") edits.set(event.data.target, event.data);
+  if (edits.size === 0) return entries;
+  const omittedCalls = new Set<string>();
+  const out: ModelEntry[] = [];
+  for (const entry of entries) {
+    const edit = entry.summary === true ? undefined : edits.get(branch[entry.index]!.id);
+    const message = entry.message;
+    if (edit?.op === "omit" && message.role !== "toolResult") {
+      if (message.role === "assistant") for (const block of message.content) if (block.type === "toolCall") omittedCalls.add(block.id);
+      continue;
+    }
+    if (edit?.op === "replace" && edit.content !== undefined && message.role !== "assistant") {
+      out.push({ ...entry, message: { ...message, content: edit.content } });
+      continue;
+    }
+    out.push(entry);
+  }
+  // A response left out takes its results with it.
+  return omittedCalls.size === 0 ? out : out.filter((entry) => !(entry.message.role === "toolResult" && omittedCalls.has(entry.message.toolCallId)));
 }
 
 /**

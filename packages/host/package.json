@@ -27,6 +27,7 @@
     "@lemma/context": "workspace:*",
     "@lemma/context-compaction": "workspace:*",
     "@lemma/context-project": "workspace:*",
+    "@lemma/context-prune": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/credentials": "workspace:*",

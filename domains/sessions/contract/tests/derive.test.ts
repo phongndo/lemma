@@ -192,6 +192,55 @@ describe("modelEntries", () => {
     ).toEqual([3, 5]);
   });
 
+  describe("context-edit", () => {
+    const call = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
+    const result = (toolCallId: string, text = toolCallId): EventData => ({
+      type: "message",
+      message: { role: "toolResult", toolCallId, toolName: "read", content: [{ type: "text", text }], isError: false, timestamp: 0 },
+    });
+    const calls: EventData = {
+      type: "message",
+      message: { role: "assistant", content: [call("c1")], api: "test", provider: "p", model: "m", usage: emptyUsage, stopReason: "toolUse", timestamp: 0 },
+    };
+    const edit = (target: string, op: "omit" | "replace", text?: string): EventData => ({
+      type: "context-edit",
+      target,
+      op,
+      ...(text === undefined ? {} : { content: [{ type: "text", text }] }),
+      source: "test",
+    });
+    const shown = (events: readonly SessionEvent[]) =>
+      deriveMessages(events).map((message) =>
+        message.role === "assistant" ? "assistant" : `${message.role}:${message.content.map((part) => (part.type === "text" ? part.text : "")).join("")}`,
+      );
+
+    it("replaces a tool result's content, keeping its place and role; the latest edit wins", () => {
+      const events = log(user("go"), calls, result("c1", "a long output"), edit("e3", "replace", "short"), edit("e3", "replace", "shorter"));
+      expect(shown(events)).toEqual(["user:go", "assistant", "toolResult:shorter"]);
+      // The log keeps the original.
+      expect(JSON.stringify(events[2]!.data)).toContain("a long output");
+    });
+
+    it("omits a prompt, and a response with its results, but never a lone result or a response's content", () => {
+      expect(shown(log(user("one"), user("two"), edit("e1", "omit")))).toEqual(["user:two"]);
+      expect(shown(log(user("go"), calls, result("c1"), assistant("done"), edit("e2", "omit")))).toEqual(["user:go", "assistant"]);
+      expect(shown(log(user("go"), calls, result("c1"), edit("e3", "omit")))).toEqual(["user:go", "assistant", "toolResult:c1"]);
+      expect(shown(log(user("go"), assistant("hi"), edit("e2", "replace", "rewritten")))).toEqual(["user:go", "assistant"]);
+    });
+
+    it("changes nothing for a target a compaction summarized, or one not on the branch", () => {
+      const events = log(
+        user("old"),
+        assistant("old reply"),
+        user("kept"),
+        { type: "compaction", summary: "S", firstKeptId: "e3", tokensBefore: 10, source: "compaction" },
+        edit("e1", "replace", "never seen"),
+        edit("nowhere", "omit"),
+      );
+      expect(shown(events).slice(1)).toEqual(["user:kept"]);
+    });
+  });
+
   it("takes a message only from a message event", () => {
     const events = log(user("hi"), { type: "custom", kind: "x.y", data: 1 }, { type: "turn-start", turnId: "t" });
     expect(events.map((event) => messageOf(event) !== undefined)).toEqual([true, false, false]);

@@ -28,8 +28,14 @@ const tokensOf = (chars: number) => Math.ceil(chars / CHARS_PER_TOKEN);
  * estimated from their length. Undefined without such a response.
  */
 export const measuredTokens = (branch: readonly SessionEvent[], entries: readonly ModelEntry[] = modelEntries(branch)): number | undefined => {
-  // A response logged before the latest compaction (one it kept) was given the context from before it.
-  const after = entries[0]?.summary === true ? entries[0].index : -1;
+  // A response logged before the latest compaction (one it kept) was given the context from before it, and one logged
+  // before the latest edit of the view (a `context-edit`) the context from before that.
+  let after = entries[0]?.summary === true ? entries[0].index : -1;
+  for (let index = branch.length - 1; index > after; index--) {
+    if (branch[index]!.data.type !== "context-edit") continue;
+    after = index;
+    break;
+  }
   for (let at = entries.length - 1; at >= 0; at--) {
     const entry = entries[at]!;
     if (entry.index <= after || entry.message.role !== "assistant") continue;

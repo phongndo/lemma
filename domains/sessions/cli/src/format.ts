@@ -47,6 +47,8 @@ const eventLines = (event: SessionEvent): string[] => {
       return [`── compacted ${data.tokensBefore} tokens (${data.source})`, clip(data.summary)];
     case "context":
       return [`── context from ${data.source}`, clip(data.display ?? texts(data.content))];
+    case "context-edit":
+      return [`── ${data.source} ${data.op === "omit" ? "left out" : "shortened"} ${data.target} in what the model sees`];
     case "turn-end":
       return data.reason === "done" ? [] : [`── turn ended: ${data.reason}${data.error === undefined ? "" : ` — ${data.error}`}`];
     default:

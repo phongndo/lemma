@@ -8,6 +8,7 @@ import commandsCli from "@lemma/commands-cli";
 import commandsHost from "@lemma/commands-host";
 import commandsRegistry from "@lemma/commands-registry";
 import contextCompaction from "@lemma/context-compaction";
+import contextPrune from "@lemma/context-prune";
 import skillsFiles from "@lemma/skills-files";
 import contextProject from "@lemma/context-project";
 import credentialsFile from "@lemma/credentials-file";
@@ -31,6 +32,9 @@ import workspaceCli from "@lemma/workspace-cli";
 import workspaceCommands from "@lemma/workspace-commands";
 import workspaceLocal from "@lemma/workspace-local";
 import workspaceSearchFff from "@lemma/workspace-search-fff";
+
+/** Bundled plugins that start off, each until a row turns it on: what changes behavior not yet measured to help everyone. */
+export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
 
 /** The web app build the transport serves when no `staticDir` is configured. */
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
@@ -58,6 +62,7 @@ export const bundled: readonly Plugin[] = [
   sessionsFiles,
   agentLoop,
   contextCompaction,
+  contextPrune,
   contextProject,
   skillsFiles,
   workspaceLocal,

@@ -9,6 +9,7 @@ import type { PromptOutcome, WhenBusy } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import compaction from "@lemma/context-compaction";
+import prune from "@lemma/context-prune";
 import { SimDisk } from "@lemma/testing";
 import { Checker } from "./checker.ts";
 import type { Outcome } from "./checker.ts";
@@ -279,15 +280,23 @@ export class World {
       calls: this.calls,
       count,
     });
+    // Half the runs shorten old tool results as they go (context-edit events), from a source of its own so the rest of
+    // the run draws as it did.
+    const prunes = this.sim.random.split("prune").chance(0.5);
     return {
       plugins: [
         compaction,
+        ...(prunes ? [prune] : []),
         model.plugin,
         simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools, count }).plugin,
         simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks, count),
         this.checker.observer(),
       ],
-      configs: { "agent.loop": { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 } },
+      configs: {
+        "agent.loop": { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 },
+        // Against the simulated model's large window and short tool results: shortens nearly every older result.
+        "context.prune": { at: 0.0001, minChars: 10, keepChars: 6, keepTurns: 1 },
+      },
     };
   }
 
