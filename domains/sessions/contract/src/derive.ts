@@ -36,26 +36,80 @@ export function modelView(branch: readonly SessionEvent[]): { readonly start: nu
 }
 
 /**
- * Model history for a branch. The latest `compaction` replaces everything
- * before its `firstKeptId` with a summary message.
+ * The message an event puts in the model's view, before a compaction or an edit changes the view: a `message` event's
+ * own; none for the rest. Every reader of what the model sees (the agent, compaction's estimates and cut, the
+ * trajectory, the inspector) goes through this and `modelEntries`, so an event type added later is seen the same way
+ * by all of them, and the switch below fails to compile until it is decided what the new type shows the model.
  */
-export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
+export function messageOf(event: SessionEvent): Message | undefined {
+  const data = event.data;
+  switch (data.type) {
+    case "message":
+      return data.message;
+    case "turn-start":
+    case "turn-end":
+    case "step-start":
+    case "step-end":
+    case "request":
+    case "attempt":
+    case "compaction":
+    case "title":
+    case "custom":
+      return undefined;
+    default:
+      return unknownEvent(data);
+  }
+}
+
+const unknownEvent = (data: never): undefined => {
+  throw new Error(`An event of a type the model view does not know: ${JSON.stringify((data as { readonly type?: unknown }).type)}`);
+};
+
+/**
+ * One message of the model's view of a branch, and where it comes from: `index`, the event's place on the branch; for
+ * the summary a compaction put in place of what came before, the compaction's (`summary`).
+ */
+export interface ModelEntry {
+  readonly message: Message;
+  readonly index: number;
+  readonly summary?: true;
+}
+
+/**
+ * The model's view of a branch, message by message, each with the event it comes from: the latest `compaction`'s
+ * summary in place of everything before its `firstKeptId`, then each event's message (`messageOf`) from there, tool
+ * results in the order the model made their calls. `deriveMessages` is its messages.
+ */
+export function modelEntries(branch: readonly SessionEvent[]): ModelEntry[] {
   const { start, compaction } = modelView(branch);
   const summary = compaction === undefined ? undefined : branch[compaction]!;
-  const messages: Message[] =
+  const entries: ModelEntry[] =
     summary?.data.type !== "compaction"
       ? []
       : [
           {
-            role: "user",
-            content: [{ type: "text", text: `<summary>\nThe conversation so far, summarized:\n\n${summary.data.summary}\n</summary>` }],
-            timestamp: summary.at,
+            message: {
+              role: "user",
+              content: [{ type: "text", text: `<summary>\nThe conversation so far, summarized:\n\n${summary.data.summary}\n</summary>` }],
+              timestamp: summary.at,
+            },
+            index: compaction!,
+            summary: true,
           },
         ];
-  for (const event of branch.slice(start)) {
-    if (event.data.type === "message") messages.push(event.data.message);
+  for (let index = start; index < branch.length; index++) {
+    const message = messageOf(branch[index]!);
+    if (message !== undefined) entries.push({ message, index });
   }
-  return inCallOrder(messages);
+  return inCallOrder(entries);
+}
+
+/**
+ * Model history for a branch: `modelEntries`' messages. The latest `compaction` replaces everything before its
+ * `firstKeptId` with a summary message.
+ */
+export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
+  return modelEntries(branch).map((entry) => entry.message);
 }
 
 /**
@@ -64,23 +118,23 @@ export function deriveMessages(branch: readonly SessionEvent[]): Message[] {
  * that follows an assistant message; a result for a call it did not make keeps
  * its place after the others.
  */
-function inCallOrder(messages: Message[]): Message[] {
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i]!;
+function inCallOrder(entries: ModelEntry[]): ModelEntry[] {
+  for (let i = 0; i < entries.length; i++) {
+    const message = entries[i]!.message;
     if (message.role !== "assistant") continue;
     let end = i + 1;
-    while (end < messages.length && messages[end]!.role === "toolResult") end++;
+    while (end < entries.length && entries[end]!.message.role === "toolResult") end++;
     if (end - i <= 2) continue;
     const order = new Map<string, number>();
     for (const block of message.content) if (block.type === "toolCall") order.set(block.id, order.size);
-    const rank = (result: Message) => (result.role === "toolResult" ? (order.get(result.toolCallId) ?? order.size) : order.size);
-    const results = messages.slice(i + 1, end);
+    const rank = (entry: ModelEntry) => (entry.message.role === "toolResult" ? (order.get(entry.message.toolCallId) ?? order.size) : order.size);
+    const results = entries.slice(i + 1, end);
     if (results.every((result, index) => index === 0 || rank(results[index - 1]!) <= rank(result))) continue;
     results.sort((a, b) => rank(a) - rank(b));
-    messages.splice(i + 1, results.length, ...results);
+    entries.splice(i + 1, results.length, ...results);
     i = end - 1;
   }
-  return messages;
+  return entries;
 }
 
 export interface RequestState {

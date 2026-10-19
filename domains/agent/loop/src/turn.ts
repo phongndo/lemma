@@ -5,7 +5,7 @@ import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "@lemma/agent";
 import { addUsage, emptyUsage } from "@lemma/llm";
-import { deriveMessages, modelView, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
+import { deriveMessages, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
 import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
@@ -159,17 +159,13 @@ export const BRANCHED_CALL = "No result was recorded for this tool call: the con
  * logging its results (a write that failed).
  */
 export function unansweredCalls(branch: readonly SessionEvent[]): { readonly event: SessionEvent; readonly calls: readonly ToolCall[] } | undefined {
-  const { start } = modelView(branch);
-  for (let i = branch.length - 1; i >= start; i--) {
-    const event = branch[i]!;
-    if (event.data.type !== "message" || event.data.message.role !== "assistant") continue;
-    const answered = new Set(
-      branch
-        .slice(i + 1)
-        .flatMap((later) => (later.data.type === "message" && later.data.message.role === "toolResult" ? [later.data.message.toolCallId] : [])),
-    );
-    const calls = event.data.message.content.filter((block): block is ToolCall => block.type === "toolCall" && !answered.has(block.id));
-    return calls.length === 0 ? undefined : { event, calls };
+  const entries = modelEntries(branch);
+  for (let at = entries.length - 1; at >= 0; at--) {
+    const entry = entries[at]!;
+    if (entry.summary === true || entry.message.role !== "assistant") continue;
+    const answered = new Set(entries.slice(at + 1).flatMap((later) => (later.message.role === "toolResult" ? [later.message.toolCallId] : [])));
+    const calls = entry.message.content.filter((block): block is ToolCall => block.type === "toolCall" && !answered.has(block.id));
+    return calls.length === 0 ? undefined : { event: branch[entry.index]!, calls };
   }
   return undefined;
 }

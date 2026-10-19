@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { branchOf, deriveMessages, rebuildRequest, requestState } from "../src/derive.ts";
+import { branchOf, deriveMessages, messageOf, modelEntries, rebuildRequest, requestState } from "../src/derive.ts";
 import type { EventData, SessionEvent } from "../src/sessions.ts";
 import { emptyUsage } from "@lemma/llm";
 
@@ -107,6 +107,54 @@ describe("deriveMessages", () => {
       "c3",
       "assistant",
     ]);
+  });
+});
+
+describe("modelEntries", () => {
+  it("is deriveMessages with where each message comes from: the summary from its compaction, the rest from their events", () => {
+    const events = log(
+      user("old"),
+      assistant("old reply"),
+      user("kept"),
+      { type: "compaction", summary: "S", firstKeptId: "e3", tokensBefore: 10, source: "compaction" },
+      { type: "title", title: "t" },
+      assistant("new"),
+    );
+    const entries = modelEntries(events);
+    expect(entries.map((entry) => entry.message)).toEqual(deriveMessages(events));
+    expect(entries.map((entry) => [entry.index, entry.summary === true])).toEqual([
+      [3, true],
+      [2, false],
+      [5, false],
+    ]);
+  });
+
+  it("keeps each tool result's event when it puts results in call order", () => {
+    const call = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
+    const result = (toolCallId: string): EventData => ({
+      type: "message",
+      message: { role: "toolResult", toolCallId, toolName: "read", content: [{ type: "text", text: toolCallId }], isError: false, timestamp: 0 },
+    });
+    const calls: EventData = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [call("c1"), call("c2")],
+        api: "test",
+        provider: "p",
+        model: "m",
+        usage: emptyUsage,
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+    };
+    const events = log(user("go"), calls, result("c2"), result("c1"));
+    expect(modelEntries(events).map((entry) => entry.index)).toEqual([0, 1, 3, 2]);
+  });
+
+  it("takes a message only from a message event", () => {
+    const events = log(user("hi"), { type: "custom", kind: "x.y", data: 1 }, { type: "turn-start", turnId: "t" });
+    expect(events.map((event) => messageOf(event) !== undefined)).toEqual([true, false, false]);
   });
 });
 

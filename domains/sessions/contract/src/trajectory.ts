@@ -1,6 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
 import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
+import { messageOf } from "./derive.ts";
 import type { Contribution, EventData, ProviderAnswer, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
@@ -202,7 +203,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start.
   const positionOf = new Map(branch.map((event, position) => [event.id, position]));
   const messagesBefore = [0];
-  for (const event of branch) messagesBefore.push(messagesBefore.at(-1)! + (event.data.type === "message" ? 1 : 0));
+  for (const event of branch) messagesBefore.push(messagesBefore.at(-1)! + (messageOf(event) === undefined ? 0 : 1));
   let viewStart = 0;
   let summarized = 0;
 
