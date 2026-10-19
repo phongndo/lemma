@@ -235,7 +235,8 @@ export const makeQueues = <T extends QueuedTurn>(files: StateFiles, base: number
         const { closing } = journal.turn;
         state.suspended = {
           turnId: journal.turn.turnId,
-          prompts: journal.turn.prompts.map(itemOf),
+          // One that ended keeps none, though an older agent's journal may list them.
+          prompts: closing === undefined ? journal.turn.prompts.map(itemOf) : [],
           marked: journal.turn.marked === true,
           cancelling: journal.turn.cancelling === true,
           ...(closing === undefined ? {} : { closing: { reason: closing.reason, ...(closing.error === undefined ? {} : { error: closing.error }) } }),

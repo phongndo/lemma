@@ -27,7 +27,7 @@ import { LIVE_INTERVAL_MS, nextInstance, readJournals, readLive, removeLive, wri
 import type { StateFiles } from "./state.ts";
 import { makeRequestIndex } from "./requests.ts";
 import { makeInputDecisions } from "./input.ts";
-import { admission, itemOf, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from "./queue.ts";
+import { admission, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from "./queue.ts";
 import type { Item, QueuedTurn, SessionState, Suspended } from "./queue.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, runTurn, toolLoop } from "./turn.ts";
@@ -646,11 +646,12 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
           if (unclosed !== undefined) {
             // It ended, but not in the log: kept in the journal, suspended, before its callers hear, it is closed so
             // when its session is next taken up (prompted, cancelled, or at the next start), and the queue then runs
-            // on as it would have now.
+            // on as it would have now. Without its prompts, as any turn that ended: one sent again is found in the log
+            // if the turn placed it, and is a new prompt if not, rather than waiting on a close that will not place it.
             yield* writeLive(files, sessionId, entry.live.file());
             state.suspended = {
               turnId: entry.turnId,
-              prompts: entry.prompts.map(itemOf),
+              prompts: [],
               marked: entry.marked,
               cancelling: entry.cancelling,
               closing: unclosed,

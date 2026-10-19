@@ -125,14 +125,15 @@ const slow: Tool<Record<string, never>> = {
     new Promise((resolve) => signal.addEventListener("abort", () => resolve(new ToolResult({ content: [{ type: "text", text: "aborted" }] })), { once: true })),
 };
 
-/** `fs` whose session file refuses one line holding `marker`, as a disk that fills up at that moment. */
-const refusingOnce = (marker: string): FileSystem => {
-  let refused = false;
+/** `fs` whose session file refuses the first line holding each of `markers`, as a disk that fills up at that moment. */
+const refusingOnce = (...markers: readonly string[]): FileSystem => {
+  const left = new Set(markers);
   const wrap = (handle: FileHandle): FileHandle =>
     Object.assign(Object.create(handle) as FileHandle, {
       appendFile: (data: string) => {
-        if (refused || !data.includes(marker)) return handle.appendFile(data);
-        refused = true;
+        const marker = [...left].find((marker) => data.includes(marker));
+        if (marker === undefined) return handle.appendFile(data);
+        left.delete(marker);
         return Promise.reject(Object.assign(new Error("ENOSPC: no space left on device"), { code: "ENOSPC" }));
       },
     });
@@ -159,6 +160,26 @@ describe("a resumed turn", () => {
     const order = events.map((event) => event.data.type);
     expect(order.lastIndexOf("message")).toBeLessThan(order.indexOf("turn-end"));
     expect(ofType(events, "turn-end")[0]!.reason).toBe("error");
+  });
+});
+
+describe("a prompt its turn never placed", () => {
+  it("sent again while the turn waits to close (its turn-end lost) is placed, rather than answered placed unlogged", async () => {
+    // The disk fills up as the prompt is logged, and again as the turn ends: it ends, but not in the log.
+    const sessions = makeSessionsPlugin({ fs: refusingOnce('"requestId":"a"', '"type":"turn-end"') });
+    const seen = await run({ scripts: [reply("done")], sessions }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const agent = yield* Agent;
+        const first = yield* Effect.flip(agent.prompt(id, text("go"), { requestId: "a" }));
+        // A client that never heard sends it again: the turn closes first.
+        const again = yield* agent.prompt(id, text("go"), { requestId: "a" });
+        return { first: first.reason, again: again.kind, events: yield* log(id) };
+      }),
+    );
+    expect(seen).toMatchObject({ first: "Session", again: "placed" });
+    expect(ofType(seen.events, "message").filter((data) => data.requestId === "a")).toHaveLength(1);
+    expect(ofType(seen.events, "turn-end").map((data) => data.reason)).toEqual(["error", "done"]);
   });
 });
 
