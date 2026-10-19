@@ -434,6 +434,10 @@ describe("providers", () => {
             { id: "claude-sonnet-5-5", reasoning: true },
             { id: "house-model", reasoning: true },
             { id: "house-adaptive", reasoning: true, compat: { forceAdaptiveThinking: true }, thinkingLevelMap: { xhigh: "xhigh" } },
+            // A map adjusts the catalog's levels; it does not undo how the model is asked.
+            { id: "claude-opus-5-5", reasoning: true, thinkingLevelMap: { max: null } },
+            // The config's word that it thinks adaptively wins over the catalog's budget.
+            { id: "claude-sonnet-4-5", reasoning: true, compat: { forceAdaptiveThinking: true } },
           ],
         },
       ],
@@ -448,7 +452,18 @@ describe("providers", () => {
       ["claude-sonnet-5-5", ["low", "medium", "high", "xhigh", "max"]],
       ["house-model", ["off", "minimal", "low", "medium", "high"]],
       ["house-adaptive", ["low", "medium", "high", "xhigh"]],
+      ["claude-opus-5-5", ["low", "medium", "high", "xhigh"]],
+      ["claude-sonnet-4-5", ["low", "medium", "high"]],
     ]);
+  });
+
+  it("asks a provider whose base URL ends in a slash at its paths, as one without", async () => {
+    const { fetch, sent } = scriptedFetch(() => sseResponse(completion("ok")));
+    const { plugins } = setup({ providers: [], fetch });
+    await runWith(plugins, collect(new LlmRequest({ model: "slash/m", messages: [user("hi")] })), {
+      "llm.http": { providers: [{ id: "slash", api: "openai-completions", baseUrl: "http://localhost:1/v1//", models: [{ id: "m" }] }] },
+    });
+    expect(sent.map((request) => request.url)).toEqual(["http://localhost:1/v1/chat/completions"]);
   });
 
   it("filters built-ins with include and exclude", async () => {

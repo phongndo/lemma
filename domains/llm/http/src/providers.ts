@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Effect } from "effect";
-import type { CustomProviderSpec, ProviderModelSpec, ProviderSpec, ThinkingLevel } from "@lemma/llm";
+import { ThinkingLevel } from "@lemma/llm";
+import type { CustomProviderSpec, ProviderModelSpec, ProviderSpec } from "@lemma/llm";
 import type { InteractionError, NoticePayload } from "@lemma/contracts";
 import snapshot from "./catalog.json" with { type: "json" };
 import { catalogOf } from "./catalog.ts";
@@ -163,13 +164,19 @@ const known = new Map<string, CatalogModel>();
 for (const models of Object.values(catalog))
   for (const model of models) if (!known.has(`${model.api} ${model.id}`)) known.set(`${model.api} ${model.id}`, model);
 
+/** How a protocol's model thinks when nothing says otherwise: Anthropic's in a budget (adaptively with pi's `forceAdaptiveThinking`), the others by an effort. */
+function protocolThinking(api: WireApi, compat: Readonly<Record<string, unknown>> | undefined): Thinking {
+  if (api === "anthropic-messages")
+    return compat?.forceAdaptiveThinking === true ? { kind: "effort", levels: ["low", "medium", "high"] } : { kind: "budget", levels: BUDGET_LEVELS };
+  return { kind: "effort", levels: LEVELS_UP_TO_HIGH, ...(api === "openai-responses" ? { values: { off: "none" } } : {}) };
+}
+
 /**
- * How a model of the user's thinks. Without a `thinkingLevelMap` (a level's value, `null` for one it lacks), a model
- * the catalog knows on its protocol thinks as the catalog says: a proxy serving Claude Sonnet 5.5 is asked as Anthropic
- * would be. Otherwise Anthropic's protocol thinks in a budget, unless the config says it thinks adaptively (pi's
- * `forceAdaptiveThinking`), where `off` is a level only if the map names it, as the newest models refuse it; the others
- * name an effort, `off` sent as `none` to the Responses API. A Chat Completions server whose config says it takes no
- * reasoning effort has no level to set.
+ * How a model of the user's thinks: as the catalog says for a model it knows on the protocol (a proxy serving Claude
+ * Sonnet 5.5 is asked as Anthropic would be), else as the protocol's do (`protocolThinking`); its `thinkingLevelMap`
+ * then adjusts that, never replacing how it is asked: a level mapped to `null` is one it lacks, one mapped to a value
+ * is one it takes, sent as that value. A Chat Completions server whose config says it takes no reasoning effort has
+ * no level to set.
  */
 function customThinking(
   api: WireApi,
@@ -177,19 +184,15 @@ function customThinking(
   compat: Readonly<Record<string, unknown>> | undefined,
   catalogued: CatalogModel | undefined,
 ): Thinking | undefined {
-  if (map === undefined && catalogued !== undefined) return catalogued.thinking;
-  const kept = (levels: readonly ThinkingLevel[]) => levels.filter((level) => map?.[level] !== null);
-  const extended = (["xhigh", "max"] as const).filter((level) => typeof map?.[level] === "string");
-  const values: Partial<Record<ThinkingLevel, string>> = {};
-  for (const [level, value] of Object.entries(map ?? {})) if (typeof value === "string") values[level as ThinkingLevel] = value;
-  if (api === "anthropic-messages") {
-    if (compat?.forceAdaptiveThinking !== true) return { kind: "budget", levels: kept(BUDGET_LEVELS) };
-    const levels = kept(["low", "medium", "high", ...extended]);
-    return { kind: "effort", levels: typeof map?.off === "string" ? ["off", ...levels] : levels, ...(Object.keys(values).length === 0 ? {} : { values }) };
-  }
   if (api === "openai-completions" && compat?.supportsReasoningEffort === false) return undefined;
-  if (api === "openai-responses" && map?.off === undefined) values.off = "none";
-  return { kind: "effort", levels: kept([...LEVELS_UP_TO_HIGH, ...extended]), ...(Object.keys(values).length === 0 ? {} : { values }) };
+  // The config's word that an Anthropic model thinks adaptively wins over the catalog's.
+  const adaptive = api === "anthropic-messages" && compat?.forceAdaptiveThinking === true;
+  const base = (adaptive && catalogued?.thinking?.kind !== "effort" ? undefined : catalogued?.thinking) ?? protocolThinking(api, compat);
+  if (map === undefined) return base;
+  const values: Partial<Record<ThinkingLevel, string>> = { ...base.values };
+  for (const [level, value] of Object.entries(map)) if (typeof value === "string") values[level as ThinkingLevel] = value;
+  const levels = ThinkingLevel.literals.filter((level) => map[level] !== null && (base.levels.includes(level) || typeof map[level] === "string"));
+  return { kind: base.kind, levels, ...(Object.keys(values).length === 0 ? {} : { values }) };
 }
 
 /** Defaults follow pi's `models.json`, as configs written for it do: 128k context, 16k output, text only, free. */
@@ -218,7 +221,9 @@ function customModel(config: CustomProvider, model: ProviderModelSpec): Model {
 }
 
 /** A provider of the user's, or one a plugin adds: keyed as its config says, keyless without an `apiKey`. */
-export function customProvider(config: CustomProvider): Provider {
+export function customProvider(entry: CustomProvider): Provider {
+  // Its protocol's paths follow the base URL: `/v1/` and `/v1` are one server.
+  const config = { ...entry, baseUrl: entry.baseUrl.replace(/\/+$/, "") };
   const name = config.name ?? config.id;
   const { env, value } = config.apiKey ?? {};
   return {
