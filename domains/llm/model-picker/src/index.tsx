@@ -42,30 +42,27 @@ function ThinkingPicker(props: { models: ModelsService; placement?: Placement; a
         }
       >
         {(close) => (
-          <>
-            <div class="menu-section">Reasoning · {selectedModel()?.name}</div>
-            <For each={levels()}>
-              {(level) => (
-                <button
-                  class="menu-item"
-                  role="menuitemradio"
-                  aria-checked={effectiveThinking() === level}
-                  onClick={() => {
-                    chooseThinking(level);
-                    close();
-                    props.afterPick?.();
-                  }}
-                >
-                  <span class="menu-check">
-                    <Show when={effectiveThinking() === level}>
-                      <CheckIcon />
-                    </Show>
-                  </span>
-                  {LEVEL_LABEL[level]}
-                </button>
-              )}
-            </For>
-          </>
+          <For each={levels()}>
+            {(level) => (
+              <button
+                class="menu-item"
+                role="menuitemradio"
+                aria-checked={effectiveThinking() === level}
+                onClick={() => {
+                  chooseThinking(level);
+                  close();
+                  props.afterPick?.();
+                }}
+              >
+                <span class="menu-check">
+                  <Show when={effectiveThinking() === level}>
+                    <CheckIcon />
+                  </Show>
+                </span>
+                {LEVEL_LABEL[level]}
+              </button>
+            )}
+          </For>
         )}
       </Popover>
     </Show>
