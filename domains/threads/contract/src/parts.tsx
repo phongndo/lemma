@@ -71,13 +71,13 @@ export interface ChatToolProps extends ToolBodyProps {
 export const ChatToolPart = definePart<ChatToolProps>("chat.tool");
 
 export interface ChatWorkProps {
-  /** Steps folded: a finished turn's work, or a running turn's work so far (`live`). */
+  /** Steps folded: one run of a turn's work, between its prompt or a steer and the next, or the answer. */
   readonly steps: number;
   readonly tools: number;
   readonly failed: number;
-  /** How long the turn took, or while it runs, has run so far. */
+  /** How long the run took, or while it is the running turn's last, has run so far. */
   readonly duration?: number | undefined;
-  /** The turn is still running; its fold is open unless the reader closed it. */
+  /** The running turn's last run, which its streaming step joins; open unless the reader closed it. */
   readonly live?: boolean | undefined;
   readonly open: boolean;
   readonly onToggle: () => void;
@@ -129,9 +129,15 @@ export interface SidebarRowProps {
   readonly active: boolean;
   /** A turn is running in it. */
   readonly running: boolean;
+  /** When its running turn began, as far as this page saw it start. */
+  readonly runningSince?: number | undefined;
   /** A turn ended in it while another thread was open, and it has not been opened since. */
   readonly unread: boolean;
-  /** The time, ticking once a minute, for relative times. */
+  /** A prompt is written in it and not sent (`Threads.drafts`); never so for the open thread, whose composer shows it. */
+  readonly drafted: boolean;
+  /** What it waits on the person for (`ThreadWaits`): `Needs input`. */
+  readonly waiting?: string | undefined;
+  /** The time, ticking once a second while a turn runs and once a minute otherwise, for times. */
   readonly now: number;
   /** Its address: the row is a link, so it opens in a new tab or window too. */
   readonly href: string;
@@ -140,11 +146,23 @@ export interface SidebarRowProps {
   readonly rename: (title: string) => void;
   /** Its menu: the `ThreadActions` that apply to it, in order. */
   readonly actions: readonly ThreadAction[];
-  /** Takes it out of the open threads, leaving the thread as it is; absent for one that cannot close (a pinned one). */
-  readonly close?: (() => void) | undefined;
+  /** The project it is in, by name. */
+  readonly project: string;
+  /** The branch its folder has checked out, once known; `worktree` when the folder is a worktree of the project. */
+  readonly branch?: string | undefined;
+  readonly worktree?: boolean | undefined;
+  /** Archives it (one at work too: its turn goes on), or unarchives an archived one; absent where it cannot be. */
+  readonly archive?: (() => void) | undefined;
+  /** Pins it, or unpins a pinned one; absent while it cannot be (archived). */
+  readonly pin?: (() => void) | undefined;
+  /** When it was archived here, which an archived one's age counts from; absent when not known (its last use then). */
+  readonly archivedAt?: number | undefined;
 }
 
-/** A thread in the sidebar's list of open threads. Arrow keys move between elements marked `data-session-row`. */
+/**
+ * A thread in the sidebar's list: a card, or a slim row once archived (`session.archived`). Arrow keys move between
+ * elements marked `data-session-row`.
+ */
 export const SidebarRowPart = definePart<SidebarRowProps>("sidebar.row");
 
 export const ChatUser = partView(ChatUserPart);

@@ -3,13 +3,13 @@
 The `ask_user` tool: one to four multiple-choice questions for the user, asked
 together, which the agent waits on. Adds it to `Tools` and serves the questions
 to clients as the `ask.*` channels; its web half (`./web`) shows the open
-thread's questions above the composer's text box, and a call in the chat as its questions
-and answers.
+thread's questions above the composer's text box, a call in the chat as its questions
+and answers, and every thread with questions open as `Needs input` (`ThreadWaits`).
 
-| Input                                                                                                                | Limits                                |
-| -------------------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `questions[]`: `header`, `question`, `options[]`, `multiSelect?`                                                     | 1–4 questions, each with its own text |
-| `options[]`: `label` (`" (Recommended)"` shows as a badge), `description?`, `preview?` (markdown beside the options) | 2–4 options, each with its own label  |
+| Input                                                                      | Limits                                |
+| -------------------------------------------------------------------------- | ------------------------------------- |
+| `questions[]`: `header`, `question`, `options[]`, `multiSelect?`           | 1–4 questions, each with its own text |
+| `options[]`: `label` (`" (Recommended)"` shows as a badge), `description?` | 2–4 options, each with its own label  |
 
 The user answers each question with a pick (or several), their own words, or
 both (a note on the pick), or skips it; or they hide the questions and send a

@@ -5,11 +5,6 @@ export const AskOption = Schema.Struct({
     description: 'What the user picks, in 1-5 words. Put the option you recommend first and end its label with " (Recommended)".',
   }),
   description: Schema.optional(Schema.String.annotate({ description: "One line: what picking it means, or what it costs." })),
-  preview: Schema.optional(
-    Schema.String.annotate({
-      description: "Markdown shown beside the options while this one is focused, for choices best compared by seeing them: a code sketch, a layout, a config.",
-    }),
-  ),
 });
 export type AskOption = typeof AskOption.Type;
 

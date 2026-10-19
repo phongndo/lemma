@@ -22,8 +22,8 @@ export interface LayoutService {
 export class Layout extends Context.Service<Layout, LayoutService>()("lemma-web/Layout") {}
 
 /**
- * Mounted over the whole app in order: dialogs (the bundled ones at orders 10 to 40), questions (50), toasts (100),
- * tooltips (200). Each shows itself when it should.
+ * Mounted over the whole app in order: the browser view's pages (0, each over its place in the pane), dialogs (the
+ * bundled ones at orders 10 to 40), questions (50), toasts (100), tooltips (200). Each shows itself when it should.
  */
 export const Layers = defineSlot<Region>("layers");
 
@@ -41,7 +41,7 @@ export const MainRegion = defineSlot<Region>("main", { shows: "first" });
  */
 export const TopRegion = defineSlot<Region>("top", { shows: "first" });
 
-/** Buttons at the end of the sidebar's head, after its toggle; it has none by default. `onPick` closes the drawer on narrow screens. */
+/** Buttons at the end of the sidebar's head, across from its toggle: the sidebar's search and new thread are its defaults. `onPick` closes the drawer on narrow screens. */
 export const SidebarActions = defineSlot<Region<{ readonly onPick: () => void }>>("sidebar.actions");
 
 /** Items at the foot of the sidebar: the settings button, the connection badge. `onPick` closes the drawer on narrow screens. */

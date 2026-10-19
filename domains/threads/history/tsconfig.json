@@ -1,9 +1,0 @@
-{
-  "extends": "../../../tsconfig.base.json",
-  "compilerOptions": {
-    "jsx": "preserve",
-    "jsxImportSource": "solid-js",
-    "types": ["node"]
-  },
-  "include": ["src", "tests", "../../../packages/web/assets.d.ts"]
-}

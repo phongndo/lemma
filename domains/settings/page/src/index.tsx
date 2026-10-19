@@ -3,7 +3,7 @@ import { withKeys } from "@lemma/web/keys";
 import { shownKeys, Actions } from "@lemma/actions";
 import { filterGroups } from "./settings.ts";
 import type { EntryGroup } from "./settings.ts";
-import { Layout, SidebarRegion } from "@lemma/frame";
+import { Layout, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import { NewThreadRoute } from "@lemma/sessions";
 import { SectionIds, Settings, SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
 import { PromptCommands } from "@lemma/threads";
@@ -296,6 +296,35 @@ export default defineWebPlugin({
       keys: "mod+,",
       when: () => section() === undefined,
       run: () => open("general"),
+    });
+    // The sidebar's foot: the way to settings, marked with how many need attention, and opening at the first that does.
+    const attention = () => {
+      const found = slots.list(SettingsSections).find((candidate) => candidate.badge?.() !== undefined);
+      return found === undefined ? undefined : { id: found.id, title: found.title, badge: found.badge!()! };
+    };
+    const openKeys = () => {
+      const action = slots.get(Actions, "settings.open");
+      return action === undefined ? undefined : shownKeys(action, webPlugins.list());
+    };
+    slots.add(SidebarFooter, {
+      id: "settings",
+      component: (props) => (
+        <button
+          class="icon-button with-badge"
+          classList={{ active: section() !== undefined }}
+          aria-label="Settings"
+          aria-pressed={section() !== undefined}
+          data-tip={withKeys(attention() === undefined ? "Settings" : `Settings · ${attention()!.title}: ${attention()!.badge}`, openKeys())}
+          onClick={() => {
+            if (section() !== undefined) open(undefined);
+            else open(attention()?.id ?? SectionIds.general);
+            props.onPick();
+          }}
+        >
+          <GearIcon />
+          <Show when={attention()}>{(shown) => <span class="count-badge">{Number.parseInt(shown().badge, 10) || "!"}</span>}</Show>
+        </button>
+      ),
     });
     slots.add(PromptCommands, {
       id: "settings",

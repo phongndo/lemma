@@ -2,7 +2,6 @@ import type { Plugin } from "@lemma/core";
 import addProject from "@lemma/workspace-add-project";
 import appearance from "@lemma/look-appearance";
 import appearancePage from "@lemma/look-appearance-page";
-import historyPage from "@lemma/threads-history";
 import browser from "@lemma/threads-browser";
 import chat from "@lemma/threads-transcript";
 import commands from "@lemma/commands-client";
@@ -102,7 +101,6 @@ export const bundled: readonly Plugin[] = [
   keysPage,
   appearancePage,
   projectsPage,
-  historyPage,
   addProject,
   devtools,
   trace,

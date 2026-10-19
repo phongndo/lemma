@@ -63,7 +63,6 @@
     "@lemma/threads-browser": "workspace:*",
     "@lemma/threads-client": "workspace:*",
     "@lemma/threads-composer": "workspace:*",
-    "@lemma/threads-history": "workspace:*",
     "@lemma/threads-prompt-commands": "workspace:*",
     "@lemma/threads-trajectory": "workspace:*",
     "@lemma/threads-transcript": "workspace:*",
