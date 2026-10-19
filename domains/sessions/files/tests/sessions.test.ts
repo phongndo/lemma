@@ -943,6 +943,24 @@ describe("the session file", () => {
     );
   });
 
+  it("refuses context a provider would refuse, which would fail every later request of the session", async () => {
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const refused = [
+          { type: "context", source: "test", content: [] },
+          { type: "context", source: "test", content: [{ type: "text", text: " \n" }] },
+          { type: "context", source: "test", content: [{ type: "image", data: "AAAA", mimeType: "image/svg+xml" }] },
+          { type: "context-edit", target: "e1", op: "replace", content: [], source: "test" },
+        ];
+        for (const data of refused) expect((yield* Effect.flip(store.append(id, data as EventData))).reason).toBe("Corrupt");
+        yield* store.append(id, { type: "context", source: "test", content: [{ type: "text", text: "seen" }] });
+        expect((yield* store.get(id)).lastSeq).toBe(1);
+      }),
+    );
+  });
+
   it("reads lines longer than its read buffer", async () => {
     const long = "é".repeat(1_500_000);
     const id = await run(

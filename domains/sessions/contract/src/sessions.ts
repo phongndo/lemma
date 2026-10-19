@@ -5,7 +5,7 @@ import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
 import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
-import { AssistantMessage, ImageContent, LlmFailure, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
+import { AssistantMessage, IMAGE_TYPES, ImageContent, LlmFailure, MAX_IMAGE_BYTES, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 import { SessionSearchMatch } from "./search.ts";
 
 /**
@@ -47,6 +47,24 @@ export type Contribution = typeof Contribution.Type;
 /** Why a turn ended: it finished, was cancelled, failed, or ran out of steps. */
 export const TurnEndReason = Schema.Literals(["done", "cancelled", "error", "max-steps"]);
 export type TurnEndReason = typeof TurnEndReason.Type;
+
+/**
+ * What a `context` event, or a `context-edit` replacing an event's content, puts before the model: at least one part,
+ * no blank text, and images of a type and size every provider takes. A provider refuses a message with any of these,
+ * and the log cannot be edited, so one logged would fail every later request of its session.
+ */
+const ShownContent = Schema.Array(Schema.Union([TextContent, ImageContent])).check(
+  Schema.isMinLength(1),
+  Schema.makeFilter((parts) => {
+    for (const part of parts) {
+      if (part.type === "text" && part.text.trim() === "") return "a text part is blank";
+      if (part.type === "image" && !IMAGE_TYPES.has(part.mimeType)) return `an image is ${part.mimeType}, which not every provider takes`;
+      // Base64: four characters for every three bytes.
+      if (part.type === "image" && part.data.length > Math.ceil(MAX_IMAGE_BYTES / 3) * 4) return "an image is larger than providers take";
+    }
+    return undefined;
+  }),
+);
 
 export const EventData = Schema.Union([
   /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
@@ -165,7 +183,7 @@ export const EventData = Schema.Union([
   Schema.Struct({
     type: Schema.Literal("context"),
     source: Schema.String,
-    content: Schema.Array(Schema.Union([TextContent, ImageContent])),
+    content: ShownContent,
     display: Schema.optional(Schema.String),
     turnId: Schema.optional(Schema.String),
     stepId: Schema.optional(Schema.String),
@@ -182,7 +200,7 @@ export const EventData = Schema.Union([
     type: Schema.Literal("context-edit"),
     target: Schema.String,
     op: Schema.Literals(["omit", "replace"]),
-    content: Schema.optional(Schema.Array(Schema.Union([TextContent, ImageContent]))),
+    content: Schema.optional(ShownContent),
     source: Schema.String,
     turnId: Schema.optional(Schema.String),
   }),
