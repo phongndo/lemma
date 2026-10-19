@@ -158,18 +158,36 @@ export function selectProviders<P extends { readonly id: string }>(
 
 const LEVELS_UP_TO_HIGH: readonly ThinkingLevel[] = ["off", "minimal", "low", "medium", "high"];
 
+/** The catalog's models by wire API and id, the first provider's where several serve one: what a model of the user's that is one of them is. */
+const known = new Map<string, CatalogModel>();
+for (const models of Object.values(catalog))
+  for (const model of models) if (!known.has(`${model.api} ${model.id}`)) known.set(`${model.api} ${model.id}`, model);
+
 /**
- * How a model of the user's thinks, from its `thinkingLevelMap` (a level's value, `null` for one it lacks): Anthropic's
- * protocol thinks in a budget, the others name an effort, `off` sent as `none` to the Responses API. A Chat Completions
- * server whose config says it takes no reasoning effort has no level to set.
+ * How a model of the user's thinks. Without a `thinkingLevelMap` (a level's value, `null` for one it lacks), a model
+ * the catalog knows on its protocol thinks as the catalog says: a proxy serving Claude Sonnet 5.5 is asked as Anthropic
+ * would be. Otherwise Anthropic's protocol thinks in a budget, unless the config says it thinks adaptively (pi's
+ * `forceAdaptiveThinking`), where `off` is a level only if the map names it, as the newest models refuse it; the others
+ * name an effort, `off` sent as `none` to the Responses API. A Chat Completions server whose config says it takes no
+ * reasoning effort has no level to set.
  */
-function customThinking(api: WireApi, map: ProviderModelSpec["thinkingLevelMap"], compat: Readonly<Record<string, unknown>> | undefined): Thinking | undefined {
+function customThinking(
+  api: WireApi,
+  map: ProviderModelSpec["thinkingLevelMap"],
+  compat: Readonly<Record<string, unknown>> | undefined,
+  catalogued: CatalogModel | undefined,
+): Thinking | undefined {
+  if (map === undefined && catalogued !== undefined) return catalogued.thinking;
   const kept = (levels: readonly ThinkingLevel[]) => levels.filter((level) => map?.[level] !== null);
-  if (api === "anthropic-messages") return { kind: "budget", levels: kept(BUDGET_LEVELS) };
-  if (api === "openai-completions" && compat?.supportsReasoningEffort === false) return undefined;
   const extended = (["xhigh", "max"] as const).filter((level) => typeof map?.[level] === "string");
   const values: Partial<Record<ThinkingLevel, string>> = {};
   for (const [level, value] of Object.entries(map ?? {})) if (typeof value === "string") values[level as ThinkingLevel] = value;
+  if (api === "anthropic-messages") {
+    if (compat?.forceAdaptiveThinking !== true) return { kind: "budget", levels: kept(BUDGET_LEVELS) };
+    const levels = kept(["low", "medium", "high", ...extended]);
+    return { kind: "effort", levels: typeof map?.off === "string" ? ["off", ...levels] : levels, ...(Object.keys(values).length === 0 ? {} : { values }) };
+  }
+  if (api === "openai-completions" && compat?.supportsReasoningEffort === false) return undefined;
   if (api === "openai-responses" && map?.off === undefined) values.off = "none";
   return { kind: "effort", levels: kept([...LEVELS_UP_TO_HIGH, ...extended]), ...(Object.keys(values).length === 0 ? {} : { values }) };
 }
@@ -178,7 +196,8 @@ function customThinking(api: WireApi, map: ProviderModelSpec["thinkingLevelMap"]
 function customModel(config: CustomProvider, model: ProviderModelSpec): Model {
   const compat = config.compat === undefined && model.compat === undefined ? undefined : { ...config.compat, ...model.compat };
   const reasoning = model.reasoning ?? false;
-  const thinking = reasoning ? customThinking(config.api, model.thinkingLevelMap, compat) : undefined;
+  const catalogued = known.get(`${config.api} ${model.id}`);
+  const thinking = reasoning ? customThinking(config.api, model.thinkingLevelMap, compat, catalogued) : undefined;
   return {
     provider: config.id,
     id: model.id,
@@ -191,6 +210,8 @@ function customModel(config: CustomProvider, model: ProviderModelSpec): Model {
     cost: model.cost === undefined ? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } : { ...model.cost },
     reasoning,
     ...(thinking === undefined ? {} : { thinking }),
+    // A model the catalog knows refuses a temperature there as here.
+    ...(catalogued?.temperature === false ? { temperature: false } : {}),
     ...(config.headers === undefined ? {} : { headers: { ...config.headers } }),
     ...(compat === undefined ? {} : { compat }),
   };

@@ -422,6 +422,35 @@ describe("providers", () => {
     expect(ids).toEqual(["local"]);
   });
 
+  it("asks a model of the user's that the catalog knows as the catalog says: a proxy's Claude Sonnet 5.5 thinks adaptively", async () => {
+    const { plugins } = setup({ providers: [] });
+    const config = {
+      providers: [
+        {
+          id: "proxy",
+          api: "anthropic-messages",
+          baseUrl: "http://localhost:1",
+          models: [
+            { id: "claude-sonnet-5-5", reasoning: true },
+            { id: "house-model", reasoning: true },
+            { id: "house-adaptive", reasoning: true, compat: { forceAdaptiveThinking: true }, thinkingLevelMap: { xhigh: "xhigh" } },
+          ],
+        },
+      ],
+    };
+    const models = await runWith(
+      plugins,
+      Effect.flatMap(Llm, (llm) => llm.models()),
+      { "llm.http": config },
+    );
+    // No `off`: Claude Sonnet 5.5 refuses thinking turned off, so off asks for its lowest effort.
+    expect(models.map((model) => [model.id, model.thinkingLevels])).toEqual([
+      ["claude-sonnet-5-5", ["low", "medium", "high", "xhigh", "max"]],
+      ["house-model", ["off", "minimal", "low", "medium", "high"]],
+      ["house-adaptive", ["low", "medium", "high", "xhigh"]],
+    ]);
+  });
+
   it("filters built-ins with include and exclude", async () => {
     const { plugins } = setup({ providers: [faux(), faux({ id: "other", name: "Other" })] });
     const ids = await runWith(
