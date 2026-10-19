@@ -180,6 +180,11 @@ describe("anthropic-messages", () => {
     expect(thinking.body.temperature).toBeUndefined();
     expect(thinking.headers["anthropic-beta"]).toBe("interleaved-thinking-2025-05-14");
     expect(anthropicMessages.build(call(budget, {}, { level: "off" })).body.thinking).toEqual({ type: "disabled" });
+    // An `off` the config maps to an effort thinks at it, as every protocol takes a mapped level.
+    const mapped = { ...adaptive, thinking: { ...adaptive.thinking!, values: { off: "low" } } } as Model;
+    const low = anthropicMessages.build(call(mapped, { providerOptions: { temperature: 0.5 } }, { level: "off" })).body;
+    expect(low).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
+    expect(low.temperature).toBeUndefined();
   });
 
   it("thinks within what a nearly full context window leaves the response, or not at all", () => {

@@ -457,6 +457,24 @@ describe("providers", () => {
     ]);
   });
 
+  it("asks off at the effort a config maps it to: a proxy's Claude Sonnet 5.5, which refuses thinking turned off", async () => {
+    const { fetch, sent } = scriptedFetch(() => new Response("no", { status: 400 }));
+    const { plugins } = setup({ providers: [], fetch });
+    await runWith(plugins, collect(new LlmRequest({ model: "proxy/claude-sonnet-5-5", messages: [user("hi")] })), {
+      "llm.http": {
+        providers: [
+          {
+            id: "proxy",
+            api: "anthropic-messages",
+            baseUrl: "http://localhost:1",
+            models: [{ id: "claude-sonnet-5-5", reasoning: true, thinkingLevelMap: { off: "low" } }],
+          },
+        ],
+      },
+    });
+    expect(sent[0]!.body).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
+  });
+
   it("asks a provider whose base URL ends in a slash at its paths, as one without", async () => {
     const { fetch, sent } = scriptedFetch(() => sseResponse(completion("ok")));
     const { plugins } = setup({ providers: [], fetch });

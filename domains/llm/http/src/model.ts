@@ -91,8 +91,12 @@ export function levelFor(model: Model, asked: ThinkingLevel | undefined): Thinki
   );
 }
 
-/** What `level` is sent as to `model`. */
-export const levelValue = (model: Model, level: ThinkingLevel): string => model.thinking?.values?.[level] ?? level;
+/**
+ * The effort `level` is sent as to `model`: its value where the model names it otherwise (OpenAI's `none` for `off`, a
+ * `thinkingLevelMap`'s), else the level. Undefined for `off` with no value: thinking is turned off, not asked at an
+ * effort. Every protocol asks by it, so a level means one thing whichever speaks it.
+ */
+export const effortOf = (model: Model, level: ThinkingLevel): string | undefined => model.thinking?.values?.[level] ?? (level === "off" ? undefined : level);
 
 /**
  * Whether the model binds a reply's thinking to the request it answered: Anthropic's adaptive-thinking models reject a

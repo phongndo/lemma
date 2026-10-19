@@ -1,7 +1,7 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
 import { socketError } from "./socket.ts";
-import { levelValue } from "./model.ts";
+import { effortOf } from "./model.ts";
 import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
@@ -153,11 +153,12 @@ function build(call: WireCall) {
   }
   const tools = request.tools ?? [];
   if (tools.length > 0) body.tools = tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters }));
-  if (model.thinking !== undefined && level !== undefined) {
+  const effort = model.thinking !== undefined && level !== undefined ? effortOf(model, level) : undefined;
+  if (effort !== undefined) {
     if (level !== "off") {
-      body.reasoning = { effort: levelValue(model, level), summary: "auto" };
+      body.reasoning = { effort, summary: "auto" };
       body.include = ["reasoning.encrypted_content"];
-    } else if (model.thinking.values?.off !== undefined) body.reasoning = { effort: model.thinking.values.off };
+    } else body.reasoning = { effort };
   }
   return {
     url: `${model.baseUrl}/responses`,

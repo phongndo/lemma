@@ -1,7 +1,7 @@
 import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import { ProviderError, withUpstream } from "./http.ts";
 import type { SseEvent } from "./http.ts";
-import { levelValue } from "./model.ts";
+import { effortOf } from "./model.ts";
 import type { Model } from "./model.ts";
 import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
@@ -241,7 +241,7 @@ function build(call: WireCall) {
   const thinking = model.thinking;
   if (thinking !== undefined && level !== undefined) {
     const on = level !== "off";
-    const value = on ? levelValue(model, level) : thinking.values?.off;
+    const value = effortOf(model, level);
     if (compat.thinkingFormat === "openrouter") {
       if (thinking.kind === "toggle") body.reasoning = { enabled: on };
       else if (value !== undefined) body.reasoning = { effort: value };

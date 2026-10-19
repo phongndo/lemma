@@ -1,6 +1,6 @@
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
-import { levelValue, THINKING_BUDGETS } from "./model.ts";
+import { effortOf, THINKING_BUDGETS } from "./model.ts";
 import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
@@ -96,14 +96,17 @@ function build(call: WireCall) {
   const body: Record<string, unknown> = { model: model.id, stream: true };
   const betas: string[] = [];
   const thinking = model.thinking;
-  const on = level !== undefined && level !== "off";
+  // Whether the model is asked to think: at a level other than off, or at an effort the config maps `off` to.
+  const effort = thinking?.kind === "effort" && level !== undefined ? effortOf(model, level) : undefined;
+  const on = level !== undefined && (level !== "off" || effort !== undefined);
   if (thinking !== undefined && level !== undefined) {
     if (thinking.kind === "effort") {
       // Adaptive thinking: the model decides how much, at the effort asked. Off is said, as these models think when
-      // nothing is: only one that can stop has `off` among its levels, as one that always thinks refuses it.
-      if (on) {
+      // nothing is: only one that can stop has `off` among its levels, as one that always thinks refuses it. An `off`
+      // the config maps to an effort is asked at that effort.
+      if (effort !== undefined) {
         body.thinking = { type: "adaptive", display: "summarized" };
-        body.output_config = { effort: levelValue(model, level) };
+        body.output_config = { effort };
       } else body.thinking = { type: "disabled" };
     } else if (on) {
       // The budget comes out of the response's limit: a request's own limit is for the answer, so it grows by it.
