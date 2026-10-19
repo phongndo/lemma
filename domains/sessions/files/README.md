@@ -47,6 +47,26 @@ line gave, and a marks line's `cwd` (written by `relocate`) moves the session to
 that directory, over the header's (a marks line moves neither the leaf nor
 `updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
 
+### Format versions
+
+The header's `version` is the file's format (`FORMAT_VERSION`, 1). A file of
+another version is refused as `Corrupt` with a message naming both versions,
+never taken for damage. The rules for changing the format, so no change makes a
+user's session unreadable:
+
+- Adding a member to `EventData` (`@lemma/sessions`) is not a new version: old
+  files hold none of it. Removing a member, narrowing one, or changing a line's
+  shape is, and the store reads every earlier version through migrations, one
+  per version (`vN` to `vN+1`), applied as a file is read.
+- A migration accepts at least everything the reader of its version accepted:
+  it may not refuse a field that reader ignored.
+- `tests/fixtures/v<N>/` holds session files version `N` wrote and how every
+  reader projected them (`projections.json`: per leaf, the model history's
+  digest; per `request` event, the rebuilt request's), and `tests/formats.test.ts`
+  reads each one back the same. `pnpm sim --fixtures <dir>` writes a new
+  version's corpus once; a version's corpus is never regenerated, so a change
+  that reads an old session differently fails the test.
+
 `<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
 to those bytes, and a hash of its last line. It is a cache, so deleting it only
@@ -91,7 +111,8 @@ costs re-reading the files.
   it (`NaN` becomes `null`). `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file. A file whose
   size, mtime, and inode match the listing index is not read; one that grew is read
-  (with `JSON.parse` only) from where the last read stopped, since sessions are
+  (with `JSON.parse` only, checking only that `seq` runs on without a gap) from
+  where the last read stopped, since sessions are
   only appended to, once the line read last is found unchanged (a failed write's
   line may since have been replaced; if it was, the whole file is read). Sessions
   are indexed when created, read, unloaded, and when the plugin stops, those last

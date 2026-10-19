@@ -220,7 +220,10 @@ tool step, not in its answer step.
 printed first, when none is given), stopping at the first that fails, and
 prints how to replay it; `--dump` prints each session's log as the run left
 it, and `--coverage` how often each kind of action, fault, and outcome
-happened across the seeds.
+happened across the seeds. `--fixtures <dir>` writes a session format
+version's fixture corpus: the sessions three seeds leave that the store serves,
+and one made by hand, with how every reader projects them
+([sessions.files](../../domains/sessions/files/README.md#format-versions)).
 
 `tests/world.test.ts` runs `LEMMA_HARNESS_RUNS` seeds (default 100) from
 `LEMMA_HARNESS_SEED` at `LEMMA_HARNESS_TICKS` ticks (default 120), and fails if

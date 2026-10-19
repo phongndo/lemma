@@ -6,7 +6,7 @@ import { SessionError } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, unsupportedSync } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
-import { decodeRecord, encodeLine } from "./format.ts";
+import { decodeRecord, encodeLine, FORMAT_VERSION } from "./format.ts";
 import type { Header, Line, Marks } from "./format.ts";
 
 export const io = (sessionId: string | undefined, message: string) => (cause: unknown) =>
@@ -246,7 +246,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
     const visit = (json: unknown, n: number): string | undefined => {
       if (header === undefined) {
         const decoded = decodeRecord(json, true);
-        if (Result.isFailure(decoded)) return `unreadable header (${decoded.failure})`;
+        if (Result.isFailure(decoded)) return decoded.failure;
         header = decoded.success as Header;
         updatedAt = header.createdAt;
         return undefined;
@@ -317,7 +317,7 @@ export function scan(fs: FileSystem, file: string, sessionId: string, prior?: Sc
 /** `scan` from `from` (or the start): the scan, or why the file is not a session. */
 async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined): Promise<Scanned | string> {
   let header: Header | undefined =
-    from === undefined ? undefined : { type: "session", version: 1, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
+    from === undefined ? undefined : { type: "session", version: FORMAT_VERSION, id: from.info.id, cwd: from.info.cwd, createdAt: from.info.createdAt };
   let leaf = from?.info.leaf;
   let title = from?.info.title;
   // A moved session's directory is already the header's here (`info.cwd`).
@@ -328,7 +328,7 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
   const visit = (json: unknown, n: number): string | undefined => {
     if (header === undefined) {
       const decoded = decodeRecord(json, true);
-      if (Result.isFailure(decoded)) return `unreadable header (${decoded.failure})`;
+      if (Result.isFailure(decoded)) return decoded.failure;
       header = decoded.success as Header;
       updatedAt = header.createdAt;
       return undefined;
@@ -355,8 +355,10 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
       leaf = line.leaf;
       return undefined;
     }
+    // The one check `load` makes that costs nothing here: a gap would have `list` describe events `load` refuses.
+    if (line.seq !== lastSeq + 1) return `line ${n}: expected seq ${lastSeq + 1}, found ${String(line.seq)}`;
     leaf = line.id;
-    lastSeq = line.seq ?? lastSeq;
+    lastSeq = line.seq;
     if (line.data?.type === "title") title = line.data.title;
     return undefined;
   };

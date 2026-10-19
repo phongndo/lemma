@@ -236,6 +236,59 @@ describe("sessions", () => {
     );
   });
 
+  /** A session with one event, then `lines` appended to its file by another program; what `get` and `events` answer. */
+  const damagedBy = async (lines: (first: { readonly id: string }) => readonly unknown[]) => {
+    const { id, first } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const first = yield* store.append(id, custom(1));
+        return { id, first };
+      }),
+    );
+    const [file] = await sessionFiles();
+    await fs.appendFile(
+      file!,
+      lines(first)
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(""),
+    );
+    return run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const events = yield* Effect.flip(store.events(id));
+        const listed = (yield* store.list()).map((info) => info.id);
+        return { reason: events.reason, message: events.message, listed: listed.includes(id) };
+      }),
+    );
+  };
+
+  it.each([
+    ["a seq gap", (first: { readonly id: string }) => [{ seq: 3, id: "gap00001", parent: first.id, at: 2, data: custom(2) }], "expected seq 2, found 3"],
+    ["a duplicate id", (first: { readonly id: string }) => [{ seq: 2, id: first.id, parent: first.id, at: 2, data: custom(2) }], "duplicate event id"],
+    ["an unknown parent", () => [{ seq: 2, id: "orphan01", parent: "nowhere1", at: 2, data: custom(2) }], "unknown parent nowhere1"],
+    ["a checkout to nowhere", () => [{ type: "checkout", leaf: "nowhere1", at: 2 }], "checkout to unknown event nowhere1"],
+  ])("treats %s as Corrupt, naming it", async (_, lines, message) => {
+    const answer = await damagedBy(lines);
+    expect(answer.reason).toBe("Corrupt");
+    expect(answer.message).toContain(message);
+  });
+
+  it("leaves a seq gap out of the listing, as loading refuses it", async () => {
+    const answer = await damagedBy((first) => [{ seq: 3, id: "gap00001", parent: first.id, at: 2, data: custom(2) }]);
+    expect(answer.listed).toBe(false);
+  });
+
+  it("names the format version of a session written by another version", async () => {
+    const id = await run(Effect.flatMap(Sessions, (store) => Effect.map(store.create(), (info) => info.id)));
+    const [file] = await sessionFiles();
+    const [header, ...rest] = (await fs.readFile(file!, "utf8")).split("\n");
+    await fs.writeFile(file!, [JSON.stringify({ ...JSON.parse(header!), version: 2 }), ...rest].join("\n"));
+    const error = await run(Effect.flatMap(Sessions, (store) => Effect.flip(store.events(id))));
+    expect(error.reason).toBe("Corrupt");
+    expect(error.message).toContain("written in session format version 2; this Lemma reads version 1");
+  });
+
   it("keeps the file and memory in step when an append is interrupted mid-write", async () => {
     const id = await run(
       Effect.gen(function* () {

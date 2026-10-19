@@ -23,7 +23,7 @@ import { errorCode, syncDirectory, syncParents } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
 import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
-import { encodeCwd, encodeLine, EVENT_ID_BYTES, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
+import { encodeCwd, encodeLine, EVENT_ID_BYTES, FORMAT_VERSION, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
 import type { Header, Line } from "./format.ts";
 import { readIndex, writeIndex } from "./listing.ts";
 import { acquireLock, REFRESH_MS, refreshLock, releaseLock } from "./lock.ts";
@@ -349,7 +349,7 @@ export const make = ({
         const createdAt = yield* Clock.currentTimeMillis;
         let id = randomId(ids, SESSION_ID_BYTES);
         while (entries.has(id)) id = randomId(ids, SESSION_ID_BYTES);
-        const header: Header = { type: "session", version: 1, id, cwd, createdAt };
+        const header: Header = { type: "session", version: FORMAT_VERSION, id, cwd, createdAt };
         const file = sessionFile(root, cwd, createdAt, id);
         const line = encodeLine(header);
         const bytes = Buffer.byteLength(line);

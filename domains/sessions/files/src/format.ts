@@ -2,6 +2,9 @@ import * as path from "node:path";
 import { Result, Schema } from "effect";
 import { SessionEvent } from "@lemma/sessions";
 
+/** The format version this store reads and writes; a file of another version says which, rather than "unreadable". */
+export const FORMAT_VERSION = 1;
+
 /**
  * One JSONL file per session. Line 1 is the header; every later line is a
  * `SessionEvent`, a checkout record, or a marks record (which may move it). Events have no top-level
@@ -11,7 +14,7 @@ import { SessionEvent } from "@lemma/sessions";
  */
 export const Header = Schema.Struct({
   type: Schema.Literal("session"),
-  version: Schema.Literal(1),
+  version: Schema.Literal(FORMAT_VERSION),
   id: Schema.String,
   cwd: Schema.String,
   createdAt: Schema.Number,
@@ -51,9 +54,18 @@ export const encodeLine = (line: Line): string => `${JSON.stringify(line)}\n`;
 
 const firstLine = (message: string) => message.split("\n")[0] ?? message;
 
+/** Why a header did not decode: written by another version of the format, or not a header at all. */
+const headerFailure = (json: unknown, error: Schema.SchemaError): string => {
+  const record = typeof json === "object" && json !== null ? (json as { type?: unknown; version?: unknown }) : undefined;
+  if (record?.type === "session" && typeof record.version === "number" && record.version !== FORMAT_VERSION) {
+    return `written in session format version ${record.version}; this Lemma reads version ${FORMAT_VERSION}`;
+  }
+  return `unreadable header (${firstLine(error.message)})`;
+};
+
 /** Decodes a line already parsed as JSON. A failure carries a one-line reason. */
 export function decodeRecord(json: unknown, header: boolean): Result.Result<Line, string> {
-  if (header) return Result.mapError(decodeHeader(json), (error) => firstLine(error.message));
+  if (header) return Result.mapError(decodeHeader(json), (error) => headerFailure(json, error));
   const type = typeof json === "object" && json !== null ? (json as { type?: unknown }).type : undefined;
   const decoded: Result.Result<Line, Schema.SchemaError> =
     type === "checkout" ? decodeCheckout(json) : type === "marks" ? decodeMarks(json) : decodeEvent(json);

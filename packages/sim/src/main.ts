@@ -7,6 +7,7 @@
 //   pnpm sim --seed 7 --dump         seed 7, then every session's log as it was left
 //   pnpm sim --count 40 --coverage   then how often each kind of action, fault, and outcome happened
 //   pnpm sim --seed 1 --digest       the short determinism run's disk digest (tests/determinism.test.ts)
+//   pnpm sim --fixtures <dir>        session files for a format version's fixture corpus (src/fixtures.ts)
 //
 // `--ticks <n>` sets the safety phase's length (default 200). Exits 1 on the first failing seed.
 process.env.TZ = "UTC";
@@ -14,6 +15,7 @@ process.env.TZ = "UTC";
 import { parseArgs } from "node:util";
 import { Cause } from "effect";
 import type { SessionEvent } from "@lemma/sessions";
+import { writeSessionFixtures } from "./fixtures.ts";
 import { digestRun } from "./run.ts";
 import { World } from "./world.ts";
 import { saveWorldFailure } from "./artifacts.ts";
@@ -27,6 +29,7 @@ const { values } = parseArgs({
     dump: { type: "boolean" },
     coverage: { type: "boolean" },
     digest: { type: "boolean" },
+    fixtures: { type: "string" },
   },
 });
 const integer = (name: string, value: string): number => {
@@ -38,6 +41,12 @@ const randomSeed = () => Math.floor(Math.random() * 2 ** 31);
 const first = values.seed === undefined ? randomSeed() : integer("seed", values.seed);
 const count = values.forever === true ? Infinity : integer("count", values.count);
 const ticks = integer("ticks", values.ticks);
+
+if (values.fixtures !== undefined) {
+  const written = await writeSessionFixtures(values.fixtures, [first, first + 1, first + 2], values.ticks === "200" ? 60 : ticks);
+  for (const file of written) console.log(file);
+  process.exit(0);
+}
 
 if (values.digest === true) {
   console.log(`seed ${first}`);
