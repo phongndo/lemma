@@ -391,8 +391,10 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     }
     if (choice.finish_reason) {
       finished = true;
-      out.stopReason = STOP[choice.finish_reason] ?? "error";
-      if (STOP[choice.finish_reason] === undefined) out.errorMessage = `The provider stopped: ${choice.finish_reason}`;
+      const stop = STOP[choice.finish_reason];
+      // A content filter, or another stop that is no answer: asked again, the same.
+      if (stop !== undefined) out.stopReason = stop;
+      else out.stopWith(`The provider stopped: ${choice.finish_reason}`, { kind: "fatal" });
     }
   }
   if (details !== undefined && thinking !== undefined) {

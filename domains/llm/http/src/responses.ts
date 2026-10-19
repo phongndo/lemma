@@ -126,6 +126,9 @@ function assistantItems(
       });
     }
   }
+  // A reasoning item goes back only before the item it led to: one with nothing after it (an answer stopped, or cut at
+  // its limit, mid-thought) is refused.
+  while (items.at(-1)?.type === "reasoning") items.pop();
   return items;
 }
 
@@ -172,7 +175,7 @@ interface Item {
   readonly phase?: string | null;
   readonly summary?: readonly { readonly text?: string }[];
   readonly content?: readonly { readonly type?: string; readonly text?: string; readonly refusal?: string }[];
-  readonly encrypted_content?: string;
+  readonly encrypted_content?: string | null;
 }
 
 interface Response {
@@ -193,6 +196,13 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
   /** The answer's output items by their index, as the message's blocks. */
   const slots = new Map<number, number>();
   const reasoning = new Map<string, number>();
+  /** The part of a reasoning block whose text streams now, by block: a new one is set apart from the last as the final text joins them. */
+  const parts = new Map<number, string>();
+  const reason = (at: number, part: string, delta: string) => {
+    const last = parts.get(at);
+    parts.set(at, part);
+    out.thinking(at, last !== undefined && last !== part ? `\n\n${delta}` : delta);
+  };
   let ended = false;
   const slot = (outputIndex: number, item: Item): number | undefined => {
     const known = slots.get(outputIndex);
@@ -213,11 +223,11 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     ended = true;
     // Some deployments send a reasoning item's encrypted content only in the final response.
     for (const item of response.output ?? []) {
-      const at = item.type === "reasoning" && item.id !== undefined && item.encrypted_content !== undefined ? reasoning.get(item.id) : undefined;
+      const at = item.type === "reasoning" && item.id !== undefined && item.encrypted_content != null ? reasoning.get(item.id) : undefined;
       const block = at === undefined ? undefined : out.content[at];
       if (block?.type !== "thinking" || block.thinkingSignature === undefined) continue;
       const stored = JSON.parse(block.thinkingSignature) as Item;
-      if (stored.encrypted_content === undefined) block.thinkingSignature = JSON.stringify({ ...stored, encrypted_content: item.encrypted_content });
+      if (stored.encrypted_content == null) block.thinkingSignature = JSON.stringify({ ...stored, encrypted_content: item.encrypted_content });
     }
     if (response.id !== undefined) out.responseId = response.id;
     const usage = response.usage;
@@ -236,10 +246,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     const reason = response.incomplete_details?.reason;
     if (response.status === "incomplete") {
       if (reason === "max_output_tokens") out.stopReason = "length";
-      else {
-        out.stopReason = "error";
-        out.errorMessage = reason === undefined ? "The response is incomplete, with no reason given" : `The response is incomplete: ${reason}`;
-      }
+      // A content filter, or another cut that is no answer: asked again, the same.
+      else out.stopWith(reason === undefined ? "The response is incomplete, with no reason given" : `The response is incomplete: ${reason}`, { kind: "fatal" });
     } else if (response.status === "failed" || response.status === "cancelled") {
       out.stopReason = "error";
       const error = response.error;
@@ -263,12 +271,9 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
       case "response.reasoning_summary_text.delta":
       case "response.reasoning_text.delta": {
         const at = slots.get(outputIndex);
-        if (at !== undefined) out.thinking(at, data.delta as string);
-        break;
-      }
-      case "response.reasoning_summary_part.done": {
-        const at = slots.get(outputIndex);
-        if (at !== undefined) out.thinking(at, "\n\n");
+        const kind =
+          data.type === "response.reasoning_summary_text.delta" ? `summary ${String(data.summary_index ?? 0)}` : `text ${String(data.content_index ?? 0)}`;
+        if (at !== undefined) reason(at, kind, data.delta as string);
         break;
       }
       case "response.output_text.delta":
@@ -290,15 +295,16 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
         if (item.type === "reasoning" && block.type === "thinking") {
           const summary = item.summary?.map((part) => part.text ?? "").join("\n\n") ?? "";
           const content = item.content?.map((part) => part.text ?? "").join("\n\n") ?? "";
-          block.thinking = summary || content || block.thinking;
+          out.complete(at, summary || content);
           block.thinkingSignature = JSON.stringify(item);
           if (item.id !== undefined) reasoning.set(item.id, at);
         } else if (item.type === "message" && block.type === "text") {
-          block.text = item.content?.map((part) => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? ""))).join("") || block.text;
+          out.complete(at, item.content?.map((part) => (part.type === "output_text" ? (part.text ?? "") : (part.refusal ?? ""))).join("") ?? "");
           block.textSignature = JSON.stringify({ v: 1, id: item.id, ...(item.phase ? { phase: item.phase } : {}) });
         } else if (item.type === "function_call" && block.type === "toolCall") {
           if (item.namespace !== undefined) block.namespace = item.namespace;
-          out.endToolCall(at, item.arguments ?? out.toolCallJson(at));
+          // A proxy may send the finished call's arguments empty: what streamed stands.
+          out.endToolCall(at, item.arguments || out.toolCallJson(at));
         }
         break;
       }

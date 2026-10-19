@@ -12,6 +12,8 @@ import type { Wire, WireCall } from "./wire.ts";
 /** Tokens always left for the answer when a thinking budget shares the response's limit. */
 const ANSWER_ROOM = 1024;
 const INTERLEAVED_THINKING = "interleaved-thinking-2025-05-14";
+/** The least budget Anthropic takes; a budget must also be below the response's limit. */
+const MIN_BUDGET = 1024;
 
 /** Anthropic's tool call ids are `[a-zA-Z0-9_-]{1,64}`. */
 const normalizeId = (id: string) => id.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
@@ -96,18 +98,25 @@ function build(call: WireCall) {
   const on = level !== undefined && level !== "off";
   if (thinking !== undefined && level !== undefined) {
     if (thinking.kind === "effort") {
-      // Adaptive thinking: the model decides how much, at the effort asked. Off, nothing is sent: a model that always
-      // thinks would refuse it turned off.
+      // Adaptive thinking: the model decides how much, at the effort asked. Off is said, as these models think when
+      // nothing is: only one that can stop has `off` among its levels, as one that always thinks refuses it.
       if (on) {
         body.thinking = { type: "adaptive", display: "summarized" };
         body.output_config = { effort: levelValue(model, level) };
-      }
+      } else body.thinking = { type: "disabled" };
     } else if (on) {
       // The budget comes out of the response's limit: a request's own limit is for the answer, so it grows by it.
       const budget = THINKING_BUDGETS[level] ?? THINKING_BUDGETS.high!;
       if (request.maxTokens !== undefined) limit = maxTokens(model, request, Math.min(request.maxTokens + budget, model.maxTokens));
-      body.thinking = { type: "enabled", budget_tokens: Math.max(1024, Math.min(budget, limit - ANSWER_ROOM)) };
-      betas.push(INTERLEAVED_THINKING);
+      // What the limit leaves the answer room for; failing that, the least budget, below the limit; a limit too short for
+      // even that (a context window nearly full) thinks not at all, as a budget there would refuse the request.
+      const room = Math.min(budget, limit - ANSWER_ROOM);
+      const tokens = room >= MIN_BUDGET ? room : limit > MIN_BUDGET ? MIN_BUDGET : undefined;
+      if (tokens === undefined) body.thinking = { type: "disabled" };
+      else {
+        body.thinking = { type: "enabled", budget_tokens: tokens };
+        betas.push(INTERLEAVED_THINKING);
+      }
     } else body.thinking = { type: "disabled" };
   }
   body.max_tokens = limit;
@@ -163,13 +172,15 @@ interface Usage {
   readonly output_tokens?: number | null;
   readonly cache_read_input_tokens?: number | null;
   readonly cache_creation_input_tokens?: number | null;
+  /** The written tokens by cache lifetime: an hour's are priced higher. */
+  readonly cache_creation?: { readonly ephemeral_1h_input_tokens?: number | null } | null;
   readonly output_tokens_details?: { readonly thinking_tokens?: number | null } | null;
 }
 
 async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall, raw: (data: unknown) => void) {
   /** Anthropic's block index to the message's. */
   const blocks = new Map<number, number>();
-  const counts: { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning?: number } = {
+  const counts: { input: number; output: number; cacheRead: number; cacheWrite: number; reasoning?: number; cacheWriteHour?: number } = {
     input: 0,
     output: 0,
     cacheRead: 0,
@@ -182,6 +193,7 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     if (usage.output_tokens != null) counts.output = usage.output_tokens;
     if (usage.cache_read_input_tokens != null) counts.cacheRead = usage.cache_read_input_tokens;
     if (usage.cache_creation_input_tokens != null) counts.cacheWrite = usage.cache_creation_input_tokens;
+    if (usage.cache_creation?.ephemeral_1h_input_tokens != null) counts.cacheWriteHour = usage.cache_creation.ephemeral_1h_input_tokens;
     if (usage.output_tokens_details?.thinking_tokens != null) counts.reasoning = usage.output_tokens_details.thinking_tokens;
     out.usage = priced(call.model, counts);
   };
@@ -213,7 +225,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
           blocks.set(index, at);
           const target = out.content[at];
           if (target?.type === "thinking" && block.type === "redacted_thinking") {
-            target.thinking = "[Reasoning redacted]";
+            // Its placeholder streams as the rest does: the block is what its deltas add up to.
+            out.thinking(at, "[Reasoning redacted]");
             target.thinkingSignature = block.data ?? "";
             target.redacted = true;
           } else {
@@ -246,8 +259,11 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
         count(data.usage as Usage | undefined);
         const reason = delta.stop_reason;
         if (typeof reason === "string") {
-          out.stopReason = STOP[reason] ?? "error";
-          if (STOP[reason] === undefined) out.errorMessage = stopError(reason, delta.stop_details);
+          const stop = STOP[reason];
+          // Out of context window, the request needs to be shorter; any other stop it calls no answer (a refusal) would be
+          // the same asked again.
+          if (stop !== undefined) out.stopReason = stop;
+          else out.stopWith(stopError(reason, delta.stop_details), { kind: reason === "model_context_window_exceeded" ? "overflow" : "fatal" });
         }
         break;
       }

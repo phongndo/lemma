@@ -12,13 +12,22 @@ export type Block = Text | Thinking | Call;
 /** Token counts as a provider reports them, priced from `model`'s catalog entry. */
 export function priced(
   model: Model,
-  counts: { readonly input: number; readonly output: number; readonly cacheRead: number; readonly cacheWrite: number; readonly reasoning?: number },
+  counts: {
+    readonly input: number;
+    readonly output: number;
+    readonly cacheRead: number;
+    readonly cacheWrite: number;
+    readonly reasoning?: number;
+    /** Of `cacheWrite`, the tokens written to Anthropic's hour-long cache, at twice the input's price. */
+    readonly cacheWriteHour?: number;
+  },
 ): Usage {
+  const hour = Math.min(counts.cacheWriteHour ?? 0, counts.cacheWrite);
   const cost = {
     input: (model.cost.input * counts.input) / 1e6,
     output: (model.cost.output * counts.output) / 1e6,
     cacheRead: (model.cost.cacheRead * counts.cacheRead) / 1e6,
-    cacheWrite: (model.cost.cacheWrite * counts.cacheWrite) / 1e6,
+    cacheWrite: (model.cost.cacheWrite * (counts.cacheWrite - hour) + model.cost.input * 2 * hour) / 1e6,
   };
   return {
     input: counts.input,
@@ -95,6 +104,7 @@ const OVERFLOW = [
   /too large for model with \d+ maximum context length/i,
   /model_context_window_exceeded/i,
   /exceeded (?:max )?context length/i,
+  /exceed context limit/i,
   /range of input length should be/i,
   /context[_ ]length[_ ]exceeded/i,
   /token limit exceeded/i,
@@ -142,6 +152,8 @@ export class Output {
   stopReason: AssistantMessage["stopReason"] | undefined;
   /** Why the provider stopped where it said so itself (a refusal, a content filter). */
   errorMessage: string | undefined;
+  /** What such a stop is to a caller deciding whether to ask again, where its wording should not decide (`stopWith`). */
+  private stopFailure: LlmFailure | undefined;
   responseId: string | undefined;
   private readonly emit: (events: StreamEvent[]) => void;
   private readonly timestamp = Date.now();
@@ -167,6 +179,16 @@ export class Output {
     this.emit(events);
   }
 
+  /**
+   * The provider ended the answer itself as a failure it names: a refusal, a content filter (`fatal`, as asking again
+   * meets the same), a context window it ran out of (`overflow`).
+   */
+  stopWith(message: string, failure: LlmFailure): void {
+    this.stopReason = "error";
+    this.errorMessage = message;
+    this.stopFailure = failure;
+  }
+
   /** The answer has begun: the provider accepted the request. */
   start(): void {
     this.send([]);
@@ -181,6 +203,19 @@ export class Output {
     if (block?.type !== "text" || delta === "") return;
     block.text += delta;
     this.send([{ type: "text-delta", index, delta }]);
+  }
+
+  /**
+   * A text or thinking block as its provider finally gave it whole: what the deltas lacked goes out as one more. A
+   * final form that does not continue them leaves them standing, as the stream told them: a consumer rebuilds the
+   * block from its deltas, and must end with the message's.
+   */
+  complete(index: number, final: string): void {
+    const block = this.content[index];
+    const current = block?.type === "text" ? block.text : block?.type === "thinking" ? block.thinking : undefined;
+    if (current === undefined || final.length <= current.length || !final.startsWith(current)) return;
+    if (block?.type === "text") this.text(index, final.slice(current.length));
+    else this.thinking(index, final.slice(current.length));
   }
 
   addThinking(): number {
@@ -255,8 +290,10 @@ export class Output {
     for (const index of this.buffers.keys()) this.endToolCall(index);
     const stopReason = this.stopReason;
     if (stopReason === undefined) return this.fail(new Error("The provider ended the response without a stop reason"), { kind: "transient" });
-    if (stopReason === "error" || stopReason === "aborted") return this.fail(new Error(this.errorMessage ?? "The provider ended the response with an error"));
-    const filled = this.usage.input + this.usage.cacheRead >= this.model.contextWindow * 0.99;
+    if (stopReason === "error" || stopReason === "aborted") {
+      return this.fail(new Error(this.errorMessage ?? "The provider ended the response with an error"), this.stopFailure);
+    }
+    const filled = this.usage.input + this.usage.cacheRead + this.usage.cacheWrite >= this.model.contextWindow * 0.99;
     if (stopReason === "length" && this.usage.output === 0 && filled) {
       this.send([{ type: "error", message: this.message("error", SILENT_OVERFLOW), failure: { kind: "overflow" } }]);
     } else this.send([{ type: "done", message: this.message(stopReason) }]);

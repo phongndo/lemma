@@ -108,19 +108,45 @@ export function history(request: LlmRequest, model: Model, normalizeId: (id: str
   return out;
 }
 
-/** The characters a request's text adds up to, at about four a token: enough to keep an answer's room inside the window. */
-function estimateTokens(request: LlmRequest): number {
-  let chars = request.system?.length ?? 0;
-  for (const message of request.messages) {
-    for (const block of message.content) {
-      if (block.type === "text") chars += block.text.length;
-      else if (block.type === "thinking") chars += block.thinking.length;
-      else if (block.type === "toolCall") chars += JSON.stringify(block.arguments).length + block.name.length;
-      else chars += 4800;
-    }
+/** Characters a token holds, at least, in the prose, code, and JSON a request carries. */
+const CHARS_PER_TOKEN = 3.5;
+/** What an image counts as, in characters. */
+const IMAGE_CHARS = 4800;
+
+const messageChars = (message: Message): number => {
+  let chars = 0;
+  for (const block of message.content) {
+    if (block.type === "text") chars += block.text.length;
+    else if (block.type === "thinking") chars += block.thinking.length;
+    else if (block.type === "toolCall") chars += JSON.stringify(block.arguments).length + block.name.length;
+    else chars += IMAGE_CHARS;
   }
-  for (const tool of request.tools ?? []) chars += tool.name.length + tool.description.length + JSON.stringify(tool.parameters).length;
-  return Math.ceil(chars / 4);
+  return chars;
+};
+
+/**
+ * The tokens a request takes, about: from the last answer's own count, which the provider measured on all that came
+ * before it, plus an estimate of what came after. An answer older than a message before it (a compaction's summary)
+ * counted another history, and one that failed counted nothing whole: without a usable count, all of it is estimated.
+ */
+function estimateTokens(request: LlmRequest): number {
+  let anchor: { readonly index: number; readonly tokens: number } | undefined;
+  let newest = Number.NEGATIVE_INFINITY;
+  for (const [index, message] of request.messages.entries()) {
+    if (message.role === "assistant" && message.timestamp >= newest && message.stopReason !== "error" && message.stopReason !== "aborted") {
+      const { usage } = message;
+      const tokens = usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+      if (tokens > 0) anchor = { index, tokens };
+    }
+    newest = Math.max(newest, message.timestamp);
+  }
+  let chars = 0;
+  for (const message of request.messages.slice(anchor === undefined ? 0 : anchor.index + 1)) chars += messageChars(message);
+  if (anchor === undefined) {
+    chars += request.system?.length ?? 0;
+    for (const tool of request.tools ?? []) chars += tool.name.length + tool.description.length + JSON.stringify(tool.parameters).length;
+  }
+  return (anchor?.tokens ?? 0) + Math.ceil(chars / CHARS_PER_TOKEN);
 }
 
 /** Tokens kept free of an estimate's error. */

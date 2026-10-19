@@ -7,6 +7,7 @@ import { errorText, ProviderError, sse } from "../src/http.ts";
 import type { Model } from "../src/model.ts";
 import { classifyFailure, Output } from "../src/output.ts";
 import { openaiResponses } from "../src/responses.ts";
+import { maxTokens } from "../src/transform.ts";
 import type { Wire, WireCall } from "../src/wire.ts";
 import { sseBody } from "./helpers.ts";
 
@@ -150,8 +151,9 @@ describe("anthropic-messages", () => {
       thinking: { type: "adaptive", display: "summarized" },
       output_config: { effort: "max" },
     });
+    // Off is said: these models think when nothing is.
     const off = anthropicMessages.build(call(adaptive, { providerOptions: { temperature: 0.5 } }, { level: "off" })).body;
-    expect(off.thinking).toBeUndefined();
+    expect(off.thinking).toEqual({ type: "disabled" });
     expect(off.temperature).toBe(0.5);
     const thinking = anthropicMessages.build(call(budget, { maxTokens: 1000, providerOptions: { temperature: 0.5 } }, { level: "low" }));
     // The budget comes on top of the answer's own limit; a temperature is refused with thinking on.
@@ -159,6 +161,21 @@ describe("anthropic-messages", () => {
     expect(thinking.body.temperature).toBeUndefined();
     expect(thinking.headers["anthropic-beta"]).toBe("interleaved-thinking-2025-05-14");
     expect(anthropicMessages.build(call(budget, {}, { level: "off" })).body.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("thinks within what a nearly full context window leaves the response, or not at all", () => {
+    const small = {
+      ...claude,
+      contextWindow: 10_000,
+      maxTokens: 8_000,
+      reasoning: true,
+      thinking: { kind: "budget" as const, levels: ["off", "high"] as const },
+    } as Model;
+    const asking = (chars: number) => anthropicMessages.build(call(small, { messages: [user("x".repeat(chars))] }, { level: "high" })).body;
+    // Room for the least budget, but not for an answer beside it: the budget stays below the limit.
+    expect(asking(14_000)).toMatchObject({ max_tokens: 1904, thinking: { type: "enabled", budget_tokens: 1024 } });
+    // No room for even that: it does not think.
+    expect(asking(18_000)).toMatchObject({ max_tokens: 761, thinking: { type: "disabled" } });
   });
 
   it("sends another model's thinking as text, its ids as Anthropic takes them, and leaves out a failed answer", () => {
@@ -266,6 +283,40 @@ describe("anthropic-messages", () => {
     expect(last(done)).toMatchObject({ type: "done" });
   });
 
+  it("streams redacted thinking's placeholder, prices an hour-long cache write higher, and ends a refusal fatal whatever it says", async () => {
+    const events = await parse(
+      anthropicMessages,
+      claude,
+      sseBody([
+        {
+          event: "message_start",
+          data: {
+            type: "message_start",
+            message: { id: "m", usage: { input_tokens: 0, cache_creation_input_tokens: 1_000_000, cache_creation: { ephemeral_1h_input_tokens: 1_000_000 } } },
+          },
+        },
+        { event: "content_block_start", data: { type: "content_block_start", index: 0, content_block: { type: "redacted_thinking", data: "opaque" } } },
+        {
+          event: "message_delta",
+          data: {
+            type: "message_delta",
+            delta: { stop_reason: "refusal", stop_details: { explanation: "That would be an unauthorized network intrusion; try again with another task." } },
+          },
+        },
+        { event: "message_stop", data: { type: "message_stop" } },
+      ]),
+    );
+    expect(events.filter((event) => event.type === "thinking-delta")).toEqual([{ type: "thinking-delta", index: 0, delta: "[Reasoning redacted]" }]);
+    // An hour's write is twice the input's price ($3 a million), not the five minutes' ($3.75).
+    expect(last(events)).toMatchObject({ type: "error", failure: { kind: "fatal" }, message: { usage: { cost: { cacheWrite: 6 } } } });
+    const full = await parse(
+      anthropicMessages,
+      claude,
+      sseBody([{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "model_context_window_exceeded" } } }]),
+    );
+    expect(last(full)).toMatchObject({ type: "error", failure: { kind: "overflow" } });
+  });
+
   it("fails on an error event, overloaded as transient, and on a refusal with its explanation", async () => {
     const overloaded = await parse(
       anthropicMessages,
@@ -364,6 +415,36 @@ describe("openai-responses", () => {
     for (const field of ["max_output_tokens", "temperature", "prompt_cache_retention"]) expect(body[field]).toBeUndefined();
   });
 
+  it("sends a reasoning item back only before the item it led to", () => {
+    const reasoning = (id: string) => ({ type: "thinking" as const, thinking: "", thinkingSignature: JSON.stringify({ type: "reasoning", id }) });
+    const input = openaiResponses.build(
+      call(gpt, {
+        messages: [
+          user("go"),
+          answer(gpt, [reasoning("rs_1"), { type: "text", text: "Looking", textSignature: '{"v":1,"id":"msg_1"}' }, reasoning("rs_2")], "stop"),
+          user("again"),
+          answer(gpt, [reasoning("rs_3")], "length"),
+          user("more"),
+        ],
+      }),
+    ).body.input as { type?: string; id?: string }[];
+    expect(input.filter((item) => item.type === "reasoning").map((item) => item.id)).toEqual(["rs_1"]);
+  });
+
+  it("keeps the arguments that streamed when the finished call's come empty", async () => {
+    const events = await parse(
+      openaiResponses,
+      gpt,
+      sseBody([
+        { type: "response.output_item.added", output_index: 0, item: { type: "function_call", id: "fc", call_id: "c", name: "read" } },
+        { type: "response.function_call_arguments.delta", output_index: 0, delta: '{"path":"a"}' },
+        { type: "response.output_item.done", output_index: 0, item: { type: "function_call", id: "fc", call_id: "c", name: "read", arguments: "" } },
+        { type: "response.completed", response: { status: "completed", output: [{ type: "reasoning", id: "x", encrypted_content: "enc" }] } },
+      ]),
+    );
+    expect(last(events)).toMatchObject({ type: "done", message: { content: [{ type: "toolCall", arguments: { path: "a" } }] } });
+  });
+
   it("drops another model's item ids, and makes a foreign call's id one the API takes", () => {
     const sibling = { ...gpt, id: "gpt-old" };
     const input = openaiResponses.build(
@@ -432,6 +513,33 @@ describe("openai-responses", () => {
         usage: { input: 200, cacheRead: 800, output: 20, reasoning: 5, totalTokens: 1020 },
       },
     });
+  });
+
+  it("streams deltas that add up to the final message: summary parts apart, and what the final item adds", async () => {
+    const events = await parse(
+      openaiResponses,
+      gpt,
+      sseBody([
+        { type: "response.output_item.added", output_index: 0, item: { type: "reasoning", id: "rs" } },
+        { type: "response.reasoning_summary_text.delta", output_index: 0, summary_index: 0, delta: "One" },
+        { type: "response.reasoning_summary_part.done", output_index: 0, summary_index: 0 },
+        { type: "response.reasoning_summary_text.delta", output_index: 0, summary_index: 1, delta: "Two" },
+        { type: "response.reasoning_summary_part.done", output_index: 0, summary_index: 1 },
+        { type: "response.output_item.done", output_index: 0, item: { type: "reasoning", id: "rs", summary: [{ text: "One" }, { text: "Two" }] } },
+        { type: "response.output_item.added", output_index: 1, item: { type: "message", id: "m" } },
+        { type: "response.output_text.delta", output_index: 1, delta: "Hel" },
+        { type: "response.output_item.done", output_index: 1, item: { type: "message", id: "m", content: [{ type: "output_text", text: "Hello" }] } },
+        { type: "response.completed", response: { status: "completed" } },
+      ]),
+    );
+    const streamed = (type: string, index: number) =>
+      events
+        .filter((event) => event.type === type && (event as { index: number }).index === index)
+        .map((event) => (event as { delta: string }).delta)
+        .join("");
+    expect(streamed("thinking-delta", 0)).toBe("One\n\nTwo");
+    expect(streamed("text-delta", 1)).toBe("Hello");
+    expect(last(events)).toMatchObject({ type: "done", message: { content: [{ thinking: "One\n\nTwo" }, { text: "Hello" }] } });
   });
 
   it("ends an answer cut at its output limit as length, and fails a failed response with its code", async () => {
@@ -655,6 +763,7 @@ describe("openai-completions", () => {
     });
     expect(last(await parse(openaiCompletions, model(), sseBody([{ choices: [{ delta: {}, finish_reason: "content_filter" }] }, "[DONE]"])))).toMatchObject({
       type: "error",
+      failure: { kind: "fatal" },
       message: { errorMessage: "The provider stopped: content_filter" },
     });
   });
@@ -696,6 +805,20 @@ describe("failures", () => {
     const message = `400 ${errorText(JSON.stringify({ error: { code: 400, message: "Provider returned error", metadata: { raw } } }))}`;
     expect(message).toContain("prompt is too long");
     expect(classify(message, 400)).toEqual({ kind: "overflow" });
+  });
+
+  it("estimates a request from its last answer's own count, unless a message before that answer is newer", () => {
+    const big = model({ contextWindow: 200_000, maxTokens: 64_000 });
+    const counted = (timestamp: number): AssistantMessage => ({
+      ...answer(big, [{ type: "text", text: "ok" }], "stop"),
+      timestamp,
+      usage: { ...emptyUsage, input: 150_000, totalTokens: 150_000 },
+    });
+    const at = (text: string, timestamp: number): Message => ({ role: "user", content: [{ type: "text", text }], timestamp });
+    // 150,000 counted, and 7 characters after it, at 3.5 a token: what is left is 200,000 - 150,002 - 4,096.
+    expect(maxTokens(big, new LlmRequest({ model: "p/m", messages: [at("hi", 1), counted(2), at("go on!!", 3)] }))).toBe(45_902);
+    // A summary newer than the answer counted another history: estimated instead.
+    expect(maxTokens(big, new LlmRequest({ model: "p/m", messages: [at("summary", 5), counted(2), at("go on!!", 6)] }))).toBe(64_000);
   });
 
   it("fails an answer cut off at its limit having said nothing, its input filling the context window, as an overflow", () => {
