@@ -3,7 +3,8 @@
 Everything Lemma does is a plugin: the agent loop, each tool, the transcript,
 the Plugins page. Yours is written against the same contracts and stands
 where a bundled one does, so it can add to Lemma or replace any part of it
-by id. This guide covers writing one. [Configuration](configuration.md#your-plugins)
+by id. This guide covers writing one; [Building on Lemma](building.md) walks
+through one from start to finish. [Configuration](configuration.md#your-plugins)
 covers where plugins go and how they are turned on and off.
 
 ## A plugin in a file

@@ -1112,15 +1112,22 @@ export const parts = async (): Promise<string> => {
   errors.splice(0);
 
   // An example's web half runs as a user's would, from the plugin directory: examples/todo adds a view of the thread
-  // and how its tool's calls show.
+  // and how its tool's calls show, and so does examples/glossary, which docs/building.md builds.
   const todo = readFileSync(resolve(root, "../../examples/todo/web.js"), "utf8");
+  const glossary = readFileSync(resolve(root, "../../examples/glossary/glossary.web.js"), "utf8");
   await page.goto(`${url}/threads/s1?mock`);
   await settled(page);
   await page.waitForFunction(() => "lemmaMock" in window && "lemma" in window);
-  await page.evaluate((source) => {
-    const url = URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
-    (window as any).lemmaMock.setWebFiles([{ name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url }]);
-  }, todo);
+  await page.evaluate(
+    ([todo, glossary]) => {
+      const url = (source: string) => URL.createObjectURL(new Blob([source], { type: "text/javascript" }));
+      (window as any).lemmaMock.setWebFiles([
+        { name: "todo/web.js", source: "user", kind: "script", path: "/plugins/todo/web.js", url: url(todo!) },
+        { name: "glossary/glossary.web.js", source: "user", kind: "script", path: "/plugins/glossary/glossary.web.js", url: url(glossary!) },
+      ]);
+    },
+    [todo, glossary],
+  );
   await showView(page, "todo").catch(() => assert.fail("examples/todo added no Todos view"));
   await page.waitForSelector(".todo-view >> text=No todos in this thread.");
   assert.equal(
@@ -1131,6 +1138,8 @@ export const parts = async (): Promise<string> => {
     "check",
     "examples/todo added no view of its tool's calls",
   );
+  await showView(page, "glossary").catch(() => assert.fail("examples/glossary added no Glossary view"));
+  await page.waitForSelector(".glossary-view >> text=No terms in this thread yet.");
   expectNoErrors("an example's web half");
   return "a part replaced and restored; six extension slots render what a plugin adds; @ completes files, / a command and its arguments, $ the skills, and a plugin adds completions; addresses survive reloads, back, and their page's plugin going off; a trajectory record's pipeline says who shaped it; a plugin adds a page; an example's web half adds a view and its tool's";
 };
