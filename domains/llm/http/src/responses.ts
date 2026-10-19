@@ -2,6 +2,7 @@ import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
 import { socketError } from "./socket.ts";
 import { levelValue } from "./model.ts";
+import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
 import { history, maxTokens, passedOn, sanitize, shortHash } from "./transform.ts";
@@ -246,8 +247,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     const reason = response.incomplete_details?.reason;
     if (response.status === "incomplete") {
       if (reason === "max_output_tokens") out.stopReason = "length";
-      // A content filter, or another cut that is no answer: asked again, the same.
-      else out.stopWith(reason === undefined ? "The response is incomplete, with no reason given" : `The response is incomplete: ${reason}`, { kind: "fatal" });
+      else
+        out.stopWith(reason === undefined ? "The response is incomplete, with no reason given" : `The response is incomplete: ${reason}`, stopFailure(reason));
     } else if (response.status === "failed" || response.status === "cancelled") {
       out.stopReason = "error";
       const error = response.error;

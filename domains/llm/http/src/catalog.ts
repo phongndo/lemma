@@ -52,7 +52,8 @@ export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"],
   const toggle = options?.some((option) => option.type === "toggle") ?? false;
   const budget = options?.some((option) => option.type === "budget_tokens") ?? false;
   if (api === "anthropic-messages") {
-    // Off, adaptive thinking is left out of the request: one that also thinks in a budget (Claude 4.6) has a way to stop.
+    // Off is a level only for a model that can stop thinking (one that also thinks in a budget, as Claude 4.6, or that
+    // toggles): it is sent `disabled`, which the models that always think refuse.
     if (effort.includes("max")) return effortThinking(effort, toggle || budget);
     if (budget) return { kind: "budget", levels: BUDGET_LEVELS };
     return toggle ? { kind: "toggle", levels: ["off", "high"] } : undefined;

@@ -1,6 +1,7 @@
 import type { AssistantMessage, ImageContent, TextContent, ToolResultMessage } from "@lemma/llm";
 import type { SseEvent } from "./http.ts";
 import { levelValue, THINKING_BUDGETS } from "./model.ts";
+import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
 import { history, maxTokens, passedOn, sanitize } from "./transform.ts";
@@ -260,10 +261,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
         const reason = delta.stop_reason;
         if (typeof reason === "string") {
           const stop = STOP[reason];
-          // Out of context window, the request needs to be shorter; any other stop it calls no answer (a refusal) would be
-          // the same asked again.
           if (stop !== undefined) out.stopReason = stop;
-          else out.stopWith(stopError(reason, delta.stop_details), { kind: reason === "model_context_window_exceeded" ? "overflow" : "fatal" });
+          else out.stopWith(stopError(reason, delta.stop_details), stopFailure(reason));
         }
         break;
       }

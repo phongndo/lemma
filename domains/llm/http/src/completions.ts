@@ -3,6 +3,7 @@ import { ProviderError, withUpstream } from "./http.ts";
 import type { SseEvent } from "./http.ts";
 import { levelValue } from "./model.ts";
 import type { Model } from "./model.ts";
+import { stopFailure } from "./failure.ts";
 import { priced } from "./output.ts";
 import type { Output } from "./output.ts";
 import { history, maxTokens, passedOn, sanitize, shortHash, textOf } from "./transform.ts";
@@ -392,9 +393,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     if (choice.finish_reason) {
       finished = true;
       const stop = STOP[choice.finish_reason];
-      // A content filter, or another stop that is no answer: asked again, the same.
       if (stop !== undefined) out.stopReason = stop;
-      else out.stopWith(`The provider stopped: ${choice.finish_reason}`, { kind: "fatal" });
+      else out.stopWith(`The provider stopped: ${choice.finish_reason}`, stopFailure(choice.finish_reason));
     }
   }
   if (details !== undefined && thinking !== undefined) {

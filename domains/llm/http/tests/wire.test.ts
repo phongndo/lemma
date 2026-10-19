@@ -5,7 +5,8 @@ import { anthropicMessages } from "../src/anthropic.ts";
 import { openaiCompletions } from "../src/completions.ts";
 import { errorText, ProviderError, sse } from "../src/http.ts";
 import type { Model } from "../src/model.ts";
-import { classifyFailure, Output } from "../src/output.ts";
+import { classifyFailure } from "../src/failure.ts";
+import { Output } from "../src/output.ts";
 import { openaiResponses } from "../src/responses.ts";
 import { maxTokens } from "../src/transform.ts";
 import type { Wire, WireCall } from "../src/wire.ts";
@@ -753,6 +754,31 @@ describe("openai-completions", () => {
       failure: { kind: "transient" },
       message: { content: [{ type: "text", text: "half" }], errorMessage: "502: Provider returned error" },
     });
+  });
+
+  it("ends a stop it names by what the stop is, in every protocol, and one it does not know by its wording", async () => {
+    const finish = async (reason: string) =>
+      last(await parse(openaiCompletions, model(), sseBody([{ choices: [{ delta: {}, finish_reason: reason }] }, "[DONE]"])));
+    expect(await finish("model_context_window_exceeded")).toMatchObject({ type: "error", failure: { kind: "overflow" } });
+    expect(await finish("network_error")).toMatchObject({ type: "error", failure: { kind: "transient" } });
+    expect(await finish("content_filter")).toMatchObject({ type: "error", failure: { kind: "fatal" } });
+    expect(await finish("something_new")).toMatchObject({
+      type: "error",
+      failure: { kind: "fatal" },
+      message: { errorMessage: "The provider stopped: something_new" },
+    });
+    const anthropicStop = await parse(
+      anthropicMessages,
+      model({ api: "anthropic-messages" }),
+      sseBody([{ event: "message_delta", data: { type: "message_delta", delta: { stop_reason: "network_error" } } }]),
+    );
+    expect(last(anthropicStop)).toMatchObject({ type: "error", failure: { kind: "transient" } });
+    const filtered = await parse(
+      openaiResponses,
+      model({ api: "openai-responses" }),
+      sseBody([{ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "content_filter" } } }]),
+    );
+    expect(last(filtered)).toMatchObject({ type: "error", failure: { kind: "fatal" } });
   });
 
   it("fails a stream that never finished, and one that says why it stopped", async () => {
