@@ -227,18 +227,22 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
     expect(await run(service.click("p", { locator: "text=Pop" }))).toMatchObject({ tabId: "t3", title: "Two", current: true });
   });
 
-  it("fails a page drawn on its own that does not finish loading, saying so", async () => {
-    const impatient = makeChromium({ idleMs: 0, headless: true, renderTimeoutMs: 300 });
-    try {
-      const busy = `<!doctype html><p>x</p><script>const end = Date.now() + 3000; while (Date.now() < end) {}</script>`;
-      expect(await failure(impatient.service.render(busy, { width: 400, colorScheme: "dark" }))).toMatchObject({
-        reason: "Timeout",
-        message: "The page did not finish loading within 0.3 seconds. Leave out what does not load, or load it from an address that answers",
-      });
-    } finally {
-      await impatient.close();
-    }
-  });
+  it(
+    "fails a page drawn on its own that does not finish loading, saying so",
+    async () => {
+      const impatient = makeChromium({ idleMs: 0, headless: true, renderTimeoutMs: 300 });
+      try {
+        const busy = `<!doctype html><p>x</p><script>const end = Date.now() + 3000; while (Date.now() < end) {}</script>`;
+        expect(await failure(impatient.service.render(busy, { width: 400, colorScheme: "dark" }))).toMatchObject({
+          reason: "Timeout",
+          message: "The page did not finish loading within 0.3 seconds. Leave out what does not load, or load it from an address that answers",
+        });
+      } finally {
+        await impatient.close();
+      }
+    },
+    LAUNCH_MS,
+  );
 
   it("draws a page on its own without anything on this machine or its network, which it never asks for", async () => {
     const local = origin.replace("127.0.0.1", "localhost");

@@ -609,6 +609,8 @@ export const createMockHost = (): Host => {
   let heldStarts: (() => void)[] | undefined;
   /** While the UI check holds them (`lemmaMock.holdSteers`), a turn waits here before placing the steers queued. */
   let heldSteers: { readonly released: Promise<void>; readonly release: () => void } | undefined;
+  /** While the UI check holds it (`lemmaMock.holdScript`), the script that draws a page waits here after its first call. */
+  let heldScript: { readonly released: Promise<void>; readonly release: () => void } | undefined;
   /** Prompts a plugin answers instead of placing them, by their text (`lemmaMock.answerPrompts`). */
   let answers = new Map<string, PromptOutcome>();
   const mockTrace = createMockTrace(plugins.map((plugin) => plugin.id));
@@ -640,6 +642,18 @@ export const createMockHost = (): Host => {
       releaseSteers: () => {
         heldSteers?.release();
         heldSteers = undefined;
+      },
+      /** Holds the script that draws a page after its first call settles until released, so it shows running however slow the page. */
+      holdScript: () => {
+        if (heldScript !== undefined) return;
+        let release!: () => void;
+        const released = new Promise<void>((resolve) => (release = resolve));
+        heldScript = { released, release };
+      },
+      /** Lets a held script make its next call, and holds no more. */
+      releaseScript: () => {
+        heldScript?.release();
+        heldScript = undefined;
       },
       /** Answers a prompt whose text is a key as a plugin's `AgentInputHook` handler would, instead of placing it. */
       answerPrompts: (outcomes: Readonly<Record<string, PromptOutcome>>) => {
@@ -1131,11 +1145,12 @@ export const createMockHost = (): Host => {
         timing: { startedAt: scriptAt, firstTokenAt: scriptAt + 200, endedAt: Date.now() },
       });
       const running = toolSpan(scriptSpan, scriptStep, script);
-      for (const line of ['✓ bash 12ms {"command":"git log --oneline -n 5"}\n', '✓ html_render 1ms {"title":"Commits"}\n']) {
+      for (const [at, line] of ['✓ bash 12ms {"command":"git log --oneline -n 5"}\n', '✓ html_render 1ms {"title":"Commits"}\n'].entries()) {
         await sleep(400);
         const printed = turn.output.get(script.id) ?? "";
         turn.output.set(script.id, printed + line);
         activity.publish({ type: "tool-output", sessionId, toolCallId: script.id, chunk: line, offset: printed.length });
+        if (at === 0 && heldScript !== undefined) await heldScript.released;
       }
       await sleep(400);
       if (cancelled.has(sessionId)) return end("cancelled");

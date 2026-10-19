@@ -20,6 +20,8 @@ export const pages = async (): Promise<string> => {
       if (event.data?.type === "check-page") (window as any).pageReports.push(event.data);
     });
   });
+  // Held after its first call until the check has seen it, however long the page takes to show it.
+  await page.evaluate(() => (window as any).lemmaMock.holdScript());
   await page.fill("textarea", "Draw a page");
   await page.keyboard.press("Enter");
 
@@ -37,6 +39,7 @@ export const pages = async (): Promise<string> => {
     /✓bash\{"command":"git log --oneline -n 5"\}12ms/,
     "a running script's call does not show its name, arguments, and time",
   );
+  await page.evaluate(() => (window as any).lemmaMock.releaseScript());
 
   await page.waitForFunction(() => document.querySelectorAll(".turn-footer").length === 1, undefined, { timeout: 30_000 });
   await page
