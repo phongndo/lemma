@@ -22,6 +22,7 @@ import {
   recentRequests,
   reconcileLive,
   resolveLeaf,
+  skipsDeltas,
   ThreadHolds,
   Threads,
   THREADS_CONTRACT,
@@ -295,6 +296,8 @@ export default defineWebPlugin({
       if (deltas.length === 0) return;
       const pending = deltas;
       deltas = [];
+      // Fallen behind, the host dropped some: the turn's view brings back what the draft missed.
+      const missed = skipsDeltas(untrack(live), pending);
       updateLive((state) =>
         pending.reduce(
           (next, event) =>
@@ -304,6 +307,8 @@ export default defineWebPlugin({
           state,
         ),
       );
+      const id = activeId();
+      if (missed && id !== undefined) void joinTurn(id);
     }
     plugin.onCleanup(() => {
       if (frame !== undefined) cancelAnimationFrame(frame);

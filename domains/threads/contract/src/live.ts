@@ -141,6 +141,24 @@ export const applyDelta = (state: LiveState, turnId: string, stepId: string, eve
   return { ...state, drafts };
 };
 
+/**
+ * Whether `updates` skip a delta of a step `state` streams: one numbered past the next it expects. A client that falls
+ * behind loses the oldest of its feed (`agent.activity` is losable), and the draft then misses that part until its step
+ * settles: a view of the running turn (`agent.view`, `beginJoin`) brings it back. While one is on its way, nothing is
+ * missed: what it does not cover is held.
+ */
+export const skipsDeltas = (state: LiveState, updates: readonly { readonly type: string; readonly stepId?: string; readonly seq?: number }[]): boolean => {
+  if (state.joining !== undefined) return false;
+  const expected = new Map(state.drafts.map((draft) => [draft.stepId, draft.seq]));
+  for (const update of updates) {
+    if (update.type !== "delta" || update.stepId === undefined || update.seq === undefined || state.settled.has(update.stepId)) continue;
+    const last = expected.get(update.stepId) ?? 0;
+    if (update.seq > last + 1) return true;
+    expected.set(update.stepId, Math.max(last, update.seq));
+  }
+  return false;
+};
+
 /** The durable event for `stepId` arrived: drop its draft and ignore stragglers. */
 export const settleStep = (state: LiveState, stepId: string): LiveState => {
   if (state.settled.has(stepId) && !state.drafts.some((draft) => draft.stepId === stepId)) return state;

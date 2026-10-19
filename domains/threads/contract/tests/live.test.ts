@@ -13,6 +13,7 @@ import {
   seedLive,
   settleStep,
   reconcileLive,
+  skipsDeltas,
 } from "../src/live.ts";
 import type { LiveState } from "../src/live.ts";
 import type { StreamEvent } from "@lemma/llm";
@@ -208,5 +209,25 @@ describe("reconcileLive", () => {
     expect(joined.output.size).toBe(0);
     // Without a log yet, the view is what shows.
     expect(joinLive(emptyLive, view, []).drafts).toHaveLength(1);
+  });
+});
+
+describe("skipped deltas", () => {
+  const delta = (stepId: string, seq: number) => ({ type: "delta", stepId, seq });
+  const numbered = (seq: number): LiveState => applyDelta(emptyLive, "t1", "s1", { type: "text-delta", index: 0, delta: "a" }, seq);
+
+  it("tells when a step's deltas skip one the draft has not had, as a client that fell behind loses them", () => {
+    expect(skipsDeltas(numbered(3), [delta("s1", 4), delta("s1", 5)])).toBe(false);
+    expect(skipsDeltas(numbered(3), [delta("s1", 4), delta("s1", 6)])).toBe(true);
+    // A step it has no draft of yet begins at 1.
+    expect(skipsDeltas(emptyLive, [delta("s2", 1), delta("s2", 2)])).toBe(false);
+    expect(skipsDeltas(emptyLive, [delta("s2", 3)])).toBe(true);
+    // A repeat is no gap, nor is tool output.
+    expect(skipsDeltas(numbered(3), [delta("s1", 2), { type: "tool-output" }, delta("s1", 4)])).toBe(false);
+  });
+
+  it("misses nothing of a settled step, nor while a view of the turn is on its way", () => {
+    expect(skipsDeltas(settleStep(numbered(3), "s1"), [delta("s1", 9)])).toBe(false);
+    expect(skipsDeltas(beginJoin(numbered(3)), [delta("s1", 9)])).toBe(false);
   });
 });
