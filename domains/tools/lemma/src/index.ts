@@ -1,0 +1,124 @@
+import { Effect, Result, Schema, Stream } from "effect";
+import { definePlugin, Registries } from "@lemma/core";
+import type { Contribution } from "@lemma/core";
+import { Channels, Interaction } from "@lemma/contracts";
+import type { Channel } from "@lemma/contracts";
+import { ToolNamespaces, Tools } from "@lemma/tools";
+import { answering, channelTool, NAMESPACE } from "./channels.ts";
+import { delegateTool } from "./delegate.ts";
+import { access, DEFAULT_CHANNELS, DEFAULT_CONFIRM, toolName } from "./policy.ts";
+
+export { DEFAULT_CHANNELS, DEFAULT_CONFIRM, NEVER, toolName } from "./policy.ts";
+export { depthOf, DelegateInput, DelegateOutput } from "./delegate.ts";
+
+const ids = (defaults: readonly string[]) => Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultType(Effect.sync(() => [...defaults])));
+const count = (fallback: number) =>
+  Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)).pipe(Schema.withDecodingDefaultType(Effect.sync(() => fallback)));
+
+const Config = Schema.Struct({
+  channels: ids(DEFAULT_CHANNELS).annotate({
+    title: "Channels scripts call",
+    description: "Channel ids offered as tools, called freely: by default those that only read. Credential channels are never offered.",
+  }),
+  confirm: ids(DEFAULT_CONFIRM).annotate({
+    title: "Channels that ask first",
+    description: "Channel ids offered as tools whose every call asks you first, showing what it sends: by default those that change something.",
+  }),
+  maxDelegations: count(4).annotate({
+    title: "Delegations at once",
+    description: "How many lemma_delegate sessions run at once at each depth; more wait for one to end.",
+  }),
+  maxDepth: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 2)))
+    .annotate({
+      title: "Delegation depth",
+      description: "How deep delegations go: a delegated session this many levels down cannot delegate. 0 turns delegation off.",
+    }),
+  confirmDelegation: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => false))).annotate({
+    title: "Ask before delegating",
+    description: "Ask you before each lemma_delegate starts a session.",
+  }),
+  maxOutputChars: count(20_000).annotate({
+    title: "Output kept (characters)",
+    description: "Text characters of a result the model reads when it calls one directly; scripts get the whole result.",
+  }),
+});
+
+const INSTRUCTIONS = `Lemma itself, through the channels its plugins serve clients (the web app, the \`lemma\` command): each tool \`lemma_<channel id, . and - as _>\` takes the channel's payload as JSON (a payload that is not an object goes in \`{ payload }\`) and resolves to its result's JSON. Streams take \`{ payload?, take?, timeoutMs? }\` and resolve to \`{ elements, ended, timedOut }\`; most begin with a \`subscribed\` element. Tools whose description says so ask the person before each call and reject when they decline.
+
+- Recent sessions: \`const sessions = await tools.lemma_sessions_list({})\` (newest first), \`await tools.lemma_sessions_search({ query: "flaky test" })\`.
+- A session's log, or its tail: \`await tools.lemma_sessions_events({ sessionId, after: seq })\`; which are running: \`await tools.lemma_agent_running({})\`.
+- Delegate tasks in parallel, each to a new session that sees only its prompt:
+  \`const results = await Promise.all(tasks.map((prompt) => tools.lemma_delegate({ prompt })))\`, each \`{ sessionId, ended, answer, error? }\`.
+- Judge many sessions cheaply: read their titles or answers, then ask a classifier (\`models.classify\`) about each, and return only the summary.`;
+
+/**
+ * Lemma's own channels as tools scripts call, in the `lemma` namespace: those the config allows, kept in step with the
+ * channels plugins serve as they come and go; and `lemma_delegate`, a task handed to a new session. Writing channels ask
+ * the person first (`Interaction`); credential channels are never offered.
+ */
+export default definePlugin({
+  id: "tools.lemma",
+  uses: ["lemma/agent@1", "lemma/llm@1", "lemma/sessions@1", "lemma/tools@1"],
+  version: "0.1.0",
+  config: Config,
+  requires: { interaction: Interaction },
+  setup: function* ({ interaction }, owner) {
+    const registries = yield* Registries;
+    const config = owner.config;
+    const budget = config.maxOutputChars;
+
+    yield* owner.add(ToolNamespaces, {
+      name: NAMESPACE,
+      description: "Lemma itself: its sessions, agent, commands, skills, models, and workspace, as the app's own channels; and tasks delegated to new sessions",
+      instructions: INSTRUCTIONS,
+    });
+    if (config.maxDepth > 0) {
+      yield* owner.add(
+        Tools,
+        delegateTool({ registries, interaction, maxDelegations: config.maxDelegations, maxDepth: config.maxDepth, confirm: config.confirmDelegation, budget }),
+      );
+    }
+
+    /** Channels already said to have no JSON form: each is warned of once, not at every change to the channels. */
+    const unoffered = new WeakSet<Channel>();
+    /** The tools added, by name, with the channel each was made from and how it is offered. */
+    const added = new Map<string, { readonly channel: Channel; readonly confirm: boolean; readonly remove: Effect.Effect<void> }>();
+    const sync = (items: readonly Contribution<Channel>[]) =>
+      Effect.gen(function* () {
+        const wanted = new Map<string, { readonly channel: Channel; readonly confirm: boolean }>();
+        for (const { item } of answering(items)) {
+          const offered = access(item.id, config);
+          const name = toolName(item.id);
+          // Two ids that read alike as a tool name: the first keeps it.
+          if (offered === undefined || wanted.has(name)) continue;
+          wanted.set(name, { channel: item, confirm: offered === "confirm" });
+        }
+        for (const [name, tool] of added) {
+          const next = wanted.get(name);
+          if (next?.channel === tool.channel && next.confirm === tool.confirm) continue;
+          added.delete(name);
+          yield* tool.remove;
+        }
+        for (const [name, { channel, confirm }] of wanted) {
+          if (added.has(name)) continue;
+          const made = Result.try(() => channelTool(channel, { registries, interaction, confirm, budget }));
+          if (Result.isFailure(made)) {
+            if (!unoffered.has(channel))
+              yield* Effect.logWarning(`tools.lemma: "${channel.id}" was not offered: its schemas have no JSON form (${String(made.failure)})`);
+            unoffered.add(channel);
+            continue;
+          }
+          const remove = yield* Effect.result(owner.add(Tools, made.success));
+          if (Result.isFailure(remove)) {
+            // Another plugin holds the name: the rest are offered all the same.
+            yield* Effect.logWarning(`tools.lemma: ${name} was not added: ${remove.failure.message}`);
+            continue;
+          }
+          added.set(name, { channel, confirm, remove: remove.success });
+        }
+      });
+    // Every list, the first too: channels served before this plugin started are in it.
+    yield* owner.background("channel tools", Stream.runForEach(registries.changes(Channels), sync));
+  },
+});

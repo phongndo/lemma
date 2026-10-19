@@ -6,7 +6,7 @@
  */
 import { randomBytes } from "node:crypto";
 import { closeSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync, rmSync } from "node:fs";
-import { lstat, mkdir, readlink, realpath, stat, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, readlink, realpath, stat, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import * as path from "node:path";
 import { ToolResult } from "./tools.ts";
@@ -248,4 +248,99 @@ export async function boundOutput(
   }
   const bounded = [{ type: "text" as const, text }, ...content.filter((item) => item.type === "image")];
   return saved ? { content: bounded, fullOutputPath: file } : { content: bounded };
+}
+
+/** PNG, JPEG, GIF, or WebP by its first bytes, as pi tells them; a file's extension is not trusted. */
+export function sniffImage(head: Uint8Array): string | undefined {
+  const ascii = (offset: number, value: string) => [...value].every((char, i) => head[offset + i] === char.charCodeAt(0));
+  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
+  if ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, i) => head[i] === byte)) return "image/png";
+  if (ascii(0, "GIF87a") || ascii(0, "GIF89a")) return "image/gif";
+  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image/webp";
+  return undefined;
+}
+
+/** An SVG by its text: an `<svg` element near the start, after any XML prolog, doctype, or comments. */
+const isSvg = (bytes: Uint8Array): boolean =>
+  /^\s*(<\?xml[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*(<!doctype svg[^>]*>\s*)?(<!--[\s\S]*?-->\s*)*<svg[\s>]/i.test(new TextDecoder().decode(bytes.subarray(0, 4096)));
+
+/** The most one image may add to a page, and all of a page's images together. */
+const MAX_INLINED_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_INLINED_PAGE_BYTES = 25 * 1024 * 1024;
+
+const IMAGE_EXTENSION = String.raw`\.(?:png|jpe?g|gif|webp|svg)`;
+/** The start of an absolute path: a `/`, but not two, which start a URL on another host (`//cdn.example.com/a.png`). */
+const ABSOLUTE = String.raw`\/(?!\/)`;
+/** An absolute path to an image in quotes, spaces and all: `src="/abs/My Shot.png"`, `"/abs/chart.svg"` in a script. */
+const QUOTED_IMAGE = new RegExp(String.raw`(["'])(${ABSOLUTE}[^"'<>\n]*?${IMAGE_EXTENSION})\1`, "gi");
+/** In CSS `url(…)` without quotes: `url(/abs/bg.webp)`. */
+const CSS_IMAGE = new RegExp(String.raw`url\((${ABSOLUTE}[^)'"\s]+?${IMAGE_EXTENSION})\)`, "gi");
+/** A `srcset`, whose candidates are a path and a descriptor each: `"/abs/a.png 1x, /abs/b.png 2x"`. */
+const SRCSET = /srcset\s*=\s*(["'])(.*?)\1/gis;
+const SRCSET_IMAGE = new RegExp(String.raw`^${ABSOLUTE}\S*${IMAGE_EXTENSION}$`, "i");
+
+/** The paths of a `srcset`'s candidates, by where each sits in the value. */
+const srcsetPaths = (value: string): string[] =>
+  value
+    .split(",")
+    .map((candidate) => candidate.trim().split(/\s+/)[0] ?? "")
+    .filter((path) => SRCSET_IMAGE.test(path));
+
+/**
+ * A page made self-contained: each absolute path to a local image in it, quoted (in an attribute or a script, spaces
+ * and all), in CSS `url(…)`, or a candidate of a `srcset`, becomes a `data:` URL, so the page shows wherever it is drawn. A file is inlined only when its bytes are
+ * an image (PNG, JPEG, GIF, WebP, or SVG text), so a path cannot carry another file's contents out, and up to 10 MiB
+ * each and 25 MiB a page; `missing` names the paths left as they were.
+ */
+export async function inlineLocalImages(html: string): Promise<{ readonly html: string; readonly missing: readonly string[] }> {
+  // In the order the page has them, whichever form each is in.
+  const found = [
+    ...[...html.matchAll(QUOTED_IMAGE)].map((match) => [match.index, [match[2]!]] as const),
+    ...[...html.matchAll(CSS_IMAGE)].map((match) => [match.index, [match[1]!]] as const),
+    ...[...html.matchAll(SRCSET)].map((match) => [match.index, srcsetPaths(match[2]!)] as const),
+  ].sort(([a], [b]) => a - b);
+  const paths = new Set(found.flatMap(([, files]) => files));
+  const urls = new Map<string, string>();
+  const missing: string[] = [];
+  let total = 0;
+  for (const file of paths) {
+    try {
+      const { size } = await stat(file);
+      if (size > MAX_INLINED_IMAGE_BYTES || total + size > MAX_INLINED_PAGE_BYTES) {
+        missing.push(file);
+        continue;
+      }
+      const bytes = await readFile(file);
+      const mimeType = sniffImage(bytes.subarray(0, 16)) ?? (isSvg(bytes) ? "image/svg+xml" : undefined);
+      if (mimeType === undefined) {
+        missing.push(file);
+        continue;
+      }
+      total += size;
+      urls.set(file, `data:${mimeType};base64,${bytes.toString("base64")}`);
+    } catch {
+      missing.push(file);
+    }
+  }
+  if (urls.size === 0) return { html, missing };
+  const url = (file: string) => urls.get(file) ?? file;
+  return {
+    html: html
+      // A srcset first: its candidates are not each quoted, as the other forms are.
+      .replace(SRCSET, (whole, quote: string, value: string) =>
+        whole.replace(
+          value,
+          value
+            .split(",")
+            .map((candidate) => {
+              const [path = "", ...descriptors] = candidate.trim().split(/\s+/);
+              return SRCSET_IMAGE.test(path) ? [url(path), ...descriptors].join(" ") : candidate.trim();
+            })
+            .join(", "),
+        ),
+      )
+      .replace(QUOTED_IMAGE, (whole, quote: string, file: string) => (urls.has(file) ? `${quote}${url(file)}${quote}` : whole))
+      .replace(CSS_IMAGE, (whole, file: string) => (urls.has(file) ? `url(${url(file)})` : whole)),
+    missing,
+  };
 }

@@ -111,7 +111,7 @@ The checker (`Checker`), TigerBeetle's state checker, holds the run to:
 
 ### What it found
 
-Each is fixed (the last by documenting what `Io` means), and pinned by a test
+Each is fixed (the `Io` one by documenting what it means), and pinned by a test
 of the agent's own, in `domains/agent/loop/tests/simulated.test.ts` (the
 cancelled turn's in `recovery.test.ts`), as a seed replays a run only at the
 commit that drew it:
@@ -132,7 +132,10 @@ commit that drew it:
   state, and started over as if it had none;
 - a journal write that failed after its rename had landed left a prompt
   reported `Io` placed by the next host (`Io` is now documented as of unknown
-  fate: send it again with the same request id).
+  fate: send it again with the same request id);
+- a prompt a turn failed to log, in a turn whose `turn-end` failed too, was
+  answered `placed` when sent again while the turn closed, though it never
+  was (a turn that ended now keeps none of its prompts).
 
 ### Testing the tester
 

@@ -4,6 +4,8 @@ import type { Plugin } from "@lemma/core";
 import agentCli from "@lemma/agent-cli";
 import agentLoop from "@lemma/agent-loop";
 import agentProfiles from "@lemma/agent-profiles";
+import browserChromium from "@lemma/browser-chromium";
+import browserTools from "@lemma/browser-tools";
 import cliRegistry from "@lemma/cli-registry";
 import commandsCli from "@lemma/commands-cli";
 import commandsHost from "@lemma/commands-host";
@@ -24,6 +26,8 @@ import toolsAsk from "@lemma/tools-ask";
 import toolsBash from "@lemma/tools-bash";
 import toolsCodemode from "@lemma/tools-codemode";
 import toolsEdit from "@lemma/tools-edit";
+import toolsHtml from "@lemma/tools-html";
+import toolsLemma from "@lemma/tools-lemma";
 import toolsRead from "@lemma/tools-read";
 import toolsRegistry from "@lemma/tools-registry";
 import toolsSearchFff from "@lemma/tools-search-fff";
@@ -59,6 +63,10 @@ export const bundled: readonly Plugin[] = [
   toolsCodemode,
   toolsSearchFff,
   toolsAsk,
+  browserChromium,
+  browserTools,
+  toolsHtml,
+  toolsLemma,
   mcpServers,
   sessionsFiles,
   agentLoop,
@@ -139,7 +147,9 @@ export const bundledWeb: readonly string[] = [
   "threads.view",
   "tools.ask",
   "tools.bash",
+  "tools.codemode",
   "tools.edit",
+  "tools.html",
   "tools.read",
   "tools.search-fff",
   "tools.write",

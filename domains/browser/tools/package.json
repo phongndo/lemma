@@ -1,0 +1,31 @@
+{
+  "name": "@lemma/browser-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The browser tools the agent calls (open, snapshot, click, type, …) and html_preview, over `Browser`",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/browser": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/llm": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@lemma/browser-chromium": "workspace:*",
+    "@lemma/tools-registry": "workspace:*",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./src/index.ts"
+  }
+}

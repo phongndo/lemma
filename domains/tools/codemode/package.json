@@ -2,10 +2,11 @@
   "name": "@lemma/tools-codemode",
   "version": "0.1.0",
   "private": true,
-  "description": "The `codemode` tool: JavaScript in a sandbox that calls the other tools",
+  "description": "The `codemode` tool: JavaScript in a sandbox that calls the other tools and non-chat models",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -13,13 +14,19 @@
   },
   "dependencies": {
     "@earendil-works/pi-codemode": "1.2.0",
+    "@lemma/agent": "workspace:*",
+    "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.4",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
-    "@lemma/contracts": "workspace:*",
+    "@lemma/sessions-files": "workspace:*",
     "@lemma/tools-bash": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-read": "workspace:*",
@@ -30,6 +37,7 @@
     "vitest": "5.0.4"
   },
   "lemma": {
-    "host": "./src/index.ts"
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
   }
 }

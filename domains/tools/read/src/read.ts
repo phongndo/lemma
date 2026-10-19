@@ -2,9 +2,9 @@ import { constants } from "node:fs";
 import { access, open, readFile, stat } from "node:fs/promises";
 import { Schema } from "effect";
 import { MAX_IMAGE_BYTES } from "@lemma/llm";
-import { ToolResult } from "@lemma/tools";
+import { ImageBlock, ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
-import { fsMessage, resolveReadPath, text, throwIfAborted } from "@lemma/tools/files";
+import { fsMessage, resolveReadPath, sniffImage, throwIfAborted } from "@lemma/tools/files";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@lemma/tools";
 import type { Truncation } from "@lemma/tools";
 
@@ -15,19 +15,13 @@ export const ReadInput = Schema.Struct({
 });
 export type ReadInput = typeof ReadInput.Type;
 
+/** What a script's call resolves to: the text the model reads, or an image as a block a script shows or classifies. */
+export const ReadOutput = Schema.Union([Schema.String, ImageBlock]);
+export type ReadOutput = typeof ReadOutput.Type;
+
 export interface ReadDetails {
   readonly path: string;
   readonly truncation?: Truncation;
-}
-
-/** PNG, JPEG, GIF, or WebP by magic bytes, like pi; the extension is not trusted. */
-function sniffImage(head: Uint8Array): string | undefined {
-  const ascii = (offset: number, value: string) => [...value].every((char, i) => head[offset + i] === char.charCodeAt(0));
-  if (head[0] === 0xff && head[1] === 0xd8 && head[2] === 0xff) return "image/jpeg";
-  if ([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a].every((byte, i) => head[i] === byte)) return "image/png";
-  if (ascii(0, "GIF87a") || ascii(0, "GIF89a")) return "image/gif";
-  if (ascii(0, "RIFF") && ascii(8, "WEBP")) return "image/webp";
-  return undefined;
 }
 
 async function readHead(file: string, length: number): Promise<Uint8Array> {
@@ -45,6 +39,7 @@ export const readTool: Tool<ReadInput> = {
   name: "read",
   description: `Read the contents of a file. Supports text files and images (jpg, png, gif, webp). Images are sent as attachments. For text files, output is truncated to ${DEFAULT_MAX_LINES} lines or ${DEFAULT_MAX_BYTES / 1024}KB (whichever is hit first). Use offset/limit for large files. When you need the full file, continue with offset until complete. Use it to examine files instead of cat or sed.`,
   input: ReadInput,
+  output: ReadOutput,
   // It only reads: cut off by a host restart, it runs again, and reads the model asks for together run together.
   replay: "safe",
   parallel: "safe",
@@ -63,18 +58,18 @@ export const readTool: Tool<ReadInput> = {
     if (mimeType !== undefined) {
       const { size } = await stat(absolute);
       if (size > MAX_IMAGE_BYTES) {
-        return text(
-          `Read image file [${mimeType}]\nImage is ${formatSize(size)}, over the ${formatSize(MAX_IMAGE_BYTES)} limit for attachments; it was not attached.`,
-          { path: absolute },
-        );
+        const note = `Read image file [${mimeType}]\nImage is ${formatSize(size)}, over the ${formatSize(MAX_IMAGE_BYTES)} limit for attachments; it was not attached.`;
+        return new ToolResult({ content: [{ type: "text", text: note }], details: { path: absolute } satisfies ReadDetails, structured: note });
       }
       const data = (await readFile(absolute)).toString("base64");
+      const note = `Read image file [${mimeType}]`;
       return new ToolResult({
         content: [
-          { type: "text", text: `Read image file [${mimeType}]` },
+          { type: "text", text: note },
           { type: "image", data, mimeType },
         ],
         details: { path: absolute } satisfies ReadDetails,
+        structured: { type: "image", data, mimeType, note } satisfies ReadOutput,
       });
     }
 
@@ -110,6 +105,6 @@ export const readTool: Tool<ReadInput> = {
       output = truncation.content;
     }
     const details: ReadDetails = { path: absolute, ...(truncation.truncated ? { truncation } : {}) };
-    return text(output, details);
+    return new ToolResult({ content: [{ type: "text", text: output }], details, structured: output });
   },
 };

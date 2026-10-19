@@ -8,7 +8,7 @@ import type { CheckCredit, ResultCredit } from "@lemma/contracts";
 import { Guards, ToolError, ToolExecuteHook, ToolExecuted, ToolOutput, ToolResult, Tools } from "@lemma/tools";
 import type { ExecuteOptions, Tool, ToolContext, ToolContribution, ToolInvocation, ToolRunner } from "@lemma/tools";
 import { capResult, textLength } from "./content.ts";
-import { toolParameters } from "./schema.ts";
+import { toolOutput, toolParameters } from "./schema.ts";
 
 type Service = Context.Service.Shape<typeof ToolRunner>;
 
@@ -21,6 +21,8 @@ interface RegistryOptions {
 interface Entry {
   readonly tool: Tool<any>;
   readonly spec: ToolContribution["spec"];
+  /** The tool's `output` as JSON Schema. */
+  readonly output: ToolContribution["output"];
   readonly decode: (input: unknown) => Effect.Effect<unknown, ToolError>;
 }
 
@@ -33,6 +35,7 @@ const entryOf = (tool: Tool<any>): Entry => {
   const entry: Entry = {
     tool,
     spec: { name: tool.name, description: tool.description, parameters: toolParameters(tool.input) },
+    output: tool.output === undefined ? undefined : toolOutput(tool.output),
     decode: (input) =>
       decodeInput(input, { errors: "all", onExcessProperty: "ignore" }).pipe(
         Effect.mapError(
@@ -176,6 +179,9 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
         .map(({ item: tool, pluginId }) => ({
           source: pluginId,
           spec: entryOf(tool).spec,
+          ...(tool.output === undefined ? {} : { output: entryOf(tool).output! }),
+          ...(tool.namespace === undefined ? {} : { namespace: tool.namespace }),
+          ...(tool.display === undefined ? {} : { display: tool.display }),
           ...(tool.replay === undefined ? {} : { replay: tool.replay }),
           ...(tool.parallel === undefined ? {} : { parallel: tool.parallel }),
           ...(tool.direct === undefined ? {} : { direct: tool.direct }),

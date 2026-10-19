@@ -1,11 +1,11 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, children, createMemo, createSignal } from "solid-js";
 import { formatDuration } from "@lemma/client/format";
 import { contentText } from "@lemma/llm";
 import type { ImageContent, TextContent } from "@lemma/llm";
 import { diffStats, parseDiff, readDetails } from "./details.ts";
 import { partialStringField, summarizeArgs, truncateLines, ToolViews, ChatTool } from "@lemma/threads";
 import { formatElapsed } from "./format.ts";
-import type { ToolResultView, ChatToolProps, ThreadsService } from "@lemma/threads";
+import type { ToolResultView, ChatToolProps, ThreadsService, ToolBodyProps } from "@lemma/threads";
 import type { ClientService, SlotsService } from "@lemma/web";
 import { ChevronDownIcon, ChevronIcon, Icon, Spinner } from "@lemma/look";
 import { Contained } from "@lemma/web";
@@ -253,5 +253,33 @@ function DefaultBody(props: {
         <p class="muted small">No output</p>
       </Show>
     </div>
+  );
+}
+
+/**
+ * What a call shows the reader outside its line (its `ToolViews` item's `display`, a page it drew), once it has a
+ * result: under its line in a turn shown unfolded, after the fold holding it otherwise. Nothing, not even an empty box
+ * taking its place in the turn, for a tool whose view has none or a call it draws nothing for.
+ */
+export function ToolDisplay(props: { chat: Chat } & Omit<ToolBodyProps, "output">) {
+  const view = () => props.chat.toolView(props.name);
+  return (
+    <Show when={props.result !== undefined && view()?.display !== undefined ? view() : undefined} keyed>
+      {(item) => {
+        const drawn = children(() => (
+          <Contained
+            slot={ToolViews}
+            item={item}
+            component={item.display!}
+            props={{ id: props.id, name: props.name, args: props.args, result: props.result, state: props.state }}
+          />
+        ));
+        return (
+          <Show when={drawn.toArray().some((node) => node !== undefined && node !== null && node !== false && node !== "")}>
+            <div class="tool-display">{drawn()}</div>
+          </Show>
+        );
+      }}
+    </Show>
   );
 }

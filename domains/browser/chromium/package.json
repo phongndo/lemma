@@ -1,0 +1,30 @@
+{
+  "name": "@lemma/browser-chromium",
+  "version": "0.1.0",
+  "private": true,
+  "description": "A headless Chromium the agent drives, through Playwright: provides `Browser`",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/browser": "workspace:*",
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "effect": "4.0.4",
+    "playwright-core": "1.64.0"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./src/index.ts"
+  }
+}

@@ -6,7 +6,7 @@ import { constants as osConstants } from "node:os";
 import { Schema } from "effect";
 import { ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
-import { OutputAccumulator } from "./output.ts";
+import { OutputAccumulator, ScriptOutput } from "./output.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize } from "@lemma/tools";
 import type { Truncation } from "@lemma/tools";
 
@@ -15,6 +15,18 @@ export const BashInput = Schema.Struct({
   timeout: Schema.optional(Schema.Number.annotate({ description: "Timeout in seconds (optional; the tool description names the default)" })),
 });
 export type BashInput = typeof BashInput.Type;
+
+/** What a script's call resolves to: on a non-zero exit, a timeout, or an abort too. */
+export const BashOutput = Schema.Struct({
+  output: Schema.String.annotate({ description: "stdout and stderr combined: whole up to 1 MiB, else its first and last 512 KiB around a marker" }),
+  exitCode: Schema.NullOr(Schema.Number).annotate({ description: "null when the command did not finish (timeout, abort)" }),
+  truncated: Schema.Boolean.annotate({ description: "Whether output left out its middle" }),
+  fullOutputPath: Schema.optional(Schema.String.annotate({ description: "The whole output, when it was longer than the model sees" })),
+  timedOut: Schema.optional(Schema.Boolean),
+  aborted: Schema.optional(Schema.Boolean),
+  wallTimeSeconds: Schema.Number,
+});
+export type BashOutput = typeof BashOutput.Type;
 
 export interface BashDetails {
   /** Null when the command did not finish (timeout, abort). */
@@ -114,7 +126,9 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
       : ""
   }.`,
   input: BashInput,
+  output: BashOutput,
   execute: async ({ command, timeout: requested }, { cwd, signal, update }) => {
+    const started = performance.now();
     const timeout = requested ?? (defaultTimeout > 0 ? defaultTimeout : undefined);
     if (timeout !== undefined && (!Number.isFinite(timeout) || timeout <= 0)) throw new Error("Invalid timeout: must be a finite number of seconds");
     if (timeout !== undefined && timeout * 1000 > MAX_TIMEOUT_MS) throw new Error(`Invalid timeout: maximum is ${MAX_TIMEOUT_MS / 1000} seconds`);
@@ -128,11 +142,13 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
     if (signal.aborted) throw new Error("Command aborted");
 
     const output = new OutputAccumulator("lemma-bash");
+    const script = new ScriptOutput();
     const child = spawn("bash", ["-c", command], { cwd, detached: true, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
     // Streaming decode: a character split across chunks is held until its last byte arrives.
     const live = new TextDecoder();
     const onData = (data: Buffer) => {
       output.append(data);
+      script.append(data);
       update?.(live.decode(data, { stream: true }));
     };
     child.stdout.on("data", onData);
@@ -196,7 +212,17 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT): Too
       ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
     };
     const textBody = status === undefined ? body || "(no output)" : `${body ? `${body}\n\n` : ""}${status}`;
-    return new ToolResult({ content: [{ type: "text", text: textBody }], ...(status === undefined ? {} : { isError: true }), details });
+    const read = script.read();
+    const structured: BashOutput = {
+      output: read.output,
+      exitCode: details.exitCode,
+      truncated: read.truncated,
+      ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
+      ...(timedOut ? { timedOut } : {}),
+      ...(aborted ? { aborted } : {}),
+      wallTimeSeconds: Math.round(performance.now() - started) / 1000,
+    };
+    return new ToolResult({ content: [{ type: "text", text: textBody }], ...(status === undefined ? {} : { isError: true }), details, structured });
   },
 });
 

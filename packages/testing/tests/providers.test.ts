@@ -71,6 +71,8 @@ llmConformance("independent replacement", (scenario) => {
         setLogo: () => Effect.void,
         classifiers: () => Effect.succeed([]),
         classify: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
+        imageModels: () => Effect.succeed([]),
+        generateImages: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
       })),
     ),
   });

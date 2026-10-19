@@ -1,0 +1,22 @@
+{
+  "name": "@lemma/browser",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The browser domain's contract: a browser the agent drives, its tabs by session, and the pages it renders",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  }
+}
