@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { McpError, SERVER_NAME } from "@lemma/mcp";
 import type { McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { ToolResult } from "@lemma/tools";
-import type { Tool } from "@lemma/tools";
+import type { Tool, ToolNamespace } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
 import {
   connectionKey,
@@ -20,7 +20,7 @@ import type { Definition, ServersFile } from "./config.ts";
 import { Connection } from "./connection.ts";
 import type { McpTool } from "./connection.ts";
 import { isImageAddress } from "./form.ts";
-import { inputOf, toContent, toolNames } from "./tools.ts";
+import { inputOf, namespaceOf, outputOf, structuredOf, toContent, toolNames } from "./tools.ts";
 
 /** A server's icon: its entry's, when it can be one, else the one it declares. */
 const iconOf = (own: string | undefined, declared: string | undefined): string | undefined => (own !== undefined && isImageAddress(own) ? own : declared);
@@ -28,6 +28,8 @@ const iconOf = (own: string | undefined, declared: string | undefined): string |
 /** What the manager needs of the kernel: adding a tool (the returned function removes it), and telling of a change. */
 export interface Kernel {
   readonly addTool: (tool: Tool) => Promise<() => Promise<void>>;
+  /** Adds the namespace of a server's tools; the returned function removes it. */
+  readonly addNamespace: (namespace: ToolNamespace) => Promise<() => Promise<void>>;
   readonly changed: (state: McpState) => void;
   readonly warn: (message: string) => void;
 }
@@ -59,6 +61,8 @@ interface Entry {
   /** What it listed when it last connected. */
   listed: readonly McpTool[];
   readonly registered: Map<string, Registered>;
+  /** Its tools' namespace, while it has tools. */
+  namespace: Registered | undefined;
   /** Serializes adding and removing its tools. */
   syncing: Promise<void>;
 }
@@ -205,7 +209,16 @@ export class Servers {
       const key = connectionKey(definition.config);
       let entry = this.entries.get(definition.name);
       if (entry === undefined) {
-        entry = { definition, connectionKey: key, connection: undefined, error: undefined, listed: [], registered: new Map(), syncing: Promise.resolve() };
+        entry = {
+          definition,
+          connectionKey: key,
+          connection: undefined,
+          error: undefined,
+          listed: [],
+          registered: new Map(),
+          namespace: undefined,
+          syncing: Promise.resolve(),
+        };
         this.entries.set(definition.name, entry);
       }
       const reconnect = entry.connection === undefined || entry.connectionKey !== key;
@@ -279,7 +292,7 @@ export class Servers {
           if (exposure === "hidden") continue;
           const tool = this.toolOf(entry, listed, names.get(listed.name)!, exposure === "codemode");
           const key = createHash("sha256")
-            .update(JSON.stringify([tool.name, tool.description, listed.inputSchema, tool.nested]))
+            .update(JSON.stringify([tool.name, tool.description, listed.inputSchema, listed.outputSchema, tool.nested]))
             .digest("hex");
           wanted.set(tool.name, { key, tool });
         }
@@ -289,6 +302,7 @@ export class Servers {
         entry.registered.delete(name);
         await registered.remove();
       }
+      await this.syncNamespace(entry, wanted.size > 0);
       for (const [name, { key, tool }] of wanted) {
         if (entry.registered.has(name)) continue;
         try {
@@ -303,6 +317,32 @@ export class Servers {
     return run;
   }
 
+  /**
+   * Keeps the namespace of the server's tools while it has some: what it is for (its configured description, else the
+   * first line of what it tells clients), and what it tells clients as the instructions scripts read.
+   */
+  private async syncNamespace(entry: Entry, wanted: boolean): Promise<void> {
+    const server = entry.definition.name;
+    const instructions = entry.connection?.instructions?.trim() || undefined;
+    const namespace: ToolNamespace = {
+      name: namespaceOf(server),
+      description: entry.definition.config.description ?? instructions?.split("\n")[0] ?? `The tools of the MCP server "${server}"`,
+      ...(instructions === undefined ? {} : { instructions }),
+      aliases: [...new Set([server, `mcp__${server}`])].filter((alias) => alias !== namespaceOf(server)),
+    };
+    const key = JSON.stringify(namespace);
+    if (wanted && entry.namespace?.key === key) return;
+    const previous = entry.namespace;
+    entry.namespace = undefined;
+    await previous?.remove();
+    if (!wanted) return;
+    try {
+      entry.namespace = { key, remove: await this.kernel.addNamespace(namespace) };
+    } catch (cause) {
+      this.kernel.warn(`${server}'s namespace was not added: ${cause instanceof Error ? cause.message : String(cause)}`);
+    }
+  }
+
   private toolOf(entry: Entry, listed: McpTool, name: string, nested: boolean): Tool {
     const server = entry.definition.name;
     const title = listed.title ?? listed.annotations?.title;
@@ -311,6 +351,8 @@ export class Servers {
       name,
       description: `${text || listed.name} (MCP server "${server}")`,
       input: inputOf(listed.inputSchema),
+      output: outputOf(listed.outputSchema),
+      namespace: namespaceOf(server),
       ...(nested ? { nested: true as const } : {}),
       execute: async (input, context) => {
         const connection = entry.connection;
@@ -330,6 +372,7 @@ export class Servers {
             ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
             ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
           },
+          structured: structuredOf(result),
         });
       },
     };
