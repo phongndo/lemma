@@ -133,7 +133,8 @@ export const applyDelta = (state: LiveState, turnId: string, stepId: string, eve
   const draft: StepDraft = index === -1 ? { turnId, stepId, blocks: [], finished: false, seq: 0 } : state.drafts[index]!;
   if (seq !== undefined && seq <= draft.seq) return state;
   const applied = applyToDraft(draft, event);
-  const next = seq === undefined || applied === draft ? applied : { ...applied, seq };
+  // Numbered even when it changes nothing shown (a step's `start`), so the next is not taken for one past a gap.
+  const next = seq === undefined || (applied === draft && seq === draft.seq) ? applied : { ...applied, seq };
   if (next === draft && index !== -1) return state;
   const drafts = state.drafts.slice();
   if (index === -1) drafts.push(next);
@@ -267,6 +268,18 @@ export const joinLive = (state: LiveState, view: AgentView | undefined, log: rea
       held.kind === "delta" ? applyDelta(next, held.turnId, held.stepId, held.event, held.seq) : appendOutput(next, held.toolCallId, held.chunk, held.offset);
   }
   return reconcileLive(next, log);
+};
+
+/**
+ * Whether the deltas held while a view of the running turn was on its way (`beginJoin`) skip one past what `view`
+ * covers: lost after the view was made. Joined (`joinLive`), the draft would miss it; another view brings it back.
+ */
+export const joinSkips = (state: LiveState, view: AgentView): boolean => {
+  const { joining = [], ...rest } = state;
+  const held = joining.flatMap((update) =>
+    update.kind === "delta" ? [{ type: "delta", stepId: update.stepId, ...(update.seq === undefined ? {} : { seq: update.seq }) }] : [],
+  );
+  return skipsDeltas(seedLive(rest, view), held);
 };
 
 /** A draft's block as shown: where it starts in the stream, and whether it is the one being written now. */

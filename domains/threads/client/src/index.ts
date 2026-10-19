@@ -22,6 +22,7 @@ import {
   recentRequests,
   reconcileLive,
   resolveLeaf,
+  joinSkips,
   skipsDeltas,
   ThreadHolds,
   Threads,
@@ -333,8 +334,11 @@ export default defineWebPlugin({
         batch(() => {
           if (joins !== join) return;
           flushDeltas();
+          // Deltas lost after the view was made leave the draft short: a newer view brings them back.
+          const again = view !== undefined && joinSkips(untrack(live), view);
           updateLive((state) => joinLive(state, view, untrack(events)));
           if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
+          if (again) void joinTurn(sessionId);
         });
       return client.channel.call(AgentChannels.view, { sessionId }).then(done, () => done(undefined));
     };

@@ -13,6 +13,7 @@ import {
   seedLive,
   settleStep,
   reconcileLive,
+  joinSkips,
   skipsDeltas,
 } from "../src/live.ts";
 import type { LiveState } from "../src/live.ts";
@@ -226,8 +227,34 @@ describe("skipped deltas", () => {
     expect(skipsDeltas(numbered(3), [delta("s1", 2), { type: "tool-output" }, delta("s1", 4)])).toBe(false);
   });
 
+  it("takes a step's start, which shows nothing, as numbered: the delta after it is no gap", () => {
+    const started = applyDelta(emptyLive, "t1", "s1", { type: "start" }, 1);
+    expect(skipsDeltas(started, [delta("s1", 2)])).toBe(false);
+    expect(skipsDeltas(started, [delta("s1", 3)])).toBe(true);
+  });
+
   it("misses nothing of a settled step, nor while a view of the turn is on its way", () => {
     expect(skipsDeltas(settleStep(numbered(3), "s1"), [delta("s1", 9)])).toBe(false);
     expect(skipsDeltas(beginJoin(numbered(3)), [delta("s1", 9)])).toBe(false);
+  });
+});
+
+describe("a join's held deltas", () => {
+  const view = (seq: number) => ({
+    turnId: "t1",
+    draft: { stepId: "s1", seq, blocks: [{ index: 0, block: { type: "text" as const, text: "A" } }] },
+    output: [],
+    queue: [],
+    queueRevision: 0,
+  });
+  const holding = (...seqs: number[]) =>
+    seqs.reduce((state, seq) => applyDelta(state, "t1", "s1", { type: "text-delta", index: 0, delta: String(seq) }, seq), beginJoin(emptyLive));
+
+  it("tells when what was held skips one past what the view covers", () => {
+    expect(joinSkips(holding(2, 3), view(1))).toBe(false);
+    // The view covers 1; 2 was lost while it was on its way.
+    expect(joinSkips(holding(3), view(1))).toBe(true);
+    // What the view already covers is no gap.
+    expect(joinSkips(holding(1, 2), view(2))).toBe(false);
   });
 });
