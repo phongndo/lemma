@@ -157,6 +157,23 @@ describe("OpenAI's WebSocket mode", () => {
     expect(sockets.opened.every((socket) => socket.closed)).toBe(true);
   });
 
+  it("closes a connection whose handshake ended just as the pool closed, or as its request stopped", async () => {
+    const sockets = fakeSockets(answering);
+    const pool = new SocketPool(sockets.factory);
+    // The handshake has ended (its open is queued first), but `acquire` has not resumed when the pool closes.
+    const late = pool.acquire("s1", "wss://x", {}, new AbortController().signal);
+    await Promise.resolve();
+    pool.closeAll();
+    expect(await late).toBeUndefined();
+    const stopping = new AbortController();
+    const pool2 = new SocketPool(sockets.factory);
+    const stopped = pool2.acquire("s2", "wss://x", {}, stopping.signal);
+    await Promise.resolve();
+    stopping.abort();
+    await expect(stopped).rejects.toThrow("aborted");
+    expect(sockets.opened.map((socket) => socket.closed)).toEqual([true, true]);
+  });
+
   it("goes over HTTP when the connection drops before anything arrived, and fails an answer it cut off as transient", async () => {
     let cut = false;
     const sockets = fakeSockets((_, socket) => {

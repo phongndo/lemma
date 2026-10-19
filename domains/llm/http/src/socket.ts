@@ -197,12 +197,17 @@ export function socketError(data: Readonly<Record<string, unknown>>): Error {
   return typeof data.status === "number" ? new ProviderError(`${data.status} ${message}`, { status: data.status }) : new Error(message);
 }
 
-/** Each session's connection, opened when its first request goes over the socket, and kept while it is used. */
+/** A session's place in the pool: its connection while one opens, then the connection. */
+type Slot = { readonly opening: AbortController } | { readonly connection: Connection };
+
+/**
+ * Each session's connection, opened when its first request goes over the socket, and kept while it is used. Every
+ * connection is in `sessions` from before its handshake until it closes, so whatever closes the pool reaches it: one
+ * whose handshake ends after its slot is gone (the pool closed, the request stopped) is closed at once.
+ */
 export class SocketPool {
   private readonly factory: SocketFactory;
-  private readonly sessions = new Map<string, Connection>();
-  /** Sessions whose connection is opening: another request of theirs goes over HTTP meanwhile; closing stops it. */
-  private readonly opening = new Map<string, AbortController>();
+  private readonly sessions = new Map<string, Slot>();
   /** Endpoints a connection could not be opened to, and until when their requests go over HTTP. */
   private readonly backoff = new Map<string, number>();
   private closed = false;
@@ -217,10 +222,12 @@ export class SocketPool {
    * other headers (a handler of the headers hook changed them) is replaced.
    */
   async acquire(session: string, url: string, headers: Readonly<Record<string, string>>, signal: AbortSignal): Promise<Connection | undefined> {
-    if (this.closed || this.opening.has(session)) return undefined;
+    if (this.closed) return undefined;
     const key = `${url}\n${JSON.stringify(Object.entries(headers).sort(([a], [b]) => a.localeCompare(b)))}`;
-    const current = this.sessions.get(session);
-    if (current?.busy === true && !current.closed) return undefined;
+    const slot = this.sessions.get(session);
+    if (slot !== undefined && "opening" in slot) return undefined;
+    const current = slot?.connection;
+    if (current !== undefined && current.busy && !current.closed) return undefined;
     if (current !== undefined && current.usable && current.key === key) {
       current.wake();
       current.busy = true;
@@ -229,41 +236,52 @@ export class SocketPool {
     current?.close();
     this.sessions.delete(session);
     if ((this.backoff.get(url) ?? 0) > Date.now()) return undefined;
-    // Held from before the handshake, so the session's next request cannot open a second connection meanwhile.
-    const pending = new AbortController();
-    this.opening.set(session, pending);
+    const opening: Slot = { opening: new AbortController() };
+    this.sessions.set(session, opening);
+    let connection: Connection;
     try {
-      const connection = await Connection.open(this.factory, url, headers, key, AbortSignal.any([signal, pending.signal]));
-      connection.busy = true;
-      this.sessions.set(session, connection);
-      return connection;
+      connection = await Connection.open(this.factory, url, headers, key, AbortSignal.any([signal, opening.opening.signal]));
     } catch (error) {
+      if (this.sessions.get(session) === opening) this.sessions.delete(session);
       if (signal.aborted) throw error;
-      if (!pending.signal.aborted) this.backoff.set(url, Date.now() + BACKOFF_MS);
+      if (!opening.opening.signal.aborted) this.backoff.set(url, Date.now() + BACKOFF_MS);
       return undefined;
-    } finally {
-      this.opening.delete(session);
     }
+    // Its slot gone while the handshake ended (the pool closed), or the request stopped: the connection is nobody's.
+    if (this.sessions.get(session) !== opening || signal.aborted) {
+      connection.close();
+      if (this.sessions.get(session) === opening) this.sessions.delete(session);
+      if (signal.aborted) throw abortError();
+      return undefined;
+    }
+    connection.busy = true;
+    this.sessions.set(session, { connection });
+    return connection;
   }
 
   /** The request on `connection` ended: kept for the session's next one, or closed. */
   release(session: string, connection: Connection, keep: boolean): void {
     connection.busy = false;
-    if (!keep || connection.closed || this.closed) {
+    const slot = this.sessions.get(session);
+    const held = slot !== undefined && "connection" in slot && slot.connection === connection;
+    if (!keep || connection.closed || !held) {
       connection.close();
-      if (this.sessions.get(session) === connection) this.sessions.delete(session);
+      if (held) this.sessions.delete(session);
       return;
     }
     connection.rest(() => {
-      if (this.sessions.get(session) === connection) this.sessions.delete(session);
+      const now = this.sessions.get(session);
+      if (now !== undefined && "connection" in now && now.connection === connection) this.sessions.delete(session);
     });
   }
 
   /** Closes every connection, and stops those opening: requests from now on go over HTTP. */
   closeAll(): void {
     this.closed = true;
-    for (const pending of this.opening.values()) pending.abort();
-    for (const connection of this.sessions.values()) connection.close();
+    for (const slot of this.sessions.values()) {
+      if ("opening" in slot) slot.opening.abort();
+      else slot.connection.close();
+    }
     this.sessions.clear();
   }
 }
