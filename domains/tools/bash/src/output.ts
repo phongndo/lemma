@@ -153,3 +153,47 @@ export class OutputAccumulator {
     this.raw = [];
   }
 }
+
+/** Half of what a script keeps of a command's output: its first and its last 512 KiB. */
+const SCRIPT_HALF_BYTES = 512 * 1024;
+
+/**
+ * A command's output as a script reads it (`BashOutput.output`), in bounded memory: whole up to 1 MiB, else its first
+ * and last 512 KiB around a marker. A script filters it itself, so it gets far more than the model's 50KB tail.
+ */
+export class ScriptOutput {
+  private readonly head: Buffer[] = [];
+  private headBytes = 0;
+  private readonly tail: Buffer[] = [];
+  private tailBytes = 0;
+  private total = 0;
+
+  append(data: Buffer): void {
+    this.total += data.length;
+    let rest = data;
+    if (this.headBytes < SCRIPT_HALF_BYTES) {
+      const taken = rest.subarray(0, SCRIPT_HALF_BYTES - this.headBytes);
+      this.head.push(taken);
+      this.headBytes += taken.length;
+      rest = rest.subarray(taken.length);
+    }
+    if (rest.length === 0) return;
+    this.tail.push(rest);
+    this.tailBytes += rest.length;
+    // At least half is kept, so the end is never short of it.
+    while (this.tail.length > 1 && this.tailBytes - this.tail[0]!.length >= SCRIPT_HALF_BYTES) this.tailBytes -= this.tail.shift()!.length;
+  }
+
+  /** The output, and whether its middle was left out. */
+  read(): { readonly output: string; readonly truncated: boolean } {
+    const head = Buffer.concat(this.head);
+    const tail = Buffer.concat(this.tail);
+    if (this.total <= SCRIPT_HALF_BYTES * 2) return { output: Buffer.concat([head, tail]).toString("utf8"), truncated: false };
+    const kept = tail.subarray(tail.length - SCRIPT_HALF_BYTES);
+    const omitted = this.total - head.length - kept.length;
+    return {
+      output: `${head.toString("utf8")}\n…[${omitted} bytes left out; the whole output is in fullOutputPath]…\n${kept.toString("utf8")}`,
+      truncated: true,
+    };
+  }
+}
