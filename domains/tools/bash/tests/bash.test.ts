@@ -130,6 +130,24 @@ describe("bash", () => {
     expect(textOf(line)).toMatch(/^a+b\n\n\[Showing last 50\.0KB of line 1 \(line is 58\.6KB\)\. Full output: /);
   });
 
+  it("gives a script up to a megabyte of output, then its first and last half megabyte, with the exit code", async () => {
+    const small = await call(bashTool, { command: "printf 'one\\ntwo'; exit 4" }, context(dir));
+    expect(small.structured).toMatchObject({ output: "one\ntwo", exitCode: 4, truncated: false });
+    const command = "head -c 700000 /dev/zero | tr '\\0' a; head -c 700000 /dev/zero | tr '\\0' b";
+    const large = await call(bashTool, { command }, context(dir));
+    const { output, truncated, fullOutputPath, exitCode } = large.structured as {
+      output: string;
+      truncated: boolean;
+      fullOutputPath?: string;
+      exitCode: number;
+    };
+    expect([truncated, exitCode]).toEqual([true, 0]);
+    expect(output.startsWith("a".repeat(512 * 1024))).toBe(true);
+    expect(output.endsWith("b".repeat(512 * 1024))).toBe(true);
+    expect(output).toContain(`…[${1_400_000 - 1024 * 1024} bytes left out; the whole output is in fullOutputPath]…`);
+    expect((await fs.stat(fullOutputPath!)).size).toBe(1_400_000);
+  });
+
   it("reports a failed command's exit code after truncated output", async () => {
     const result = await call(bashTool, { command: "seq 1 3000; exit 7" }, context(dir));
     expect(result.isError).toBe(true);

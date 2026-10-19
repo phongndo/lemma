@@ -106,6 +106,8 @@ export const scriptedLlm = (scripts: readonly (Script | ((request: LlmRequest) =
         setLogo: () => Effect.void,
         classifiers: () => Effect.succeed([]),
         classify: unknown,
+        imageModels: () => Effect.succeed([]),
+        generateImages: unknown,
       })),
     ),
   });

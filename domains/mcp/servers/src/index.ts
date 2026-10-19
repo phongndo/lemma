@@ -7,7 +7,7 @@ import { definePlugin, Events, Registries } from "@lemma/core";
 import { Channels, Paths } from "@lemma/contracts";
 import { PromptSections } from "@lemma/agent";
 import { Mcp, MCP_CONTRACT, McpChanged, McpError, McpServers, serveMcp } from "@lemma/mcp";
-import { Tools } from "@lemma/tools";
+import { ToolNamespaces, Tools } from "@lemma/tools";
 import { Servers } from "./servers.ts";
 
 const VERSION = "0.1.0";
@@ -56,6 +56,10 @@ export default definePlugin({
       {
         addTool: async (tool) => {
           const remove = await run(owner.add(Tools, tool));
+          return () => run(remove);
+        },
+        addNamespace: async (namespace) => {
+          const remove = await run(owner.add(ToolNamespaces, namespace));
           return () => run(remove);
         },
         changed: (state) => void run(events.publish(McpChanged, state)).catch(() => {}),

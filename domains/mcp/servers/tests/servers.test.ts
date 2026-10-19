@@ -11,7 +11,7 @@ import type { Plugin } from "@lemma/core";
 import { eventFeed, Paths } from "@lemma/contracts";
 import { Mcp, McpChanged, McpServers } from "@lemma/mcp";
 import type { McpServerConfig, McpState } from "@lemma/mcp";
-import { declaredTools, ToolInvocation, ToolRunner } from "@lemma/tools";
+import { declaredTools, ToolInvocation, ToolNamespaces, ToolRunner } from "@lemma/tools";
 import { textOf } from "@lemma/tools/testing";
 import registry from "@lemma/tools-registry";
 import mcpServers from "../src/index.ts";
@@ -86,6 +86,16 @@ describe("a server in mcp.json", () => {
           const sum = yield* call("mcp__fixture__add_numbers", { a: 2, b: 3 });
           expect(textOf(sum)).toBe('{"sum":5}');
           expect(sum.details).toMatchObject({ server: "fixture", tool: "add-numbers", structuredContent: { sum: 5 } });
+          // A script gets the whole result, typed by the tool's output schema, and finds the server's tools by its namespace.
+          expect(sum.structured).toEqual({ content: [{ type: "text", text: '{"sum":5}' }], structuredContent: { sum: 5 } });
+          expect(tools.find((tool) => tool.spec.name === "mcp__fixture__add_numbers")).toMatchObject({
+            namespace: "mcp__fixture",
+            output: { type: "object", required: ["content"], properties: { structuredContent: { type: "object", properties: { sum: { type: "number" } } } } },
+          });
+          const namespaces = (yield* (yield* Registries).items(ToolNamespaces)).map(({ item }) => item);
+          expect(namespaces).toEqual([
+            { name: "mcp__fixture", description: "Tools for the tests.", instructions: "Tools for the tests.", aliases: ["fixture"] },
+          ]);
           const failed = yield* call("mcp__fixture__fail", {});
           expect([failed.isError, textOf(failed)]).toEqual([true, "it failed"]);
         }),

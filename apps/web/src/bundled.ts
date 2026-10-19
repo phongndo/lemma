@@ -35,7 +35,9 @@ import reload from "@lemma/frame-reload";
 import threadView from "@lemma/threads-view";
 import ask from "@lemma/tools-ask/web";
 import bash from "@lemma/tools-bash/web";
+import codemode from "@lemma/tools-codemode/web";
 import edit from "@lemma/tools-edit/web";
+import html from "@lemma/tools-html/web";
 import read from "@lemma/tools-read/web";
 import search from "@lemma/tools-search-fff/web";
 import write from "@lemma/tools-write/web";
@@ -82,8 +84,10 @@ export const bundled: readonly Plugin[] = [
   write,
   edit,
   bash,
+  codemode,
   search,
   ask,
+  html,
   composer,
   promptCommands,
   fileMentions,

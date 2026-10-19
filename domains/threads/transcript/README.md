@@ -67,6 +67,13 @@ runtime's `Client`, `Router`, and `Slots`.
   and removed lines counted on the call's line), `exitCode` (shown when not 0),
   `truncated`, and `fullOutputPath`. Output shows its first 14 lines until
   asked for more.
+- **What calls show.** A call whose `ToolViews` item has a `display` (a page
+  `html_render` drew) shows it where the reader sees it without opening
+  anything, once the call has a result: after the fold holding the call, above
+  the answer, whether the fold is open or closed; under the call's line in a
+  turn shown unfolded. Each is drawn once, keyed by its call, so a page drawn
+  while the turn ran is not loaded again as the turn goes on and ends. A call
+  it draws nothing for (a script that showed no page) takes no room.
 - **Runs of calls.** In folded work, two or more calls in a row, with only
   thoughts between them, are one `ChatWorkGroupPart` line saying what they did
   from each tool's `ToolViews` `action`; it names two kinds at most and counts

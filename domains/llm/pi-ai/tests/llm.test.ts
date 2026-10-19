@@ -597,6 +597,84 @@ describe("classifiers", () => {
   });
 });
 
+describe("image models", () => {
+  /** A provider with only an image model, keyed by `PAINT_API_KEY`; it records what it was asked. */
+  const painter = () => {
+    const asked: { context: unknown; options: unknown }[] = [];
+    const provider = createProvider({
+      id: "painters",
+      name: "Painters",
+      auth: { apiKey: envApiKeyAuth("Painters API key", ["PAINT_API_KEY"]) },
+      models: [
+        {
+          type: "image",
+          id: "brush",
+          name: "Brush",
+          api: "paint-api",
+          provider: "painters",
+          baseUrl: "https://paint.test",
+          input: ["text", "image"],
+          output: ["image"],
+          cost: { input: 1, output: 30, cacheRead: 0, cacheWrite: 0 },
+        },
+      ],
+      images: {
+        "paint-api": {
+          generateImages: async (model, context, options) => {
+            asked.push({ context, options });
+            return {
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              output: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+              responseId: "r1",
+              stopReason: "stop",
+              timestamp: 1,
+            };
+          },
+        },
+      },
+    });
+    return { asked, provider };
+  };
+
+  it("are listed, available once their provider is configured, and generate through it as Lemma, without pi's fields", async () => {
+    const { asked, provider } = painter();
+    const run = (env: Record<string, string>) =>
+      runWith(
+        setup({ providers: () => [provider], env }).plugins,
+        Effect.flatMap(Llm, (llm) => Effect.all({ all: llm.imageModels(), available: llm.imageModels({ available: true }) })),
+      );
+    const keyless = await run({});
+    expect(keyless.all).toEqual([
+      {
+        ref: "painters/brush",
+        provider: "painters",
+        id: "brush",
+        name: "Brush",
+        api: "paint-api",
+        input: ["text", "image"],
+        output: ["image"],
+        cost: { input: 1, output: 30 },
+      },
+    ]);
+    expect(keyless.available).toEqual([]);
+    expect((await run({ PAINT_API_KEY: "k" })).available.map((model) => model.ref)).toEqual(["painters/brush"]);
+    const context = { input: [{ type: "text" as const, text: "a fox" }] };
+    const result = await runWith(
+      setup({ providers: () => [provider], env: { PAINT_API_KEY: "k" } }).plugins,
+      Effect.flatMap(Llm, (llm) => llm.generateImages("painters/brush", context)),
+    );
+    expect(result).toEqual({ provider: "painters", model: "brush", output: [{ type: "image", data: "aGk=", mimeType: "image/png" }], stopReason: "stop" });
+    expect(asked[0]).toMatchObject({ context, options: { apiKey: "k", headers: { "User-Agent": `lemma (${platform()} ${release()}; ${arch()})` } } });
+    const unknown = await runWith(
+      setup({ providers: () => [provider], env: { PAINT_API_KEY: "k" } }).plugins,
+      Effect.flatMap(Llm, (llm) => Effect.flip(llm.generateImages("painters/nope", context))),
+    );
+    expect(unknown.reason).toBe("UnknownModel");
+  });
+});
+
 describe("model catalogs", () => {
   /** A provider whose list grows on every refresh after the first `unchanged` (the first is at startup). */
   const growing = (unchanged: number): Provider => {

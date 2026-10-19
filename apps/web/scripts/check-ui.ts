@@ -1,5 +1,6 @@
 import { browser, saveArtifacts, server, shard, shards } from "./check-ui/shared.ts";
 import { devtools } from "./check-ui/devtools.ts";
+import { pages } from "./check-ui/pages.ts";
 import { parts } from "./check-ui/parts.ts";
 import { rail } from "./check-ui/rail.ts";
 import { separate } from "./check-ui/separate.ts";
@@ -58,6 +59,10 @@ import { toggling } from "./check-ui/toggling.ts";
  *    goes there, lighting it; the previous and next buttons move a turn each.
  * 11. With no provider set up, the app opens in the chat; the composer's notice
  *    opens Providers, which goes back to the chat once one connects.
+ * 12. A script's calls show as they settle, and the pages tools draw (a
+ *    script's and the model's own) show after the turn's work and above its
+ *    answer, once each, in a sandbox that keeps them out of the app, sized to
+ *    their content, and following the app's look without loading again.
  *
  * Run it in the browser shell: `nix develop .#browser -c pnpm --filter @lemma/web-app ui:check`.
  * `--shard=i/n` runs a share of it, as CI does on two runners: of the lanes the
@@ -79,7 +84,7 @@ import { toggling } from "./check-ui/toggling.ts";
 
 try {
   // In this order, every other lane makes two shares that take about as long.
-  const lanes = [toggling, parts, rail, devtools, separate].filter((_, at) => at % shards === shard - 1);
+  const lanes = [toggling, parts, rail, devtools, separate, pages].filter((_, at) => at % shards === shard - 1);
   const done = await Promise.all(lanes.map((lane) => lane()));
   console.log(`UI check${shards > 1 ? ` (${shard}/${shards})` : ""}: ${done.join("; ")}.`);
 } catch (error) {

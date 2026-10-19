@@ -71,6 +71,28 @@ const MOCK_INSPECTORS = [
   },
 ];
 
+/**
+ * The prompt that draws pages: a script (codemode) printing its calls as they settle and drawing a page from inside,
+ * then a page the model draws itself (html_render), as the chat shows what tools draw, outside the fold.
+ */
+export const PAGE_PROMPT = "Draw a page";
+/** A page's script reports what it can reach and the theme it has, each time the theme changes, for the UI check. */
+const pageProbe = `<script>
+const report = () => {
+  let reach;
+  try { reach = String(parent.document.title); } catch (error) { reach = error.name; }
+  parent.postMessage({ type: "check-page", title: document.title, reach, bg: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(), loaded: performance.timeOrigin }, "*");
+};
+new MutationObserver(report).observe(document.getElementById("lemma-theme"), { childList: true, characterData: true, subtree: true });
+report();
+</script>`;
+const SCRIPT_PAGE = `<!doctype html><html><head><title>Commits</title></head><body><h3 style="margin:0 0 8px">Commits this week</h3><div style="display:flex;gap:6px;align-items:end;height:80px">${[
+  40, 72, 28, 64, 50,
+]
+  .map((height, index) => `<div style="flex:1;height:${height}px;background:var(--chart-${index + 1});border-radius:4px"></div>`)
+  .join("")}</div>${pageProbe}</body></html>`;
+const MODEL_PAGE = `<!doctype html><html><head><title>Summary</title></head><body><h3 style="margin:0 0 8px">Summary</h3><div style="height:120px;padding:16px;box-sizing:border-box;background:var(--bg-raised);border-radius:var(--radius)">Three packages, one plugin each.</div>${pageProbe}</body></html>`;
+
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 let idSeq = 0;
 const id = (prefix: string) => `${prefix}${(++idSeq).toString(36)}`;
@@ -1074,6 +1096,145 @@ export const createMockHost = (): Host => {
         void runTurn(sessionId, next.prompt.content, next.prompt.options, next.prompt.requestId).then(next.done, next.fail);
       }
     };
+    if (text === PAGE_PROMPT) {
+      // A script: its calls print as they settle, and the page it draws is kept in its result for the chat to show.
+      const scriptStep = id("p");
+      const scriptAt = Date.now();
+      const script = {
+        type: "toolCall" as const,
+        id: id("c"),
+        name: "codemode",
+        arguments: {
+          code: '// @options: {"timeout_ms": 60000}\nconst log = await tools.bash({ command: "git log --oneline -n 5" });\nawait tools.html_render({ title: "Commits", html: page(log.output) });\nreturn "drawn";',
+        },
+      };
+      const scripted = assistant([{ type: "text", text: "I'll draw it with a script." }, script], usage(3000, 120, 8000), "toolUse", undefined, by);
+      const scriptSpan = stepSpan(scriptStep, 1);
+      if (!(await asked(scriptSpan, scriptStep, scripted))) return end("cancelled");
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: scriptStep,
+        message: scripted,
+        timing: { startedAt: scriptAt, firstTokenAt: scriptAt + 200, endedAt: Date.now() },
+      });
+      const running = toolSpan(scriptSpan, scriptStep, script);
+      for (const line of ['✓ bash 12ms {"command":"git log --oneline -n 5"}\n', '✓ html_render 1ms {"title":"Commits"}\n']) {
+        await sleep(400);
+        const printed = turn.output.get(script.id) ?? "";
+        turn.output.set(script.id, printed + line);
+        activity.publish({ type: "tool-output", sessionId, toolCallId: script.id, chunk: line, offset: printed.length });
+      }
+      await sleep(400);
+      if (cancelled.has(sessionId)) return end("cancelled");
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: scriptStep,
+        details: {
+          calls: [
+            { name: "bash", args: '{"command":"git log --oneline -n 5"}', status: "ok", durationMs: 12 },
+            { name: "html_render", args: '{"title":"Commits"}', status: "ok", durationMs: 1 },
+          ],
+          displays: [
+            {
+              name: "html_render",
+              title: "Commits",
+              content: [{ type: "text", text: 'Shown to the person as "Commits", above your reply.' }],
+              details: { title: "Commits", html: SCRIPT_PAGE },
+            },
+          ],
+        },
+        timing: { startedAt: Date.now() - 1200, endedAt: Date.now() },
+        message: {
+          role: "toolResult",
+          toolCallId: script.id,
+          toolName: "codemode",
+          isError: false,
+          timestamp: Date.now(),
+          content: [
+            { type: "text", text: "Script completed\nWall time 1.2 seconds\nOutput:\n" },
+            { type: "text", text: "drawn" },
+          ],
+        },
+      });
+      running.end();
+      scriptSpan.end();
+      append(sessionId, { type: "step-end", turnId, stepId: scriptStep, decision: { result: "continue", why: "the model asked for tools" } });
+      // A page the model draws itself, and a script beside it that draws nothing, whose call shows nothing outside the fold.
+      const drawStep = id("p");
+      const drawAt = Date.now();
+      const draw = { type: "toolCall" as const, id: id("c"), name: "html_render", arguments: { title: "Summary", html: MODEL_PAGE } };
+      const quiet = { type: "toolCall" as const, id: id("c"), name: "codemode", arguments: { code: "return 2 + 2;" } };
+      const drawing = assistant([draw, quiet], usage(3100, 400, 8000), "toolUse", undefined, by);
+      const drawSpan = stepSpan(drawStep, 2);
+      if (!(await asked(drawSpan, drawStep, drawing))) return end("cancelled");
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: drawStep,
+        message: drawing,
+        timing: { startedAt: drawAt, firstTokenAt: drawAt + 200, endedAt: Date.now() },
+      });
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: drawStep,
+        details: { title: "Summary", html: MODEL_PAGE },
+        timing: { startedAt: Date.now() - 5, endedAt: Date.now() },
+        message: {
+          role: "toolResult",
+          toolCallId: draw.id,
+          toolName: "html_render",
+          isError: false,
+          timestamp: Date.now(),
+          content: [{ type: "text", text: 'Shown to the person as "Summary", above your reply.' }],
+        },
+      });
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: drawStep,
+        details: { calls: [] },
+        timing: { startedAt: Date.now() - 5, endedAt: Date.now() },
+        message: {
+          role: "toolResult",
+          toolCallId: quiet.id,
+          toolName: "codemode",
+          isError: false,
+          timestamp: Date.now(),
+          content: [
+            { type: "text", text: "Script completed\nWall time 0.0 seconds\nOutput:\n" },
+            { type: "text", text: "4" },
+          ],
+        },
+      });
+      drawSpan.end();
+      append(sessionId, { type: "step-end", turnId, stepId: drawStep, decision: { result: "continue", why: "the model asked for tools" } });
+      const answerStep = id("p");
+      const answerAt = Date.now();
+      const answered = assistant(
+        [{ type: "text", text: "Both pages are above: the week's commits, and a summary." }],
+        usage(3200, 30, 8000),
+        "stop",
+        undefined,
+        by,
+      );
+      const answerSpan = stepSpan(answerStep, 3);
+      if (!(await asked(answerSpan, answerStep, answered))) return end("cancelled");
+      append(sessionId, {
+        type: "message",
+        turnId,
+        stepId: answerStep,
+        message: answered,
+        timing: { startedAt: answerAt, firstTokenAt: answerAt + 150, endedAt: Date.now() },
+      });
+      answerSpan.end();
+      append(sessionId, { type: "step-end", turnId, stepId: answerStep, decision: { result: "stop", why: "the model stopped (stop)" } });
+      end("done");
+      if (sessions.get(sessionId)!.info.title === undefined) append(sessionId, { type: "title", title: text });
+      return;
+    }
     const step1 = id("p");
     const startedAt = Date.now();
     const call = { type: "toolCall" as const, id: id("c"), name: "bash", arguments: { command: "ls -la packages" } };

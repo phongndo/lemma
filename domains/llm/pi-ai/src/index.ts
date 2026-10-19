@@ -22,7 +22,18 @@ import {
 import type { NoticePayload } from "@lemma/contracts";
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
 import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
-import { makeEventMapper, reasoningFor, toClassifierContext, toClassifierInfo, toClassifierResult, toContext, toModelInfo } from "./convert.ts";
+import {
+  makeEventMapper,
+  reasoningFor,
+  toClassifierContext,
+  toClassifierInfo,
+  toClassifierResult,
+  toContext,
+  toImageModelInfo,
+  toImagesContext,
+  toImagesResult,
+  toModelInfo,
+} from "./convert.ts";
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
@@ -487,6 +498,28 @@ export function makeLlmPlugin(options: Options = {}) {
               models.classify(model, toClassifierContext(context), { signal, ...(headers === undefined ? {} : { headers }) }),
             );
             return toClassifierResult(result);
+          }),
+
+        imageModels: (query) =>
+          query?.available === true
+            ? Effect.forEach(
+                models.getProviders(),
+                (provider) => Effect.tryPromise((signal) => models.getAvailableOfType("image", provider.id, { signal })).pipe(Effect.orElseSucceed(() => [])),
+                { concurrency: "unbounded" },
+              ).pipe(Effect.map((lists) => lists.flat().map(toImageModelInfo)))
+            : Effect.sync(() => models.getModelsOfType("image").map(toImageModelInfo)),
+
+        generateImages: (ref, context) =>
+          Effect.gen(function* () {
+            const parsed = parseModelRef(ref);
+            const model = parsed === undefined ? undefined : models.getModelOfType("image", parsed.provider, parsed.model);
+            if (model === undefined) return yield* Effect.fail(unknownModel(ref));
+            const headers = identityHeaders(model);
+            // Like classify: a provider's failure, or missing auth, is the result's error.
+            const result = yield* Effect.promise((signal) =>
+              models.generateImages(model, toImagesContext(context), { signal, ...(headers === undefined ? {} : { headers }) }),
+            );
+            return toImagesResult(result);
           }),
 
         login: (providerId: string, type: AuthType) =>

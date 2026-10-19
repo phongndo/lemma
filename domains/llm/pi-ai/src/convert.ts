@@ -6,6 +6,9 @@ import type {
   ClassifierContext,
   ClassifierInfo,
   ClassifierResult,
+  ImageModelInfo,
+  ImagesContext,
+  ImagesResult,
   LlmFailure,
   LlmRequest,
   ModelInfo,
@@ -52,6 +55,19 @@ export function toClassifierInfo(model: Pi.ClassifierModel<Pi.ClassifierApi>): C
   };
 }
 
+export function toImageModelInfo(model: Pi.ImageModel<Pi.ImageApi>): ImageModelInfo {
+  return {
+    ref: `${model.provider}/${model.id}`,
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    api: model.api,
+    input: [...model.input],
+    output: [...model.output],
+    cost: { input: model.cost.input, output: model.cost.output },
+  };
+}
+
 const toUsage = (usage: Pi.Usage): Usage => ({
   input: usage.input,
   output: usage.output,
@@ -64,6 +80,20 @@ const toUsage = (usage: Pi.Usage): Usage => ({
 
 /** The contract's context as pi-ai's: `state` is JSON, as a script or tool gave it. */
 export const toClassifierContext = (context: ClassifierContext): Pi.ClassifierContext => context as AsPi<ClassifierContext> as Pi.ClassifierContext;
+
+export const toImagesContext = (context: ImagesContext): Pi.ImagesContext => context as AsPi<ImagesContext> as Pi.ImagesContext;
+
+/** Rebuilt field by field, so pi-only fields (`api`, `responseId`, `timestamp`) stay out. */
+export const toImagesResult = (result: Pi.AssistantImages): ImagesResult => ({
+  provider: result.provider,
+  model: result.model,
+  output: result.output.map((block) =>
+    block.type === "text" ? { type: "text" as const, text: block.text } : { type: "image" as const, data: block.data, mimeType: block.mimeType },
+  ),
+  ...(result.usage === undefined ? {} : { usage: toUsage(result.usage) }),
+  stopReason: result.stopReason,
+  ...(result.errorMessage === undefined ? {} : { errorMessage: result.errorMessage }),
+});
 
 /** Rebuilt field by field, so pi-only fields (`api`, `timestamp`) stay out. */
 export const toClassifierResult = (result: Pi.ClassifierResult): ClassifierResult => ({

@@ -79,6 +79,34 @@ export const inputOf = (schema: unknown) => {
   return Schema.Unknown.check(Schema.makeFilter(() => true, { toJsonSchema: () => parameters }));
 };
 
+/**
+ * What a script's call of a tool resolves to: the server's whole `CallToolResult` (`content` as the server sent it,
+ * every block, before the model's output is bounded), its `structuredContent` typed by the tool's `outputSchema` when
+ * it declares one.
+ */
+export const outputOf = (outputSchema: unknown) => {
+  const result = {
+    type: "object",
+    properties: {
+      content: { type: "array", items: { type: "object" }, description: "Content blocks: text, image (`data` base64, `mimeType`), resource, …" },
+      structuredContent: isObject(outputSchema) ? inputSchema(outputSchema) : {},
+      isError: { type: "boolean" },
+    },
+    required: ["content"],
+  };
+  return Schema.Unknown.check(Schema.makeFilter(() => true, { toJsonSchema: () => result }));
+};
+
+/** The `CallToolResult` a script's call resolves to (`outputOf`). */
+export const structuredOf = (result: CallResult): Json => ({
+  content: result.content ?? [],
+  ...(result.structuredContent === undefined ? {} : { structuredContent: result.structuredContent }),
+  ...(result.isError === undefined ? {} : { isError: result.isError }),
+});
+
+/** The namespace of a server's tools, as their names begin: `mcp__<server>`, every other character `_`. */
+export const namespaceOf = (server: string): string => `mcp__${server.replace(unsafe, "_")}`;
+
 /** Characters a name keeps: providers accept `[A-Za-z0-9_-]{1,64}`, and `-` would not survive as a script's identifier. */
 const unsafe = /[^A-Za-z0-9_]/g;
 const MAX_NAME = 64;

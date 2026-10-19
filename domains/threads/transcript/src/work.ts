@@ -125,3 +125,18 @@ export const workEntries = (items: readonly Item[], actionOf: ActionOf, least = 
   close();
   return entries;
 };
+
+/** A tool call in a turn's work. */
+export type ToolBlock = Extract<Block, { kind: "tool" }>;
+
+/**
+ * The calls among a fold's `items` that show the reader something outside it (their view's `display`, which `shows`
+ * tells), in order: those with a result, as a display is drawn for a call that has one. A failed attempt's calls never
+ * ran, so they show nothing.
+ */
+export const displayedCalls = (items: readonly Item[], shows: (name: string) => boolean): ToolBlock[] =>
+  items.flatMap((item) =>
+    item.kind === "assistant"
+      ? item.blocks.filter((block): block is ToolBlock => block.kind === "tool" && block.result !== undefined && shows(block.call.name))
+      : [],
+  );

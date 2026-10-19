@@ -101,6 +101,38 @@ describe("registry", () => {
     });
   });
 
+  it("lists what a script's call resolves to, as JSON Schema of any root, with the tool's namespace and display", async () => {
+    const shot: Tool<any> = {
+      name: "shot",
+      description: "d",
+      input: Schema.Struct({}),
+      output: Schema.Union([Schema.String, Schema.Struct({ type: Schema.Literal("image"), data: Schema.String })]),
+      namespace: "camera",
+      display: true,
+      execute: async () => ok(""),
+    };
+    const listed = await run(
+      [contributor("mine", [shot, echo])],
+      Effect.flatMap(ToolRunner, (registry) => registry.list),
+    );
+    expect(listed.find((tool) => tool.spec.name === "echo")).not.toHaveProperty("output");
+    expect(listed.find((tool) => tool.spec.name === "shot")).toMatchObject({
+      namespace: "camera",
+      display: true,
+      output: {
+        anyOf: [
+          { type: "string" },
+          {
+            type: "object",
+            required: ["type", "data"],
+            properties: { type: { type: "string", enum: ["image"] }, data: { type: "string" } },
+            additionalProperties: false,
+          },
+        ],
+      },
+    });
+  });
+
   it("gives non-object inputs an object root", () => {
     expect(toolParameters(Schema.Unknown)).toEqual({ type: "object", properties: {} });
   });

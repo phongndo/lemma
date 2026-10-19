@@ -3,7 +3,7 @@ import { definePlugin } from "@lemma/core";
 import { Tools } from "@lemma/tools";
 import { DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
 
-export { bashTool, BashInput, DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
+export { bashTool, BashInput, BashOutput, DEFAULT_BASH_TIMEOUT, makeBashTool } from "./bash.ts";
 export type { BashDetails } from "./bash.ts";
 
 const BashConfig = Schema.Struct({
