@@ -197,6 +197,11 @@ export const EventData = Schema.Union([
     turnId: Schema.optional(Schema.String),
     /** What writing the summary cost. */
     usage: Schema.optional(Usage),
+    /**
+     * The files the history it replaces read and changed (the previous compaction's lists, with the history after it),
+     * shown with the summary, so the model knows what to read again rather than trust a summary of it.
+     */
+    files: Schema.optional(Schema.Struct({ read: Schema.Array(Schema.String), modified: Schema.Array(Schema.String) })),
   }),
   /**
    * What changed in the system prompt since the request that declared it (`restart`), told to the model as a message

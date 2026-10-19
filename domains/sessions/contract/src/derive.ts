@@ -87,9 +87,15 @@ export function promptUpdateText(data: Extract<EventData, { readonly type: "prom
   return lines.join("\n");
 }
 
-/** A `compaction` event as the model reads it, in place of the history it replaces: its summary. */
+/** A `compaction` event as the model reads it, in place of the history it replaces: its summary, and the files it names. */
 export function summaryText(data: Extract<EventData, { readonly type: "compaction" }>): string {
-  return `<summary>\nThe conversation so far, summarized:\n\n${data.summary}\n</summary>`;
+  const files = data.files;
+  const listed = (label: string, paths: readonly string[]) => (paths.length === 0 ? [] : [`${label}:`, ...paths.map((path) => `- ${path}`)]);
+  const named =
+    files === undefined || files.read.length + files.modified.length === 0
+      ? ""
+      : `\n\n<files>\n${[...listed("Changed", files.modified), ...listed("Read", files.read)].join("\n")}\nRead a file again before relying on what the summary says of it.\n</files>`;
+  return `<summary>\nThe conversation so far, summarized:\n\n${data.summary}${named}\n</summary>`;
 }
 
 /**

@@ -11,6 +11,7 @@ import {
   promptUpdateText,
   rebuildRequest,
   requestState,
+  summaryText,
 } from "../src/derive.ts";
 import type { EventData, SessionEvent } from "../src/sessions.ts";
 import { contentText, emptyUsage } from "@lemma/llm";
@@ -469,5 +470,24 @@ describe("thinkingFrom", () => {
     const rebuilt = rebuildRequest(events, "e7")!;
     expect(texts(rebuilt.messages)).toEqual([expect.stringContaining("S"), "two", "r2"]);
     expect(rebuilt.thinkingFrom).toBe(3);
+  });
+});
+
+describe("summaryText", () => {
+  it("names the files the replaced history read and changed, after the summary", () => {
+    const text = summaryText({
+      type: "compaction",
+      summary: "S",
+      firstKeptId: "e1",
+      tokensBefore: 1,
+      source: "c",
+      files: { read: ["a.ts"], modified: ["b.ts"] },
+    });
+    expect(text).toBe(
+      "<summary>\nThe conversation so far, summarized:\n\nS\n\n<files>\nChanged:\n- b.ts\nRead:\n- a.ts\nRead a file again before relying on what the summary says of it.\n</files>\n</summary>",
+    );
+    expect(summaryText({ type: "compaction", summary: "S", firstKeptId: "e1", tokensBefore: 1, source: "c" })).toBe(
+      "<summary>\nThe conversation so far, summarized:\n\nS\n</summary>",
+    );
   });
 });

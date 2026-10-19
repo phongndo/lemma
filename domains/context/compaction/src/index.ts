@@ -4,14 +4,26 @@ import { inChainOrder, Notice } from "@lemma/contracts";
 import { AgentInputHook, AgentRequestHook } from "@lemma/agent";
 import { CompactionError, CompactionHook, CONTEXT_CONTRACT } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
-import { Llm, LlmRequest } from "@lemma/llm";
-import { modelEntries, modelView, SessionRemoved } from "@lemma/sessions";
+import { addUsage, Llm, LlmRequest } from "@lemma/llm";
+import { deriveHistory, modelEntries, modelView, requestState, SessionRemoved } from "@lemma/sessions";
 import { declaredTools } from "@lemma/tools";
 import type { PromptContent, RequestDraft } from "@lemma/agent";
-import type { ModelInfo, StreamEvent } from "@lemma/llm";
+import type { AssistantMessage, ModelInfo, StreamEvent, Usage } from "@lemma/llm";
 import { definePlugin, Events, Hooks } from "@lemma/core";
 import type { HandlerStep } from "@lemma/core";
-import { chooseCut, estimateTokens, SUMMARY_PROMPT, summaryAsk, transcript, validCut, viewTokens } from "./compact.ts";
+import {
+  answersAsk,
+  chooseCut,
+  estimateTokens,
+  filesOf,
+  forkAsk,
+  REVIEW_PROMPT,
+  SUMMARY_PROMPT,
+  summaryAsk,
+  transcript,
+  validCut,
+  viewTokens,
+} from "./compact.ts";
 import { Config } from "./config.ts";
 
 export { chooseCut, estimateTokens, measuredTokens, transcript } from "./compact.ts";
@@ -24,6 +36,8 @@ class SummaryFailed extends Data.TaggedError("SummaryFailed")<{ readonly message
  */
 const PROMPT_TOKENS = 200;
 const DENSE_CHARS_PER_TOKEN = 1.5;
+/** Compactions a turn makes, at most, before the threshold no longer asks for one: past that, each refills the window. */
+const PER_TURN = 3;
 
 /**
  * What a prompt asks of compaction: undefined unless it is `/compact`, alone or with what the summary should focus on
@@ -66,44 +80,118 @@ export default definePlugin({
     const hooks = yield* Hooks;
     /** Per session, the turn in which writing a summary failed: not tried again until the next turn. */
     const failedIn = new Map<string, string>();
+    /** Per session, the turn told it summarized `PER_TURN` times and would not again. */
+    const thrashedIn = new Map<string, string>();
     /** Per session, a compaction the user asked for (`/compact`), made before the session's next model call. */
     const requested = new Map<string, { readonly instructions?: string }>();
+
+    /** A model call's answer, settled: its message, or why it gave none. */
+    const settle = (request: LlmRequest) =>
+      llm.stream(request).pipe(
+        Stream.runFold(
+          (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
+          (last, event) => (event.type === "done" || event.type === "error" ? event : last),
+        ),
+        Effect.flatMap((settled) =>
+          settled?.type === "done"
+            ? Effect.succeed(settled.message)
+            : Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" })),
+        ),
+      );
+
+    /**
+     * The text of an answer that ended as one does: undefined for one cut off at its limit, which would lose the rest of
+     * what it replaces, or one that called a tool (a fork offers the turn's tools), whose text only leads up to the call.
+     */
+    const answerText = (message: AssistantMessage): string | undefined =>
+      message.stopReason !== "stop"
+        ? undefined
+        : message.content
+            .flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join("")
+            .trim();
 
     const summarize = (writer: ModelInfo, ask: string, output: number, sessionId: string) =>
       Clock.currentTimeMillis.pipe(
         Effect.flatMap((now) =>
-          llm
-            .stream(
-              new LlmRequest({
-                model: writer.ref,
-                system: SUMMARY_PROMPT,
-                messages: [{ role: "user", content: [{ type: "text", text: ask }], timestamp: now }],
-                maxTokens: output,
-                sessionId,
-              }),
-            )
-            .pipe(
-              Stream.runFold(
-                (): Extract<StreamEvent, { type: "done" | "error" }> | undefined => undefined,
-                (last, event) => (event.type === "done" || event.type === "error" ? event : last),
-              ),
-              Effect.flatMap((settled) => {
-                if (settled?.type !== "done") return Effect.fail(new SummaryFailed({ message: settled?.message.errorMessage ?? "the model gave no summary" }));
-                // A summary cut off at its length limit would lose the rest of what it replaces.
-                if (settled.message.stopReason === "length") return Effect.fail(new SummaryFailed({ message: `the summary ran past ${output} tokens` }));
-                const summary = settled.message.content
-                  .flatMap((part) => (part.type === "text" ? [part.text] : []))
-                  .join("")
-                  .trim();
-                return summary === ""
-                  ? Effect.fail(new SummaryFailed({ message: "the model gave an empty summary" }))
-                  : Effect.succeed({ summary, usage: settled.message.usage });
-              }),
-            ),
+          settle(
+            new LlmRequest({
+              model: writer.ref,
+              system: SUMMARY_PROMPT,
+              messages: [{ role: "user", content: [{ type: "text", text: ask }], timestamp: now }],
+              maxTokens: output,
+              sessionId,
+            }),
+          ),
         ),
+        Effect.flatMap((message) => {
+          const summary = answerText(message);
+          if (summary === undefined) {
+            const why = message.stopReason === "length" ? `ran past ${output} tokens` : `ended as ${message.stopReason}`;
+            return Effect.fail(new SummaryFailed({ message: `the summary ${why}` }));
+          }
+          return summary === ""
+            ? Effect.fail(new SummaryFailed({ message: "the model gave an empty summary" }))
+            : Effect.succeed({ summary, usage: message.usage });
+        }),
       );
 
-    /** `CompactionHook`'s terminal: a model (the config's, else the request's) summarizes what comes before the cut. */
+    /**
+     * The turn's last request with `ask` after it, as its model would be asked it next: the same system prompt, tools,
+     * thinking, and history, so the provider's cache of that request serves all but what follows it. Undefined when the
+     * branch has no request for `writer`, or the fork with its answer would not fit the window.
+     */
+    const forkOf = (asked: CompactionRequest, writer: ModelInfo, ask: string, output: number) =>
+      Effect.gen(function* () {
+        const state = requestState(asked.branch);
+        if (asked.reason === "overflow" || state.model !== writer.ref || state.system === undefined) return undefined;
+        if (asked.tokens + Math.ceil(ask.length / 4) + output > writer.contextWindow) return undefined;
+        const history = deriveHistory(asked.branch);
+        return new LlmRequest({
+          model: writer.ref,
+          system: state.system,
+          messages: [...history.messages, { role: "user", content: [{ type: "text", text: ask }], timestamp: yield* Clock.currentTimeMillis }],
+          ...(history.thinkingFrom === undefined ? {} : { thinkingFrom: history.thinkingFrom }),
+          ...(state.tools === undefined || state.tools.length === 0 ? {} : { tools: state.tools }),
+          ...(state.thinking === undefined ? {} : { thinking: state.thinking }),
+          maxTokens: output,
+          sessionId: asked.sessionId,
+        });
+      });
+
+    /**
+     * Asks a model that sees only `summary` what it leaves out, and the turn's own (through a fork of its last request)
+     * to answer: the answers, to go after the summary, and what the calls made cost. No answers when there is nothing
+     * to ask, or either answer did not end as one does; fails only when the first call does.
+     */
+    const review = (asked: CompactionRequest, writer: ModelInfo, summary: string, output: number) =>
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        const reader = yield* settle(
+          new LlmRequest({
+            model: writer.ref,
+            system: REVIEW_PROMPT,
+            messages: [{ role: "user", content: [{ type: "text", text: summary }], timestamp: now }],
+            maxTokens: 1_024,
+            sessionId: asked.sessionId,
+          }),
+        );
+        const questions = answerText(reader);
+        if (questions === undefined || questions === "" || /^none\.?$/i.test(questions)) return { usage: reader.usage };
+        const fork = yield* forkOf(asked, writer, answersAsk(questions), output);
+        const answering = fork === undefined ? undefined : yield* Effect.option(settle(fork));
+        if (answering === undefined || answering._tag === "None") return { usage: reader.usage };
+        const answers = answerText(answering.value);
+        const usage = addUsage(reader.usage, answering.value.usage);
+        return answers === undefined || answers === "" ? { usage } : { usage, answers: `## Questions a reader asked, answered\n\n${questions}\n\n${answers}` };
+      });
+
+    /**
+     * `CompactionHook`'s terminal: a model (the config's, else the request's) summarizes what comes before the cut. The
+     * request's own model writes it in a fork of its last request, which its provider's cache serves; failing that (an
+     * overflow, another model, a failed call, or an answer cut off, calling a tool, or with no text), a model is sent the
+     * history as a transcript to summarize. A review that fails leaves the summary as it was written.
+     */
     const write = (asked: CompactionRequest): Effect.Effect<CompactionResult, CompactionError> =>
       Effect.gen(function* () {
         const kept = asked.branch[asked.firstKept];
@@ -118,12 +206,37 @@ export default definePlugin({
         const writer = yield* llm.model(config.model ?? asked.model);
         // What is sent fits the writer's window with its answer, even for text as dense as 1.5 characters a token.
         const output = Math.min(8_192, writer.maxTokens, Math.floor(writer.contextWindow / 4));
-        // What is sent besides the transcript, the system prompt and the ask around it, comes out of its room.
-        const around = SUMMARY_PROMPT.length + summaryAsk("", asked.previous !== undefined, asked.instructions).length;
-        const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN) - around;
-        const text = transcript(older, asked.previous, budget);
-        const written = yield* summarize(writer, summaryAsk(text, asked.previous !== undefined, asked.instructions), output, asked.sessionId);
-        return { kind: "summary", summary: written.summary, firstKeptId: kept.id, usage: written.usage } as const;
+        const fork = yield* forkOf(asked, writer, forkAsk(asked.previous !== undefined, asked.instructions), output);
+        const forked =
+          fork === undefined
+            ? undefined
+            : yield* settle(fork).pipe(
+                Effect.catch((error) =>
+                  Effect.as(Effect.logDebug(`compaction: the fork gave no summary (${error.message}); summarizing a transcript instead`), undefined),
+                ),
+              );
+        const forkedText = forked === undefined ? undefined : answerText(forked);
+        const written =
+          forked !== undefined && forkedText !== undefined && forkedText !== ""
+            ? { summary: forkedText, usage: forked.usage }
+            : yield* Effect.gen(function* () {
+                // What is sent besides the transcript, the system prompt and the ask around it, comes out of its room.
+                const around = SUMMARY_PROMPT.length + summaryAsk("", asked.previous !== undefined, asked.instructions).length;
+                const budget = Math.floor((writer.contextWindow - output - PROMPT_TOKENS) * DENSE_CHARS_PER_TOKEN) - around;
+                const text = transcript(older, asked.previous, budget);
+                const serial = yield* summarize(writer, summaryAsk(text, asked.previous !== undefined, asked.instructions), output, asked.sessionId);
+                return { summary: serial.summary, usage: forked === undefined ? serial.usage : addUsage(forked.usage, serial.usage) };
+              });
+        const reviewed = config.review
+          ? yield* review(asked, writer, written.summary, output).pipe(
+              Effect.catch((error) =>
+                Effect.as(Effect.logWarning(`compaction: the summary's review failed (${error.message}); the summary is kept without it`), undefined),
+              ),
+            )
+          : undefined;
+        const usage: Usage = reviewed === undefined ? written.usage : addUsage(written.usage, reviewed.usage);
+        const summary = reviewed?.answers === undefined ? written.summary : `${written.summary}\n\n${reviewed.answers}`;
+        return { kind: "summary", summary, firstKeptId: kept.id, usage } as const;
       }).pipe(Effect.mapError((error) => new CompactionError({ message: error.message, cause: error })));
 
     const compact = (draft: RequestDraft) =>
@@ -136,6 +249,19 @@ export default definePlugin({
         const asked = draft.overflow === true ? undefined : requested.get(draft.sessionId);
         const reason = draft.overflow === true ? "overflow" : asked !== undefined ? "requested" : "threshold";
         if (reason === "threshold" && tokens < config.at * model.contextWindow) return;
+        // A turn that keeps filling the window again (one output too large for it) is not summarized over and over.
+        const made = branch.filter((event) => event.data.type === "compaction" && event.data.turnId === draft.turnId).length;
+        if (reason === "threshold" && made >= PER_TURN) {
+          if (thrashedIn.get(draft.sessionId) !== draft.turnId) {
+            thrashedIn.set(draft.sessionId, draft.turnId);
+            yield* events.publish(Notice, {
+              level: "warning",
+              source: owner.id,
+              message: `Summarized ${PER_TURN} times this turn and still near the context limit: not summarizing again until the next turn`,
+            });
+          }
+          return;
+        }
         // Asked for once, from here: a request that fails is not made again, nor one that finds nothing to summarize.
         if (asked !== undefined) requested.delete(draft.sessionId);
         const keep = Math.min(config.keepRecent, Math.floor(model.contextWindow * 0.3));
@@ -158,12 +284,16 @@ export default definePlugin({
           ...(asked?.instructions === undefined ? {} : { instructions: asked.instructions }),
         };
         const steps: HandlerStep<CompactionRequest, CompactionResult>[] = [];
-        const made = yield* hooks.invoke(CompactionHook, request, write, { onStep: (step) => void steps.push(step) });
-        if (made.kind === "skip") return yield* told(`The earlier conversation was not summarized: ${made.reason}`);
+        const result = yield* hooks.invoke(CompactionHook, request, write, { onStep: (step) => void steps.push(step) });
+        if (result.kind === "skip") return yield* told(`The earlier conversation was not summarized: ${result.reason}`);
         // What a handler wrote keeps the history from a place it may be kept from, as the terminal's does.
-        const keptAt = branch.findIndex((event) => event.id === made.firstKeptId);
+        const keptAt = branch.findIndex((event) => event.id === result.firstKeptId);
         if (!validCut(branch, keptAt))
-          return yield* new CompactionError({ message: `the summary keeps the history from ${made.firstKeptId}, which it cannot be kept from` });
+          return yield* new CompactionError({ message: `the summary keeps the history from ${result.firstKeptId}, which it cannot be kept from` });
+        // The files the replaced history read and changed, whoever wrote the summary, after the previous summary's.
+        const { start } = modelView(branch);
+        const replaced = branch.slice(start, keptAt).flatMap((event) => (event.data.type === "message" ? [event.data.message] : []));
+        const files = filesOf(replaced, previous?.type === "compaction" ? previous.files : undefined);
         // Written by the outermost handler whose summary is not the one the rest of the chain handed it, or by this
         // plugin's model (the terminal).
         const writtenBy =
@@ -172,12 +302,13 @@ export default definePlugin({
           )?.pluginId ?? owner.id;
         yield* draft.append({
           type: "compaction",
-          summary: made.summary,
-          firstKeptId: made.firstKeptId,
+          summary: result.summary,
+          firstKeptId: result.firstKeptId,
           tokensBefore: tokens,
           source: writtenBy,
           turnId: draft.turnId,
-          ...(made.usage === undefined ? {} : { usage: made.usage }),
+          ...(result.usage === undefined ? {} : { usage: result.usage }),
+          ...(files.read.length + files.modified.length === 0 ? {} : { files: { read: [...files.read], modified: [...files.modified] } }),
         });
         yield* events.publish(Notice, {
           level: "info",
@@ -199,6 +330,7 @@ export default definePlugin({
       Effect.sync(() => {
         requested.delete(sessionId);
         failedIn.delete(sessionId);
+        thrashedIn.delete(sessionId);
       }),
     );
 
