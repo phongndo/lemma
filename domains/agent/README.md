@@ -8,6 +8,8 @@ The agent: the turn loop that asks a model, runs the tools it calls, and logs ea
 | [`agent.profiles`](profiles/README.md) | host + web | Profiles: a thread's prompt, tools, sections, and model, chosen per thread (`TurnOptions.plugins`) |
 | [`agent.cli`](cli/README.md)           | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                              |
 
+A plugin replacing `agent.loop` runs `agentConformance` from `@lemma/agent/testing`: what clients and plugins rely on of an `Agent` (prompts placed once, requests that rebuild from the log, tool calls run once and answered, the busy rules, cancel, withdraw, and the hooks' say), against the contract alone.
+
 ## Extending it
 
 What the contract offers in each of the [five shapes](../../docs/plugins.md#the-five-shapes):

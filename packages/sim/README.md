@@ -70,6 +70,8 @@ draw that part's faults often and high, with the actions that make them matter
 on, as a bug often needs one part failing a lot rather than every part a
 little. Odd seeds shuffle fibers' work (`shuffle`).
 
+A `World` runs `agent.loop` unless given another plugin providing `Agent` (`agent`, an `AgentFactory` given the run's disk, ids, and platform): a replacement runs the same workload, faults, and checks.
+
 - **Safety phase.** Each tick takes one action, then lets simulated time pass.
   Clients call the hosts' channels as the transport does (`callServed`, so a
   reload repeats a `repeatable` call): prompts (follow-up, steer, reject),

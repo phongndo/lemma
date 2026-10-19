@@ -216,8 +216,10 @@ its own when it lives in this repository, as the examples are.
 A plugin that replaces a provider runs its contract's conformance suite, the
 same tests the bundled provider passes: `sessionsConformance` from
 `@lemma/sessions/testing` for a `Sessions`, `llmConformance` from
-`@lemma/llm/testing` for an `Llm`, and `toolsConformance` from
-`@lemma/tools/testing` for a `ToolRunner`.
+`@lemma/llm/testing` for an `Llm`, `toolsConformance` from
+`@lemma/tools/testing` for a `ToolRunner`, and `agentConformance` from
+`@lemma/agent/testing` for an `Agent`. A replacement agent can also run the
+harness simulator's workload and checks (`World`'s `agent` in `@lemma/sim`).
 
 `lemma plugins check [path]` runs a plugin file or folder as a host would
 before you install it. It starts a host in a home of its own with the plugin
