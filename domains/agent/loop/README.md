@@ -238,6 +238,26 @@ running turn's model output so far (`draft`, through the stream event numbered
 queue. `AssistantDelta` carries the same numbering and `ToolOutput` an offset,
 so a client seeded from `view` skips what it already shows.
 
+## Notices
+
+A plugin that publishes a `ModelNotice` (a background command that exited, from
+`tools.bash`) has it placed as that plugin's `context` event, with the notice's
+`display`, as a prompt is placed: `whenBusy: "steer"`, so it joins the running
+turn after its current step; its `requestId` is `<source>:<id>`, logged on the
+event, so a notice heard twice is placed once; and as a `context` event, not a
+user message, clients show it as the plugin's, and `ask_user` does not take it
+for the user's reply. A plugin could append a `context` event itself, but the
+model would read it only once a turn's next request did: a notice reaches it
+now.
+
+With no turn running, it starts one only if the last turn this instance saw
+ran to its end (`done` or `max-steps`) and nothing is queued, on the model and
+thinking that turn had (its `turn-start`), not the agent's default. After a turn the
+user cancelled, or one that failed, the notice waits in the queue, held, and
+goes with the user's next prompt: a command finishing does not restart work
+the user stopped, nor send the prompts held after it. A notice published while
+no agent runs (one reloading) is lost.
+
 ## Durability
 
 A host that crashes, restarts, or reloads the agent loses no turn and no queued

@@ -226,6 +226,8 @@ export const EventData = Schema.Union([
     display: Schema.optional(Schema.String),
     turnId: Schema.optional(Schema.String),
     stepId: Schema.optional(Schema.String),
+    /** One the agent placed for a plugin (`ModelNotice`): its submission's id, as a prompt's, so it is placed once. */
+    requestId: Schema.optional(Schema.String),
   }),
   /**
    * Changes what the model sees of an earlier event on the branch, which stays in the log as it was: `omit` leaves it

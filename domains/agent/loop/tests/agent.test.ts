@@ -3,11 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { definePlugin, PluginContext } from "@lemma/core";
+import { definePlugin, Events, PluginContext } from "@lemma/core";
 import type { Handler } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
-import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, PromptSections } from "@lemma/agent";
+import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, ModelNotice, PromptSections, QueueChanged } from "@lemma/agent";
 import type { PromptDecision, PromptInput } from "@lemma/agent";
 import { contentText, emptyUsage, LlmRequest, LlmRequestHook } from "@lemma/llm";
 import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
@@ -157,6 +157,15 @@ const unclosableSessions = (fails: { turnEnd: boolean }) =>
             : store.append(sessionId, data, options),
       })),
     ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
+  });
+
+/** What turns placed, in log order: each person's prompt (no source) and each plugin's notice, with its request id. */
+const prompts = (events: readonly SessionEvent[]) =>
+  events.flatMap((event) => {
+    const data = event.data;
+    if (data.type === "message" && data.message.role === "user") return [[contentText(data.message.content), undefined, data.requestId]];
+    if (data.type === "context") return [[contentText(data.content), data.source, data.requestId]];
+    return [];
   });
 
 /** Every `request` event rebuilds to exactly what the model received, in order. */
@@ -694,6 +703,113 @@ describe("agent", () => {
     );
   });
 
+  it("places a plugin's notice as a prompt from it: starting a turn after one that ran to its end, steering one that runs, and once for each id", async () => {
+    const gate = Effect.runSync(Deferred.make<void>());
+    await withAgent({ scripts: [reply("hi"), reply("seen"), gated(gate, reply("w1")), reply("w2")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const events = yield* Events;
+        const notice = (noticeId: string, said: string) =>
+          events.publish(ModelNotice, { sessionId: id, id: noticeId, source: "tools.x", content: text(said), display: `${noticeId} ended` });
+        yield* a.prompt(id, text("hello"));
+        yield* notice("n1", "job 1 exited");
+        yield* waitFor(log(id), (logged) => ofType(logged, "turn-end").length === 2);
+        const working = yield* Effect.forkChild(a.prompt(id, text("work")));
+        yield* waitFor(
+          Effect.sync(() => requests.length),
+          (asked) => asked === 3,
+        );
+        yield* notice("n2", "job 2 exited");
+        yield* waitFor(a.queue(id), (queue) => queue.length === 1 && queue[0]!.mode === "steer" && queue[0]!.source === "tools.x");
+        yield* Deferred.succeed(gate, undefined);
+        yield* Fiber.join(working);
+        // Told again (a listener heard it twice): placed once all the same.
+        yield* notice("n2", "job 2 exited");
+        yield* notice("n1", "job 1 exited");
+        const placed = yield* log(id);
+        // A notice is the plugin's `context`, not a user message: what the model reads, and what a transcript shows.
+        expect(prompts(placed)).toEqual([
+          ["hello", undefined, expect.any(String)],
+          ["job 1 exited", "tools.x", "tools.x:n1"],
+          ["work", undefined, expect.any(String)],
+          ["job 2 exited", "tools.x", "tools.x:n2"],
+        ]);
+        expect(ofType(placed, "context").map((notice) => notice.display)).toEqual(["n1 ended", "n2 ended"]);
+        expect(ofType(placed, "turn-end")).toHaveLength(3);
+        expect(requests).toHaveLength(4);
+      }),
+    );
+  });
+
+  it("starts a notice's turn on the model and thinking the session's last turn had, not the agent's default", async () => {
+    await withAgent({ models: ["fake/m1", "fake/m2"], scripts: [reply("hi"), reply("seen")] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const events = yield* Events;
+        yield* a.prompt(id, text("hello"), { model: "fake/m2", thinking: "high" });
+        yield* events.publish(ModelNotice, { sessionId: id, id: "n1", source: "tools.x", content: text("job exited") });
+        yield* waitFor(log(id), (logged) => ofType(logged, "turn-end").length === 2);
+        expect(requests.map((request) => request.model)).toEqual(["fake/m2", "fake/m2"]);
+        expect(ofType(yield* log(id), "turn-start").map(({ model, thinking }) => ({ model, thinking }))).toEqual([
+          { model: "fake/m2", thinking: "high" },
+          { model: "fake/m2", thinking: "high" },
+        ]);
+        // The same model: the notice's request extends the last one.
+        expect(ofType(yield* log(id), "request").map((request) => request.restart)).toEqual(["start", undefined]);
+      }),
+    );
+  });
+
+  it("holds a plugin's notice after a turn the user cancelled, with the prompts held there, until the user's next prompt", async () => {
+    await withAgent({ scripts: [hang("thinking"), reply("all three")] }, ({ rec }) =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const a = yield* Agent;
+        const events = yield* Events;
+        const notice = (noticeId: string) =>
+          events.publish(ModelNotice, { sessionId: id, id: noticeId, source: "tools.x", content: text(`${noticeId} exited`) });
+        const first = yield* Effect.forkChild(a.prompt(id, text("go")));
+        yield* waitFor(
+          Effect.sync(() => rec.deltas.length),
+          (n) => n >= 1,
+        );
+        const later = yield* Effect.forkChild(a.prompt(id, text("later")));
+        yield* waitFor(a.queue(id), (queue) => queue.length === 1);
+        yield* a.cancel(id);
+        yield* Fiber.join(first);
+        // Cancelled: the notice starts nothing, nor the follow-up held after it (a start would have taken the queue).
+        yield* notice("n1");
+        yield* waitFor(a.queue(id), (queue) => queue.length === 2);
+        // Told again, it is found queued, which the agent says again once it has decided, and still starts nothing.
+        const told: number[] = [];
+        yield* Effect.forkChild(Stream.runForEach(events.stream(QueueChanged), ({ revision }) => Effect.sync(() => void told.push(revision))));
+        yield* Effect.yieldNow;
+        yield* notice("n1");
+        yield* waitFor(
+          Effect.sync(() => told.length),
+          (heard) => heard >= 1,
+        );
+        expect(yield* a.busy(id)).toBe(false);
+        expect((yield* a.queue(id)).map((prompt) => [prompt.source, prompt.mode])).toEqual([
+          [undefined, "follow-up"],
+          ["tools.x", "follow-up"],
+        ]);
+        yield* a.prompt(id, text("now"));
+        yield* Fiber.join(later);
+        const placed = yield* log(id);
+        expect(prompts(placed).map(([said, source]) => [said, source])).toEqual([
+          ["go", undefined],
+          ["later", undefined],
+          ["n1 exited", "tools.x"],
+          ["now", undefined],
+        ]);
+        expect(ofType(placed, "turn-end").map((ended) => ended.reason)).toEqual(["cancelled", "done"]);
+      }),
+    );
+  });
+
   /** A plugin that, before the second turn's request, summarizes everything before its prompt; `after` runs next. */
   const compactor = (after: Effect.Effect<void, AgentError> = Effect.void) =>
     definePlugin({
@@ -1172,9 +1288,9 @@ describe("agent", () => {
     );
   });
 
-  it("closes a cancelled turn whose turn-end was lost as cancelled when the agent next starts, and holds the queue it held", async () => {
-    const fails = { turnEnd: true };
-    const id = await withAgent({ sessions: unclosableSessions(fails), scripts: [hang("partial")] }, ({ requests }) =>
+  /** A turn cancelled with a follow-up queued, whose `turn-end` did not reach the log: the session's id. */
+  const cancelledUnclosed = () =>
+    withAgent({ sessions: unclosableSessions({ turnEnd: true }), scripts: [hang("partial")] }, ({ requests }) =>
       Effect.gen(function* () {
         const { id } = yield* newSession;
         const a = yield* Agent;
@@ -1195,6 +1311,9 @@ describe("agent", () => {
         return id;
       }),
     );
+
+  it("closes a cancelled turn whose turn-end was lost as cancelled when the agent next starts, and holds the queue it held", async () => {
+    const id = await cancelledUnclosed();
     await withAgent({ scripts: [] }, ({ requests }) =>
       Effect.gen(function* () {
         const a = yield* Agent;
@@ -1204,6 +1323,42 @@ describe("agent", () => {
         expect((yield* a.queue(id)).map((prompt) => prompt.requestId)).toEqual(["later"]);
         expect(requests).toEqual([]);
         yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => journals.get(id)?.turn === undefined && journals.get(id)?.held === true);
+      }),
+    );
+  });
+
+  it("holds the queue a closing turn held when a plugin's notice joins it, as a person's prompt would not", async () => {
+    const id = await cancelledUnclosed();
+    // The turn closes once this opens, so the notice arrives while it closes.
+    const gate = Effect.runSync(Deferred.make<void>());
+    const closingSlowly = definePlugin({
+      id: "sessions",
+      provides: [Sessions],
+      requires: [Paths],
+      exclusive: true,
+      layer: Layer.effect(
+        Sessions,
+        Effect.map(Sessions, (store) => ({
+          ...store,
+          append: (sessionId: string, data: EventData, options?: { readonly parent?: string }) =>
+            data.type === "turn-end" ? Effect.andThen(Deferred.await(gate), store.append(sessionId, data, options)) : store.append(sessionId, data, options),
+        })),
+      ).pipe(Layer.provide(sessions.layer({}) as Layer.Layer<Sessions, never, Paths>)),
+    });
+    await withAgent({ sessions: closingSlowly, scripts: [] }, ({ requests }) =>
+      Effect.gen(function* () {
+        const a = yield* Agent;
+        const events = yield* Events;
+        yield* waitFor(a.busy(id), (busy) => busy);
+        yield* events.publish(ModelNotice, { sessionId: id, id: "n1", source: "tools.x", content: text("job exited") });
+        yield* waitFor(a.queue(id), (queue) => queue.length === 2);
+        yield* Deferred.succeed(gate, undefined);
+        yield* waitFor(log(id), (logged) => ofType(logged, "turn-end").length === 1);
+        yield* waitFor(readJournals({ home: dir, fs: nodeFileSystem }), (journals) => journals.get(id)?.turn === undefined);
+        // Closed as cancelled: the follow-up and the notice wait for the user's next prompt.
+        expect((yield* a.queue(id)).map((prompt) => prompt.requestId)).toEqual(["later", "tools.x:n1"]);
+        expect(yield* a.busy(id)).toBe(false);
+        expect(requests).toEqual([]);
       }),
     );
   });

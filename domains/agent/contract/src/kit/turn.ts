@@ -165,6 +165,10 @@ export interface Placed {
   readonly content: PromptContent;
   /** Who shaped it (`AgentInputHook`'s handlers), logged with it. */
   readonly credit?: ResultCredit;
+  /** The plugin that sent it, when no person did (`PromptOptions.source`): it is logged as that plugin's `context`. */
+  readonly source?: string;
+  /** For a plugin's: what a transcript shows of it (`PromptOptions.display`). */
+  readonly display?: string;
 }
 
 /** The session's queue as the turn sees it: steers join the turn between steps. */
@@ -423,18 +427,30 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
 
   /**
    * Logs a placed prompt and records it placed (`input.logged`, and `also`) in one step a cancel cannot split: a prompt
-   * logged but not recorded would be answered as never placed.
+   * logged but not recorded would be answered as never placed. A person's is a user message; a plugin's (a notice) is
+   * a `context` event from it, which a transcript shows as the plugin's, not as something the user typed.
    */
   const userMessage = (placed: Placed, also: () => void = () => {}) =>
     Effect.uninterruptible(
       Effect.flatMap(Clock.currentTimeMillis, (timestamp) =>
-        append({
-          type: "message",
-          message: { role: "user", content: placed.content, timestamp },
-          turnId,
-          requestId: placed.requestId,
-          ...(placed.credit === undefined ? {} : { credit: placed.credit }),
-        }),
+        append(
+          placed.source === undefined
+            ? {
+                type: "message",
+                message: { role: "user", content: placed.content, timestamp },
+                turnId,
+                requestId: placed.requestId,
+                ...(placed.credit === undefined ? {} : { credit: placed.credit }),
+              }
+            : {
+                type: "context",
+                source: placed.source,
+                content: placed.content,
+                ...(placed.display === undefined ? {} : { display: placed.display }),
+                turnId,
+                requestId: placed.requestId,
+              },
+        ),
       ).pipe(
         Effect.tap(() =>
           Effect.sync(() => {
