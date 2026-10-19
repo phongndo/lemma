@@ -460,8 +460,12 @@ describe("openai-responses", () => {
     for (const field of ["max_output_tokens", "temperature", "prompt_cache_retention"]) expect(body[field]).toBeUndefined();
   });
 
-  it("sends a reasoning item back only before the item it led to", () => {
-    const reasoning = (id: string) => ({ type: "thinking" as const, thinking: "", thinkingSignature: JSON.stringify({ type: "reasoning", id }) });
+  it("sends a reasoning item back only before the item it led to, and only with its encrypted content", () => {
+    const reasoning = (id: string, encrypted: string | null = "enc") => ({
+      type: "thinking" as const,
+      thinking: "",
+      thinkingSignature: JSON.stringify({ type: "reasoning", id, encrypted_content: encrypted }),
+    });
     const input = openaiResponses.build(
       call(gpt, {
         messages: [
@@ -470,10 +474,24 @@ describe("openai-responses", () => {
           user("again"),
           answer(gpt, [reasoning("rs_3")], "length"),
           user("more"),
+          // Reasoned without its content asked for: with `store: false` nothing finds it by its id.
+          answer(gpt, [reasoning("rs_4", null), { type: "text", text: "Done", textSignature: '{"v":1,"id":"msg_4"}' }], "stop"),
+          user("last"),
         ],
       }),
     ).body.input as { type?: string; id?: string }[];
     expect(input.filter((item) => item.type === "reasoning").map((item) => item.id)).toEqual(["rs_1"]);
+  });
+
+  it("asks for reasoning's encrypted content at every effort but `none`, an `off` the config maps to one too", () => {
+    const mapped = { ...gpt, reasoning: true, thinking: { kind: "effort" as const, levels: ["off", "low"] as const, values: { off: "minimal" } } } as Model;
+    expect(openaiResponses.build(call(mapped, {}, { level: "off" })).body).toMatchObject({
+      reasoning: { effort: "minimal", summary: "auto" },
+      include: ["reasoning.encrypted_content"],
+    });
+    const none = openaiResponses.build(call({ ...mapped, thinking: { ...mapped.thinking!, values: { off: "none" } } }, {}, { level: "off" })).body;
+    expect(none.reasoning).toEqual({ effort: "none" });
+    expect(none.include).toBeUndefined();
   });
 
   it("keeps the arguments that streamed when the finished call's come empty", async () => {

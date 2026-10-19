@@ -98,7 +98,9 @@ function assistantItems(
     if (block.type === "thinking") {
       if (block.thinkingSignature === undefined) continue;
       try {
-        items.push(JSON.parse(block.thinkingSignature) as Record<string, unknown>);
+        const item = JSON.parse(block.thinkingSignature) as Record<string, unknown>;
+        // With `store: false` the provider keeps nothing to find one by its id: one without its content is refused.
+        if (item.encrypted_content != null) items.push(item);
       } catch {
         // Not a reasoning item: nothing to send back.
       }
@@ -154,11 +156,12 @@ function build(call: WireCall) {
   const tools = request.tools ?? [];
   if (tools.length > 0) body.tools = tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters }));
   const effort = model.thinking !== undefined && level !== undefined ? effortOf(model, level) : undefined;
-  if (effort !== undefined) {
-    if (level !== "off") {
-      body.reasoning = { effort, summary: "auto" };
-      body.include = ["reasoning.encrypted_content"];
-    } else body.reasoning = { effort };
+  // `none` is the API's word for no reasoning; at any other effort (an `off` a config maps to one too) the model reasons,
+  // and its reasoning comes back encrypted, as `store: false` keeps nothing for it to go back as otherwise.
+  if (effort === "none") body.reasoning = { effort };
+  else if (effort !== undefined) {
+    body.reasoning = { effort, summary: "auto" };
+    body.include = ["reasoning.encrypted_content"];
   }
   return {
     url: `${model.baseUrl}/responses`,
