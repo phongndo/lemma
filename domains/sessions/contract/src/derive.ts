@@ -229,6 +229,8 @@ export interface RequestState {
   readonly thinking?: ThinkingLevel;
   readonly system?: string;
   readonly tools?: readonly ToolSpec[];
+  /** The `nested` tools offered beside `tools`; undefined when the log predates their being logged. */
+  readonly nested?: readonly string[];
 }
 
 /** The request state after `event`: a `request` event's header, its omitted fields kept from `state`; any other, `state`. */
@@ -240,6 +242,7 @@ export function nextRequestState(state: RequestState, event: SessionEvent): Requ
     ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
     ...(data.system !== undefined ? { system: data.system } : state.system === undefined ? {} : { system: state.system }),
     ...(data.tools !== undefined ? { tools: data.tools } : state.tools === undefined ? {} : { tools: state.tools }),
+    ...(data.nested !== undefined ? { nested: data.nested } : state.nested === undefined ? {} : { nested: state.nested }),
   };
 }
 

@@ -101,8 +101,8 @@ export const EventData = Schema.Union([
     ),
   }),
   /**
-   * The request header, logged before the model call. `system` and `tools` are
-   * omitted when unchanged since the previous `request` on the branch.
+   * The request header, logged before the model call. `system`, `tools`, and
+   * `nested` are omitted when unchanged since the previous `request` on the branch.
    * `system` is the text of the `system` contributions, in order, with empty
    * ones dropped, joined by a blank line (`"\n\n"`); `chars` is each text's
    * length, so `trajectory` can split it back into sections.
@@ -117,6 +117,11 @@ export const EventData = Schema.Union([
     composition: Schema.String,
     system: Schema.optional(Schema.String),
     tools: Schema.optional(Schema.Array(ToolSpec)),
+    /**
+     * The `nested` tools the request offered beside `tools` without declaring them to the model, by name: with
+     * `tools`, what its calls may reach (`ToolInvocation.offered`), so a call resumed after a restart is held to it.
+     */
+    nested: Schema.optional(Schema.Array(Schema.String)),
     contributions: Schema.Array(Contribution),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),

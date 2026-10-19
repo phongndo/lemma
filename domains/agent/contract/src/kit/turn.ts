@@ -528,6 +528,9 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       const previous = state.request!;
       const history = deriveMessages(before);
       const unchanged = sameSpecs(state.loggedSpecs, specs) || isDeepStrictEqual(previous.tools ?? [], specs);
+      // Offered beside them, logged so a call resumed after a restart is held to them (the first request logs none too).
+      const declaredNames = new Set(specs.map((spec) => spec.name));
+      const nested = plan.tools.flatMap((tool) => (declaredNames.has(tool.spec.name) ? [] : [tool.spec.name]));
       const composition = yield* host.composition;
       const logged = yield* append({
         type: "request",
@@ -538,6 +541,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         composition: composition.id,
         ...(previous.system === system ? {} : { system }),
         ...(unchanged ? {} : { tools: specs }),
+        ...(isDeepStrictEqual(previous.nested, nested) ? {} : { nested }),
         contributions,
         ...(handlers.length === 0 ? {} : { handlers }),
         ...(plan.providerOptions === undefined ? {} : { providerOptions: plan.providerOptions }),
@@ -987,10 +991,12 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
             at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
           );
           // Held to what the step's request offered, as logged, as a call made before the restart was: a tool a
-          // profile or another handler took out is not there for it now either. Tools only others call are offered
-          // as they are to any request offering one that runs them.
-          const declared = (requestState(yield* branchNow).tools ?? []).map((spec) => spec.name);
-          const resumedOffer: Offer = { declared, offered: [...declared, ...listed.filter((tool) => tool.nested === true).map((tool) => tool.spec.name)] };
+          // profile or another handler took out is not there for it now either. A log from before the `nested` tools
+          // offered were logged has every one listed now.
+          const logged = requestState(yield* branchNow);
+          const declared = (logged.tools ?? []).map((spec) => spec.name);
+          const nested = logged.nested ?? listed.filter((tool) => tool.nested === true).map((tool) => tool.spec.name);
+          const resumedOffer: Offer = { declared, offered: [...declared, ...nested] };
           // The rest of the cut-off step, traced as the step it is.
           const ended = yield* services
             .trace(

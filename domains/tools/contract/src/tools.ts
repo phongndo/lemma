@@ -89,12 +89,14 @@ export class ToolInvocation extends Schema.Class<ToolInvocation>("lemma/ToolInvo
   /**
    * The tools, by name, the model request behind this call offered (after `AgentRequestHook`): those it declared to
    * the model, and the `nested` ones a tool that runs others may call. The registry refuses any other as `NotFound`.
-   * Absent: no request to hold it to, as for a call resumed after a restart.
+   * A call resumed after a restart is held to what its request offered, as logged. Absent: no request to hold it to,
+   * as for a call made outside a turn.
    */
   offered: Schema.optional(Schema.Array(Schema.String)),
   /**
    * For the model's own call: the tools, by name, the request declared to it (`declaredTools`), the only ones it may
-   * call; the rest of `offered` only a tool that runs others calls. Absent: a call a tool makes, or one resumed.
+   * call; the rest of `offered` only a tool that runs others calls. Absent: a call a tool makes, or one made outside
+   * a turn.
    */
   declared: Schema.optional(Schema.Array(Schema.String)),
   /**
