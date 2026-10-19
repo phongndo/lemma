@@ -2,7 +2,8 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import { ThinkingLevel } from "@lemma/llm";
 import { Models } from "@lemma/llm/web";
 import { ComposerControls, Threads, TurnOptionSources } from "@lemma/threads";
-import { CheckIcon, ChevronDownIcon, Popover } from "@lemma/look";
+import { CheckIcon, ChevronDownIcon, Popover, SettingRow } from "@lemma/look";
+import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { load, save } from "@lemma/web/storage";
 import type { SessionEvent } from "@lemma/sessions";
@@ -61,8 +62,8 @@ export default defineWebPlugin({
     };
     const current = () => (threads.blank() ? next() : profileOf(threads.activeId())) ?? fallback();
 
-    const pick = (profile: ProfileInfo) => {
-      const sessionId = threads.blank() ? undefined : threads.activeId();
+    /** Gives `profile` to a thread (`undefined`: the next new one), with its model and reasoning. */
+    const pick = (profile: ProfileInfo, sessionId: string | undefined) => {
       if (sessionId === undefined) {
         setNext(profile.name);
         save(NEXT_KEY, profile.name);
@@ -70,6 +71,52 @@ export default defineWebPlugin({
       if (profile.model !== undefined) models.choose(profile.model);
       if (isThinking(profile.thinking)) models.chooseThinking(profile.thinking);
     };
+    const describe = (name: string | undefined) => profiles().find((profile) => profile.name === name)?.description;
+
+    /** The profiles, as a menu under `trigger`, `current` checked. */
+    function ProfileMenu(props: { current: string | undefined; onPick: (profile: ProfileInfo) => void; placement: "top-start" | "bottom-end" }) {
+      return (
+        <Popover
+          label="Profile"
+          tip={describe(props.current) ?? "What the agent is for in this thread"}
+          triggerClass="select-chip"
+          placement={props.placement}
+          trigger={
+            <>
+              <span class="picker-label">{props.current ?? "Profile"}</span>
+              <ChevronDownIcon />
+            </>
+          }
+        >
+          {(close) => (
+            <For each={profiles()}>
+              {(profile) => (
+                <button
+                  class="menu-item"
+                  role="menuitemradio"
+                  aria-checked={props.current === profile.name}
+                  data-tip={profile.description}
+                  onClick={() => {
+                    props.onPick(profile);
+                    close();
+                  }}
+                >
+                  <span class="menu-check">
+                    <Show when={props.current === profile.name}>
+                      <CheckIcon />
+                    </Show>
+                  </span>
+                  {profile.name}
+                  <Show when={profile.source !== "bundled"}>
+                    <span class="muted"> · {profile.source}</span>
+                  </Show>
+                </button>
+              )}
+            </For>
+          )}
+        </Popover>
+      );
+    }
 
     plugin.onCleanup(slots.add(TurnOptionSources, { id: PROFILES_PLUGIN, value: profileOf }));
     plugin.onCleanup(
@@ -78,47 +125,37 @@ export default defineWebPlugin({
         order: -10,
         component: () => (
           <Show when={profiles().length > 0}>
-            <Popover
-              label="Profile"
-              tip={profiles().find((profile) => profile.name === current())?.description ?? "What the agent is for in this thread"}
-              triggerClass="select-chip"
-              placement="top-start"
-              trigger={
-                <>
-                  <span class="picker-label">{current() ?? "Profile"}</span>
-                  <ChevronDownIcon />
-                </>
-              }
-            >
-              {(close) => (
-                <For each={profiles()}>
-                  {(profile) => (
-                    <button
-                      class="menu-item"
-                      role="menuitemradio"
-                      aria-checked={current() === profile.name}
-                      data-tip={profile.description}
-                      onClick={() => {
-                        pick(profile);
-                        close();
-                      }}
-                    >
-                      <span class="menu-check">
-                        <Show when={current() === profile.name}>
-                          <CheckIcon />
-                        </Show>
-                      </span>
-                      {profile.name}
-                      <Show when={profile.source !== "bundled"}>
-                        <span class="muted"> · {profile.source}</span>
-                      </Show>
-                    </button>
-                  )}
-                </For>
-              )}
-            </Popover>
+            <ProfileMenu current={current()} placement="top-start" onPick={(profile) => pick(profile, threads.blank() ? undefined : threads.activeId())} />
           </Show>
         ),
+      }),
+    );
+    // The profile a new thread starts with, first among General's settings for new threads.
+    const forNew = () => next() ?? fallback();
+    plugin.onCleanup(
+      slots.add(SettingsGroups, {
+        id: "profiles",
+        order: -10,
+        section: SectionIds.general,
+        title: "New threads",
+        entries: () =>
+          profiles().length === 0
+            ? []
+            : [
+                {
+                  text: `Profile agent role coding general system prompt ${profiles()
+                    .map((profile) => profile.name)
+                    .join(" ")}`,
+                  view: () => (
+                    <SettingRow
+                      title="Profile"
+                      description={describe(forNew()) ?? "What the agent is for: its guidance, and the tools it keeps. Picking one picks its model too."}
+                    >
+                      <ProfileMenu current={forNew()} placement="bottom-end" onPick={(profile) => pick(profile, undefined)} />
+                    </SettingRow>
+                  ),
+                },
+              ],
       }),
     );
   },

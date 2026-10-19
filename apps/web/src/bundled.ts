@@ -1,5 +1,6 @@
 import type { Plugin } from "@lemma/core";
 import addProject from "@lemma/workspace-add-project";
+import agentLoop from "@lemma/agent-loop/web";
 import appearance from "@lemma/look-appearance";
 import appearancePage from "@lemma/look-appearance-page";
 import browser from "@lemma/threads-browser";
@@ -95,6 +96,7 @@ export const bundled: readonly Plugin[] = [
   fileMentions,
   skills,
   profiles,
+  agentLoop,
   modelPicker,
   compaction,
   workspaceBar,

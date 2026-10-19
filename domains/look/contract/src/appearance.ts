@@ -3,6 +3,12 @@ import { Option, Schema } from "effect";
 /** The plugin whose config is the look; `appearance-page` edits its row. */
 export const APPEARANCE_PLUGIN = "look.appearance";
 
+/**
+ * The look's optional plugins, by id: Settings › Appearance offers each as a switch (`WebPlugins.setEnabled`), so a
+ * plugin replacing one under its id keeps the switch.
+ */
+export const LOOK_PLUGINS = { highlight: "look.highlight", diagrams: "look.diagrams", fileIcons: "look.file-icons" } as const;
+
 /** The look, as `look.appearance`'s row in config.jsonc holds it (its `config`). An absent field follows the default. */
 export const AppearanceConfig = Schema.Struct({
   scheme: Schema.optional(Schema.Literals(["system", "light", "dark"])).annotate({

@@ -3,10 +3,10 @@ import { load, save } from "@lemma/web/storage";
 import {
   APPEARANCE_PLUGIN,
   LEGACY_KEYS,
+  LOOK_PLUGINS,
   decodeSettings,
   legacySettings,
   resolveLook,
-  schemeTokens,
   settingValue,
   Accents,
   Fonts,
@@ -18,7 +18,7 @@ import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups, SettingsSections } from "@lemma/settings";
 import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import styles from "./appearance-page.css?inline";
-import { AccentPicker, CornersSetting, FontSetting, Preview, SchemePicker, TextSizeSetting, ThemeChoice, WidthSetting } from "./views.tsx";
+import { AccentPicker, CornersSetting, FontSetting, PluginSwitch, Preview, SchemePicker, TextSizeSetting, ThemeChoice, WidthSetting } from "./views.tsx";
 import type { Choices, Deps } from "./views.tsx";
 
 const isColor = (value: string) => CSS.supports("color", value);
@@ -92,8 +92,7 @@ export default defineWebPlugin({
 
     const choices = createMemo<Choices>(() => ({ themes: slots.list(Themes), accents: slots.list(Accents), fonts: slots.list(Fonts) }));
     const look = createMemo(() => resolveLook(settings(), choices(), prefersDark(), isColor));
-    const tokensFor = (scheme: Scheme) => schemeTokens(settings(), choices(), scheme, isColor);
-    const deps: Deps = { settings, set, choices, look, tokensFor };
+    const deps: Deps = { settings, set, choices, look };
 
     // Which theme rows show: a scheme with a choice of themes, or a theme chosen that is gone. Memos, so a pick redraws no row.
     const choosing = (scheme: Scheme) =>
@@ -102,9 +101,65 @@ export default defineWebPlugin({
           choices().themes.filter((theme) => theme.scheme === scheme).length > 1 ||
           look().missing.some((choice) => choice.field === (scheme === "light" ? "lightTheme" : "darkTheme")),
       );
+    /** The themes offered for `scheme`, for a search to find them by name. */
+    const titles = (scheme: Scheme) =>
+      choices()
+        .themes.filter((theme) => theme.scheme === scheme)
+        .map((theme) => theme.title)
+        .join(" ");
     const choosingLight = choosing("light");
     const choosingDark = choosing("dark");
     const painting = () => row()?.state === "active";
+    const customized = () => Object.values(settings()).some((value) => value !== undefined);
+    const reset = () => {
+      const appearance = row();
+      if (appearance === undefined) return;
+      const cleared = Object.fromEntries(Object.keys(settings()).map((field) => [field, null]));
+      setPending({});
+      return webPlugins.setConfig(appearance, cleared).catch((error) => {
+        setPending(undefined);
+        notify.report(error, "Could not reset the appearance");
+      });
+    };
+
+    // The look's optional plugins, each a switch: on and off as the Plugins page turns them.
+    type PluginStatus = ReturnType<typeof webPlugins.list>[number];
+    const [switching, setSwitching] = createSignal<ReadonlyMap<string, boolean>>(new Map());
+    const pluginRow = (id: string) => webPlugins.list().find((candidate) => candidate.id === id);
+    const isOn = (found: PluginStatus) => switching().get(found.id) ?? found.enabled;
+    const turn = (found: PluginStatus, on: boolean) => {
+      setSwitching((now) => new Map(now).set(found.id, on));
+      webPlugins
+        .setEnabled(found, on)
+        .catch((error) => notify.report(error, `Could not turn ${on ? "on" : "off"} ${found.id}`))
+        .finally(() =>
+          setSwitching((now) => {
+            const next = new Map(now);
+            next.delete(found.id);
+            return next;
+          }),
+        );
+    };
+    const switches = [
+      {
+        id: LOOK_PLUGINS.highlight,
+        title: "Syntax highlighting",
+        text: "Syntax highlighting code colors shiki",
+        description: "Colors code blocks by their language.",
+      },
+      {
+        id: LOOK_PLUGINS.diagrams,
+        title: "Diagrams",
+        text: "Diagrams mermaid charts flowcharts",
+        description: "Draws mermaid code blocks as diagrams, with their source a click away.",
+      },
+      {
+        id: LOOK_PLUGINS.fileIcons,
+        title: "File icons",
+        text: "File icons type colored",
+        description: "Shows each file's type as its own colored icon, wherever a file is named.",
+      },
+    ] as const;
 
     const section = SectionIds.appearance;
     slots.add(SettingsSections, {
@@ -115,6 +170,13 @@ export default defineWebPlugin({
       intro: () => (
         <Show when={!painting()}>
           <p class="callout">The appearance plugin is off, so the system scheme and Lemma's own look show. These settings apply when it is on.</p>
+        </Show>
+      ),
+      actions: () => (
+        <Show when={customized()}>
+          <button class="button small" data-tip="Return every appearance setting to its default" onClick={plugin.action("reset appearance", reset)}>
+            Reset
+          </button>
         </Show>
       ),
     });
@@ -131,8 +193,8 @@ export default defineWebPlugin({
       title: "Theme",
       entries: () => [
         { text: "Theme scheme color mode dark light system", view: () => <SchemePicker deps={deps} /> },
-        ...(choosingLight() ? [{ text: "Light theme", view: () => <ThemeChoice deps={deps} scheme="light" /> }] : []),
-        ...(choosingDark() ? [{ text: "Dark theme", view: () => <ThemeChoice deps={deps} scheme="dark" /> }] : []),
+        ...(choosingLight() ? [{ text: `Light theme palette ${titles("light")}`, view: () => <ThemeChoice deps={deps} scheme="light" /> }] : []),
+        ...(choosingDark() ? [{ text: `Dark theme palette ${titles("dark")}`, view: () => <ThemeChoice deps={deps} scheme="dark" /> }] : []),
         { text: "Accent color colour highlight primary buttons links", view: () => <AccentPicker deps={deps} /> },
       ],
     });
@@ -162,6 +224,31 @@ export default defineWebPlugin({
         { text: "Corners radius rounded square round", view: () => <CornersSetting deps={deps} /> },
         { text: "Conversation width layout wide full", view: () => <WidthSetting deps={deps} /> },
       ],
+    });
+    slots.add(SettingsGroups, {
+      id: "appearance.plugins",
+      order: 40,
+      section,
+      title: "Code and files",
+      entries: () =>
+        switches.flatMap((entry) => {
+          const found = pluginRow(entry.id);
+          return found === undefined
+            ? []
+            : [
+                {
+                  text: entry.text,
+                  view: () => (
+                    <PluginSwitch
+                      title={entry.title}
+                      description={entry.description}
+                      on={isOn(pluginRow(entry.id) ?? found)}
+                      onChange={(on) => turn(pluginRow(entry.id) ?? found, on)}
+                    />
+                  ),
+                },
+              ];
+        }),
     });
 
     const schemes: readonly { readonly value: SchemeChoice; readonly title: string }[] = [

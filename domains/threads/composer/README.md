@@ -14,7 +14,7 @@ prompt in the transcript), `composer.answer` in `ComposerNotices` (what a plugin
 handled or refused the last prompt said: `Threads.answer`), and the defaults of
 `ComposerQueuedPart` and `ComposerSuggestionPart`. Adds `composer.focus`
 (`ThreadsActionIds.focusComposer`, key `/`) to `Actions`, and its `send`,
-`whenBusy`, and `stop` settings to Settings › Keyboard (`SettingsGroups`). Requires `Threads`, `Models`
+`whenBusy`, and `stop` settings to Settings › General › Composer (`SettingsGroups`). Requires `Threads`, `Models`
 ([`@lemma/llm/web`](../../llm/contract/src/web/models.ts)), `Workspace`
 ([`@lemma/workspace/web`](../../workspace/contract/src/web/workspace.ts)), and
 the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.

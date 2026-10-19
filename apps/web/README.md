@@ -82,7 +82,9 @@ The look is the `look.appearance` plugin's config, which it paints on the page:
 
 Settings › Appearance (the `look.appearance-page` plugin) edits that row, as
 `lemma plugins config look.appearance accent blue` or an agent's edit to `config.jsonc`
-does, and the palette's Appearance commands switch the scheme. What there is
+does, and the palette's Appearance commands switch the scheme. Its Code and
+files switches turn the look's optional plugins on and off (`LOOK_PLUGINS`:
+syntax highlighting, diagrams, file icons), as the Plugins page does. What there is
 to choose from is three slots, `Themes`, `Accents`, and `Fonts`: `look.appearance`
 adds Lemma's own there, and a plugin adds others beside them, so a theme pack
 is a web half, offered while it loads and gone with it. A theme is its base

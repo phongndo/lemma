@@ -111,6 +111,7 @@ export const bundledWeb: readonly string[] = [
   "actions.keymap",
   "actions.keys-page",
   "actions.palette",
+  "agent.loop",
   "agent.profiles",
   "commands.client",
   "context.compaction",

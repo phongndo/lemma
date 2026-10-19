@@ -130,3 +130,15 @@
 body:has(.resizing) .browser-page {
   pointer-events: none;
 }
+
+/* Settings › General › Browser: the engine, and an address of one's own under it. */
+.browser-search-setting {
+  display: grid;
+  gap: 6px;
+  width: 260px;
+}
+
+.browser-search-setting .field {
+  height: 30px;
+  font-size: calc(13px * var(--text-scale));
+}

@@ -5,7 +5,8 @@
   "description": "The turn loop: asks a model, runs the tools it calls, and logs each step",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
   },
   "scripts": {
     "check": "tsc --noEmit",
@@ -17,9 +18,13 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
+    "@lemma/look": "workspace:*",
     "@lemma/sessions": "workspace:*",
+    "@lemma/settings": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.4",
+    "solid-js": "1.9.17"
   },
   "devDependencies": {
     "@lemma/sessions-files": "workspace:*",
@@ -31,6 +36,7 @@
     "vitest": "5.0.4"
   },
   "lemma": {
-    "host": "./src/index.ts"
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
   }
 }

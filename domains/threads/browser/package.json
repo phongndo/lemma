@@ -15,6 +15,7 @@
     "@lemma/actions": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
+    "@lemma/settings": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/web": "workspace:*",
     "effect": "4.0.4",

@@ -16,6 +16,7 @@
     "@lemma/actions-keys-page": "workspace:*",
     "@lemma/actions-palette": "workspace:*",
     "@lemma/agent": "workspace:*",
+    "@lemma/agent-loop": "workspace:*",
     "@lemma/agent-profiles": "workspace:*",
     "@lemma/client": "workspace:*",
     "@lemma/commands": "workspace:*",

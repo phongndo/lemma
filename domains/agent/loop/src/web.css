@@ -1,0 +1,14 @@
+/* Settings › General › Agent: a count and its unit. */
+.agent-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.agent-count .field {
+  width: 84px;
+  height: 30px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}

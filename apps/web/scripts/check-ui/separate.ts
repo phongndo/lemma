@@ -156,7 +156,8 @@ export const separate = async (): Promise<string> => {
   await styled.click("[role=radio][aria-label='Check teal']");
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--accent") === "rgb(0, 128, 128)", undefined, { timeout: 5_000 });
   await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Dark')");
-  await styled.click("[role=radiogroup][aria-label='Dark theme'] [role=radio]:has-text('Check night')");
+  await styled.click("button[aria-label='Dark theme']");
+  await styled.click("[role=menuitemradio]:has-text('Check night')");
   await styled
     .waitForFunction(
       () => document.documentElement.style.getPropertyValue("--bg") === "rgb(10, 20, 30)" && document.documentElement.dataset.theme === "dark",
@@ -171,7 +172,8 @@ export const separate = async (): Promise<string> => {
   assert.match(raised, /rgb\(10, 20, 30\)/, `a theme's surfaces do not derive from its background: --bg-raised is ${raised}`);
   // A light theme's too: its raised surfaces rise from its background, not to plain white.
   await styled.click("[role=radiogroup][aria-label=Scheme] [role=radio]:has-text('Light')");
-  await styled.click("[role=radiogroup][aria-label='Light theme'] [role=radio]:has-text('Check day')");
+  await styled.click("button[aria-label='Light theme']");
+  await styled.click("[role=menuitemradio]:has-text('Check day')");
   await styled.waitForFunction(() => document.documentElement.style.getPropertyValue("--bg") === "rgb(250, 240, 220)", undefined, { timeout: 5_000 });
   const day = await styled.evaluate(async () => (await import("/src/ui/api.ts" as string)).api.look.tokenColor("--bg-raised"));
   const [red, , blue] = [1, 3, 5].map((at) => Number.parseInt(day.slice(at, at + 2), 16)) as [number, number, number];

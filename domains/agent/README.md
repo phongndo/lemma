@@ -4,7 +4,7 @@ The agent: the turn loop that asks a model, runs the tools it calls, and logs ea
 
 | Plugin                                 | Halves     | What it does                                                                                       |
 | -------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------- |
-| [`agent.loop`](loop/README.md)         | host       | Runs turns: provides `Agent`, and serves it to clients as the `agent.*` channels                   |
+| [`agent.loop`](loop/README.md)         | host + web | Runs turns: provides `Agent`, and serves it to clients as the `agent.*` channels                   |
 | [`agent.profiles`](profiles/README.md) | host + web | Profiles: a thread's prompt, tools, sections, and model, chosen per thread (`TurnOptions.plugins`) |
 | [`agent.cli`](cli/README.md)           | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                              |
 

@@ -17,6 +17,8 @@ divider. Requires `Llm`.
 | `model`      | unset   | The model that writes summaries (`provider/model`); the turn's model when unset                                               |
 | `review`     | `false` | Have a model that sees only the summary ask what it leaves out, and the turn's model answer: two more model calls per summary |
 
+- **Its setting.** Its web half offers `at` in Settings › General › Agent
+  (Summarize at), written to its row as the Plugins page would.
 - **The meter.** Its web half adds a ring to the composer's row, beside its buttons
   (`ComposerActions`), so how full the open thread's context is stays in
   view. It measures as the estimate below

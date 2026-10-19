@@ -30,7 +30,7 @@ import {
 import type { ComposerActionProps, ComposerQueuedProps, ComposerSuggestion, ComposerSuggestionProps, PromptActionProps, ThreadsService } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Models } from "@lemma/llm/web";
-import { SectionIds, SettingsGroups } from "@lemma/settings";
+import { SectionIds, SettingsGroups, configSetting } from "@lemma/settings";
 import { Client, Notify, Router, Slots, WebPlugins, defineWebPlugin, Contained, Each, Highlighted, Isolated, usePlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
@@ -71,9 +71,6 @@ const ComposerConfig = Schema.Struct({
       description: "escape-twice: Escape twice within a second stops the running turn. escape: Escape once does.",
     }),
 });
-
-/** What each setting is when its row leaves it out. */
-const CONFIG_DEFAULTS = Schema.decodeUnknownSync(ComposerConfig)({});
 
 const noPrompt = { text: "", images: [] } as const;
 
@@ -834,7 +831,7 @@ function SuggestionRow(props: ComposerSuggestionProps) {
   );
 }
 
-/** Which keys send, on the Keyboard page. */
+/** Which keys send, in General › Composer. */
 function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
   return (
     <SettingRow
@@ -854,7 +851,7 @@ function SendSetting(props: { send: Send; onChange: (send: Send) => void }) {
   );
 }
 
-/** What sending does while a turn runs, on the Keyboard page. */
+/** What sending does while a turn runs, in General › Composer. */
 function WhenBusySetting(props: { whenBusy: WhenBusy; onChange: (whenBusy: WhenBusy) => void }) {
   return (
     <SettingRow
@@ -874,7 +871,7 @@ function WhenBusySetting(props: { whenBusy: WhenBusy; onChange: (whenBusy: WhenB
   );
 }
 
-/** Which Escape stops a running turn, on the Keyboard page. */
+/** Which Escape stops a running turn, in General › Composer. */
 function StopSetting(props: { stop: Stop; onChange: (stop: Stop) => void }) {
   return (
     <SettingRow
@@ -1038,32 +1035,31 @@ export default defineWebPlugin({
     });
     use.slots.add(ComposerQueuedPart, { id: "composer.queued", phase: "default", component: QueuedRow });
     use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", phase: "default", component: SuggestionRow });
-    // How it sends and stops belongs with the keys, so it offers those settings on the Keyboard page. A default is
-    // written as unset, so the file keeps only what was changed.
-    const setOption = <K extends keyof typeof ComposerConfig.Type>(key: K, value: (typeof ComposerConfig.Type)[K]) => {
-      const self = use.webPlugins.list().find((candidate) => candidate.id === plugin.id);
-      if (self === undefined) return;
-      void use.webPlugins
-        .setConfig(self, { [key]: value === CONFIG_DEFAULTS[key] ? null : value })
-        .catch((error) => use.notify.report(error, "Could not change the composer's setting"));
+    // How it sends and stops, in General: its own config, written as the Plugins page would.
+    const option = <K extends keyof typeof ComposerConfig.Type>(key: K) => {
+      const setting = configSetting<(typeof ComposerConfig.Type)[K]>(use.webPlugins, use.notify, plugin.id, key);
+      return { value: () => setting.value() ?? plugin.config[key], set: setting.set };
     };
+    const send = option("send");
+    const whenBusy = option("whenBusy");
+    const stop = option("stop");
     use.slots.add(SettingsGroups, {
       id: "composer.send",
-      order: 0,
-      section: SectionIds.keyboard,
+      order: 20,
+      section: SectionIds.general,
       title: "Composer",
       entries: () => [
         {
           text: "Composer: send a message with Enter or Mod+Enter; the other one, or Shift+Enter, starts a new line; Mod+Enter (Mod+Shift+Enter while it sends) runs it in a new thread in the background",
-          view: () => <SendSetting send={plugin.config.send} onChange={(send) => setOption("send", send)} />,
+          view: () => <SendSetting send={send.value()} onChange={send.set} />,
         },
         {
           text: "Composer: while a turn runs, sending steers it or queues the message for after it; Alt does the other",
-          view: () => <WhenBusySetting whenBusy={plugin.config.whenBusy} onChange={(whenBusy) => setOption("whenBusy", whenBusy)} />,
+          view: () => <WhenBusySetting whenBusy={whenBusy.value()} onChange={whenBusy.set} />,
         },
         {
           text: "Composer: stop a running turn with Escape twice, or once",
-          view: () => <StopSetting stop={plugin.config.stop} onChange={(stop) => setOption("stop", stop)} />,
+          view: () => <StopSetting stop={stop.value()} onChange={stop.set} />,
         },
       ],
     });

@@ -1,4 +1,4 @@
-import { CodeBlocks } from "@lemma/look";
+import { CodeBlocks, LOOK_PLUGINS } from "@lemma/look";
 import { Slots, defineWebPlugin } from "@lemma/web";
 import styles from "./highlight.css?inline";
 
@@ -10,7 +10,7 @@ type Highlighter = typeof import("./highlight.ts");
  * highlighted as it grows once its language has loaded, plain until then.
  */
 export default defineWebPlugin({
-  id: "look.highlight",
+  id: LOOK_PLUGINS.highlight,
   styles,
   requires: { slots: Slots },
   setup: ({ slots }) => {

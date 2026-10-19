@@ -4,12 +4,13 @@ import { Pane, Views } from "@lemma/threads";
 import type { ThreadViewProps } from "@lemma/threads";
 import { Actions, keysFor, overridesFrom } from "@lemma/actions";
 import { Layers } from "@lemma/frame";
-import { Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
+import { Notify, Slots, WebPlugins, defineWebPlugin } from "@lemma/web";
 import { ArrowLeftIcon, CodeIcon, ExternalIcon, LaptopIcon, RefreshIcon, XIcon } from "@lemma/look";
 import { SEARCH, addressOf, hostOf } from "./address.ts";
 import { takenFromPages } from "./keys.ts";
 import { PageLayer, bridge, createPages } from "./pages.tsx";
 import type { Page, Pages } from "./pages.tsx";
+import { addSettings } from "./settings.tsx";
 import styles from "./browser.css?inline";
 
 const BrowserConfig = Schema.Struct({
@@ -168,10 +169,11 @@ export default defineWebPlugin({
   id: "threads.browser",
   styles,
   config: BrowserConfig,
-  requires: { slots: Slots, pane: Pane, webPlugins: WebPlugins },
-  setup: ({ slots, pane, webPlugins }, plugin) => {
+  requires: { slots: Slots, pane: Pane, webPlugins: WebPlugins, notify: Notify },
+  setup: ({ slots, pane, webPlugins, notify }, plugin) => {
     const pages = createPages();
     const search = () => plugin.config.search;
+    addSettings(slots, webPlugins, notify, plugin.id, search);
     // A page lives as long as its tab.
     createEffect(() => pages.keepOnly(new Set([MAIN, ...pane.tabs().map((tab) => tab.id)])));
     // The tabs there were when it started: any other is one just opened, whose address bar takes focus once.

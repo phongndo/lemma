@@ -268,7 +268,7 @@ function KeysBody(props: { deps: Deps }) {
   // A line per row by its action and key, so one being re-recorded survives the list updating.
   const lines = createMemo(() => rows().map((row) => JSON.stringify([row.action.id, row.key ?? null])));
   const bound = () => rows().filter((row) => row.key !== undefined).length;
-  // What other plugins add to this section (the composer's send key) comes first.
+  // What other plugins add to this section comes first.
   const extras = createMemo(() =>
     deps.slots
       .list(SettingsGroups)

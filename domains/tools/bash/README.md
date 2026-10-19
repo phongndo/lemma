@@ -3,7 +3,8 @@
 The `bash` tool: a shell command in the session's directory, or one left running
 in the background. Adds it to `Tools`, and a section to the agent's
 `PromptSections` listing a session's background commands while they run. Its web
-half (`./web`) shows a call as its command, as a shell line.
+half (`./web`) shows a call as its command, as a shell line, and offers its
+`timeout` in Settings › General › Agent (through `HostPlugins`).
 
 | Input                                     | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
