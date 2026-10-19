@@ -6,6 +6,7 @@ import { defineRoute } from "@lemma/router";
 import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, LlmFailure, Message, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
+import { SessionSearchMatch } from "./search.ts";
 
 /**
  * A session is an append-only log of events. Each event names its parent, so
@@ -176,13 +177,18 @@ export const SessionInfo = Schema.Struct({
   /** Set by `mark`; present only when true. How clients file the session, not part of its history. */
   pinned: Schema.optional(Schema.Boolean),
   archived: Schema.optional(Schema.Boolean),
+  /** Set by `mark`, present only when true: kept though nothing has gone into it (see `SessionMarks.kept`). */
+  kept: Schema.optional(Schema.Boolean),
 });
 export type SessionInfo = typeof SessionInfo.Type;
 
 export class SessionError extends Data.TaggedError("SessionError")<{
   readonly sessionId?: string;
-  /** `Busy`: `remove` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler refused it. */
-  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy";
+  /**
+   * `Busy`: `remove` or `relocate` refused, as the session is held (`Sessions.hold`) or a `SessionRemoveHook` handler
+   * refused it. `NotEmpty`: `relocate` refused, as something has gone into the session.
+   */
+  readonly reason: "NotFound" | "Corrupt" | "Io" | "InvalidParent" | "Busy" | "NotEmpty";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -236,6 +242,11 @@ export const SessionCheckedOut = Event.make<{ readonly sessionId: string; readon
 export interface SessionMarks {
   readonly pinned?: boolean;
   readonly archived?: boolean;
+  /**
+   * Kept though nothing has gone into it yet: a client holds something for it (an unsent prompt, a page in its pane).
+   * A provider may delete an empty session that is not kept once it has been empty a while (`sessions.files` does).
+   */
+  readonly kept?: boolean;
 }
 
 /** Sessions, stored as logs. Its provider serves them to clients too: it adds `serveSessions` to `Channels`. */
@@ -261,8 +272,20 @@ export class Sessions extends Context.Service<
      * publishes `SessionCheckedOut` once the leaf has moved.
      */
     readonly checkout: (sessionId: string, eventId: string) => Effect.Effect<SessionInfo, SessionError>;
-    /** Pins or archives it. Neither moves the leaf nor `updatedAt`: filing a session is not activity in it. */
+    /** Pins, archives, or keeps it. None moves the leaf nor `updatedAt`: filing a session is not activity in it. */
     readonly mark: (sessionId: string, marks: SessionMarks) => Effect.Effect<SessionInfo, SessionError>;
+    /**
+     * What was said in sessions: in each, the newest prompt or reply on its current branch holding every word of
+     * `query` (`searchLog`), the most recently updated sessions first, up to `limit` (20 when absent). Reading for it is
+     * not a use of a session: one not in memory is read and let go, not kept loaded.
+     */
+    readonly search: (query: string, options?: { readonly limit?: number }) => Effect.Effect<readonly SessionSearchMatch[], SessionError>;
+    /**
+     * Moves a session nothing has gone into yet to another directory, as if it had been made there: a new thread whose
+     * project is changed before its first prompt keeps its id. Fails `NotEmpty` once it has an event, and `Busy` while
+     * it is held.
+     */
+    readonly relocate: (sessionId: string, cwd: string) => Effect.Effect<SessionInfo, SessionError>;
     /**
      * Holds the session while the scope lasts, so it is not removed: work that
      * writes to it holds it from before it starts until it has stopped, as the
@@ -391,10 +414,33 @@ export const SessionChannels = {
   mark: defineChannel({
     kind: "call",
     id: "sessions.mark",
-    title: "Pin or archive a session",
+    title: "Pin, archive, or keep a session",
     description: "Sets how a session is filed; an absent mark keeps its value",
-    payload: Schema.Struct({ ...sessionField, pinned: Schema.optional(Schema.Boolean), archived: Schema.optional(Schema.Boolean) }),
+    payload: Schema.Struct({
+      ...sessionField,
+      pinned: Schema.optional(Schema.Boolean),
+      archived: Schema.optional(Schema.Boolean),
+      kept: Schema.optional(Schema.Boolean),
+    }),
     success: SessionInfo,
+  }),
+  relocate: defineChannel({
+    kind: "call",
+    id: "sessions.relocate",
+    title: "Move an empty session",
+    description: "Moves a session nothing has gone into yet to another directory (cwd); fails NotEmpty once it has an event",
+    payload: Schema.Struct({ ...sessionField, cwd: Schema.String }),
+    success: SessionInfo,
+  }),
+  /** `Sessions.search`: what was said in sessions. It reads sessions' logs, so a client asks once the query has settled. */
+  search: defineChannel({
+    kind: "call",
+    id: "sessions.search",
+    title: "Search sessions",
+    description: "The newest prompt or reply in each session holding every word of a query, most recently updated sessions first",
+    payload: Schema.Struct({ query: Schema.String, limit: Schema.optional(Schema.Number) }),
+    success: Schema.Array(SessionSearchMatch),
+    repeatable: true,
   }),
   /** `Sessions.remove`: fails `Busy` while the session is held, as it is while a turn runs in it. */
   delete: defineChannel({
@@ -481,9 +527,15 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
   serveChannel(SessionChannels.setTitle, ({ sessionId, title }) =>
     Effect.andThen(sessions.append(sessionId, { type: "title", title }), sessions.get(sessionId)),
   ),
-  serveChannel(SessionChannels.mark, ({ sessionId, pinned, archived }) =>
-    sessions.mark(sessionId, { ...(pinned === undefined ? {} : { pinned }), ...(archived === undefined ? {} : { archived }) }),
+  serveChannel(SessionChannels.mark, ({ sessionId, pinned, archived, kept }) =>
+    sessions.mark(sessionId, {
+      ...(pinned === undefined ? {} : { pinned }),
+      ...(archived === undefined ? {} : { archived }),
+      ...(kept === undefined ? {} : { kept }),
+    }),
   ),
+  serveChannel(SessionChannels.relocate, ({ sessionId, cwd }) => sessions.relocate(sessionId, cwd)),
+  serveChannel(SessionChannels.search, ({ query, limit }) => sessions.search(query, limit === undefined ? undefined : { limit })),
   serveChannel(SessionChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
   serveChannel(SessionChannels.changes, () =>
     eventFeed(Effect.succeed<SessionsChange>({ type: "subscribed" }), [
@@ -501,5 +553,5 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
 
 /** A new thread. */
 export const NewThreadRoute = defineRoute("thread.new", { path: "/" });
-/** A thread, in one of its views (the web app's `Views` item ids; the first when absent). */
+/** A thread; with `view` (a web app `Views` item's id), that view opened in the pane beside its chat. */
 export const ThreadRoute = defineRoute("thread", { path: "/threads/:id/:view?" });

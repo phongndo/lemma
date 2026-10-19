@@ -14,9 +14,12 @@ import {
   SessionEvent,
   SessionRemoved,
   SessionRemoveHook,
+  branchOf,
+  searchLog,
+  searchWords,
 } from "@lemma/sessions";
-import type { SessionInfo, Sessions } from "@lemma/sessions";
-import { errorCode, syncDirectory } from "@lemma/contracts/fs";
+import type { SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
+import { errorCode, syncDirectory, syncParents } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, unfiled } from "./file.ts";
 import type { FiledAs, LastLine, Scanned, Writer } from "./file.ts";
@@ -48,7 +51,8 @@ interface Open {
 /** Every session file seen. `info` is cached for `list`; `scanned` is the file as last read, or as memory knew it when unloaded. */
 interface Entry {
   readonly id: string;
-  readonly file: string;
+  /** Where it is: `relocate` moves it to its new directory's. */
+  file: string;
   /** Serializes loading, appends, checkouts, and unloading. */
   readonly lock: Semaphore.Semaphore;
   info: SessionInfo;
@@ -59,6 +63,10 @@ interface Entry {
 }
 
 const decodeEvent = Schema.decodeUnknownResult(SessionEvent, { onExcessProperty: "error" });
+
+/** What `search` finds at most when not told, and how many logs it reads at once. */
+const SEARCH_LIMIT = 20;
+const SEARCH_READS = 8;
 const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1();
 
 /**
@@ -97,6 +105,8 @@ const scannedOf = (open: Open, stat: { readonly size: number; readonly mtimeMs: 
 interface Options {
   /** Seconds an open session may go unused before it is unloaded; 0 keeps it loaded. */
   readonly unloadAfter: number;
+  /** Seconds a session may stay empty since it was made, and not kept, before it is deleted; 0 keeps them all. */
+  readonly emptyAfter: number;
   /** Where the files are: the real file system, or a simulated disk in tests. Time comes from Effect's `Clock`. */
   readonly fs: FileSystem;
   /** Where session and event ids' random bytes come from. */
@@ -107,6 +117,7 @@ interface Options {
 
 export const make = ({
   unloadAfter,
+  emptyAfter,
   fs,
   ids,
   claimant,
@@ -217,10 +228,20 @@ export const make = ({
      * A file appended to since is read on from where the last read stopped. Open sessions are authoritative.
      */
     const refresh = (id: string, file: string): Effect.Effect<Entry, SessionError> =>
+      Effect.suspend(() => {
+        const at = entries.get(id)?.file ?? file;
+        return refreshAt(id, at).pipe(
+          // Moved meanwhile (`relocate` renames it without the lock this takes none of): read where it now is.
+          Effect.catch((error) => {
+            const moved = entries.get(id)?.file;
+            return moved !== undefined && moved !== at ? refreshAt(id, moved) : Effect.fail(error);
+          }),
+        );
+      });
+    const refreshAt = (id: string, at: string): Effect.Effect<Entry, SessionError> =>
       Effect.gen(function* () {
         const known = entries.get(id);
         if (known?.open !== undefined) return known;
-        const at = known?.file ?? file;
         const { mtimeMs, size, ino } = yield* stat(at);
         const prior = known?.scanned ?? index.get(keyOf(at));
         if (prior !== undefined && prior.size === size && prior.mtimeMs === mtimeMs && prior.ino === ino) {
@@ -488,6 +509,123 @@ export const make = ({
         ),
       );
 
+    /**
+     * Moves an empty session: the new directory is written to its file first (a marks record), so wherever a crash
+     * leaves the file it reads as moved; then the file is renamed into that directory's folder, best effort, as the
+     * folder only groups files and `list` by directory looks there.
+     */
+    const relocate: Service["relocate"] = (sessionId, to) =>
+      Effect.gen(function* () {
+        const cwd = path.resolve(to);
+        const entry = yield* locate(sessionId);
+        return yield* entry.lock.withPermits(1)(
+          Effect.uninterruptible(
+            Effect.gen(function* () {
+              const open = yield* openLocked(entry);
+              if (open.events.length > 0) {
+                return yield* new SessionError({ sessionId, reason: "NotEmpty", message: `Session ${sessionId} has events: only an empty session moves` });
+              }
+              if (holds.has(sessionId) || deleting.has(sessionId)) return yield* busy(sessionId);
+              if (entry.info.cwd === cwd) return entry.info;
+              yield* commit(entry, open, { type: "marks", cwd, at: yield* Clock.currentTimeMillis }, () => {
+                open.marks = applyMarks(open.marks, { cwd });
+              });
+              const file = sessionFile(root, cwd, open.header.createdAt, sessionId);
+              if (file === entry.file) return entry.info;
+              const from = entry.file;
+              // Closed before the rename, and the session dropped from memory as an unload drops it: the next use reads
+              // it again where it now is.
+              if (open.writer !== undefined) yield* open.writer.settle;
+              yield* forget(entry);
+              let created: unknown;
+              const moved = yield* Effect.exit(
+                Effect.tryPromise({
+                  try: async () => {
+                    created = await fs.mkdir(path.dirname(file), { recursive: true });
+                    await fs.rename(from, file);
+                    // Where it is from the moment it is there: a `list` or `get` meanwhile looks for it there.
+                    entry.file = file;
+                  },
+                  catch: io(sessionId, `Cannot move ${from} to ${file}`),
+                }),
+              );
+              if (Exit.isFailure(moved)) {
+                yield* warn(`Session ${sessionId} moved to ${cwd}, but its file stays in ${path.dirname(from)}`);
+                return entry.info;
+              }
+              indexChanged = index.delete(keyOf(from)) || indexChanged;
+              // Its new name made durable: until it is, a crash may leave the file in the old folder, where it still
+              // reads as moved (its marks say so), and the next load makes it durable.
+              const synced = yield* Effect.exit(
+                Effect.tryPromise({
+                  try: async () => {
+                    await syncDirectory(fs, path.dirname(file));
+                    await syncParents(fs, path.dirname(file), created);
+                    await syncDirectory(fs, path.dirname(from)).catch(() => undefined);
+                  },
+                  catch: io(sessionId, `Cannot make ${file} durable`),
+                }),
+              );
+              if (Exit.isSuccess(synced)) confirmed.add(file);
+              else yield* warn(`Session ${sessionId} moved to ${cwd}, but its new name may not survive a crash yet`);
+              const at = yield* Effect.option(stat(file));
+              if (Option.isSome(at)) record(entry, scannedOf(open, at.value));
+              return entry.info;
+            }),
+          ),
+        );
+      });
+
+    /**
+     * `Sessions.search`: the sessions with something in them, the most recently updated first, read a few at a time
+     * until `limit` have matched. One loaded is read in memory; any other from its file, let go after, without counting
+     * as a use or being made durable; one unreadable is passed over.
+     */
+    const search: Service["search"] = (query, options) =>
+      Effect.gen(function* () {
+        const words = searchWords(query);
+        const limit = options?.limit ?? SEARCH_LIMIT;
+        if (words.length === 0) return [];
+        const said = (yield* list()).filter((info) => info.lastSeq > 0);
+        const found: SessionSearchMatch[] = [];
+        for (let at = 0; at < said.length && found.length < limit; at += SEARCH_READS) {
+          const matches = yield* Effect.forEach(
+            said.slice(at, at + SEARCH_READS),
+            (info) =>
+              Effect.orElseSucceed(
+                Effect.map(readBranch(info.id), (events) => searchLog(info.id, events, words)),
+                () => undefined,
+              ),
+            { concurrency: SEARCH_READS },
+          );
+          for (const match of matches) if (match !== undefined) found.push(match);
+        }
+        return found.slice(0, limit);
+      });
+    /** A session's current branch, from memory when it is loaded, else read from its file and not kept. */
+    const readBranch = (sessionId: string): Effect.Effect<readonly SessionEvent[], SessionError> =>
+      Effect.suspend(() => {
+        const entry = entries.get(sessionId);
+        if (entry === undefined) return Effect.succeed([]);
+        if (entry.open !== undefined) return Effect.succeed(branchOf(entry.open.events, entry.open.leaf));
+        return Effect.map(load(fs, entry.file, sessionId), (loaded) => branchOf(loaded.events, loaded.leaf));
+      });
+
+    /**
+     * Deletes the sessions nothing has gone into for `emptyAfter` seconds since they were made, unless kept (a client
+     * holds something for them), filed (pinned, archived), or held: new threads a client made and left. Run as the
+     * store starts and every hour after.
+     */
+    const sweepEmpty = (emptyAfter: number) =>
+      Effect.gen(function* () {
+        const cutoff = (yield* Clock.currentTimeMillis) - emptyAfter * 1000;
+        for (const info of yield* list()) {
+          if (info.lastSeq > 0 || info.kept === true || info.pinned === true || info.archived === true || info.createdAt > cutoff) continue;
+          // One in use, or refused by a hook, stays.
+          yield* Effect.ignore(remove(info.id));
+        }
+      });
+
     /** What `remove` does once every `SessionRemoveHook` handler let it. */
     const removeNow = (sessionId: string) =>
       Effect.gen(function* () {
@@ -604,6 +742,10 @@ export const make = ({
       });
       yield* owner.background("unload idle sessions", Effect.repeat(sweep, Schedule.spaced(Duration.millis(Math.min(idleMs / 2, 60_000)))));
     }
+    if (emptyAfter > 0) {
+      // A failed sweep (a disk error listing) is tried again at the next.
+      yield* owner.background("delete abandoned empty sessions", Effect.repeat(Effect.ignore(sweepEmpty(emptyAfter)), Schedule.spaced(Duration.hours(1))));
+    }
 
     return {
       create,
@@ -617,6 +759,8 @@ export const make = ({
       branch,
       checkout,
       mark,
+      relocate,
+      search,
       hold,
       remove,
     } satisfies Service;

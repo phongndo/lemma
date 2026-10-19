@@ -3,8 +3,10 @@
 Provides `Sessions` (`@lemma/sessions`): each session is an append-only tree of
 `SessionEvent`s stored as one JSONL file. Requires `Paths`. Serves the
 `sessions.*` channels (`SessionChannels`, through `serveSessions`): the calls
-clients make on sessions; `sessions.log`, one session's log as it grows; and
-`sessions.changes`, every session created, changed, or removed.
+clients make on sessions (`sessions.relocate` moves an empty one, its file
+into its new directory's folder); `sessions.search`, what was said in them;
+`sessions.log`, one session's log as it grows; and `sessions.changes`, every
+session created, changed, or removed.
 
 ```ts
 Effect.gen(function* () {
@@ -20,9 +22,10 @@ Effect.gen(function* () {
 { "plugins": { "sessions.files": { "config": { "unloadAfter": 300 } } } }
 ```
 
-| Config        | Default | Meaning                                                                                                                                    |
-| ------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `unloadAfter` | `300`   | Seconds a session may go unused before its events leave memory and its file is closed; the next use reloads it. `0` keeps sessions loaded. |
+| Config        | Default | Meaning                                                                                                                                              |
+| ------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `unloadAfter` | `300`   | Seconds a session may go unused before its events leave memory and its file is closed; the next use reloads it. `0` keeps sessions loaded.           |
+| `emptyAfter`  | `86400` | Seconds a session nothing has gone into may stay, since it was made, before it is deleted (a new thread a client made and left). `0` keeps them all. |
 
 ## Storage
 
@@ -35,12 +38,14 @@ pi-style (`/home/me/app` → `--home-me-app--`); the header's `cwd` is authorita
 | 1        | `{ "type": "session", "version": 1, id, cwd, createdAt }`                   |
 | event    | a `SessionEvent` (`seq`, `id`, `parent`, `at`, `data`); no top-level `type` |
 | checkout | `{ "type": "checkout", "leaf": eventId, "at" }`                             |
-| marks    | `{ "type": "marks", "pinned"?, "archived"?, "at" }`                         |
+| marks    | `{ "type": "marks", "pinned"?, "archived"?, "kept"?, "cwd"?, "at" }`        |
 
 `seq` counts events only (checkout lines do not advance it). The leaf is the last
 event appended or the last checkout, whichever is later. The title is the latest
-`title` event; `pinned` and `archived` are the latest value each marks line gave
-(a marks line moves neither the leaf nor `updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
+`title` event; `pinned`, `archived`, and `kept` are the latest value each marks
+line gave, and a marks line's `cwd` (written by `relocate`) moves the session to
+that directory, over the header's (a marks line moves neither the leaf nor
+`updatedAt`: filing a session is not activity in it). Session ids are 12 url-safe random characters; event ids 8.
 
 `<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
@@ -101,6 +106,19 @@ costs re-reading the files.
   file, and the next use reloads it. A loaded session takes about 1.1× its file
   size in heap, and reloading a 40 MB one about 70 ms: without unloading, a
   long-running host's heap and open files grow with every session it touches.
+- **Moving an empty session** (`relocate`) writes its new directory to its
+  file first, then renames the file into that directory's folder: a `list` or
+  `get` meanwhile finds it where it is. A rename that fails leaves the file
+  where it was, still read as moved; a sync of its new name that fails is
+  warned of and made good by the next load.
+- **Search** (`search`) reads the sessions with something in them, the most
+  recently updated first, eight at a time, until enough have matched. A
+  session in memory is read there; any other is read from its file and let go,
+  not counted as a use, so searching neither loads sessions nor keeps them.
+- **Empty sessions** nothing has gone into for `emptyAfter` seconds since they
+  were made are deleted, as the store starts and every hour after, unless kept
+  (`SessionMarks.kept`: a client holds something for one), pinned, archived,
+  or in use: new threads a client made and left, as when its tab closed.
 - **One process per directory.** The store holds `<Paths.home>/sessions/.lock`
   (`{ pid, hostname, token, startedAt }`) while it runs, and touches it every 10
   seconds, so a second host on the same directory fails to activate this plugin

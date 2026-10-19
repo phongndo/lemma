@@ -20,6 +20,13 @@ const Config = Schema.Struct({
       title: "Unload after",
       description: "Seconds a session may go unused before its events leave memory and its file is closed; the next use reloads it. 0 keeps sessions loaded.",
     }),
+  emptyAfter: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 86_400)))
+    .annotate({
+      title: "Delete empty after",
+      description:
+        "Seconds a session nothing has gone into may stay, since it was made, before it is deleted (checked hourly): a new thread a client made and left. One kept, pinned, archived, or in use stays. 0 keeps them all.",
+    }),
 });
 type Config = typeof Config.Type;
 
