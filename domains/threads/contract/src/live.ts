@@ -134,7 +134,7 @@ export const applyDelta = (state: LiveState, turnId: string, stepId: string, eve
   if (seq !== undefined && seq <= draft.seq) return state;
   const applied = applyToDraft(draft, event);
   // Numbered even when it changes nothing shown (a step's `start`), so the next is not taken for one past a gap.
-  const next = seq === undefined || (applied === draft && seq === draft.seq) ? applied : { ...applied, seq };
+  const next = seq === undefined ? applied : { ...applied, seq };
   if (next === draft && index !== -1) return state;
   const drafts = state.drafts.slice();
   if (index === -1) drafts.push(next);
