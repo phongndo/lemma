@@ -44,7 +44,9 @@ its counts are the same on every machine, and hard budgets.
 the runtime's contracts, the host and web runtimes, the planner, the client)
 to a size budget in lines (`scripts/size.ts`), and prints how many extension
 points each domain's contract declares. A change that needs more raises the
-budget in the same change.
+budget in the same change. It reports, failing nothing, how many of those
+points the examples and the bundled plugins use, and names any neither does
+(`scripts/examples-coverage.ts`; `--list` says which examples show each).
 
 Tests wait for a condition, never a fixed time, and make their temporary files
 with `mkdtemp`: `scripts/check-boundaries.ts` (in `pnpm check`) counts fixed

@@ -1,13 +1,116 @@
 /*
  * `@lemma/llm/testing`: the `Llm` contract as a Vitest suite, which a plugin replacing `llm.pi-ai` (or adding a
- * provider) runs to meet the same bar (`llmConformance`). Imports `vitest`: for tests only.
+ * provider) runs to meet the same bar (`llmConformance`), and a scripted model (`scriptedLlm`) for testing a plugin in
+ * a real turn. Imports `vitest`: for tests only.
  */
-import { Effect, Result, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Result, Schema, Stream } from "effect";
 import { describe, expect, test } from "vitest";
-import { definePlugin, makeCore, PluginContext } from "@lemma/core";
+import { definePlugin, Hooks, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { Llm, LlmRequest, LlmRequestHook, StreamEvent } from "./llm.ts";
-import type { StreamEvent as ModelEvent } from "./llm.ts";
+import { emptyUsage, Llm, LlmError, LlmRequest, LlmRequestHook, StreamEvent, streamThroughHook } from "./llm.ts";
+import type { AssistantMessage, ModelInfo, StreamEvent as ModelEvent, ToolCall } from "./llm.ts";
+
+/** What a scripted model plays for one call: the stream a provider would. */
+export type Script = Stream.Stream<ModelEvent, LlmError>;
+
+/** The scripted model's one model. */
+export const SCRIPTED_MODEL: ModelInfo = {
+  ref: "scripted/model",
+  provider: "scripted",
+  id: "model",
+  name: "Scripted model",
+  api: "scripted",
+  reasoning: false,
+  thinkingLevels: [],
+  input: ["text"],
+  contextWindow: 100_000,
+  maxTokens: 8_000,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+
+const answer = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): AssistantMessage => ({
+  role: "assistant",
+  content,
+  api: SCRIPTED_MODEL.api,
+  provider: SCRIPTED_MODEL.provider,
+  model: SCRIPTED_MODEL.id,
+  usage: { ...emptyUsage, input: 10, output: 5, totalTokens: 15 },
+  stopReason,
+  timestamp: 1,
+});
+
+/** Answers `text`, ending the turn. */
+export const reply = (text: string): Script =>
+  Stream.fromIterable<ModelEvent>([
+    { type: "start" },
+    { type: "text-delta", index: 0, delta: text },
+    { type: "done", message: answer([{ type: "text", text }], "stop") },
+  ]);
+
+/** A call of the tool `name` with `args`, for `callTools`. */
+export const toolCall = (name: string, args: Record<string, unknown>, id = `call-${name}`): ToolCall => ({ type: "toolCall", id, name, arguments: args });
+
+/** Calls the tools, so the turn runs them and asks the model again. */
+export const callTools = (...calls: ToolCall[]): Script =>
+  Stream.fromIterable<ModelEvent>([
+    { type: "start" },
+    ...calls.flatMap((call, index): ModelEvent[] => [
+      { type: "toolcall-start", index, id: call.id, name: call.name },
+      { type: "toolcall-end", index, toolCall: call },
+    ]),
+    { type: "done", message: answer(calls, "toolUse") },
+  ]);
+
+/** Writes `text`, then never ends: for a turn that runs while the test acts. */
+export const hang = (text: string): Script =>
+  Stream.concat(Stream.fromIterable<ModelEvent>([{ type: "start" }, { type: "text-delta", index: 0, delta: text }]), Stream.never);
+
+/** Plays `script` once `gate` opens. */
+export const gated = (gate: Deferred.Deferred<void>, script: Script): Script => Stream.unwrap(Effect.as(Deferred.await(gate), script));
+
+/**
+ * A plugin providing `Llm` with one model (`SCRIPTED_MODEL`), which plays `scripts` in order, a call each (a function
+ * of the request, for one that answers what it was asked), recording each request; a call past the last fails. It
+ * runs `LlmRequestHook` as a provider does. For testing a plugin in a real turn: compose it with the agent, the
+ * session log, and the tools, as the agent suite does (`@lemma/agent/testing`).
+ */
+export const scriptedLlm = (scripts: readonly (Script | ((request: LlmRequest) => Script))[], id = "scripted-llm") => {
+  const requests: LlmRequest[] = [];
+  const queue = [...scripts];
+  const unknown = (ref: string) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` }));
+  const plugin = definePlugin({
+    id,
+    provides: [Llm],
+    layer: Layer.effect(
+      Llm,
+      Effect.map(Hooks, (hooks) => ({
+        providers: Effect.succeed([]),
+        models: () => Effect.succeed([SCRIPTED_MODEL]),
+        model: (ref: string) => (ref === SCRIPTED_MODEL.ref ? Effect.succeed(SCRIPTED_MODEL) : unknown(ref)),
+        stream: (request: LlmRequest) =>
+          streamThroughHook(hooks, request, (asked) =>
+            Effect.sync(() => {
+              requests.push(asked);
+              const next = queue.shift();
+              return next === undefined
+                ? Stream.fail(new LlmError({ reason: "UnknownModel", message: "no script left" }))
+                : typeof next === "function"
+                  ? next(asked)
+                  : next;
+            }),
+          ),
+        login: () => Effect.void,
+        logout: () => Effect.void,
+        addCustom: () => Effect.succeed("custom"),
+        removeCustom: () => Effect.void,
+        setLogo: () => Effect.void,
+        classifiers: () => Effect.succeed([]),
+        classify: unknown,
+      })),
+    ),
+  });
+  return { plugin, requests };
+};
 
 /** Checks stream grammar and deltas against the terminal message, independently of provider adapters. */
 export function streamProblems(events: readonly unknown[]): string[] {

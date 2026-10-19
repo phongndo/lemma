@@ -10,101 +10,19 @@ import type { Scope } from "effect";
 import { describe, expect, test } from "vitest";
 import { definePlugin, Events, Hooks, makeCore, PluginContext } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { emptyUsage, Llm, LlmError, streamThroughHook } from "@lemma/llm";
-import type { AssistantMessage, LlmRequest, ModelInfo, StreamEvent, ToolCall } from "@lemma/llm";
+import { callTools, gated, hang, reply, scriptedLlm, SCRIPTED_MODEL } from "@lemma/llm/testing";
+import type { Script } from "@lemma/llm/testing";
+import type { LlmRequest } from "@lemma/llm";
 import { branchOf, rebuildRequest, Sessions } from "@lemma/sessions";
 import type { SessionEvent } from "@lemma/sessions";
 import { ToolResult, Tools } from "@lemma/tools";
 import { Agent, AgentContinueHook, AgentInputHook, TurnEnded, TurnStarted } from "./agent.ts";
 import type { PromptContent } from "./agent.ts";
 
-/** A script the suite's model plays for one call. */
-type Script = Stream.Stream<StreamEvent, LlmError>;
-
-const MODEL: ModelInfo = {
-  ref: "conformance/model",
-  provider: "conformance",
-  id: "model",
-  name: "Conformance model",
-  api: "conformance",
-  reasoning: false,
-  thinkingLevels: [],
-  input: ["text"],
-  contextWindow: 100_000,
-  maxTokens: 8_000,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
-
-const answer = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): AssistantMessage => ({
-  role: "assistant",
-  content,
-  api: "conformance",
-  provider: "conformance",
-  model: "model",
-  usage: { ...emptyUsage, input: 10, output: 5, totalTokens: 15 },
-  stopReason,
-  timestamp: 1,
-});
-
-const reply = (text: string): Script =>
-  Stream.fromIterable<StreamEvent>([
-    { type: "start" },
-    { type: "text-delta", index: 0, delta: text },
-    { type: "done", message: answer([{ type: "text", text }], "stop") },
-  ]);
-
-const callTools = (...calls: ToolCall[]): Script =>
-  Stream.fromIterable<StreamEvent>([
-    { type: "start" },
-    ...calls.flatMap((call, index): StreamEvent[] => [
-      { type: "toolcall-start", index, id: call.id, name: call.name },
-      { type: "toolcall-end", index, toolCall: call },
-    ]),
-    { type: "done", message: answer(calls, "toolUse") },
-  ]);
-
-/** Writes `text`, then never ends: for a turn that runs while the test acts. */
-const hang = (text: string): Script =>
-  Stream.concat(Stream.fromIterable<StreamEvent>([{ type: "start" }, { type: "text-delta", index: 0, delta: text }]), Stream.never);
-
-/** Plays `script` once `gate` opens. */
-const gated = (gate: Deferred.Deferred<void>, script: Script): Script => Stream.unwrap(Effect.as(Deferred.await(gate), script));
-
 const text = (value: string): PromptContent => [{ type: "text", text: value }];
 
 /** The suite's model, as a provider of `Llm` runs it (through `LlmRequestHook`), recording each request. */
-const scriptedModel = (scripts: readonly Script[]) => {
-  const requests: LlmRequest[] = [];
-  const queue = [...scripts];
-  const plugin = definePlugin({
-    id: "conformance-model",
-    provides: [Llm],
-    layer: Layer.effect(
-      Llm,
-      Effect.map(Hooks, (hooks) => ({
-        providers: Effect.succeed([]),
-        models: () => Effect.succeed([MODEL]),
-        model: (ref: string) =>
-          ref === MODEL.ref ? Effect.succeed(MODEL) : Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
-        stream: (request: LlmRequest) =>
-          streamThroughHook(hooks, request, (asked) =>
-            Effect.sync(() => {
-              requests.push(asked);
-              return queue.shift() ?? Stream.fail(new LlmError({ reason: "UnknownModel", message: "no script left" }));
-            }),
-          ),
-        login: () => Effect.void,
-        logout: () => Effect.void,
-        addCustom: () => Effect.succeed("custom"),
-        removeCustom: () => Effect.void,
-        setLogo: () => Effect.void,
-        classifiers: () => Effect.succeed([]),
-        classify: (ref: string) => Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model ${ref}` })),
-      })),
-    ),
-  });
-  return { plugin, requests };
-};
+const scriptedModel = (scripts: readonly Script[]) => scriptedLlm(scripts, "conformance-model");
 
 /** The suite's tool, `echo`, recording each run. */
 const echoTool = () => {
@@ -142,7 +60,7 @@ const waitFor = <A>(read: Effect.Effect<A>, ready: (value: A) => boolean): Effec
 /**
  * The `Agent` contract as tests. `compose` returns, fresh for each test, the plugins that provide `Agent`, and what
  * it needs but the model and the tools (a `Sessions`, a `ToolRunner`, and the runtime the application would provide):
- * the suite adds a scripted `Llm` (one model, `conformance/model`) and an `echo` tool. A plugin written to replace
+ * the suite adds a scripted `Llm` (`scriptedLlm`, one model, `scripted/model`) and an `echo` tool. A plugin written to replace
  * `agent.loop` runs it to meet the bar the bundled one does.
  */
 export function agentConformance(name: string, compose: () => readonly Plugin[] | Promise<readonly Plugin[]>): void {
@@ -161,7 +79,9 @@ export function agentConformance(name: string, compose: () => readonly Plugin[] 
       return Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const core = yield* makeCore([...plugins, model.plugin, tools.plugin, ...extra], { configs: { "agent.loop": { defaultModel: MODEL.ref } } });
+            const core = yield* makeCore([...plugins, model.plugin, tools.plugin, ...extra], {
+              configs: { "agent.loop": { defaultModel: SCRIPTED_MODEL.ref } },
+            });
             return yield* core.run(body({ requests: model.requests, ran: tools.ran }));
           }),
         ) as Effect.Effect<A, unknown>,
