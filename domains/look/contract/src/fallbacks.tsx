@@ -1,4 +1,4 @@
-import { For } from "solid-js";
+import { For, Show } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
 import { configEdit, configText } from "./config.ts";
 import type { ConfigFormProps, IconName, IconProps, SearchFieldProps, SegmentedProps, ToggleProps } from "./parts.tsx";
@@ -109,7 +109,9 @@ export function ConfigFormFallback(props: ConfigFormProps) {
           </p>
         )}
       </For>
-      <p>Saved to {props.file}, where any other setting is edited.</p>
+      <Show when={props.file}>
+        <p>Saved to {props.file}, where any other setting is edited.</p>
+      </Show>
     </div>
   );
 }

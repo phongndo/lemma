@@ -4,7 +4,7 @@ import { stepFor } from "@lemma/web/keys";
 import { Layers } from "@lemma/frame";
 import { Interactions, Slots, defineWebPlugin } from "@lemma/web";
 import type { InteractionsService } from "@lemma/web";
-import { Dialog } from "@lemma/look";
+import { ConfigForm, Dialog } from "@lemma/look";
 import styles from "./interaction-dialog.css?inline";
 
 type Of<T extends InteractionRequest["type"]> = Extract<InteractionRequest, { type: T }>;
@@ -106,6 +106,63 @@ function Select(props: { interactions: InteractionsService; request: Of<"select"
   );
 }
 
+/**
+ * Several values at once, drawn as a plugin's settings are (`ConfigForm`): each field kept here as it is set, and
+ * sent together. A field the form needs and has no default for must be set first.
+ */
+function Form(props: { interactions: InteractionsService; request: Of<"form"> }) {
+  const [values, setValues] = createSignal<Readonly<Record<string, unknown>>>({});
+  const missing = () => props.request.fields.filter((field) => !field.optional && values()[field.key] === undefined);
+  const submit = () => props.interactions.answer(props.request.id, { type: "form", value: values() });
+  return (
+    <Dialog
+      title={props.request.title}
+      onClose={() => props.interactions.dismiss(props.request.id)}
+      footer={
+        <>
+          <button type="button" class="button" onClick={() => props.interactions.dismiss(props.request.id)}>
+            Cancel
+          </button>
+          <button
+            type="button"
+            class="button button-primary"
+            disabled={missing().length > 0}
+            data-tip={
+              missing().length > 0
+                ? `Needs ${missing()
+                    .map((field) => field.title)
+                    .join(", ")}`
+                : undefined
+            }
+            onClick={submit}
+          >
+            Submit
+          </button>
+        </>
+      }
+    >
+      <Show when={props.request.detail}>
+        <p class="dialog-detail">{props.request.detail}</p>
+      </Show>
+      <ConfigForm
+        fields={props.request.fields}
+        config={{ values: values(), secretsSet: [] }}
+        // A field set to null is unset, back to its default.
+        onSave={async (changed) => {
+          setValues((all) => {
+            const next: Record<string, unknown> = { ...all };
+            for (const [key, value] of Object.entries(changed)) {
+              if (value === null) delete next[key];
+              else next[key] = value;
+            }
+            return next;
+          });
+        }}
+      />
+    </Dialog>
+  );
+}
+
 /** The oldest open question from the host; answering or dismissing reveals the next. A view that claims questions (the palette, the Providers page) shows those itself. */
 function InteractionModal(props: { interactions: InteractionsService }) {
   const current = () => props.interactions.open().find((request) => !props.interactions.claimed(request));
@@ -116,13 +173,14 @@ function InteractionModal(props: { interactions: InteractionsService }) {
           <Match when={request.type === "ask" && request}>{(r) => <Ask interactions={props.interactions} request={r()} />}</Match>
           <Match when={request.type === "confirm" && request}>{(r) => <Confirm interactions={props.interactions} request={r()} />}</Match>
           <Match when={request.type === "select" && request}>{(r) => <Select interactions={props.interactions} request={r()} />}</Match>
+          <Match when={request.type === "form" && request}>{(r) => <Form interactions={props.interactions} request={r()} />}</Match>
         </Switch>
       )}
     </Show>
   );
 }
 
-/** The host's questions as a dialog: an API key to enter, a change to confirm, an option to pick. */
+/** The host's questions as a dialog: an API key to enter, a change to confirm, an option to pick, a form to fill. */
 export default defineWebPlugin({
   id: "frame.questions",
   styles,

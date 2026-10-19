@@ -238,5 +238,30 @@ export const separate = async (): Promise<string> => {
     .catch(() => assert.fail("an older app's scheme and width were not carried into config"));
   await carried.close();
   expectNoErrors("carrying an older app's appearance into config");
-  return "with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
+
+  // A form question: drawn as a plugin's settings are, its Submit waiting on the field it needs, and what is set the answer.
+  const form = await open();
+  form.on("pageerror", (error) => errors.push(error.message));
+  await form.goto(`${url}/?mock`);
+  await settled(form);
+  await form.evaluate(async () => {
+    const { Commands } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const commands = await (window as any).lemma.service(Commands);
+    void commands.run(commands.list().find((command: { readonly id: string }) => command.id === "workspace.pull-request"));
+  });
+  const dialog = form.locator(".dialog", { hasText: "Open a pull request" });
+  await dialog.waitFor({ timeout: 5_000 }).catch(() => assert.fail("a form question does not show"));
+  const submit = dialog.getByRole("button", { name: "Submit" });
+  assert.ok(await submit.isDisabled(), "a form's Submit is open before the field it needs is set");
+  await dialog.locator("#config-title").fill("Add forms");
+  await dialog.locator("#config-title").blur();
+  await dialog.locator("#config-base").selectOption("develop");
+  await submit.click();
+  await form
+    .getByText('Opened "Add forms" into develop')
+    .waitFor({ timeout: 5_000 })
+    .catch(() => assert.fail("a form's answer did not reach the command that asked it"));
+  await form.close();
+  expectNoErrors("answering a form");
+  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
 };

@@ -257,6 +257,28 @@ describe("questions", () => {
     expect(toAnswer({ type: "ask", id: "a", title: "Key" }, " sk ")).toEqual({ type: "ask", value: " sk " });
   });
 
+  test("a form is answered with its fields as JSON, each of its type, every one it needs there", () => {
+    const form = {
+      type: "form" as const,
+      id: "f",
+      title: "Book a meeting",
+      fields: [
+        { key: "title", title: "Title", type: "string" as const, optional: false },
+        { key: "minutes", title: "Minutes", type: "integer" as const, optional: true, default: 30 },
+        { key: "room", title: "Room", type: "enum" as const, options: ["a", "b"], optional: true },
+      ],
+    };
+    expect(toAnswer(form, '{"title": "Standup", "minutes": "15", "room": "b"}')).toEqual({ type: "form", value: { title: "Standup", minutes: 15, room: "b" } });
+    expect(toAnswer(form, '{"title": "Standup"}')).toEqual({ type: "form", value: { title: "Standup" } });
+    expect(toAnswer(form, '{"minutes": 15}')).toBe('It needs title: answer as {"title":"…","minutes":30,"room":"a"}');
+    expect(toAnswer(form, '{"title": "x", "minutes": 1.5}')).toContain("minutes must be a whole number");
+    expect(toAnswer(form, '{"title": "x", "seats": 3}')).toContain("seats is not one of its fields (title, minutes, room)");
+    expect(toAnswer(form, "Standup")).toContain('Answer "Book a meeting" with its fields as JSON');
+    expect(formatQuestions([form])).toBe(
+      ["f  form  Book a meeting", "    title (string)", "    minutes (integer, optional, default 30)", "    room (a | b, optional)"].join("\n"),
+    );
+  });
+
   test("open questions show what they are about before their choices", () => {
     const approval = {
       type: "select" as const,

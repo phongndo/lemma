@@ -79,7 +79,11 @@ const hostIcon = (command: CommandInfo): Component => {
   }
 };
 
-const fromInteraction = (request: InteractionRequest): Question => {
+/** A question the palette shows: any but a form, which the question dialog draws. */
+type PaletteQuestion = Exclude<InteractionRequest, { readonly type: "form" }>;
+const inPalette = (request: InteractionRequest): request is PaletteQuestion => request.type !== "form";
+
+const fromInteraction = (request: PaletteQuestion): Question => {
   switch (request.type) {
     case "select":
       return {
@@ -124,8 +128,8 @@ function Palette(props: { deps: Deps }) {
   let list!: HTMLDivElement;
   const previous = document.activeElement as HTMLElement | null;
   let disposed = false;
-  // The host's questions show here while the palette is open.
-  onCleanup(interactions.claim());
+  // The host's questions show here while the palette is open, but a form, which needs its dialog.
+  onCleanup(interactions.claim(inPalette));
 
   const close = () => {
     dialogs.open(undefined);
@@ -175,7 +179,7 @@ function Palette(props: { deps: Deps }) {
 
   // Host questions take precedence: a running command is waiting on them.
   const asking = createMemo((): Asking | undefined => {
-    const request = interactions.open()[0];
+    const request = interactions.open().find(inPalette);
     if (request === undefined) return local();
     return {
       id: request.id,

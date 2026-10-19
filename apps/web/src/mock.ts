@@ -250,6 +250,13 @@ const MOCK_SKILLS = [
 
 const MOCK_COMMANDS = [
   {
+    id: "workspace.pull-request",
+    title: "Open pull request…",
+    category: "Git",
+    description: "Open a pull request from the current branch",
+    source: "workspace.commands",
+  },
+  {
     id: "workspace.new-branch",
     title: "Create branch…",
     category: "Git",
@@ -1675,6 +1682,27 @@ export const createMockHost = (): Host => {
             await sleep(250);
             currentBranch = answer.value.replace(/^origin\//, "");
             return { message: `Switched to ${currentBranch}` };
+          }
+          case "workspace.pull-request": {
+            // A form: its fields as a plugin's settings are described (`describeConfig`).
+            const answer = await ask({
+              type: "interaction",
+              request: {
+                type: "form",
+                id: id("i"),
+                title: "Open a pull request",
+                detail: `From ${currentBranch}`,
+                fields: [
+                  { key: "title", title: "Title", type: "string", optional: false },
+                  { key: "base", title: "Base", type: "enum", options: ["main", "develop"], optional: true, default: "main" },
+                  { key: "draft", title: "Draft", type: "boolean", optional: true, default: false },
+                ],
+              },
+            });
+            if (answer?.type !== "form") throw cancelled();
+            return {
+              message: `Opened "${String(answer.value["title"])}" into ${String(answer.value["base"] ?? "main")}${answer.value["draft"] === true ? " as a draft" : ""}`,
+            };
           }
           case "workspace.new-branch": {
             const answer = await ask({ type: "interaction", request: { type: "ask", id: id("i"), title: "New branch name", placeholder: "feature/name" } });

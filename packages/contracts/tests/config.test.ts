@@ -59,8 +59,10 @@ describe("describeConfig", () => {
     expect(field("maxSteps").secret).toBeUndefined();
   });
 
-  it("finds defaults only when an empty config is valid", () => {
-    expect(field("maxSteps").default).toBeUndefined();
+  it("finds each field's default, beside a field that has none too", () => {
+    expect(field("maxSteps").default).toBe(200);
+    expect(field("theme").default).toBe("system");
+    expect(field("baseUrl").default).toBeUndefined();
     const optionalOnly = describeConfig(Config.mapFields(Struct.omit(["baseUrl"])));
     expect(optionalOnly.find((candidate) => candidate.key === "maxSteps")?.default).toBe(200);
     expect(optionalOnly.find((candidate) => candidate.key === "theme")?.default).toBe("system");

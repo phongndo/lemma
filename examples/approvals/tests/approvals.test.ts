@@ -58,6 +58,7 @@ const answering = (answers: readonly (string | undefined)[]) => {
     layer: Layer.succeed(Interaction, {
       confirm: () => Effect.die("not asked"),
       ask: () => Effect.die("not asked"),
+      form: () => Effect.die("not asked"),
       select: <V extends string>(title: string, _options: readonly { readonly value: V }[], detail?: string) =>
         Effect.suspend(() => {
           asked.push({ title, ...(detail === undefined ? {} : { detail }) });

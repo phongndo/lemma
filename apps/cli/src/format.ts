@@ -219,6 +219,13 @@ export const formatWebHalves = (composition: WebComposition, hostIds: ReadonlySe
 export const formatReload = (report: ReloadResult, restarts = "the transport"): string =>
   report.deferred ? `applying: the host restarts ${restarts}, so clients reconnect` : (describeReload(report) ?? "nothing changed");
 
+/** A form's fields, a line each: key, type, whether it may be left out, and what it is for. */
+export const formLines = (request: Extract<InteractionRequest, { type: "form" }>): string[] =>
+  request.fields.map(
+    (field) =>
+      `  ${field.key} (${field.type === "enum" ? field.options?.join(" | ") : field.type}${field.optional ? `, optional${field.default === undefined ? "" : `, default ${JSON.stringify(field.default)}`}` : ""})${field.description === undefined ? "" : `: ${field.description}`}`,
+  );
+
 export const formatQuestions = (questions: readonly InteractionRequest[]): string =>
   questions.length === 0
     ? "No open questions."
@@ -227,7 +234,11 @@ export const formatQuestions = (questions: readonly InteractionRequest[]): strin
           [
             `${question.id}  ${question.type}  ${question.title}`,
             // What it is about (the command to approve, say) before the choices.
-            ...((question.type === "confirm" || question.type === "select") && question.detail !== undefined ? [indent(question.detail)] : []),
+            ...((question.type === "confirm" || question.type === "select" || question.type === "form") && question.detail !== undefined
+              ? [indent(question.detail)]
+              : []),
+            // Its fields, answered as JSON (`lemma answer <id> '{"key": …}'`).
+            ...(question.type === "form" ? formLines(question).map((line) => `  ${line}`) : []),
             ...(question.type === "select"
               ? question.options.map((option, i) => `    ${i + 1}. ${option.value}${option.label === option.value ? "" : ` (${option.label})`}`)
               : []),

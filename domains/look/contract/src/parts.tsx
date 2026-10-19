@@ -122,16 +122,16 @@ export const SegmentedPart = definePart<SegmentedProps>("segmented", SegmentedFa
 export interface ConfigFormProps {
   readonly fields: readonly ConfigField[];
   readonly config: ConfigValues | undefined;
-  /** Where the fields are written, for the note under the form. */
-  readonly file: string;
+  /** Where the fields are written, for the note under the form; none for a form whose values go elsewhere (a question's answer). */
+  readonly file?: string | undefined;
   readonly disabled?: boolean;
   /** Saves fields, reporting what failed itself; a rejection shows as the field's error. */
   readonly onSave: (values: Readonly<Record<string, unknown>>) => Promise<void>;
 }
 
 /**
- * A plugin's settings, projected from its config Schema. Its fallback is a text input per field, read as
- * `lemma plugins config` reads a value.
+ * A plugin's settings, projected from its config Schema, or any values asked for so (a `form` question). Its fallback
+ * is a text input per field, read as `lemma plugins config` reads a value.
  */
 export const ConfigFormPart = definePart<ConfigFormProps>("config-form", ConfigFormFallback);
 

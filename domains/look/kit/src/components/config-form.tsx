@@ -99,7 +99,7 @@ export function ConfigForm(props: ConfigFormProps) {
                   </select>
                 </Match>
                 <Match when={field.type === "other"}>
-                  <span class="muted small">Edit in {props.file}</span>
+                  <span class="muted small">{props.file === undefined ? "Not editable here" : `Edit in ${props.file}`}</span>
                 </Match>
               </Switch>
               <Show when={resettable(field)}>
@@ -116,7 +116,9 @@ export function ConfigForm(props: ConfigFormProps) {
           </div>
         )}
       </For>
-      <p class="config-note muted small">Saved to {props.file}.</p>
+      <Show when={props.file}>
+        <p class="config-note muted small">Saved to {props.file}.</p>
+      </Show>
     </div>
   );
 }

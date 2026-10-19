@@ -11,7 +11,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 /** Lines of `src` per runtime package, at most. */
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
-  "packages/contracts": 2_500,
+  "packages/contracts": 2_600,
   "packages/host": 2_750,
   "packages/composition": 850,
   "packages/web": 2_000,

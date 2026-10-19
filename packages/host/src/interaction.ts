@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import type { Context } from "effect";
-import { Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts";
+import { describeConfig, Interaction, InteractionError, InteractionHook, InteractionOrigin } from "@lemma/contracts";
 import type { InteractionAnswer, InteractionRequest } from "@lemma/contracts";
 import { Hooks } from "@lemma/core";
 
@@ -55,6 +55,15 @@ export function makeInteraction(hooks: Context.Service.Shape<typeof Hooks>): Con
         Effect.filterOrFail(
           (value): value is V => options.some((option) => option.value === value),
           (value) => new InteractionError({ reason: "Unavailable", message: `Selected "${value}" is not one of the options offered for "${title}"` }),
+        ),
+      ),
+    form: (title, schema, detail) =>
+      request({ type: "form", id: randomUUID(), title, ...(detail === undefined ? {} : { detail }), fields: describeConfig(schema) }).pipe(
+        Effect.flatMap((value) => Schema.decodeUnknownEffect(schema)(value)),
+        Effect.mapError((error) =>
+          error._tag === "InteractionError"
+            ? error
+            : new InteractionError({ reason: "Unavailable", message: `The answer to "${title}" does not fit: ${error.message}` }),
         ),
       ),
   };

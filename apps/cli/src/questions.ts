@@ -1,11 +1,12 @@
 import { Effect, FiberMap, Queue, Stream } from "effect";
 import type { Scope } from "effect";
-import { HostError } from "@lemma/contracts";
+import { formValues, HostError } from "@lemma/contracts";
 import type { InteractionAnswer, InteractionRequest, RuntimeEvent } from "@lemma/contracts";
 import { dropped } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { connectedAfter, received } from "./channels.ts";
 import type { Connection, Failure, Globals, Io } from "./command.ts";
+import { formLines } from "./format.ts";
 
 /**
  * The questions the host asks while a command is attached (a tool asking to
@@ -51,8 +52,29 @@ export const toAnswer = (request: InteractionRequest, raw: string): InteractionA
         ? `Choose one of: ${request.options.map((candidate, i) => `${i + 1}. ${candidate.value}`).join(", ")}`
         : { type: "select", value: option.value };
     }
+    case "form": {
+      let given: unknown;
+      try {
+        given = JSON.parse(raw);
+      } catch {
+        return `Answer "${request.title}" with its fields as JSON: ${formExample(request)}`;
+      }
+      const read = formValues(request.fields, given);
+      return "error" in read ? `${read.error}: answer as ${formExample(request)}` : { type: "form", value: read.value };
+    }
   }
 };
+
+/** A form's fields as the JSON that answers it, each with a value of its type, or its default. */
+const formExample = (request: Extract<InteractionRequest, { type: "form" }>): string =>
+  JSON.stringify(
+    Object.fromEntries(
+      request.fields.map((field) => [
+        field.key,
+        field.default ?? { string: "…", number: 0, integer: 0, boolean: false, enum: field.options?.[0] ?? "…", strings: ["…"], other: null }[field.type],
+      ]),
+    ),
+  );
 
 const promptText = (request: InteractionRequest): string => {
   switch (request.type) {
@@ -62,6 +84,14 @@ const promptText = (request: InteractionRequest): string => {
       return `${request.title}${request.placeholder === undefined ? "" : ` (${request.placeholder})`}: `;
     case "select":
       return `${request.title}${request.detail === undefined ? "" : `\n${request.detail}`}\n${request.options.map((option, i) => `  ${i + 1}. ${option.label}${option.description === undefined ? "" : ` — ${option.description}`}`).join("\n")}\n> `;
+    case "form":
+      return [
+        request.title,
+        ...(request.detail === undefined ? [] : [request.detail]),
+        ...formLines(request),
+        `Answer as JSON, such as ${formExample(request)}`,
+        "> ",
+      ].join("\n");
   }
 };
 

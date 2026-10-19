@@ -68,7 +68,10 @@ plugin shadows one.
   login's provider), as `--questions` says: `ask` at the terminal (the default
   when there is one), `dismiss`, or `ignore` (the default otherwise, so an agent
   never answers for the person), which leaves them to another client and says
-  how to answer from the CLI. `--answer <value>` answers them in order. The host
+  how to answer from the CLI. `--answer <value>` answers them in order; a form
+  (several values at once) is answered with its fields as JSON, as in
+  `lemma answer <id> '{"title": "Add forms"}'`, which `lemma questions` lists
+  with their types. The host
   holds a question only for clients that answer questions; once none is
   connected it waits 15 seconds for one to come back
   ([`interactionGraceMs`](../../domains/transport/server/README.md)).
