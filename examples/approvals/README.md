@@ -9,7 +9,8 @@ It is a plugin file, not a bundled plugin: [`approvals.ts`](approvals.ts)
 imports only packages the host supplies (`effect`, `@lemma/core`,
 `@lemma/contracts`, and the tools domain's contract, `@lemma/tools`, whose
 `/files` resolves paths as the file tools do, so `~/x` and `@x` mean what they
-mean to `write`), so it needs no install step. It is
+mean to `write`, and whose `/patch` names the files a patch touches), so it
+needs no install step. It is
 written with promises (`@lemma/core/plain`): it adds its guard to the tools
 domain's `Guards` registry, `interaction.select` is the contract's Effect
 method seen as a promise, and a question it asks still belongs to the turn
@@ -25,10 +26,10 @@ not start rather than run tools without asking (see
 [configuration](../../docs/configuration.md#when-something-cannot-run)). It
 then shows on the Plugins page as a user plugin, with its settings:
 
-| Setting          | Default             | What it does                                                                  |
-| ---------------- | ------------------- | ----------------------------------------------------------------------------- |
-| `ask`            | `["bash"]`          | Tools that need approval for every call                                       |
-| `outsideProject` | `["write", "edit"]` | Tools that need approval when their `path` is outside the session's directory |
+| Setting          | Default                            | What it does                                                                                                            |
+| ---------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `ask`            | `["bash"]`                         | Tools that need approval for every call                                                                                 |
+| `outsideProject` | `["write", "edit", "apply_patch"]` | Tools that need approval when their `path`, or any file `apply_patch`'s patch names, is outside the session's directory |
 
 Questions reach whichever client is attached: the web app shows a dialog (or
 the palette, while it is open), `lemma run` asks at the terminal or takes

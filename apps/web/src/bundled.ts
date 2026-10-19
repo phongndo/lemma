@@ -38,6 +38,7 @@ import bash from "@lemma/tools-bash/web";
 import codemode from "@lemma/tools-codemode/web";
 import edit from "@lemma/tools-edit/web";
 import html from "@lemma/tools-html/web";
+import patch from "@lemma/tools-patch/web";
 import read from "@lemma/tools-read/web";
 import search from "@lemma/tools-search-fff/web";
 import write from "@lemma/tools-write/web";
@@ -83,6 +84,7 @@ export const bundled: readonly Plugin[] = [
   read,
   write,
   edit,
+  patch,
   bash,
   codemode,
   search,

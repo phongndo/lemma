@@ -501,6 +501,7 @@ export const createMockHost = (): Host => {
     "tools.read": { contributes: [{ name: "lemma/tools", items: 1, keys: ["read"] }] },
     "tools.write": { contributes: [{ name: "lemma/tools", items: 1, keys: ["write"] }] },
     "tools.edit": { contributes: [{ name: "lemma/tools", items: 1, keys: ["edit"] }] },
+    "tools.patch": { contributes: [{ name: "lemma/tools", items: 1, keys: ["apply_patch"] }] },
     "tools.bash": { contributes: [{ name: "lemma/tools", items: 1, keys: ["bash"] }] },
     "tools.codemode": { requires: ["lemma/ToolRunner"], contributes: [{ name: "lemma/tools", items: 1, keys: ["codemode"] }] },
     "sessions.files": { provides: ["lemma/Sessions"], requires: ["lemma/Paths"] },
