@@ -3,8 +3,8 @@ import type { Effect } from "effect";
 import type { Awaitable } from "@lemma/core";
 
 /**
- * One credential per provider id, stored in `auth.json` (mode 0600). The shape
- * matches pi-ai's `Credential`, so provider auth flows store it unchanged.
+ * One credential per provider id, stored in `auth.json` (mode 0600): an API key,
+ * or a sign-in's tokens with its provider's own fields.
  */
 export const ApiKeyCredential = Schema.Struct({
   type: Schema.Literal("api_key"),

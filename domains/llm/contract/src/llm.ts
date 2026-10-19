@@ -6,9 +6,9 @@ import { defineChannel, eventFeed, inChainOrder, ResultCredit, serveChannel } fr
 import type { Channel } from "@lemma/contracts";
 import { InteractionOrigin } from "@lemma/contracts";
 
-// Message shapes follow pi-ai's provider-neutral format so opaque provider
-// state (reasoning signatures, response ids) survives a round trip through the
-// session log unchanged. The log stores these values verbatim.
+// Message shapes are provider-neutral (pi-ai's, which the first logs were written
+// in), and opaque provider state (reasoning signatures, response ids) survives a
+// round trip through the session log unchanged. The log stores these values verbatim.
 
 export const TextContent = Schema.Struct({
   type: Schema.Literal("text"),
@@ -301,7 +301,7 @@ export const ProviderInfo = Schema.Struct({
 });
 export type ProviderInfo = typeof ProviderInfo.Type;
 
-/** A model a provider in `Providers` serves; what it leaves out has pi's defaults (128k context, 16k output, text only, free). */
+/** A model a provider in `Providers` serves; what it leaves out has the llm plugin's defaults (128k context, 16k output, text only, free). */
 export const ProviderModelSpec = Schema.Struct({
   id: Schema.String,
   name: Schema.optional(Schema.String),
@@ -311,9 +311,9 @@ export const ProviderModelSpec = Schema.Struct({
   maxTokens: Schema.optional(Schema.Number.check(Schema.isGreaterThan(0))),
   /** USD per million tokens. */
   cost: Schema.optional(Schema.Struct({ input: Schema.Number, output: Schema.Number, cacheRead: Schema.Number, cacheWrite: Schema.Number })),
-  /** pi thinking level → provider value; `null` marks a level unsupported. */
+  /** Thinking level → the provider's value for it; `null` marks a level unsupported. */
   thinkingLevelMap: Schema.optional(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
-  /** pi-ai's per-API `compat` flags (`supportsDeveloperRole: false` for Ollama, say); passed through unchecked. */
+  /** The protocol's `compat` flags, as the llm plugin documents them (`supportsDeveloperRole: false` for Ollama, say); passed through unchecked. */
   compat: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
 export type ProviderModelSpec = typeof ProviderModelSpec.Type;
@@ -397,7 +397,7 @@ export class LlmRequest extends Schema.Class<LlmRequest>("lemma/LlmRequest")({
   /** Lets providers key prompt caches and pooled connections. */
   sessionId: Schema.optional(Schema.String),
   /**
-   * What the provider passes on as it is, as its plugin documents (`llm.pi-ai`: `temperature`, `samplingParams`,
+   * What the provider passes on as it is, as its plugin documents (`llm.http`: `temperature`, `samplingParams`,
    * `metadata`). Logged with the request, so a request rebuilt from the log carries them.
    */
   providerOptions: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
@@ -554,7 +554,7 @@ export const LlmProviderResponse = Event.make<{
 
 /**
  * Each event of a provider's stream as the provider sent it, before it is made a `StreamEvent`: for debugging an
- * adapter. Published only while its provider plugin is told to (`llm.pi-ai`'s `providerEvents`), as it is costly.
+ * adapter. Published only while its provider plugin is told to (`llm.http`'s `providerEvents`), as it is costly.
  */
 export const LlmProviderStreamEvent = Event.make<{
   readonly sessionId?: string;

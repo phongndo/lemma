@@ -15,41 +15,24 @@ from typing import Any
 
 THINKING_LEVELS = ("off", "minimal", "low", "medium", "high", "xhigh", "max")
 
-# Harbor's provider names are LiteLLM's; Lemma's are pi-ai's. Others pass through.
-PROVIDER_ALIASES = {
-    "gemini": "google",
-    "vertex_ai": "google-vertex",
-    "bedrock": "amazon-bedrock",
-    "fireworks_ai": "fireworks",
-    "together_ai": "together",
-    "moonshot": "moonshotai",
-}
-
-# The variable pi-ai reads each built-in provider's API key from. Only the
-# chosen provider's is passed into the task's container; `--ae NAME=value`
-# passes any other.
+# The variable the llm plugin (`llm.http`) reads each built-in provider's API
+# key from. Only the chosen provider's is passed into the task's container;
+# `--ae NAME=value` passes any other.
 KEY_VARIABLES = {
     "anthropic": "ANTHROPIC_API_KEY",
     "openai": "OPENAI_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
-    "google": "GEMINI_API_KEY",
-    "xai": "XAI_API_KEY",
-    "groq": "GROQ_API_KEY",
-    "mistral": "MISTRAL_API_KEY",
-    "deepseek": "DEEPSEEK_API_KEY",
-    "fireworks": "FIREWORKS_API_KEY",
-    "together": "TOGETHER_API_KEY",
-    "zai": "ZAI_API_KEY",
-    "moonshotai": "MOONSHOT_API_KEY",
+    "opencode": "OPENCODE_API_KEY",
+    "opencode-go": "OPENCODE_API_KEY",
 }
 
 
 def model_ref(model_name: str | None) -> str:
-    """Harbor's `-m provider/model` as Lemma's `<provider>/<model>` ref."""
+    """Harbor's `-m provider/model` as Lemma's `<provider>/<model>` ref: the same, as Lemma's built-ins have LiteLLM's names."""
     provider, slash, model = (model_name or "").partition("/")
     if not slash or not provider or not model:
         raise ValueError(f"-m takes <provider>/<model>, as Lemma's model refs do (anthropic/claude-sonnet-5-5); got {model_name!r}")
-    return f"{PROVIDER_ALIASES.get(provider, provider)}/{model}"
+    return f"{provider}/{model}"
 
 
 def key_variable(ref: str) -> str | None:

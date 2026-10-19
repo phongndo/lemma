@@ -1,5 +1,5 @@
 /*
- * `@lemma/llm/testing`: the `Llm` contract as a Vitest suite, which a plugin replacing `llm.pi-ai` (or adding a
+ * `@lemma/llm/testing`: the `Llm` contract as a Vitest suite, which a plugin replacing `llm.http` (or adding a
  * provider) runs to meet the same bar (`llmConformance`), and a scripted model (`scriptedLlm`) for testing a plugin in
  * a real turn. Imports `vitest`: for tests only.
  */

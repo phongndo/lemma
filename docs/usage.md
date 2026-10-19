@@ -22,5 +22,5 @@ credentials, and each host is separate from any other.
 
 Log in to a provider from the key icon in the web app or with `lemma login`, or
 set the provider's API key environment variable. The
-[llm plugin](../domains/llm/pi-ai/README.md) lists the providers and how to add
+[llm plugin](../domains/llm/http/README.md) lists the providers and how to add
 your own. `lemma doctor` says what is missing.

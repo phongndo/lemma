@@ -93,10 +93,6 @@ class ModelRefs(unittest.TestCase):
     def test_openrouter_keeps_the_upstream_in_the_model(self):
         self.assertEqual(model_ref("openrouter/anthropic/claude-sonnet-4.5"), "openrouter/anthropic/claude-sonnet-4.5")
 
-    def test_litellm_provider_names_become_pi_ai_ones(self):
-        self.assertEqual(model_ref("gemini/gemini-2.5-pro"), "google/gemini-2.5-pro")
-        self.assertEqual(model_ref("bedrock/claude"), "amazon-bedrock/claude")
-
     def test_a_ref_needs_a_provider_and_a_model(self):
         for bad in (None, "", "gpt-5", "openai/", "/gpt-5"):
             with self.subTest(bad=bad), self.assertRaises(ValueError):
@@ -106,6 +102,7 @@ class ModelRefs(unittest.TestCase):
         self.assertEqual(key_variable("anthropic/x"), "ANTHROPIC_API_KEY")
         self.assertEqual(key_variable("openai/x"), "OPENAI_API_KEY")
         self.assertEqual(key_variable("openrouter/anthropic/x"), "OPENROUTER_API_KEY")
+        self.assertEqual(key_variable("opencode-go/kimi-k3"), "OPENCODE_API_KEY")
         self.assertIsNone(key_variable("mock/scripted"))
 
     def test_thinking_levels_are_lemma_s(self):

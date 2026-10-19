@@ -19,7 +19,7 @@ const hostOf = (url: string) => {
 /** Focus on arrival: a step can appear after the dialog opened, so the dialog's own autofocus has passed. */
 const focus = (element: HTMLElement) => queueMicrotask(() => element.focus());
 
-/** A question's title as a label: pi-ai's end in a colon, as a terminal prompt does. */
+/** A question's title as a label: a login's may end in a colon, as a terminal prompt does. */
 const label = (title: string) => title.replace(/:\s*$/, "");
 
 /** The address to open, whole and selectable, with a copy button: a browser on any machine can open it. */

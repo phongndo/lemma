@@ -60,7 +60,7 @@ TESTS = {
 TIMEOUTS = {"tally": 300.0, "slowly": 20.0}
 CONFIG = {
     "plugins": {
-        "llm.pi-ai": {
+        "llm.http": {
             "config": {"providers": [{"id": "mock", "api": "openai-completions", "baseUrl": f"http://127.0.0.1:{PORT}/v1", "models": [{"id": "scripted"}]}]}
         }
     }

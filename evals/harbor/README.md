@@ -41,8 +41,8 @@ uv run --project evals/harbor --locked harbor run -d terminal-bench@2.0 \
 ```
 
 `-m` takes a Lemma model ref, `<provider>/<model>` (`lemma models --all` lists
-them; OpenRouter's are `openrouter/<vendor>/<model>`). LiteLLM's provider names,
-which Harbor's other agents take, are mapped (`gemini/` is `google/`).
+them; OpenRouter's are `openrouter/<vendor>/<model>`). Lemma's built-in
+providers have the names LiteLLM gives them, which Harbor's other agents take.
 Options go in as `--ak name=value`:
 
 | Option         | Default                   | What it does                                                                                    |

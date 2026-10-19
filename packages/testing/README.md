@@ -61,7 +61,7 @@ that closing the stream aborts the request.
 `toolsConformance(name, compose)` checks a `ToolRunner`, with tools of its own:
 attribution, input validation, errors as results, unknown tools, every chunk
 of a tool's output reaching the caller before its result, and cancellation
-while the caller's listener never returns. The bundled `llm.pi-ai` and
+while the caller's listener never returns. The bundled `llm.http` and
 `tools.registry` run these, as does a replacement for each written from the
 contracts alone, in `tests/providers.test.ts`.
 

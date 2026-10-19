@@ -383,7 +383,7 @@ asked again, or run (or reported interrupted) when the turn resumes.
   so their events chain the same way, and one appended before a later handler
   fails or the turn is cancelled stays on the turn's branch.
 - **Branch points in the log.** A provider needs a result for every tool call,
-  and pi-ai would make one up for a call that has none, sending what the log
+  and the llm plugin makes one up for a call that has none, sending what the log
   does not hold. So a turn begun after a checkout into a turn logs those
   results first; `rebuildRequest` then rebuilds what was sent.
 - **Plugin-owned turns.** Turns are forked into the plugin's scope. `prompt` awaits
