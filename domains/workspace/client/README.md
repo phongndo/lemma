@@ -16,9 +16,9 @@ the host through `WorkspaceChannels` (`workspace.status`,
   browser starts without them. Projects with threads come from the host's
   sessions, so every browser lists those.
 - **No project.** While connected, with no thread open and no folder picked,
-  it points the next new thread at `standaloneDir` (`<home>/scratch` on the
-  host), creating the folder when it is missing: a new chat never defaults to
-  the host's own directory.
+  it makes `standaloneDir` (`<home>/scratch` on the host) where a new thread
+  starts when nothing else says (`Threads.startIn`), creating the folder when
+  it is missing: a new chat never defaults to the host's own directory.
 - **Status.** `workspace.status` is asked again when the working directory or
   the connection changes, when a turn starts or ends, when the window regains
   focus, and on `refresh` (which `commands.client` calls after each command).
@@ -31,5 +31,7 @@ the host through `WorkspaceChannels` (`workspace.status`,
   `lemma/task` when nothing is left). The host makes the name unique. The
   picked base branch is cleared after, and changing the working directory
   resets the draft to the project's `worktree` setting, else the global one.
-- **Opening a folder** (`open`) also adds it to the projects added by hand; a
-  path with no folder on the host shows an error and returns false.
+- **Opening a folder** (`open`) also adds it to the projects added by hand,
+  and starts a thread there: the thread shown, moved there while that is blank,
+  as picking a project does. A path with no folder on the host shows an error
+  and returns false.

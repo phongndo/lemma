@@ -40,7 +40,8 @@ export default defineWebPlugin({
       aliases: ["clear"],
       description: "Start a new thread here",
       icon: PenSquareIcon,
-      run: () => threads.newThread(threads.active()?.cwd ?? threads.pendingCwd()),
+      // A blank thread is new already.
+      run: () => threads.newThread(undefined, { inPlace: true }),
     });
     slots.add(PromptCommands, {
       id: "rename",

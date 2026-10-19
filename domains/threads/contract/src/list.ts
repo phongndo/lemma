@@ -3,37 +3,8 @@ import { branchOf, SessionChannels } from "@lemma/sessions";
 import type { QueuedPrompt } from "@lemma/agent";
 import type { SessionEvent, SessionInfo, SessionsChange } from "@lemma/sessions";
 
-interface SessionGroup {
-  readonly cwd: string;
-  /** Newest first. */
-  readonly sessions: readonly SessionInfo[];
-  readonly updatedAt: number;
-}
-
-/** Sessions grouped by working directory; groups and sessions newest first. */
-export const groupSessions = (sessions: readonly SessionInfo[]): SessionGroup[] => {
-  const byCwd = new Map<string, SessionInfo[]>();
-  for (const session of sessions) {
-    const group = byCwd.get(session.cwd);
-    if (group === undefined) byCwd.set(session.cwd, [session]);
-    else group.push(session);
-  }
-  return [...byCwd.entries()]
-    .map(([cwd, list]) => {
-      const sorted = list.slice().sort((a, b) => b.updatedAt - a.updatedAt);
-      return { cwd, sessions: sorted, updatedAt: sorted[0]!.updatedAt };
-    })
-    .sort((a, b) => b.updatedAt - a.updatedAt);
-};
-
-/** The sidebar's filing: pinned sessions on their own, newest first, the rest by project, archived ones in neither. */
-export const fileSessions = (sessions: readonly SessionInfo[]): { readonly pinned: SessionInfo[]; readonly groups: SessionGroup[] } => {
-  const shown = sessions.filter((session) => session.archived !== true);
-  return {
-    pinned: shown.filter((session) => session.pinned === true).sort((a, b) => b.updatedAt - a.updatedAt),
-    groups: groupSessions(shown.filter((session) => session.pinned !== true)),
-  };
-};
+/** Nothing has gone into it yet: a blank thread, as a new tab is, which lists leave out until it has a prompt. */
+export const isBlank = (session: SessionInfo): boolean => session.lastSeq === 0;
 
 /** Replaces or inserts `info` by id. */
 export const upsertSession = (sessions: readonly SessionInfo[], info: SessionInfo): SessionInfo[] => {

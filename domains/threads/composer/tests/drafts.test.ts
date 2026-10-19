@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { dropRetry, keepDraft, returned, unsent } from "../src/drafts.ts";
-import type { Draft, Drafts } from "../src/drafts.ts";
+import { SharedDrafts, dropRetry, keepDraft, lostOnReload, returned, unsent } from "../src/drafts.ts";
+import type { Draft, Drafts, Prompt } from "../src/drafts.ts";
 
 const image = { type: "image", data: "aGk=", mimeType: "image/png" } as const;
 const other = { type: "image", data: "eW8=", mimeType: "image/png" } as const;
@@ -54,5 +54,32 @@ describe("returned", () => {
   test("leaves out empty text either side", () => {
     expect(returned({ text: "", images: [image], requestId: "r1" }, { text: "why", images: [] })).toEqual({ text: "why", images: [image] });
     expect(returned(sent, { text: "", images: [other] })).toEqual({ text: "fix it", images: [image, other] });
+  });
+});
+
+describe("SharedDrafts", () => {
+  test("starts from what was kept, and passes on each thread's change but not the one written with no thread shown", () => {
+    const told: [string, Prompt | undefined][] = [];
+    const drafts = new SharedDrafts([["t", { text: "kept", images: [] }]], (key, prompt) => told.push([key, prompt]));
+    expect(drafts.get("t")).toEqual({ text: "kept", images: [] });
+    expect(told).toEqual([]);
+    keepDraft(drafts, "t", { text: "kept more", images: [image] }, false);
+    drafts.set("", { text: "nowhere yet", images: [] });
+    drafts.delete("t");
+    drafts.delete("");
+    expect(told).toEqual([
+      ["t", { text: "kept more", images: [image] }],
+      ["t", undefined],
+    ]);
+  });
+});
+
+describe("lostOnReload", () => {
+  test("is a draft's images, a send that did not get through, or one written with no thread shown; not text alone", () => {
+    expect(lostOnReload("t", { text: "hi", images: [] })).toBe(false);
+    expect(lostOnReload("t", { text: "hi", images: [image] })).toBe(true);
+    expect(lostOnReload("t", { text: "hi", images: [], requestId: "r1" })).toBe(true);
+    expect(lostOnReload("", { text: "hi", images: [] })).toBe(true);
+    expect(lostOnReload("", { text: " ", images: [] })).toBe(false);
   });
 });

@@ -30,12 +30,12 @@ thread's own commands. Requires `Slots`, `Threads`, and `Notify`. No config.
   command whose tree runs nothing here as typed, for a host plugin to answer
   (`/compact`).
 
-| Command                                                   | From                                                       | What it does                                        |
-| --------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------- |
-| `/new` (`/clear`)                                         | here                                                       | A new thread in the open thread's directory         |
-| `/rename <title>`                                         | here                                                       | Renames the open thread                             |
-| `/copy`                                                   | here                                                       | Copies the last reply                               |
-| `/compact [focus]`                                        | [`context.compaction`](../../context/compaction/README.md) | Summarizes the conversation (the host answers it)   |
-| `/model <model>`, `/thinking <level>`                     | `llm.model-picker`                                         | The composer's model and its reasoning              |
-| `/settings [section]`                                     | [`settings.page`](../../settings/page/README.md)           | Opens settings                                      |
-| `/mcp <list\|reconnect\|enable\|disable\|exposure\|tool>` | [`mcp.servers`](../../mcp/servers/README.md)               | The MCP servers and how their tools reach the model |
+| Command                                                   | From                                                       | What it does                                                    |
+| --------------------------------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
+| `/new` (`/clear`)                                         | here                                                       | A new thread in the open thread's directory, unless it is blank |
+| `/rename <title>`                                         | here                                                       | Renames the open thread                                         |
+| `/copy`                                                   | here                                                       | Copies the last reply                                           |
+| `/compact [focus]`                                        | [`context.compaction`](../../context/compaction/README.md) | Summarizes the conversation (the host answers it)               |
+| `/model <model>`, `/thinking <level>`                     | `llm.model-picker`                                         | The composer's model and its reasoning                          |
+| `/settings [section]`                                     | [`settings.page`](../../settings/page/README.md)           | Opens settings                                                  |
+| `/mcp <list\|reconnect\|enable\|disable\|exposure\|tool>` | [`mcp.servers`](../../mcp/servers/README.md)               | The MCP servers and how their tools reach the model             |

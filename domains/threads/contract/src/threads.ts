@@ -1,4 +1,5 @@
 import type { PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { ImageContent } from "@lemma/llm";
 import type { MenuAction } from "@lemma/frame";
 import type { IconName } from "@lemma/look";
 import type { LedgerRecord, SessionEvent, SessionInfo, SessionMarks } from "@lemma/sessions";
@@ -32,17 +33,36 @@ export interface ThreadsService {
   readonly running: Accessor<readonly string[]>;
   /** The active session has a turn running. */
   readonly busy: Accessor<boolean>;
-  /** Where a new chat starts, when not in the host's directory. */
+  /** Nothing has gone into the thread shown yet (`isBlank`), or no thread is shown: what is sent next starts it. */
+  readonly blank: Accessor<boolean>;
+  /** Where a new thread starts when nothing else says, rather than in the host's directory. */
   readonly pendingCwd: Accessor<string | undefined>;
-  /** Goes to a thread (keeping the view shown), or to a new one; resolves once its log has loaded. */
+  /**
+   * The prompts written in threads and not yet sent, by thread id: what the composer holds for each (it writes them,
+   * `setDraft`), so a list can show a new thread left mid-prompt as a draft. Their text is kept in this browser, and
+   * comes back after a reload, and another tab's arrive as it saves them; their images last while the page does. A
+   * thread's goes with it when it is deleted.
+   */
+  readonly drafts: Accessor<ReadonlyMap<string, ThreadDraft>>;
+  /** Keeps a thread's unsent prompt (`drafts`); one with no text and no images, or none, drops it. */
+  readonly setDraft: (sessionId: string, draft: ThreadDraft | undefined) => void;
+  /**
+   * Goes to a thread, as it was left, or to the new-thread page, which shows a blank thread: the newest there is,
+   * else a new one in `pendingCwd` once there is one. Resolves once its log has loaded.
+   */
   readonly select: (sessionId: string | undefined) => Promise<void>;
-  /** A thread's address, in `view` (a `Views` item's id) when not the first. */
+  /** A thread's address; with `view` (a `Views` item's id, not the first), one that opens that view in its pane. */
   readonly href: (sessionId: string, view?: string) => string;
   /** Fetches a thread's log ahead of opening it (a link to it hovered), so it shows at once. */
   readonly preload: (sessionId: string) => void;
-  /** A new thread, created by its first prompt, in `cwd` or the host's directory. */
-  readonly newThread: (cwd?: string) => void;
-  /** Sets where the next new thread starts without going to it (no `select`): a default, not a choice. */
+  /**
+   * Creates an empty thread, as a browser opens a tab, in `cwd` (else the shown thread's directory, else `pendingCwd`,
+   * else the host's) and goes to it; one made here in `cwd` with nothing sent or written yet (no `drafts` entry) is
+   * gone to instead. `inPlace`: while the shown thread is blank and made here, it moves to `cwd` instead
+   * (`sessions.relocate`), keeping its id. A blank thread made here and left with nothing written in it is deleted.
+   */
+  readonly newThread: (cwd?: string, options?: { readonly inPlace?: boolean }) => Promise<void>;
+  /** Sets where a new thread starts when nothing else says (`pendingCwd`). */
   readonly startIn: (cwd: string | undefined) => void;
   readonly rename: (sessionId: string, title: string) => Promise<void>;
   /** Pins or archives it; failures are reported. */
@@ -50,9 +70,12 @@ export interface ThreadsService {
   /** Deletes it for good, leaving it first if it is open; failures (a running turn) are reported. */
   readonly remove: (sessionId: string) => Promise<void>;
   /**
-   * Sends a prompt, creating the session first for a new chat (in `cwd`, else the pending directory). Resolves false when
-   * it was refused. While a turn runs it steers that turn or follows it (`whenBusy`, default steer). `requestId` makes it
-   * exactly-once: sending again with the same id (after a lost connection) cannot place it twice.
+   * Sends a prompt to the shown thread: when none is shown, to one it creates (in `cwd`, else `pendingCwd`), and when
+   * a blank one is in another directory than `cwd`, to it once moved there (`sessions.relocate`; one made in another
+   * window stays, and a new thread there takes the prompt). With `background`, it goes to a new thread instead (in
+   * `cwd`, else the shown thread's directory), which is not gone to.
+   * Resolves false when it was refused. While a turn runs it steers that turn or follows it (`whenBusy`, default steer).
+   * `requestId` makes it exactly-once: sending again with the same id (after a lost connection) cannot place it twice.
    */
   readonly send: (
     content: PromptContent,
@@ -61,6 +84,7 @@ export interface ThreadsService {
       readonly cwd?: string | undefined;
       readonly requestId?: string | undefined;
       readonly whenBusy?: "steer" | "follow-up" | undefined;
+      readonly background?: boolean | undefined;
     },
   ) => Promise<boolean>;
   /**
@@ -72,7 +96,8 @@ export interface ThreadsService {
   readonly queue: Accessor<readonly QueuedPrompt[]>;
   /**
    * The active thread's last prompt that a plugin answered instead of placing it (`AgentInputHook`): handled (and
-   * what it said it did) or refused (and why), and by which plugin. Until the next is sent, or it is dismissed.
+   * what it said it did) or refused (and why), and by which plugin; with no thread shown, the new-thread page's. Until
+   * the next is sent, or it is dismissed.
    */
   readonly answer: Accessor<PromptAnswer | undefined>;
   readonly dismissAnswer: () => void;
@@ -87,8 +112,31 @@ export interface ThreadsService {
 
 export class Threads extends Context.Service<Threads, ThreadsService>()("lemma-web/Threads") {}
 
+/** A prompt written in a thread and not yet sent (see `ThreadsService.drafts`). */
+export interface ThreadDraft {
+  readonly text: string;
+  readonly images: readonly ImageContent[];
+}
+
+/** Holds something to send: text other than whitespace, or an image. What counts as a draft (`Threads.drafts`). */
+export const written = (prompt: { readonly text: string; readonly images: readonly unknown[] } | undefined): boolean =>
+  prompt !== undefined && (prompt.text.trim() !== "" || prompt.images.length > 0);
+
+/**
+ * What a plugin keeps for a thread with nothing sent in it yet (the inspection pane's tabs, a browser page in one):
+ * `holds` says whether it keeps something for the thread now; reactive. While anything holds a blank thread made here
+ * (or it has a draft), leaving it does not delete it, and it is kept on the host (`SessionMarks.kept`), which deletes
+ * empty sessions left a while otherwise.
+ */
+export interface ThreadHold {
+  readonly holds: (sessionId: string) => boolean;
+}
+
+export const ThreadHolds = defineSlot<ThreadHold>("thread.holds");
+
 /** A prompt a plugin answered instead of placing it (see `ThreadsService.answer`). */
 export interface PromptAnswer {
+  /** The thread it was written in; `""` for the new-thread page with no thread shown. */
   readonly sessionId: string;
   readonly kind: "handled" | "refused";
   /** The plugin. */
@@ -96,6 +144,27 @@ export interface PromptAnswer {
   /** What it did, or why it refused; may be empty for one it handled. */
   readonly message: string;
 }
+
+/**
+ * Threads waiting on the person: the agent's questions (the ask tool's), a question a turn asked the host to put
+ * (an approval). `waiting` says what a thread waits for, as a short label (`Needs input`, `Needs approval`), or
+ * nothing; reactive. The sidebar marks such a thread with the first label an item gives, by order, above its being
+ * at work or done.
+ */
+export interface ThreadWait {
+  readonly waiting: (sessionId: string) => string | undefined;
+}
+
+export const ThreadWaits = defineSlot<ThreadWait>("thread.waits");
+
+/** What a thread waits on the person for (`ThreadWaits`): the first item's label, by order, or none. */
+export const waitingOn = (waits: readonly ThreadWait[], sessionId: string): string | undefined => {
+  for (const wait of waits) {
+    const label = wait.waiting(sessionId);
+    if (label !== undefined) return label;
+  }
+  return undefined;
+};
 
 /** What a session's menu item can do to its row. */
 export interface ThreadRowControl {
@@ -108,16 +177,60 @@ export type ThreadAction = MenuAction<SessionInfo, ThreadRowControl>;
 
 export const ThreadActions = defineSlot<ThreadAction>("thread.actions");
 
+/** What a view is drawn with. */
+export interface ThreadViewProps {
+  /**
+   * The inspection pane's tab it shows in (`Pane`), unique among every thread's tabs and kept across reloads; absent
+   * for the first view, which fills the page. A view may have several tabs: what it keeps for one (the browser's page)
+   * is keyed by it, and let go once the tab is gone from `Pane.tabs`.
+   */
+  readonly tab?: string;
+}
+
 export interface ThreadView {
   readonly title: string;
   readonly icon: Component;
-  readonly component: Component;
+  readonly component: Component<ThreadViewProps>;
   /** The composer shows over its bottom: it pads its end by `--composer-height` (the composer's height, set on the page) to scroll under it. */
   readonly composer?: boolean;
+  /** The letter that opens it from the pane's + menu and its empty pane (`b` for the browser). */
+  readonly letter?: string;
+  /** A tab's name while it has one of its own (a page's title); its `title` otherwise. */
+  readonly label?: (tab: string) => string | undefined;
 }
 
-/** The main area's views of a thread over the same log: the transcript (order 0), the trajectory (10). The first by order is where a new thread opens. */
+/**
+ * Views of a thread over the same log: the transcript (order 0), the trajectory (10), a browser (20). The first by
+ * order fills the page; the others open as tabs in the thread's inspection pane beside it (`Pane`), by its + or the
+ * palette, as many of each as are wanted.
+ */
 export const Views = defineSlot<ThreadView>("views");
+
+/** A tab of a thread's inspection pane: a `Views` item's, by its id. */
+export interface PaneTab {
+  /** Unique among every thread's tabs, and kept across reloads: a view's `ThreadViewProps.tab`. */
+  readonly id: string;
+  readonly view: string;
+  /** The thread whose pane it is in. */
+  readonly thread: string;
+}
+
+/** The inspection pane beside each thread's chat: its tabs are views of the thread (`Views`). Each thread has its own. */
+export interface PaneService {
+  /** Every thread's tabs: a view keeps what it keeps for one (the browser's page) while it is here. */
+  readonly tabs: Accessor<readonly PaneTab[]>;
+  /**
+   * Opens a new tab of `view` in `thread`'s pane (else the shown thread's), showing it unless `background`: its id, or
+   * undefined with no thread to open it in.
+   */
+  readonly open: (view: string, options?: { readonly background?: boolean; readonly thread?: string }) => string | undefined;
+}
+
+/**
+ * Provided by `threads.view`. What a view draws outside the pane for one of its tabs (the browser's page, drawn over
+ * the pane) marks itself `data-pane-tab` with the tab's id, so focus in it is in the pane: ⌘W there closes the tab.
+ */
+export class Pane extends Context.Service<Pane, PaneService>()("lemma-web/Pane") {}
 
 export const ComposerRegion = defineSlot<Region>("composer", { shows: "first" });
 
@@ -129,7 +242,7 @@ export interface ComposerActionProps {
   readonly insert: (text: string) => void;
 }
 
-/** Buttons beside send: attaching images is the default one. */
+/** Buttons beside send: the context meter and attaching images are the default ones. */
 export const ComposerActions = defineSlot<Region<ComposerActionProps>>("composer.actions");
 
 /** Something the composer offers to put in place of the word being typed. */
@@ -287,9 +400,6 @@ export interface ThreadHeaderItem extends Region {
 
 /** The session's header: the sidebar toggle, title, running chip, and the thread's ⋯ menu are its default items. */
 export const ThreadHeader = defineSlot<ThreadHeaderItem>("thread.header");
-
-/** The thread page's bottom right corner, over the view and beside the composer, in order: the context meter. */
-export const ThreadCorner = defineSlot<Region>("thread.corner");
 
 /** Above the composer box: the connection notice, the provider callout. */
 export const ComposerNotices = defineSlot<Region>("composer.notices");
