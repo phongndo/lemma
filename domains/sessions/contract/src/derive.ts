@@ -112,17 +112,41 @@ export function modelEntries(branch: readonly SessionEvent[]): ModelEntry[] {
   return inCallOrder(afterResults(edited(branch, entries)));
 }
 
-/** `entries` with the branch's `context-edit`s applied, the latest per target; one that cannot apply changes nothing. */
+type ContextEdit = Extract<SessionEvent["data"], { type: "context-edit" }>;
+
+/**
+ * Whether `edit` changes `message`, its target's: an omit leaves out anything but a lone tool result (a response takes
+ * its results with it), a replace puts its content in place of anything but a response (whose calls its results answer).
+ */
+export function editApplies(edit: ContextEdit, message: Message): boolean {
+  return edit.op === "omit" ? message.role !== "toolResult" : edit.content !== undefined && message.role !== "assistant";
+}
+
+/** Of a target's edits, oldest first, the latest that applies to its message. */
+function latestApplying(edits: readonly ContextEdit[] | undefined, message: Message): ContextEdit | undefined {
+  for (let at = (edits?.length ?? 0) - 1; at >= 0; at--) if (editApplies(edits![at]!, message)) return edits![at];
+  return undefined;
+}
+
+/**
+ * `entries` with the branch's `context-edit`s applied: per target, the latest that applies to it; one that cannot apply
+ * changes nothing, and leaves an earlier one in force.
+ */
 function edited(branch: readonly SessionEvent[], entries: ModelEntry[]): ModelEntry[] {
-  const edits = new Map<string, Extract<SessionEvent["data"], { type: "context-edit" }>>();
-  for (const event of branch) if (event.data.type === "context-edit") edits.set(event.data.target, event.data);
+  const edits = new Map<string, ContextEdit[]>();
+  for (const event of branch) {
+    if (event.data.type !== "context-edit") continue;
+    const target = edits.get(event.data.target);
+    if (target === undefined) edits.set(event.data.target, [event.data]);
+    else target.push(event.data);
+  }
   if (edits.size === 0) return entries;
   const omittedCalls = new Set<string>();
   const out: ModelEntry[] = [];
   for (const entry of entries) {
-    const edit = entry.summary === true ? undefined : edits.get(branch[entry.index]!.id);
     const message = entry.message;
-    if (edit?.op === "omit" && message.role !== "toolResult") {
+    const edit = entry.summary === true ? undefined : latestApplying(edits.get(branch[entry.index]!.id), message);
+    if (edit?.op === "omit") {
       if (message.role === "assistant") for (const block of message.content) if (block.type === "toolCall") omittedCalls.add(block.id);
       continue;
     }

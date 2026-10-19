@@ -1,7 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, LlmFailure, ThinkingLevel, ToolCall, ToolResultMessage, ToolSpec, Usage, UserMessage } from "@lemma/llm";
 import type { HandlerCredit, ResultCredit } from "@lemma/contracts";
-import { messageOf } from "./derive.ts";
+import { editApplies, messageOf } from "./derive.ts";
 import type { Contribution, EventData, ProviderAnswer, SessionEvent, Timing, TurnEndReason } from "./sessions.ts";
 
 /**
@@ -276,12 +276,36 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   let previousSections = new Map<string, string | number>();
   let previousTools = new Map<string, string>();
   // How many messages each request carried, as `deriveMessages` of the branch before it would count them, kept as the
-  // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start.
+  // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start
+  // but those an edit omits.
   const positionOf = new Map(branch.map((event, position) => [event.id, position]));
   const messagesBefore = [0];
-  for (const event of branch) messagesBefore.push(messagesBefore.at(-1)! + (messageOf(event) === undefined ? 0 : 1));
+  // Where each tool call's results are, so a response a `context-edit` omits takes its results out of the count too.
+  const resultsOf = new Map<string, number[]>();
+  branch.forEach((event, position) => {
+    const message = messageOf(event);
+    messagesBefore.push(messagesBefore.at(-1)! + (message === undefined ? 0 : 1));
+    if (message?.role === "toolResult") resultsOf.set(message.toolCallId, [...(resultsOf.get(message.toolCallId) ?? []), position]);
+  });
   let viewStart = 0;
   let summarized = 0;
+  // The events `context-edit`s so far omit, by position: per target, as the latest that applies to it says.
+  const omitted = new Set<number>();
+  /** The messages before `position` in the view that an omit leaves out: each omitted event's, and its calls' results. */
+  const omittedBefore = (position: number): number => {
+    let count = 0;
+    for (const target of omitted) {
+      if (target < viewStart || target >= position) continue;
+      count++;
+      const message = messageOf(branch[target]!)!;
+      if (message.role !== "assistant") continue;
+      for (const block of message.content) {
+        if (block.type !== "toolCall") continue;
+        for (const result of resultsOf.get(block.id) ?? []) if (result >= viewStart && result < position) count++;
+      }
+    }
+    return count;
+  };
 
   const stepFor = (turnId: string, stepId: string, at: number): MutableStep | undefined => {
     const existing = stepById.get(stepId);
@@ -371,7 +395,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           model: data.model,
           ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
           composition: data.composition,
-          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]!,
+          messages: summarized + messagesBefore[position]! - messagesBefore[viewStart]! - omittedBefore(position),
           ...(system === undefined ? {} : { system }),
           sections,
           tools,
@@ -399,6 +423,14 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
             ...(data.usage === undefined ? {} : { usage: data.usage }),
           });
         }
+        return;
+      }
+      case "context-edit": {
+        const target = positionOf.get(data.target);
+        const message = target === undefined ? undefined : messageOf(branch[target]!);
+        if (target === undefined || message === undefined || !editApplies(data, message)) return;
+        if (data.op === "omit") omitted.add(target);
+        else omitted.delete(target);
         return;
       }
       case "attempt": {

@@ -173,9 +173,10 @@ export const EventData = Schema.Union([
   /**
    * Changes what the model sees of an earlier event on the branch, which stays in the log as it was: `omit` leaves it
    * out (a response with its tool results, so calls keep their results), `replace` puts `content` in its place (a
-   * prompt, a tool result, or a `context` event; never a response, whose calls its results answer). The latest edit of
-   * an event wins. One that cannot apply (its target not on the branch, or already summarized away by a compaction,
-   * or omitting a lone tool result, or replacing a response) changes nothing. Append it as `context` says.
+   * prompt, a tool result, or a `context` event; never a response, whose calls its results answer). Of an event's
+   * edits, the latest that applies wins. One that cannot apply (its target not on the branch, or already summarized
+   * away by a compaction, or omitting a lone tool result, or replacing a response) changes nothing, and leaves an
+   * earlier one in force. Append it as `context` says.
    */
   Schema.Struct({
     type: Schema.Literal("context-edit"),

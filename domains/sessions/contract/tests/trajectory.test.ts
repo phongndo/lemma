@@ -113,6 +113,58 @@ describe("trajectory", () => {
     expect(derived).toEqual([1, 3, 2, 4]);
   });
 
+  it("counts the messages each request carried as deriveMessages does, as context-edits leave some out", () => {
+    const call = (id: string) => ({ type: "toolCall" as const, id, name: "read", arguments: {} });
+    const result = (toolCallId: string): EventData => ({
+      type: "message",
+      turnId: "t1",
+      stepId: "t1.1",
+      message: { role: "toolResult", toolCallId, toolName: "read", content: [{ type: "text", text: toolCallId }], isError: false, timestamp: 0 },
+    });
+    const edit = (target: string, op: "omit" | "replace"): EventData => ({
+      type: "context-edit",
+      target,
+      op,
+      ...(op === "replace" ? { content: [{ type: "text" as const, text: "again" }] } : {}),
+      source: "test",
+    });
+    const step = (turnId: string, stepId: string, message: AssistantMessage, ...after: EventData[]): EventData[] => [
+      { type: "step-start", turnId, stepId },
+      { type: "request", turnId, stepId, model: "p/m", composition: "c", contributions: [] },
+      { type: "message", turnId, stepId, message },
+      ...after,
+      { type: "step-end", turnId, stepId },
+    ];
+    const turn = (turnId: string, ...steps: EventData[][]): EventData[] => [
+      { type: "turn-start", turnId },
+      { type: "message", turnId, message: { role: "user", content: [{ type: "text", text: turnId }], timestamp: 0 } },
+      ...steps.flat(),
+      { type: "turn-end", turnId, reason: "done" },
+    ];
+    const done = assistant([{ type: "text", text: "ok" }], "stop");
+    const branch = log(
+      // e1 to e14: the first turn's response with two calls is e5, its results e6 and e7.
+      ...turn("t1", step("t1", "t1.1", assistant([call("c1"), call("c2")], "toolUse"), result("c1"), result("c2")), step("t1", "t1.2", done)),
+      // The response left out takes its results with it; an omit of a lone result cannot apply.
+      ...turn("t2", [edit("e5", "omit"), edit("e6", "omit")], step("t2", "t2.1", done)),
+      // The first prompt left out, then put back by a replace.
+      ...turn("t3", [edit("e2", "omit")], step("t3", "t3.1", done)),
+      ...turn("t4", [edit("e2", "replace")], step("t4", "t4.1", done)),
+    );
+    const counted = trajectory(branch).flatMap((t) => t.steps.map((step) => step.request!));
+    const derived = counted.map(
+      (request) =>
+        deriveMessages(
+          branch.slice(
+            0,
+            branch.findIndex((event) => event.id === request.eventId),
+          ),
+        ).length,
+    );
+    expect(counted.map((request) => request.messages)).toEqual(derived);
+    expect(derived).toEqual([1, 4, 3, 4, 7]);
+  });
+
   const events = log(
     { type: "turn-start", turnId: "t1" },
     { type: "message", turnId: "t1", message: { role: "user", content: [{ type: "text", text: "list files" }], timestamp: 0 } },

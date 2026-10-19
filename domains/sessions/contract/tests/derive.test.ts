@@ -228,6 +228,14 @@ describe("modelEntries", () => {
       expect(shown(log(user("go"), assistant("hi"), edit("e2", "replace", "rewritten")))).toEqual(["user:go", "assistant"]);
     });
 
+    it("leaves an earlier edit in force when a later one cannot apply", () => {
+      // An omit cannot apply to a lone result, so the shortening before it still holds.
+      const events = log(user("go"), calls, result("c1", "a long output"), edit("e3", "replace", "short"), edit("e3", "omit"));
+      expect(shown(events)).toEqual(["user:go", "assistant", "toolResult:short"]);
+      // A replace cannot apply to a response, so the omit before it still holds.
+      expect(shown(log(user("go"), assistant("hi"), edit("e2", "omit"), edit("e2", "replace", "rewritten")))).toEqual(["user:go"]);
+    });
+
     it("changes nothing for a target a compaction summarized, or one not on the branch", () => {
       const events = log(
         user("old"),
