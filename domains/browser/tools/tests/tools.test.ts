@@ -177,5 +177,6 @@ describe.skipIf(executable === undefined)("html_preview in Chromium", () => {
     } finally {
       await real.close();
     }
-  });
+    // It starts a Chromium, which a busy machine starts slowly.
+  }, 60_000);
 });

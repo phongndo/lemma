@@ -20,6 +20,11 @@ const found = findChromium({
   },
 });
 const missing = "problem" in found;
+/**
+ * How long a hook or test that starts a Chromium may take: a cold start on a busy machine (CI runs every package's tests
+ * at once) outlasts the defaults. Each group starts its browser in a hook, so its tests meet a warm one.
+ */
+const LAUNCH_MS = 60_000;
 
 const page = (body: string) =>
   `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html><html><head><title>Test</title></head><body>${body}</body></html>`)}`;
@@ -58,7 +63,7 @@ describe.skipIf(missing)("Chromium", () => {
 
   beforeAll(async () => {
     await run(service.open("a", { url: FORM }));
-  });
+  }, LAUNCH_MS);
 
   it("reads a page as a tree with refs, its password values hidden, and acts by ref", async () => {
     const snapshot = await run(service.snapshot("a", {}));
@@ -192,7 +197,9 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
     await new Promise<void>((resolve) => closed.listen(0, "127.0.0.1", resolve));
     refused = `http://127.0.0.1:${(closed.address() as AddressInfo).port}/`;
     await new Promise<void>((resolve) => closed.close(() => resolve()));
-  });
+    // Started here, so the first test does not wait out a cold start; a session of its own touches none of theirs.
+    await run(service.open("warm", {}));
+  }, LAUNCH_MS);
   afterAll(async () => {
     await browser.close();
     server.close();
@@ -273,20 +280,24 @@ describe.skipIf(missing)("Chromium over HTTP", () => {
 });
 
 describe.skipIf(missing)("an idle Chromium", () => {
-  it("closes after its last call, its tabs with it, and starts again when called", async () => {
-    const browser = makeChromium({ idleMs: 50, headless: true });
-    try {
-      await Effect.runPromise(browser.service.open("s", { url: page("<p>Hi</p>") }));
-      await vi.waitFor(async () => expect(await Effect.runPromise(browser.snapshot)).toMatchObject({ running: false }), { timeout: 10_000 });
-      expect(await Effect.runPromise(Effect.flip(browser.service.snapshot("s", {})))).toMatchObject({
-        reason: "NoTab",
-        message: expect.stringMatching(/closes 50 ms after its last call/),
-      });
-      expect(await Effect.runPromise(browser.service.open("s", {}))).toMatchObject({ tabId: "t1" });
-    } finally {
-      await browser.close();
-    }
-  });
+  it(
+    "closes after its last call, its tabs with it, and starts again when called",
+    async () => {
+      const browser = makeChromium({ idleMs: 50, headless: true });
+      try {
+        await Effect.runPromise(browser.service.open("s", { url: page("<p>Hi</p>") }));
+        await vi.waitFor(async () => expect(await Effect.runPromise(browser.snapshot)).toMatchObject({ running: false }), { timeout: 10_000 });
+        expect(await Effect.runPromise(Effect.flip(browser.service.snapshot("s", {})))).toMatchObject({
+          reason: "NoTab",
+          message: expect.stringMatching(/closes 50 ms after its last call/),
+        });
+        expect(await Effect.runPromise(browser.service.open("s", {}))).toMatchObject({ tabId: "t1" });
+      } finally {
+        await browser.close();
+      }
+    },
+    LAUNCH_MS,
+  );
 });
 
 describe("an unfound Chromium", () => {
