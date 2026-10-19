@@ -24,10 +24,12 @@ config.
 - **An empty region.** With nothing in `SidebarRegion`, the main region takes
   the whole width.
 - **A desktop window.** While the window's own controls overlay the page
-  (Window Controls Overlay), it sets `data-titlebar` on `.app` and
-  `--titlebar-inset` on the column under them, the DOM convention
-  [`@lemma/web`](../../../packages/web/src/index.ts) describes, which other
-  plugins' stylesheets read.
+  (Window Controls Overlay), it sets `data-titlebar` on `.app`, and
+  `--titlebar-inset` and `--titlebar-inset-end` on the columns under them, the
+  DOM convention [`@lemma/web`](../../../packages/web/src/index.ts) describes,
+  which other plugins' stylesheets read. On Windows and Linux it gives the
+  controls the page's background and muted text (`lemmaDesktop.titleBar`),
+  again whenever the look changes.
 
 ## Rationale
 

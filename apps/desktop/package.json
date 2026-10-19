@@ -14,6 +14,7 @@
     "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
+    "@lemma/web": "workspace:*",
     "effect": "4.0.4"
   },
   "devDependencies": {

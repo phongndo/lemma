@@ -1,5 +1,7 @@
 import { Show, createSignal, onCleanup } from "solid-js";
 import { load, save } from "@lemma/web/storage";
+import { dragEdge } from "@lemma/web/drag";
+import { onLookChange, tokenColor } from "@lemma/web/paint";
 import { Actions } from "@lemma/actions";
 import { Docks, Layers, Layout, MainRegion, SidebarRegion, TopRegion } from "@lemma/frame";
 import { Root, Slots, defineWebPlugin, Contained, Each } from "@lemma/web";
@@ -20,6 +22,9 @@ interface ControlsOverlay extends EventTarget {
   readonly visible: boolean;
 }
 const controlsOverlay = (navigator as { windowControlsOverlay?: ControlsOverlay }).windowControlsOverlay;
+/** The desktop app's window controls (Windows, Linux), which take the page's colors. */
+const titleBarBridge = (window as Window & { lemmaDesktop?: { readonly titleBar?: { readonly setColors: (background: string, symbols: string) => void } } })
+  .lemmaDesktop?.titleBar;
 
 const clampWidth = (width: number) => Math.round(Math.max(MIN_WIDTH, Math.min(width, MAX_WIDTH, Math.max(MIN_WIDTH, window.innerWidth - MIN_MAIN))));
 
@@ -42,6 +47,13 @@ export default defineWebPlugin({
     const [collapsed, setCollapsed] = createSignal(load(COLLAPSED_KEY) === "1");
     const [resizing, setResizing] = createSignal(false);
     const [titlebar, setTitlebar] = createSignal(controlsOverlay?.visible === true);
+    // The window's controls look like the heads they sit in: the page's background and muted text, as its look changes.
+    if (titleBarBridge !== undefined) {
+      const bridge = titleBarBridge;
+      const tell = () => bridge.setColors(tokenColor("--bg"), tokenColor("--text-2"));
+      tell();
+      plugin.onCleanup(onLookChange(tell));
+    }
     const narrowQuery = window.matchMedia(NARROW);
     const [narrow, setNarrow] = createSignal(narrowQuery.matches);
     plugin.listen(narrowQuery, "change", () => setNarrow(narrowQuery.matches));
@@ -79,23 +91,16 @@ export default defineWebPlugin({
     });
 
     const startResize = (event: PointerEvent) => {
-      event.preventDefault();
-      const handle = event.currentTarget as HTMLElement;
-      handle.setPointerCapture(event.pointerId);
       const startX = event.clientX;
       const startWidth = width();
-      setResizing(true);
-      const move = (next: PointerEvent) => setChosen(clampWidth(startWidth + next.clientX - startX));
-      const end = () => {
-        setResizing(false);
-        save(WIDTH_KEY, String(chosen()));
-        handle.removeEventListener("pointermove", move);
-        handle.removeEventListener("pointerup", end);
-        handle.removeEventListener("pointercancel", end);
-      };
-      handle.addEventListener("pointermove", move);
-      handle.addEventListener("pointerup", end);
-      handle.addEventListener("pointercancel", end);
+      const started = dragEdge(event, {
+        move: (next) => setChosen(clampWidth(startWidth + next.clientX - startX)),
+        end: () => {
+          setResizing(false);
+          save(WIDTH_KEY, String(chosen()));
+        },
+      });
+      if (started) setResizing(true);
     };
     const resetWidth = () => {
       setChosen(DEFAULT_WIDTH);

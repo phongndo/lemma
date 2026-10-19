@@ -36,6 +36,12 @@
     --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, "Liberation Mono", monospace;
     --text-scale: 1;
     --radius-scale: 1;
+    /*
+     * The bars across the top of the sidebar and the page (their heads): one height, so their buttons line up with
+     * each other, stay put as the sidebar opens and closes, and line up with a desktop window's controls, which the
+     * desktop app centers in it.
+     */
+    --head-height: 48px;
 
     --bg: #fafafa;
     --text: #171717;

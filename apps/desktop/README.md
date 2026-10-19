@@ -38,8 +38,30 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
   each window at its address. Any other host keeps running and re-reads its
   config and plugin files. Neither rebuilds the web app for `pnpm desktop` nor
   reloads the desktop's own main process.
+- **No title bar of its own.** The page's heads (`--head-height`, 48px) are
+  the window's title bar, and its controls sit in them, level with their
+  buttons: the traffic lights centered on macOS; on Windows and Linux an
+  overlay as tall as a head, in the page's colors, which change with its look.
 - **Links open in the system browser.** Navigation stays within the host's
   origin.
+- **The browser view's pages are Chromium's** (`src/browser.ts`): a
+  `<webview>` each, in their own partition (`persist:lemma-browser`, so
+  sign-ins last), with no Node, no preload, and the sandbox, whatever the
+  element asks for. A page may write to the clipboard and go fullscreen, and
+  is refused the rest (reading the clipboard, location, notifications). A
+  window it opens (a sign-in) is a window the app makes, its size and kind the
+  app's, three at most, closing with its page and with the app's window; it is
+  not one of the app's own, so reloading, a `lemma://` link, and the Dock leave
+  it alone, and the app does not stay open for it. A link to a new tab opens
+  one in the thread's pane.
+  Its right-click menu has Back, Forward, Reload, what is under the pointer,
+  and Inspect, and its DevTools open in their own window. While a page has
+  focus, ⌘R (Ctrl+R) reloads it, not the app; ⌘[ and ⌘] (Alt+← and Alt+→) go
+  back and forward; ⌘⌥I (Ctrl+Shift+I) or F12 opens its DevTools; the menu's
+  other keys (quitting, editing, zoom) work as usual; and the app's own
+  shortcuts that a browser keeps for itself (tabs, threads) reach the app,
+  those held with a modifier or a function key, matched as the web app matches
+  them (`@lemma/web/keys`).
 - **`lemma://` links open in the app.** `lemma://threads/<id>` shows that
   thread (any of the web app's [addresses](../web/README.md#addresses) works):
   in the open window, without a reload, or in a new one. The app registers

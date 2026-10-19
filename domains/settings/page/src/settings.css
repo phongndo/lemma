@@ -28,9 +28,9 @@
   border-right: 1px solid var(--border);
 }
 
-/* In a desktop window, the window's controls take the nav's top 48px; the search lines up with the threads'. */
+/* In a desktop window, the window's controls take the nav's top, a head's height; the search starts below it. */
 [data-titlebar] .settings-nav {
-  padding-top: 52px;
+  padding-top: calc(var(--head-height) + 4px);
   app-region: drag;
 }
 
@@ -114,8 +114,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  height: 48px;
-  padding: 0 12px 0 max(16px, var(--titlebar-inset, 0px));
+  height: var(--head-height);
+  padding: 0 max(12px, var(--titlebar-inset-end, 0px)) 0 max(16px, var(--titlebar-inset, 0px));
   background: var(--bg);
   font-size: calc(13.5px * var(--text-scale));
 }
