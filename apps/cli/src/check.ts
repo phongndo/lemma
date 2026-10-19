@@ -212,6 +212,8 @@ export interface Checked {
   readonly fault?: string;
   readonly provides: readonly string[];
   readonly requires: readonly string[];
+  /** The domain contracts it says it is written against, as `name@version`; absent when it says nothing. */
+  readonly uses?: readonly string[];
   readonly hooks: readonly string[];
   readonly adds: readonly string[];
   /** What the host printed of it: a warning, an error. */
@@ -268,6 +270,7 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Effe
       ...(status.fault === undefined ? {} : { fault: status.fault.message }),
       provides: status.provides,
       requires: status.requires,
+      ...(status.uses === undefined ? {} : { uses: status.uses }),
       hooks: (status.hooks ?? []).map((hook) => hook.name),
       adds: (status.contributes ?? []).map((registry) => `${registry.name}: ${registry.keys?.join(", ") ?? `${registry.items} item(s)`}`),
       warnings: host.lines.filter((line) => (line.includes(`[${status.id}]`) || line.includes(`"${status.id}"`)) && /warning|error|fail/.test(line)),
@@ -299,6 +302,13 @@ export const checkPlugin = (path: string | undefined, io: Io, run: Runner): Effe
         `${status.id}: ${status.state}`,
         ...(status.provides.length === 0 ? [] : [`  provides ${status.provides.join(", ")}`]),
         ...(status.requires.length === 0 ? [] : [`  requires ${status.requires.join(", ")}`]),
+        ...(status.uses === undefined
+          ? [
+              `  warning: it names no contract versions (uses: ["lemma/tools@1", …], or [] for none), so a change to a contract it uses will not be caught when it loads`,
+            ]
+          : status.uses.length === 0
+            ? []
+            : [`  uses ${status.uses.join(", ")}`]),
         ...(status.hooks.length === 0 ? [] : [`  handles ${status.hooks.join(", ")}`]),
         ...status.adds.map((added) => `  adds ${added}`),
         ...status.warnings.map((line) => `  ${line}`),

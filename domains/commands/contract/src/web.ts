@@ -10,3 +10,4 @@ export interface CommandsService {
 }
 
 export class Commands extends Context.Service<Commands, CommandsService>()("lemma-web/Commands") {}
+export { COMMANDS_CONTRACT } from "./version.ts";

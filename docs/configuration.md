@@ -109,7 +109,10 @@ A plugin says which version of the host's contracts it is written for by
 requiring `HostApi(version)` from `@lemma/contracts`, which the host provides
 for the version it implements (`HOST_API`), and a web app plugin by
 `defineWebPlugin({ api })`, so after an incompatible change it is left out with
-the version named rather than failing at some later call. A plugin that
+the version named rather than failing at some later call. It says the same of
+each domain's contract it uses with `uses: ["lemma/tools@1", …]`, and is left
+out when the plugin serving that domain implements another version
+([writing plugins](plugins.md#contract-versions)). A plugin that
 renames a setting reads its users' old rows with `migrateConfig` from
 `@lemma/contracts`.
 

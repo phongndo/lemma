@@ -39,6 +39,9 @@ export const PluginStatus = Schema.Struct({
   /** Capability keys. */
   provides: Schema.Array(Schema.String),
   requires: Schema.Array(Schema.String),
+  /** The domain contracts it is written against, and implements, as `name@version` (`ContractVersions` in `@lemma/core`). */
+  uses: Schema.optional(Schema.Array(Schema.String)),
+  implements: Schema.optional(Schema.Array(Schema.String)),
   state: Schema.Literals(["pending", "activating", "active", "draining", "closed", "failed", "disabled"]),
   fault: Schema.optional(Schema.Struct({ phase: Schema.String, operation: Schema.optional(Schema.String), message: Schema.String })),
   /** The plugin whose failure or absence keeps this one from running. */

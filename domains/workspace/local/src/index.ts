@@ -6,7 +6,7 @@ import { Effect, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Registries } from "@lemma/core";
 import { Channels, Paths } from "@lemma/contracts";
-import { serveFiles, serveWorkspace, Workspace, WorkspaceError } from "@lemma/workspace";
+import { serveFiles, serveWorkspace, Workspace, WORKSPACE_CONTRACT, WorkspaceError } from "@lemma/workspace";
 import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/workspace";
 import { expandHome, kindOf } from "@lemma/contracts/fs";
 
@@ -312,6 +312,7 @@ const WorkspaceConfig = Schema.Struct({
  */
 export default definePlugin({
   id: "workspace.local",
+  implements: [WORKSPACE_CONTRACT],
   version: "0.1.0",
   config: WorkspaceConfig,
   provides: { workspace: Workspace },

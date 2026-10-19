@@ -43,3 +43,4 @@ export class Devtools extends Context.Service<Devtools, DevtoolsService>()("lemm
 
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const DevtoolsActionIds = { eventLog: "event-log.open" } as const;
+export { DEVTOOLS_CONTRACT } from "../version.ts";

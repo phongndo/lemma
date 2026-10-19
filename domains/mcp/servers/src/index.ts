@@ -6,7 +6,7 @@ import type { Context } from "effect";
 import { definePlugin, Events, Registries } from "@lemma/core";
 import { Channels, Paths } from "@lemma/contracts";
 import { PromptSections } from "@lemma/agent";
-import { Mcp, McpChanged, McpError, McpServers, serveMcp } from "@lemma/mcp";
+import { Mcp, MCP_CONTRACT, McpChanged, McpError, McpServers, serveMcp } from "@lemma/mcp";
 import { Tools } from "@lemma/tools";
 import { Servers } from "./servers.ts";
 
@@ -41,6 +41,7 @@ const toMcpError = (cause: unknown) =>
  */
 export default definePlugin({
   id: "mcp.servers",
+  implements: [MCP_CONTRACT],
   version: VERSION,
   config: Config,
   requires: { paths: Paths },

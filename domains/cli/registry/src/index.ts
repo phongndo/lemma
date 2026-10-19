@@ -4,7 +4,19 @@ import type { Context, Scope } from "effect";
 import { awaitable, definePlugin, PluginContext, Registries } from "@lemma/core";
 import type { Awaitable, Contribution } from "@lemma/core";
 import { Channels, HostError, Inspectors, InteractionError, InteractionOrigin, withContribution } from "@lemma/contracts";
-import { asHostError, CliChecks, CliCommands, CliRunner, closest, describeFailure, InProgress, inputProblem, plainJson, serveCli } from "@lemma/cli";
+import {
+  asHostError,
+  CLI_CONTRACT,
+  CliChecks,
+  CliCommands,
+  CliRunner,
+  closest,
+  describeFailure,
+  InProgress,
+  inputProblem,
+  plainJson,
+  serveCli,
+} from "@lemma/cli";
 import type { CheckResult, CliCommand, CliCommandInfo, CliContext, CliElement, CliResult, RunRequest } from "@lemma/cli";
 
 type Service = Context.Service.Shape<typeof CliRunner>;
@@ -329,6 +341,7 @@ const makeRunner = (
  */
 export default definePlugin({
   id: "cli.registry",
+  implements: [CLI_CONTRACT],
   version: "0.1.0",
   config: Config,
   provides: { cli: CliRunner },

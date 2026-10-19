@@ -9,3 +9,4 @@ export * from "./completion.ts";
 export * from "./summary.ts";
 export * from "./speed.ts";
 export * from "./commands.ts";
+export { THREADS_CONTRACT } from "./version.ts";

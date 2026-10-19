@@ -3,7 +3,7 @@ import { HostError } from "@lemma/contracts";
 import { LlmChannels, ThinkingLevel } from "@lemma/llm";
 import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo } from "@lemma/llm";
 import { load, loadJson, loadStrings, recordOf, save } from "@lemma/web/storage";
-import { DEFAULT_THINKING, clampThinking, resolveModel, Models } from "@lemma/llm/web";
+import { clampThinking, DEFAULT_THINKING, LLM_CONTRACT, Models, resolveModel } from "@lemma/llm/web";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
 const MODEL_KEY = "lemma.model";
@@ -18,6 +18,7 @@ const SETTLE_MS = 5_000;
  */
 export default defineWebPlugin({
   id: "llm.client",
+  implements: [LLM_CONTRACT],
   requires: { client: Client, notify: Notify },
   provides: { models: Models },
   setup: ({ client, notify }, plugin) => {

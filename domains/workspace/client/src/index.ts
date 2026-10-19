@@ -3,7 +3,7 @@ import { WorkspaceChannels } from "@lemma/workspace";
 import type { WorkspaceStatus } from "@lemma/workspace";
 import { load, loadJson, loadStrings, recordOf, save } from "@lemma/web/storage";
 import { branchSlug } from "./slug.ts";
-import { knownProjects, patchProjectSettings, projectName, Workspace } from "@lemma/workspace/web";
+import { knownProjects, patchProjectSettings, projectName, Workspace, WORKSPACE_CONTRACT } from "@lemma/workspace/web";
 import type { ProjectSettings, WorktreeDraft } from "@lemma/workspace/web";
 import { Threads } from "@lemma/threads";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
@@ -27,6 +27,7 @@ const isProjectSettings = (value: unknown): value is ProjectSettings =>
 
 export default defineWebPlugin({
   id: "workspace.client",
+  implements: [WORKSPACE_CONTRACT],
   requires: { client: Client, notify: Notify, threads: Threads },
   provides: { workspace: Workspace },
   setup: ({ client, notify, threads }, plugin) => {

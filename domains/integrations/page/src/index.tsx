@@ -1,6 +1,6 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
 import type { Component, JSX } from "solid-js";
-import { IntegrationKinds, IntegrationsSection } from "@lemma/integrations";
+import { IntegrationKinds, INTEGRATIONS_CONTRACT, IntegrationsSection } from "@lemma/integrations";
 import type { IntegrationItem, IntegrationKind, IntegrationOffer } from "@lemma/integrations";
 import { AlertIcon, ArrowLeftIcon, CheckIcon, Dialog, PlugIcon, PlusIcon, SearchField, SearchIcon, Spinner, Toggle } from "@lemma/look";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
@@ -400,6 +400,7 @@ function IntegrationsPage(props: { slots: SlotsService; settings: SettingsServic
  */
 export default defineWebPlugin({
   id: "integrations.page",
+  implements: [INTEGRATIONS_CONTRACT],
   styles,
   requires: { slots: Slots, settings: Settings },
   setup: ({ slots, settings }) => {

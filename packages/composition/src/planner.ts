@@ -320,6 +320,7 @@ function targetOf(error: CompositionError, optional: (id: string) => boolean, so
     case "DuplicatePlugin":
     case "ReservedCapability":
     case "MissingCapability":
+    case "IncompatibleContract":
     case "InvalidConfig": {
       const id = error.plugins[0];
       return id !== undefined && optional(id) ? id : undefined;
@@ -356,6 +357,11 @@ function describe(
         .map((match) => match[2]!);
       return `it is written for version ${api[2]} of the ${api[1]} API, and this Lemma provides ${offered.length ? `version ${[...new Set(offered)].join(", ")}` : "no version of it"}`;
     }
+    case "IncompatibleContract": {
+      const contract = error.contract;
+      if (contract?.uses === undefined || contract.implemented === undefined) return error.message;
+      return `it is written for version ${contract.uses} of the ${contract.name} contract, and "${contract.by}" implements version ${contract.implemented}`;
+    }
     case "DuplicateCapability":
       return `it provides "${error.capability}", as ${error.plugins.map((id) => `"${id}"`).join(" and ")} both do`;
     case "ReservedCapability":
@@ -375,6 +381,10 @@ function suggestionFor(error: CompositionError, appKeys: ReadonlySet<string>): s
       return `Fix its "config" row (its README lists the current settings)`;
     case "MissingCapability":
       return API_KEY.test(error.capability ?? "") ? "Update the plugin for this version of Lemma, or turn it off" : "Fix the plugin, or turn it off";
+    case "IncompatibleContract":
+      return error.contract?.uses === undefined
+        ? "Fix its uses (name@version), or turn it off"
+        : "Update the plugin for this version of the contract, or turn it off";
     case "DuplicateCapability":
       return "Turn one of them off";
     case "ReservedCapability":

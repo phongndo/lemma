@@ -132,3 +132,4 @@ export const IntegrationKinds = defineSlot<IntegrationKind>("integrations.kinds"
  * Add dialog: `all` on every kind's offers, a kind's id on that kind's.
  */
 export const IntegrationsSection = "integrations";
+export { INTEGRATIONS_CONTRACT } from "./version.ts";

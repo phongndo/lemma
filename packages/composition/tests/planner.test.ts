@@ -179,6 +179,26 @@ describe("planComposition", () => {
     expect(running(appProvided)).toContain("later");
   });
 
+  test("a plugin written for another version of a domain's contract is left out with both versions named", () => {
+    const provider = definePlugin({ id: "store", implements: ["lemma/store@2"], layer: Layer.empty });
+    const old = definePlugin({ id: "old", uses: ["lemma/store@1"], layer: Layer.empty });
+    const fresh = definePlugin({ id: "fresh", uses: ["lemma/store@2"], layer: Layer.empty });
+    const planned = plan({
+      bundled: [...bundled, provider],
+      local: [
+        { plugin: old, source: "user" },
+        { plugin: fresh, source: "user" },
+      ],
+    });
+    expect(planned.problems.get("old")).toBe(`it is written for version 1 of the lemma/store contract, and "store" implements version 2`);
+    expect(planned.diagnostics.find((diagnostic) => diagnostic.pluginId === "old")?.suggestion).toBe(
+      "Update the plugin for this version of the contract, or turn it off",
+    );
+    expect(running(planned)).toEqual(expect.arrayContaining(["store", "fresh"]));
+    // With the provider off, the old plugin runs: using a contract needs no plugin for it.
+    expect(running(plan({ bundled: [...bundled, provider], rows: { store: { enabled: false } }, local: [{ plugin: old, source: "user" }] }))).toContain("old");
+  });
+
   test("a plugin providing what the app provides is left out, even when a pinned plugin requires that", () => {
     const pages = definePlugin({ id: "pages", requires: [Slots], layer: Layer.empty });
     const stray = definePlugin({ id: "stray", provides: [Slots], layer: Layer.succeed(Slots, "stray") });

@@ -5,7 +5,7 @@ import { definePlugin } from "@lemma/core";
 import { Channels, Paths, serveChannel } from "@lemma/contracts";
 import { AgentInputHook, PromptSections } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
-import { SkillChannels } from "@lemma/skills";
+import { SkillChannels, SKILLS_CONTRACT } from "@lemma/skills";
 import { Config } from "./config.ts";
 import { expandHome, makeSkillFinder, mentionedSkills, skillBlock, skillsSection } from "./skills.ts";
 
@@ -21,6 +21,7 @@ const PROJECT_DIRS = [path.join(".agents", "skills"), path.join(".lemma", "skill
  */
 export default definePlugin({
   id: "skills.files",
+  implements: [SKILLS_CONTRACT],
   version: "0.1.0",
   config: Config,
   requires: { paths: Paths, sessions: Sessions },

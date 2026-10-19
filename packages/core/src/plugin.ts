@@ -28,6 +28,10 @@ export interface Deadlines {
 export interface Plugin<Provides extends readonly Capability[] = readonly Capability[]> {
   readonly id: string;
   readonly version?: string;
+  /** The contracts it is written against, as `name@version` (see `ContractVersions`). */
+  readonly uses?: readonly string[];
+  /** The contracts it implements, as `name@version` (see `ContractVersions`). */
+  readonly implements?: readonly string[];
   /** Validates the config supplied for this plugin, and encodes it back (a settings form shows defaults). Absent: the plugin takes none. */
   readonly config?: Schema.Codec<any, any>;
   readonly provides: Provides;
@@ -71,7 +75,20 @@ export type Provided<P extends Capabilities> = keyof P extends never ? void | un
 export type SetupResult<Out, R> = Effect.Effect<Out, unknown, R> | Generator<Effect.Effect<unknown, unknown, R>, Out, any>;
 
 /** The manifest fields every way of writing a plugin shares. */
-export interface PluginManifest {
+/**
+ * Which versions of named contracts a plugin is written against (`uses`) and implements (`implements`), each
+ * `name@version` with a whole-number version: `"example/store@2"`. Planning refuses a plugin that uses a version of a
+ * contract other than the one a plugin in the composition implements (`CompositionError` "IncompatibleContract"), so a
+ * plugin written for an older contract is left out with both versions named rather than failing at some later call.
+ * A contract no plugin in the composition implements constrains nothing: `uses` is no dependency, and starts nothing.
+ * Write `uses` as a literal: a version read from the contract's own package at run time would always match.
+ */
+export interface ContractVersions {
+  readonly uses?: readonly string[];
+  readonly implements?: readonly string[];
+}
+
+export interface PluginManifest extends ContractVersions {
   readonly id: string;
   readonly version?: string;
   readonly exclusive?: boolean;
@@ -174,6 +191,8 @@ export function definePlugin(
   return Object.freeze({
     id: definition.id,
     ...(definition.version === undefined ? {} : { version: definition.version }),
+    ...(definition.uses === undefined ? {} : { uses: Object.freeze([...definition.uses]) }),
+    ...(definition.implements === undefined ? {} : { implements: Object.freeze([...definition.implements]) }),
     ...(config === undefined ? {} : { config }),
     provides: Object.freeze([...provides]),
     requires: Object.freeze([...requires]),

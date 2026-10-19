@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import { Clock, Data, Effect, Stream } from "effect";
 import { inChainOrder, Notice } from "@lemma/contracts";
 import { AgentInputHook, AgentRequestHook } from "@lemma/agent";
-import { CompactionError, CompactionHook } from "@lemma/context";
+import { CompactionError, CompactionHook, CONTEXT_CONTRACT } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Llm, LlmRequest } from "@lemma/llm";
 import { modelEntries, modelView, SessionRemoved } from "@lemma/sessions";
@@ -56,6 +56,7 @@ export const requestChars = (draft: Pick<RequestDraft, "sections" | "tools">): n
  */
 export default definePlugin({
   id: "context.compaction",
+  implements: [CONTEXT_CONTRACT],
   version: "0.1.0",
   config: Config,
   requires: { llm: Llm },

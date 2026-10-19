@@ -171,6 +171,27 @@ command's `run`, and a section's `text` may return a value, a promise, or an
 Effect. The [kernel's README](../packages/core/README.md) covers the rest:
 `config` Schemas, `requires` and `provides`, reloads, and faults.
 
+## Contract versions
+
+Each domain's contract has a version, which its package exports
+(`TOOLS_CONTRACT` is `"lemma/tools@1"`) and the plugin serving the domain
+implements. Say which versions yours is written against, as literals:
+
+```ts
+export default definePlugin({ id: "greet", uses: ["lemma/tools@1"], setup: … });
+```
+
+After an incompatible change to a contract (something removed or renamed, or a
+meaning changed; never an addition), its version goes up, and a plugin written
+for the old one is left out, both versions named, rather than failing at some
+later call. Using a contract starts nothing and needs no plugin for it: with
+the domain's plugin off, yours still runs. A plugin that serves a domain says
+`implements: [TOOLS_CONTRACT]`, so plugins written for another version of it
+are told. The runtime's own contracts are versioned by `HostApi` and a web
+half's `api` ([configuration](configuration.md#when-something-cannot-run)).
+`lemma plugins check` warns of a plugin that names no versions (`uses: []`
+says it uses no domain's contract).
+
 ## Replacing a bundled plugin
 
 A plugin with a bundled plugin's id takes its place, and one providing what a

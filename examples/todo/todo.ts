@@ -69,6 +69,8 @@ export const reminder = (todos: readonly Todo[]): string | undefined => {
 export default definePlugin({
   id: "todo",
   version: "0.1.0",
+  // The contracts it is written against: after an incompatible change to one, it is left out, saying which.
+  uses: ["lemma/agent@1", "lemma/sessions@1", "lemma/tools@1"],
   requires: { sessions: Sessions },
   setup: ({ sessions }, { add }) => {
     add(Tools, {

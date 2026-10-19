@@ -2,7 +2,7 @@ import { createSignal } from "solid-js";
 import { HostError } from "@lemma/contracts";
 import { CommandChannels } from "@lemma/commands";
 import type { CommandInfo } from "@lemma/commands";
-import { Commands } from "@lemma/commands/web";
+import { Commands, COMMANDS_CONTRACT } from "@lemma/commands/web";
 import { Threads } from "@lemma/threads";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
@@ -10,6 +10,7 @@ import { Workspace } from "@lemma/workspace/web";
 /** What host plugins offer to run: the palette's host commands, `lemma commands run`. */
 export default defineWebPlugin({
   id: "commands.client",
+  implements: [COMMANDS_CONTRACT],
   requires: { client: Client, notify: Notify, threads: Threads, workspace: Workspace },
   provides: { commands: Commands },
   setup: ({ client, notify, threads, workspace }, plugin) => {

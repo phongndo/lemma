@@ -11,10 +11,16 @@ export class CompositionError extends Data.TaggedError("CompositionError")<{
     | "DependencyCycle"
     | "InvalidConfig"
     | "InactiveDependency"
+    | "IncompatibleContract"
     | "CoreClosed";
   readonly message: string;
   readonly plugins: readonly string[];
   readonly capability?: string;
+  /**
+   * For an "IncompatibleContract": the contract's name, the version the plugin uses (absent when its `name@version`
+   * does not parse), and the version a plugin in the composition implements.
+   */
+  readonly contract?: { readonly name: string; readonly uses?: number; readonly implemented?: number; readonly by?: string };
   /** Location inside the plugin's config for `InvalidConfig`. */
   readonly path?: readonly (string | number)[];
 }> {}

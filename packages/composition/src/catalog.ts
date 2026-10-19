@@ -227,6 +227,8 @@ export function catalog({
       ...(locked === undefined ? {} : { locked }),
       provides: plugin.provides.map((tag) => tag.key),
       requires: plugin.requires.map((tag) => tag.key).filter((key) => !builtins.has(key)),
+      ...(plugin.uses === undefined ? {} : { uses: plugin.uses }),
+      ...(plugin.implements === undefined ? {} : { implements: plugin.implements }),
       ...(snapshot === undefined ? {} : { state: snapshot.state }),
       ...(snapshot?.fault === undefined ? {} : { fault: snapshot.fault }),
       ...(haltedBy === undefined ? {} : { haltedBy }),

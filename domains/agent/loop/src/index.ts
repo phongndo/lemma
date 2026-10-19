@@ -7,7 +7,7 @@ import type { IdSource, ResultCredit } from "@lemma/contracts";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
 import { InProgress } from "@lemma/cli";
-import { Agent, AgentError, PromptSections, QueueChanged, serveAgent } from "@lemma/agent";
+import { Agent, AGENT_CONTRACT, AgentError, PromptSections, QueueChanged, serveAgent } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
 import { SessionError, SessionRemoved, Sessions } from "@lemma/sessions";
 import { ToolOutput, ToolRunner } from "@lemma/tools";
@@ -148,6 +148,7 @@ export interface AgentPluginOptions {
 export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
   definePlugin({
     id: "agent.loop",
+    implements: [AGENT_CONTRACT],
     version: "0.1.0",
     config: AgentConfig,
     provides: { agent: Agent },

@@ -3,7 +3,7 @@ import { withKeys } from "@lemma/web/keys";
 import { shownKeys, Actions } from "@lemma/actions";
 import { Docks } from "@lemma/frame";
 import { Client, HostPlugins, Router, Slots, WebPlugins, defineWebPlugin, Contained } from "@lemma/web";
-import { Devtools, DevtoolsPanels, DevtoolsActionIds } from "@lemma/devtools/web";
+import { Devtools, DEVTOOLS_CONTRACT, DevtoolsActionIds, DevtoolsPanels } from "@lemma/devtools/web";
 import type { DevtoolsService } from "@lemma/devtools/web";
 import { CodeIcon, LogIcon, XIcon } from "@lemma/look";
 import styles from "./devtools.css?inline";
@@ -39,6 +39,7 @@ const load = (): Saved => {
  */
 export default defineWebPlugin({
   id: "devtools.dock",
+  implements: [DEVTOOLS_CONTRACT],
   styles,
   requires: { slots: Slots, router: Router, client: Client, webPlugins: WebPlugins, host: HostPlugins },
   provides: { devtools: Devtools },

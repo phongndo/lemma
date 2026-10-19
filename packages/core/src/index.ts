@@ -53,6 +53,7 @@ export type {
   BuiltIns,
   Capabilities,
   Capability,
+  ContractVersions,
   Deadlines,
   Plugin,
   PluginLayer,

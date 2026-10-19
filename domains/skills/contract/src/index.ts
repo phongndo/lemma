@@ -29,3 +29,4 @@ export const SkillChannels = {
     repeatable: true,
   }),
 };
+export { SKILLS_CONTRACT } from "./version.ts";

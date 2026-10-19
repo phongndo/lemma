@@ -121,6 +121,38 @@ export function plan(
     }
   }
 
+  // The versions of the contracts the plugins implement, and whether each plugin uses the version implemented.
+  const implemented = new Map<string, { readonly version: number; readonly by: string }[]>();
+  for (const plugin of byId.values()) {
+    for (const spec of plugin.implements ?? []) {
+      const parsed = parseContract(spec);
+      if (parsed === undefined) {
+        errors.push(malformedContract(plugin.id, spec, "implements"));
+        continue;
+      }
+      implemented.set(parsed.name, [...(implemented.get(parsed.name) ?? []), { version: parsed.version, by: plugin.id }]);
+    }
+  }
+  for (const plugin of byId.values()) {
+    for (const spec of plugin.uses ?? []) {
+      const parsed = parseContract(spec);
+      if (parsed === undefined) {
+        errors.push(malformedContract(plugin.id, spec, "uses"));
+        continue;
+      }
+      const other = (implemented.get(parsed.name) ?? []).find((each) => each.by !== plugin.id && each.version !== parsed.version);
+      if (other === undefined) continue;
+      errors.push(
+        new CompositionError({
+          reason: "IncompatibleContract",
+          message: `Plugin "${plugin.id}" is written for version ${parsed.version} of contract "${parsed.name}", but "${other.by}" implements version ${other.version}`,
+          plugins: [plugin.id],
+          contract: { name: parsed.name, uses: parsed.version, implemented: other.version, by: other.by },
+        }),
+      );
+    }
+  }
+
   const configs = new Map<string, unknown>();
   for (const plugin of byId.values()) {
     if (!plugin.config) continue;
@@ -212,3 +244,19 @@ export function plan(
 }
 
 const byPluginId = Order.mapInput(Order.String, (plugin: Plugin) => plugin.id);
+
+/** A contract version, `name@version` with a whole-number version; undefined when `spec` is not one. */
+function parseContract(spec: unknown): { readonly name: string; readonly version: number } | undefined {
+  if (typeof spec !== "string") return undefined;
+  const match = /^(.+)@(\d+)$/.exec(spec);
+  return match === null ? undefined : { name: match[1]!, version: Number(match[2]) };
+}
+
+function malformedContract(pluginId: string, spec: unknown, field: "uses" | "implements"): CompositionError {
+  return new CompositionError({
+    reason: "IncompatibleContract",
+    message: `Plugin "${pluginId}" ${field} ${JSON.stringify(spec)}, which is not name@version (a whole-number version)`,
+    plugins: [pluginId],
+    contract: { name: String(spec) },
+  });
+}

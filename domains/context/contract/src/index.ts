@@ -80,3 +80,4 @@ export const CompactionHook = Hook.make<CompactionRequest, CompactionResult, Com
     output: (result) => (result.kind === "summary" ? { kind: "summary", chars: result.summary.length } : { kind: "skip" }),
   },
 });
+export { CONTEXT_CONTRACT } from "./version.ts";

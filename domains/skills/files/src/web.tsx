@@ -3,7 +3,7 @@ import { rank } from "@lemma/web/match";
 import { Client, Slots, defineWebPlugin } from "@lemma/web";
 import { ComposerCompletions } from "@lemma/threads";
 import type { ComposerSuggestion } from "@lemma/threads";
-import { SkillChannels } from "@lemma/skills";
+import { SkillChannels, SKILLS_CONTRACT } from "@lemma/skills";
 import type { SkillInfo } from "@lemma/skills";
 import { Workspace } from "@lemma/workspace/web";
 import { LogIcon } from "@lemma/look";
@@ -22,6 +22,7 @@ const LIST_MS = 5_000;
  */
 export default defineWebPlugin({
   id: "skills.files",
+  implements: [SKILLS_CONTRACT],
   config: Config,
   requires: { client: Client, workspace: Workspace, slots: Slots },
   setup: ({ client, workspace, slots }, plugin) => {
