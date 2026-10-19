@@ -2,7 +2,7 @@ import { Show, createMemo } from "solid-js";
 import { formatTokens } from "@lemma/client/format";
 import { Models } from "@lemma/llm/web";
 import type { ModelsService } from "@lemma/llm/web";
-import { PromptCommands, ThreadCorner, Threads } from "@lemma/threads";
+import { ComposerActions, PromptCommands, Threads } from "@lemma/threads";
 import { ArchiveIcon } from "@lemma/look";
 import type { ThreadsService } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
@@ -69,7 +69,7 @@ function ContextMeter(props: { threads: ThreadsService; models: ModelsService; a
         </Show>
         <Show when={cacheHit() !== undefined}>
           <span class="context-meter-cache" aria-label={cache()}>
-            {percent(cacheHit()!)} cached
+            {percent(cacheHit()!)} CH
           </span>
         </Show>
       </span>
@@ -80,7 +80,7 @@ function ContextMeter(props: { threads: ThreadsService; models: ModelsService; a
 /**
  * `context.compaction`'s web half: how full the open thread's context is, as the host half measures it, against the
  * window of the selected model (where the next prompt goes) and its `at`, and how much of the last call the
- * provider's cache served. In the thread page's bottom right corner, while a thread is open.
+ * provider's cache served, beside it. In the composer's row, before its buttons, while a thread is open.
  */
 export default defineWebPlugin({
   id: "context.compaction",
@@ -89,9 +89,9 @@ export default defineWebPlugin({
   requires: { threads: Threads, models: Models, slots: Slots },
   setup: ({ threads, models, slots }, plugin) => {
     plugin.onCleanup(
-      slots.add(ThreadCorner, {
+      slots.add(ComposerActions, {
         id: "context-meter",
-        order: 10,
+        order: 50,
         component: () => (
           <Show when={threads.activeId() !== undefined}>
             <ContextMeter threads={threads} models={models} at={plugin.config.at} />
