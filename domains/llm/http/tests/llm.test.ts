@@ -585,6 +585,45 @@ describe("model catalogs", () => {
     expect(models[1]).toMatchObject({ name: "Plain", contextWindow: 50_000, maxTokens: 4_000 });
   });
 
+  it("never asks a model OpenRouter says must reason to stop, though models.dev has it switching off", async () => {
+    const heard = Deferred.makeUnsafe<void>();
+    const listener = definePlugin({
+      id: "listener",
+      layer: Layer.effectDiscard(Effect.flatMap(PluginContext, (context) => context.observe(ModelsChanged, () => Deferred.succeed(heard, undefined)))),
+    });
+    const sent: Record<string, unknown>[] = [];
+    const fetchImpl: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (init?.method === "POST") {
+        sent.push(JSON.parse(String(init.body)) as Record<string, unknown>);
+        return new Response("no", { status: 400 });
+      }
+      if (url === "https://models.dev/api.json") {
+        const toggles = { tool_call: true, reasoning: true, reasoning_options: [{ type: "toggle" }] };
+        return Response.json({ openrouter: { npm: "@openrouter/ai-sdk-provider", models: { "openai/o3": toggles, "deepseek/v3": toggles } } });
+      }
+      if (url === "https://openrouter.ai/api/v1/models") return Response.json({ data: [{ id: "openai/o3", reasoning: { mandatory: true } }] });
+      throw new Error("offline in tests");
+    };
+    const openrouter = faux({ id: "openrouter", apis: { "openai-completions": "https://openrouter.ai/api/v1" }, env: ["OPENROUTER_API_KEY"], models: [] });
+    const { plugins } = setup({ fetch: fetchImpl, providers: [openrouter], env: { OPENROUTER_API_KEY: "sk-or" } });
+    const models = await runWith(
+      [listener, ...plugins],
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        yield* Deferred.await(heard);
+        // Asked at no level, as the agent asks by default.
+        yield* Stream.runDrain(llm.stream(new LlmRequest({ model: "openrouter/openai/o3", messages: [user("hi")] })));
+        return yield* llm.models();
+      }),
+    );
+    expect(models.map((model) => [model.id, model.thinkingLevels])).toEqual([
+      ["deepseek/v3", ["off", "high"]],
+      ["openai/o3", ["high"]],
+    ]);
+    expect(sent[0]).toMatchObject({ reasoning: { enabled: true } });
+  });
+
   it("tells clients when a refresh changed a model's limits, though it serves the same models", async () => {
     const heard = Deferred.makeUnsafe<void>();
     const listener = definePlugin({

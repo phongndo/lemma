@@ -7,7 +7,7 @@
  */
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { catalogOf, MODELS_DEV } from "../src/catalog.ts";
+import { catalogOf, fetchJson, MODELS_DEV, MUST_THINK_LISTS, mustThinkOf } from "../src/catalog.ts";
 import type { DevCatalog } from "../src/catalog.ts";
 import { ENDPOINTS } from "../src/endpoints.ts";
 
@@ -15,11 +15,16 @@ const response = await fetch(MODELS_DEV);
 if (!response.ok) throw new Error(`${MODELS_DEV}: HTTP ${response.status}`);
 const dev = (await response.json()) as DevCatalog;
 const catalog = Object.fromEntries(
-  ENDPOINTS.map((endpoint) => {
-    const listing = dev[endpoint.id];
-    if (listing === undefined) throw new Error(`models.dev lists no provider "${endpoint.id}"`);
-    return [endpoint.id, catalogOf(endpoint, listing)];
-  }),
+  await Promise.all(
+    ENDPOINTS.map(async (endpoint) => {
+      const listing = dev[endpoint.id];
+      if (listing === undefined) throw new Error(`models.dev lists no provider "${endpoint.id}"`);
+      const list = MUST_THINK_LISTS[endpoint.id];
+      const mustThink = list === undefined ? undefined : mustThinkOf(await fetchJson(fetch, list, {}, new AbortController().signal));
+      if (list !== undefined && mustThink === undefined) throw new Error(`${list}: not a list of models`);
+      return [endpoint.id, catalogOf(endpoint, listing, mustThink)] as const;
+    }),
+  ),
 );
 const path = fileURLToPath(new URL("../src/catalog.json", import.meta.url));
 writeFileSync(path, `${JSON.stringify(catalog, null, 2)}\n`);

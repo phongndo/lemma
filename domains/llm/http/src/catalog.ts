@@ -14,7 +14,7 @@ export interface DevModel {
   readonly name?: string;
   readonly reasoning?: boolean;
   /** How it is asked to think: a named effort, a token budget, or on and off. */
-  readonly reasoning_options?: readonly { readonly type?: string; readonly values?: readonly unknown[] }[];
+  readonly reasoning_options?: readonly { readonly type?: string; readonly values?: readonly unknown[]; readonly min?: unknown }[];
   /** False: it refuses a temperature. */
   readonly temperature?: boolean;
   readonly tool_call?: boolean;
@@ -45,12 +45,15 @@ const API_OF_NPM: Readonly<Record<string, WireApi>> = {
  * How a model on `api` is asked to think, from models.dev's options. Anthropic's adaptive thinking is the one with a
  * `max` effort (every Claude model agrees); its other thinking models, and those speaking its protocol, think in a
  * token budget. A model that only turns thinking on and off has no level to pick where its protocol has no switch
- * (`toggles`: OpenAI's `reasoning_effort` has none).
+ * (`toggles`: OpenAI's `reasoning_effort` has none). Off is a level only for a model that can stop thinking: one its
+ * provider says must reason (`mustThink`) cannot, whatever models.dev says, nor can one whose least budget is more
+ * than none.
  */
-export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"], toggles: boolean): Thinking | undefined {
+export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"], toggles: boolean, mustThink = false): Thinking | undefined {
   const effort = options?.find((option) => option.type === "effort")?.values?.filter((value): value is string => typeof value === "string") ?? [];
   const toggle = options?.some((option) => option.type === "toggle") ?? false;
-  const budget = options?.some((option) => option.type === "budget_tokens") ?? false;
+  const budgeted = options?.find((option) => option.type === "budget_tokens");
+  const budget = budgeted !== undefined;
   if (api === "anthropic-messages") {
     // Off is a level only for a model that can stop thinking (one that also thinks in a budget, as Claude 4.6, or that
     // toggles): it is sent `disabled`, which the models that always think refuse.
@@ -58,22 +61,29 @@ export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"],
     if (budget) return { kind: "budget", levels: BUDGET_LEVELS };
     return toggle ? { kind: "toggle", levels: ["off", "high"] } : undefined;
   }
-  if (effort.length > 0) return effortThinking(effort, toggle);
-  return (toggle || budget) && toggles ? { kind: "toggle", levels: ["off", "high"] } : undefined;
+  // Elsewhere it stops by its switch, or at a budget of none.
+  const stops = !mustThink && (toggle || (budget && !(typeof budgeted.min === "number" && budgeted.min > 0)));
+  if (effort.length > 0) return effortThinking(effort, toggle && stops);
+  return (toggle || budget) && toggles ? { kind: "toggle", levels: stops ? ["off", "high"] : ["high"] } : undefined;
 }
 
 /**
  * models.dev's chat models of a provider, on the wire APIs it serves (`serves`), each as the catalog keeps it. A
  * model without tool calls, or making no text, is not one an agent can use.
  */
-export function fromDev(dev: DevProvider, serves: (api: WireApi) => boolean, toggles: (api: WireApi, id: string) => boolean): CatalogModel[] {
+export function fromDev(
+  dev: DevProvider,
+  serves: (api: WireApi) => boolean,
+  toggles: (api: WireApi, id: string) => boolean,
+  mustThink: ReadonlySet<string> = new Set(),
+): CatalogModel[] {
   const models: CatalogModel[] = [];
   for (const [id, info] of Object.entries(dev.models)) {
     const api = API_OF_NPM[info.provider?.npm ?? dev.npm ?? ""];
     if (api === undefined || !serves(api) || info.tool_call === false) continue;
     if (info.modalities?.output !== undefined && !info.modalities.output.includes("text")) continue;
     const reasoning = info.reasoning === true;
-    const thinking = reasoning ? thinkingOf(api, info.reasoning_options, toggles(api, id)) : undefined;
+    const thinking = reasoning ? thinkingOf(api, info.reasoning_options, toggles(api, id), mustThink.has(id)) : undefined;
     models.push({
       id,
       name: info.name ?? id,
@@ -91,15 +101,20 @@ export function fromDev(dev: DevProvider, serves: (api: WireApi) => boolean, tog
 }
 
 /**
- * `provider`'s models as models.dev lists them (`dev`), on the wire APIs it serves. A model that only turns thinking
- * on and off has a level to pick where the protocol has a switch: OpenAI's Chat Completions has none, but OpenRouter's
- * and DeepSeek's do.
+ * `provider`'s models as models.dev lists them (`dev`), on the wire APIs it serves, those it says must reason
+ * (`mustThink`, from `mustThinkSource`) never asked to stop. A model that only turns thinking on and off has a level
+ * to pick where the protocol has a switch: OpenAI's Chat Completions has none, but OpenRouter's and DeepSeek's do.
  */
-export const catalogOf = (provider: { readonly id: string; readonly apis: Readonly<Partial<Record<WireApi, string>>> }, dev: DevProvider): CatalogModel[] =>
+export const catalogOf = (
+  provider: { readonly id: string; readonly apis: Readonly<Partial<Record<WireApi, string>>> },
+  dev: DevProvider,
+  mustThink?: ReadonlySet<string>,
+): CatalogModel[] =>
   fromDev(
     dev,
     (api) => provider.apis[api] !== undefined,
     (api, id) => api !== "openai-completions" || thinkingFormat({ provider: provider.id, baseUrl: provider.apis[api] ?? "", id }) !== "openai",
+    mustThink,
   );
 
 /** `url`'s JSON, as Lemma asks for it, given up on after 20 seconds; rejects on an HTTP error. */
@@ -132,6 +147,40 @@ export function devSource(fetchImpl: typeof fetch): (signal: AbortSignal) => Pro
       });
     }
     return cached.catalog;
+  };
+}
+
+/**
+ * Where a provider lists which of its models must reason, refusing a request that turns reasoning off: OpenRouter's
+ * list says so (`reasoning.mandatory`) of models models.dev has switching it off.
+ */
+export const MUST_THINK_LISTS: Readonly<Record<string, string>> = { openrouter: "https://openrouter.ai/api/v1/models" };
+
+/** The ids of the models a provider's list says must reason; undefined for a list that is not one. */
+export function mustThinkOf(list: unknown): ReadonlySet<string> | undefined {
+  const data = (list as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return undefined;
+  const ids = data.flatMap((entry: { id?: unknown; reasoning?: { mandatory?: unknown } } | null) =>
+    typeof entry?.id === "string" && entry.reasoning?.mandatory === true ? [entry.id] : [],
+  );
+  return new Set(ids);
+}
+
+/** Each provider's `MUST_THINK_LISTS` list over the network, read at most once an hour; undefined for none, or out of reach. */
+export function mustThinkSource(fetchImpl: typeof fetch): (provider: string, signal: AbortSignal) => Promise<ReadonlySet<string> | undefined> {
+  const cached = new Map<string, { at: number; ids: Promise<ReadonlySet<string> | undefined> }>();
+  return (provider, signal) => {
+    const url = MUST_THINK_LISTS[provider];
+    if (url === undefined) return Promise.resolve(undefined);
+    const known = cached.get(provider);
+    if (known !== undefined && Date.now() - known.at <= DEV_TTL) return known.ids;
+    const ids = fetchJson(fetchImpl, url, {}, signal).then(mustThinkOf, () => undefined);
+    cached.set(provider, { at: Date.now(), ids });
+    // A failed read is tried again on the next refresh.
+    void ids.then((value) => {
+      if (value === undefined && cached.get(provider)?.ids === ids) cached.delete(provider);
+    });
+    return ids;
   };
 }
 

@@ -23,7 +23,7 @@ import {
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, StreamEvent } from "@lemma/llm";
 import { authSource, resolveAuth } from "./auth.ts";
 import type { Env } from "./auth.ts";
-import { devSource, planModels, planSource } from "./catalog.ts";
+import { devSource, mustThinkSource, planModels, planSource } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { headerRecord } from "./http.ts";
 import { identityHeaders } from "./identity.ts";
@@ -197,6 +197,7 @@ export function makeLlmPlugin(options: Options = {}) {
       const announce = events.publish(ModelsChanged, {});
 
       const dev = devSource(fetchImpl);
+      const mustThinkOfProvider = mustThinkSource(fetchImpl);
       const plan = planSource(fetchImpl);
       /** One refresh of a provider at a time, so a slow one cannot finish after a later one and put back what it replaced. */
       const refreshing = new Map(builtins.map((provider) => [provider.id, Semaphore.makeUnsafe(1)]));
@@ -218,7 +219,8 @@ export function makeLlmPlugin(options: Options = {}) {
           if (!(yield* signedInWithChatGPT(provider))) provider.models = apiModels.get(provider.id) ?? provider.models;
           if (config.liveCatalogs) {
             const listing = (yield* Effect.promise(() => dev(signal)))?.[provider.id];
-            const fresh = listing === undefined ? [] : liveModels(provider, listing);
+            const mustThink = listing === undefined ? undefined : yield* Effect.promise(() => mustThinkOfProvider(provider.id, signal));
+            const fresh = listing === undefined ? [] : liveModels(provider, listing, mustThink);
             if (fresh.length > 0) apiModels.set(provider.id, fresh);
           }
           const api = apiModels.get(provider.id) ?? provider.models;

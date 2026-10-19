@@ -120,8 +120,9 @@ export const builtin = (definition: BuiltinProvider): Provider => ({
   models: placed(definition, definition.models),
 });
 
-/** `provider`'s models as models.dev lists them now, at its base URLs. */
-export const liveModels = (provider: Pick<Provider, "id" | "apis">, dev: DevProvider): Model[] => placed(provider, catalogOf(provider, dev));
+/** `provider`'s models as models.dev lists them now, at its base URLs; `mustThink` as its own list says. */
+export const liveModels = (provider: Pick<Provider, "id" | "apis">, dev: DevProvider, mustThink?: ReadonlySet<string>): Model[] =>
+  placed(provider, catalogOf(provider, dev, mustThink));
 
 /** A provider in this plugin's config, or one a plugin adds to `Providers`, on a protocol this plugin speaks. */
 export type CustomProvider = ProviderSpec & { readonly api: WireApi };

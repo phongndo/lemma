@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import { Llm } from "@lemma/llm";
-import { devSource, fromDev, planModels, planSource, thinkingOf } from "../src/catalog.ts";
+import { devSource, fromDev, mustThinkOf, mustThinkSource, planModels, planSource, thinkingOf } from "../src/catalog.ts";
 import type { DevProvider, PlanModel } from "../src/catalog.ts";
 import { chatgpt } from "../src/chatgpt.ts";
 import { makeLlmPlugin } from "../src/index.ts";
@@ -40,6 +40,17 @@ describe("thinkingOf", () => {
     expect(thinkingOf("openai-completions", [{ type: "toggle" }], false)).toBeUndefined();
     expect(thinkingOf("openai-completions", [{ type: "toggle" }], true)).toEqual({ kind: "toggle", levels: ["off", "high"] });
     expect(thinkingOf("openai-completions", [], true)).toBeUndefined();
+  });
+
+  it("gives off only to a model that can stop thinking: not one whose least budget is more than none, nor one its provider says must reason", () => {
+    // Gemini 2.5 Pro behind OpenRouter: it thinks in at least 128 tokens.
+    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 128 }], true)).toEqual({ kind: "toggle", levels: ["high"] });
+    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 0 }], true)).toEqual({ kind: "toggle", levels: ["off", "high"] });
+    // OpenAI's o3 behind OpenRouter, which models.dev has switching thinking off.
+    expect(thinkingOf("openai-completions", [{ type: "toggle" }], true, true)).toEqual({ kind: "toggle", levels: ["high"] });
+    expect(thinkingOf("openai-completions", [...effort("low", "high"), { type: "toggle" }], true, true)).toEqual({ kind: "effort", levels: ["low", "high"] });
+    // Anthropic's budget models turn thinking off however little they think in.
+    expect(thinkingOf("anthropic-messages", [{ type: "budget_tokens", min: 1024 }], true)?.levels).toContain("off");
   });
 });
 
@@ -110,6 +121,25 @@ describe("fromDev", () => {
       expect(provider.models.length).toBeGreaterThan(0);
       for (const model of provider.models) expect(provider.apis[model.api]).toBeDefined();
     }
+  });
+});
+
+describe("mustThinkSource", () => {
+  it("reads which of OpenRouter's models must reason from its list, once an hour, and nothing for a provider with none", async () => {
+    let reads = 0;
+    const read = mustThinkSource(async (input) => {
+      reads++;
+      expect(String(input)).toBe("https://openrouter.ai/api/v1/models");
+      return Response.json({
+        data: [{ id: "openai/o3", reasoning: { mandatory: true } }, { id: "anthropic/claude", reasoning: { mandatory: false } }, { id: "x" }],
+      });
+    });
+    const signal = new AbortController().signal;
+    expect(await read("openrouter", signal)).toEqual(new Set(["openai/o3"]));
+    expect(await read("openrouter", signal)).toEqual(new Set(["openai/o3"]));
+    expect(await read("faux", signal)).toBeUndefined();
+    expect(reads).toBe(1);
+    expect(mustThinkOf({ error: "nope" })).toBeUndefined();
   });
 });
 
