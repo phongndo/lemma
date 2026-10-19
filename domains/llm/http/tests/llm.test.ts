@@ -173,6 +173,31 @@ describe("stream", () => {
     expect(signal?.aborted).toBe(true);
   });
 
+  it("counts whatever the provider sends as the connection alive, its keep-alives as much as model output", async () => {
+    // Keep-alives for longer than the stream timeout, then the answer.
+    const pinging = () =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          let pings = 0;
+          const tick = () => {
+            if (pings++ < 5) {
+              controller.enqueue(encoder.encode(": keep-alive\n\n"));
+              setTimeout(tick, 40);
+            } else {
+              controller.enqueue(encoder.encode(completion("late but alive")));
+              controller.close();
+            }
+          };
+          tick();
+        },
+      });
+    const { fetch } = scriptedFetch(() => new Response(pinging(), { headers: { "content-type": "text/event-stream" } }));
+    const { plugins } = setup({ fetch });
+    const events = await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })), { "llm.http": { streamTimeout: 0.1 } });
+    expect(events.at(-1)).toMatchObject({ type: "done", message: { content: [{ type: "text", text: "late but alive" }] } });
+  });
+
   it("asks a failing provider again itself, before a response starts, waiting the delay it names", async () => {
     let calls = 0;
     const { fetch } = scriptedFetch(() =>

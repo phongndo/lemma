@@ -26,6 +26,8 @@ export interface SendOptions {
   readonly answered: (response: Response) => void;
   /** Each event as the provider sent it, before it is read. */
   readonly raw: (data: unknown) => void;
+  /** Anything arrived from the provider, model output or not (a ping, a keep-alive comment): the connection lives. */
+  readonly alive: () => void;
 }
 
 /** `built`'s headers with what `LlmProviderHeadersHook` made of the model's and provider's own over them (a `null` drops one). */
@@ -52,8 +54,18 @@ export async function send(call: WireCall, out: Output, options: SendOptions): P
     signal: options.signal,
     retries: RETRIES,
   });
+  options.alive();
   options.answered(response);
   out.start();
   if (response.body === null) throw new Error("The provider answered with no body");
-  await wire.read(sse(response.body), out, call, options.raw);
+  // Every chunk counts as the connection alive, the events the model output carries or not.
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        options.alive();
+        controller.enqueue(chunk);
+      },
+    }),
+  );
+  await wire.read(sse(body), out, call, options.raw);
 }

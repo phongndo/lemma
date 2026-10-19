@@ -397,6 +397,7 @@ export function makeLlmPlugin(options: Options = {}) {
                         Effect.runFork(events.publish(LlmProviderResponse, { ...where, status: response.status, headers: headerRecord(response.headers) }));
                       },
                       raw: config.providerEvents ? (data) => void Effect.runFork(events.publish(LlmProviderStreamEvent, { ...where, data })) : () => {},
+                      alive: arm,
                     });
                     output.finish();
                   } catch (error) {
