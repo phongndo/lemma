@@ -269,7 +269,11 @@ export const WebFile = Schema.Struct({
   kind: Schema.Literals(["script", "style"]),
   /** Where it is on the host. */
   path: Schema.String,
-  /** Served by the transport under `/api` (it needs the token); changes when the file does. */
+  /**
+   * Served by the transport under `/api/web/<source>@<version>/<name>` (it needs the token, in the path as
+   * `/api/web/t/<token>/…` or as for any `/api` call); its version changes when the file does, or for a package, any
+   * file of it, so a module its web half imports by a relative path is served beside it under the same version.
+   */
   url: Schema.String,
 });
 export type WebFile = typeof WebFile.Type;

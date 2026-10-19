@@ -37,8 +37,9 @@ A host half imports only what the host supplies (`effect`, `@lemma/core`,
 the host links them into `~/.lemma/node_modules` as it starts, where a plugin
 file resolves them and an editor finds their types.
 
-A web half is a JavaScript module beside it, named `.web.js`. Here, how the
-chat shows `greet`'s calls:
+A web half is a module beside it, named `.web.js` (or `.web.ts`, its types
+stripped as it is served: erasable syntax only, no JSX). Here, how the chat
+shows `greet`'s calls:
 
 ```js
 // ~/.lemma/plugins/greet.web.js

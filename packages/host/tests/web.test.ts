@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect } from "effect";
@@ -40,11 +40,38 @@ describe("listWebFiles", () => {
         ["user", "ticker/ticker.css", "style"],
       ]);
       expect(untrusted[0]!.path).toBe(join(user, "composer.web.js"));
-      expect(untrusted[0]!.url).toMatch(/^\/api\/web\/user\/composer\.web\.js\?v=\d+$/);
-      expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user\/ticker\/web\.js\?v=\d+$/);
+      // A file's version is its mtime; a package's, every file of it, so a module its web half imports is versioned with it.
+      expect(untrusted[0]!.url).toMatch(/^\/api\/web\/user@\d+\/composer\.web\.js$/);
+      expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user@[0-9a-f]{12}\/ticker\/web\.js$/);
+      expect(untrusted[3]!.url.split("/")[3]).toBe(untrusted[2]!.url.split("/")[3]);
 
       const trusted = await Effect.runPromise(listWebFiles(paths, true));
       expect(trusted.map((file) => `${file.source}/${file.name}`).slice(-1)).toEqual(["project/panel.web.mjs"]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("lists a web half written in TypeScript, and a package's version changes with any file of it", async () => {
+    const root = await mkdtemp(join(tmpdir(), "lemma-ui-"));
+    try {
+      const paths = resolvePaths({ env: { LEMMA_HOME: join(root, "home") }, cwd: join(root, "project") });
+      const user = userPluginsDir(paths);
+      await mkdir(join(user, "board"), { recursive: true });
+      await writeFile(join(user, "notes.web.ts"), "");
+      await writeFile(join(user, "board", "package.json"), JSON.stringify({ lemma: { web: "./web.ts" } }));
+      await writeFile(join(user, "board", "web.ts"), "");
+      await writeFile(join(user, "board", "model.ts"), "");
+      const before = await Effect.runPromise(listWebFiles(paths, false));
+      expect(before.map((file) => [file.name, file.kind, file.plugin])).toEqual([
+        ["board/web.ts", "script", "board"],
+        ["notes.web.ts", "script", "notes"],
+      ]);
+      await writeFile(join(user, "board", "model.ts"), "export const x = 1;");
+      // Edited later than it was: a new mtime, whatever the clock's resolution.
+      await utimes(join(user, "board", "model.ts"), new Date(), new Date(Date.now() + 5_000));
+      const after = await Effect.runPromise(listWebFiles(paths, false));
+      expect(after[0]!.url).not.toBe(before[0]!.url);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

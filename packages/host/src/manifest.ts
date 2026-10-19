@@ -7,7 +7,7 @@ import { Predicate } from "effect";
  * name, or as a package:
  *
  *   approvals.ts        a host half (`.ts`, `.js`, `.mjs`): the host loads it
- *   notes.web.js        a web half (`.web.js`, `.web.mjs`): the web app loads it
+ *   notes.web.js        a web half (`.web.js`, `.web.mjs`, or `.web.ts`, its types stripped as it is served)
  *   theme.css           a stylesheet the web app applies after its own
  *   ticker/             a package, whose package.json says where its halves are:
  *     package.json        "lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }
@@ -38,7 +38,7 @@ export type Entry =
       readonly problems: readonly string[];
     };
 
-const WEB_FILE = /\.web\.(js|mjs)$/;
+const WEB_FILE = /\.web\.(js|mjs|ts|mts)$/;
 const isWeb = (name: string) => WEB_FILE.test(name);
 /** The plugin a web half's file is named for: `notes.web.js` defines `notes`. */
 export const webPluginOf = (name: string): string => name.replace(WEB_FILE, "");
@@ -71,9 +71,9 @@ const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; r
   };
   const [hostPath] = await inside("host", host);
   let [webPath] = await inside("web", web);
-  // The web app imports a web half as it is: a module in JavaScript.
-  if (webPath !== undefined && !/\.m?js$/.test(webPath)) {
-    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript (.js or .mjs), which the web app imports as it is`);
+  // The web app imports a web half as a module: JavaScript, or TypeScript whose types are stripped as it is served.
+  if (webPath !== undefined && !/\.m?[jt]s$/.test(webPath)) {
+    problems.push(`"lemma.web" names ${String(web)}: a web half is JavaScript or TypeScript (.js, .mjs, .ts, .mts), not JSX`);
     webPath = undefined;
   }
   if (styles !== undefined && !Array.isArray(styles)) problems.push(`"lemma.styles" is not a list of paths`);

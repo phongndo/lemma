@@ -164,7 +164,11 @@ it.
 
 A web half needs no build step: its default export may be a function that
 receives [the api](src/ui/api.ts), including Solid, the contracts,
-`defineWebPlugin`, and `html` (Solid's JSX without a compiler).
+`defineWebPlugin`, and `html` (Solid's JSX without a compiler). It may be
+TypeScript (`.ts`, its types stripped as it is served), and a folder plugin's
+web half may import the folder's other modules by relative path (`./model.ts`),
+which the host serves beside it, versioned with the folder; one with no
+runtime imports of its own (types only) can be shared with the host half.
 
 ```js
 // ~/.lemma/plugins/tool-count.web.js
