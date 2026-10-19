@@ -167,7 +167,11 @@ const read: Effect.Effect<Read, ReloadError> = Effect.gen(function* () {
   const local = yield* loadLocalPlugins(loaded.trusted ? [userPluginsDir, projectPluginsDir(paths)] : [userPluginsDir], {
     bundled: Object.fromEntries(input.bundled.map((plugin) => [plugin.id, plugin])),
   });
-  const localPlugins = local.plugins.map(({ plugin, dir }) => ({ plugin, source: dir === userPluginsDir ? ("user" as const) : ("project" as const) }));
+  const localPlugins = local.plugins.map(({ plugin, dir, resources }) => ({
+    plugin,
+    source: dir === userPluginsDir ? ("user" as const) : ("project" as const),
+    ...(resources === undefined ? {} : { resources }),
+  }));
   const files = yield* listWebFiles(paths, loaded.trusted);
   // A row naming a web half is the web app's, which plans its halves from the same rows; one naming no plugin either
   // app has is a mistake (renamed, removed, mistyped), said so here with the id meant, and refused when required.

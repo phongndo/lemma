@@ -18,7 +18,7 @@ const stray: KnownPlugin = { plugin: definePlugin({ id: "stray", provides: [Slot
 const known: KnownPlugin[] = [
   { plugin: definePlugin({ id: "llm", version: "1", provides: [Llm], layer: Layer.succeed(Llm, "llm") }), source: "bundled" },
   { plugin: definePlugin({ id: "tools", version: "1", provides: [Tools], layer: Layer.succeed(Tools, "tools") }), source: "bundled" },
-  { plugin: definePlugin({ id: "bash", requires: [Tools], layer: Layer.empty }), source: "project", shadows: true },
+  { plugin: definePlugin({ id: "bash", requires: [Tools], layer: Layer.empty }), source: "project", shadows: true, resources: { skills: ["/bash/skills"] } },
   { plugin: definePlugin({ id: "agent", version: "1", provides: [Agent], requires: [Llm, Tools], layer: Layer.succeed(Agent, "agent") }), source: "bundled" },
   { plugin: definePlugin({ id: "gateway", requires: [Agent], layer: Layer.empty }), source: "bundled" },
   { plugin: definePlugin({ id: "my-llm", provides: [Llm], layer: Layer.succeed(Llm, "my-llm") }), source: "user" },
@@ -100,7 +100,13 @@ describe("catalog", () => {
       ["gateway", true, "closed", "Serves the clients", "agent"],
       ["my-llm", false, "-", "-", "-"],
     ]);
-    expect(entries.find((entry) => entry.id === "bash")).toMatchObject({ source: "project", shadows: true, scope: "project", requires: ["test/Tools"] });
+    expect(entries.find((entry) => entry.id === "bash")).toMatchObject({
+      source: "project",
+      shadows: true,
+      scope: "project",
+      requires: ["test/Tools"],
+      resources: { skills: ["/bash/skills"] },
+    });
     expect(entries.find((entry) => entry.id === "agent")).toMatchObject({ version: "1", provides: ["test/Agent"], requires: ["test/Llm", "test/Tools"] });
     expect(entries.find((entry) => entry.id === "gateway")?.version).toBeUndefined();
   });

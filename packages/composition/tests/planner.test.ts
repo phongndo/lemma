@@ -68,6 +68,9 @@ describe("planComposition", () => {
     const shadow = definePlugin({ id: "llm", provides: [Llm], layer: Layer.succeed(Llm, "shadow") });
     const shadowed = plan({ local: [{ plugin: shadow, source: "project" }] });
     expect(shadowed.known.find((entry) => entry.plugin.id === "llm")).toMatchObject({ plugin: shadow, source: "project", shadows: true });
+    // The folders its package names travel with it, for its status.
+    const pack = plan({ local: [{ plugin: mine, source: "user", resources: { skills: ["/pack/skills"] } }] });
+    expect(pack.known.find((entry) => entry.plugin.id === "my-llm")).toMatchObject({ resources: { skills: ["/pack/skills"] } });
   });
 
   test("ignores a row naming no plugin, unless it is required", () => {

@@ -96,6 +96,8 @@ interface LocalPlugin {
   readonly dir: string;
   /** Where its code is: its file, or its package's folder (`CodeOwner`). */
   readonly code: string;
+  /** Folders of things other plugins read, by kind, as its package's manifest names them. */
+  readonly resources?: Readonly<Record<string, readonly string[]>>;
 }
 
 interface LocalPlugins {
@@ -122,14 +124,15 @@ export function loadLocalPlugins(dirs: readonly string[], context: LocalContext)
           diagnostics.push(new Diagnostic({ severity: "warning", pluginId: entry.name, message: `${entry.path}/package.json: ${problem}; it is left out` }));
         }
       }
-      const files = entries.flatMap((entry): { readonly file: string; readonly folder?: string }[] =>
-        entry.kind === "host"
-          ? [{ file: entry.path }]
-          : entry.kind === "package" && entry.manifest.host !== undefined
-            ? [{ file: entry.manifest.host, folder: entry.path }]
-            : [],
+      const files = entries.flatMap(
+        (entry): { readonly file: string; readonly folder?: string; readonly resources?: Readonly<Record<string, readonly string[]>> }[] =>
+          entry.kind === "host"
+            ? [{ file: entry.path }]
+            : entry.kind === "package" && entry.manifest.host !== undefined
+              ? [{ file: entry.manifest.host, folder: entry.path, ...(entry.manifest.resources === undefined ? {} : { resources: entry.manifest.resources }) }]
+              : [],
       );
-      for (const { file, folder } of files) {
+      for (const { file, folder, resources } of files) {
         shareHostPackages();
         try {
           // Keyed by version: an unchanged plugin returns the cached module (the same
@@ -149,7 +152,7 @@ export function loadLocalPlugins(dirs: readonly string[], context: LocalContext)
               new Diagnostic({ severity: "warning", message: `${file}: no plugin in the default export`, suggestion: "export default definePlugin({ ... })" }),
             );
           }
-          plugins.push(...found.map((plugin) => ({ plugin, dir, code: folder ?? file })));
+          plugins.push(...found.map((plugin) => ({ plugin, dir, code: folder ?? file, ...(resources === undefined ? {} : { resources }) })));
         } catch (cause) {
           diagnostics.push(
             new Diagnostic({

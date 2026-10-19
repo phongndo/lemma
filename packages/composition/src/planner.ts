@@ -14,6 +14,8 @@ import type { KnownPlugin, Resolved } from "./catalog.ts";
 export interface LocalPlugin {
   readonly plugin: Plugin;
   readonly source: "user" | "project";
+  /** Folders of things other plugins read, by kind, as its package's manifest names them (`PluginStatus.resources`). */
+  readonly resources?: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface PlanInput {
@@ -105,10 +107,10 @@ export function planComposition(input: PlanInput): Plan {
 
   const byId = new Map<string, KnownPlugin>();
   for (const plugin of input.bundled) byId.set(plugin.id, { plugin, source: "bundled" });
-  for (const { plugin, source } of input.local) {
+  for (const { plugin, source, resources } of input.local) {
     const previous = byId.get(plugin.id);
     const shadows = previous?.source === "bundled" || previous?.shadows === true;
-    byId.set(plugin.id, { plugin, source, ...(shadows ? { shadows } : {}) });
+    byId.set(plugin.id, { plugin, source, ...(shadows ? { shadows } : {}), ...(resources === undefined ? {} : { resources }) });
   }
   const known = [...byId.values()];
 

@@ -4,6 +4,8 @@ import { Effect, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Events, makeCore } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
+import type { PluginInfo } from "@lemma/contracts";
+import { hostControlPlugin } from "@lemma/contracts/testing";
 import { Agent } from "@lemma/agent";
 import { Sessions } from "@lemma/sessions";
 import agent from "@lemma/agent-loop";
@@ -69,15 +71,22 @@ describe("in a turn", () => {
     await fs.rm(home, { recursive: true, force: true });
   });
 
-  const turn = (plugins: Readonly<Record<string, unknown>> | undefined, config: Readonly<Record<string, unknown>> = {}) => {
+  const turn = (
+    plugins: Readonly<Record<string, unknown>> | undefined,
+    config: Readonly<Record<string, unknown>> = {},
+    known: readonly PluginInfo[] | undefined = undefined,
+  ) => {
     const llm = fakeLlm([reply("ok")]);
     const toolset = testTools();
     return Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const core = yield* makeCore([paths(home, home), host(), sessions, tools, toolset.plugin, llm.plugin, agent, profiles], {
-            configs: { "agent.profiles": config },
-          });
+          const core = yield* makeCore(
+            [paths(home, home), known === undefined ? host() : hostControlPlugin(known), sessions, tools, toolset.plugin, llm.plugin, agent, profiles],
+            {
+              configs: { "agent.profiles": config },
+            },
+          );
           return yield* core.run(
             Effect.gen(function* () {
               const notices: string[] = [];
@@ -98,6 +107,27 @@ describe("in a turn", () => {
     expect((request.tools ?? []).map((tool) => tool.name)).toEqual(["echo"]);
     expect(request.system).toContain("You only read.");
     expect(request.system).not.toContain("<environment>");
+  });
+
+  it("takes a profile from an enabled plugin's package, a user's own of the name replacing it", async () => {
+    await fs.mkdir(path.join(home, "pack", "profiles"), { recursive: true });
+    await fs.writeFile(path.join(home, "pack", "profiles", "triage.md"), "---\ntools: echo\n---\nSort the inbox.\n");
+    await fs.writeFile(path.join(home, "pack", "profiles", "reader.md"), "The pack's reader.\n");
+    const pack: PluginInfo = {
+      id: "pack",
+      source: "user",
+      enabled: true,
+      provides: [],
+      requires: [],
+      resources: { profiles: [path.join(home, "pack", "profiles")] },
+    };
+    const triage = await turn({ "agent.profiles": "triage" }, {}, [pack]);
+    expect(triage.request.system).toContain("Sort the inbox.");
+    const reader = await turn({ "agent.profiles": "reader" }, {}, [pack]);
+    expect(reader.request.system).toContain("You only read.");
+    expect(reader.request.system).not.toContain("The pack's reader.");
+    const off = await turn({ "agent.profiles": "triage" }, {}, [{ ...pack, enabled: false }]);
+    expect(off.request.system).not.toContain("Sort the inbox.");
   });
 
   it("gives a thread with none chosen the default, and says so when a profile named is not there", async () => {

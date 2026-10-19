@@ -57,7 +57,9 @@ Both halves define the id `greet`, so they are one plugin: one row in
 `config.jsonc` turns both on or off, and the web app runs the web half only
 while the host half runs. A plugin with several files is a folder whose
 `package.json` names its halves, as [ticker](../examples/ticker/README.md) and
-[todo](../examples/todo/README.md) are. The bundled plugins are laid out the
+[todo](../examples/todo/README.md) are; its manifest can also bring folders
+of skills or profiles (`"resources"`, see
+[Configuration](configuration.md#your-plugins)). The bundled plugins are laid out the
 same way, one package each under `domains/`.
 
 ## The five shapes

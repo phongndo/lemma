@@ -16,8 +16,10 @@ sections: "*", "!project-context"
 You help the user write. Keep their voice; say what you changed and why.
 ```
 
-- **Where.** Bundled ones (`profiles/` here), then `~/.lemma/profiles/`, then
-  `.lemma/profiles/` in the session's directory; a later one of a name wins.
+- **Where.** Bundled ones (`profiles/` here), then those an enabled plugin's
+  package brings (`"resources": { "profiles": "./profiles" }`, read from
+  plugin status), then `~/.lemma/profiles/`, then `.lemma/profiles/` in the
+  session's directory; a later one of a name wins.
   Profiles carry no code and only narrow what plugins offer, so a project's
   load as its `AGENTS.md` and skills do.
 - **Choosing.** The web half's picker, before the model picker, sends the

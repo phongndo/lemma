@@ -19,8 +19,10 @@ the source `skills` (`Skills`) to `ComposerCompletions`. Requires `Paths` and
   frontmatter gives none, and is letters, digits, `_`, `-`, and `.`; a folder
   whose name is none of that is skipped. The frontmatter is read as the flat
   YAML skills use (a value plain, quoted, continued, or a `>` or `|` block).
-- **Where.** The user's directories: `~/.lemma/skills` (`Paths.home`),
-  `~/.agents/skills`, and `dirs`, in order. Then a project's: `.agents/skills`
+- **Where.** First those an enabled plugin's package brings
+  (`"resources": { "skills": "./skills" }`, read from plugin status). Then the
+  user's directories: `~/.lemma/skills` (`Paths.home`), `~/.agents/skills`,
+  and `dirs`, in order. Then a project's: `.agents/skills`
   and `.lemma/skills` in the session's directory and every one above it, from
   the root down. Where two share a name the later wins, so the nearest
   project's does. Like `AGENTS.md`, a project's skills need no trust: they are

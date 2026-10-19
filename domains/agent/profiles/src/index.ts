@@ -3,7 +3,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { definePlugin, Events } from "@lemma/core";
-import { Channels, Notice, Paths, serveChannel } from "@lemma/contracts";
+import { Channels, HostControl, Notice, Paths, resourcesOf, serveChannel } from "@lemma/contracts";
 import { AgentRequestHook, ProfileChannels, PROFILES_PLUGIN, PromptSections } from "@lemma/agent";
 import type { RequestDraft } from "@lemma/agent";
 import { byName, keeps, parseProfile } from "./profile.ts";
@@ -42,8 +42,8 @@ const readDir = async (dir: string, source: Profile["source"]): Promise<Profile[
  * Profiles: what a thread's agent is for. A thread is given one (`TurnOptions.plugins["agent.profiles"]`, which the
  * web half's picker sends with each prompt), else the configured default: its prompt is a section of the system prompt,
  * and in `AgentRequestHook`'s `select` phase it keeps the tools and sections it allows of what every `shape` handler
- * offered. Found by the session's directory: bundled, then `~/.lemma/profiles`, then the project's `.lemma/profiles`,
- * a later one of a name winning. Profiles are data: they carry no code, and narrow what plugins offer, so a
+ * offered. Found by the session's directory: bundled, then those plugins' packages bring (`"resources": { "profiles":
+ * "./profiles" }`), then `~/.lemma/profiles`, then the project's `.lemma/profiles`, a later one of a name winning. Profiles are data: they carry no code, and narrow what plugins offer, so a
  * project's load as its `AGENTS.md` and skills do. The turn logs the choice (`turn-start`), so a resumed turn keeps it
  * and its requests rebuild from the log.
  */
@@ -51,14 +51,21 @@ export default definePlugin({
   id: PROFILES_PLUGIN,
   uses: ["lemma/agent@1"],
   config: Config,
-  requires: { paths: Paths },
-  setup: function* ({ paths }, owner) {
+  requires: { paths: Paths, host: HostControl },
+  setup: function* ({ paths, host }, owner) {
     const config = owner.config;
     const events = yield* Events;
     const user = path.join(paths.home, "profiles");
     const load = (cwd: string) =>
-      Effect.promise(async () =>
-        byName([...(await readDir(BUNDLED, "bundled")), ...(await readDir(user, "user")), ...(await readDir(path.join(cwd, ".lemma", "profiles"), "project"))]),
+      Effect.flatMap(host.plugins, (plugins) =>
+        Effect.promise(async () =>
+          byName([
+            ...(await readDir(BUNDLED, "bundled")),
+            ...(await Promise.all(resourcesOf(plugins, "profiles").map(({ dir, source }) => readDir(dir, source)))).flat(),
+            ...(await readDir(user, "user")),
+            ...(await readDir(path.join(cwd, ".lemma", "profiles"), "project")),
+          ]),
+        ),
       );
     const told = new Set<string>();
     /** The profile a request's turn was taken with, else the default; one named that is not there is said so once. */

@@ -62,6 +62,14 @@ your plugins. What is there loads by itself, and again when it changes:
 | `theme.css`                            | A stylesheet the web app applies after its own                                                                                             |
 | `ticker/`                              | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
 
+A folder plugin's manifest can also name folders of things other plugins read,
+by kind: `"resources": { "skills": "./skills", "profiles": "./profiles" }`.
+They come and go with its host half's plugins (turned off, a project not
+trusted), and the plugin that reads a kind finds them in plugin status
+(`resourcesOf`): `skills.files` reads `skills`, and `agent.profiles` reads
+`profiles`, each below your own of the same name. A field Lemma does not read
+is reported, which catches a typo.
+
 The host links what a plugin file may import (`effect`, `@lemma/core`,
 `@lemma/contracts`, the domains' contracts) into `~/.lemma/node_modules` as it
 starts, pointing at the packages it runs, so those files resolve them, and an
