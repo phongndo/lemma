@@ -33,7 +33,9 @@ export default definePlugin({
 The host loads it as soon as it is saved, and the model has `greet` from its
 next request. `lemma plugins` and Settings › Plugins list it, with a switch.
 A host half imports only what the host supplies (`effect`, `@lemma/core`,
-`@lemma/contracts`, and the domains' contracts), so it needs no install step.
+`@lemma/contracts`, and the domains' contracts), so it needs no install step:
+the host links them into `~/.lemma/node_modules` as it starts, where a plugin
+file resolves them and an editor finds their types.
 
 A web half is a JavaScript module beside it, named `.web.js`. Here, how the
 chat shows `greet`'s calls:

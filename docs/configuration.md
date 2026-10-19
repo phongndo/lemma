@@ -62,6 +62,12 @@ your plugins. What is there loads by itself, and again when it changes:
 | `theme.css`                    | A stylesheet the web app applies after its own                                                                                             |
 | `ticker/`                      | A folder plugin, its `package.json` naming its halves: `"lemma": { "host": "./ticker.ts", "web": "./web.js", "styles": ["./ticker.css"] }` |
 
+The host links what a plugin file may import (`effect`, `@lemma/core`,
+`@lemma/contracts`, the domains' contracts) into `~/.lemma/node_modules` as it
+starts, pointing at the packages it runs, so those files resolve them, and an
+editor finds their types, with nothing installed; a directory of your own
+there is left alone.
+
 A plugin is one id, with a host half, a web half, or both. Both halves of one
 plugin define its id, so its one row decides both, and the web app runs the
 web half only while the host half runs; [ticker](../examples/ticker/README.md)
