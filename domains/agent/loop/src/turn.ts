@@ -110,6 +110,8 @@ interface TurnInput {
   /** The model it asks. Only a resumed turn that closes as cancelled may have none: it asks nothing. */
   readonly model?: ModelInfo;
   readonly thinking?: ThinkingLevel;
+  /** The turn's choices for plugins (`TurnOptions.plugins`), logged with `turn-start` and handed to each request. */
+  readonly plugins?: Readonly<Record<string, unknown>>;
   /** Placed first, in order: a new turn's prompts, or those a resumed turn had not placed yet. */
   readonly prompts: readonly Placed[];
   /** Present when the turn continues one a restart cut off. */
@@ -425,7 +427,15 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       // As it stands now: the branch kept grows as the turn appends, and handlers see this one.
       const branch: readonly SessionEvent[] = (yield* branchNow).slice();
       const listed = yield* tools.list;
-      const sections = yield* services.sections({ sessionId, turnId, cwd, model: asking.ref, tools: listed, branch });
+      const sections = yield* services.sections({
+        sessionId,
+        turnId,
+        cwd,
+        model: asking.ref,
+        tools: listed,
+        branch,
+        ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
+      });
       /** The events each plugin's handler appended, by type, for its credit. */
       const appended = new Map<string, string[]>();
       const draft: RequestDraft = {
@@ -434,6 +444,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         cwd,
         model: asking.ref,
         ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+        ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
         sections,
         tools: listed,
         ...(state.streak.shorten ? { overflow: true } : {}),
@@ -955,6 +966,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
           const interrupted = new Map(
             at.pending.filter((call) => at.started.has(call.id) && !repeatable.has(call.name)).map((call) => [call.id, output(call.id)] as const),
           );
+          // Held to what the step's request offered, as logged, as a call made before the restart was: a tool a
+          // profile or another handler took out is not there for it now either. Tools only others call are offered
+          // as they are to any request offering one that runs them.
+          const declared = (requestState(yield* branchNow).tools ?? []).map((spec) => spec.name);
+          const resumedOffer: Offer = { declared, offered: [...declared, ...listed.filter((tool) => tool.nested === true).map((tool) => tool.spec.name)] };
           // The rest of the cut-off step, traced as the step it is.
           const ended = yield* services
             .trace(
@@ -965,7 +981,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
                   const ran =
                     at.message.stopReason === "length"
                       ? yield* answerTruncated(at.stepId)
-                      : yield* services.trace("agent.tools", runTools(at.stepId, interrupted));
+                      : yield* services.trace("agent.tools", runTools(at.stepId, interrupted, resumedOffer));
                   const decision = yield* decide(plan.steps, { message: at.message, results: [...at.results, ...ran] });
                   yield* append({ type: "step-end", turnId, stepId: at.stepId, decision });
                   state.step = undefined;
@@ -1096,6 +1112,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         turnId,
         model: (yield* asked).ref,
         ...(input.thinking === undefined ? {} : { thinking: input.thinking }),
+        ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
       });
     }
     yield* events.publish(TurnStarted, { sessionId, turnId, requestIds: resume === undefined ? input.prompts.map((prompt) => prompt.requestId) : [] });

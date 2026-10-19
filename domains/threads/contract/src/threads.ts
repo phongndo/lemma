@@ -456,6 +456,19 @@ export const ComposerTakeovers = defineSlot<ComposerTakeover>("composer.takeover
 /** The composer's toolbar, left of its buttons: the model and reasoning pickers. */
 export const ComposerControls = defineSlot<Region>("composer.controls");
 
+/**
+ * A plugin's choice for the turns a prompt starts, sent with it (the agent's `TurnOptions.plugins`, keyed by `id`,
+ * the plugin's id): the thread's profile, for `agent.profiles`. Asked as each prompt is sent, for the thread it goes
+ * to (`undefined` for a new one); `undefined` sends nothing for the plugin.
+ */
+export interface TurnOptionSource {
+  /** The plugin whose choice it is: its key in `TurnOptions.plugins`. */
+  readonly id: string;
+  readonly value: (sessionId: string | undefined) => unknown;
+}
+
+export const TurnOptionSources = defineSlot<TurnOptionSource>("composer.turn-options");
+
 /** Under the composer: the workspace bar. */
 export const ComposerFooter = defineSlot<Region>("composer.footer");
 

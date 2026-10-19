@@ -354,6 +354,41 @@ describe("agent", () => {
     );
   });
 
+  it("logs the plugins' choices a prompt carries with its turn, and hands them to its sections and request handlers", async () => {
+    const seen: unknown[] = [];
+    const watcher = definePlugin({
+      id: "watcher",
+      layer: Layer.effectDiscard(
+        Effect.gen(function* () {
+          const owner = yield* PluginContext;
+          yield* owner.add(PromptSections, { id: "watcher", text: (request) => void seen.push(["section", request.plugins]) });
+          yield* owner.on(
+            AgentRequestHook,
+            (draft, next) =>
+              Effect.andThen(
+                Effect.sync(() => seen.push(["request", draft.plugins])),
+                next(draft),
+              ),
+            {
+              phase: "select",
+            },
+          );
+        }),
+      ),
+    });
+    await withAgent({ plugins: [watcher], scripts: [reply("ok")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        yield* Effect.flatMap(Agent, (a) => a.prompt(id, text("go"), { plugins: { "agent.profiles": "writing" } }));
+        expect(ofType(yield* log(id), "turn-start")[0]).toMatchObject({ plugins: { "agent.profiles": "writing" } });
+        expect(seen).toEqual([
+          ["section", { "agent.profiles": "writing" }],
+          ["request", { "agent.profiles": "writing" }],
+        ]);
+      }),
+    );
+  });
+
   it("refuses a call to a tool the request did not offer", async () => {
     const readOnly = definePlugin({
       id: "read-only",

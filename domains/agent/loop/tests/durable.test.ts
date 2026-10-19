@@ -526,6 +526,15 @@ describe("planResume", () => {
     expect(resume.kind === "open" && [...resume.plan.placed]).toEqual(["r"]);
   });
 
+  it("goes on with the plugins' choices the turn was taken with", () => {
+    const events = [
+      event(1, "a", null, { type: "turn-start", turnId: "t", model: "fake/m1", plugins: { "agent.profiles": "writing" } }),
+      event(2, "b", "a", { type: "message", turnId: "t", requestId: "r", message: { role: "user", content: text("go"), timestamp: 1 } }),
+      event(3, "c", "b", { type: "step-start", turnId: "t", stepId: "s" }),
+    ];
+    expect(planResume(events, "t")).toMatchObject({ kind: "open", plan: { plugins: { "agent.profiles": "writing" } } });
+  });
+
   it("answers a steer placed after the last step before the restart, rather than closing the turn", () => {
     const answer = {
       role: "assistant" as const,

@@ -50,7 +50,14 @@ export type TurnEndReason = typeof TurnEndReason.Type;
 
 export const EventData = Schema.Union([
   /** `model` and `thinking` are what the turn was started with, so a turn resumed after a restart runs on with them. */
-  Schema.Struct({ type: Schema.Literal("turn-start"), turnId: Schema.String, model: Schema.optional(Schema.String), thinking: Schema.optional(ThinkingLevel) }),
+  Schema.Struct({
+    type: Schema.Literal("turn-start"),
+    turnId: Schema.String,
+    model: Schema.optional(Schema.String),
+    thinking: Schema.optional(ThinkingLevel),
+    /** The turn's choices for plugins, by plugin id (the agent's `TurnOptions.plugins`). */
+    plugins: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+  }),
   Schema.Struct({
     type: Schema.Literal("turn-end"),
     turnId: Schema.String,

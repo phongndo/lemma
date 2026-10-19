@@ -23,6 +23,7 @@ import {
   ComposerQueued,
   ComposerSuggestionView,
   queuePlaces,
+  TurnOptionSources,
 } from "@lemma/threads";
 import type { ComposerActionProps, ComposerQueuedProps, ComposerSuggestion, ComposerSuggestionProps, ThreadsService } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
@@ -258,7 +259,14 @@ function Composer(props: { deps: Deps }) {
     place: async (sent, content, whenBusy, background) => {
       // A new chat may start in its own worktree, named from the prompt: one in the background, as one sent from here would.
       const cwd = threads.blank() ? await workspace.newChatDir(sent.text) : undefined;
-      return threads.send(content, { turn: models.turnOptions(), cwd, requestId: sent.requestId, whenBusy, background });
+      // Each plugin's choice for the turn (`TurnOptionSources`), for the thread it goes to: none for a new one.
+      const goingTo = background === true || threads.blank() ? undefined : threads.activeId();
+      const chosen = slots.list(TurnOptionSources).flatMap((source) => {
+        const value = source.value(goingTo);
+        return value === undefined ? [] : [[source.id, value] as const];
+      });
+      const turn = chosen.length === 0 ? models.turnOptions() : { ...models.turnOptions(), plugins: Object.fromEntries(chosen) };
+      return threads.send(content, { turn, cwd, requestId: sent.requestId, whenBusy, background });
     },
     report: (error) => notify.report(error, "Could not create a session"),
     settled: () => queueMicrotask(resize),

@@ -66,6 +66,8 @@ export interface ResumePlan {
   readonly lastId: string;
   readonly model?: string;
   readonly thinking?: ThinkingLevel;
+  /** The turn's choices for plugins, as its `turn-start` logged them. */
+  readonly plugins?: Readonly<Record<string, unknown>>;
   /** What the turn has cost so far. */
   readonly usage: Usage;
   /** Steps counted so far: those begun, but for those whose failed call is asked again (they do not count). */
@@ -128,6 +130,7 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
   let steps = 0;
   let model = start.data.type === "turn-start" ? start.data.model : undefined;
   let thinking = start.data.type === "turn-start" ? start.data.thinking : undefined;
+  const plugins = start.data.type === "turn-start" ? start.data.plugins : undefined;
   let requestModel: string | undefined;
   let requestThinking: ThinkingLevel | undefined;
   const placed = new Set<string>();
@@ -238,6 +241,7 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
       lastId: path[path.length - 1]!.id,
       ...(model === undefined ? {} : { model }),
       ...(thinking === undefined ? {} : { thinking }),
+      ...(plugins === undefined ? {} : { plugins }),
       usage,
       steps,
       placed,

@@ -32,6 +32,12 @@ export const TurnOptions = Schema.Struct({
   /** Falls back to the agent's configured default, then the first available model. */
   model: Schema.optional(ModelRef),
   thinking: Schema.optional(ThinkingLevel),
+  /**
+   * Choices for plugins, by plugin id, that the turn is taken with (the thread's profile, for `agent.profiles`):
+   * logged with the turn (`turn-start`), so a turn resumed after a restart goes on with them and a request rebuilds
+   * from the log, and handed to its prompt sections and `AgentRequestHook` (`plugins`). Each plugin checks its own.
+   */
+  plugins: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
 export type TurnOptions = typeof TurnOptions.Type;
 
@@ -120,6 +126,8 @@ export interface SectionRequest {
    * here, not at the session's current leaf, which a checkout during the turn can move elsewhere.
    */
   readonly branch: readonly SessionEvent[];
+  /** The turn's choices for plugins, by plugin id (`TurnOptions.plugins`). */
+  readonly plugins?: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -185,6 +193,8 @@ export interface RequestDraft {
   readonly branch: readonly SessionEvent[];
   /** `deriveMessages(branch)`. */
   readonly history: readonly Message[];
+  /** The turn's choices for plugins, by plugin id (`TurnOptions.plugins`): read-only, as the turn was taken with them. */
+  readonly plugins?: Readonly<Record<string, unknown>>;
   /**
    * Appends an event after the turn's last one (a `compaction`, say); the
    * request, and the rest of the turn, continue from it. It stays on the
@@ -195,7 +205,7 @@ export interface RequestDraft {
   readonly append: (data: EventData) => Effect.Effect<SessionEvent, AgentError>;
 }
 
-export type RequestPlan = Omit<RequestDraft, "history" | "branch" | "append" | "sessionId" | "turnId" | "cwd" | "overflow">;
+export type RequestPlan = Omit<RequestDraft, "history" | "branch" | "append" | "sessionId" | "turnId" | "cwd" | "overflow" | "plugins">;
 
 /** A prompt as it was submitted, before the agent places it. */
 export interface PromptInput {
@@ -290,17 +300,18 @@ export const AgentInputHook = Hook.make<PromptInput, PromptDecision, AgentError>
 
 /**
  * Runs before every model call. Skills, project context, and prompt plugins contribute here. Its phases are `shape`
- * (where a handler naming no phase goes: it adds and changes sections and tools) and `fit` (after every `shape` handler,
- * so it sees the request they made: compaction sizes it against the model's window).
+ * (where a handler naming no phase goes: it adds and changes sections and tools), `select` (after every `shape` handler:
+ * it chooses among what they offered, as a thread's profile keeps the tools and sections it allows), and `fit` (after
+ * both, so it sees the request as it will be: compaction sizes it against the model's window).
  *
- * @composition a chain in phase order (`shape`, then `fit`): each handler changes the draft it hands `next` and sees
+ * @composition a chain in phase order (`shape`, `select`, then `fit`): each handler changes the draft it hands `next` and sees
  * what later handlers made in what `next` returns; one that returns without `next` sends what it returns. A handler
  * that fails ends the turn in error, logged with its message, and the prompt that started it fails with `Hook`.
  * Checked: what a handler hands on and returns has a model, sections, and tools of the right shape.
  */
 export const AgentRequestHook = Hook.make<RequestDraft, RequestPlan, AgentError>("lemma/agent.request", {
   check: { input: planProblem, output: planProblem },
-  phases: ["shape", "fit"],
+  phases: ["shape", "select", "fit"],
   defaultPhase: "shape",
   summary: {
     input: (draft) => ({ model: draft.model, sections: draft.sections.length, tools: draft.tools.length }),

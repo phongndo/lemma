@@ -351,6 +351,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
           const turnOptions = {
             ...(options.model === undefined ? {} : { model: options.model }),
             ...(options.thinking === undefined ? {} : { thinking: options.thinking }),
+            ...(options.plugins === undefined ? {} : { plugins: options.plugins }),
           };
           const item: Item = {
             prompt: {
@@ -456,11 +457,13 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
       /** A new turn, begun, on `model`. */
       const begun = (sessionId: string, entry: Running, info: SessionInfo, model: ModelInfo) => {
         const thinking = entry.prompts.at(-1)?.options?.thinking;
+        const plugins = entry.prompts.at(-1)?.options?.plugins;
         return runTurn(services, settings, {
           ...turnInput(sessionId, entry, info),
           model,
           prompts: entry.prompts.map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
           ...(thinking === undefined ? {} : { thinking }),
+          ...(plugins === undefined ? {} : { plugins }),
         });
       };
 
@@ -500,6 +503,7 @@ export const makeAgentPlugin = (options: AgentPluginOptions = {}) =>
               .map(({ requestId, content, credit }) => ({ requestId, content, ...(credit === undefined ? {} : { credit }) })),
             resume: turnResume,
             ...(plan.thinking === undefined ? {} : { thinking: plan.thinking }),
+            ...(plan.plugins === undefined ? {} : { plugins: plan.plugins }),
           });
         });
 
