@@ -12,7 +12,8 @@ Handles `AgentRequestHook` in its phase `fit`, before
 `at` of the model's window (estimated at four characters a token), each tool
 result in the model's view longer than `minChars`, and older than the latest
 `keepTurns` turns, becomes its start and end with a note of how much was left
-out, through a `context-edit` event on the turn's branch (`RequestDraft.append`).
+out (its images stay), through a `context-edit` event on the turn's branch
+(`RequestDraft.append`).
 The log keeps every result whole, and the request still rebuilds from it
 (`rebuildRequest`). It hands compaction the request with its edits, so
 compaction measures the shortened conversation and summarizes only if

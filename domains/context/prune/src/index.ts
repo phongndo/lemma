@@ -32,8 +32,8 @@ const CHARS_PER_TOKEN = 4;
 
 const textOf = (message: Message): string =>
   message.content
-    .map((part) =>
-      part.type === "text" ? part.text : part.type === "thinking" ? part.thinking : part.type === "toolCall" ? JSON.stringify(part.arguments) : "",
+    .flatMap((part) =>
+      part.type === "text" ? [part.text] : part.type === "thinking" ? [part.thinking] : part.type === "toolCall" ? [JSON.stringify(part.arguments)] : [],
     )
     .join("\n");
 
@@ -87,12 +87,14 @@ export default definePlugin({
             const data = target.data;
             if (data.type !== "message") continue;
             const text = textOf(data.message);
+            // Only its text is long: its images stay as they are.
+            const images = data.message.role === "toolResult" ? data.message.content.filter((part) => part.type === "image") : [];
             appended.push(
               yield* draft.append({
                 type: "context-edit",
                 target: target.id,
                 op: "replace",
-                content: [{ type: "text", text: shortened(text, config.keepChars) }],
+                content: [{ type: "text", text: shortened(text, config.keepChars) }, ...images],
                 source: owner.id,
                 turnId: draft.turnId,
               }),

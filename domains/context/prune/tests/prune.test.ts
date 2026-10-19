@@ -1,10 +1,12 @@
 import * as fs from "node:fs/promises";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { makeCore } from "@lemma/core";
 import { Agent } from "@lemma/agent";
 import { branchOf, rebuildRequest, Sessions } from "@lemma/sessions";
 import type { EventData, SessionEvent } from "@lemma/sessions";
+import { ToolResult } from "@lemma/tools";
+import type { Tool } from "@lemma/tools";
 import agent from "@lemma/agent-loop";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
@@ -104,5 +106,39 @@ describe("in a turn", () => {
     const lastRequest = [...events].reverse().find((event) => event.data.type === "request")!;
     const rebuilt = rebuildRequest(branchOf(events, events.at(-1)!.id), lastRequest.id);
     expect(rebuilt?.messages).toEqual(requests[2]!.messages);
+  });
+
+  it("keeps a shortened result's images: only its text is long", async () => {
+    const image = { type: "image" as const, data: "iVBORw0KGgo=", mimeType: "image/png" };
+    const shot: Tool<Record<string, never>> = {
+      name: "shot",
+      description: "Takes a screenshot, and describes it at length.",
+      input: Schema.Struct({}),
+      execute: async () => new ToolResult({ content: [{ type: "text", text: "z".repeat(2_000) }, image] }),
+    };
+    const llm = fakeLlm([useTools(call("c1", "shot", {})), reply("done"), reply("again")]);
+    const toolset = testTools([shot]);
+    const requests = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, prune], {
+            configs: { "context.prune": { at: 0.001, minChars: 500, keepChars: 40, keepTurns: 1 } },
+          });
+          return yield* core.run(
+            Effect.gen(function* () {
+              const { id } = yield* Effect.flatMap(Sessions, (store) => store.create());
+              const turns = yield* Agent;
+              yield* turns.prompt(id, [{ type: "text", text: "go" }]);
+              yield* turns.prompt(id, [{ type: "text", text: "and again" }]);
+              return llm.requests;
+            }),
+          );
+        }),
+      ),
+    );
+    const sent = requests[2]!.messages.find((message) => message.role === "toolResult")!;
+    expect(sent.content.map((part) => part.type)).toEqual(["text", "image"]);
+    expect(JSON.stringify(sent.content[0])).toContain("left out by context.prune");
+    expect(sent.content[1]).toEqual(image);
   });
 });

@@ -1124,6 +1124,9 @@ importers:
       '@lemma/sessions-files':
         specifier: workspace:*
         version: link:../../sessions/files
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../tools/contract
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../tools/registry
