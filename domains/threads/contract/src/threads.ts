@@ -1,5 +1,5 @@
 import type { PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
-import type { ImageContent } from "@lemma/llm";
+import type { ImageContent, TextContent } from "@lemma/llm";
 import type { MenuAction } from "@lemma/frame";
 import type { IconName } from "@lemma/look";
 import type { LedgerRecord, SessionEvent, SessionInfo, SessionMarks } from "@lemma/sessions";
@@ -106,8 +106,8 @@ export interface ThreadsService {
   /** Makes a follow-up in the active thread's queue a steer: the running turn places it after its current step. */
   readonly promote: (requestId: string) => Promise<void>;
   readonly cancel: () => void;
-  /** Moves the active session's leaf: the next prompt branches from `eventId`. */
-  readonly checkout: (eventId: string) => Promise<void>;
+  /** Moves the active session's leaf: the next prompt branches from `eventId`. Resolves whether it moved; a failure is reported. */
+  readonly checkout: (eventId: string) => Promise<boolean>;
   /**
    * Copies the active thread's branch up to `eventId` (its leaf when absent) into a new thread (`sessions.fork`), and
    * goes to it: how a thread whose log is damaged (`SessionInfo.damaged`) goes on. Failures are reported.
@@ -170,6 +170,29 @@ export const waitingOn = (waits: readonly ThreadWait[], sessionId: string): stri
   }
   return undefined;
 };
+
+/** A prompt placed in the open thread, as the transcript shows it. */
+export interface PromptInfo {
+  readonly sessionId: string;
+  /** Its message's event in the log. */
+  readonly eventId: string;
+  /** When it was placed. */
+  readonly at: number;
+  readonly content: readonly (TextContent | ImageContent)[];
+  /** A steer: placed in its turn after the work began. */
+  readonly steer: boolean;
+}
+
+export interface PromptActionProps {
+  readonly prompt: PromptInfo;
+}
+
+/**
+ * Buttons under a prompt in the transcript, after its time, shown while the pointer is on it, in order: the composer's
+ * "Edit from here" (10), and the transcript's copy (20) and link to the prompt (30). An item draws its own button
+ * (`icon-button`), or nothing for a prompt it does not apply to.
+ */
+export const PromptActions = defineSlot<Region<PromptActionProps>>("prompt.actions");
 
 /** What a session's menu item can do to its row. */
 export interface ThreadRowControl {

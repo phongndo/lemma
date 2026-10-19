@@ -17,15 +17,17 @@ import {
   ComposerRegion,
   ComposerSuggestionPart,
   ComposerTakeovers,
+  PromptActions,
   PromptCommands,
   Threads,
   ThreadsActionIds,
   ComposerQueued,
   ComposerSuggestionView,
+  promptBases,
   queuePlaces,
   TurnOptionSources,
 } from "@lemma/threads";
-import type { ComposerActionProps, ComposerQueuedProps, ComposerSuggestion, ComposerSuggestionProps, ThreadsService } from "@lemma/threads";
+import type { ComposerActionProps, ComposerQueuedProps, ComposerSuggestion, ComposerSuggestionProps, PromptActionProps, ThreadsService } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { Models } from "@lemma/llm/web";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
@@ -34,12 +36,12 @@ import { Workspace } from "@lemma/workspace/web";
 import type { ModelsService } from "@lemma/llm/web";
 import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, XIcon } from "@lemma/look";
+import { ChatIcon, ChevronDownIcon, ImageIcon, LogIcon, Segmented, SendIcon, SettingRow, StopIcon, UndoIcon, XIcon } from "@lemma/look";
 import { commandTurn } from "./command.ts";
 import { createCompletion, ghostText } from "./completion.ts";
-import { SharedDrafts, dropRetry, keepDraft, lostOnReload, unsent } from "./drafts.ts";
+import { SharedDrafts, dropRetry, keepDraft, lostOnReload, returned, unsent } from "./drafts.ts";
 import type { Draft, Drafts } from "./drafts.ts";
-import { recallTarget, sentPrompts } from "./history.ts";
+import { promptOf, recallTarget, sentPrompts } from "./history.ts";
 import type { SentPrompt } from "./history.ts";
 import { leftOutWarnings, readImage, sortFiles, unreadWarning } from "./images.ts";
 import { createSender } from "./sender.ts";
@@ -105,6 +107,8 @@ interface Deps {
   /** The queue above the box shows its prompts, or only its header: one choice for every thread, while the plugin runs. */
   readonly queueOpen: Accessor<boolean>;
   readonly setQueueOpen: (open: boolean) => void;
+  /** The last prompt "Edit from here" put back in a thread's draft, and where the cursor goes: after it (`EditFromHere`). */
+  readonly editing: Accessor<{ readonly sessionId: string; readonly cursor: number } | undefined>;
 }
 
 function Composer(props: { deps: Deps }) {
@@ -211,6 +215,28 @@ function Composer(props: { deps: Deps }) {
     resize();
   });
   onCleanup(() => props.deps.setFocus(undefined));
+  // A prompt put back to edit ("Edit from here") went into the thread's draft: the box shows it, the cursor after the prompt.
+  createEffect(
+    on(
+      props.deps.editing,
+      (edit) => {
+        if (edit === undefined || edit.sessionId !== draftKey()) return;
+        const draft = drafts.get(edit.sessionId);
+        batch(() => {
+          setRecalled(undefined);
+          setText(draft?.text ?? "");
+          setImages(draft?.images ?? []);
+        });
+        queueMicrotask(() => {
+          resize();
+          input.focus();
+          input.setSelectionRange(edit.cursor, edit.cursor);
+          syncCursor();
+        });
+      },
+      { defer: true },
+    ),
+  );
 
   /**
    * The prompts waiting for a turn of their own, shown over the box (`queuePlaces`' `next`): a steer for the running
@@ -914,6 +940,51 @@ function PromptAnswerNotice(props: { threads: ThreadsService }) {
   );
 }
 
+/**
+ * The composer's `PromptActions` item, "Edit from here": the thread goes back to before the prompt's turn
+ * (`promptBases`, `Threads.checkout`), and the prompt comes back to be written again, before what is written in the
+ * thread's draft. Files stay as they are. None for a steer, a prompt placed with another, or the thread's first; not
+ * while a turn runs.
+ */
+function EditFromHere(
+  props: PromptActionProps & {
+    readonly deps: Deps;
+    readonly bases: Accessor<ReadonlyMap<string, string>>;
+    readonly edited: (sessionId: string, cursor: number) => void;
+  },
+) {
+  const { threads, drafts } = props.deps;
+  const base = () => props.bases().get(props.prompt.eventId);
+  const busy = () => threads.busy();
+  const edit = usePlugin().action("edit a prompt from where it was sent", async () => {
+    const to = base();
+    const { sessionId, content } = props.prompt;
+    if (to === undefined || busy() || threads.activeId() !== sessionId || !(await threads.checkout(to))) return;
+    const prompt = promptOf(content);
+    drafts.set(sessionId, returned(prompt, drafts.get(sessionId)));
+    props.edited(sessionId, prompt.text.length);
+  });
+  return (
+    <Show when={base()}>
+      {/* Not `disabled` while a turn runs: its tooltip says why it does nothing. */}
+      <button
+        type="button"
+        class="icon-button"
+        aria-label="Edit from here"
+        aria-disabled={busy()}
+        data-tip={
+          busy()
+            ? "Stop the turn to edit from here"
+            : "Edit from here: the thread goes back to before this prompt, which returns to the composer. Files stay as they are."
+        }
+        onClick={() => edit()}
+      >
+        <UndoIcon />
+      </button>
+    </Show>
+  );
+}
+
 /** Where prompts are written: text, pasted or dropped images, completions, send and stop. Its notices, controls, completions, and footer are slots. */
 export default defineWebPlugin({
   id: "threads.composer",
@@ -925,6 +996,7 @@ export default defineWebPlugin({
     const [queueOpen, setQueueOpen] = createSignal(true);
     const drafts = new SharedDrafts(use.threads.drafts(), use.threads.setDraft);
     const outgoing = new Set<Draft>();
+    const [editing, setEditing] = createSignal<{ readonly sessionId: string; readonly cursor: number }>();
     // A deleted thread (a blank tab closed) takes its draft with it, so closing the app does not ask about it.
     createEffect(() => {
       if (!use.threads.loaded()) return;
@@ -939,6 +1011,7 @@ export default defineWebPlugin({
       setFocus: (next) => setFocus(() => next),
       queueOpen,
       setQueueOpen,
+      editing,
     };
     // An unsent prompt a reload would lose (its images, a send that did not get through), in any thread, or one still
     // going out: closing or reloading the tab asks first. Drafts' text comes back (`Threads.drafts`), so it does not ask.
@@ -952,6 +1025,13 @@ export default defineWebPlugin({
     use.slots.add(ComposerNotices, { id: "composer.answer", order: 50, component: () => <PromptAnswerNotice threads={use.threads} /> });
     // Its own button goes through the slot other plugins add theirs to, and its queue rows through a part others replace.
     use.slots.add(ComposerActions, { id: "composer.attach", order: 100, component: AttachImages });
+    // Under each prompt in the transcript, first: it owns the box the prompt comes back to.
+    const bases = createMemo(() => promptBases(use.threads.branch()));
+    use.slots.add(PromptActions, {
+      id: "composer.edit",
+      order: 10,
+      component: (props) => <EditFromHere {...props} deps={deps} bases={bases} edited={(sessionId, cursor) => setEditing({ sessionId, cursor })} />,
+    });
     use.slots.add(ComposerQueuedPart, { id: "composer.queued", phase: "default", component: QueuedRow });
     use.slots.add(ComposerSuggestionPart, { id: "composer.suggestion", phase: "default", component: SuggestionRow });
     // How it sends and stops belongs with the keys, so it offers those settings on the Keyboard page. A default is

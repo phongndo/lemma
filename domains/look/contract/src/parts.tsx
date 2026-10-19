@@ -86,6 +86,8 @@ export interface CopyButtonProps {
   /** Its accessible name and tooltip: `Copy response`. */
   readonly label: string;
   readonly class?: string;
+  /** What it shows until it has copied: `copy`, or another (`link`, for an address). */
+  readonly icon?: IconName;
 }
 
 /** An icon button that copies its text and says for a moment whether that worked. */
@@ -186,6 +188,8 @@ export type IconName =
   | "palette"
   | "arrow-left"
   | "redo"
+  | "undo"
+  | "link"
   | "skip"
   | "maximize"
   | "minimize"
@@ -348,6 +352,8 @@ export const PaletteIcon = () => <Icon name="palette" />;
 export const ArrowLeftIcon = () => <Icon name="arrow-left" />;
 
 export const RedoIcon = () => <Icon name="redo" />;
+export const UndoIcon = () => <Icon name="undo" />;
+export const LinkIcon = () => <Icon name="link" />;
 
 export const SkipIcon = () => <Icon name="skip" />;
 

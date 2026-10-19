@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createProjector, pendingToolCalls, promptMarks } from "../src/transcript.ts";
+import { createProjector, pendingToolCalls, promptBases, promptMarks } from "../src/transcript.ts";
 import type { AssistantItem } from "../src/transcript.ts";
 import { assistant, branch, toolResult, transcriptOf, usage, user } from "../src/testing.ts";
 
@@ -146,11 +146,61 @@ describe("transcript", () => {
     ]);
   });
 
+  it("marks the errors of a stopped turn's last step as the stop's, and no other errors", () => {
+    const stopped = (reason: "cancelled" | "error") => {
+      const project = createProjector();
+      const events = branch(
+        { type: "turn-start", turnId: "t1" },
+        user("hi", "t1"),
+        { type: "step-start", turnId: "t1", stepId: "s1" },
+        { type: "message", turnId: "t1", stepId: "s1", message: assistant([call("c1")]) },
+        toolResult("c1", "exit 1", { isError: true, turnId: "t1", stepId: "s1" }),
+        { type: "step-start", turnId: "t1", stepId: "s2" },
+        { type: "message", turnId: "t1", stepId: "s2", message: assistant([call("c2"), call("c3")]) },
+        toolResult("c2", "ok", { turnId: "t1", stepId: "s2" }),
+        toolResult("c3", 'Tool "bash" was cancelled', { isError: true, turnId: "t1", stepId: "s2" }),
+      );
+      // Its results are logged before the turn ends, and become the stop's once it has.
+      const running = project(events);
+      const ended = project([...events, { seq: 10, id: "e10", parent: "e9", at: 9000, data: { type: "turn-end", turnId: "t1", reason } }]);
+      const results = (t: typeof ended) =>
+        t.turns[0]!.items.flatMap((item) => (item.kind === "assistant" ? item.blocks : [])).map((block) =>
+          block.kind === "tool" ? block.result?.stopped : undefined,
+        );
+      return { running: results(running), ended: results(ended) };
+    };
+    expect(stopped("cancelled")).toEqual({ running: [undefined, undefined, undefined], ended: [undefined, undefined, true] });
+    expect(stopped("error").ended).toEqual([undefined, undefined, undefined]);
+  });
+
   it("lists pending tool calls", () => {
     const t = transcriptOf(
       branch({ type: "turn-start", turnId: "t1" }, { type: "message", turnId: "t1", message: assistant([call("c1"), call("c2")]) }, toolResult("c1", "x")),
     );
     expect([...pendingToolCalls(t)]).toEqual(["c2"]);
+  });
+});
+
+describe("promptBases", () => {
+  it("goes back to before the turn a prompt opened, and has nowhere for a steer, a second prompt, or the first", () => {
+    const events = branch(
+      { type: "turn-start", turnId: "t1" },
+      user("first", "t1"),
+      { type: "message", turnId: "t1", stepId: "s1", message: assistant([{ type: "text", text: "a" }]) },
+      user("steer", "t1"),
+      { type: "turn-end", turnId: "t1", reason: "done" },
+      { type: "turn-start", turnId: "t2" },
+      user("second", "t2"),
+      user("with it", "t2"),
+      { type: "turn-end", turnId: "t2", reason: "cancelled" },
+      user("older"),
+      { type: "turn-start", turnId: "t3" },
+    );
+    // Event ids are e1, e2, … in order (`branch`).
+    expect([...promptBases(events)]).toEqual([
+      ["e7", "e5"],
+      ["e10", "e9"],
+    ]);
   });
 });
 

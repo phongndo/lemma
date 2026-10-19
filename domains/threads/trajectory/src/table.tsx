@@ -341,7 +341,13 @@ export function createTable(view: View) {
       out.push({ label: `Filter: turn:${record.turn.index}`, run: () => setQuery(`turn:${record.turn.index}`) });
       // Records of model calls and tool runs are log events; the next prompt can continue from one of them.
       if (record.kind === "assistant" || record.kind === "tool") {
-        out.push({ label: "Branch from here", run: () => void deps.threads.checkout(record.id) });
+        out.push({
+          label: "Branch from here",
+          run: () =>
+            void deps.threads.checkout(record.id).then((moved) => {
+              if (moved) deps.notify.toast({ level: "info", message: "The next prompt continues from the chosen event, on a new branch." });
+            }),
+        });
       }
       // Then what plugins add.
       for (const action of deps.slots.list(TrajectoryActions)) {
