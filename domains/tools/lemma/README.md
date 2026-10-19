@@ -52,16 +52,17 @@ channel and the code (`"sessions.get" failed (NotFound): …`).
 sessions (`sessions.list`, `.get`, `.events`, `.search`), the agent's state
 (`agent.running`, `.view`, `.queue`), streams a script waits on
 (`agent.activity`, `sessions.log`, `sessions.changes`), what else Lemma has
-(`commands.list`, `skills.list`, `llm.models`, `llm.providers`,
-`cli.commands`), the workspace (`workspace.status`, `.branches`, `.browse`,
+(`commands.list`, `skills.list`, `profiles.list`, `llm.models`,
+`llm.providers`, `cli.commands`), the workspace (`workspace.status`, `.branches`, `.browse`,
 `files.search`), and the host's trace (`devtools.trace.spans`, `.changes`,
 `cli.in-progress`). `mcp.state` is left out: it carries each server's entry as
 written, which may hold a credential typed in place of a `${VAR}`.
 
 `confirm` by default holds those that change something an agent may usefully
 do: prompting, cancelling, withdrawing, and promoting (`agent.prompt`,
-`.cancel`, `.withdraw`, `.promote`), making, renaming, filing, and checking out
-sessions (`sessions.create`, `.set-title`, `.mark`, `.checkout`), running a
+`.cancel`, `.withdraw`, `.promote`), making, renaming, filing, checking out,
+and forking sessions (`sessions.create`, `.set-title`, `.mark`, `.checkout`,
+`.fork`), running a
 command (`commands.run`), the workspace's writes
 (`workspace.create-directory`, `.create-worktree`, `.checkout`), and
 `mcp.reconnect`. A declined question, a dismissed one, or nobody to ask

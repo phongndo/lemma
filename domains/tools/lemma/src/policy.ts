@@ -19,9 +19,10 @@ export const DEFAULT_CHANNELS: readonly string[] = [
   "agent.activity",
   "sessions.log",
   "sessions.changes",
-  // What else Lemma has: commands, skills, models and providers (no credentials), CLI commands.
+  // What else Lemma has: commands, skills, profiles, models and providers (no credentials), CLI commands.
   "commands.list",
   "skills.list",
+  "profiles.list",
   "llm.models",
   "llm.providers",
   "cli.commands",
@@ -46,6 +47,7 @@ export const DEFAULT_CONFIRM: readonly string[] = [
   "sessions.set-title",
   "sessions.mark",
   "sessions.checkout",
+  "sessions.fork",
   "commands.run",
   "workspace.create-directory",
   "workspace.create-worktree",
