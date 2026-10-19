@@ -1,30 +1,61 @@
 // Adapted from pi (MIT): packages/coding-agent/src/core/tools/output-accumulator.ts.
 import { createWriteStream } from "node:fs";
 import type { WriteStream } from "node:fs";
-import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, tailBytes, truncateTail } from "@lemma/tools";
+import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, headBytes, tailBytes, truncateHead, truncateTail } from "@lemma/tools";
 import type { Truncation } from "@lemma/tools";
 import { outputFile } from "@lemma/tools/files";
 
+/** What a truncated output kept: its first lines, its last, and how much fell between them. */
+export interface KeptEnds {
+  readonly head: string;
+  readonly tail: string;
+  /** Lines between `head` and `tail`; 0 when all that was left out is part of one long line. */
+  readonly omittedLines: number;
+  readonly omittedBytes: number;
+  /** The number of `head`'s last line. */
+  readonly headTo: number;
+  /** The number of `tail`'s first line. */
+  readonly tailFrom: number;
+  /** `head` ends partway through its last line, `headTo`. */
+  readonly headCut: boolean;
+  /** `tail` starts partway through its first line, `tailFrom`. */
+  readonly tailCut: boolean;
+}
+
 interface OutputSnapshot {
+  /** The whole output when it fits; else its ends, `head` and `tail` in `ends`, joined by a blank line. */
   readonly content: string;
   readonly truncation: Truncation;
-  /** Set once the output exceeded the limits, unless no file could be made: the complete raw output. */
+  /** Present when the output was truncated: its first and last lines, each within half the limits. */
+  readonly ends?: KeptEnds;
+  /** Set once the output exceeded the limits (or from the start, with `spill: "always"`), unless no file could be made: the complete raw output. */
   readonly fullOutputPath?: string;
 }
 
+export interface OutputOptions {
+  /** What the snapshot keeps, at most: the defaults are the tools' (`DEFAULT_MAX_LINES`, `DEFAULT_MAX_BYTES`). */
+  readonly maxLines?: number;
+  readonly maxBytes?: number;
+  /** `always`: the full output goes to a file from its first byte, as a background command's does, whatever its size. */
+  readonly spill?: "always";
+}
+
 const bytes = (text: string) => Buffer.byteLength(text, "utf8");
+const lineCount = (text: string) => (text.length === 0 ? 0 : text.split("\n").length - (text.endsWith("\n") ? 1 : 0));
 
 /**
- * Streaming command output in bounded memory. Keeps a decoded tail for the
- * model and, once the output exceeds the limits, spills everything to a temp
- * file the model can read or grep (`outputFile`).
+ * Streaming command output in bounded memory. Keeps the decoded start and a decoded tail for the model and, once the
+ * output exceeds the limits, spills everything to a temp file the model can read or grep (`outputFile`). Past the
+ * limits the model gets both ends, half the limits each: what the command set out to do, and how it ended.
  */
 export class OutputAccumulator {
-  private readonly maxLines = DEFAULT_MAX_LINES;
-  private readonly maxBytes = DEFAULT_MAX_BYTES;
-  private readonly rollingBytes = DEFAULT_MAX_BYTES * 2;
+  private readonly maxLines: number;
+  private readonly maxBytes: number;
+  private readonly rollingBytes: number;
   private readonly decoder = new TextDecoder();
   private raw: Buffer[] = [];
+  /** The output's start, as decoded, until it is long enough for any head the limits keep. */
+  private head = "";
   private tail = "";
   private tailSize = 0;
   private tailAtLineStart = true;
@@ -43,8 +74,12 @@ export class OutputAccumulator {
 
   private readonly prefix: string;
 
-  constructor(prefix: string) {
+  constructor(prefix: string, options: OutputOptions = {}) {
     this.prefix = prefix;
+    this.maxLines = options.maxLines ?? DEFAULT_MAX_LINES;
+    this.maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
+    this.rollingBytes = this.maxBytes * 2;
+    if (options.spill === "always") this.spill();
   }
 
   private get totalLines(): number {
@@ -58,6 +93,11 @@ export class OutputAccumulator {
   /** The size of the last line, open or ended by a newline. */
   get lastLineBytes(): number {
     return this.lineOpen ? this.currentLineBytes : this.endedLineBytes;
+  }
+
+  /** The complete output's file, when there is one (always, with `spill: "always"`, unless it could not be made). */
+  get path(): string | undefined {
+    return this.file;
   }
 
   append(data: Buffer): void {
@@ -81,17 +121,66 @@ export class OutputAccumulator {
 
   snapshot(): OutputSnapshot {
     const text = this.tailAtLineStart ? this.tail : this.tail.slice(this.tail.indexOf("\n") + 1);
-    const tail = truncateTail(text, { maxLines: this.maxLines, maxBytes: this.maxBytes });
     const truncated = this.totalLines > this.maxLines || this.decodedBytes > this.maxBytes;
+    const file = this.file === undefined ? {} : { fullOutputPath: this.file };
+    if (!truncated) {
+      const whole = truncateTail(text, { maxLines: this.maxLines, maxBytes: this.maxBytes });
+      return { content: whole.content, truncation: { ...whole, totalLines: this.totalLines, totalBytes: this.decodedBytes }, ...file };
+    }
+    this.spill();
+    const half = { maxLines: Math.max(1, Math.floor(this.maxLines / 2)), maxBytes: Math.max(1, Math.floor(this.maxBytes / 2)) };
+    // The head's whole lines, or the start of a first line too long for them; the tail's, or the end of a last one.
+    const start = this.head.includes("\n") && !this.head.endsWith("\n") ? this.head.slice(0, this.head.lastIndexOf("\n") + 1) : this.head;
+    const kept = truncateHead(start, half);
+    const head = kept.firstLineExceedsLimit ? headBytes(start.split("\n")[0]!, half.maxBytes) : kept.content;
+    const end = truncateTail(text, half);
+    const headLines = lineCount(head);
+    const tailLines = end.outputLines;
+    const omittedLines = Math.max(0, this.totalLines - headLines - tailLines);
+    const ends: KeptEnds = {
+      head,
+      tail: end.content,
+      omittedLines,
+      omittedBytes: Math.max(0, this.decodedBytes - bytes(head) - end.outputBytes),
+      headTo: headLines,
+      tailFrom: this.totalLines - tailLines + 1,
+      headCut: kept.firstLineExceedsLimit,
+      tailCut: end.lastLinePartial,
+    };
+    const content = `${head}\n\n${end.content}`;
     const truncation: Truncation = {
-      ...tail,
-      truncated,
-      truncatedBy: truncated ? (tail.truncatedBy ?? (this.decodedBytes > this.maxBytes ? "bytes" : "lines")) : null,
+      content,
+      truncated: true,
+      truncatedBy: this.totalLines > this.maxLines ? "lines" : "bytes",
       totalLines: this.totalLines,
       totalBytes: this.decodedBytes,
+      outputLines: headLines + tailLines,
+      outputBytes: bytes(head) + end.outputBytes,
+      lastLinePartial: end.lastLinePartial,
+      firstLineExceedsLimit: kept.firstLineExceedsLimit,
+      maxLines: this.maxLines,
+      maxBytes: this.maxBytes,
     };
-    if (truncated) this.spill();
-    return { content: truncation.content, truncation, ...(this.file === undefined ? {} : { fullOutputPath: this.file }) };
+    return { content, truncation, ends, ...file };
+  }
+
+  /**
+   * `snapshot` as the model reads it: the whole output when it fit; else its start, a line saying what was left out and
+   * where all of it is (`full`: the file, or that it could not be saved), then its end, where errors and results are.
+   */
+  shown(snapshot: OutputSnapshot, full: string): string {
+    const { ends, truncation } = snapshot;
+    if (ends === undefined) return snapshot.content;
+    const marker =
+      truncation.totalLines === 1
+        ? `[… ${formatSize(ends.omittedBytes)} of line 1 (${formatSize(this.lastLineBytes)}) left out. ${full}]`
+        : ends.omittedLines > 0
+          ? `[… ${ends.omittedLines} lines left out: showing lines 1-${ends.headTo} and ${ends.tailFrom}-${truncation.totalLines} of ${truncation.totalLines}. ${full}]`
+          : `[… ${formatSize(ends.omittedBytes)} left out: ${[
+              ...(ends.headCut ? [`the end of line ${ends.headTo}`] : []),
+              ...(ends.tailCut ? [`the start of line ${ends.tailFrom}`] : []),
+            ].join(" and ")}. ${full}]`;
+    return `${ends.head}\n\n${marker}\n\n${ends.tail}`;
   }
 
   async close(): Promise<void> {
@@ -112,6 +201,8 @@ export class OutputAccumulator {
     if (text.length === 0) return;
     const size = bytes(text);
     this.decodedBytes += size;
+    // Characters at least as many as any head could keep, in bytes or in lines.
+    if (this.head.length < this.maxBytes) this.head += text.slice(0, this.maxBytes - this.head.length);
     this.tail += text;
     this.tailSize += size;
     if (this.tailSize > this.rollingBytes * 2) this.trimTail();
@@ -142,7 +233,7 @@ export class OutputAccumulator {
     try {
       ({ path: this.file, release: this.release } = outputFile(this.prefix, "log"));
     } catch {
-      // The tail is still returned; only the full output is lost.
+      // The ends are still returned; only the full output is lost.
       this.spillFailed = true;
       this.raw = [];
       return;

@@ -133,6 +133,15 @@ export function truncateTail(content: string, limits: Limits = {}): Truncation {
   };
 }
 
+/** The first `maxBytes` of a string, ending on a UTF-8 character boundary. */
+export function headBytes(text: string, maxBytes: number): string {
+  const buffer = encoder.encode(text);
+  if (buffer.length <= maxBytes) return text;
+  let end = maxBytes;
+  while (end > 0 && (buffer[end]! & 0xc0) === 0x80) end--;
+  return new TextDecoder().decode(buffer.subarray(0, end));
+}
+
 /** The last `maxBytes` of a string, starting on a UTF-8 character boundary. */
 export function tailBytes(text: string, maxBytes: number): string {
   const buffer = encoder.encode(text);

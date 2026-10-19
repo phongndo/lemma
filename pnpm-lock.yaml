@@ -2827,9 +2827,15 @@ importers:
 
   domains/tools/bash:
     dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
       '@lemma/threads':
         specifier: workspace:*
         version: link:../../threads/contract

@@ -13,7 +13,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/agent": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/sessions": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
