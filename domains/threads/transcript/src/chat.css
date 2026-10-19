@@ -119,22 +119,6 @@
   justify-content: center;
 }
 
-.empty-state {
-  padding: 12vh 0 24px;
-  text-align: center;
-}
-
-.empty-state h2 {
-  font-size: calc(22px * var(--text-scale));
-  font-weight: 600;
-  letter-spacing: -0.015em;
-  margin-bottom: 8px;
-}
-
-.empty-state p {
-  margin: 4px 0;
-}
-
 .jump {
   position: sticky;
   bottom: calc(14px + var(--composer-height, 0px));
@@ -989,7 +973,7 @@
   border-left: 1px solid var(--border-strong);
 }
 
-.working {
+.chat-working {
   display: flex;
   align-items: center;
   gap: 8px;

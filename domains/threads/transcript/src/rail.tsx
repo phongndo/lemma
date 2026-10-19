@@ -11,7 +11,7 @@ const PREVIEW_SOURCE = 2000;
 const CARD_INSET = 8;
 
 /**
- * A tick per prompt along the chat's left edge, evenly spaced and squeezed
+ * A tick per prompt the chat shows (steers too, alike) along the chat's left edge, evenly spaced and squeezed
  * together when there are too many to fit. Pointing anywhere on the strip
  * picks the nearest tick and previews its prompt and answer in a card level
  * with it; clicking goes there. Each tick is also a button: one tab stop, the

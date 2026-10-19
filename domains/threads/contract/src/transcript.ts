@@ -1,7 +1,7 @@
 import { addUsage, emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, ImageContent, TextContent, ToolCall, ToolResultMessage, Usage } from "@lemma/llm";
 import type { SessionEvent, Timing, TurnEndReason } from "@lemma/sessions";
-import { answerText } from "./fold.ts";
+import { endingText } from "./fold.ts";
 
 /**
  * Projection of a session branch into what the chat transcript renders.
@@ -406,12 +406,19 @@ export const pendingToolCalls = (transcript: Transcript): Set<string> => {
   return pending;
 };
 
+/** A prompt on the chat's prompt rail: every one the chat shows, a turn's first and each steer, alike. */
 export interface PromptMark {
-  /** The turn's key. */
+  /**
+   * Where it is (`data-mark` in the transcript): the turn's key for the prompt that starts it, `<turn key>:<item id>`
+   * for a steer, `steer:<request id>` for one not yet placed.
+   */
   readonly key: string;
   /** The prompt's text, whitespace collapsed; a stand-in when it is only images. */
   readonly prompt: string;
-  /** The turn's answer (`answerText`), markdown as written; empty until there is one. */
+  /**
+   * What answered it: the text the turn's assistant ends with before the next prompt of the turn (after the last, the
+   * turn's answer, `answerText`), markdown as written; empty until there is one.
+   */
   readonly reply: string;
 }
 
@@ -423,13 +430,23 @@ const flatten = (text: string, max: number) => {
 /** One mark per turn that starts with a prompt: what the chat's prompt rail shows and jumps to. */
 export const promptMarks = (turns: readonly TurnView[]): PromptMark[] =>
   turns.flatMap((turn) => {
-    const user = turn.items.find((item): item is UserItem => item.kind === "user");
-    if (user === undefined) return [];
-    const text = user.content
-      .filter((part): part is TextContent => part.type === "text")
-      .map((part) => part.text)
-      .join(" ");
-    const images = user.content.filter((part) => part.type === "image").length;
-    const prompt = flatten(text, 200) || (images === 1 ? "Image" : `${images} images`);
-    return [{ key: turn.key, prompt, reply: answerText(turn) }];
+    const at = turn.items.flatMap((item, index) => (item.kind === "user" ? [index] : []));
+    return at.map((start, nth): PromptMark => {
+      const user = turn.items[start] as UserItem;
+      const reply = endingText(turn.items.slice(start + 1, at[nth + 1]));
+      return { key: nth === 0 ? turn.key : markKey(turn, user), prompt: promptText(user.content), reply };
+    });
   });
+
+/** A prompt as the rail says it: its text, whitespace collapsed; a stand-in when it is only images. */
+export const promptText = (content: readonly (TextContent | ImageContent)[]): string => {
+  const text = content
+    .filter((part): part is TextContent => part.type === "text")
+    .map((part) => part.text)
+    .join(" ");
+  const images = content.filter((part) => part.type === "image").length;
+  return flatten(text, 200) || (images === 1 ? "Image" : `${images} images`);
+};
+
+/** A steer's mark key (`PromptMark.key`): the turn's, and the steer's id. */
+export const markKey = (turn: TurnView, steer: UserItem): string => `${turn.key}:${steer.id}`;

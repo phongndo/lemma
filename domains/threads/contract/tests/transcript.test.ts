@@ -169,6 +169,26 @@ describe("createProjector", () => {
 });
 
 describe("promptMarks", () => {
+  it("marks each steer too, at its place, with what answered it", () => {
+    const t = transcriptOf(
+      branch(
+        { type: "turn-start", turnId: "t1" },
+        user("teach me llvm", "t1"),
+        { type: "message", turnId: "t1", stepId: "s1", message: assistant([{ type: "text", text: "Where to start?" }]) },
+        { type: "message", turnId: "t1", message: { role: "user", content: [{ type: "text", text: "the   codebase" }], timestamp: 0 } },
+        { type: "message", turnId: "t1", stepId: "s2", message: assistant([{ type: "text", text: "Read lib/ first." }]) },
+        { type: "turn-end", turnId: "t1", reason: "done" },
+      ),
+    );
+    const marks = promptMarks(t.turns);
+    const steer = t.turns[0]!.items.filter((item) => item.kind === "user")[1]!;
+    expect(marks).toEqual([
+      { key: "t1", prompt: "teach me llvm", reply: "Where to start?" },
+      { key: `t1:${steer.id}`, prompt: "the codebase", reply: "Read lib/ first." },
+    ]);
+    expect(steer.kind === "user" && steer.steer).toBe(true);
+  });
+
   it("marks each turn that starts with a prompt, with its answer", () => {
     const answer = "## Fixed\n\nThe **cause** was `retry_count`.";
     const t = transcriptOf(

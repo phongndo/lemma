@@ -10,7 +10,7 @@ export const ChatConfig = Schema.Struct({
   }),
   foldWork: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
     title: "Fold finished work",
-    description: "Once a turn ends, fold its thinking and tool calls into one line above the answer.",
+    description: "Once a turn ends, fold its thinking and tool calls into one line above the answer, and one more after each steer or compaction.",
   }),
   promptRail: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
     title: "Prompt rail",
