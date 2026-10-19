@@ -74,6 +74,7 @@
     "@lemma/tools-codemode": "workspace:*",
     "@lemma/tools-edit": "workspace:*",
     "@lemma/tools-html": "workspace:*",
+    "@lemma/tools-patch": "workspace:*",
     "@lemma/tools-read": "workspace:*",
     "@lemma/tools-search-fff": "workspace:*",
     "@lemma/tools-write": "workspace:*",

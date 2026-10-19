@@ -62,16 +62,49 @@ describe("edit", () => {
     expect(await get("f.txt")).toBe("foo bar foo\nbaz\n");
   });
 
-  it("counts overlapping occurrences as ambiguous", async () => {
-    await put("f.txt", "}\n}\n}\n");
-    expect(await attempt(editTool, { path: "f.txt", edits: [{ oldText: "}\n}\n", newText: "x" }] }, context(dir))).toContain(
-      "Found 2 occurrences of the text in f.txt",
+  it("falls back as pi does: trailing whitespace and Unicode quotes, dashes, and spaces normalized, other lines left as they were", async () => {
+    await put("ws.ts", "const a = 1;  \nconst b = 2;\t\nconst c = 3; \n");
+    const spaced = await call(
+      editTool,
+      { path: "ws.ts", edits: [{ oldText: "const a = 1;\nconst b = 2;", newText: "const a = 1;\nconst b = 20;" }] },
+      context(dir),
     );
+    expect(textOf(spaced)).toBe("Successfully replaced 1 block(s) in ws.ts.");
+    // The lines the edit covers are written as normalized; the line it did not cover keeps its bytes.
+    expect(await get("ws.ts")).toBe("const a = 1;\nconst b = 20;\nconst c = 3; \n");
+
+    await put("quotes.py", "print(“hi”)\nx = 1 — 2\nend\n");
+    await call(
+      editTool,
+      {
+        path: "quotes.py",
+        edits: [
+          { oldText: "end", newText: "done" },
+          { oldText: "x = 1 - 2", newText: "x = 1 + 2" },
+        ],
+      },
+      context(dir),
+    );
+    expect(await get("quotes.py")).toBe("print(“hi”)\nx = 1 + 2\ndone\n");
+  });
+
+  it("requires a fallback match to be unique among the normalized text", async () => {
+    await put("f.txt", "x = 1 \ny\nx = 1\t\ny\n");
+    expect(await attempt(editTool, { path: "f.txt", edits: [{ oldText: "x = 1\ny", newText: "z" }] }, context(dir))).toContain(
+      "Found 2 occurrences of the text in f.txt. The text must be unique.",
+    );
+    expect(await get("f.txt")).toBe("x = 1 \ny\nx = 1\t\ny\n");
+  });
+
+  it("counts occurrences as pi does, without overlaps", async () => {
+    // "}\n}\n" is in "}\n}\n}\n" twice, overlapping: counted once, so the first is replaced.
+    await put("f.txt", "}\n}\n}\n");
+    await call(editTool, { path: "f.txt", edits: [{ oldText: "}\n}\n", newText: "x\n" }] }, context(dir));
+    expect(await get("f.txt")).toBe("x\n}\n");
     await put("g.txt", "aaaa");
     expect(await attempt(editTool, { path: "g.txt", edits: [{ oldText: "aa", newText: "b" }] }, context(dir))).toContain(
-      "Found 3 occurrences of the text in g.txt",
+      "Found 2 occurrences of the text in g.txt",
     );
-    expect(await get("f.txt")).toBe("}\n}\n}\n");
     expect(await get("g.txt")).toBe("aaaa");
   });
 

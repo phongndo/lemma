@@ -6,6 +6,7 @@ import { Interaction, InteractionError } from "@lemma/contracts";
 import { Guards } from "@lemma/tools";
 import type { GuardDecision, ToolInvocation } from "@lemma/tools";
 import { resolveToCwd } from "@lemma/tools/files";
+import { patchPaths } from "@lemma/tools/patch";
 
 /**
  * Asks before the agent runs a command or writes outside the project: allow
@@ -17,7 +18,8 @@ import { resolveToCwd } from "@lemma/tools/files";
  * domain's `Guards`, which every call passes before its tool runs. It imports only packages the
  * host supplies: `effect`, `@lemma/core`, `@lemma/contracts`, and the tools
  * domain's contract (`@lemma/tools`), whose `/files` resolves paths as the file
- * tools do, so it judges the file a tool will touch. It is
+ * tools do, so it judges the file a tool will touch, and whose `/patch` names
+ * the files an `apply_patch` patch touches. It is
  * written with promises (`@lemma/core/plain`): its services are promise-based
  * views of the same contracts an Effect plugin uses.
  */
@@ -30,10 +32,10 @@ const Config = Schema.Struct({
       description: "Tools that need approval for every call.",
     }),
   outsideProject: Schema.Array(Schema.String)
-    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => ["write", "edit"])))
+    .pipe(Schema.withDecodingDefaultType(Effect.sync(() => ["write", "edit", "apply_patch"])))
     .annotate({
       title: "Ask outside the project for",
-      description: "Tools that need approval when the path they are given is outside the session's directory.",
+      description: "Tools that need approval when a path they are given (`path`, or a file of `apply_patch`'s patch) is outside the session's directory.",
     }),
 });
 
@@ -66,6 +68,13 @@ const inside = (dir: string, path: string) => {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 };
 
+/** The paths a call is given, as written: each file `apply_patch`'s patch names, or else its `path`. */
+const pathsOf = (call: ToolInvocation): readonly string[] => {
+  if (call.name === "apply_patch") return patchPaths(field(call.input, "input") ?? "");
+  const path = field(call.input, "path");
+  return path === undefined ? [] : [path];
+};
+
 export const question = (call: ToolInvocation, config: typeof Config.Type): Question | undefined => {
   if (config.ask.includes(call.name)) {
     const command = field(call.input, "command");
@@ -74,11 +83,11 @@ export const question = (call: ToolInvocation, config: typeof Config.Type): Ques
       : { title: "Run this command?", detail: command };
   }
   if (config.outsideProject.includes(call.name)) {
-    const path = field(call.input, "path");
-    if (path === undefined) return undefined;
-    // As the file tools resolve it: `~` is the home directory and a leading `@` (a mention) is dropped.
-    const absolute = resolveToCwd(path, call.cwd);
-    if (!inside(call.cwd, absolute)) return { title: `Allow ${call.name} outside the project?`, detail: absolute };
+    // As the file tools resolve them: `~` is the home directory and a leading `@` (a mention) is dropped.
+    const outside = pathsOf(call)
+      .map((path) => resolveToCwd(path, call.cwd))
+      .filter((absolute) => !inside(call.cwd, absolute));
+    if (outside.length > 0) return { title: `Allow ${call.name} outside the project?`, detail: outside.join("\n") };
   }
   return undefined;
 };

@@ -10,11 +10,12 @@ and the clients) then shows the model the summary in place of that part; the
 log keeps every original event, and the web app marks the place with a
 divider. Requires `Llm`.
 
-| Config       | Default | What it does                                                                      |
-| ------------ | ------- | --------------------------------------------------------------------------------- |
-| `at`         | `0.8`   | Share of the window the conversation may fill before its older part is summarized |
-| `keepRecent` | `20000` | Tokens of the latest conversation kept word for word (at most 30% of the window)  |
-| `model`      | unset   | The model that writes summaries (`provider/model`); the turn's model when unset   |
+| Config       | Default | What it does                                                                                                                  |
+| ------------ | ------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `at`         | `0.8`   | Share of the window the conversation may fill before its older part is summarized                                             |
+| `keepRecent` | `20000` | Tokens of the latest conversation kept word for word (at most 30% of the window)                                              |
+| `model`      | unset   | The model that writes summaries (`provider/model`); the turn's model when unset                                               |
+| `review`     | `false` | Have a model that sees only the summary ask what it leaves out, and the turn's model answer: two more model calls per summary |
 
 - **Its setting.** Its web half offers `at` in Settings › General › Agent
   (Summarize at), written to its row as the Plugins page would.
@@ -54,11 +55,47 @@ divider. Requires `Llm`.
   decisions, next steps, critical context), which asks for exact paths and
   errors, and for the ids and results of any other agents or background work.
   A later compaction folds the previous summary into one with the messages
-  after it, keeping what is still true. Tool output and long text are cut in
-  what is sent, and the oldest messages go first so the request (its system
-  prompt, the user's focus, and an answer of up to 8,192 tokens included) fits
-  the writing model's window even for text as dense as 1.5 characters a token.
-  A summary stopped at that limit is not used.
+  after it, keeping what is still true. A summary stopped at its limit (8,192
+  tokens at most) is not used.
+- **Written in a fork.** The turn's own model writes it, unless `model` names
+  another: it is asked the turn's last request again (its system prompt, tools,
+  thinking, and history, rebuilt from the log) with the request for a summary
+  after it, so the provider's cache serves all of it but that, at about a tenth
+  of the price of sending it fresh ([Claude Code's
+  account](https://claude.dev/blog/lessons-from-building-claude-code-prompt-caching-is-everything/),
+  read 2026-10-19).
+  The 20% of the window `at` leaves is the room it needs. When it cannot be (the
+  model refused the request as too long, another model writes summaries, or the
+  fork would not fit), or the fork's call fails, or its answer is cut off at
+  its limit, calls a tool, or has no text, the writing model is sent the
+  history as a transcript instead: tool output and long text cut, the
+  oldest messages going first, so it fits even for text as dense as 1.5
+  characters a token.
+- **The files.** The compaction names the files the history it replaces read
+  and changed (by the `read`, `write`, `edit`, and `apply_patch` calls in it
+  that succeeded),
+  after the previous compaction's, and the model reads them with the summary
+  (`summaryText` in `@lemma/sessions`), told to read a file again before
+  relying on what the summary says of it. What else the model needs after a
+  compaction comes from the request after it, which declares its system prompt
+  afresh: the project's instructions, the skills, and the background commands
+  still running, as their sections say now.
+- **Reviewed, if asked.** With `review`, a model that sees only the summary
+  lists up to five things it leaves out, and the turn's model answers them in a
+  fork as above; the answers go after the summary. A review that fails, or
+  whose questions or answers are cut off, leaves the summary as written. It
+  costs two more calls per compaction, so it is off by default. Terminal-Bench's
+  [Terminus 2](https://github.com/laude-institute/harbor/blob/main/src/harbor/agents/terminus_2/terminus_2.py)
+  reviews its summaries the same way (read 2026-10-19).
+- **Three a turn.** A turn that fills the window again after each summary (an
+  output too large for what is kept) is summarized at most three times; a
+  warning says so, and the threshold asks for none until the next turn. An
+  overflow, or `/compact`, still does.
+- **Not clearing tool results.** Dropping old tool output from the history
+  would shorten it more cheaply, but it rewrites what earlier requests sent:
+  every later token of the cached prefix is sent again, and Anthropic's newest
+  models refuse thinking made before the change ([append-only
+  requests](../../agent/loop/README.md#append-only-requests)).
 - **Its cost.** The event records the turn it happened in and what writing the
   summary cost (`turnId`, `usage`); the turn's usage (`TurnEnded`, the
   trajectory, `lemma run`, the web app's turn footer) includes it.

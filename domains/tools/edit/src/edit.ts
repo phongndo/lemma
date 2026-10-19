@@ -2,8 +2,9 @@ import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import { Schema, SchemaTransformation } from "effect";
 import type { Tool } from "@lemma/tools";
-import { unifiedPatch } from "./diff.ts";
+import { unifiedPatch } from "@lemma/tools/diff";
 import { fsMessage, replaceFile, resolveToCwd, text, throwIfAborted, withFileLock } from "@lemma/tools/files";
+import { applyEditsToNormalizedContent, detectLineEnding, normalizeToLF, restoreLineEndings, splitBom } from "./edit-diff.ts";
 
 const Replacement = Schema.Struct({
   oldText: Schema.String.annotate({
@@ -74,73 +75,6 @@ export interface EditDetails {
   readonly firstChangedLine?: number;
 }
 
-const detectLineEnding = (content: string): "\r\n" | "\n" => {
-  const lf = content.indexOf("\n");
-  const crlf = content.indexOf("\r\n");
-  return lf !== -1 && crlf !== -1 && crlf < lf ? "\r\n" : "\n";
-};
-const normalizeToLF = (value: string) => value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-const restoreLineEndings = (value: string, ending: "\r\n" | "\n") => (ending === "\r\n" ? value.replace(/\n/g, "\r\n") : value);
-
-/** Counts overlapping matches too: "}\n}\n" occurs twice in "}\n}\n}\n". */
-const occurrences = (haystack: string, needle: string): number => {
-  let count = 0;
-  for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) count++;
-  return count;
-};
-
-/**
- * Applies every edit to the same original text. Matching is exact (after
- * normalizing line endings to LF): no match, several matches, overlaps, and a
- * no-op are errors that leave the file unchanged.
- */
-export function applyEdits(content: string, edits: readonly Edit[], display: string): string {
-  const one = edits.length === 1;
-  const matched = edits
-    .map((edit, index) => {
-      const oldText = normalizeToLF(edit.oldText);
-      if (oldText.length === 0) throw new Error(one ? `oldText must not be empty in ${display}.` : `edits[${index}].oldText must not be empty in ${display}.`);
-      const at = content.indexOf(oldText);
-      if (at === -1) {
-        throw new Error(
-          one
-            ? `Could not find the exact text in ${display}. The old text must match exactly including all whitespace and newlines.`
-            : `Could not find edits[${index}] in ${display}. The oldText must match exactly including all whitespace and newlines.`,
-        );
-      }
-      const count = occurrences(content, oldText);
-      if (count > 1) {
-        throw new Error(
-          one
-            ? `Found ${count} occurrences of the text in ${display}. The text must be unique. Please provide more context to make it unique.`
-            : `Found ${count} occurrences of edits[${index}] in ${display}. Each oldText must be unique. Please provide more context to make it unique.`,
-        );
-      }
-      return { index, at, length: oldText.length, newText: normalizeToLF(edit.newText) };
-    })
-    .sort((a, b) => a.at - b.at);
-  for (let i = 1; i < matched.length; i++) {
-    const previous = matched[i - 1]!;
-    const current = matched[i]!;
-    if (previous.at + previous.length > current.at) {
-      throw new Error(`edits[${previous.index}] and edits[${current.index}] overlap in ${display}. Merge them into one edit or target disjoint regions.`);
-    }
-  }
-  let result = content;
-  for (let i = matched.length - 1; i >= 0; i--) {
-    const { at, length, newText } = matched[i]!;
-    result = result.slice(0, at) + newText + result.slice(at + length);
-  }
-  if (result === content) {
-    throw new Error(
-      one
-        ? `No changes made to ${display}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`
-        : `No changes made to ${display}. The replacements produced identical content.`,
-    );
-  }
-  return result;
-}
-
 export const editTool: Tool<EditInput> = {
   name: "edit",
   description:
@@ -159,18 +93,16 @@ export const editTool: Tool<EditInput> = {
         throw new Error(`Could not edit file: ${fsMessage(cause, path)}`);
       }
       throwIfAborted(signal);
-      // The model never includes an invisible BOM in oldText; keep it out of matching and put it back.
-      const bom = raw.startsWith("﻿") ? "﻿" : "";
-      const content = raw.slice(bom.length);
-      const ending = detectLineEnding(content);
-      const before = normalizeToLF(content);
-      const after = applyEdits(before, edits, path);
+      // pi's edit: the BOM aside (a model never writes it), matched with LF line endings, then written back as it was.
+      const { bom, text: content } = splitBom(raw);
+      const originalEnding = detectLineEnding(content);
+      const { baseContent, newContent } = applyEditsToNormalizedContent(normalizeToLF(content), [...edits], path);
       try {
-        await replaceFile(absolute, bom + restoreLineEndings(after, ending));
+        await replaceFile(absolute, bom + restoreLineEndings(newContent, originalEnding));
       } catch (cause) {
         throw new Error(`Could not edit file: ${fsMessage(cause, path)}`);
       }
-      const { patch, firstChangedLine } = unifiedPatch(path, before, after);
+      const { patch, firstChangedLine } = unifiedPatch(path, baseContent, newContent);
       const details: EditDetails = { path: absolute, patch, ...(firstChangedLine === undefined ? {} : { firstChangedLine }) };
       return text(`Successfully replaced ${edits.length} block(s) in ${path}.`, details);
     });

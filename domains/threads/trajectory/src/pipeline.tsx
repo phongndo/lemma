@@ -2,7 +2,7 @@ import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 import { formatDuration, formatTokens } from "@lemma/client/format";
 import type { CheckCredit, HandlerCredit } from "@lemma/contracts";
-import type { TrajectoryStep, TrajectoryToolRun, TurnEndReason } from "@lemma/sessions";
+import type { RequestRestart, TrajectoryStep, TrajectoryToolRun, TurnEndReason } from "@lemma/sessions";
 import { clockTime } from "@lemma/web/format";
 import { inputTokens } from "./scale.ts";
 
@@ -88,8 +88,18 @@ function Checks(props: { checks: readonly CheckCredit[] | undefined; none: strin
   );
 }
 
+/** Why a request declared its system prompt and tools afresh (`RequestRestart`), as the pipeline says it. */
+const RESTARTS: Record<RequestRestart, string> = {
+  start: "the thread had no request to continue",
+  compaction: "a compaction replaced the start of its history",
+  edit: "a plugin changed what the model sees of earlier events",
+  model: "it asks another model",
+  tools: "it declares a tool the one before did not",
+};
+
 /**
- * What shaped a model call and what came of it, from the log: the compactions its request made, the request's handlers
+ * What shaped a model call and what came of it, from the log: the compactions its request made, the prompt updates it
+ * told, the request's handlers
  * (`AgentRequestHook`), the attempts that failed (in earlier steps too, each asked again in a step of its own) and when
  * each was asked again, the answer, what `AgentContinueHook` decided, and what the turn then did.
  */
@@ -129,7 +139,37 @@ export function createPipeline({ Section, Facts }: PipelineParts) {
             </For>
           </Section>
         </Show>
+        <Show when={step().promptUpdates.length > 0}>
+          <Section title="Prompt update" aside="told, not rewritten">
+            <For each={step().promptUpdates}>
+              {(update) => (
+                <Facts
+                  rows={[
+                    [
+                      "Sections",
+                      update.sections.length === 0
+                        ? undefined
+                        : update.sections.map((section) => `${section.id}${section.text === "" ? " (removed)" : ""} · ${section.source}`).join(", "),
+                    ],
+                    [
+                      "Tools",
+                      update.unavailable === undefined
+                        ? undefined
+                        : update.unavailable.length === 0
+                          ? "every tool available again"
+                          : `unavailable: ${update.unavailable.join(", ")}`,
+                    ],
+                    ["At", clockTime(update.at)],
+                  ]}
+                />
+              )}
+            </For>
+          </Section>
+        </Show>
         <Section title="Request" aside="AgentRequestHook">
+          <Show when={step().request?.restart}>
+            {(restart) => <p class="trj-desc">It declared its system prompt and tools afresh: {RESTARTS[restart()]}.</p>}
+          </Show>
           <Handlers handlers={step().request?.handlers} none="No plugin changed the request." />
         </Section>
         <Section title="Model" aside={attempts().length === 0 ? undefined : `${attempts().length} failed first`}>

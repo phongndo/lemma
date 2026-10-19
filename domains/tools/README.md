@@ -1,6 +1,6 @@
 # tools
 
-What the model can call, and how calls run. Its contract is [`@lemma/tools`](contract/src/tools.ts), with helpers for tools that bound their output, touch files or inline images (`/files`), draw pages in the chat or check them (`/html`), and test themselves (`/testing`).
+What the model can call, and how calls run. Its contract is [`@lemma/tools`](contract/src/tools.ts), with helpers for tools that bound their output, touch files or inline images (`/files`), show changes to text (`/diff`), read and apply Codex's patches (`/patch`), draw pages in the chat or check them (`/html`), and test themselves (`/testing`).
 
 The file tools reach any path the host's user can, not only the project's:
 confining them is a policy, and `Guards` is where a plugin sets one
@@ -17,6 +17,7 @@ while it runs (`outputFile`).
 | [`tools.read`](read/README.md)             | host + web | The `read` tool, and how its calls show                                                                                                                      |
 | [`tools.write`](write/README.md)           | host + web | The `write` tool, and how its calls show                                                                                                                     |
 | [`tools.edit`](edit/README.md)             | host + web | The `edit` tool, and how its calls show                                                                                                                      |
+| [`tools.patch`](patch/README.md)           | host + web | The `apply_patch` tool: Codex's patches, and how its calls show                                                                                              |
 | [`tools.bash`](bash/README.md)             | host + web | The `bash` tool, and how its calls show                                                                                                                      |
 | [`tools.codemode`](codemode/README.md)     | host + web | The `codemode` tool: JavaScript in a sandbox that calls the other tools and classifier and image models, resumed after a restart; its calls live in the chat |
 | [`tools.search-fff`](search-fff/README.md) | host + web | The `grep` and `find` tools, searching with fff, and how their calls show                                                                                    |

@@ -15,11 +15,11 @@ The user answers each question with a pick (or several), their own words, or
 both (a note on the pick), or skips it; or they hide the questions and send a
 message instead, which joins the turn. What the model reads says which:
 
-| Outcome     | When                                                                                              | The result says                                                                                |
-| ----------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| answered    | A client answered (`ask.answer`)                                                                  | Each question with `chose …`, `wrote …`, `chose …, and added …`, or `skipped: decide yourself` |
-| replied     | A steer was queued for the session: sent while the questions were open, or before they were asked | The user sent a message instead, which follows                                                 |
-| unavailable | No client had `ask.open` open, nor opened it within `waitForClientMs`                             | Nobody can answer: go on, and say what was assumed                                             |
+| Outcome     | When                                                                                                       | The result says                                                                                |
+| ----------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| answered    | A client answered (`ask.answer`)                                                                           | Each question with `chose …`, `wrote …`, `chose …, and added …`, or `skipped: decide yourself` |
+| replied     | A person's steer was queued for the session: sent while the questions were open, or before they were asked | The user sent a message instead, which follows                                                 |
+| unavailable | No client had `ask.open` open, nor opened it within `waitForClientMs`                                      | Nobody can answer: go on, and say what was assumed                                             |
 
 The result's `details` (`AskDetails`) holds the questions and the outcome,
 which the chat shows.
@@ -59,7 +59,9 @@ lemma channels call ask.answer '{"sessionId":"<session>","toolCallId":"call_1","
   are open would wait behind them: a follow-up for the turn to end, a steer for
   the turn's current tool calls. So a follow-up sent then is made a steer
   (`AgentInputHook`), and a steer answers the questions: the model reads that
-  the user replied, then the message, in the same turn.
+  the user replied, then the message, in the same turn. A plugin's notice
+  (`QueuedPrompt.source`, such as a background command's exit) is no reply: it
+  waits behind the questions.
 - **The composer is the answer box.** The questions draw just above the text
   box (`ComposerTakeovers`) as the completion menu does, an option a menu row
   with its description beside it (whole in its tip) and the digit that picks

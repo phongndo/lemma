@@ -633,22 +633,38 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
 /** The prompt rail's key for a steer sent and not yet placed. */
 const pendingMark = (requestId: string) => `steer:${requestId}`;
 
-/** A steer sent and not yet placed, where it will join, as it will show once placed; until then it can be withdrawn. */
+/**
+ * A steer sent and not yet placed, where it will join, as it will show once placed; until then it can be withdrawn. A
+ * plugin's notice (`QueuedPrompt.source`) shows as the context line it will be, with no place on the prompt rail.
+ */
 function PendingSteer(props: { chat: Chat; steer: QueuePlaces["joining"][number] }) {
   const withdraw = usePlugin().action("withdraw a steer", () => props.chat.threads.withdraw(props.steer.requestId));
+  const notice = () => props.steer.source;
+  const noticeText = () => props.steer.display ?? props.steer.content.flatMap((part) => (part.type === "text" ? [part.text] : [])).join("\n");
   return (
-    <div class="steer-pending" data-mark={pendingMark(props.steer.requestId)}>
-      <button
-        type="button"
-        class="icon-button steer-withdraw"
-        aria-label="Withdraw the steer"
-        data-tip="Withdraw: the turn has not taken it yet"
-        onClick={() => withdraw()}
-      >
-        <XIcon />
-      </button>
-      <ChatUser content={props.steer.content} steer />
-    </div>
+    <Show
+      when={notice() === undefined}
+      fallback={
+        <div class="divider" data-tip={noticeText()}>
+          <span>
+            Context from {notice()}: {noticeText().split("\n")[0]}
+          </span>
+        </div>
+      }
+    >
+      <div class="steer-pending" data-mark={pendingMark(props.steer.requestId)}>
+        <button
+          type="button"
+          class="icon-button steer-withdraw"
+          aria-label="Withdraw the steer"
+          data-tip="Withdraw: the turn has not taken it yet"
+          onClick={() => withdraw()}
+        >
+          <XIcon />
+        </button>
+        <ChatUser content={props.steer.content} steer />
+      </div>
+    </Show>
   );
 }
 
@@ -741,10 +757,13 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   let scroller!: HTMLDivElement;
   let content!: HTMLDivElement;
   const [stuck, setStuck] = createSignal(true);
-  // Every prompt the chat shows: each turn's, its steers, and the steers sent and not yet placed, at the end.
+  // Every prompt a person sent that the chat shows: each turn's, its steers, and the steers sent and not yet placed, at
+  // the end. A plugin's notice is none.
   const marks = createMemo((): readonly PromptMark[] => [
     ...promptMarks(props.turns()),
-    ...queuePlaces(threads).joining.map((steer) => ({ key: pendingMark(steer.requestId), prompt: promptText(steer.content), reply: "" })),
+    ...queuePlaces(threads).joining.flatMap((steer) =>
+      steer.source === undefined ? [{ key: pendingMark(steer.requestId), prompt: promptText(steer.content), reply: "" }] : [],
+    ),
   ]);
   const [current, setCurrent] = createSignal(0);
   const [steps, setSteps] = createSignal<{ previous: number | undefined; next: number | undefined }>(

@@ -48,6 +48,11 @@ You help the user write. Keep their voice; say what you changed and why.
 Two ship with Lemma: `coding` (how to work in a codebase), the default, and
 `general` (no guidance of a kind of work, every tool). With this plugin off,
 the agent has its base prompt alone: what makes it a coding agent is a profile.
+`coding`'s first line asks the model to carry a task through: a reminder to
+persist, one of three (with using tools and planning) that together raised
+OpenAI's internal SWE-bench Verified score for GPT-4.1 by close to 20% ([its
+prompting guide](https://developers.openai.com/cookbook/examples/gpt4-1_prompting_guide),
+archived, read 2026-10-19).
 
 Serves `profiles.list` (`ProfileChannels` in `@lemma/agent`): the profiles a
 thread in a directory can be given, and the default.

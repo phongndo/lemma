@@ -1,0 +1,21 @@
+[project]
+name = "lemma-harbor"
+version = "0.1.0"
+description = "Lemma as a Harbor installed agent, and a summary of Harbor jobs"
+requires-python = ">=3.12"
+# Pinned: Harbor's agent interfaces change between releases.
+dependencies = ["harbor==0.24.0"]
+
+[project.scripts]
+lemma-harbor-summary = "lemma_harbor.summary:main"
+
+[tool.ruff]
+line-length = 160 # the repository's print width
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+isort.known-first-party = ["lemma_harbor", "test_source"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"

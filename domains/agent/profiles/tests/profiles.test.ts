@@ -144,7 +144,10 @@ describe("in a turn", () => {
       fs.writeFile(path.join(home, "profiles", "reader.md"), "You only read, and carefully.\n"),
     );
     expect(request.system).toContain("You only read.");
-    expect(later?.system).toContain("You only read, and carefully.");
+    // The prompt the model was given stays, so the next request extends it: the edit reaches the model as an update
+    // after the new prompt, which the next request that declares the prompt afresh carries.
+    expect(later?.system).toBe(request.system);
+    expect(JSON.stringify(later?.messages.at(-1))).toContain("You only read, and carefully.");
   });
 
   it("gives a thread with none chosen the default, and says so when a profile named is not there", async () => {

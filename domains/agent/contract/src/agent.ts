@@ -64,6 +64,10 @@ export const QueuedPrompt = Schema.Struct({
   at: Schema.Number,
   /** `AgentInputHook`'s handlers, logged with the user message it becomes. */
   credit: Schema.optional(ResultCredit),
+  /** The plugin that sent it, when no person did (`PromptOptions.source`). */
+  source: Schema.optional(Schema.String),
+  /** What a transcript shows of a plugin's (`PromptOptions.display`). */
+  display: Schema.optional(Schema.String),
 });
 export type QueuedPrompt = typeof QueuedPrompt.Type;
 
@@ -144,8 +148,9 @@ export interface PromptSection {
 /**
  * The system prompt's sections, in order: the agent asks each for its text, then runs `AgentRequestHook`, whose
  * handlers change or drop sections. Its phases are `base` (the agent's base prompt), `body` (where a section naming no
- * phase goes, ordered within it by `order`), and `environment` (the agent's, last): a section in `body` keeps the
- * prompt's stable prefix long, as `environment`'s date changes daily.
+ * phase goes, ordered within it by `order`), and `environment` (the agent's, last). A section whose text changes
+ * between requests does not rewrite the prompt the model was sent: the agent tells the model its new text in a
+ * `prompt-update` event (`@lemma/sessions`), and the next request that declares the prompt afresh carries it.
  *
  * @composition every section is written for each request, in phase order (`base`, `body`, `environment`, then
  * `order`), one per id (another plugin adding an id fails `Conflict`); a section whose text fails fails the request,
@@ -387,7 +392,37 @@ export interface PromptOptions extends TurnOptions {
   readonly requestId?: string;
   /** Default `follow-up`. */
   readonly whenBusy?: WhenBusy;
+  /**
+   * The plugin sending it, when it is not a person's prompt (a background command's exit, `ModelNotice`): logged as
+   * that plugin's `context` event (`@lemma/sessions`), not a user message, so a client shows it as the plugin's, not as
+   * something the user typed. With no turn running, it starts one only after a turn that ran to its end (`done`,
+   * `max-steps`) with nothing queued: after one the user cancelled, or that failed, it waits, held, and goes with the
+   * user's next prompt. Sent again while it waits, it does not start the queue as a person's retry does.
+   */
+  readonly source?: string;
+  /** With `source`: what a transcript shows of it, in place of its content (the `context` event's `display`). */
+  readonly display?: string;
 }
+
+/**
+ * Something for the model that no prompt carries: work it started ended on its own (a background command exited). The
+ * agent places it in the session as a `context` event from `source` (`PromptOptions.source`), steering the running
+ * turn or starting one after a turn that ran to its end, on that turn's model and thinking; `id` makes it once
+ * (published again with the same id, it is not placed twice). A tool that leaves work running publishes it rather
+ * than call `Agent`, so it need not require the agent and restart with it. Lost when no agent hears it, as while one
+ * reloads. Unlike appending a `context` event itself, it reaches the model now: a turn ends, or never starts, without it.
+ */
+export const ModelNotice = Event.make<{
+  readonly sessionId: string;
+  /** Unique for the notice within `source`: a background command's job id. */
+  readonly id: string;
+  /** The plugin publishing it. */
+  readonly source: string;
+  /** What the model reads, as a `context` event's content: at least one part, and no blank text. */
+  readonly content: PromptContent;
+  /** What a transcript shows of it, in place of its content. */
+  readonly display?: string;
+}>("lemma/agent.notice");
 
 /** The turn loop. Its provider serves it to clients too: it adds `serveAgent` to `Channels`. */
 export class Agent extends Context.Service<

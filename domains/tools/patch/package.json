@@ -1,0 +1,31 @@
+{
+  "name": "@lemma/tools-patch",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The `apply_patch` tool: Codex's patch format, adding, deleting, updating, and moving files together or not at all, with unified diffs",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.ts"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/core": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/tools": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "effect": "4.0.4"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.4"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.ts"
+  }
+}

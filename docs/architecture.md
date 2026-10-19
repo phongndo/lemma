@@ -46,7 +46,10 @@ The [session log](../domains/sessions/files/README.md) is the source of truth: e
 model request can be rebuilt from it (`rebuildRequest` in the sessions domain's
 contract, [`@lemma/sessions`](../domains/sessions/contract/src/derive.ts)), along
 with which plugins contributed each part, which handlers changed it, and who
-shaped each tool result (the `credit` vocabulary in `@lemma/contracts`). The
+shaped each tool result (the `credit` vocabulary in `@lemma/contracts`). Each
+request extends the one before it, so a provider's cache of its prefix serves it:
+what changed in the system prompt is appended as a `prompt-update` event rather than
+rewritten ([append-only requests](../domains/agent/loop/README.md#append-only-requests)). The
 host's trace, in memory, shows the same work as it ran: every span its plugins'
 work ends, by session, turn, step, and plugin
 ([devtools.trace](../domains/devtools/trace/README.md)).

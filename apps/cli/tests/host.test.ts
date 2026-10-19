@@ -207,8 +207,8 @@ describe("against a running host", () => {
     expect(shown.out).toContain("Agent  used by no plugin");
     expect(shown.out).toContain("Llm  from llm.pi-ai");
     expect(shown.out).toContain("HostControl  from the host");
-    // What a plugin adds to other plugins' registries: bash its tool.
-    expect((await invoke(["plugins", "show", "tools.bash"], home)).out).toContain("Contributes\n  lemma/tools  bash");
+    // What a plugin adds to other plugins' registries: bash its tool, and the section listing its background commands.
+    expect((await invoke(["plugins", "show", "tools.bash"], home)).out).toContain("Contributes\n  lemma/agent.sections  tools.bash.jobs\n  lemma/tools  bash");
     const transport = JSON.parse((await invoke(["plugins", "show", "transport.server", "--json"], home)).out);
     // It observes the runtime's events only: each domain streams its own.
     expect([...transport.observes].sort()).toEqual(["lemma/notice", "lemma/plugins.changed", "lemma/web.changed"]);

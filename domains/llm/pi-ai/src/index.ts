@@ -423,7 +423,7 @@ export function makeLlmPlugin(options: Options = {}) {
                 void (async () => {
                   arm();
                   try {
-                    for await (const event of models.streamSimple(model, toContext(request), streamOptions)) {
+                    for await (const event of models.streamSimple(model, toContext(request, model), streamOptions)) {
                       if (stalled) break;
                       arm();
                       send(mapper.push(event));

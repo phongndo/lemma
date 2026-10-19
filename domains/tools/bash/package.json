@@ -13,8 +13,10 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@lemma/agent": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
     "@lemma/settings": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",

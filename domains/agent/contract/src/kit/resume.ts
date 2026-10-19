@@ -176,6 +176,11 @@ export function planResume(events: readonly SessionEvent[], turnId: string, mark
           open.results.push(data.message);
         }
         break;
+      case "context":
+        // A plugin's notice the turn placed, as it places a prompt.
+        if (data.requestId !== undefined) placed.add(data.requestId);
+        if (closed !== undefined && open === undefined && data.requestId !== undefined) steered = true;
+        break;
       case "attempt":
         usage = addUsage(usage, data.message.usage);
         if (open !== undefined) open.attempt = data;

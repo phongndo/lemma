@@ -269,7 +269,9 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           if (entry === undefined) return yield* unknown(invocation.name, yield* names);
           // A tool the request did not offer is not there for this call, whoever makes it (a model, or a tool running
           // others); nor, for the model's own call, is one the request did not declare to it, which only a tool calls.
-          const reachable = invocation.declared ?? invocation.offered;
+          // A declared one it no longer offers (the agent keeps its declarations as they were) is not there either.
+          const { declared, offered } = invocation;
+          const reachable = declared === undefined ? offered : offered === undefined ? declared : declared.filter((name) => offered.includes(name));
           if (reachable !== undefined && !reachable.includes(invocation.name)) return yield* unknown(invocation.name, [...reachable]);
           if (signal.aborted) return yield* new ToolError({ tool: invocation.name, reason: "Cancelled", message: `Tool "${invocation.name}" was cancelled` });
           const started = yield* Clock.currentTimeMillis;

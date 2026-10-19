@@ -8,18 +8,18 @@ import type { CompactionError } from "@lemma/context";
 import type { CompactionRequest, CompactionResult } from "@lemma/context";
 import { Notice } from "@lemma/contracts";
 import { Agent, AgentRequestHook } from "@lemma/agent";
-import { emptyUsage } from "@lemma/llm";
-import { branchOf, rebuildRequest, Sessions, trajectory } from "@lemma/sessions";
+import { contentText, emptyUsage } from "@lemma/llm";
+import { branchOf, promptUpdateText, rebuildRequest, Sessions, summaryText, trajectory } from "@lemma/sessions";
 import type { NoticePayload } from "@lemma/contracts";
-import type { AssistantMessage, Message, StreamEvent } from "@lemma/llm";
+import type { AssistantMessage, LlmRequest, Message, StreamEvent } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import agent from "@lemma/agent-loop";
-import { call, failWith, fakeLlm, host, paths, reply, tempDir, testTools, useTools } from "../../../agent/loop/tests/fakes.ts";
+import { call, failWith, fakeLlm, host, ofType, paths, reply, respond, tempDir, testTools, useTools } from "../../../agent/loop/tests/fakes.ts";
 import type { Script } from "../../../agent/loop/tests/fakes.ts";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import compaction, { chooseCut, compactAsked, estimateTokens, requestChars, transcript } from "../src/index.ts";
-import { SUMMARY_PROMPT, summaryAsk, validCut } from "../src/compact.ts";
+import { filesOf, REVIEW_PROMPT, SUMMARY_PROMPT, summaryAsk, validCut, viewTokens } from "../src/compact.ts";
 
 const user = (text: string): Message => ({ role: "user", content: [{ type: "text", text }], timestamp: 1 });
 const answer = (content: AssistantMessage["content"], input = 0, output = 0): Message => ({
@@ -56,8 +56,23 @@ describe("the estimate", () => {
       tokensBefore: 1010,
       source: "context.compaction",
     });
-    // The usage before it counted what the summary replaced: estimated instead (base, summary, kept prompt).
-    expect(estimateTokens(compacted, () => 400)).toBe(100 + 10 + 10);
+    // The usage before it counted what the summary replaced: estimated instead (base and summary as the model reads
+    // it, its files too, then the kept prompt).
+    const summary = compacted.at(-1)!.data as Extract<EventData, { type: "compaction" }>;
+    expect(estimateTokens(compacted, () => 400)).toBe(Math.ceil((400 + summaryText(summary).length) / 4) + 10);
+    const listing = { ...summary, files: { read: ["a.ts"], modified: ["b".repeat(400)] } };
+    expect(estimateTokens([...compacted.slice(0, -1), { ...compacted.at(-1)!, data: listing }], () => 400)).toBeGreaterThan(100 + 100 + 10);
+  });
+
+  it("counts a prompt update only while requests still send it: not once a request has declared the prompt afresh", () => {
+    const update: EventData = { type: "prompt-update", sections: [{ id: "todo", source: "t", text: "t".repeat(4_000) }] };
+    const restart: EventData = { type: "request", requestId: "r", model: "p/m", restart: "tools" } as unknown as EventData;
+    const told = Math.ceil(promptUpdateText(update as Extract<EventData, { type: "prompt-update" }>).length / 4);
+    const prompt = message(user("x".repeat(400)));
+    expect(estimateTokens(branch(prompt, update), () => 0)).toBe(100 + told);
+    expect(estimateTokens(branch(prompt, update, restart), () => 0)).toBe(100);
+    expect(viewTokens(branch(prompt, update, restart))).toBe(100);
+    expect(viewTokens(branch(prompt, restart, update))).toBe(100 + told);
   });
 });
 
@@ -153,6 +168,9 @@ describe("asking for a compaction", () => {
   });
 });
 
+/** A request for a summary, whether a fork of the turn's last request or a transcript sent to summarize: it ends asking for one. */
+const isSummary = (request: LlmRequest) => contentText(request.messages.at(-1)?.content ?? []).endsWith("Summarize the conversation above.");
+
 let dir: string;
 beforeEach(async () => {
   dir = await tempDir();
@@ -167,14 +185,14 @@ const long = (letter: string) => [{ type: "text" as const, text: letter.repeat(4
  * Two turns in one session, the second summarizing the first once 50 tokens (of a 100,000 window) are in use; the
  * second turn's model calls play `second` (a tool call makes a turn of two steps).
  */
-const twoTurns = (summary: Script, second: readonly Script[] = [reply("b")], others: readonly Plugin[] = []) => {
+const twoTurns = (summary: Script, second: readonly Script[] = [reply("b")], others: readonly Plugin[] = [], config: Record<string, unknown> = {}) => {
   const llm = fakeLlm([reply("a"), summary, ...second]);
   const toolset = testTools();
   return Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const core = yield* makeCore([paths(dir, dir), host(), sessions, tools, toolset.plugin, llm.plugin, agent, compaction, ...others], {
-          configs: { "context.compaction": { at: 0.0005, keepRecent: 10 } },
+          configs: { "context.compaction": { at: 0.0005, keepRecent: 10, ...config } },
         });
         return yield* core.run(
           Effect.gen(function* () {
@@ -226,7 +244,7 @@ describe("in a session", () => {
   it("lets a plugin write the summary itself through CompactionHook: no model writes one, and it is credited", async () => {
     const mine = answering("my-summary", (request) => ({ kind: "summary", summary: "Mine.", firstKeptId: request.branch[request.firstKept]!.id }));
     const { events, requests } = await twoTurns(reply("b"), [], [mine]);
-    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, false]);
+    expect(requests.map((request) => isSummary(request))).toEqual([false, false]);
     expect(events.flatMap((event) => (event.data.type === "compaction" ? [event.data] : []))).toMatchObject([{ summary: "Mine.", source: "my-summary" }]);
   });
 
@@ -264,7 +282,7 @@ describe("in a session", () => {
   it("summarizes the earlier conversation before a call that would fill too much of the window", async () => {
     const { id, events, notices, requests, turns } = await twoTurns(reply("They asked about x; it was answered."));
     // The first turn's request, the summary, the second turn's request.
-    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, true, false]);
+    expect(requests.map((request) => isSummary(request))).toEqual([false, true, false]);
     expect(JSON.stringify(requests[1]!.messages)).toContain("x".repeat(400));
     const logged = events.flatMap((event) => (event.data.type === "compaction" ? [event] : []));
     expect(logged).toHaveLength(1);
@@ -283,6 +301,77 @@ describe("in a session", () => {
     expect(notices).toMatchObject([{ level: "info", source: "context.compaction" }]);
     // The summary's cost is part of the turn's: its model call and the summary's, 10 in and 5 out each.
     expect(turns[1]!.usage).toMatchObject({ input: 20, output: 10 });
+  });
+
+  it("writes the summary in a fork of the turn's last request, so its provider's cache serves all but the ask", async () => {
+    const { events, requests } = await twoTurns(reply("They asked about x."));
+    const [last, fork] = [requests[0]!, requests[1]!];
+    expect(fork.system).toBe(last.system);
+    expect(fork.tools).toEqual(last.tools);
+    expect(fork.messages.slice(0, last.messages.length)).toEqual(last.messages);
+    expect(contentText(fork.messages.at(-1)!.content)).toContain("<compaction>\n\nFrom Lemma, not the user");
+    // The request after it declares its prompt afresh, as one after a compaction does.
+    expect(ofType(events, "request").map((request) => request.restart)).toEqual(["start", "compaction"]);
+  });
+
+  it("asks for a transcript's summary when the fork answers without one, and counts both calls", async () => {
+    const { events, requests } = await twoTurns(useTools(call("c9", "echo", { text: "no" })), [reply("From the transcript."), reply("b")]);
+    expect(requests[1]!.system).toBe(requests[0]!.system);
+    expect(requests[2]!.system).toBe(SUMMARY_PROMPT);
+    expect(ofType(events, "compaction")[0]).toMatchObject({ summary: "From the transcript.", usage: { input: 20, output: 10 } });
+  });
+
+  it("asks for a transcript's summary when the fork fails, is cut off at its limit, or calls a tool after some text", async () => {
+    const forks: readonly Script[] = [
+      failWith("overloaded"),
+      cutOff,
+      respond([{ type: "text", text: "Let me check the file first." }, call("c9", "echo", { text: "no" })], "toolUse"),
+    ];
+    for (const fork of forks) {
+      const { events, requests } = await twoTurns(fork, [reply("From the transcript."), reply("b")]);
+      expect(requests[2]!.system).toBe(SUMMARY_PROMPT);
+      expect(ofType(events, "compaction").map((made) => made.summary)).toEqual(["From the transcript."]);
+    }
+  });
+
+  it("keeps the summary as written when its review fails, or its reader's questions are cut off", async () => {
+    for (const reader of [failWith("rate limited"), cutOff]) {
+      const { events, notices } = await twoTurns(reply("They asked about x."), [reader, reply("b")], [], { review: true });
+      expect(ofType(events, "compaction").map((made) => made.summary)).toEqual(["They asked about x."]);
+      expect(notices.filter((notice) => notice.level === "warning")).toEqual([]);
+    }
+  });
+
+  it("has a reader of the summary ask what it leaves out, and the turn's model answer, when review is on", async () => {
+    const { events, requests } = await twoTurns(reply("They asked about x."), [reply("1. Which file?"), reply("1. src/x.ts"), reply("b")], [], {
+      review: true,
+    });
+    expect(requests[2]!.system).toBe(REVIEW_PROMPT);
+    expect(contentText(requests[2]!.messages[0]!.content)).toBe("They asked about x.");
+    // The answers come from a fork of the last request, which saw the conversation.
+    expect(requests[3]!.system).toBe(requests[0]!.system);
+    expect(contentText(requests[3]!.messages.at(-1)!.content)).toContain("1. Which file?");
+    const summary = ofType(events, "compaction")[0]!.summary;
+    expect(summary).toBe("They asked about x.\n\n## Questions a reader asked, answered\n\n1. Which file?\n\n1. src/x.ts");
+  });
+
+  it("summarizes a turn that keeps filling the window three times at most, and says so once", async () => {
+    // Each step's tool result alone fills the (tiny) threshold again.
+    const echo = (id: string) => useTools(call(id, "echo", { text: id.repeat(200) }));
+    const { events, notices } = await twoTurns(reply("Summary 1."), [
+      echo("c1"),
+      reply("Summary 2."),
+      echo("c2"),
+      reply("Summary 3."),
+      echo("c3"),
+      echo("c4"),
+      reply("b"),
+    ]);
+    expect(ofType(events, "compaction").map((made) => made.summary)).toEqual(["Summary 1.", "Summary 2.", "Summary 3."]);
+    expect(notices.filter((notice) => notice.level === "warning").map((notice) => notice.message)).toEqual([
+      "Summarized 3 times this turn and still near the context limit: not summarizing again until the next turn",
+    ]);
+    expect(ofType(events, "turn-end").map((ended) => ended.reason)).toEqual(["done", "done"]);
   });
 
   it("summarizes, whatever its estimate, once the model refused a request as too long", async () => {
@@ -313,22 +402,27 @@ describe("in a session", () => {
       ),
     );
     // The first turn's request, the refused one, the summary, and the shortened request.
-    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, false, true, false]);
+    expect(requests.map((request) => isSummary(request))).toEqual([false, false, true, false]);
     expect(events.filter((event) => event.data.type === "compaction")).toHaveLength(1);
     expect(events.flatMap((event) => (event.data.type === "turn-end" ? [event.data.reason] : []))).toEqual(["done", "done"]);
   });
 
   it("goes ahead without a summary when writing one fails, and tries no more that turn", async () => {
-    const { events, notices, requests } = await twoTurns(failWith("overloaded"), [useTools(call("c1", "echo", { text: "hi" })), reply("b")]);
+    const { events, notices, requests } = await twoTurns(failWith("overloaded"), [
+      failWith("overloaded"),
+      useTools(call("c1", "echo", { text: "hi" })),
+      reply("b"),
+    ]);
     expect(events.some((event) => event.data.type === "compaction")).toBe(false);
-    // The second turn's two model calls, with one summary attempt before the first.
-    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, true, false, false]);
-    expect(requests[2]!.messages).toHaveLength(3);
+    // The second turn's two model calls, with one summary attempt (a fork, then a transcript) before the first.
+    expect(requests.map((request) => isSummary(request))).toEqual([false, true, true, false, false]);
+    expect(requests[3]!.messages).toHaveLength(3);
     expect(notices).toEqual([{ level: "warning", source: "context.compaction", message: "Could not summarize the earlier conversation: overloaded" }]);
   });
 
   it("does not take a summary cut off at its length limit", async () => {
-    const { events, notices } = await twoTurns(cutOff);
+    // The fork's, then the transcript's.
+    const { events, notices } = await twoTurns(cutOff, [cutOff, reply("b")]);
     expect(events.some((event) => event.data.type === "compaction")).toBe(false);
     expect(notices[0]!.message).toContain("the summary ran past");
   });
@@ -381,7 +475,7 @@ describe("in a session", () => {
     const { events, notice, outcome, requests } = await asking([reply("a"), reply("They asked about x."), reply("b"), reply("c")], [watching]);
     expect(outcome).toMatchObject({ kind: "handled", by: "context.compaction" });
     // The first turn's request, the summary, then the next two turns' requests: no second summary.
-    expect(requests.map((request) => request.system === SUMMARY_PROMPT)).toEqual([false, true, false, false]);
+    expect(requests.map((request) => isSummary(request))).toEqual([false, true, false, false]);
     expect(JSON.stringify(requests[1]!.messages)).toContain("The user asked the summary to focus on: the x question");
     expect(seen).toMatchObject([{ reason: "requested", instructions: "the x question" }]);
     // Far shorter than what is kept by default, the conversation is summarized but for its last quarter: the new prompt.
@@ -420,5 +514,57 @@ describe("in a session", () => {
     );
     expect(order?.at(-1)).toEqual({ pluginId: "context.compaction", phase: "fit", order: 0 });
     expect(order?.at(-2)).toMatchObject({ pluginId: "zzz.late", phase: "shape" });
+  });
+});
+
+describe("files", () => {
+  const asks = (...calls: readonly (readonly [string, string, Record<string, unknown>])[]): Message => ({
+    role: "assistant",
+    content: calls.map(([id, name, args]) => ({ type: "toolCall" as const, id, name, arguments: args })),
+    api: "fake",
+    provider: "fake",
+    model: "m1",
+    usage: emptyUsage,
+    stopReason: "toolUse",
+    timestamp: 1,
+  });
+  const result = (id: string, isError = false): Message => ({
+    role: "toolResult",
+    toolCallId: id,
+    toolName: "t",
+    content: [{ type: "text", text: isError ? "failed" : "ok" }],
+    isError,
+    timestamp: 1,
+  });
+
+  it("lists what the replaced history read and changed, after the previous summary's, each once at its latest", () => {
+    // Read as `apply_patch` reads it: a marker indented.
+    const patch = "*** Begin Patch\n  *** Update File: src/c.ts\n@@\n-a\n+b\n*** Add File: src/d.ts\n+d\n*** End Patch";
+    const files = filesOf(
+      [
+        asks(["r1", "read", { path: "src/a.ts" }], ["r2", "read", { path: "src/b.ts" }]),
+        result("r1"),
+        result("r2"),
+        asks(["e1", "edit", { path: "src/a.ts", edits: [] }], ["p1", "apply_patch", { input: patch }]),
+        result("e1"),
+        result("p1"),
+      ],
+      { read: ["old.ts"], modified: ["src/b.ts"] },
+    );
+    // Read files changed since are listed as changed only.
+    expect(files).toEqual({ read: ["old.ts"], modified: ["src/b.ts", "src/a.ts", "src/c.ts", "src/d.ts"] });
+  });
+
+  it("leaves out calls that failed, or have no result: they read and changed nothing", () => {
+    const files = filesOf(
+      [
+        asks(["r1", "read", { path: "gone.ts" }], ["e1", "edit", { path: "a.ts", edits: [] }], ["w1", "write", { path: "b.ts", content: "" }]),
+        result("r1", true),
+        result("e1", true),
+        asks(["p1", "apply_patch", { input: "*** Begin Patch\n*** Update File: c.ts\n-x\n*** End Patch" }]),
+      ],
+      undefined,
+    );
+    expect(files).toEqual({ read: [], modified: [] });
   });
 });

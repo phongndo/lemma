@@ -59,6 +59,14 @@ const eventLines = (event: SessionEvent): string[] => {
       return [`── context from ${data.source}`, clip(data.display ?? texts(data.content))];
     case "context-edit":
       return [`── ${data.source} ${data.op === "omit" ? "left out" : "shortened"} ${data.target} in what the model sees`];
+    case "prompt-update":
+      return [
+        `── system prompt updated`,
+        ...data.sections.map((section) => `${section.id} (${section.source})${section.text === "" ? ": removed" : ""}`),
+        ...(data.unavailable === undefined
+          ? []
+          : [data.unavailable.length === 0 ? "every tool available again" : `unavailable: ${data.unavailable.join(", ")}`]),
+      ];
     case "turn-end":
       return data.reason === "done" ? [] : [`── turn ended: ${data.reason}${data.error === undefined ? "" : ` — ${data.error}`}`];
     default:

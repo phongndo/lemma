@@ -1,4 +1,5 @@
 import { modelEntries } from "@lemma/sessions";
+import { patchPaths } from "@lemma/tools/patch";
 import type { Message } from "@lemma/llm";
 import type { ModelEntry, SessionEvent } from "@lemma/sessions";
 
@@ -56,15 +57,16 @@ const entriesTokens = (entries: readonly ModelEntry[], from = 0): number => {
 
 /**
  * How many tokens the next request's context holds, about: `measuredTokens`,
- * or without a response to measure from, everything estimated, with
+ * or without a response to measure from, everything estimated as the request
+ * sends it (the summary as the model reads it, with its files), with
  * `baseChars()` for the system prompt and tools (only then worked out).
  */
 export const estimateTokens = (branch: readonly SessionEvent[], baseChars: () => number): number => {
   const entries = modelEntries(branch);
   const measured = measuredTokens(branch, entries);
   if (measured !== undefined) return measured;
-  const summary = entries[0]?.summary === true ? branch[entries[0].index]!.data : undefined;
-  return tokensOf(baseChars() + (summary?.type === "compaction" ? summary.summary.length : 0)) + entriesTokens(entries);
+  const summary = entries[0]?.summary === true ? entries[0].message : undefined;
+  return tokensOf(baseChars() + (summary === undefined ? 0 : messageChars(summary))) + entriesTokens(entries);
 };
 
 /**
@@ -180,9 +182,8 @@ export const summaryAsk = (text: string, previous: boolean, instructions: string
     "Summarize the conversation above.",
   ].join("\n\n");
 
-export const SUMMARY_PROMPT = `You write a checkpoint of a coding session for another model, which will continue the work with only your summary and the most recent messages. You are not taking part in the conversation: do not continue it, answer its questions, or call tools.
-
-Write the summary in the user's language, in this form, leaving out a section with nothing in it:
+/** The summary's form, whoever asks for it. */
+const SUMMARY_FORM = `Write the summary in the user's language, in this form, leaving out a section with nothing in it:
 
 ## Goal
 What the user wants, in their own terms.
@@ -205,3 +206,77 @@ What remains to do, in order.
 What the work depends on: files read, created, or changed (with paths); commands run and the results that matter; errors hit and how they were resolved; and any background work or other agents started, with their ids, their status, and where their results are.
 
 Preserve exact file paths, identifiers, commands, and error messages. Leave out pleasantries and anything superseded. Write the summary only, with no preamble.`;
+
+export const SUMMARY_PROMPT = `You write a checkpoint of a coding session for another model, which will continue the work with only your summary and the most recent messages. You are not taking part in the conversation: do not continue it, answer its questions, or call tools.
+
+${SUMMARY_FORM}`;
+
+/**
+ * What the turn's own model is asked, after the conversation as its last request sent it (a fork of that request,
+ * which its provider's cache serves): to stop and write the summary. It ends as `summaryAsk` does.
+ */
+export const forkAsk = (previous: boolean, instructions: string | undefined): string =>
+  [
+    "<compaction>",
+    "From Lemma, not the user: the conversation is near the limit of your context window. Stop working on the task, and call no tools: write a checkpoint of the session for another model, which will continue the work with only your summary and the most recent messages.",
+    SUMMARY_FORM,
+    ...(previous
+      ? [
+          "The conversation begins with a summary of what came before it: write one summary of both, keeping what is still true from it, and moving work now finished to Done.",
+        ]
+      : []),
+    ...(instructions === undefined ? [] : [`The user asked the summary to focus on: ${cut(instructions, RESULT_CHARS)}`]),
+    "</compaction>",
+    "Summarize the conversation above.",
+  ].join("\n\n");
+
+/** At most this many paths are kept of each kind, the latest. */
+const FILES_KEPT = 50;
+
+/** The files a summary stands for having read and changed, by the bundled tools' names and arguments. */
+export interface Files {
+  readonly read: readonly string[];
+  readonly modified: readonly string[];
+}
+
+/**
+ * The files the summarized messages read and changed, after those `before` (the previous compaction's) lists: each
+ * path once, at its latest, the latest `FILES_KEPT` of each kind. Only calls whose result succeeded count: a failed
+ * edit changed nothing. A file changed is not listed as read too.
+ */
+export const filesOf = (messages: readonly Message[], before: Files | undefined): Files => {
+  const succeeded = new Set(messages.flatMap((message) => (message.role === "toolResult" && message.isError !== true ? [message.toolCallId] : [])));
+  const read = [...(before?.read ?? [])];
+  const modified = [...(before?.modified ?? [])];
+  const note = (list: string[], path: unknown) => {
+    if (typeof path !== "string" || path === "") return;
+    const at = list.indexOf(path);
+    if (at !== -1) list.splice(at, 1);
+    list.push(path);
+  };
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) {
+      if (part.type !== "toolCall" || !succeeded.has(part.id)) continue;
+      const args = part.arguments;
+      if (part.name === "read") note(read, args.path);
+      else if (part.name === "edit" || part.name === "write") note(modified, args.path);
+      else if (part.name === "apply_patch") {
+        if (typeof args.input === "string") for (const path of patchPaths(args.input)) note(modified, path);
+      }
+    }
+  }
+  return { read: read.filter((path) => !modified.includes(path)).slice(-FILES_KEPT), modified: modified.slice(-FILES_KEPT) };
+};
+
+/** What a model that sees only the summary is asked, to find what the summary leaves out. */
+export const REVIEW_PROMPT = `You read a checkpoint summary of a coding session that another model will continue from, with only the summary and the most recent messages. List up to five questions about facts the summary leaves out that the work would need (exact paths, values, commands, errors, decisions and their reasons), one per line, numbered. Ask only what the summary does not answer; if it is complete, answer "None".`;
+
+/** What the turn's own model, which saw the conversation, is asked: to answer the questions about what it summarized. */
+export const answersAsk = (questions: string): string =>
+  [
+    "<compaction-review>",
+    "From Lemma, not the user: a reader of your summary asked these questions about what it leaves out. Answer each from the conversation, briefly and exactly, numbered as asked; say so where the conversation does not tell. Call no tools.",
+    questions,
+    "</compaction-review>",
+  ].join("\n\n");
