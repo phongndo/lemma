@@ -3,10 +3,11 @@ import * as path from "node:path";
 import { Effect, Fiber, Layer, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { CoreClosed, Events, definePlugin, makeCore, PluginContext, Registries } from "@lemma/core";
+import { CoreClosed, Events, definePlugin, Hooks, makeCore, PluginContext, Registries } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { InteractionOrigin, Paths } from "@lemma/contracts";
-import { PromptSections } from "@lemma/agent";
+import { AgentRequestHook, PromptSections } from "@lemma/agent";
+import type { RequestDraft } from "@lemma/agent";
 import { Llm, LlmError } from "@lemma/llm";
 import type { ClassifierAnswer, ClassifierContext, ClassifierResult, ImagesContext } from "@lemma/llm";
 import { Sessions } from "@lemma/sessions";
@@ -794,6 +795,59 @@ describe("finding tools", () => {
     );
     expect(texts[0]).toContain("- browser: Drives a headless web browser");
     expect(texts[1]).toBeUndefined();
+  });
+
+  it("settles that section once a request's tools are chosen: it goes with codemode, or with the last tool it names", async () => {
+    // As a thread's profile keeps some of the tools on offer.
+    let keeps = (_: string) => true;
+    const profile = definePlugin({
+      id: "profile-fake",
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.on(AgentRequestHook, (draft, next) => next({ ...draft, tools: draft.tools.filter((tool) => keeps(tool.spec.name)) }), { phase: "select" }),
+        ),
+      ),
+    });
+    const sent = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* coreOf([browser, profile]);
+          return yield* core.run(
+            Effect.gen(function* () {
+              const hooks = yield* Hooks;
+              const tools = yield* Effect.flatMap(ToolRunner, (registry) => registry.list);
+              const section = (yield* (yield* Registries).items(PromptSections)).find(({ item }) => item.id === "codemode-namespaces")!.item;
+              // Written as a string: codemode's section is no promise or Effect.
+              const text = (yield* Effect.promise(async () =>
+                section.text({ sessionId: "s", turnId: "t", cwd: home, model: "faux/m", tools, branch: [] }),
+              )) as string;
+              const draft: RequestDraft = {
+                sessionId: "s",
+                turnId: "t",
+                cwd: home,
+                model: "faux/m",
+                sections: [
+                  { id: "codemode-namespaces", source: "tools.codemode", text },
+                  { id: "other", source: "other", text: "Other" },
+                ],
+                tools,
+                branch: [],
+                history: [],
+                append: () => Effect.die("not appended"),
+              };
+              const ask = (keep: (name: string) => boolean) => {
+                keeps = keep;
+                return hooks.invoke(AgentRequestHook, draft, ({ model, sections, tools }) => Effect.succeed({ model, sections, tools }));
+              };
+              return [yield* ask(() => true), yield* ask((name) => name !== "codemode"), yield* ask((name) => !name.startsWith("browser_"))].map((plan) =>
+                plan.sections.map((each) => each.id),
+              );
+            }),
+          );
+        }),
+      ),
+    );
+    expect(sent).toEqual([["codemode-namespaces", "other"], ["other"], ["other"]]);
   });
 });
 

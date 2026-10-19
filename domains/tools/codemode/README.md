@@ -2,8 +2,8 @@
 
 The `codemode` tool: JavaScript in pi's QuickJS sandbox that calls the other
 tools, and classifier and image models. Adds it to `Tools`, and a system prompt
-section (`PromptSections`) naming the namespaces of the tools only scripts call;
-requires `ToolRunner`, which its scripts call the other tools through, `Llm`,
+section (`PromptSections`) naming the namespaces of the tools only scripts call,
+which it settles once a request's tools are chosen (`AgentRequestHook`); requires `ToolRunner`, which its scripts call the other tools through, `Llm`,
 which they call models through, `Sessions`, where `store()` lives, and `Paths`,
 where scripts keep their journals. No config. Its web half (`./web`) shows a
 call as its script's first line; opened, the script, each call it made (as they
@@ -83,7 +83,10 @@ codemode call's own output (`✓ bash 12ms {"command":"ls"}`), and the result's
   script finds it by searching and reads its namespace's instructions on
   demand, and the description stays the same as such tools come and go,
   keeping the request's prefix cached. The system prompt names the namespaces
-  (the MCP servers name their own), so the model knows they are there.
+  (the MCP servers name their own), so the model knows they are there: once a
+  request's tools are chosen (a thread's profile keeps some), only those whose
+  tools it still offers, and none without codemode (`AgentRequestHook`'s
+  `select` phase).
 - **Pages from scripts.** A script that computes data can draw it with a
   `display` tool (`html_render`); the call's result keeps what each such call
   showed (`details.displays`: its result and its input's `title`, not the rest

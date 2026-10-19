@@ -1,11 +1,11 @@
 import { Effect, Schedule, Stream } from "effect";
 import { definePlugin, Hook, Hooks, Registries } from "@lemma/core";
 import { Paths } from "@lemma/contracts";
-import { PromptSections } from "@lemma/agent";
+import { AgentRequestHook, PromptSections } from "@lemma/agent";
 import { Llm } from "@lemma/llm";
 import { SessionAppended, Sessions } from "@lemma/sessions";
 import { ToolNamespaces, ToolRunner, Tools } from "@lemma/tools";
-import type { ToolNamespace } from "@lemma/tools";
+import type { ToolContribution, ToolNamespace } from "@lemma/tools";
 import { codemodeTool } from "./codemode.ts";
 import type { CodemodeDetails } from "./details.ts";
 import { Journals } from "./journal.ts";
@@ -19,6 +19,9 @@ export type { CodemodeCallRecord, CodemodeDetails, CodemodeDisplay } from "./det
  * Asked only once a script's call has failed, to tell a failure of shutting down from the call's own.
  */
 const Probe = Hook.make<void, void>("tools.codemode/core-closing");
+
+/** The system prompt's section naming the namespaces of the tools only scripts call. */
+const SECTION = "codemode-namespaces";
 
 /** The namespaces whose tools only scripts call in a request, as the system prompt names them; the MCP servers name their own. */
 const section = (namespaces: readonly ToolNamespace[]): string =>
@@ -82,20 +85,41 @@ export default definePlugin({
           );
 
     yield* owner.add(Tools, codemodeTool({ registry: runner, llm, namespaces: () => namespaces, branch, journals, closing }));
+    // Where codemode is offered, the namespaces of the tools it alone calls there.
+    const listedIn = (tools: readonly ToolContribution[]): readonly ToolNamespace[] => {
+      if (!tools.some((tool) => tool.spec.name === "codemode")) return [];
+      const used = new Set(tools.filter((tool) => tool.nested === true && tool.namespace !== undefined).map((tool) => tool.namespace));
+      return namespaces.filter((namespace) => used.has(namespace.name) && !namespace.name.startsWith("mcp__"));
+    };
     yield* owner.add(
       PromptSections,
       {
-        id: "codemode-namespaces",
-        // Only where codemode is offered, naming the namespaces of the tools it alone calls.
+        id: SECTION,
         text: ({ tools }) => {
-          if (!tools.some((tool) => tool.spec.name === "codemode")) return undefined;
-          const used = new Set(tools.filter((tool) => tool.nested === true && tool.namespace !== undefined).map((tool) => tool.namespace));
-          const listed = namespaces.filter((namespace) => used.has(namespace.name) && !namespace.name.startsWith("mcp__"));
+          const listed = listedIn(tools);
           return listed.length === 0 ? undefined : section(listed);
         },
       },
       // After the MCP servers' section, before the environment, whose date changes daily.
       { order: 610 },
+    );
+    // The section is written for the tools on offer before the request's are chosen (a thread's profile keeps some):
+    // once they are, it names only the namespaces still offered, and goes with codemode.
+    yield* owner.on(
+      AgentRequestHook,
+      (draft, next) =>
+        Effect.map(next(draft), (plan) => {
+          if (!plan.sections.some((each) => each.id === SECTION)) return plan;
+          const listed = listedIn(plan.tools);
+          return {
+            ...plan,
+            sections:
+              listed.length === 0
+                ? plan.sections.filter((each) => each.id !== SECTION)
+                : plan.sections.map((each) => (each.id === SECTION ? { ...each, text: section(listed) } : each)),
+          };
+        }),
+      { phase: "select" },
     );
   },
 });
