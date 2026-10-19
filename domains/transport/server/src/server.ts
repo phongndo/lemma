@@ -10,7 +10,7 @@ import type { HttpServerError } from "effect/http";
 import { NodeHttpServer, NodeHttpServerRequest } from "@effect/platform-node";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import type { Rpc, RpcGroup } from "effect/rpc";
-import { HOST_PROTOCOL } from "@lemma/contracts";
+import { HOST_PROTOCOL, WEB_IMPORTABLE } from "@lemma/contracts";
 import type { WebComposition, WebFile } from "@lemma/contracts";
 import { isInside, kindOf } from "@lemma/contracts/fs";
 import { ServedRpcs } from "./channels.ts";
@@ -33,7 +33,10 @@ interface ServerOptions {
   readonly token: string;
   readonly version: string;
   readonly staticDir?: string | undefined;
-  /** The files the web app loads from the plugin directories; `/api/web/<source>/<path>` serves only a file listed here. */
+  /**
+   * The files the web app loads from the plugin directories, which `/api/web/<source>@<version>/<name>` serves, with
+   * the modules and stylesheets of a listed package's folder its web half may import (`webFileFor`).
+   */
   readonly web?: Effect.Effect<WebComposition>;
 }
 
@@ -43,13 +46,13 @@ const equalTokens = (a: string, b: string): boolean => {
   return left.length === right.length && timingSafeEqual(left, right);
 };
 
-/** Bearer header for HTTP; `?token=` for WebSocket, whose browser API cannot set headers. */
 /**
  * A web file's address may carry the token in its path (`/api/web/t/<token>/…`), as the web app writes it, so a module
  * a web half imports by a relative path, which keeps the path but not the query, carries it too.
  */
 const WEB_TOKEN = /^\/api\/web\/t\/([^/]+)(\/.*)$/;
 
+/** Bearer header for HTTP; `?token=` for WebSocket, whose browser API cannot set headers; or the web file's path. */
 const presented = (request: HttpServerRequest.HttpServerRequest, url: URL): string | undefined => {
   const header = request.headers["authorization"];
   if (header?.startsWith("Bearer ")) return header.slice("Bearer ".length);
@@ -57,13 +60,10 @@ const presented = (request: HttpServerRequest.HttpServerRequest, url: URL): stri
   return url.searchParams.get("token") ?? (inPath === undefined ? undefined : decodeURIComponent(inPath));
 };
 
-/** What a package's web half may import beside its listed files: modules and stylesheets. */
-const IMPORTABLE = new Set([".js", ".mjs", ".ts", ".mts", ".css"]);
-
 /**
  * The file `path` (`/api/web/<source>@<version>/<name>`, its token taken out) names: a listed web half or stylesheet,
- * or a module or stylesheet inside a listed package's folder (one its web half imports by a relative path), but
- * nothing in its dependencies, and nothing outside it.
+ * or a module or stylesheet inside a listed package's folder (one its web half imports by a relative path,
+ * `WEB_IMPORTABLE`), but nothing in its dependencies or hidden, and nothing outside it.
  */
 const webFileFor = (files: readonly WebFile[], path: string): string | undefined => {
   const listed = files.find((file) => file.url.split("?")[0] === path);
@@ -79,12 +79,16 @@ const webFileFor = (files: readonly WebFile[], path: string): string | undefined
   }
   const folder = name.split("/")[0]!;
   const owner = files.find((file) => file.source === source && file.name.includes("/") && file.name.split("/")[0] === folder);
-  if (owner === undefined || !IMPORTABLE.has(extname(name))) return undefined;
+  if (owner === undefined || !WEB_IMPORTABLE.has(extname(name))) return undefined;
   const pluginsDir = owner.path.slice(0, owner.path.length - owner.name.length);
   const packageDir = resolve(pluginsDir, folder);
   const file = resolve(pluginsDir, name);
-  const within = relative(packageDir, file);
-  return within.startsWith("..") || within.split(/[\\/]/).includes("node_modules") ? undefined : file;
+  if (!isInside(packageDir, file)) return undefined;
+  return relative(packageDir, file)
+    .split(/[\\/]/)
+    .some((part) => part === "node_modules" || part.startsWith("."))
+    ? undefined
+    : file;
 };
 
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);

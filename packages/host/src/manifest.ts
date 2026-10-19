@@ -1,6 +1,7 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { Predicate } from "effect";
+import { isInside } from "@lemma/contracts/fs";
 
 /*
  * A plugin directory (`<home>/plugins`, a trusted project's `.lemma/plugins`) holds a plugin's halves as files, by
@@ -72,7 +73,7 @@ const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; r
     if (file === undefined) return [];
     if (typeof file !== "string") return (problems.push(`"lemma.${field}" is not a path`), []);
     const path = join(dir, file);
-    if (relative(dir, path).startsWith("..")) return (problems.push(`"lemma.${field}" names ${file}, outside the package`), []);
+    if (!isInside(dir, path)) return (problems.push(`"lemma.${field}" names ${file}, outside the package`), []);
     // A host half that is missing is the loader's to report: that plugin cannot run.
     if (field !== "host" && !(await stat(path).catch(() => undefined))?.isFile())
       return (problems.push(`"lemma.${field}" names ${file}, which is missing`), []);
@@ -98,7 +99,7 @@ const manifestOf = async (dir: string): Promise<{ readonly manifest: Manifest; r
         continue;
       }
       const path = join(dir, folder);
-      if (relative(dir, path).startsWith("..")) problems.push(`"lemma.resources.${kind}" names ${folder}, outside the package`);
+      if (!isInside(dir, path)) problems.push(`"lemma.resources.${kind}" names ${folder}, outside the package`);
       else if (!(await stat(path).catch(() => undefined))?.isDirectory()) problems.push(`"lemma.resources.${kind}" names ${folder}, which is no folder`);
       else found.push(path);
     }

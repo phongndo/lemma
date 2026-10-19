@@ -40,7 +40,7 @@ describe("listWebFiles", () => {
         ["user", "ticker/ticker.css", "style"],
       ]);
       expect(untrusted[0]!.path).toBe(join(user, "composer.web.js"));
-      // A file's version is its mtime; a package's, every file of it, so a module its web half imports is versioned with it.
+      // A file's version is its mtime; a package's, the files its web half may import, so a module it imports is versioned with it.
       expect(untrusted[0]!.url).toMatch(/^\/api\/web\/user@\d+\/composer\.web\.js$/);
       expect(untrusted[2]!.url).toMatch(/^\/api\/web\/user@[0-9a-f]{12}\/ticker\/web\.js$/);
       expect(untrusted[3]!.url.split("/")[3]).toBe(untrusted[2]!.url.split("/")[3]);
@@ -52,7 +52,7 @@ describe("listWebFiles", () => {
     }
   });
 
-  test("lists a web half written in TypeScript, and a package's version changes with any file of it", async () => {
+  test("lists a web half written in TypeScript, and a package's version changes with any module of it, not its data", async () => {
     const root = await mkdtemp(join(tmpdir(), "lemma-ui-"));
     try {
       const paths = resolvePaths({ env: { LEMMA_HOME: join(root, "home") }, cwd: join(root, "project") });
@@ -62,13 +62,16 @@ describe("listWebFiles", () => {
       await writeFile(join(user, "board", "package.json"), JSON.stringify({ lemma: { web: "./web.ts" } }));
       await writeFile(join(user, "board", "web.ts"), "");
       await writeFile(join(user, "board", "model.ts"), "");
+      await writeFile(join(user, "board", "data.json"), "[]");
       const before = await Effect.runPromise(listWebFiles(paths, false));
       expect(before.map((file) => [file.name, file.kind, file.plugin])).toEqual([
         ["board/web.ts", "script", "board"],
         ["notes.web.ts", "script", "notes"],
       ]);
+      // Edited later than it was: a new mtime, whatever the clock's resolution. Data the web half cannot import is not read for it.
+      await utimes(join(user, "board", "data.json"), new Date(), new Date(Date.now() + 5_000));
+      expect((await Effect.runPromise(listWebFiles(paths, false)))[0]!.url).toBe(before[0]!.url);
       await writeFile(join(user, "board", "model.ts"), "export const x = 1;");
-      // Edited later than it was: a new mtime, whatever the clock's resolution.
       await utimes(join(user, "board", "model.ts"), new Date(), new Date(Date.now() + 5_000));
       const after = await Effect.runPromise(listWebFiles(paths, false));
       expect(after[0]!.url).not.toBe(before[0]!.url);

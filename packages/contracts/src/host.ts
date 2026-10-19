@@ -272,11 +272,18 @@ export const WebFile = Schema.Struct({
   /**
    * Served by the transport under `/api/web/<source>@<version>/<name>` (it needs the token, in the path as
    * `/api/web/t/<token>/…` or as for any `/api` call); its version changes when the file does, or for a package, any
-   * file of it, so a module its web half imports by a relative path is served beside it under the same version.
+   * file of it its web half may import (`WEB_IMPORTABLE`), so such a module is served beside it under the same version.
    */
   url: Schema.String,
 });
 export type WebFile = typeof WebFile.Type;
+
+/**
+ * What of a package's own files, beside its listed ones, its web half may import by a relative path: modules and
+ * stylesheets, by extension, outside its dependencies and not hidden. The transport serves them, and the package's
+ * version (`WebFile.url`) follows them.
+ */
+export const WEB_IMPORTABLE: ReadonlySet<string> = new Set([".js", ".mjs", ".ts", ".mts", ".css"]);
 
 /**
  * What the web app needs to plan its halves: the rows of both config files

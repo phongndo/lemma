@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { extname, join, relative, sep } from "node:path";
 import { Effect } from "effect";
+import { WEB_IMPORTABLE } from "@lemma/contracts";
 import type { WebFile } from "@lemma/contracts";
 import { projectPluginsDir } from "./config.ts";
 import { entriesOf, webPluginOf } from "./manifest.ts";
@@ -10,32 +11,28 @@ import type { PathsService } from "./paths.ts";
 /** `<home>/plugins`: the user's plugins, both halves (see `manifest.ts`). */
 export const userPluginsDir = (paths: PathsService): string => join(paths.home, "plugins");
 
-/** A package's version: every file of it but its dependencies' and hidden ones, by mtime, so an edit to any is a new one. */
+/** A package's version: the files of it its web half may import (`WEB_IMPORTABLE`), by mtime, so an edit to any is a new one. */
 const packageVersion = async (dir: string): Promise<string> => {
-  const hash = createHash("sha256");
+  const files: string[] = [];
   const walk = async (at: string): Promise<void> => {
-    for (const entry of (await readdir(at, { withFileTypes: true }).catch(() => [])).sort((a, b) => (a.name < b.name ? -1 : 1))) {
+    for (const entry of await readdir(at, { withFileTypes: true }).catch(() => [])) {
       if (entry.name === "node_modules" || entry.name.startsWith(".")) continue;
-      const path = join(at, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else hash.update(`${path}:${(await stat(path).catch(() => undefined))?.mtimeMs ?? 0}\n`);
+      if (entry.isDirectory()) await walk(join(at, entry.name));
+      else if (WEB_IMPORTABLE.has(extname(entry.name))) files.push(join(at, entry.name));
     }
   };
   await walk(dir);
-  return hash.digest("hex").slice(0, 12);
+  const stamps = await Promise.all(files.sort().map(async (path) => `${path}:${(await stat(path).catch(() => undefined))?.mtimeMs ?? 0}\n`));
+  return createHash("sha256").update(stamps.join("")).digest("hex").slice(0, 12);
 };
 
 /**
- * The files the web app loads from the plugin directories: web halves
- * (`notes.web.js`, a package's `lemma.web`) and stylesheets (`theme.css`, a
- * package's `lemma.styles`), the user's first, each directory by name. A
- * project's are listed only when it is trusted: they run in the browser with
- * the page's token. The URL carries a version in its path
- * (`/api/web/<source>@<version>/<name>`): a file's mtime, or for a package
- * every file of it, so an edited file is fetched again rather than served from
- * the module cache, and so is a module a package's web half imports by a
- * relative path, which inherits the version (the transport serves a package's
- * own files beside its listed ones).
+ * The files the web app loads from the plugin directories: web halves (`notes.web.js`, a package's `lemma.web`) and
+ * stylesheets (`theme.css`, a package's `lemma.styles`), the user's first, each directory by name. A project's are
+ * listed only when it is trusted: they run in the browser with the page's token. The URL carries a version in its path
+ * (`/api/web/<source>@<version>/<name>`): a file's mtime, or for a package those of the files its web half may import,
+ * so an edited file is fetched again rather than served from the module cache, and so is a module a package's web half
+ * imports by a relative path, which inherits the version (the transport serves those beside its listed files).
  */
 export function listWebFiles(paths: PathsService, trusted: boolean): Effect.Effect<WebFile[]> {
   const dirs = [{ dir: userPluginsDir(paths), source: "user" as const }, ...(trusted ? [{ dir: projectPluginsDir(paths), source: "project" as const }] : [])];

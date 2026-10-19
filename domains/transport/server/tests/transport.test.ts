@@ -65,6 +65,8 @@ describe("transport", () => {
         yield* Effect.promise(() => writeFile(join(dir, "board", "model.ts"), 'export const title: string = "Board";'));
         yield* Effect.promise(() => writeFile(join(dir, "board", "node_modules", "dep", "index.js"), "secret"));
         yield* Effect.promise(() => writeFile(join(dir, "board", "data.json"), "{}"));
+        yield* Effect.promise(() => mkdir(join(dir, "board", ".cache"), { recursive: true }));
+        yield* Effect.promise(() => writeFile(join(dir, "board", ".cache", "built.js"), "hidden"));
         host.holder.web = {
           ...host.holder.web,
           files: [{ name: "board/web.ts", source: "user", kind: "script", path: join(dir, "board", "web.ts"), url: "/api/web/user@abc/board/web.ts" }],
@@ -78,6 +80,8 @@ describe("transport", () => {
         expect(yield* Effect.promise(() => model.text())).toMatch(/export const title\s*=\s*"Board";/);
         expect((yield* get("/user@abc/board/node_modules/dep/index.js")).status).toBe(404);
         expect((yield* get("/user@abc/board/data.json")).status).toBe(404);
+        // Nor what is hidden, which its version does not follow.
+        expect((yield* get("/user@abc/board/.cache/built.js")).status).toBe(404);
         expect((yield* get("/user@abc/other/web.js")).status).toBe(404);
         expect((yield* get("/user@abc/board/..%2F..%2Fconfig.jsonc")).status).toBe(404);
       }),
