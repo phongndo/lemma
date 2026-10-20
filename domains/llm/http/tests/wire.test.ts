@@ -136,6 +136,7 @@ describe("anthropic-messages", () => {
           name: "read",
           description: "Read",
           input_schema: { type: "object", properties: { path: { type: "string" } }, required: ["path"] },
+          eager_input_streaming: true,
           cache_control: cache,
         },
       ],
@@ -291,6 +292,14 @@ describe("anthropic-messages", () => {
     });
   });
 
+  it("streams a tool's input as the model writes it, but to a proxy whose compat refuses the field", () => {
+    const tools = [{ name: "read", description: "Read", parameters: { type: "object" } }];
+    const eager = (extra: Partial<Model>) =>
+      (anthropicMessages.build(call({ ...claude, ...extra }, { tools })).body as { tools: Record<string, unknown>[] }).tools[0]!.eager_input_streaming;
+    expect(eager({})).toBe(true);
+    expect(eager({ compat: { supportsEagerToolInputStreaming: false } })).toBeUndefined();
+  });
+
   it("leaves out a union at a tool schema's root, which Anthropic refuses, and ignores a trailing [DONE]", async () => {
     const union = {
       $schema: "http://json-schema.org/draft-07/schema#",
@@ -434,7 +443,7 @@ describe("openai-responses", () => {
       temperature: 0.3,
       reasoning: { effort: "high", summary: "auto" },
       include: ["reasoning.encrypted_content"],
-      tools: [{ type: "function", name: "read", description: "Read", parameters: { type: "object" } }],
+      tools: [{ type: "function", name: "read", description: "Read", parameters: { type: "object" }, strict: false }],
       input: [
         { role: "developer", content: "Be brief" },
         { role: "user", content: [{ type: "input_text", text: "look" }] },

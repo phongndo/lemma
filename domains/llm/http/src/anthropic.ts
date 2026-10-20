@@ -125,6 +125,8 @@ function build(call: WireCall) {
   if (request.system !== undefined && request.system !== "") body.system = [{ type: "text", text: sanitize(request.system), cache_control: cache }];
   body.messages = messages(call, cache);
   const tools = request.tools ?? [];
+  // A proxy refusing the field is told so by pi's `supportsEagerToolInputStreaming: false`.
+  const eager = model.compat?.supportsEagerToolInputStreaming !== false;
   if (tools.length > 0) {
     body.tools = tools.map((tool, index) => {
       // A schema's own identity (an MCP server's tool may carry one) is not part of the input it describes, and
@@ -134,6 +136,8 @@ function build(call: WireCall) {
         name: tool.name,
         description: tool.description,
         input_schema: { ...schema, type: "object", properties: schema.properties ?? {} },
+        // Its input streams as the model writes it, rather than whole once the server has checked it.
+        ...(eager ? { eager_input_streaming: true } : {}),
         ...(index === tools.length - 1 ? { cache_control: cache } : {}),
       };
     });

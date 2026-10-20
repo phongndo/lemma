@@ -156,7 +156,10 @@ function build(call: WireCall) {
     if (options.temperature !== undefined && model.temperature !== false) body.temperature = options.temperature;
   }
   const tools = request.tools ?? [];
-  if (tools.length > 0) body.tools = tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters }));
+  // Not strict: without the field the API rewrites each schema to strict where it can, which changes what a tool is sent.
+  if (tools.length > 0) {
+    body.tools = tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters, strict: false }));
+  }
   // A model that reasons is asked for its reasoning encrypted, as `store: false` keeps nothing for it to go back as
   // otherwise; at `none`, the API's word for no reasoning, the effort alone is said.
   // A reasoning model with no level to set reasons as it will: its reasoning comes back encrypted all the same.
