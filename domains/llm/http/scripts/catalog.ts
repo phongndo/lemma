@@ -18,8 +18,8 @@ const catalog = Object.fromEntries(
   await Promise.all(
     // A provider of classifiers alone has no chat models to list.
     ENDPOINTS.filter((endpoint) => Object.keys(endpoint.apis).length > 0).map(async (endpoint) => {
-      const listing = dev[endpoint.id];
-      if (listing === undefined) throw new Error(`models.dev lists no provider "${endpoint.id}"`);
+      const listing = dev[endpoint.catalog ?? endpoint.id];
+      if (listing === undefined) throw new Error(`models.dev lists no provider "${endpoint.catalog ?? endpoint.id}"`);
       const list = MUST_THINK_LISTS[endpoint.id];
       const mustThink = list === undefined ? undefined : mustThinkOf(await fetchJson(fetch, list, {}, new AbortController().signal));
       if (list !== undefined && mustThink === undefined) throw new Error(`${list}: not a list of models`);

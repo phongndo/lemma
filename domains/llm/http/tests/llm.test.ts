@@ -394,7 +394,20 @@ describe("providers", () => {
       plugins,
       Effect.flatMap(Llm, (l) => Effect.all({ providers: l.providers, available: l.models({ available: true }), go: l.models() })),
     );
-    expect(result.providers.map((p) => p.id)).toEqual(["anthropic", "openai", "openrouter", "opencode", "opencode-go", "typesafe"]);
+    expect(result.providers.map((p) => p.id)).toEqual([
+      "anthropic",
+      "openai",
+      "openrouter",
+      "opencode",
+      "opencode-go",
+      "xai",
+      "github-copilot",
+      "kimi-coding",
+      "meta",
+      "typesafe",
+    ]);
+    // Copilot takes no key a person can give it: it is signed in to.
+    expect(result.providers.find((p) => p.id === "github-copilot")?.auth).toEqual([{ type: "oauth", name: "Sign in with GitHub Copilot", interactive: true }]);
     const anthropic = result.providers.find((p) => p.id === "anthropic")!;
     expect(anthropic).toMatchObject({ auth: [{ type: "api_key", name: "Anthropic API key" }], configured: true, source: "ANTHROPIC_API_KEY" });
     expect(result.providers.find((p) => p.id === "openai")?.auth).toEqual([

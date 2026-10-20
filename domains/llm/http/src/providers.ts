@@ -10,6 +10,11 @@ import type { Classifier } from "./classify.ts";
 import type { ImageModel } from "./images.ts";
 import nonchatSnapshot from "./nonchat.json" with { type: "json" };
 import { chatgpt } from "./chatgpt.ts";
+import { copilot, copilotHeaders } from "./copilot.ts";
+import { kimi } from "./kimi.ts";
+import { meta } from "./meta.ts";
+import { openrouter } from "./openrouter.ts";
+import { xai } from "./xai.ts";
 import { thinkingFormat } from "./completions.ts";
 import type { ThinkingFormat } from "./completions.ts";
 import { ENDPOINTS } from "./endpoints.ts";
@@ -83,8 +88,10 @@ export interface Provider {
   readonly headers?: (request: LlmRequest) => Record<string, string>;
   /** The base URL of each wire API it serves its models on; a refresh leaves out a model on any other. */
   readonly apis: Readonly<Partial<Record<WireApi, string>>>;
-  /** Its catalog is models.dev's provider of this id, refreshed live. */
+  /** Its catalog is models.dev's provider of this id (or `catalog`), refreshed live. */
   readonly live: boolean;
+  /** models.dev's id for it, where that is not its own. */
+  readonly catalog?: string;
   /** Its Responses API also speaks OpenAI's WebSocket mode. */
   readonly webSocket?: boolean;
   models: readonly Model[];
@@ -115,6 +122,11 @@ const opencodeSession = (request: LlmRequest) => ({ "x-opencode-session": reques
 /** What each built-in provider adds to its endpoints: a sign-in, the headers its requests need. */
 const extras: Readonly<Record<string, Pick<BuiltinProvider, "oauth" | "headers" | "webSocket">>> = {
   openai: { oauth: chatgpt, webSocket: true },
+  openrouter: { oauth: openrouter },
+  xai: { oauth: xai },
+  "github-copilot": { oauth: copilot, headers: copilotHeaders },
+  "kimi-coding": { oauth: kimi },
+  meta: { oauth: meta },
   opencode: { headers: opencodeSession },
   "opencode-go": { headers: opencodeSession },
 };
@@ -158,7 +170,8 @@ const placedAt = <Api extends string, M extends object>(
 export const builtin = (definition: BuiltinProvider): Provider => ({
   id: definition.id,
   name: definition.name,
-  apiKey: { name: `${definition.name} API key`, env: definition.env },
+  apiKey: { name: `${definition.name} API key`, env: definition.env, ...(definition.keyLogin === false ? { login: false as const } : {}) },
+  ...(definition.catalog === undefined ? {} : { catalog: definition.catalog }),
   ...(definition.oauth === undefined ? {} : { oauth: definition.oauth }),
   ...(definition.headers === undefined ? {} : { headers: definition.headers }),
   apis: definition.apis,

@@ -182,7 +182,18 @@ describe("fromDev", () => {
 
   it("describes the committed catalog's providers on the protocols this plugin speaks", () => {
     const providers = builtinProviders();
-    expect(providers.map((provider) => provider.id)).toEqual(["anthropic", "openai", "openrouter", "opencode", "opencode-go", "typesafe"]);
+    expect(providers.map((provider) => provider.id)).toEqual([
+      "anthropic",
+      "openai",
+      "openrouter",
+      "opencode",
+      "opencode-go",
+      "xai",
+      "github-copilot",
+      "kimi-coding",
+      "meta",
+      "typesafe",
+    ]);
     // TypeSafe serves classifiers alone.
     for (const provider of providers.filter((provider) => Object.keys(provider.apis).length > 0)) {
       expect(provider.models.length).toBeGreaterThan(0);

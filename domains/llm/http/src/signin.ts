@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { Duration, Effect } from "effect";
+import { refused } from "./http.ts";
 import { signInPage } from "./page.ts";
 import type { LoginContext } from "./providers.ts";
 
@@ -244,6 +245,9 @@ export const postForm = (fetchImpl: typeof fetch, url: string, fields: Record<st
 /** The device-code grant's poll, as RFC 8628 answers it: done with tokens, or pending, slowed, or failed by its `error`. */
 export function devicePoll<A>(provider: string, response: Response, body: Record<string, unknown>, done: (body: Record<string, unknown>) => A): DevicePoll<A> {
   if (response.ok && typeof body.access_token === "string" && body.access_token !== "") return { status: "done", value: done(body) };
+  // The provider failing a while, or asking for fewer requests, ends nothing: the code may still be entered.
+  if (response.status === 429) return { status: "slow-down" };
+  if (response.status >= 500) return { status: "pending" };
   switch (body.error) {
     case "authorization_pending":
       return { status: "pending" };
@@ -258,3 +262,52 @@ export function devicePoll<A>(provider: string, response: Response, body: Record
       return { status: "failed", message: `${provider}'s token request failed (${response.status})${oauthDetail(body)}` };
   }
 }
+
+/** How long one request of a sign-in may take. */
+const REQUEST_TIMEOUT_MS = 30_000;
+const bounded = (signal: AbortSignal) => AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
+
+/** Where a device-code grant asks its provider, and how. */
+export interface DeviceEndpoints<A> {
+  /** As notices name it: "xAI". */
+  readonly provider: string;
+  /** The device authorization endpoint, and the form it is sent. */
+  readonly authorize: string;
+  readonly fields: Record<string, string>;
+  /** The token endpoint, and the form a poll sends, given the device code. */
+  readonly token: string;
+  readonly poll: (deviceCode: string) => Record<string, string>;
+  /** Headers every request sends (a client's User-Agent). */
+  readonly headers?: Record<string, string>;
+  /** What a poll's tokens sign in with. */
+  readonly done: (body: Record<string, unknown>) => A;
+}
+
+/** A device-code sign-in, start to end: the code asked for and shown to the person, then the provider polled for it. */
+export const deviceFlow = <A>(context: LoginContext, endpoints: DeviceEndpoints<A>) =>
+  Effect.gen(function* () {
+    const { provider } = endpoints;
+    const grant = yield* Effect.tryPromise({
+      try: async (signal) => {
+        const response = await postForm(context.fetch, endpoints.authorize, endpoints.fields, bounded(signal), endpoints.headers);
+        if (!response.ok) throw await refused(response, `${provider}'s device authorization failed`);
+        const body = await json(response);
+        const link = trustedLink(body.verification_uri_complete) ?? trustedLink(body.verification_uri);
+        if (typeof body.device_code !== "string" || typeof body.user_code !== "string" || link === undefined) {
+          throw new Error(`${provider}'s device authorization answer is not one${oauthDetail(body)}`);
+        }
+        return {
+          deviceCode: body.device_code,
+          userCode: body.user_code,
+          verificationUri: link,
+          ...(typeof body.interval === "number" ? { intervalSeconds: body.interval } : {}),
+          ...(typeof body.expires_in === "number" ? { expiresInSeconds: body.expires_in } : {}),
+        };
+      },
+      catch: (error) => error,
+    });
+    return yield* deviceSignIn(context, provider, grant, async (signal) => {
+      const response = await postForm(context.fetch, endpoints.token, endpoints.poll(grant.deviceCode), bounded(signal), endpoints.headers);
+      return devicePoll(provider, response, await json(response), endpoints.done);
+    });
+  });

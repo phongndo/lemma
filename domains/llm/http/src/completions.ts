@@ -39,6 +39,8 @@ export interface Compat {
 const isOpenRouter = (model: Pick<Model, "provider" | "baseUrl">) => model.provider === "openrouter" || model.baseUrl.includes("openrouter.ai");
 const isOpenCode = (model: Pick<Model, "provider" | "baseUrl">) =>
   model.provider === "opencode" || model.provider === "opencode-go" || model.baseUrl.includes("opencode.ai");
+/** Kimi Code's API, Moonshot's: its own rules, as Moonshot's are. */
+const isKimi = (model: Pick<Model, "provider" | "baseUrl">) => model.provider === "kimi-coding" || /api\.kimi\.(com|ai)|api\.moonshot\./.test(model.baseUrl);
 const isDeepSeek = (model: Pick<Model, "provider" | "baseUrl" | "id">) =>
   model.provider === "deepseek" || model.baseUrl.toLowerCase().includes("deepseek.com") || (isOpenCode(model) && model.id.startsWith("deepseek"));
 
@@ -53,15 +55,16 @@ export function thinkingFormat(model: Pick<Model, "provider" | "baseUrl" | "id" 
 export function compatOf(model: Model): Compat {
   const openrouter = isOpenRouter(model);
   const deepseek = isDeepSeek(model);
-  const nonstandard = openrouter || isOpenCode(model) || deepseek;
+  const kimi = isKimi(model);
+  const nonstandard = openrouter || isOpenCode(model) || deepseek || kimi;
   const detected: Compat = {
     developerRole: openrouter ? model.id.startsWith("anthropic/") || model.id.startsWith("openai/") : !nonstandard,
     store: !nonstandard,
     reasoningEffort: true,
-    maxTokensField: isOpenCode(model) || deepseek ? "max_tokens" : "max_completion_tokens",
+    maxTokensField: isOpenCode(model) || deepseek || kimi ? "max_tokens" : "max_completion_tokens",
     thinkingFormat: thinkingFormat(model),
-    // DeepSeek's thinking models, and Kimi K2.6, refuse an assistant message without it, behind OpenRouter as well.
-    reasoningContent: deepseek || (openrouter && /^~?deepseek\/|^moonshotai\/kimi-k2\.6/.test(model.id)),
+    // DeepSeek's thinking models, and Kimi's, refuse an assistant message without it, behind OpenRouter as well.
+    reasoningContent: deepseek || kimi || (openrouter && /^~?deepseek\/|^moonshotai\/kimi-k2\.6/.test(model.id)),
     cacheControl: openrouter && model.id.startsWith("anthropic/"),
     usageInStreaming: true,
   };

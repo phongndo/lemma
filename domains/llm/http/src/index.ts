@@ -223,7 +223,7 @@ export function makeLlmPlugin(options: Options = {}) {
           if (!(yield* signedInWithAccount(provider))) provider.models = apiModels.get(provider.id) ?? provider.models;
           if (config.liveCatalogs) {
             // Read from models.dev and the provider's word on which models must reason: either out of reach, the list stands.
-            const listing = (yield* Effect.promise(() => dev(signal)))?.[provider.id];
+            const listing = (yield* Effect.promise(() => dev(signal)))?.[provider.catalog ?? provider.id];
             const mustThink = listing === undefined ? undefined : yield* Effect.promise(() => mustThinkOfProvider(provider.id, signal));
             const fresh = listing === undefined || mustThink === undefined ? [] : liveModels(provider, listing, mustThink);
             if (fresh.length > 0) apiModels.set(provider.id, fresh);

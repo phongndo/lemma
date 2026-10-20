@@ -9,6 +9,10 @@ export interface Endpoint {
   /** The base URL of each wire API it serves its models on; its catalog leaves out a model on any other. */
   readonly apis: Readonly<Partial<Record<WireApi, string>>>;
   readonly env: readonly string[];
+  /** models.dev's id for it, where that is not its own (Kimi Code's plan is `kimi-code-plan-cn` there). */
+  readonly catalog?: string;
+  /** False: it takes no key a person can give it, only a sign-in (Copilot's). */
+  readonly keyLogin?: false;
   /**
    * Where it serves its classifier models (`classify.ts`), on which protocol, and those models where it publishes no
    * list of them: kept by hand. OpenRouter's are its list's, in `nonchat.json` (`scripts/catalog.ts`).
@@ -76,6 +80,27 @@ export const ENDPOINTS: readonly Endpoint[] = [
     },
     env: ["OPENCODE_API_KEY"],
   },
+  { id: "xai", name: "xAI", apis: { "openai-responses": "https://api.x.ai/v1" }, env: ["XAI_API_KEY"] },
+  {
+    id: "github-copilot",
+    name: "GitHub Copilot",
+    // A signed-in account's requests go to the host its token names (`copilot.ts`).
+    apis: {
+      "anthropic-messages": "https://api.githubcopilot.com",
+      "openai-responses": "https://api.githubcopilot.com",
+      "openai-completions": "https://api.githubcopilot.com",
+    },
+    env: [],
+    keyLogin: false,
+  },
+  {
+    id: "kimi-coding",
+    name: "Kimi Code",
+    catalog: "kimi-code-plan-cn",
+    apis: { "openai-completions": "https://api.kimi.com/coding/v1" },
+    env: ["KIMI_API_KEY"],
+  },
+  { id: "meta", name: "Meta", apis: { "openai-responses": "https://api.meta.ai/v1" }, env: ["META_API_KEY"] },
   // Classifiers only: no chat models, and none in models.dev's catalog.
   {
     id: "typesafe",

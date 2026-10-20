@@ -47,6 +47,8 @@ const API_OF_NPM: Readonly<Record<string, WireApi>> = {
   "@ai-sdk/anthropic": "anthropic-messages",
   "@ai-sdk/openai": "openai-responses",
   "@ai-sdk/openai-compatible": "openai-completions",
+  // xAI's API speaks OpenAI's Responses protocol.
+  "@ai-sdk/xai": "openai-responses",
   "@openrouter/ai-sdk-provider": "openai-completions",
 };
 
