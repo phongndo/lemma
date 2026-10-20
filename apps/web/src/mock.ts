@@ -614,6 +614,8 @@ export const createMockHost = (): Host => {
   let heldScript: { readonly released: Promise<void>; readonly release: () => void } | undefined;
   /** Prompts a plugin answers instead of placing them, by their text (`lemmaMock.answerPrompts`). */
   let answers = new Map<string, PromptOutcome>();
+  /** Each worktree asked for, as asked (`lemmaMock.worktreesAsked`). */
+  const worktreesAsked: unknown[] = [];
   const mockTrace = createMockTrace(plugins.map((plugin) => plugin.id));
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
@@ -660,6 +662,8 @@ export const createMockHost = (): Host => {
       answerPrompts: (outcomes: Readonly<Record<string, PromptOutcome>>) => {
         answers = new Map(Object.entries(outcomes));
       },
+      /** The worktrees the app has asked for, each as its call's payload. */
+      worktreesAsked: () => worktreesAsked,
     },
   });
   const halted = () => {
@@ -1827,7 +1831,9 @@ export const createMockHost = (): Host => {
       return { parent, entries, truncated: false };
     }),
     serveCall("workspace.local", WorkspaceChannels.createDirectory, async ({ path }) => ({ path, exists: true })),
-    serveCall("workspace.local", WorkspaceChannels.createWorktree, async ({ path, branch }) => {
+    serveCall("workspace.local", WorkspaceChannels.createWorktree, async (asked) => {
+      const { path, branch } = asked;
+      worktreesAsked.push(asked);
       await sleep(300);
       const tree = `${HOME}/worktrees/${path.split("/").pop()}/${branch.replace(/\//g, "-")}`;
       return { path: tree, exists: true, git: { root: tree, branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: path } };

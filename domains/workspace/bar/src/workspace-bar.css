@@ -3,19 +3,6 @@
   overflow: hidden;
 }
 
-.workspace-bar {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  margin: -16px 20px 0;
-  padding: 20px 6px 4px;
-  border: 1px solid var(--border);
-  border-top: 0;
-  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-  background: var(--bg-sunk);
-}
-
 .strip-chip {
   display: inline-flex;
   align-items: center;
@@ -30,6 +17,11 @@
   font-size: calc(12.5px * var(--text-scale));
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* On a new chat's start line: no chevron, so the line reads as text; under the pointer or open, it shows as a button. */
+.start-chip > .icon:last-child {
+  display: none;
 }
 
 button.strip-chip:hover:not(:disabled),
@@ -117,6 +109,29 @@ button.strip-chip:hover:not(:disabled),
   padding: 4px;
 }
 
+/* A new worktree's branch menu ends with whether it starts from the remote: a switch, under the list. */
+.menu-toggle-row {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 8px 14px;
+  border-top: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.menu-toggle-row > .icon {
+  width: 14px;
+  height: 14px;
+  color: var(--text-3);
+  flex: none;
+}
+
+.menu-toggle-row .spacer {
+  flex: 1;
+}
+
 .menu-note {
   flex: none;
   padding: 9px 14px;
@@ -125,41 +140,4 @@ button.strip-chip:hover:not(:disabled),
   font-size: calc(11.5px * var(--text-scale));
   line-height: 1.45;
   white-space: normal;
-}
-
-.strip-sep {
-  width: 1px;
-  height: 14px;
-  margin: 0 2px;
-  background: var(--border-strong);
-  flex: none;
-}
-
-.mode-menu {
-  width: 340px;
-  max-width: calc(100vw - 16px);
-}
-
-.menu-item-tall {
-  align-items: flex-start;
-  padding-top: 8px;
-  padding-bottom: 8px;
-  white-space: normal;
-}
-
-.menu-item-tall .menu-check {
-  margin-top: 2px;
-}
-
-.menu-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.menu-desc {
-  font-size: calc(12px * var(--text-scale));
-  color: var(--text-3);
-  line-height: 1.4;
 }

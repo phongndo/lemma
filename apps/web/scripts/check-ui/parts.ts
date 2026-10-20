@@ -122,8 +122,8 @@ export const parts = async (): Promise<string> => {
   await marker("ThreadHeader", { side: "end" });
   await marker("SidebarActions");
   await marker("ComposerActions");
-  await marker("WorkspaceBarItems", { side: "start" });
-  for (const slot of ["ThreadHeader", "SidebarActions", "ComposerActions", "WorkspaceBarItems"]) {
+  await marker("ThreadCard");
+  for (const slot of ["ThreadHeader", "SidebarActions", "ComposerActions", "ThreadCard"]) {
     await page.waitForSelector(`.check-${slot}`, { timeout: 5_000 }).catch(() => assert.fail(`${slot} does not render what a plugin adds`));
   }
   // A palette source: its items come up in the palette, and its prefix narrows to it.

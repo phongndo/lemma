@@ -1,6 +1,5 @@
 import type { MenuAction } from "@lemma/frame";
 import { defineSlot } from "@lemma/web";
-import type { Region } from "@lemma/web";
 import type { WorkspaceStatus } from "../workspace.ts";
 import { Context } from "effect";
 import type { Accessor } from "solid-js";
@@ -61,13 +60,6 @@ export class Workspace extends Context.Service<Workspace, WorkspaceService>()("l
 export type ProjectAction = MenuAction<string>;
 
 export const ProjectActions = defineSlot<ProjectAction>("project.actions");
-
-/** An item in the workspace bar under the composer, at its start or end. The project, mode, and branch pickers are its defaults. */
-export interface WorkspaceBarItem extends Region {
-  readonly side: "start" | "end";
-}
-
-export const WorkspaceBarItems = defineSlot<WorkspaceBarItem>("workspace-bar.items");
 
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const WorkspaceActionIds = { addProject: "add-project.open" } as const;

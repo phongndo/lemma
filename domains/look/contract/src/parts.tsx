@@ -41,7 +41,8 @@ export interface DialogProps {
 /** A modal: backdrop, Escape to close, focus kept inside. */
 export const DialogPart = definePart<DialogProps>("dialog");
 
-export type Placement = "top-start" | "top-end" | "bottom-start" | "bottom-end";
+/** Which side of its trigger a menu opens on (it flips when the other has more room), and how it lines up: with the trigger's start or end edge, or centered on it (`top`, `bottom`). */
+export type Placement = "top" | "bottom" | "top-start" | "top-end" | "bottom-start" | "bottom-end";
 
 export interface PopoverProps {
   readonly label: string;

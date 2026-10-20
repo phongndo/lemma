@@ -212,6 +212,30 @@ export const devtools = async (): Promise<string> => {
   // until the queue is done with, so none depends on timing.
   await page.goto(`${url}/?mock`);
   await settled(page);
+  // A new thread's prompt is in the middle of the page, under its start line: where it works and its mode, which the
+  // composer's own row does not hold.
+  await page
+    .waitForSelector(".thread-chat.starting .thread-start .agent-mode-chip", { timeout: 5_000 })
+    .catch(() => assert.fail("a new thread has no start line with its mode under its prompt"));
+  assert.equal(await page.locator(".composer-controls [aria-label=Mode]").count(), 0, "a new thread's mode is picked in the composer");
+  // The line is under the prompt, and its menus open below it, each centered on its item.
+  await page.click(".thread-start [aria-label=Mode]");
+  await page.waitForSelector(".agent-mode-menu");
+  const [modeItem, modeMenu, prompt] = await Promise.all(
+    [".thread-start [aria-label=Mode]", ".agent-mode-menu", ".composer-dock textarea"].map((selector) => page.locator(selector).boundingBox()),
+  );
+  assert(modeItem!.y > prompt!.y, "a new thread's start line is not under its prompt");
+  // The prompt (its box, with any notice over it) is in the middle of the page, the line under it moving it nowhere.
+  const [composer, chat] = await Promise.all(
+    [".composer-dock > :not(.thread-start)", ".thread-chat"].map((selector) => page.locator(selector).first().boundingBox()),
+  );
+  assert(Math.abs(composer!.y + composer!.height / 2 - (chat!.y + chat!.height / 2)) < 2, "a new thread's prompt is not in the middle of the page");
+  assert(
+    modeMenu!.y > modeItem!.y && Math.abs(modeMenu!.x + modeMenu!.width / 2 - (modeItem!.x + modeItem!.width / 2)) < 2,
+    "a start line's menu does not open below its item, centered on it",
+  );
+  await page.keyboard.press("Escape");
+  await page.waitForSelector(".agent-mode-menu", { state: "detached" });
   await page.evaluate(async () => {
     const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
     (await (window as any).lemma.service(Settings)).open(undefined);
@@ -224,6 +248,23 @@ export const devtools = async (): Promise<string> => {
   await page.fill("textarea", "start a turn");
   await page.keyboard.press("Enter");
   await page.waitForSelector(".send.stop");
+  // Sent, the thread has started: its prompt goes to the bottom, and the start line with it.
+  await page
+    .waitForSelector(".thread-chat.starting", { state: "detached", timeout: 5_000 })
+    .catch(() => assert.fail("a thread's prompt stays in the middle of the page once its first prompt is sent"));
+  // Its facts are in its card, open over the chat until closed, its mode first; the composer holds none of them.
+  await page
+    .waitForSelector(".thread-card .menu-item:first-child >> text=Work mode", { timeout: 5_000 })
+    .catch(() => assert.fail("a started thread's card does not show its mode first"));
+  assert.equal(
+    await page.locator(".composer-dock .context-row, .composer-dock .agent-mode-chip, .workspace-bar").count(),
+    0,
+    "a thread's facts are in its composer",
+  );
+  await page.click(".main-head .card-toggle");
+  await page.waitForSelector(".thread-card", { state: "detached", timeout: 5_000 }).catch(() => assert.fail("the thread card's switch does not close it"));
+  await page.click(".main-head .card-toggle");
+  await page.waitForSelector(".thread-card", { timeout: 5_000 }).catch(() => assert.fail("the thread card's switch does not open it again"));
   await page.fill("textarea", "steer it");
   // Something written takes the stop button's place with the steer button, rather than adding one beside it.
   await page

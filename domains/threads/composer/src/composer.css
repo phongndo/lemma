@@ -9,7 +9,8 @@
   max-width: var(--content);
   width: 100%;
   margin: 0 auto;
-  padding: 0 24px 18px;
+  /* The space under the box, against the page's foot: a page that places it elsewhere (a new thread's, in the middle) sets `--composer-foot`. */
+  padding: 0 24px var(--composer-foot, 18px);
   /* Over the conversation: its margins leave the pointer to what is under them. */
   pointer-events: none;
 }

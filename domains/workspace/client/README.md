@@ -2,8 +2,8 @@
 
 Projects and the directory the composer works in, for the web app: provides
 `Workspace` ([`@lemma/workspace/web`](../contract/src/web/workspace.ts)), which
-the sidebar, the composer, the workspace bar, and the palette read. It asks
-the host through `WorkspaceChannels` (`workspace.status`,
+the sidebar, the composer, a new thread's start line, the thread card, and
+the palette read. It asks the host through `WorkspaceChannels` (`workspace.status`,
 `workspace.create-directory`, `workspace.create-worktree`). Requires `Client`,
 `Notify`, and `Threads` (`@lemma/threads`); adds to no slot. No config.
 

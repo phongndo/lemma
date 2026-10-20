@@ -1,0 +1,69 @@
+/* The mode menu: each mode's name over what it is for, the chosen one checked at its end. */
+.agent-mode-menu {
+  width: 340px;
+  max-width: calc(100vw - 16px);
+}
+
+.agent-mode-item {
+  padding-block: 8px;
+  white-space: normal;
+}
+
+.agent-mode-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.agent-mode-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.agent-mode-description {
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+  line-height: 1.4;
+}
+
+/* On a new thread's start line, after where it works: a chip as quiet as the workspace's beside it. */
+.agent-mode-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  max-width: 220px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-3);
+  font-size: calc(12.5px * var(--text-scale));
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.agent-mode-chip:hover,
+.agent-mode-chip[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text-2);
+}
+
+/* No chevron, so the line reads as text; under the pointer or open, it shows as a button. */
+.agent-mode-chip > .icon:last-child {
+  display: none;
+}
+
+/* Between a thread's mode and what it works in: a quiet dot. */
+.agent-mode-sep {
+  padding: 0 2px;
+  color: var(--text-3);
+  flex: none;
+}
+
+/* Nothing after it on the line (no project yet): no separator. */
+.agent-mode-sep:last-child {
+  display: none;
+}

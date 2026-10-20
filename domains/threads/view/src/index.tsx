@@ -4,7 +4,19 @@ import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
 import { load, save } from "@lemma/web/storage";
 import { dragEdge } from "@lemma/web/drag";
-import { sessionTitle, ComposerRegion, ComposerTakeovers, Pane, ThreadActions, ThreadHeader, Threads, ThreadsActionIds, Views } from "@lemma/threads";
+import {
+  sessionTitle,
+  ComposerRegion,
+  ComposerTakeovers,
+  Pane,
+  ThreadActions,
+  ThreadHeader,
+  Threads,
+  ThreadsActionIds,
+  ThreadCard,
+  ThreadStart,
+  Views,
+} from "@lemma/threads";
 import { Actions } from "@lemma/actions";
 import { ActionMenu, Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
@@ -13,12 +25,15 @@ import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
 import type { ThreadAction } from "@lemma/threads";
-import { ArchiveIcon, CopyIcon, MoreIcon, PenSquareIcon, PencilIcon, PinIcon, Popover, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
+import { ArchiveIcon, CopyIcon, LogIcon, MoreIcon, PenSquareIcon, PencilIcon, PinIcon, Popover, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
+import { CostRow } from "./card.tsx";
 import { createInspector } from "./inspector.tsx";
 import styles from "./thread-view.css?inline";
 
 const WIDTH_KEY = "lemma.threads.view.inspector-width";
+/** Whether the thread card is kept open, in this browser: open until closed. */
+const CARD_KEY = "lemma.threads.view.card";
 /** The inspection pane's width (px) when none is kept, and the least it and the chat beside it take. */
 const WIDTH = 480;
 const MIN_WIDTH = 280;
@@ -47,6 +62,14 @@ export default defineWebPlugin({
     /** The view filling the page: the first. */
     const main = () => views()[0];
     const inspector = createInspector({ threads, slots, router, focusChat: () => slots.get(Actions, ThreadsActionIds.focusComposer)?.run() });
+    /** The thread card (`ThreadCard`) is kept open, over an open thread's chat: until closed, and remembered. */
+    const [cardOpen, setCardOpen] = createSignal(load(CARD_KEY) !== "0");
+    const toggleCard = () => {
+      setCardOpen(!cardOpen());
+      save(CARD_KEY, cardOpen() ? undefined : "0");
+    };
+    /** An open thread with something sent: what the card is of (a new one has its start line instead). */
+    const started = () => threads.activeId() !== undefined && !threads.blank();
     /** The address names a thread the host does not have. */
     const unknown = () => {
       const named = router.matchOf(ThreadRoute)?.params.id;
@@ -162,6 +185,16 @@ export default defineWebPlugin({
     });
     // The inspection pane opens and closes from the keyboard and the header's button, at the tab it last showed.
     add(
+      {
+        id: "thread.card",
+        order: 12,
+        title: "Toggle thread details",
+        detail: "The open thread's mode, where it works, its context, and its cost, over its chat",
+        category: "View",
+        icon: LogIcon,
+        when: started,
+        run: toggleCard,
+      },
       {
         id: "thread.inspect",
         order: 12,
@@ -298,6 +331,23 @@ export default defineWebPlugin({
         </button>
       </Show>
     ));
+    // The thread card's switch, before the thread's menu.
+    header("thread.card", 15, "end", () => (
+      <Show when={started()}>
+        <button
+          class="icon-button card-toggle"
+          classList={{ on: cardOpen() }}
+          aria-label="Thread details"
+          aria-pressed={cardOpen()}
+          data-tip={cardOpen() ? "Hide thread details" : "Show thread details"}
+          onClick={toggleCard}
+        >
+          <LogIcon />
+        </button>
+      </Show>
+    ));
+    // Its own row: what the thread has cost, after the others' (its mode, where it works, its context).
+    slots.add(ThreadCard, { id: "thread.cost", order: 100, component: () => <CostRow threads={threads} /> });
     header("thread.menu", 20, "end", () => (
       <Show when={threads.active()} keyed>
         {(session) => {
@@ -350,15 +400,22 @@ export default defineWebPlugin({
         });
         if (started) setResizing(true);
       };
+      /** A new thread, nothing sent yet: its prompt in the middle of the page, over what it starts with (`ThreadStart`). */
+      const starting = () => threads.blank() && unknown() === undefined && main()?.composer === true;
       return (
         <main class="main" classList={{ resizing: resizing(), maximized: inspector.maximized() }} ref={page}>
           {/* Out of sight while the pane fills the page, so focus does not go into it. */}
-          <section class="thread-chat" ref={chat} inert={inspector.maximized() || undefined}>
+          <section class="thread-chat" classList={{ starting: starting() }} ref={chat} inert={inspector.maximized() || undefined}>
             <header class="main-head">
               <Each slot={ThreadHeader} filter={(item) => item.side === "start"} />
               <span class="spacer" />
               <Each slot={ThreadHeader} filter={(item) => item.side === "end"} />
             </header>
+            <Show when={cardOpen() && started() && unknown() === undefined}>
+              <aside class="menu thread-card" aria-label="Thread details">
+                <Each slot={ThreadCard} />
+              </aside>
+            </Show>
             <Show
               when={unknown()}
               fallback={
@@ -379,6 +436,11 @@ export default defineWebPlugin({
             <Show when={unknown() === undefined && main()?.composer === true}>
               <div class="composer-dock" ref={dock}>
                 <First slot={ComposerRegion} />
+                <Show when={starting()}>
+                  <div class="thread-start">
+                    <Each slot={ThreadStart} />
+                  </div>
+                </Show>
               </div>
             </Show>
           </section>

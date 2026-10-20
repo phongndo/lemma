@@ -495,6 +495,22 @@ export const TurnOptionSources = defineSlot<TurnOptionSource>("composer.turn-opt
 /** Under the composer: the workspace bar. */
 export const ComposerFooter = defineSlot<Region>("composer.footer");
 
+/**
+ * Under a new thread's prompt, while nothing is sent: what the thread starts with and keeps (its mode, its project), in
+ * one centered line, in order; a menu an item opens goes below it, centered on it (`placement: "bottom"`). Gone once
+ * the first prompt is sent: a thread's own are shown elsewhere.
+ */
+export const ThreadStart = defineSlot<Region>("thread.start");
+
+/**
+ * The thread card: an open thread's facts, in rows, floating over its chat's top right while the person keeps it open
+ * (its header's switch, remembered): its mode, where it works, how full its context is, what it has cost. Each row is
+ * a plugin's, in order, drawn as a menu's rows are (`menu-item`, its icon in `menu-check`, `menu-label`, `menu-hint`);
+ * a row that does something is a button, or a menu's trigger, of that class. Changing a thread is mostly the agent's
+ * to do, so a row mostly shows.
+ */
+export const ThreadCard = defineSlot<Region>("thread.card");
+
 export interface ToolBodyProps {
   readonly id: string;
   readonly name: string;
