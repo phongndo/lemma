@@ -1,4 +1,5 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
+import { usesPlan } from "@lemma/llm";
 import type { ModelInfo, ThinkingLevel } from "@lemma/llm";
 import { contextSize } from "./context-size.ts";
 import { DEFAULT_THINKING, filterModels, thinkingLevels, Models, LlmActionIds, ProviderLogo } from "@lemma/llm/web";
@@ -7,7 +8,7 @@ import { SectionIds, SettingsGroups } from "@lemma/settings";
 import { ComposerControls, PromptCommands, ThreadsActionIds } from "@lemma/threads";
 import { Slots, defineWebPlugin } from "@lemma/web";
 import type { ModelsService } from "@lemma/llm/web";
-import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
+import { BrainIcon, CheckIcon, ChevronDownIcon, ImageIcon, PlusIcon, Popover, SearchIcon, SettingRow, StarIcon } from "@lemma/look";
 import type { Placement } from "@lemma/look";
 import styles from "./model-picker.css?inline";
 
@@ -94,6 +95,16 @@ function ModelPicker(props: {
   const [query, setQuery] = createSignal("");
   const [rail, setRail] = createSignal<Rail>("all");
   const providerName = (id: string) => props.models.providers().find((provider) => provider.id === id)?.name ?? id;
+  /** Providers whose requests use the person's plan, not a price per token. */
+  const onPlan = createMemo(
+    () =>
+      new Set(
+        props.models
+          .providers()
+          .filter(usesPlan)
+          .map((provider) => provider.id),
+      ),
+  );
   const providers = createMemo(() => [...new Set(props.models.models().map((model) => model.provider))]);
   const shown = createMemo((): readonly ModelInfo[] => {
     // Searching always covers every model.
@@ -206,6 +217,24 @@ function ModelPicker(props: {
                   </button>
                 )}
               </For>
+              {/* Another provider's models: connecting one is a step away. */}
+              <Show when={props.onProviders}>
+                {(open) => (
+                  <button
+                    type="button"
+                    class="rail-item rail-connect"
+                    tabindex="-1"
+                    aria-label="Connect a provider"
+                    data-tip="Connect a provider"
+                    onClick={() => {
+                      close();
+                      open()();
+                    }}
+                  >
+                    <PlusIcon />
+                  </button>
+                )}
+              </Show>
             </nav>
             <div class="model-list" role="listbox">
               <For each={shown()}>
@@ -220,6 +249,11 @@ function ModelPicker(props: {
                           <span>{providerName(model.provider)}</span>
                           <span class="dot" />
                           <span>{contextSize(model.contextWindow)}</span>
+                          <Show when={onPlan().has(model.provider)}>
+                            <span class="model-plan" data-tip="Included in your plan">
+                              Plan
+                            </span>
+                          </Show>
                           <Show when={model.reasoning}>
                             <span class="meta-icon" data-tip="Reasoning">
                               <BrainIcon />
@@ -278,7 +312,30 @@ function ModelPicker(props: {
                       </>
                     }
                   >
-                    {rail() === "favorites" && query() === "" ? "Star a model to keep it here" : "No matching models"}
+                    <Show
+                      when={rail() === "favorites" && query() === ""}
+                      fallback={
+                        <>
+                          No matching models.{" "}
+                          <Show when={props.onProviders}>
+                            {(open) => (
+                              <button
+                                type="button"
+                                class="link-button"
+                                onClick={() => {
+                                  close();
+                                  open()();
+                                }}
+                              >
+                                Connect another provider
+                              </button>
+                            )}
+                          </Show>
+                        </>
+                      }
+                    >
+                      Star a model to keep it here
+                    </Show>
                   </Show>
                 </div>
               </Show>

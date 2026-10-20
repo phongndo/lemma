@@ -1,9 +1,9 @@
 import { batch, createMemo, createSignal } from "solid-js";
 import { HostError } from "@lemma/contracts";
 import { LlmChannels, ThinkingLevel } from "@lemma/llm";
-import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo } from "@lemma/llm";
+import type { AuthType, CustomProviderSpec, ModelInfo, ProviderInfo, SignIn } from "@lemma/llm";
 import { load, loadJson, loadStrings, recordOf, save } from "@lemma/web/storage";
-import { clampThinking, DEFAULT_THINKING, LLM_CONTRACT, Models, resolveModel } from "@lemma/llm/web";
+import { browserPlace, clampThinking, DEFAULT_THINKING, LLM_CONTRACT, Models, resolveModel, signInReturn } from "@lemma/llm/web";
 import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
 const MODEL_KEY = "lemma.model";
@@ -35,6 +35,9 @@ export default defineWebPlugin({
     );
     const [favorites, setFavorites] = createSignal<readonly string[]>(loadStrings(FAVORITES_KEY));
     const [loggingIn, setLoggingIn] = createSignal<string>();
+    const [signIns, setSignIns] = createSignal<readonly SignIn[]>([]);
+    // Each list is all of them: one heard on reconnecting replaces what was left from before.
+    plugin.onCleanup(client.follow(LlmChannels.signIns, undefined, (list) => setSignIns(list)));
 
     const selected = createMemo(() => resolveModel(models(), preferred()));
     const thinking = createMemo(() => {
@@ -126,10 +129,16 @@ export default defineWebPlugin({
         login: async (provider: ProviderInfo, type: AuthType) => {
           if (loggingIn() !== undefined) return false;
           setLoggingIn(provider.id);
-          const before = Math.max(0, ...notify.toasts().map((toast) => toast.id));
           try {
+            // Where this page's browser is may decide a sign-in's way in; the desktop app's page offers a way back to it.
+            const returnTo = signInReturn("lemmaDesktop" in window);
+            await client.channel.call(LlmChannels.login, {
+              provider: provider.id,
+              type,
+              browser: browserPlace(location.hostname),
+              ...(returnTo === undefined ? {} : { returnTo }),
+            });
             // Listed now, so it shows connected as the call returns: `llm.changes` reports it too, a moment later.
-            await client.channel.call(LlmChannels.login, { provider: provider.id, type });
             await refresh();
             return true;
           } catch (error) {
@@ -138,13 +147,10 @@ export default defineWebPlugin({
             return false;
           } finally {
             setLoggingIn(undefined);
-            // Device codes, login links, and progress from this attempt are no longer useful; its success still is.
-            const origin = `login:${provider.id}`;
-            notify.dismissWhere(
-              (toast) => toast.id > before && toast.kind !== "signed-in" && (toast.code !== undefined || toast.links !== undefined || toast.origin === origin),
-            );
           }
         },
+        signIns,
+        answerSignIn: (signIn: SignIn, value: string) => client.channel.call(LlmChannels.answerSignIn, { provider: signIn.provider, seq: signIn.seq, value }),
         cancelLogin: async (provider: ProviderInfo) => {
           return client.channel.call(LlmChannels.cancelLogin, { provider: provider.id }).catch((error) => {
             notify.report(error, `Could not cancel the ${provider.name} login`);
@@ -155,7 +161,7 @@ export default defineWebPlugin({
         logout: async (provider: ProviderInfo) => {
           try {
             await client.channel.call(LlmChannels.logout, { provider: provider.id });
-            notify.toast({ level: "info", message: `Logged out of ${provider.name}` });
+            notify.toast({ level: "info", message: `Logged out of ${provider.name}. To end its access there too, revoke it with ${provider.name}.` });
             await refresh();
           } catch (error) {
             notify.report(error, "Logout failed");

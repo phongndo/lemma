@@ -290,3 +290,18 @@
   width: 14px;
   height: 14px;
 }
+
+/* After the providers: connecting another, quieter than they are. */
+.rail-item.rail-connect .icon {
+  color: var(--text-3);
+}
+
+/* A model the person's plan covers, where a price per token would go. */
+.model-plan {
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  font-size: calc(10.5px * var(--text-scale));
+  line-height: 1.5;
+}
