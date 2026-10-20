@@ -5,7 +5,7 @@
   "description": "A plugin with both halves: a todo tool, a prompt section, and a thread view, its state the session's log",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -18,7 +18,7 @@
   "devDependencies": {
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vitest": "5.0.5"
   },
   "lemma": {

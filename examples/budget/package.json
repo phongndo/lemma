@@ -5,7 +5,7 @@
   "description": "A token budget for each turn, and a meter: observes the agent's turns, wraps each model call, and has a say in whether a turn goes on",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -22,7 +22,7 @@
     "@lemma/tools": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vitest": "5.0.5"
   },
   "lemma": {
