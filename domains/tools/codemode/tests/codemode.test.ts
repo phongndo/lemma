@@ -402,27 +402,47 @@ describe("pi codemode", () => {
 
   it("cancels the calls still running when the script ends: it returned, or timed out", async () => {
     const cancelled: string[] = [];
+    // `slow` tells `running` once it is listening for its cancel, so a script that waits on `running` ends with `slow`
+    // running, however slowly the calls start: a call cancelled before it starts never runs its tool at all.
+    let listening!: () => void;
+    const started = new Promise<void>((resolve) => (listening = resolve));
     const slow = definePlugin({
       id: "slow",
       layer: Layer.effectDiscard(
         Effect.flatMap(PluginContext, (owner) =>
-          owner.add(Tools, {
-            name: "slow",
-            description: "Waits until cancelled",
-            input: Schema.Struct({ name: Schema.String }),
-            execute: async ({ name }, { signal }) => {
-              await new Promise((resolve) => signal.addEventListener("abort", resolve, { once: true }));
-              cancelled.push(name);
-              return new ToolResult({ content: [] });
-            },
-          }),
+          Effect.andThen(
+            owner.add(Tools, {
+              name: "slow",
+              description: "Waits until cancelled",
+              input: Schema.Struct({ name: Schema.String }),
+              execute: async ({ name }, { signal }) => {
+                const aborted = new Promise((resolve) => (signal.aborted ? resolve(undefined) : signal.addEventListener("abort", resolve, { once: true })));
+                listening();
+                await aborted;
+                cancelled.push(name);
+                return new ToolResult({ content: [] });
+              },
+            }),
+            owner.add(Tools, {
+              name: "running",
+              description: "Answers once slow is running",
+              input: Schema.Struct({}),
+              execute: async () => {
+                await started;
+                return new ToolResult({ content: [] });
+              },
+            }),
+          ),
         ),
       ),
     });
-    const returned = await run(`tools.slow({ name: "unawaited" }); return "ok";`, process.cwd(), [slow]);
+    const returned = await run(`tools.slow({ name: "unawaited" }); await tools.running({}); return "ok";`, process.cwd(), [slow]);
     expect(textOf(returned)).toContain("ok");
     await vi.waitFor(() => expect(cancelled).toEqual(["unawaited"]));
-    expect((returned.details as CodemodeDetails).calls).toMatchObject([{ name: "slow", status: "cancelled" }]);
+    expect((returned.details as CodemodeDetails).calls).toMatchObject([
+      { name: "slow", status: "cancelled" },
+      { name: "running", status: "ok" },
+    ]);
     const timedOut = await run(`// @options: {"timeout_ms": 200}\nawait tools.slow({ name: "timed out" });`, process.cwd(), [slow]);
     expect(textOf(timedOut)).toContain("Script timed out");
     await vi.waitFor(() => expect(cancelled).toEqual(["unawaited", "timed out"]));
@@ -660,7 +680,8 @@ describe("a script of many calls", () => {
     expect(details.calls).toHaveLength(500);
     expect(details.callsOmitted).toBe(20);
     expect(details.calls.slice(0, 2).map((call) => call.args)).toEqual(['["bash"]', '["read"]']);
-  });
+    // 520 calls one after another, each through the sandbox: longer than the default allows on a busy machine.
+  }, 30_000);
 });
 
 describe("store()", () => {
