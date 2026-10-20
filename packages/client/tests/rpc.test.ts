@@ -28,7 +28,7 @@ class SilentWebSocket extends EventTarget {
 interface FakeHost {
   /** Whether it answers each ping at once, as a live host on the same machine does. */
   answering: boolean;
-  /** Answers it holds back until the test sends them, as a live host behind a slow or reconnecting network's are; none while undefined. */
+  /** Answers held back until the test sends them, as a slow or reconnecting network holds a live host's; while undefined, none is. */
   held: (() => void)[] | undefined;
   /** How long after it was asked to each sleep ends, as a busy, throttled, or sleeping machine's timers do. */
   lateMillis: number;
