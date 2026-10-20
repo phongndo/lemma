@@ -102,6 +102,23 @@ const retryDelay = (headers: Headers | undefined, attempt: number): { readonly m
   return { ms: Math.min(500 * 2 ** attempt, 8000) * (1 - Math.random() * 0.25), named: false };
 };
 
+/** What a provider's refusal says: its status, and its wording (`errorText`) or the status's. */
+const refusalText = async (response: Response): Promise<string> =>
+  `${response.status} ${errorText(await response.text().catch(() => "")) || response.statusText || "(no body)"}`.trim();
+
+/**
+ * A provider's refusal (`response`, not ok) of a request whose caller asks again itself, as a `ProviderError`: `what`
+ * was refused, with its status and wording, and the wait the provider names before another try as `retryAfterMs`.
+ */
+export async function refused(response: Response, what: string): Promise<ProviderError> {
+  const delay = retryDelay(response.headers, 0);
+  return new ProviderError(`${what}: ${await refusalText(response)}`, {
+    status: response.status,
+    headers: response.headers,
+    ...(delay.named ? { retryAfterMs: delay.ms } : {}),
+  });
+}
+
 const sleep = (ms: number, signal: AbortSignal) =>
   new Promise<void>((resolve, reject) => {
     if (signal.aborted) return reject(abortError());
@@ -133,12 +150,7 @@ export async function post(
     try {
       const response = await fetchImpl(url, { method: "POST", headers: init.headers, body, signal: init.signal });
       if (response.ok) return response;
-      const text = await response.text().catch(() => "");
-      const said = errorText(text);
-      failure = new ProviderError(`${response.status} ${said || response.statusText || "(no body)"}`.trim(), {
-        status: response.status,
-        headers: response.headers,
-      });
+      failure = new ProviderError(await refusalText(response), { status: response.status, headers: response.headers });
       if (!retryable(response.status, response.headers)) throw failure;
     } catch (error) {
       if (init.signal.aborted) throw abortError();

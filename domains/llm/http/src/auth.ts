@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import type { Context } from "effect";
 import type { Credential, Credentials } from "@lemma/credentials";
-import { classifyFailure } from "./failure.ts";
+import { classifyFailure, JudgedError } from "./failure.ts";
 import { ConnectionError, networkError, ProviderError } from "./http.ts";
 import type { OAuthCredential, Provider } from "./providers.ts";
 import type { Auth } from "./wire.ts";
@@ -69,17 +69,12 @@ export const resolveAuth = (
       ).pipe(
         Effect.mapError((error) => {
           // Judged as a request's failure is: only a refusal (the refresh token revoked or spent) needs a new sign-in;
-          // the network, or the provider, failing may pass when asked again, and the sign-in is still good.
+          // the network, or the provider, failing may pass when asked again, and the sign-in is still good. Decided
+          // here, where the cause is known, it travels with the error whatever its message says.
           const failed = error instanceof ProviderError || error instanceof ConnectionError ? error : networkError(error);
-          const message = `${provider.name} sign-in could not be refreshed: ${failed.message}`;
-          if (classifyFailure(failed, failed.message).kind === "fatal")
-            return new Error(`${message}. Run /login ${provider.id} to sign in again.`, { cause: error });
-          if (failed instanceof ConnectionError) return new ConnectionError(message, { cause: error });
-          return new ProviderError(message, {
-            ...(failed.status === undefined ? {} : { status: failed.status }),
-            ...(failed.retryAfterMs === undefined ? {} : { retryAfterMs: failed.retryAfterMs }),
-            cause: error,
-          });
+          const failure = classifyFailure(failed, failed.message);
+          const advice = failure.kind === "fatal" ? `. Run /login ${provider.id} to sign in again.` : "";
+          return new JudgedError(`${provider.name} sign-in could not be refreshed: ${failed.message}${advice}`, failure, { cause: error });
         }),
       );
       if (isOAuth(fresh)) return { key: fresh.access, oauth: true };

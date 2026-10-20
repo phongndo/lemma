@@ -27,6 +27,7 @@ import { devSource, mustThinkSource, planModels, planSource } from "./catalog.ts
 import { deviceId } from "./device.ts";
 import { headerRecord } from "./http.ts";
 import { identityHeaders } from "./identity.ts";
+import { classifyFailure, JudgedError } from "./failure.ts";
 import { isWireApi, thinkFor, toModelInfo } from "./model.ts";
 import type { Model } from "./model.ts";
 import { Output } from "./output.ts";
@@ -429,7 +430,7 @@ export function makeLlmPlugin(options: Options = {}) {
                     const message = error instanceof Error ? error.message : String(error);
                     output.fail(
                       auth?.oauth === true && message.includes("usage_limit_exceeded")
-                        ? new Error(`${message}\nCheck your ChatGPT usage: ${CHATGPT_USAGE}`, { cause: error })
+                        ? new JudgedError(`${message}\nCheck your ChatGPT usage: ${CHATGPT_USAGE}`, classifyFailure(error, message), { cause: error })
                         : error,
                       undefined,
                       aborted,

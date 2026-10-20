@@ -19,6 +19,19 @@ const STOPS: Readonly<Record<string, LlmFailure>> = {
   network_error: { kind: "transient" },
 };
 
+/**
+ * An error whose failure was decided where its cause was known (a sign-in's refresh, judged by what refused it): its
+ * wording, made for the user, cannot change what it is.
+ */
+export class JudgedError extends Error {
+  readonly failure: LlmFailure;
+  constructor(message: string, failure: LlmFailure, options?: { readonly cause?: unknown }) {
+    super(message, options);
+    this.name = "JudgedError";
+    this.failure = failure;
+  }
+}
+
 /** What a stop the provider named is, where `STOPS` knows it; undefined leaves it to its wording (`classifyFailure`). */
 export const stopFailure = (reason: string | undefined): LlmFailure | undefined => (reason === undefined ? undefined : STOPS[reason]);
 
@@ -53,12 +66,13 @@ const PASSING =
   /overloaded|server_error|server_busy|api_error|internal (?:server )?error|temporarily|unavailable|high demand|at capacity|provider returned error|timed? ?out|try again|ended (?:before|without)|terminated|other side closed|socket|network|\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_[A-Z_]+)\b/i;
 
 /**
- * Why a call failed, for a caller deciding whether to ask again: `overflow` when the provider says the request is too
+ * Why a call failed, for a caller deciding whether to ask again: as decided already for a `JudgedError`; `overflow` when the provider says the request is too
  * long for the context window; by status when it refused the request (a 429 a `rate-limit`, a 408, 409, or 5xx
  * `transient`, another 4xx `fatal`, as is a quota or billing limit); by its wording when it failed mid-answer or the
  * connection did. What cannot be told to pass is `fatal`.
  */
 export function classifyFailure(error: unknown, message: string): LlmFailure {
+  if (error instanceof JudgedError) return error.failure;
   const after = error instanceof ProviderError && error.retryAfterMs !== undefined ? { retryAfterMs: error.retryAfterMs } : {};
   if (error instanceof ConnectionError) return { kind: "transient" };
   if (!RATE_LIMIT.test(message) && OVERFLOW.some((pattern) => pattern.test(message))) return { kind: "overflow" };

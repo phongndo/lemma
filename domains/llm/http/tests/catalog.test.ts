@@ -419,5 +419,14 @@ describe("Sign in with ChatGPT", () => {
       resource: "https://api.openai.com/v1",
     });
     expect(fresh).toMatchObject({ access: "new", refresh: "ref2", clientId: "issued" });
+    // A refusal keeps its status and the wait OpenAI names before another try.
+    const limited = await chatgpt
+      .refresh(
+        { type: "oauth", access: "old", refresh: "ref", expires: 0, clientId: "issued" },
+        async () => Response.json({ error: { message: "Slow down" } }, { status: 429, headers: { "retry-after": "120" } }),
+        new AbortController().signal,
+      )
+      .catch((error: unknown) => error);
+    expect(limited).toMatchObject({ status: 429, retryAfterMs: 120_000, message: "OpenAI's token request failed: 429 Slow down" });
   });
 });

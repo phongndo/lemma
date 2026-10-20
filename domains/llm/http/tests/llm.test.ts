@@ -953,6 +953,12 @@ describe("login", () => {
     expect(blip.stored).toMatchObject({ type: "oauth", refresh: "r" });
     const down = await outcome(() => Promise.reject(new ProviderError("OpenAI's token request failed (503): unavailable", { status: 503 })));
     expect(down.last).toMatchObject({ type: "error", failure: { kind: "transient" } });
+    // What the refusal is stays what its status made it, whatever its words.
+    const slowed = await outcome(() => Promise.reject(new ProviderError("429 Slow down", { status: 429, retryAfterMs: 120_000 })));
+    expect(slowed.last).toMatchObject({ type: "error", failure: { kind: "rate-limit", retryAfterMs: 120_000 } });
+    const denied = await outcome(() => Promise.reject(new ProviderError("400 invalid_grant: Refresh denied by network policy", { status: 400 })));
+    expect(denied.last).toMatchObject({ type: "error", failure: { kind: "fatal" } });
+    expect((denied.last as { message: { errorMessage: string } }).message.errorMessage).toContain("Run /login faux");
   });
 });
 
