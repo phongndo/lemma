@@ -1,6 +1,8 @@
 import { Effect } from "effect";
 import type { Context } from "effect";
 import type { Credential, Credentials } from "@lemma/credentials";
+import { classifyFailure } from "./failure.ts";
+import { ConnectionError, networkError, ProviderError } from "./http.ts";
 import type { OAuthCredential, Provider } from "./providers.ts";
 import type { Auth } from "./wire.ts";
 
@@ -66,8 +68,18 @@ export const resolveAuth = (
         ),
       ).pipe(
         Effect.mapError((error) => {
-          const detail = error instanceof Error ? error.message : String(error);
-          return new Error(`${provider.name} sign-in could not be refreshed: ${detail}. Run /login ${provider.id} to sign in again.`);
+          // Judged as a request's failure is: only a refusal (the refresh token revoked or spent) needs a new sign-in;
+          // the network, or the provider, failing may pass when asked again, and the sign-in is still good.
+          const failed = error instanceof ProviderError || error instanceof ConnectionError ? error : networkError(error);
+          const message = `${provider.name} sign-in could not be refreshed: ${failed.message}`;
+          if (classifyFailure(failed, failed.message).kind === "fatal")
+            return new Error(`${message}. Run /login ${provider.id} to sign in again.`, { cause: error });
+          if (failed instanceof ConnectionError) return new ConnectionError(message, { cause: error });
+          return new ProviderError(message, {
+            ...(failed.status === undefined ? {} : { status: failed.status }),
+            ...(failed.retryAfterMs === undefined ? {} : { retryAfterMs: failed.retryAfterMs }),
+            cause: error,
+          });
         }),
       );
       if (isOAuth(fresh)) return { key: fresh.access, oauth: true };

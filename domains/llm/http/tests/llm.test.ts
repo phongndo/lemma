@@ -10,6 +10,7 @@ import { InteractionError, InteractionOrigin } from "@lemma/contracts";
 import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import { llmConformance } from "@lemma/testing";
 import { deviceId } from "../src/device.ts";
+import { ProviderError } from "../src/http.ts";
 import { makeLlmPlugin } from "../src/index.ts";
 import type { OAuthMethod } from "../src/index.ts";
 import {
@@ -931,6 +932,27 @@ describe("login", () => {
       failure: { kind: "fatal" },
       message: { errorMessage: "Faux sign-in could not be refreshed: invalid_grant. Run /login faux to sign in again." },
     });
+  });
+
+  it("fails a request whose sign-in could not be refreshed for the network as one to ask again, the sign-in kept", async () => {
+    const outcome = async (refresh: OAuthMethod["refresh"]) => {
+      const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh };
+      const credentials = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
+      const plugins = [
+        credentials.plugin,
+        fakeInteraction(() => Effect.succeed("")).plugin,
+        makeLlmPlugin({ fetch: offline, providers: () => [faux({ oauth: sso })], env: {} }),
+      ];
+      const events = await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })));
+      return { last: events.at(-1), stored: credentials.store.get("faux") };
+    };
+    // As Node's fetch fails when the name does not resolve.
+    const blip = await outcome(() => Promise.reject(new TypeError("fetch failed", { cause: { code: "ENOTFOUND" } })));
+    expect(blip.last).toMatchObject({ type: "error", failure: { kind: "transient" } });
+    expect((blip.last as { message: { errorMessage: string } }).message.errorMessage).not.toContain("/login");
+    expect(blip.stored).toMatchObject({ type: "oauth", refresh: "r" });
+    const down = await outcome(() => Promise.reject(new ProviderError("OpenAI's token request failed (503): unavailable", { status: 503 })));
+    expect(down.last).toMatchObject({ type: "error", failure: { kind: "transient" } });
   });
 });
 

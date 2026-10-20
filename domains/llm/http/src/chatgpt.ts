@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { Effect } from "effect";
+import { ProviderError } from "./http.ts";
 import type { LoginContext, OAuthCredential, OAuthMethod } from "./providers.ts";
 
 /**
@@ -118,7 +119,10 @@ async function token(fetchImpl: typeof fetch, body: URLSearchParams, clientId: s
     body,
     signal,
   });
-  if (!response.ok) throw new Error(`OpenAI's token request failed (${response.status}): ${(await response.text().catch(() => "")) || response.statusText}`);
+  if (!response.ok) {
+    const detail = (await response.text().catch(() => "")) || response.statusText;
+    throw new ProviderError(`OpenAI's token request failed (${response.status}): ${detail}`, { status: response.status });
+  }
   const data = (await response.json()) as { access_token?: unknown; refresh_token?: unknown; scope?: unknown; expires_in?: unknown };
   const { access_token: access, refresh_token: refresh, scope, expires_in: expiresIn } = data;
   if (typeof access !== "string" || typeof refresh !== "string" || typeof scope !== "string" || typeof expiresIn !== "number" || expiresIn <= 0) {
