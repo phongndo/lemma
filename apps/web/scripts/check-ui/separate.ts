@@ -11,13 +11,7 @@ export const separate = async (): Promise<string> => {
   await fresh.goto(`${url}/?mock`);
   await fresh.waitForSelector(".composer-callout, .settings");
   assert.equal(await fresh.locator(".settings").count(), 0, "with no provider set up, the app opened settings rather than the chat");
-  // It offers the popular sign-ins themselves, then the full list.
-  assert.deepEqual(
-    await fresh.locator(".composer-callout .provider-start-way").allTextContents(),
-    ["ChatGPT", "GitHub Copilot", "OpenRouter"],
-    "the no-provider notice should offer the popular sign-ins",
-  );
-  await fresh.click(".composer-callout >> text=All providers…");
+  await fresh.click(".composer-callout button >> text=Connect");
   await fresh.waitForSelector(".settings >> text=Connect a provider to start chatting");
   await fresh.locator(".provider", { hasText: "OpenCode Zen" }).locator(".provider-connect").click();
   await fresh.fill(".connect input[type=password]", "sk-check");
