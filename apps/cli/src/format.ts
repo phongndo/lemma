@@ -298,8 +298,8 @@ export const formatChannels = (channels: readonly ChannelInfo[]): string =>
   channels.length === 0
     ? "No channels: no running plugin serves one."
     : pad([
-        ["channel", "kind", "title", "from", "what it does"],
-        ...channels.map((channel) => [channel.id, channel.kind, channel.title ?? "", channel.source, channel.description ?? ""]),
+        ["channel", "kind", "access", "title", "from", "what it does"],
+        ...channels.map((channel) => [channel.id, channel.kind, channel.access ?? "", channel.title ?? "", channel.source, channel.description ?? ""]),
       ]);
 
 /** An inspector's snapshot or a channel call's result: as tables when it has their shape, else as JSON. */

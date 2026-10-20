@@ -39,24 +39,27 @@ channel and the code (`"sessions.get" failed (NotFound): …`).
 
 ## Config
 
-| Key                 | Default                   | What it does                                                                                                 |
-| ------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| `channels`          | the read-only list, below | Channel ids offered as tools, called freely                                                                  |
-| `confirm`           | the writing list, below   | Channel ids offered as tools whose every call asks the person first, showing the payload                     |
-| `maxDelegations`    | `4`                       | `lemma_delegate` sessions running at once at each depth; more wait for one to end                            |
-| `maxDepth`          | `2`                       | How deep delegations go: a delegated session this many levels down cannot delegate; `0`: no `lemma_delegate` |
-| `confirmDelegation` | `false`                   | Ask the person before each `lemma_delegate`                                                                  |
-| `maxOutputChars`    | `20000`                   | Text characters of a result the model reads when it calls a tool directly                                    |
+| Key                 | Default                 | What it does                                                                                                 |
+| ------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `channels`          | `["*"]`                 | Channel ids offered as tools, called freely; `*` is every channel that declares it only reads                |
+| `confirm`           | the writing list, below | Channel ids offered as tools whose every call asks the person first, showing the payload                     |
+| `maxDelegations`    | `4`                     | `lemma_delegate` sessions running at once at each depth; more wait for one to end                            |
+| `maxDepth`          | `2`                     | How deep delegations go: a delegated session this many levels down cannot delegate; `0`: no `lemma_delegate` |
+| `confirmDelegation` | `false`                 | Ask the person before each `lemma_delegate`                                                                  |
+| `maxOutputChars`    | `20000`                 | Text characters of a result the model reads when it calls a tool directly                                    |
 
-`channels` by default holds those that only read and answer in bounded size:
-sessions (`sessions.list`, `.get`, `.events`, `.search`), the agent's state
-(`agent.running`, `.view`, `.queue`), streams a script waits on
-(`agent.activity`, `sessions.log`, `sessions.changes`), what else Lemma has
-(`commands.list`, `skills.list`, `profiles.list`, `llm.models`,
-`llm.providers`, `cli.commands`), the workspace (`workspace.status`, `.branches`, `.browse`,
-`files.search`), and the host's trace (`devtools.trace.spans`, `.changes`,
-`cli.in-progress`). `mcp.state` is left out: it carries each server's entry as
-written, which may hold a credential typed in place of a `${VAR}`.
+A channel says what calling it does (`access` in its declaration): `read`,
+`operate`, `change`, or `secret`. `channels` holds `*` by default, every
+channel that declares `read`, whatever plugin serves it, so a plugin's new
+read is a script's new tool with nothing configured: sessions and their
+Trajectory views (`sessions.list`, `.events`, `.search`, `.records`,
+`.request`, `.cache`), the agent's state, what else Lemma has (commands,
+skills, profiles, models), the workspace, and the host's own state and trace
+(`devtools.host.*`, `devtools.trace.*`). It stays an allowlist: one without
+`*` offers only the ids it names, and an id beside `*` adds a channel that
+declares nothing. A channel that declares a write (`operate`, `change`)
+asks first even when `channels` names it; `confirm` takes precedence over
+both.
 
 `confirm` by default holds those that change something an agent may usefully
 do: prompting, cancelling, withdrawing, and promoting (`agent.prompt`,
@@ -68,11 +71,14 @@ command (`commands.run`), the workspace's writes
 `mcp.reconnect`. A declined question, a dismissed one, or nobody to ask
 leaves the channel uncalled, and the call is an error saying which.
 
-Never offered, whatever the config says: the logins and stored credentials
-(`llm.login`, `llm.logout`, `llm.cancel-login`), the provider and server
-entries that can hold them (`llm.add-custom`, `llm.remove-custom`,
-`llm.set-logo`, `mcp.put`), and `cli.run`, which runs any `lemma` command,
-those among them. `commands.run` can run a command that logs out of a
+Never offered, whatever the config says: a channel that declares `secret`
+(a credential can cross it), and, even when a replacement declares less,
+signing in and out (`llm.login`, `llm.logout`, `llm.cancel-login`), the
+provider and server entries that can hold a credential (`llm.add-custom`,
+`llm.remove-custom`, `llm.set-logo`, `mcp.put`), their state as written
+(`mcp.state`, `mcp.changes`, where a credential may be typed in place of a
+`${VAR}`), and `cli.run`, which runs any `lemma` command, those among them.
+`commands.run` can run a command that logs out of a
 provider; its question shows the command's id.
 
 ## Delegation
@@ -126,6 +132,10 @@ The new session sees only the prompt.
   most and risks nothing a session's own tools do not; changing it (a prompt
   that spends money, a checkout that moves a session) is the person's to
   allow, call by call. Credentials never cross.
+- **The channel says what it does.** Whether a call only reads is a fact
+  about the channel, which its author knows, so its declaration says it and
+  every read is offered as it comes. Which writes are worth an agent's asking
+  is a judgment, so the config names them.
 - **Delegation is a tool, not a channel.** Waiting for a turn to end and
   reading its answer is several calls and a projection of the log; scripts
   get one call that resolves to the answer, which `Promise.all` fans out.

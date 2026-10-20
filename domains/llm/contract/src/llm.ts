@@ -633,6 +633,7 @@ export const LlmChannels = {
   providers: defineChannel({
     kind: "call",
     id: "llm.providers",
+    access: "read",
     title: "Providers",
     description: "Every model provider, with the logins it offers and whether requests can authenticate now",
     payload: Schema.Void,
@@ -642,6 +643,7 @@ export const LlmChannels = {
   models: defineChannel({
     kind: "call",
     id: "llm.models",
+    access: "read",
     title: "Models",
     description: "Every known model; with available, only those whose provider is configured",
     payload: Schema.Struct({ available: Schema.optional(Schema.Boolean) }),
@@ -666,6 +668,7 @@ export const LlmChannels = {
   login: defineChannel({
     kind: "call",
     id: "llm.login",
+    access: "secret",
     title: "Log in",
     description: "Runs a provider's login flow and stores the credential; its questions and progress reach clients as interactions and notices",
     payload: Schema.Struct({ ...providerField, type: AuthType }),
@@ -675,6 +678,7 @@ export const LlmChannels = {
   cancelLogin: defineChannel({
     kind: "call",
     id: "llm.cancel-login",
+    access: "operate",
     title: "Cancel a login",
     description: "Stops a provider's running login, whoever started it; false when none was running",
     payload: Schema.Struct(providerField),
@@ -683,6 +687,7 @@ export const LlmChannels = {
   logout: defineChannel({
     kind: "call",
     id: "llm.logout",
+    access: "change",
     title: "Log out",
     description: "Removes a provider's stored credential",
     payload: Schema.Struct(providerField),
@@ -692,6 +697,7 @@ export const LlmChannels = {
   addCustom: defineChannel({
     kind: "call",
     id: "llm.add-custom",
+    access: "secret",
     title: "Add a provider",
     description: "Adds a provider of the user's on a known wire API; resolves with its id",
     payload: Schema.Struct({ spec: CustomProviderSpec }),
@@ -700,6 +706,7 @@ export const LlmChannels = {
   removeCustom: defineChannel({
     kind: "call",
     id: "llm.remove-custom",
+    access: "change",
     title: "Remove a provider",
     description: "Removes a provider the user added, with its logo",
     payload: Schema.Struct(providerField),
@@ -708,6 +715,7 @@ export const LlmChannels = {
   setLogo: defineChannel({
     kind: "call",
     id: "llm.set-logo",
+    access: "change",
     title: "Set a provider's logo",
     description: "Sets or clears the logo, as SVG markup, of a provider the user added",
     payload: Schema.Struct({ ...providerField, svg: Schema.optional(Schema.String) }),
@@ -725,6 +733,7 @@ export const LlmChannels = {
   changes: defineChannel({
     kind: "stream",
     id: "llm.changes",
+    access: "read",
     title: "Changes",
     description: "Says it is subscribed, then each time the providers or models listed change: list both on each",
     payload: Schema.Void,

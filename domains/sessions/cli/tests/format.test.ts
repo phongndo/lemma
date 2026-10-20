@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { ledger, pluginShares, promptDiff, trajectory } from "@lemma/sessions";
+import { findStep, ledger, pluginShares, promptDiff, trajectory } from "@lemma/sessions";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
 import { formatCache, formatDiff, formatRecords, formatSession, formatShares, formatStep, formatSystem, formatTrajectory } from "../src/format.ts";
-import { findStep, parseOffset } from "../src/index.ts";
+import { parseOffset } from "../src/index.ts";
 
 describe("formatSession", () => {
   const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };

@@ -1,7 +1,8 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
+import type { Context } from "effect";
 import { ConfigField, ConfigValues } from "./config.ts";
 import { CompositionInfo, ConfigScope, FaultRecord, faultMessage, HookUse, PluginSource, RegistryUse } from "./host.ts";
-import type { PluginInfo } from "./host.ts";
+import type { HostControl, Paths, PluginInfo } from "./host.ts";
 
 /*
  * The host as clients see it through `RuntimeRpcs`: who it is, what its
@@ -144,6 +145,21 @@ export const HostInfo = Schema.Struct({
   startedBy: Schema.optional(Schema.String),
 });
 export type HostInfo = typeof HostInfo.Type;
+
+/** What a host says of itself (`Host.Info`) but its version, which its transport gives. */
+export const runtimeInfo = (
+  control: Context.Service.Shape<typeof HostControl>,
+  paths: Context.Service.Shape<typeof Paths>,
+): Effect.Effect<Omit<HostInfo, "version">> =>
+  Effect.map(control.composition, (composition) => ({
+    cwd: paths.cwd,
+    home: paths.home,
+    composition,
+    runtime: control.runtime,
+    pid: control.process.pid,
+    startedAt: control.process.startedAt,
+    ...(control.process.startedBy === undefined ? {} : { startedBy: control.process.startedBy }),
+  }));
 
 /**
  * The version of what the host serves on the wire (`RuntimeRpcs`, and its encoding, which Effect's RPC owns): 6 since

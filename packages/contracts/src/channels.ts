@@ -6,6 +6,11 @@ import { HostError } from "./status.ts";
 
 export type ChannelKind = "call" | "stream";
 
+/** What making a channel's call, or opening its stream, does (see `ChannelDeclaration.access`). */
+export const ChannelAccess = Schema.Literals(["read", "operate", "change", "secret"]);
+export type ChannelAccess = typeof ChannelAccess.Type;
+const ACCESSES: ReadonlySet<unknown> = new Set(ChannelAccess.literals);
+
 /**
  * What a client needs to reach a channel, without its implementation: a
  * contract module declares one, the host plugin serving it adds it with a
@@ -53,6 +58,15 @@ export interface ChannelDeclaration<Kind extends ChannelKind = ChannelKind, Payl
    * its client reopens it (`follow` in `@lemma/client`).
    */
   readonly repeatable?: Kind extends "call" ? boolean : never;
+  /**
+   * What making the call, or opening the stream, does, for whatever decides on an agent's behalf whether to
+   * (`tools.lemma`): `read` only reads, and answers with no credential; `operate` does Lemma's work (prompts the agent,
+   * files a session, writes the workspace); `change` changes Lemma itself (its plugins, their config, how it runs, the
+   * credentials it keeps); `secret` lets a credential cross (a login, a provider's entry, a command line that runs any
+   * command). One running what others register declares the most they do (`commands.run`: `change`). Absent, nothing
+   * is said, and an agent reaches the channel only as configured.
+   */
+  readonly access?: ChannelAccess;
 }
 
 /**
@@ -294,6 +308,8 @@ export const channelProblem = (value: unknown): string | undefined => {
   if (!Schema.isSchema(channel.success)) return named("its `success` must be a Schema");
   if (channel.repeatable !== undefined && typeof channel.repeatable !== "boolean") return named("its `repeatable` must be a boolean");
   if (channel.kind === "stream" && channel.repeatable !== undefined) return named("only a call is `repeatable`: a client reopens a stream itself");
+  if (channel.access !== undefined && !ACCESSES.has(channel.access))
+    return named(`its \`access\` must be one of ${[...ACCESSES].map((access) => JSON.stringify(access)).join(", ")}, not ${JSON.stringify(channel.access)}`);
   if (typeof channel.handle !== "function") return named("its `handle` must be a function");
   return undefined;
 };
@@ -489,6 +505,8 @@ export const ChannelInfo = Schema.Struct({
   kind: Schema.Literals(["call", "stream"]),
   title: Schema.optional(Schema.String),
   description: Schema.optional(Schema.String),
+  /** What calling it does (`ChannelDeclaration.access`): any text, so a client reads a host that knows one it does not. */
+  access: Schema.optional(Schema.String),
   source: Schema.String,
 });
 export type ChannelInfo = typeof ChannelInfo.Type;

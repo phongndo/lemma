@@ -109,6 +109,7 @@ export const FileChannels = {
   search: defineChannel({
     kind: "call",
     id: "files.search",
+    access: "read",
     title: "Search files",
     description: "Files and directories in `cwd` matching `query`, best first; fails Unavailable when no plugin searches files",
     payload: Schema.Struct({ cwd: Schema.String, query: Schema.String, ...FileSearchOptions.fields }),

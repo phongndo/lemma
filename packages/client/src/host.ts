@@ -193,13 +193,13 @@ export const safely = <A>(listener: (value: A) => void, value: A, what: string) 
 };
 
 /** A channel by declaration or by id: how its request is made and its answers read (see `Host.channel`). */
-interface ChannelAccess {
+interface ChannelCodec {
   readonly id: string;
   readonly request: (payload: unknown) => Effect.Effect<{ readonly id: string; readonly payload?: unknown }, HostError>;
   readonly read: (value: unknown) => Effect.Effect<unknown, HostError>;
 }
 
-const channelOf = (target: string | ChannelDeclaration): ChannelAccess => {
+const channelOf = (target: string | ChannelDeclaration): ChannelCodec => {
   if (typeof target === "string") {
     return {
       id: target,

@@ -5,10 +5,13 @@ import { definePlugin, Registries } from "@lemma/core";
 import {
   branchOf,
   cacheReport,
+  findStep,
+  lastTurnRunning,
   LEDGER_SORTS,
   ledger,
   parseLedgerFilter,
   pluginShares,
+  previousRequest,
   promptDiff,
   rebuildRequest,
   recordStart,
@@ -19,7 +22,7 @@ import {
   ThreadRoute,
   trajectory,
 } from "@lemma/sessions";
-import type { LedgerSort, SessionLogUpdate, TrajectoryStep, TrajectoryTurn } from "@lemma/sessions";
+import type { LedgerSort, SessionLogUpdate } from "@lemma/sessions";
 import { callHere, CliCommandError, CliCommands, defineCliCommand, followHere, usageError } from "@lemma/cli";
 import {
   formatCache,
@@ -46,21 +49,6 @@ export const parseOffset = (text: string): number | undefined => {
     return "";
   });
   return rest === "" && text !== "" ? total : undefined;
-};
-
-/** A step by request number, by `<turn>.<step>` (1-based), by step id, or the last step that sent a request. */
-export const findStep = (turns: readonly TrajectoryTurn[], selector: string): { turn: TrajectoryTurn; step: TrajectoryStep } | undefined => {
-  const all = turns.flatMap((turn) => turn.steps.map((step) => ({ turn, step })));
-  const requests = all.filter(({ step }) => step.request !== undefined);
-  if (selector === "last") return requests.at(-1);
-  if (/^\d+$/.test(selector)) return requests[Number(selector) - 1];
-  const position = /^(\d+)\.(\d+)$/.exec(selector);
-  if (position !== null) {
-    const turn = turns[Number(position[1]) - 1];
-    const step = turn?.steps[Number(position[2]) - 1];
-    return turn === undefined || step === undefined ? undefined : { turn, step };
-  }
-  return all.find(({ step }) => step.stepId === selector);
 };
 
 const session = [{ name: "id", description: "A session's id (lemma sessions list)", required: true }] as const;
@@ -263,7 +251,7 @@ export const sessionCommands = (registries: Reader) => [
         const branch = branchOf(events, info.leaf);
         const turns = trajectory(branch);
         if (listing) {
-          const running = turns.at(-1)?.end === undefined;
+          const running = lastTurnRunning(turns);
           let records = ledger(turns).filter(parseLedgerFilter(flags.filter ?? ""));
           if (range !== undefined && records.length > 0) {
             const origin = ledger(turns).reduce((earliest, record) => Math.min(earliest, recordStart(record)), Infinity);
@@ -293,8 +281,7 @@ export const sessionCommands = (registries: Reader) => [
           case "tools":
             return { json: request!.tools, text: formatTools(request!) };
           case "diff": {
-            const requests = turns.flatMap((turn) => turn.steps.flatMap((step) => (step.request === undefined ? [] : [step.request])));
-            const previous = requests[requests.indexOf(request!) - 1];
+            const previous = previousRequest(turns, request!);
             const diff = promptDiff(previous, request!);
             return { json: { previous: previous?.eventId, sections: diff }, text: formatDiff(diff, previous === undefined) };
           }

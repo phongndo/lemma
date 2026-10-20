@@ -15,6 +15,7 @@ import contextPrune from "@lemma/context-prune";
 import skillsFiles from "@lemma/skills-files";
 import contextProject from "@lemma/context-project";
 import credentialsFile from "@lemma/credentials-file";
+import devtoolsHost from "@lemma/devtools-host";
 import devtoolsTrace from "@lemma/devtools-trace";
 import llmCli from "@lemma/llm-cli";
 import llmCommands from "@lemma/llm-commands";
@@ -83,6 +84,7 @@ export const bundled: readonly Plugin[] = [
   commandsRegistry,
   commandsHost,
   devtoolsTrace,
+  devtoolsHost,
   // The lemma command's: the commands and checks plugins add, then each domain's.
   cliRegistry,
   llmCli,

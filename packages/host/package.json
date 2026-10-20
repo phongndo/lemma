@@ -37,6 +37,7 @@
     "@lemma/credentials": "workspace:*",
     "@lemma/credentials-file": "workspace:*",
     "@lemma/devtools": "workspace:*",
+    "@lemma/devtools-host": "workspace:*",
     "@lemma/devtools-trace": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/llm-cli": "workspace:*",

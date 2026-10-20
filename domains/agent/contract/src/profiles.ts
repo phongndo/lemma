@@ -24,6 +24,7 @@ export const ProfileChannels = {
   list: defineChannel({
     kind: "call",
     id: "profiles.list",
+    access: "read",
     title: "List profiles",
     description: "The profiles a thread in a directory (cwd) can be given, and which is the default",
     payload: Schema.Struct({ cwd: Schema.optional(Schema.String) }),

@@ -22,6 +22,7 @@ export const SkillChannels = {
   list: defineChannel({
     kind: "call",
     id: "skills.list",
+    access: "read",
     title: "List skills",
     description: "The skills a session in `cwd` has, by name; where two share a name, the project's, then the nearest",
     payload: Schema.Struct({ cwd: Schema.String }),

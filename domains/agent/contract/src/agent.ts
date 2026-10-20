@@ -535,6 +535,7 @@ export const AgentChannels = {
   prompt: defineChannel({
     kind: "call",
     id: "agent.prompt",
+    access: "operate",
     title: "Prompt",
     description:
       "Sends a prompt to a session and answers when the turn that places it ends; whenBusy says what it does while a turn runs, and calling again with the same requestId never places it twice",
@@ -552,6 +553,7 @@ export const AgentChannels = {
   cancel: defineChannel({
     kind: "call",
     id: "agent.cancel",
+    access: "operate",
     title: "Cancel a turn",
     description:
       "Cancels the session's turn, if any, and answers once it has ended; for a turn a restart cut off that cannot resume yet, once the cancellation is recorded",
@@ -561,6 +563,7 @@ export const AgentChannels = {
   running: defineChannel({
     kind: "call",
     id: "agent.running",
+    access: "read",
     title: "Running turns",
     description: "The sessions with a turn running",
     payload: Schema.Void,
@@ -570,6 +573,7 @@ export const AgentChannels = {
   queue: defineChannel({
     kind: "call",
     id: "agent.queue",
+    access: "read",
     title: "Queued prompts",
     description: "The session's prompts waiting for a turn, oldest first",
     payload: Schema.Struct(sessionField),
@@ -579,6 +583,7 @@ export const AgentChannels = {
   withdraw: defineChannel({
     kind: "call",
     id: "agent.withdraw",
+    access: "operate",
     title: "Withdraw a prompt",
     description: "Takes a queued prompt out, failing its prompt call Retracted; false when it was no longer queued",
     payload: Schema.Struct({ ...sessionField, requestId: Schema.String }),
@@ -587,6 +592,7 @@ export const AgentChannels = {
   promote: defineChannel({
     kind: "call",
     id: "agent.promote",
+    access: "operate",
     title: "Steer with a queued prompt",
     description:
       "Makes a queued follow-up a steer, which the running turn places after its current step; false when it was no queued follow-up, or no turn runs",
@@ -596,6 +602,7 @@ export const AgentChannels = {
   view: defineChannel({
     kind: "call",
     id: "agent.view",
+    access: "read",
     title: "View a session",
     description: "What a client joining now shows of the session beyond its log: the running turn's model and tool output so far, and the queue",
     payload: Schema.Struct(sessionField),
@@ -614,6 +621,7 @@ export const AgentChannels = {
   activity: defineChannel({
     kind: "stream",
     id: "agent.activity",
+    access: "read",
     title: "Agent activity",
     description: "Turns starting and ending, model and tool output, and queue changes in every session, after a subscribed acknowledgement",
     payload: Schema.Void,

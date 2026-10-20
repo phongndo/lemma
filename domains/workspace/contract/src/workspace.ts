@@ -119,6 +119,7 @@ export const WorkspaceChannels = {
   status: defineChannel({
     kind: "call",
     id: "workspace.status",
+    access: "read",
     title: "Workspace status",
     description: "Whether a directory exists, and its git state when it is in a work tree; never fails",
     payload: AtPath,
@@ -128,6 +129,7 @@ export const WorkspaceChannels = {
   browse: defineChannel({
     kind: "call",
     id: "workspace.browse",
+    access: "read",
     title: "Browse directories",
     description: "The directories a partly typed path completes to (`~/code/ba`), best match first; never fails",
     payload: Schema.Struct({ partialPath: Schema.String }),
@@ -137,6 +139,7 @@ export const WorkspaceChannels = {
   createDirectory: defineChannel({
     kind: "call",
     id: "workspace.create-directory",
+    access: "operate",
     title: "Create directory",
     description: "Creates a directory and its missing parents, and gives its status; fails Exists when something is there already",
     payload: AtPath,
@@ -145,6 +148,7 @@ export const WorkspaceChannels = {
   createWorktree: defineChannel({
     kind: "call",
     id: "workspace.create-worktree",
+    access: "operate",
     title: "Create worktree",
     description:
       "Creates a linked worktree of the repository at `path` on a new branch started from `base` (default HEAD), or from its remote version, fetched first (`fromRemote`), and gives its status",
@@ -154,6 +158,7 @@ export const WorkspaceChannels = {
   branches: defineChannel({
     kind: "call",
     id: "workspace.branches",
+    access: "read",
     title: "Branches",
     description: "Local branches by recency, then remote-tracking ones without a local counterpart",
     payload: AtPath,
@@ -163,6 +168,7 @@ export const WorkspaceChannels = {
   checkout: defineChannel({
     kind: "call",
     id: "workspace.checkout",
+    access: "operate",
     title: "Switch branch",
     description: "Switches to `branch` as `git switch` would, creating it from HEAD with `create`, and gives the new status",
     payload: Schema.Struct({ path: Schema.String, branch: Schema.String, create: Schema.optional(Schema.Boolean) }),

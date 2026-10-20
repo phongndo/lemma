@@ -2,7 +2,7 @@
   "name": "@lemma/devtools",
   "version": "0.1.0",
   "private": true,
-  "description": "The devtools domain's contract: the trace's channels, and devtools panels (`./web`)",
+  "description": "The devtools domain's contract: the channels of the trace and of the host's own state, and devtools panels (`./web`)",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

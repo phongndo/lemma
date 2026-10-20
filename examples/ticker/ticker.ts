@@ -38,6 +38,7 @@ export type Quote = typeof Quote.Type;
 export const prices = defineChannel({
   kind: "stream",
   id: "ticker.prices",
+  access: "read",
   title: "Prices",
   description: "Every symbol's quote now, then on each tick",
   payload: Schema.Void,
@@ -48,6 +49,7 @@ export const prices = defineChannel({
 export const quote = defineChannel({
   kind: "call",
   id: "ticker.quote",
+  access: "read",
   title: "Quote",
   description: "One symbol's quote now",
   payload: Schema.Struct({ symbol: Schema.String }),

@@ -180,6 +180,7 @@ export const McpChannels = {
   state: defineChannel({
     kind: "call",
     id: "mcp.state",
+    access: "secret",
     title: "MCP servers",
     description: "Every MCP server, with its state, where it is defined, and its tools",
     payload: Schema.Void,
@@ -190,6 +191,7 @@ export const McpChannels = {
   changes: defineChannel({
     kind: "stream",
     id: "mcp.changes",
+    access: "secret",
     title: "MCP server changes",
     description: "Every MCP server now, then again whenever one changes",
     payload: Schema.Void,
@@ -198,6 +200,7 @@ export const McpChannels = {
   reconnect: defineChannel({
     kind: "call",
     id: "mcp.reconnect",
+    access: "operate",
     title: "Reconnect an MCP server",
     description: "Closes a server's connection and connects again",
     payload: Schema.Struct(serverField),
@@ -206,6 +209,7 @@ export const McpChannels = {
   configure: defineChannel({
     kind: "call",
     id: "mcp.configure",
+    access: "change",
     title: "Configure an MCP server",
     description: "Turns a server on or off, or changes how its tools reach the model, in the user's mcp.json",
     payload: Schema.Struct({ ...serverField, change: McpServerChange }),
@@ -214,6 +218,7 @@ export const McpChannels = {
   put: defineChannel({
     kind: "call",
     id: "mcp.put",
+    access: "secret",
     title: "Add, replace, or remove an MCP server",
     description: "Writes a server's whole entry to the user's mcp.json, or removes it with null",
     payload: Schema.Struct({ ...serverField, entry: Schema.NullOr(McpServerConfig) }),

@@ -247,9 +247,9 @@ describe("against a running host", () => {
   test("channels lists what host plugins serve; an unknown one is NotFound, for a call and a stream alike", async () => {
     // The bundled domains serve theirs; a plugin file's are below, and examples/ticker uses one in a real host.
     const text = (await invoke(["channels"], home)).out;
-    expect(text).toMatch(/^sessions\.list +call +List sessions +sessions\.files /m);
-    expect(text).toMatch(/\nllm\.login\s+call\s+Log in\s+llm\.pi-ai\s+Runs a provider's login flow/);
-    expect(text).toMatch(/\ncommands\.run\s+call\s+Run command\s+commands\.registry\s+Runs a command/);
+    expect(text).toMatch(/^sessions\.list +call +read +List sessions +sessions\.files /m);
+    expect(text).toMatch(/\nllm\.login\s+call\s+secret\s+Log in\s+llm\.pi-ai\s+Runs a provider's login flow/);
+    expect(text).toMatch(/\ncommands\.run\s+call\s+change\s+Run command\s+commands\.registry\s+Runs a command/);
     const listed = JSON.parse((await invoke(["channels", "--json"], home)).out) as { id: string; source: string }[];
     const servedBy = (source: string) => listed.filter((channel) => channel.source === source).map((channel) => channel.id);
     expect(servedBy("sessions.files")).toContain("sessions.list");

@@ -1,7 +1,7 @@
-import { Cause, Effect, Schema } from "effect";
+import { Effect } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
-import { HostError, Inspectors, snapshotOf, toPluginStatus } from "@lemma/contracts";
+import { inspectorSnapshot, listInspectors, runtimeInfo, toPluginStatus } from "@lemma/contracts";
 import type { ChangeReport, HostControl, Paths, ReloadResult } from "@lemma/contracts";
 import { callChannel, listChannels, openedStream, ServedRpcs } from "./channels.ts";
 import { toHostError } from "./errors.ts";
@@ -18,57 +18,16 @@ interface HandlerServices {
   readonly registries: Context.Service.Shape<typeof Registries>;
 }
 
-/** What an inspector's snapshot must be to cross the wire: JSON as it is. */
-const asJson = Schema.encodeUnknownEffect(Schema.toCodecJson(Schema.Unknown));
-
 /** The runtime's calls; every domain serves its own as channels, which this serves as they are registered. */
 export const makeHandlers = ({ version, hub, interactions, paths, control, registries }: HandlerServices) =>
   ServedRpcs.of({
-    "Host.Info": () =>
-      Effect.map(control.composition, (composition) => ({
-        version,
-        cwd: paths.cwd,
-        home: paths.home,
-        composition,
-        runtime: control.runtime,
-        pid: control.process.pid,
-        startedAt: control.process.startedAt,
-        ...(control.process.startedBy === undefined ? {} : { startedBy: control.process.startedBy }),
-      })),
+    "Host.Info": () => Effect.map(runtimeInfo(control, paths), (info) => ({ version, ...info })),
     "Host.Events": ({ answers, client }) => hub.events(answers, client),
     "Host.Clients": () => hub.clients,
     "Host.Plugins": () => Effect.map(control.plugins, (plugins) => plugins.map(toPluginStatus)),
-    "Host.Inspectors": () =>
-      Effect.map(registries.items(Inspectors), (items) =>
-        items.map(({ item, pluginId }) => ({
-          id: item.id,
-          title: item.title,
-          ...(item.description === undefined ? {} : { description: item.description }),
-          source: pluginId,
-        })),
-      ),
-    "Host.Inspect": ({ id }) =>
-      Effect.flatMap(registries.items(Inspectors), (items) => {
-        const found = items.find((contribution) => contribution.item.id === id)?.item;
-        if (found === undefined) return Effect.fail(new HostError({ code: "NotFound", subject: id, message: `No inspector "${id}"` }));
-        // An inspector that fails or dies says so; it never takes the transport with it.
-        return snapshotOf(found).pipe(
-          Effect.catchCause((cause) => {
-            const error = Cause.squash(cause);
-            return Effect.fail(new HostError({ code: "Failed", subject: id, message: error instanceof Error ? error.message : String(error) }));
-          }),
-          // Nor does a snapshot JSON cannot carry, which the protocol would refuse as a defect. One of nothing is no value.
-          Effect.flatMap((snapshot) =>
-            snapshot === undefined
-              ? Effect.succeed(null)
-              : asJson(snapshot).pipe(
-                  Effect.mapError(
-                    (error) => new HostError({ code: "Failed", subject: id, message: `Inspector "${id}"'s snapshot cannot be sent: ${error.message}` }),
-                  ),
-                ),
-          ),
-        );
-      }),
+    "Host.Inspectors": () => listInspectors(registries),
+    // An inspector that fails or dies, or whose snapshot is not JSON, says so; it never takes the transport with it.
+    "Host.Inspect": ({ id }) => inspectorSnapshot(registries, id),
     // Never deferred from here: the transport serving it, the one plugin a change from here waits for, is pinned, so it is
     // not restarted from here (`HostControl.restart` refuses to force a locked plugin).
     "Host.RestartPlugin": ({ pluginId, force }) =>

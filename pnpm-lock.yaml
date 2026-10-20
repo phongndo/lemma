@@ -1375,6 +1375,31 @@ importers:
         specifier: 5.0.4
         version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/devtools/host:
+    dependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/devtools':
+        specifier: workspace:*
+        version: link:../contract
+      effect:
+        specifier: 4.0.4
+        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+    devDependencies:
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.4
+        version: 5.0.4(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   domains/devtools/trace:
     dependencies:
       '@lemma/contracts':
@@ -4141,6 +4166,9 @@ importers:
       '@lemma/devtools':
         specifier: workspace:*
         version: link:../../domains/devtools/contract
+      '@lemma/devtools-host':
+        specifier: workspace:*
+        version: link:../../domains/devtools/host
       '@lemma/devtools-trace':
         specifier: workspace:*
         version: link:../../domains/devtools/trace
