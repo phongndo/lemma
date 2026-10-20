@@ -5,7 +5,7 @@
   "description": "Research notes: tools to write, search, and read notes in the project, a prompt section listing them, a research profile, and a skill",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -24,7 +24,7 @@
     "@lemma/skills-files": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vitest": "5.0.5"
   },
   "lemma": {

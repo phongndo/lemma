@@ -7,6 +7,15 @@ Processes run with `--conditions=lemma-source`, which selects `@lemma/core`'s
 and `@lemma/router`'s sources over their builds; the condition is Lemma's own because dependencies
 publish a `source` condition for files they do not ship.
 
+The type checker is [tsrs](https://github.com/oxc-project/tsrs), a Rust port of
+TypeScript 7's compiler: each package's `check` is `tsrs --noEmit`, and the
+core's and router's builds are `tsrs -p`. It reports what TypeScript does, a few
+times faster and in under half the memory. It follows a TypeScript nightly,
+which its version names, so a message can differ slightly from a released
+`tsc`'s. The packed-package check (`pnpm package:check`) still type-checks a
+consumer with TypeScript itself, as the packages' users do. Its Linux binary
+links against glibc: on NixOS it runs through `programs.nix-ld`.
+
 ```sh
 nix develop -c pnpm install --frozen-lockfile
 nix develop -c pnpm check          # build, import boundaries, test hygiene, lint, format check, type-check
@@ -26,8 +35,11 @@ set `HK=0` to skip them once.
 CI (`.github/workflows/check.yml`) runs its checks as parallel jobs, in the dev
 shell on Linux: `pnpm check`, the packed-package and browser checks, and
 `pnpm test` and the web app's `ui:check`, each in two halves on runners of
-their own (`--shard=1/2`, `--shard=2/2`); macOS runs `pnpm test`, in halves
-too, with plain Node.js and pnpm. The `passed` job succeeds only when every
+their own (`--shard=1/2`, `--shard=2/2`); macOS runs `pnpm test` in thirds,
+with plain Node.js and pnpm. The tests' shards are split by how long each file
+took (`scripts/test-shards.ts`, from `scripts/test-durations.json`), so they end
+together; when they drift apart, `nix develop -c pnpm test:durations` measures
+again. The `passed` job succeeds only when every
 other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its
 bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
 every job on main, unchanged, so a failure there is a flake to fix, and runs the

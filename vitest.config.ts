@@ -3,6 +3,7 @@ import { availableParallelism } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
+import { DurationSequencer } from "./scripts/test-shards.ts";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 /** The packages in `group`: its folders with a package.json, so a file beside them (a README, `.DS_Store`) is none. */
@@ -16,9 +17,11 @@ const domains = existsSync(join(root, "domains")) ? readdirSync(join(root, "doma
 
 // `pnpm test`: every package's tests in one run, each package a project with its own config. One pool takes files
 // from all of them, so a slow package's files spread over the workers rather than holding a turn of their own. Many
-// tests wait on processes they start, so twice as many workers as cores keeps the cores busy.
+// tests wait on processes they start, so twice as many workers as cores keeps the cores busy. CI's shards split the
+// files by how long each takes (scripts/test-shards.ts).
 export default defineConfig({
   test: {
+    sequence: { sequencer: DurationSequencer },
     projects: [
       ...packagesIn("packages"),
       ...domains.flatMap((domain) => packagesIn(`domains/${domain.name}`)),
