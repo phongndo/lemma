@@ -35,4 +35,17 @@ describe("known projects", () => {
     ];
     expect(knownProjects(sessions, ["/b", "/d"], { hidden: ["/b", "/d"], standalone: "/scratch" })).toEqual(["/b"]);
   });
+
+  it("files a worktree's sessions under its repository's project, and waits for a folder not yet placed", () => {
+    const sessions = [
+      { cwd: "/repo", updatedAt: 1 },
+      { cwd: "/trees/repo/fix", updatedAt: 7 },
+      { cwd: "/unplaced", updatedAt: 9 },
+    ];
+    const projectOf = (cwd: string) => (cwd === "/unplaced" ? undefined : cwd.startsWith("/trees/repo/") ? "/repo" : cwd);
+    expect(knownProjects(sessions, [], { projectOf })).toEqual(["/repo"]);
+    // A folder added by hand is listed as its project too: a worktree added is its repository, and one unplaced waits.
+    expect(knownProjects([], ["/trees/repo/other", "/unplaced", "/plain"], { projectOf })).toEqual(["/repo", "/plain"]);
+    expect(knownProjects([], ["/trees/repo/other"], { projectOf, hidden: ["/repo"] })).toEqual([]);
+  });
 });

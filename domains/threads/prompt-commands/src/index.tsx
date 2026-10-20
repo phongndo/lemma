@@ -40,8 +40,9 @@ export default defineWebPlugin({
       aliases: ["clear"],
       description: "Start a new thread here",
       icon: PenSquareIcon,
-      // A blank thread is new already.
-      run: () => threads.newThread(undefined, { inPlace: true }),
+      // Here: in this thread's folder (its worktree, too), where a new thread would otherwise start in its project. A
+      // blank thread is new already.
+      run: () => threads.newThread(threads.active()?.cwd, { inPlace: true }),
     });
     slots.add(PromptCommands, {
       id: "rename",

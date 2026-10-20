@@ -1,18 +1,29 @@
 /**
- * Projects to offer: folders with sessions, most recently used first, then ones added by hand.
- * There are none until there is one of those. A `hidden` (removed) project returns once it has
- * a session; the `standalone` folder, where threads with no project run, is never one.
+ * Projects to offer: the projects of folders with sessions, most recently used first, then those of folders added by
+ * hand. There are none until there is one of those. A folder counts as its project (`projectOf`: a worktree's is its
+ * repository's), and one not yet placed (`projectOf` gives undefined) waits rather than show as a project of its own.
+ * A `hidden` (removed) project returns once it has a session; the `standalone` folder, where threads with no project
+ * run, is never one.
  */
 export const knownProjects = (
   sessions: readonly { readonly cwd: string; readonly updatedAt: number }[],
   added: readonly string[],
-  options: { readonly hidden?: readonly string[]; readonly standalone?: string | undefined } = {},
+  options: {
+    readonly hidden?: readonly string[];
+    readonly standalone?: string | undefined;
+    readonly projectOf?: (cwd: string) => string | undefined;
+  } = {},
 ): string[] => {
+  const projectOf = options.projectOf ?? ((cwd: string) => cwd);
   const recency = new Map<string, number>();
-  for (const session of sessions) recency.set(session.cwd, Math.max(recency.get(session.cwd) ?? 0, session.updatedAt));
+  for (const session of sessions) {
+    const project = projectOf(session.cwd);
+    if (project !== undefined) recency.set(project, Math.max(recency.get(project) ?? 0, session.updatedAt));
+  }
   const byRecency = [...recency.keys()].sort((a, b) => recency.get(b)! - recency.get(a)!);
   const hidden = new Set(options.hidden);
-  return [...new Set([...byRecency, ...added.filter((cwd) => !hidden.has(cwd))])].filter((cwd) => cwd !== options.standalone);
+  const addedProjects = added.flatMap((folder) => projectOf(folder) ?? []).filter((project) => !hidden.has(project));
+  return [...new Set([...byRecency, ...addedProjects])].filter((cwd) => cwd !== options.standalone);
 };
 
 /** How one project shows and starts threads, remembered in the browser. An absent field follows the default. */

@@ -52,6 +52,7 @@ import tooltips from "@lemma/frame-tooltips";
 import trajectory from "@lemma/threads-trajectory";
 import workspaceBar from "@lemma/workspace-bar";
 import workspace from "@lemma/workspace-client";
+import workspaceTidy from "@lemma/workspace-tidy/web";
 
 /**
  * The web app as shipped, every part a plugin: models of host state first,
@@ -100,6 +101,7 @@ export const bundled: readonly Plugin[] = [
   modelPicker,
   compaction,
   workspaceBar,
+  workspaceTidy,
   connection,
   reload,
   palette,

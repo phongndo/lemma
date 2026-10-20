@@ -368,9 +368,11 @@
   text-overflow: ellipsis;
 }
 
+/* Its own width up to a limit, giving way to the title only when the header runs short: a share of the title's
+   width would cut a short project's name beside a short title. */
 .main-project {
-  flex: none;
-  max-width: 40%;
+  flex: 0 1 auto;
+  max-width: 240px;
   overflow: hidden;
   color: var(--text-3);
   text-overflow: ellipsis;

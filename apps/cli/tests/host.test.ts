@@ -203,8 +203,8 @@ describe("against a running host", () => {
   test("plugins show prints a plugin's wiring: who provides, who uses, and the hooks and events it takes part in", async () => {
     const shown = await invoke(["plugins", "show", "agent.loop"], home);
     expect(shown.code).toBe(ExitCode.ok);
-    // Clients reach it through its channels: no plugin needs it.
-    expect(shown.out).toContain("Agent  used by no plugin");
+    // Clients reach it through its channels; of the plugins, workspace.tidy asks it which turns run.
+    expect(shown.out).toContain("Agent  used by workspace.tidy");
     expect(shown.out).toContain("Llm  from llm.pi-ai");
     expect(shown.out).toContain("HostControl  from the host");
     // What a plugin adds to other plugins' registries: bash its tool, and the section listing its background commands.
@@ -269,9 +269,13 @@ describe("against a running host", () => {
     expect(servedBy("commands.registry")).toEqual(["commands.list", "commands.run", "commands.changes"]);
     expect(servedBy("workspace.local")).toEqual([
       "workspace.status",
+      "workspace.places",
       "workspace.browse",
       "workspace.create-directory",
       "workspace.create-worktree",
+      "workspace.worktrees",
+      "workspace.remove-worktree",
+      "workspace.restore-worktree",
       "workspace.branches",
       "workspace.checkout",
       "files.search",

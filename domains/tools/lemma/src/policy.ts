@@ -26,9 +26,11 @@ export const DEFAULT_CHANNELS: readonly string[] = [
   "llm.models",
   "llm.providers",
   "cli.commands",
-  // The workspace: a directory's git state, branches, path completion, file search.
+  // The workspace: a directory's git state and project, branches, worktrees, path completion, file search.
   "workspace.status",
+  "workspace.places",
   "workspace.branches",
+  "workspace.worktrees",
   "workspace.browse",
   "files.search",
   // The host's trace: what ran and how long it took, and recent composition changes; what stopping would cut off.
@@ -51,6 +53,8 @@ export const DEFAULT_CONFIRM: readonly string[] = [
   "commands.run",
   "workspace.create-directory",
   "workspace.create-worktree",
+  "workspace.remove-worktree",
+  "workspace.restore-worktree",
   "workspace.checkout",
   "mcp.reconnect",
 ];
