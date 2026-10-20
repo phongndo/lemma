@@ -335,4 +335,5 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
   if (!ended) throw new Error("The provider's stream ended before the response did");
 }
 
-export const openaiResponses: Wire = { build, read };
+/** Thinking is turned off only by the effort `off` is sent as (`none`). */
+export const openaiResponses: Wire = { build, read, saysOff: (model) => model.thinking?.values?.off !== undefined };

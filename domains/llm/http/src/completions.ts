@@ -243,8 +243,9 @@ function build(call: WireCall) {
   if (thinking !== undefined && think !== undefined) {
     const { on, effort: value } = think;
     if (compat.thinkingFormat === "openrouter") {
-      if (thinking.kind === "toggle") body.reasoning = { enabled: on };
-      else if (value !== undefined) body.reasoning = { effort: value };
+      // Off goes as the model names it (`none`), else by the switch every model there has.
+      if (on) body.reasoning = thinking.kind === "toggle" ? { enabled: true } : { effort: value };
+      else body.reasoning = value === undefined ? { enabled: false } : { effort: value };
     } else if (compat.thinkingFormat === "deepseek") {
       body.thinking = { type: on ? "enabled" : "disabled" };
       if (on && thinking.kind === "effort" && compat.reasoningEffort) body.reasoning_effort = value;
@@ -404,4 +405,9 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
   if (!finished) throw new Error("The provider's stream ended without a finish reason");
 }
 
-export const openaiCompletions: Wire = { build, read };
+/** Thinking is turned off by OpenRouter's and DeepSeek's switches; OpenAI's format has none, only the effort `off` is sent as. */
+export const openaiCompletions: Wire = {
+  build,
+  read,
+  saysOff: (model) => thinkingFormat(model) !== "openai" || model.thinking?.values?.off !== undefined,
+};

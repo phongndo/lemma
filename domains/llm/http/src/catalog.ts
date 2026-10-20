@@ -63,7 +63,8 @@ export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"],
   }
   // Elsewhere it stops by its switch, or at a budget of none.
   const stops = !mustThink && (toggle || (budget && !(typeof budgeted.min === "number" && budgeted.min > 0)));
-  if (effort.length > 0) return effortThinking(effort, toggle && stops);
+  // One that must reason has no `none` to stop at either.
+  if (effort.length > 0) return effortThinking(mustThink ? effort.filter((value) => value !== "none") : effort, toggle && stops);
   return (toggle || budget) && toggles ? { kind: "toggle", levels: stops ? ["off", "high"] : ["high"] } : undefined;
 }
 

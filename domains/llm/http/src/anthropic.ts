@@ -277,4 +277,5 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
   if (!stopped && out.stopReason === undefined) throw new Error("The provider's stream ended before the message did");
 }
 
-export const anthropicMessages: Wire = { build, read };
+/** Thinking is turned off as `disabled`, whatever kind it is. */
+export const anthropicMessages: Wire = { build, read, saysOff: () => true };

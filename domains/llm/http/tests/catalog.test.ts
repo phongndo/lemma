@@ -7,8 +7,8 @@ import { chatgpt } from "../src/chatgpt.ts";
 import { makeLlmPlugin } from "../src/index.ts";
 import type { Model } from "../src/model.ts";
 import type { LoginContext } from "../src/providers.ts";
-import { builtinProviders } from "../src/providers.ts";
-import { fakeCredentials, fakeInteraction, runWith } from "./helpers.ts";
+import { builtin, builtinProviders } from "../src/providers.ts";
+import { catalogModel, fakeCredentials, fakeInteraction, runWith } from "./helpers.ts";
 
 describe("thinkingOf", () => {
   const effort = (...values: string[]) => [{ type: "effort", values }];
@@ -49,6 +49,8 @@ describe("thinkingOf", () => {
     // OpenAI's o3 behind OpenRouter, which models.dev has switching thinking off.
     expect(thinkingOf("openai-completions", [{ type: "toggle" }], true, true)).toEqual({ kind: "toggle", levels: ["high"] });
     expect(thinkingOf("openai-completions", [...effort("low", "high"), { type: "toggle" }], true, true)).toEqual({ kind: "effort", levels: ["low", "high"] });
+    // Nor at a `none` models.dev gives one.
+    expect(thinkingOf("openai-completions", effort("none", "low", "high"), true, true)).toEqual({ kind: "effort", levels: ["low", "high"] });
     // Anthropic's budget models turn thinking off however little they think in.
     expect(thinkingOf("anthropic-messages", [{ type: "budget_tokens", min: 1024 }], true)?.levels).toContain("off");
   });
@@ -112,6 +114,31 @@ describe("fromDev", () => {
         () => false,
       ).map((model) => model.id),
     ).toEqual(["kimi-k3"]);
+  });
+
+  it("offers a catalog model off only where its protocol can say it", () => {
+    const thinking = { kind: "effort" as const, levels: ["off", "low", "high"] as const };
+    const at = (id: string, apis: Record<string, string>, models: Parameters<typeof catalogModel>[]) =>
+      builtin({ id, name: id, apis, env: [], models: models.map((args) => catalogModel(...args)) }).models.map((model) => [model.id, model.thinking?.levels]);
+    const zen = { "openai-completions": "https://zen.test/v1", "openai-responses": "https://zen.test/v1", "anthropic-messages": "https://zen.test" };
+    expect(
+      at("zen", zen, [
+        // OpenAI's format has no switch, and nothing names its off: asked at off, it would think.
+        ["chat", { reasoning: true, thinking }],
+        ["responses", { api: "openai-responses", reasoning: true, thinking }],
+        ["none", { api: "openai-responses", reasoning: true, thinking: { ...thinking, values: { off: "none" } } }],
+        ["claude", { api: "anthropic-messages", reasoning: true, thinking }],
+      ]),
+    ).toEqual([
+      ["chat", ["low", "high"]],
+      ["responses", ["low", "high"]],
+      ["none", ["off", "low", "high"]],
+      ["claude", ["off", "low", "high"]],
+    ]);
+    // OpenRouter's switch says it.
+    expect(at("openrouter", { "openai-completions": "https://openrouter.ai/api/v1" }, [["chat", { reasoning: true, thinking }]])).toEqual([
+      ["chat", ["off", "low", "high"]],
+    ]);
   });
 
   it("describes the committed catalog's providers on the protocols this plugin speaks", () => {

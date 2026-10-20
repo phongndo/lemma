@@ -712,6 +712,19 @@ describe("openai-completions", () => {
     });
   });
 
+  it("turns thinking off behind OpenRouter's switch where nothing names the model's off", () => {
+    const routed = (values?: Record<string, string>) =>
+      model({
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: true,
+        thinking: { kind: "effort", levels: ["off", "low"], ...(values === undefined ? {} : { values }) },
+      });
+    expect(openaiCompletions.build(call(routed(), {}, { level: "off" })).body.reasoning).toEqual({ enabled: false });
+    expect(openaiCompletions.build(call(routed({ off: "none" }), {}, { level: "off" })).body.reasoning).toEqual({ effort: "none" });
+    expect(openaiCompletions.build(call(routed(), {}, { level: "low" })).body.reasoning).toEqual({ effort: "low" });
+  });
+
   it("turns thinking on for an `off` the config maps to an effort, behind every format's switch", () => {
     const at = (target: Model) => openaiCompletions.build(call(target, {}, { level: "off" })).body;
     const mapped = { reasoning: true, thinking: { kind: "effort" as const, levels: ["off", "low"] as const, values: { off: "low" } } };

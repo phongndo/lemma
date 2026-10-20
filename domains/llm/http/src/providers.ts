@@ -10,6 +10,7 @@ import { chatgpt } from "./chatgpt.ts";
 import { thinkingFormat } from "./completions.ts";
 import type { ThinkingFormat } from "./completions.ts";
 import { ENDPOINTS } from "./endpoints.ts";
+import { WIRES } from "./request.ts";
 import type { Endpoint } from "./endpoints.ts";
 import { BUDGET_LEVELS, WIRE_APIS } from "./model.ts";
 import type { CatalogModel, Model, Thinking, WireApi } from "./model.ts";
@@ -100,11 +101,22 @@ const extras: Readonly<Record<string, Pick<BuiltinProvider, "oauth" | "headers" 
 export const builtinProviders = (): BuiltinProvider[] =>
   ENDPOINTS.map((endpoint) => ({ ...endpoint, ...extras[endpoint.id], models: catalog[endpoint.id] ?? [] }));
 
+/**
+ * A catalog's `model` offering `off` only where its protocol can say it (`Wire.saysOff`), whatever made its levels:
+ * asked at an `off` it cannot say, it would think while its user is told it does not. A model of the user's keeps
+ * the `off` its config gives it, which on OpenAI's format with no value leaves thinking to the server, as pi's do.
+ */
+function sayable(model: Model): Model {
+  const thinking = model.thinking;
+  if (thinking === undefined || !thinking.levels.includes("off") || WIRES[model.api].saysOff(model)) return model;
+  return { ...model, thinking: { ...thinking, levels: thinking.levels.filter((level) => level !== "off") } };
+}
+
 /** `models` placed at `provider`: each at the base URL of its protocol there, those on another left out. */
 export const placed = (provider: Pick<Provider, "id" | "apis">, models: readonly CatalogModel[]): Model[] =>
   models.flatMap((model) => {
     const baseUrl = provider.apis[model.api];
-    return baseUrl === undefined ? [] : [{ ...model, provider: provider.id, baseUrl }];
+    return baseUrl === undefined ? [] : [sayable({ ...model, provider: provider.id, baseUrl })];
   });
 
 /** A built-in provider, served. */

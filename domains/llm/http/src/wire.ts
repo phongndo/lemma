@@ -30,6 +30,12 @@ export interface Wire {
    * Throws when the provider fails mid-answer, or ends without finishing it.
    */
   readonly read: (events: AsyncIterable<SseEvent>, out: Output, call: WireCall, raw: (data: unknown) => void) => Promise<void>;
+  /**
+   * Whether a request at `off` tells `model` to stop thinking (a switch, or the value its `off` is sent as). Where it
+   * cannot, `off` is not one of a catalog model's levels: asked at it, the model would think while its user is told it
+   * does not.
+   */
+  readonly saysOff: (model: Model) => boolean;
 }
 
 /** An event's data as JSON; a provider's malformed event fails the answer, naming it. */

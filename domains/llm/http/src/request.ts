@@ -8,7 +8,7 @@ import { answerItems, openaiResponses } from "./responses.ts";
 import type { SocketPool } from "./socket.ts";
 import type { Wire, WireCall } from "./wire.ts";
 
-const WIRES: Readonly<Record<WireApi, Wire>> = {
+export const WIRES: Readonly<Record<WireApi, Wire>> = {
   "anthropic-messages": anthropicMessages,
   "openai-responses": openaiResponses,
   "openai-completions": openaiCompletions,
