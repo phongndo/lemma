@@ -46,7 +46,7 @@ describe("thinkingOf", () => {
   });
 
   it("gives a model on a server taking any effort (OpenRouter) every effort, where models.dev names none", () => {
-    const any = { kind: "effort", levels: ["off", "low", "medium", "high"], values: { off: "none" } };
+    const any = { kind: "effort", levels: ["off", "low", "medium", "high"] };
     // OpenRouter turns an effort into a budget for a model thinking in one, as Claude and Gemini do there.
     expect(thinkingOf("openai-completions", [{ type: "toggle" }], "any")).toEqual(any);
     expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 0 }], "any")).toEqual(any);

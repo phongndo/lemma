@@ -496,6 +496,25 @@ describe("providers", () => {
     expect(sent[1]!.body).toMatchObject({ reasoning: { effort: "high" } });
   });
 
+  it("leaves thinking to a server of OpenAI's format at off, though the model's OpenRouter entry stops it by OpenRouter's switch", async () => {
+    const { fetch, sent } = scriptedFetch(() => new Response("no", { status: 400 }));
+    const { plugins } = setup({ providers: [], fetch });
+    const ask = (model: string) => collect(new LlmRequest({ model, messages: [user("hi")] }));
+    const server = (id: string, compat?: Record<string, unknown>) => ({
+      id,
+      api: "openai-completions",
+      baseUrl: "https://gateway.test/v1",
+      ...(compat === undefined ? {} : { compat }),
+      // LM Studio names its models as OpenRouter does.
+      models: [{ id: "qwen/qwen3-32b", reasoning: true }],
+    });
+    await runWith(plugins, Effect.all([ask("lmstudio/qwen/qwen3-32b"), ask("router/qwen/qwen3-32b")]), {
+      "llm.http": { providers: [server("lmstudio"), server("router", { thinkingFormat: "openrouter" })] },
+    });
+    expect(sent[0]!.body).not.toHaveProperty("reasoning_effort");
+    expect(sent[1]!.body).toMatchObject({ reasoning: { enabled: false } });
+  });
+
   it("asks a provider whose base URL ends in a slash at its paths, as one without", async () => {
     const { fetch, sent } = scriptedFetch(() => sseResponse(completion("ok")));
     const { plugins } = setup({ providers: [], fetch });
