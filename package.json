@@ -9,6 +9,7 @@
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "pnpm build && vitest run",
+    "test:durations": "pnpm build && node scripts/test-durations.ts",
     "ci": "pnpm check && pnpm test",
     "stress": "node scripts/stress.ts",
     "start": "pnpm --filter @lemma/web-app build && pnpm --filter @lemma/host start",

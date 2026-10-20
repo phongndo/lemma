@@ -32,7 +32,8 @@ jobs:
       - uses: ./.github/actions/dev-shell
       - run: nix develop -c pnpm check
 
-  # The tests keep a runner's cores busy, so they run in two halves (Vitest's shards, by file) on a runner each.
+  # The tests keep a runner's cores busy, so they run in shards on a runner each, split by how long each file takes
+  # (scripts/test-shards.ts).
   test:
     name: test (Linux, ${{ matrix.shard }}/2)
     strategy:
@@ -56,12 +57,13 @@ jobs:
 
   # The tests again on macOS, with plain Node.js and pnpm; what the check job checks is the same on every platform.
   # The host does not support Windows yet. No pnpm store cache: on macOS, restoring it took longer than installing.
+  # In thirds: a macOS runner has fewer cores than a Linux one, and these jobs set how long a run takes.
   macos:
-    name: test (macOS, ${{ matrix.shard }}/2)
+    name: test (macOS, ${{ matrix.shard }}/3)
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3]
     runs-on: macos-latest
     timeout-minutes: 20
     env:
@@ -73,7 +75,7 @@ jobs:
         with:
           node-version: 24
       - run: pnpm install --frozen-lockfile
-      - run: pnpm test --shard=${{ matrix.shard }}/2
+      - run: pnpm test --shard=${{ matrix.shard }}/3
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure()
         with:

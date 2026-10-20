@@ -35,8 +35,11 @@ set `HK=0` to skip them once.
 CI (`.github/workflows/check.yml`) runs its checks as parallel jobs, in the dev
 shell on Linux: `pnpm check`, the packed-package and browser checks, and
 `pnpm test` and the web app's `ui:check`, each in two halves on runners of
-their own (`--shard=1/2`, `--shard=2/2`); macOS runs `pnpm test`, in halves
-too, with plain Node.js and pnpm. The `passed` job succeeds only when every
+their own (`--shard=1/2`, `--shard=2/2`); macOS runs `pnpm test` in thirds,
+with plain Node.js and pnpm. The tests' shards are split by how long each file
+took (`scripts/test-shards.ts`, from `scripts/test-durations.json`), so they end
+together; when they drift apart, `nix develop -c pnpm test:durations` measures
+again. The `passed` job succeeds only when every
 other job does, so it is the one check a branch rule needs to require. Each commit on main also uploads its
 bundle size and benchmark numbers (`metrics-<sha>`). Daily it reruns
 every job on main, unchanged, so a failure there is a flake to fix, and runs the
