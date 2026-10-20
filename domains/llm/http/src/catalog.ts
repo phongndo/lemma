@@ -85,8 +85,8 @@ export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"],
   const stops = !mustThink && (switched || (budget && !leastBudget));
   // One that must reason has no `none` to stop at either.
   if (effort.length > 0) return effortThinking(mustThink ? effort.filter((value) => value !== "none") : effort, switched && stops);
-  // Taking any effort, it stops unless it must reason: an `off` with no value, as models.dev names none, which its server
-  // says by its own switch (a server of another format borrowing the entry says nothing).
+  // Taking any effort, it stops unless it must reason: an `off` with no value, as models.dev names none, which OpenRouter's
+  // requests say as its `none` (a server of another format borrowing the entry says nothing).
   if (asking === "any") return effortThinking(ANY_EFFORTS, !mustThink && !leastBudget);
   return asking === "switch" ? { kind: "toggle", levels: stops ? ["off", "high"] : ["high"] } : undefined;
 }

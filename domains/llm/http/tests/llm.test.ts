@@ -513,7 +513,7 @@ describe("providers", () => {
       "llm.http": { providers: [server("lmstudio"), server("router", { thinkingFormat: "openrouter" })] },
     });
     expect(sent[0]!.body).not.toHaveProperty("reasoning_effort");
-    expect(sent[1]!.body).toMatchObject({ reasoning: { enabled: false } });
+    expect(sent[1]!.body).toMatchObject({ reasoning: { effort: "none" } });
   });
 
   it("asks a provider whose base URL ends in a slash at its paths, as one without", async () => {

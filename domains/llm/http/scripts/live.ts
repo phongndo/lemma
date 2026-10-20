@@ -32,7 +32,7 @@ import { makeLlmPlugin } from "../src/index.ts";
 const DEFAULTS: Readonly<Record<string, readonly string[]>> = {
   anthropic: ["claude-haiku-4-5", "claude-haiku-5-5"],
   openai: ["gpt-5.4-nano"],
-  openrouter: ["anthropic/claude-haiku-4.5", "openai/gpt-5-mini"],
+  openrouter: ["anthropic/claude-haiku-4.5", "openai/gpt-5-mini", "qwen/qwen3-32b"],
   opencode: ["claude-haiku-4-5", "gpt-5.4-mini", "glm-5.1"],
   "opencode-go": ["deepseek-v4.1-flash", "minimax-m2.7"],
 };
@@ -210,8 +210,14 @@ const check = (llm: typeof Llm.Service, ref: string) =>
     // Every thinking level it offers.
     for (const at of info.thinkingLevels) {
       const levelRun = yield* run(llm, new LlmRequest({ model: ref, messages: [user("Reply with: ok")], thinking: at, sessionId }));
-      const thought = levelRun.message?.content.some((block) => block.type === "thinking") ?? false;
-      report(ref, `thinking ${at}`, levelRun.failure === undefined, levelRun.failure ?? `${levelRun.message?.usage.output} out${thought ? ", thought" : ""}`);
+      const thought = (levelRun.message?.content.some((block) => block.type === "thinking") ?? false) || (levelRun.message?.usage.reasoning ?? 0) > 0;
+      // Asked not to think, it must not.
+      report(
+        ref,
+        `thinking ${at}`,
+        levelRun.failure === undefined && !(at === "off" && thought),
+        levelRun.failure ?? `${levelRun.message?.usage.output} out${thought ? ", thought" : ""}`,
+      );
     }
 
     // A stop midway: the stream ends at once, and the next request is answered.

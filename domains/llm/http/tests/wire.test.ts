@@ -729,7 +729,7 @@ describe("openai-completions", () => {
         reasoning: true,
         thinking: { kind: "effort", levels: ["off", "low"], ...(values === undefined ? {} : { values }) },
       });
-    expect(openaiCompletions.build(call(routed(), {}, { level: "off" })).body.reasoning).toEqual({ enabled: false });
+    expect(openaiCompletions.build(call(routed(), {}, { level: "off" })).body.reasoning).toEqual({ effort: "none" });
     expect(openaiCompletions.build(call(routed({ off: "none" }), {}, { level: "off" })).body.reasoning).toEqual({ effort: "none" });
     expect(openaiCompletions.build(call(routed(), {}, { level: "low" })).body.reasoning).toEqual({ effort: "low" });
   });

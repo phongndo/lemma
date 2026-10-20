@@ -243,9 +243,9 @@ function build(call: WireCall) {
   if (thinking !== undefined && think !== undefined) {
     const { on, effort: value } = think;
     if (compat.thinkingFormat === "openrouter") {
-      // Off goes as the model names it (`none`), else by the switch every model there has.
+      // Off goes as the model names it, else as the effort OpenRouter documents for no reasoning, `none`.
       if (on) body.reasoning = thinking.kind === "toggle" ? { enabled: true } : { effort: value };
-      else body.reasoning = value === undefined ? { enabled: false } : { effort: value };
+      else body.reasoning = { effort: value ?? "none" };
     } else if (compat.thinkingFormat === "deepseek") {
       body.thinking = { type: on ? "enabled" : "disabled" };
       if (on && thinking.kind === "effort" && compat.reasoningEffort) body.reasoning_effort = value;
