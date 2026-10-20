@@ -1,6 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { Effect, Stream } from "effect";
+import { fileURLToPath } from "node:url";
+import { Effect, Schema, Stream } from "effect";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { Events, makeCore } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
@@ -12,7 +13,7 @@ import agent from "@lemma/agent-loop";
 import sessions from "@lemma/sessions-files";
 import tools from "@lemma/tools-registry";
 import { fakeLlm, host, paths, reply, tempDir, testTools } from "../../loop/tests/fakes.ts";
-import profiles, { byName, keeps, parseProfile } from "../src/index.ts";
+import profiles, { byName, Config, keeps, parseProfile } from "../src/index.ts";
 
 describe("a profile file", () => {
   it("reads its fields and its body", () => {
@@ -57,6 +58,16 @@ describe("a profile file", () => {
   it("is the project's over the user's over the bundled one of a name", () => {
     const named = byName([parseProfile("a", "project", "project"), parseProfile("a", "bundled", "bundled"), parseProfile("a", "user", "user")]);
     expect(named.get("a")?.prompt).toBe("project");
+  });
+});
+
+describe("the bundled modes", () => {
+  it("are work, the default, and creator, each described", async () => {
+    const dir = fileURLToPath(new URL("../profiles", import.meta.url));
+    const files = (await fs.readdir(dir)).sort();
+    expect(files).toEqual(["creator.md", "work.md"]);
+    for (const file of files) expect(parseProfile(file, await fs.readFile(path.join(dir, file), "utf8"), "bundled").description).toBeDefined();
+    expect(Schema.decodeUnknownSync(Config)({}).default).toBe("work");
   });
 });
 
@@ -148,6 +159,60 @@ describe("in a turn", () => {
     // after the new prompt, which the next request that declares the prompt afresh carries.
     expect(later?.system).toBe(request.system);
     expect(JSON.stringify(later?.messages.at(-1))).toContain("You only read, and carefully.");
+  });
+
+  /** A thread given `prompts` in turn, each with its turn options' plugins: the requests, notices, and each turn's logged mode. */
+  const thread = (prompts: readonly (Readonly<Record<string, unknown>> | undefined)[], config: Readonly<Record<string, unknown>> = {}) => {
+    const llm = fakeLlm(prompts.map(() => reply("ok")));
+    const toolset = testTools();
+    return Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const core = yield* makeCore([paths(home, home), host(), sessions, tools, toolset.plugin, llm.plugin, agent, profiles], {
+            configs: { "agent.profiles": config },
+          });
+          return yield* core.run(
+            Effect.gen(function* () {
+              const notices: string[] = [];
+              yield* Effect.forkScoped(Stream.runForEach((yield* Events).stream(Notice), (notice) => Effect.sync(() => notices.push(notice.message))));
+              yield* Effect.yieldNow;
+              const store = yield* Sessions;
+              const { id } = yield* store.create();
+              for (const plugins of prompts) yield* (yield* Agent).prompt(id, [{ type: "text", text: "go" }], plugins === undefined ? {} : { plugins });
+              const logged = (yield* store.branch(id)).flatMap((event) => (event.data.type === "turn-start" ? [event.data.plugins?.["agent.profiles"]] : []));
+              return { requests: llm.requests, notices, logged };
+            }),
+          );
+        }),
+      ),
+    );
+  };
+
+  it("keeps the mode a thread's first prompt chose: a later prompt naming another goes with it, and its turn logs so", async () => {
+    const { requests, notices, logged } = await thread([{ "agent.profiles": "reader" }, { "agent.profiles": "nonesuch" }]);
+    expect(logged).toEqual(["reader", "reader"]);
+    // Nothing of the request changed: no update brings back the sections the reader leaves out.
+    expect(JSON.stringify(requests[1]?.messages.at(-1))).not.toContain("<environment>");
+    expect((requests[1]?.tools ?? []).map((tool) => tool.name)).toEqual(["echo"]);
+    expect(notices.some((message) => message.includes("nonesuch"))).toBe(false);
+  });
+
+  it("keeps a thread's mode for a later prompt that names none", async () => {
+    const { requests, logged } = await thread([{ "agent.profiles": "reader" }, undefined]);
+    expect(logged).toEqual(["reader", undefined]);
+    expect(JSON.stringify(requests[1]?.messages.at(-1))).not.toContain("<environment>");
+  });
+
+  it("logs the default with a thread's first turn when none is chosen, and goes on with it", async () => {
+    const { requests, logged } = await thread([undefined, { "agent.profiles": "work" }], { default: "reader" });
+    expect(logged).toEqual(["reader", "reader"]);
+    expect((requests[0]?.tools ?? []).map((tool) => tool.name)).toEqual(["echo"]);
+  });
+
+  it("goes on in work for a thread taken with a bundled mode since renamed", async () => {
+    const { requests, notices } = await thread([{ "agent.profiles": "coding" }]);
+    expect(requests[0]?.system).toContain("Carry a task through");
+    expect(notices).toEqual([]);
   });
 
   it("gives a thread with none chosen the default, and says so when a profile named is not there", async () => {

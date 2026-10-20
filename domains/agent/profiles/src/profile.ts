@@ -1,5 +1,8 @@
+import { PROFILES_PLUGIN } from "@lemma/agent";
+import type { SessionEvent } from "@lemma/sessions";
+
 /**
- * A profile: what a thread's agent is for, as a Markdown file. Its frontmatter says what it keeps of what plugins
+ * A profile: what a thread's agent is for (its mode, as the picker names it), as a Markdown file. Its frontmatter says what it keeps of what plugins
  * offer, and its body is a section of the system prompt:
  *
  *   ---
@@ -92,6 +95,26 @@ export const keeps = (patterns: readonly string[] | undefined, name: string): bo
     if (glob(excluded ? pattern.slice(1) : pattern).test(name)) kept = !excluded;
   }
   return kept;
+};
+
+/**
+ * The bundled profiles `work` replaced, which older threads logged: a thread taken with one goes on in `work` unless a
+ * profile of the old name is found.
+ */
+export const RENAMED: Readonly<Record<string, string>> = { coding: "work", general: "work" };
+
+/**
+ * A thread's mode, as its first turn logged it (`turn-start`'s `plugins["agent.profiles"]`): it is chosen for the thread
+ * and kept from then on. `undefined` before its first turn; no `name` when that turn logged none (a thread from before
+ * modes were kept, or a client that sent none), which then has the default.
+ */
+export const firstMode = (branch: readonly SessionEvent[]): { readonly name?: string } | undefined => {
+  for (const event of branch) {
+    if (event.data.type !== "turn-start") continue;
+    const chosen = event.data.plugins?.[PROFILES_PLUGIN];
+    return typeof chosen === "string" ? { name: chosen } : {};
+  }
+  return undefined;
 };
 
 /** Profiles by name, later sources winning: bundled, then the user's, then the project's. */

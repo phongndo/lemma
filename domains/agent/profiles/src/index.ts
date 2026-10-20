@@ -4,19 +4,21 @@ import { fileURLToPath } from "node:url";
 import { Effect, Schema } from "effect";
 import { definePlugin, Events } from "@lemma/core";
 import { Channels, HostControl, Notice, Paths, resourcesOf, serveChannel } from "@lemma/contracts";
-import { AgentRequestHook, ProfileChannels, PROFILES_PLUGIN, PromptSections } from "@lemma/agent";
+import { AgentInputHook, AgentRequestHook, ProfileChannels, PROFILES_PLUGIN, PromptSections } from "@lemma/agent";
 import type { RequestDraft } from "@lemma/agent";
-import { byName, keeps, parseProfile } from "./profile.ts";
+import { Sessions } from "@lemma/sessions";
+import type { SessionEvent } from "@lemma/sessions";
+import { byName, firstMode, keeps, parseProfile, RENAMED } from "./profile.ts";
 import type { Profile } from "./profile.ts";
 
-export { byName, keeps, parseProfile } from "./profile.ts";
+export { byName, firstMode, keeps, parseProfile, RENAMED } from "./profile.ts";
 export type { Profile } from "./profile.ts";
 
 /** Its row in config.jsonc's `plugins`. */
 export const Config = Schema.Struct({
-  default: Schema.String.pipe(Schema.withDecodingDefaultType(Effect.sync(() => "coding"))).annotate({
-    title: "Default profile",
-    description: "The profile a thread has until one is chosen for it.",
+  default: Schema.String.pipe(Schema.withDecodingDefaultType(Effect.sync(() => "work"))).annotate({
+    title: "Default mode",
+    description: "The mode (profile) a new thread has when none is chosen for it.",
   }),
 });
 export type Config = typeof Config.Type;
@@ -51,20 +53,22 @@ const profileReader = () => {
 };
 
 /**
- * Profiles: what a thread's agent is for. A thread is given one (`TurnOptions.plugins["agent.profiles"]`, which the
- * web half's picker sends with each prompt), else the configured default: its prompt is a section of the system prompt,
- * and in `AgentRequestHook`'s `select` phase it keeps the tools and sections it allows of what every `shape` handler
- * offered. Found by the session's directory: bundled, then those plugins' packages bring (`"resources": { "profiles":
- * "./profiles" }`), then `~/.lemma/profiles`, then the project's `.lemma/profiles`, a later one of a name winning. Profiles are data: they carry no code, and narrow what plugins offer, so a
- * project's load as its `AGENTS.md` and skills do. The turn logs the choice (`turn-start`), so a resumed turn keeps it
- * and its requests rebuild from the log.
+ * Profiles: what a thread's agent is for, its mode. A thread is given one with its first prompt
+ * (`TurnOptions.plugins["agent.profiles"]`, which the web half's picker sends for a new thread), else the configured
+ * default, and keeps it: the first turn logs it, and later prompts go with it whatever they name. Its prompt is a
+ * section of the system prompt, and in `AgentRequestHook`'s `select` phase it keeps the tools and sections it allows
+ * of what every `shape` handler offered. Found by the session's directory: bundled, then those plugins' packages bring
+ * (`"resources": { "profiles": "./profiles" }`), then `~/.lemma/profiles`, then the project's `.lemma/profiles`, a
+ * later one of a name winning. Profiles are data: they carry no code, and narrow what plugins offer, so a project's
+ * load as its `AGENTS.md` and skills do. Each request reads the mode from its turn's branch, so a resumed turn keeps
+ * it and its requests rebuild from the log.
  */
 export default definePlugin({
   id: PROFILES_PLUGIN,
   uses: ["lemma/agent@1"],
   config: Config,
-  requires: { paths: Paths, host: HostControl },
-  setup: function* ({ paths, host }, owner) {
+  requires: { paths: Paths, host: HostControl, sessions: Sessions },
+  setup: function* ({ paths, host, sessions }, owner) {
     const config = owner.config;
     const events = yield* Events;
     const user = path.join(paths.home, "profiles");
@@ -81,13 +85,15 @@ export default definePlugin({
         ),
       );
     const told = new Set<string>();
-    /** The profile a request's turn was taken with, else the default; one named that is not there is said so once. */
-    const active = (cwd: string, plugins: Readonly<Record<string, unknown>> | undefined) =>
+    /**
+     * The profile of a request's thread: the one its first turn logged (`firstMode`), kept for the thread, else the
+     * default. One named that is not there is said so once; a bundled one since renamed is its successor.
+     */
+    const active = (cwd: string, branch: readonly SessionEvent[]) =>
       Effect.gen(function* () {
         const profiles = yield* load(cwd);
-        const chosen = plugins?.[PROFILES_PLUGIN];
-        const name = typeof chosen === "string" ? chosen : config.default;
-        const profile = profiles.get(name);
+        const name = firstMode(branch)?.name ?? config.default;
+        const profile = profiles.get(name) ?? (RENAMED[name] === undefined ? undefined : profiles.get(RENAMED[name]));
         if (profile === undefined && !told.has(`${cwd}\n${name}`)) {
           told.add(`${cwd}\n${name}`);
           yield* events.publish(Notice, {
@@ -103,17 +109,32 @@ export default definePlugin({
       PromptSections,
       {
         id: "profile",
-        text: ({ cwd, plugins }) =>
-          Effect.map(active(cwd, plugins), (profile) => (profile === undefined || profile.prompt === "" ? undefined : profile.prompt)),
+        text: ({ cwd, branch }) => Effect.map(active(cwd, branch), (profile) => (profile === undefined || profile.prompt === "" ? undefined : profile.prompt)),
       },
       { order: 100 },
+    );
+
+    // A thread's mode is chosen with its first prompt and kept: that prompt goes with the one chosen (the default when
+    // none is), so its turn logs it; a later prompt naming another goes with the thread's own, as the log then says.
+    yield* owner.on(AgentInputHook, (input, next) =>
+      Effect.gen(function* () {
+        const asked = input.options.plugins?.[PROFILES_PLUGIN];
+        // A log it cannot read leaves the prompt as it came: each request still takes the mode from the turn's branch.
+        const branch = yield* sessions.branch(input.sessionId).pipe(Effect.catch(() => Effect.succeed(undefined)));
+        if (branch === undefined) return yield* next(input);
+        const first = firstMode(branch);
+        const mode = first === undefined ? (typeof asked === "string" ? asked : config.default) : (first.name ?? config.default);
+        // A later prompt naming none is left as it came: the thread's first turn says its mode.
+        if (asked === mode || (first !== undefined && asked === undefined)) return yield* next(input);
+        return yield* next({ ...input, options: { ...input.options, plugins: { ...input.options.plugins, [PROFILES_PLUGIN]: mode } } });
+      }),
     );
 
     yield* owner.on(
       AgentRequestHook,
       (draft: RequestDraft, next) =>
         Effect.gen(function* () {
-          const profile = yield* active(draft.cwd, draft.plugins);
+          const profile = yield* active(draft.cwd, draft.branch);
           if (profile === undefined || (profile.tools === undefined && profile.sections === undefined)) return yield* next(draft);
           return yield* next({
             ...draft,

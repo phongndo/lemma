@@ -2,11 +2,11 @@
 
 The agent: the turn loop that asks a model, runs the tools it calls, and logs each step to the session. Its contract is [`@lemma/agent`](contract/src/agent.ts).
 
-| Plugin                                 | Halves     | What it does                                                                                       |
-| -------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------- |
-| [`agent.loop`](loop/README.md)         | host + web | Runs turns: provides `Agent`, and serves it to clients as the `agent.*` channels                   |
-| [`agent.profiles`](profiles/README.md) | host + web | Profiles: a thread's prompt, tools, sections, and model, chosen per thread (`TurnOptions.plugins`) |
-| [`agent.cli`](cli/README.md)           | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                              |
+| Plugin                                 | Halves     | What it does                                                                                                                   |
+| -------------------------------------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| [`agent.loop`](loop/README.md)         | host + web | Runs turns: provides `Agent`, and serves it to clients as the `agent.*` channels                                               |
+| [`agent.profiles`](profiles/README.md) | host + web | Modes (profiles): a thread's prompt, tools, sections, and model, chosen with its first prompt (`TurnOptions.plugins`) and kept |
+| [`agent.cli`](cli/README.md)           | host       | The `lemma` command's `run` and `agent …`: adds them to `CliCommands`                                                          |
 
 A loop of another kind need not start from nothing: `@lemma/agent/kit` is `agent.loop`'s implementation as pieces, from the whole agent shaped by a `TurnPolicy` (`makeAgent`) to one turn over the log (`runTurn`), a restart's resume plan (`planResume`), the journal, the queue's rules, and the live view.
 

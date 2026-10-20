@@ -2,7 +2,7 @@
   "name": "@lemma/agent-profiles",
   "version": "0.1.0",
   "private": true,
-  "description": "Profiles: what a thread's agent is for, chosen per thread (its prompt, tools, sections, model)",
+  "description": "Modes (profiles): what a thread's agent is for, chosen with its first prompt and kept (its prompt, tools, sections, model)",
   "type": "module",
   "exports": {
     ".": "./src/index.ts",

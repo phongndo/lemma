@@ -2,8 +2,8 @@ import { Schema } from "effect";
 import { defineChannel } from "@lemma/contracts";
 
 /*
- * Profiles: what a thread's agent is for, chosen per thread (`agent.profiles`). A thread's choice travels as the
- * profile's name in `TurnOptions.plugins`, under the plugin's id.
+ * Profiles: what a thread's agent is for, its mode (`agent.profiles`), chosen with its first prompt and kept. The choice
+ * travels as the profile's name in `TurnOptions.plugins`, under the plugin's id, and the thread's first turn logs it.
  */
 
 /** The profiles plugin's id: its key in `TurnOptions.plugins`, whose value is the chosen profile's name. */

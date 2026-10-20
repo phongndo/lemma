@@ -1511,13 +1511,17 @@ export const createMockHost = (): Host => {
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
   const served: Served[] = [
-    // The bundled profiles, as `agent.profiles` lists them for any directory.
+    // The bundled modes, as `agent.profiles` lists them for any directory.
     serveCall("agent.profiles", ProfileChannels.list, async () => ({
       profiles: [
-        { name: "coding", description: "A coding agent: reads, edits, and runs code in the project", source: "bundled" as const },
-        { name: "general", description: "A general assistant: answers, research, writing, and files, with every tool", source: "bundled" as const },
+        {
+          name: "creator",
+          description: "Customize Lemma through conversation, writing plugins that add features or UI, and modes of your own",
+          source: "bundled" as const,
+        },
+        { name: "work", description: "Work with code, files, and information, searching, editing, and running commands as needed", source: "bundled" as const },
       ],
-      default: "coding",
+      default: "work",
     })),
     serveCall("sessions.files", SessionChannels.list, async ({ cwd }) =>
       [...sessions.values()]
