@@ -512,6 +512,12 @@ describe("openai-responses", () => {
     ]);
   });
 
+  it("asks a reasoning model with no level to set for its reasoning encrypted, and no other", () => {
+    expect(openaiResponses.build(call(gpt, {})).body).toMatchObject({ include: ["reasoning.encrypted_content"] });
+    expect(openaiResponses.build(call(gpt, {})).body.reasoning).toBeUndefined();
+    expect(openaiResponses.build(call({ ...gpt, reasoning: false }, {})).body.include).toBeUndefined();
+  });
+
   it("asks for reasoning's encrypted content at every effort but `none`, an `off` the config maps to one too", () => {
     const mapped = { ...gpt, reasoning: true, thinking: { kind: "effort" as const, levels: ["off", "low"] as const, values: { off: "minimal" } } } as Model;
     expect(openaiResponses.build(call(mapped, {}, { level: "off" })).body).toMatchObject({

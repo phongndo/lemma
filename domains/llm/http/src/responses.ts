@@ -159,10 +159,12 @@ function build(call: WireCall) {
   if (tools.length > 0) body.tools = tools.map((tool) => ({ type: "function", name: tool.name, description: tool.description, parameters: tool.parameters }));
   // A model that reasons is asked for its reasoning encrypted, as `store: false` keeps nothing for it to go back as
   // otherwise; at `none`, the API's word for no reasoning, the effort alone is said.
+  // A reasoning model with no level to set reasons as it will: its reasoning comes back encrypted all the same.
   if (think?.on === true) {
     body.reasoning = { effort: think.effort, summary: "auto" };
     body.include = ["reasoning.encrypted_content"];
   } else if (think?.effort !== undefined) body.reasoning = { effort: think.effort };
+  else if (think === undefined && model.reasoning) body.include = ["reasoning.encrypted_content"];
   return {
     url: `${model.baseUrl}/responses`,
     body: merged(body, options.samplingParams),
