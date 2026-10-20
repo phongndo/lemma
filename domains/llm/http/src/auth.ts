@@ -72,7 +72,8 @@ export const makeRefresher: Effect.Effect<Refresher, never, Scope.Scope> = Effec
         Effect.flatMap((exit) => Deferred.done(done, exit)),
         Effect.ensuring(Effect.sync(() => void (running.get(id) === done && running.delete(id)))),
       );
-      return Effect.forkIn(Effect.uninterruptible(settled), scope).pipe(Effect.andThen(Deferred.await(done)));
+      // Uninterruptible from its start, so it settles `done` though stopping interrupts it before it runs.
+      return Effect.forkIn(settled, scope, { uninterruptible: true }).pipe(Effect.andThen(Deferred.await(done)));
     });
   return { run };
 });

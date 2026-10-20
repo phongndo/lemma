@@ -11,6 +11,7 @@ import { CredentialError, Credentials } from "@lemma/credentials";
 import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import { llmConformance } from "@lemma/testing";
 import { deviceId } from "../src/device.ts";
+import { makeRefresher } from "../src/auth.ts";
 import { ProviderError } from "../src/http.ts";
 import { makeLlmPlugin } from "../src/index.ts";
 import type { OAuthMethod } from "../src/index.ts";
@@ -1058,6 +1059,19 @@ describe("login", () => {
     expect(asked).toEqual(["first"]);
     expect(credentials.store.get("faux")).toMatchObject({ access: "rotated" });
     expect(credentials.store.get("other")).toMatchObject({ access: "second" });
+  });
+
+  it("answers a refresh asked for once the plugin has stopped, which then asks nothing", async () => {
+    const answer = await Effect.runPromise(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const refresher = yield* Scope.provide(makeRefresher, scope);
+        yield* Scope.close(scope, Exit.void);
+        // Started in a scope already closed: it still runs, told the plugin is stopping, and settles its caller.
+        return yield* refresher.run("faux", (stopping) => Effect.sync(() => (stopping() ? "asked nothing" : "asked")));
+      }),
+    );
+    expect(answer).toBe("asked nothing");
   });
 
   it("fails a request whose credential store is busy as one to ask again, without sending the user to sign in", async () => {
