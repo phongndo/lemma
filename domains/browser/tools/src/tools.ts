@@ -6,7 +6,7 @@ import { MAX_IMAGE_BYTES } from "@lemma/llm";
 import { ImageBlock, ToolResult } from "@lemma/tools";
 import type { Tool, ToolNamespace } from "@lemma/tools";
 import { inlineLocalImages } from "@lemma/tools/files";
-import { HTML_MAX_CHARS, HTML_THEME_VARIABLES, htmlBootstrap, htmlTheme, htmlThemeCss, withHtmlBootstrap } from "@lemma/tools/html";
+import { HTML_MAX_CHARS, HTML_TALL_PAGE, HTML_THEME_VARIABLES, htmlBootstrap, htmlTheme, htmlThemeCss, withHtmlBootstrap } from "@lemma/tools/html";
 
 type Service = Context.Service.Shape<typeof Browser>;
 
@@ -284,6 +284,12 @@ export const htmlPreviewTool = (browser: Service): Tool<HtmlPreviewInput> => ({
         missingImages: inlined.missing,
       };
       const note = `Page at ${rendered.width}px, ${appearance}: ${rendered.contentHeight}px tall${rendered.capturedHeight < rendered.contentHeight ? `, the first ${rendered.capturedHeight}px shown` : ""}`;
+      // At the reply column's width or wider, where a page is no taller than in the chat: a phone's narrower width says
+      // nothing of how the page reads in the chat.
+      const tall =
+        rendered.width >= DEFAULT_WIDTH && rendered.contentHeight > HTML_TALL_PAGE
+          ? `\nTaller than the ${HTML_TALL_PAGE}px a page in the chat reads well at: shown with html_render, it is a document between your text, not a part of a reply. Keep what matters most, and split the rest into pages of their own or say it in your reply.`
+          : "";
       const screenshot: ImageBlock = { type: "image", data: rendered.screenshot.data, mimeType: rendered.screenshot.mimeType, note };
       const attached = base64Bytes(rendered.screenshot.data) <= MAX_IMAGE_BYTES;
       return new ToolResult({
@@ -291,7 +297,7 @@ export const htmlPreviewTool = (browser: Service): Tool<HtmlPreviewInput> => ({
           ...(attached ? [{ type: "image" as const, data: screenshot.data, mimeType: screenshot.mimeType }] : []),
           {
             type: "text",
-            text: `${note}${attached ? "" : " (the screenshot is too large to attach)"}\n${JSON.stringify(report, null, 2)}`,
+            text: `${note}${attached ? "" : " (the screenshot is too large to attach)"}${tall}\n${JSON.stringify(report, null, 2)}`,
           },
         ],
         structured: { ...report, screenshot } satisfies HtmlPreviewOutput,

@@ -41,7 +41,9 @@ A target is one of `ref` (from the tab's latest snapshot), `locator`, `selector`
   it could not), at 728 pixels, the chat's reply column, by default. It
   resolves to the screenshot, the height the page needs, and what it logged,
   uncaught exceptions with their stacks, so the model fixes a page before
-  showing it. A screenshot too large to attach is left out of the model's
+  showing it. A page taller than `HTML_TALL_PAGE` (1,500 pixels) at the reply
+  column's width or wider, more than a page between the model's text reads
+  well at, is called out, so the model trims or splits it. A screenshot too large to attach is left out of the model's
   result and kept in the script's, for `html_preview` and `browser_screenshot`
   alike. Addresses on this machine or its network (`localhost`, `192.168.x.x`)
   do not load in a preview (`render` refuses them, below), as T3 Code's preview

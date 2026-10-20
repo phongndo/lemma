@@ -125,6 +125,27 @@ describe("the browser tools", () => {
       missingImages: ["/nonexistent/x.png"],
       screenshot: { type: "image", mimeType: "image/png" },
     });
+    const text = (preview.content[1] as { text: string }).text;
+    expect(text).not.toContain("Taller than");
+  });
+
+  it("says when a page is taller than a page in the chat reads well at, at the chat's width", async () => {
+    const { service } = fake({
+      render: (_html, options) =>
+        Effect.succeed({
+          width: options.width,
+          contentHeight: 9892,
+          capturedHeight: 4000,
+          screenshot: { data: "iVBORw0KGgo=", mimeType: "image/png", width: options.width, height: 4000 },
+          console: [],
+        }),
+    });
+    const preview = await call(byName(service, "html_preview"), { html: "<p>x</p>" }, ctx);
+    const text = (preview.content[1] as { text: string }).text;
+    expect(text).toMatch(/^Page at 728px, dark: 9892px tall, the first 4000px shown\nTaller than the 1500px a page in the chat reads well at/);
+    // At a phone's width a page is taller than in the chat: that is no reason to trim it.
+    const phone = await call(byName(service, "html_preview"), { html: "<p>x</p>", width: 390 }, ctx);
+    expect((phone.content[1] as { text: string }).text).not.toContain("Taller than");
   });
 });
 
