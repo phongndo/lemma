@@ -13,8 +13,10 @@
  *   --provider <json>    add a provider of the user's, as the config's `providers` row takes it (a local server)
  *
  * Without models, it checks those `DEFAULTS` names for each provider that has a credential, or the first model it
- * serves where it serves none of them. A ChatGPT plan lists its own models once the catalog has read them, so name one
- * (`openai/gpt-6-luna`) to check a sign-in. It exits non-zero when a check fails.
+ * serves where it serves none of them, and the first classifier it serves. A ChatGPT plan lists its own models once the
+ * catalog has read them, so name one (`openai/gpt-6-luna`) to check a sign-in. A classifier named is asked whether a
+ * message is spam; an image model named (`openrouter/google/gemini-2.5-flash-image`) is asked for an image. It exits
+ * non-zero when a check fails.
  */
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -26,7 +28,7 @@ import { definePlugin, makeCore, PluginContext } from "@lemma/core";
 import { Credentials } from "@lemma/credentials";
 import credentialsFile from "@lemma/credentials-file";
 import { Llm, LlmRequest } from "@lemma/llm";
-import type { AssistantMessage, Message, ModelInfo, StreamEvent, ThinkingLevel } from "@lemma/llm";
+import type { AssistantMessage, ClassifierAnswer, Message, ModelInfo, StreamEvent, ThinkingLevel } from "@lemma/llm";
 import { makeLlmPlugin } from "../src/index.ts";
 
 /** The models checked for each provider with a credential: a cheap one on each protocol it serves. */
@@ -239,6 +241,49 @@ const check = (llm: typeof Llm.Service, ref: string) =>
     );
   });
 
+/** A classifier asked about an obvious scam: it should say it is spam, pushy, and claiming urgency. */
+const classifyCheck = (llm: typeof Llm.Service, ref: string) =>
+  Effect.gen(function* () {
+    const result = yield* llm.classify(ref, {
+      state: { message: "URGENT!!! You won a free cruise. Click here within 1 hour to claim it.", sender: "unknown" },
+      questions: {
+        spam: { type: "bool", instructions: "Is this message spam?", criteria: { true: "unsolicited advertising or a scam", false: "a genuine message" } },
+        tone: { type: "choice", instructions: "The message's tone", criteria: { calm: "relaxed", pushy: "pressuring the reader", friendly: "warm" } },
+        urgency: { type: "score", instructions: "How urgent it claims to be", criteria: ["not urgent", "somewhat urgent", "extremely urgent"] },
+      },
+    });
+    const shown = (answer: ClassifierAnswer | undefined) =>
+      answer?.type === "bool"
+        ? answer.probability.toFixed(2)
+        : answer?.type === "choice"
+          ? answer.choice
+          : answer?.type === "score"
+            ? answer.score.toFixed(2)
+            : "none";
+    const { spam, tone, urgency } = result.answers;
+    report(
+      ref,
+      "classify",
+      result.stopReason === "stop" && spam?.type === "bool" && spam.probability > 0.5,
+      result.errorMessage ??
+        `spam ${shown(spam)}, tone ${shown(tone)}, urgency ${shown(urgency)}; ${result.usage?.input ?? "no"} tokens in, $${result.usage?.cost.total.toFixed(6) ?? "?"}`,
+    );
+  });
+
+/** An image model asked for a simple image. */
+const imagesCheck = (llm: typeof Llm.Service, ref: string) =>
+  Effect.gen(function* () {
+    const result = yield* llm.generateImages(ref, { input: [{ type: "text", text: "A small red circle on a plain white background." }] });
+    const images = result.output.flatMap((block) => (block.type === "image" ? [block] : []));
+    report(
+      ref,
+      "images",
+      result.stopReason === "stop" && images.length > 0,
+      result.errorMessage ??
+        `${images.map((image) => `${image.mimeType}, ${Math.round((image.data.length * 3) / 4 / 1024)} KiB`).join("; ") || "no image"}; $${result.usage?.cost.total.toFixed(6) ?? "?"}`,
+    );
+  });
+
 const program = Effect.gen(function* () {
   const llm = yield* Llm;
   const credentials = yield* Credentials;
@@ -259,9 +304,21 @@ const program = Effect.gen(function* () {
     const listed = (DEFAULTS[provider] ?? []).map((id) => `${provider}/${id}`).filter((ref) => served.includes(ref));
     return listed.length > 0 ? listed : served.slice(0, 1);
   };
-  const refs = asked.length > 0 ? asked : providers.flatMap((provider) => pick(provider.id));
+  const classifiers = new Set((yield* llm.classifiers()).map((model) => model.ref));
+  const imageModels = new Set((yield* llm.imageModels()).map((model) => model.ref));
+  const askable = yield* llm.classifiers({ available: true });
+  const refs =
+    asked.length > 0
+      ? asked
+      : providers.flatMap((provider) => [
+          ...pick(provider.id),
+          ...askable
+            .filter((model) => model.provider === provider.id)
+            .slice(0, 1)
+            .map((model) => model.ref),
+        ]);
   // A model named for a provider is the one its refresh is checked with: a sign-in's plan may serve none of `DEFAULTS`.
-  const named = (provider: string) => refs.find((ref) => ref.startsWith(`${provider}/`)) ?? pick(provider)[0];
+  const named = (provider: string) => refs.find((ref) => ref.startsWith(`${provider}/`) && !classifiers.has(ref) && !imageModels.has(ref)) ?? pick(provider)[0];
   if (refresh) {
     for (const provider of providers) {
       const stored = yield* credentials.read(provider.id);
@@ -275,7 +332,7 @@ const program = Effect.gen(function* () {
     }
   }
   if (refs.length === 0) console.log(`No models to check: no provider has a credential in ${home}, and none was named.`);
-  for (const ref of refs) yield* check(llm, ref);
+  for (const ref of refs) yield* classifiers.has(ref) ? classifyCheck(llm, ref) : imageModels.has(ref) ? imagesCheck(llm, ref) : check(llm, ref);
 });
 
 const config = { webSocket, ...(custom === undefined ? {} : { providers: [JSON.parse(custom)] }) };

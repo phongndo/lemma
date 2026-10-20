@@ -5,7 +5,10 @@ import type { CustomProviderSpec, ProviderModelSpec, ProviderSpec } from "@lemma
 import type { InteractionError, NoticePayload } from "@lemma/contracts";
 import snapshot from "./catalog.json" with { type: "json" };
 import { catalogOf } from "./catalog.ts";
-import type { DevProvider } from "./catalog.ts";
+import type { DevProvider, Nonchat } from "./catalog.ts";
+import type { Classifier } from "./classify.ts";
+import type { ImageModel } from "./images.ts";
+import nonchatSnapshot from "./nonchat.json" with { type: "json" };
 import { chatgpt } from "./chatgpt.ts";
 import { thinkingFormat } from "./completions.ts";
 import type { ThinkingFormat } from "./completions.ts";
@@ -73,6 +76,10 @@ export interface Provider {
   /** Its Responses API also speaks OpenAI's WebSocket mode. */
   readonly webSocket?: boolean;
   models: readonly Model[];
+  /** Its classifier models (`classify.ts`). */
+  readonly classifiers: readonly Classifier[];
+  /** Its image models (`images.ts`). */
+  readonly images: readonly ImageModel[];
 }
 
 /** What a built-in provider is: its endpoints, how else it is signed in to, and its models in the snapshot. */
@@ -83,9 +90,12 @@ export interface BuiltinProvider extends Endpoint {
   readonly headers?: (sessionId: string | undefined) => Record<string, string>;
   /** Its models before a live catalog is read. */
   readonly models: readonly CatalogModel[];
+  /** The classifier and image models it lists, where it serves them (`nonchat.json`); `classifiers.models` are kept by hand. */
+  readonly nonchat?: Nonchat;
 }
 
 const catalog = snapshot as unknown as Readonly<Record<string, readonly CatalogModel[]>>;
+const nonchat = nonchatSnapshot as unknown as Readonly<Record<string, Nonchat>>;
 
 /** OpenCode routes a conversation's requests by its session, and refuses a request without one. */
 const opencodeSession = (sessionId: string | undefined) => ({ "x-opencode-session": sessionId ?? randomUUID() });
@@ -99,7 +109,12 @@ const extras: Readonly<Record<string, Pick<BuiltinProvider, "oauth" | "headers" 
 
 /** The providers this plugin knows, with this version's catalog of each. */
 export const builtinProviders = (): BuiltinProvider[] =>
-  ENDPOINTS.map((endpoint) => ({ ...endpoint, ...extras[endpoint.id], models: catalog[endpoint.id] ?? [] }));
+  ENDPOINTS.map((endpoint) => ({
+    ...endpoint,
+    ...extras[endpoint.id],
+    models: catalog[endpoint.id] ?? [],
+    ...(nonchat[endpoint.id] === undefined ? {} : { nonchat: nonchat[endpoint.id] }),
+  }));
 
 /**
  * A catalog's `model` offering `off` only where its protocol can say it (`Wire.saysOff`), whatever made its levels:
@@ -119,6 +134,14 @@ export const placed = (provider: Pick<Provider, "id" | "apis">, models: readonly
     return baseUrl === undefined ? [] : [sayable({ ...model, provider: provider.id, baseUrl })];
   });
 
+/** Classifier or image `models` at `provider`, on the protocol and base URL it serves them at (`where`); none where it serves none. */
+const placedAt = <Api extends string, M extends object>(
+  provider: string,
+  where: { readonly api: Api; readonly baseUrl: string } | undefined,
+  models: readonly M[] | undefined,
+): (M & { readonly provider: string; readonly api: Api; readonly baseUrl: string })[] =>
+  where === undefined ? [] : (models ?? []).map((model) => ({ ...model, provider, api: where.api, baseUrl: where.baseUrl }));
+
 /** A built-in provider, served. */
 export const builtin = (definition: BuiltinProvider): Provider => ({
   id: definition.id,
@@ -130,6 +153,8 @@ export const builtin = (definition: BuiltinProvider): Provider => ({
   live: true,
   ...(definition.webSocket === true ? { webSocket: true } : {}),
   models: placed(definition, definition.models),
+  classifiers: placedAt(definition.id, definition.classifiers, definition.classifiers?.models ?? definition.nonchat?.classifiers),
+  images: placedAt(definition.id, definition.images, definition.nonchat?.images),
 });
 
 /** `provider`'s models as models.dev lists them now, at its base URLs; `mustThink` as its own list says. */
@@ -261,5 +286,7 @@ export function customProvider(entry: CustomProvider): Provider {
     apis: { [config.api]: config.baseUrl },
     live: false,
     models: config.models.map((model) => customModel(config, model)),
+    classifiers: [],
+    images: [],
   };
 }

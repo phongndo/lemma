@@ -1,4 +1,4 @@
-import type { AssistantMessage, ImageContent, TextContent } from "@lemma/llm";
+import type { AssistantMessage, ImageContent, TextContent, Usage } from "@lemma/llm";
 import { ProviderError, withUpstream } from "./http.ts";
 import type { SseEvent } from "./http.ts";
 import type { Model } from "./model.ts";
@@ -272,7 +272,8 @@ const STOP: Readonly<Record<string, AssistantMessage["stopReason"]>> = {
   function_call: "toolUse",
 };
 
-interface Usage {
+/** Token counts as Chat Completions servers report them. */
+export interface CompletionsUsage {
   readonly prompt_tokens?: number;
   readonly completion_tokens?: number;
   readonly prompt_cache_hit_tokens?: number;
@@ -283,11 +284,11 @@ interface Usage {
 
 interface Chunk {
   readonly id?: string;
-  readonly usage?: Usage | null;
+  readonly usage?: CompletionsUsage | null;
   readonly error?: unknown;
   readonly choices?: readonly {
     readonly finish_reason?: string | null;
-    readonly usage?: Usage;
+    readonly usage?: CompletionsUsage;
     readonly delta?: {
       readonly content?: string | null;
       readonly reasoning_content?: unknown;
@@ -303,6 +304,20 @@ interface Chunk {
   }[];
 }
 
+/** `usage` priced at `model`'s rates. */
+export function completionsUsage(model: Pick<Model, "cost">, usage: CompletionsUsage): Usage {
+  // Servers put the cache's hits in different places: OpenAI's details, DeepSeek's own field, Kimi's top level.
+  const cacheRead = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? usage.cached_tokens ?? 0;
+  const cacheWrite = usage.prompt_tokens_details?.cache_write_tokens ?? 0;
+  return priced(model, {
+    input: Math.max(0, (usage.prompt_tokens ?? 0) - cacheRead - cacheWrite),
+    output: usage.completion_tokens ?? 0,
+    cacheRead,
+    cacheWrite,
+    reasoning: usage.completion_tokens_details?.reasoning_tokens ?? 0,
+  });
+}
+
 async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall, raw: (data: unknown) => void) {
   const { model } = call;
   let text: number | undefined;
@@ -314,17 +329,8 @@ async function read(events: AsyncIterable<SseEvent>, out: Output, call: WireCall
     const block = thinking === undefined ? undefined : out.content[thinking];
     if (details !== undefined && block?.type === "thinking") block.thinkingSignature = JSON.stringify(details);
   });
-  const count = (usage: Usage) => {
-    // Servers put the cache's hits in different places: OpenAI's details, DeepSeek's own field, Kimi's top level.
-    const cacheRead = usage.prompt_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? usage.cached_tokens ?? 0;
-    const cacheWrite = usage.prompt_tokens_details?.cache_write_tokens ?? 0;
-    out.usage = priced(model, {
-      input: Math.max(0, (usage.prompt_tokens ?? 0) - cacheRead - cacheWrite),
-      output: usage.completion_tokens ?? 0,
-      cacheRead,
-      cacheWrite,
-      reasoning: usage.completion_tokens_details?.reasoning_tokens ?? 0,
-    });
+  const count = (usage: CompletionsUsage) => {
+    out.usage = completionsUsage(model, usage);
   };
   for await (const event of events) {
     if (event.data === "[DONE]") break;

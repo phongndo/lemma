@@ -136,13 +136,20 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 /**
  * POSTs `body` as JSON, asking again up to `retries` times before an answer starts where the provider SDKs would (a
- * lost connection, a 408, 409, 429, or 5xx), waiting the delay the provider names up to a minute. A refusal is a
- * `ProviderError` with its status and wording; a longer requested delay is its `retryAfterMs`, for the caller.
+ * lost connection, a 408, 409, 429, or 5xx), but for a status in `final`, waiting the delay the provider names up to a
+ * minute. A refusal is a `ProviderError` with its status and wording; a longer requested delay is its `retryAfterMs`,
+ * for the caller.
  */
 export async function post(
   fetchImpl: typeof fetch,
   url: string,
-  init: { readonly headers: Headers; readonly body: unknown; readonly signal: AbortSignal; readonly retries: number },
+  init: {
+    readonly headers: Headers;
+    readonly body: unknown;
+    readonly signal: AbortSignal;
+    readonly retries: number;
+    readonly final?: readonly number[];
+  },
 ): Promise<Response> {
   const body = JSON.stringify(init.body);
   for (let attempt = 0; ; attempt++) {
@@ -151,7 +158,7 @@ export async function post(
       const response = await fetchImpl(url, { method: "POST", headers: init.headers, body, signal: init.signal });
       if (response.ok) return response;
       failure = new ProviderError(await refusalText(response), { status: response.status, headers: response.headers });
-      if (!retryable(response.status, response.headers)) throw failure;
+      if (!retryable(response.status, response.headers) || init.final?.includes(response.status) === true) throw failure;
     } catch (error) {
       if (init.signal.aborted) throw abortError();
       if (error instanceof ProviderError) throw error;

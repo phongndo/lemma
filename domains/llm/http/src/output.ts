@@ -11,7 +11,7 @@ export type Block = Text | Thinking | Call;
 
 /** Token counts as a provider reports them, priced from `model`'s catalog entry. */
 export function priced(
-  model: Model,
+  model: Pick<Model, "cost">,
   counts: {
     readonly input: number;
     readonly output: number;

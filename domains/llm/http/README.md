@@ -2,7 +2,7 @@
 
 Provides `Llm` (`@lemma/llm`) by speaking providers' HTTP APIs itself, with `fetch` and no provider SDK, and serves its `llm.*` channels to clients (`LlmChannels`, through `serveLlm` from [the contract](../contract/src/llm.ts), which a replacement uses as well). Requires `Credentials`, `Interaction`, `HostControl`, and `Paths`.
 
-It speaks three wire protocols: `anthropic-messages` (Anthropic's Messages API), `openai-responses` (OpenAI's Responses API), and `openai-completions` (Chat Completions, which most other servers copy). Its built-in providers:
+It speaks three wire protocols for chat: `anthropic-messages` (Anthropic's Messages API), `openai-responses` (OpenAI's Responses API), and `openai-completions` (Chat Completions, which most other servers copy); and three for classifiers and image models (below). Its built-in providers:
 
 | Provider           | Protocols                  | Login                                               |
 | ------------------ | -------------------------- | --------------------------------------------------- |
@@ -11,10 +11,13 @@ It speaks three wire protocols: `anthropic-messages` (Anthropic's Messages API),
 | `openrouter`       | Chat Completions           | API key (`OPENROUTER_API_KEY`)                      |
 | `opencode` (Zen)   | Anthropic, Responses, Chat | API key (`OPENCODE_API_KEY`)                        |
 | `opencode-go` (Go) | Anthropic, Responses, Chat | API key (`OPENCODE_API_KEY`)                        |
+| `typesafe`         | none: classifiers alone    | API key (`TYPESAFE_API_KEY`)                        |
 
 Any server on one of the three protocols is added as a provider of the user's (below): Ollama, LM Studio, vLLM, a company gateway, another vendor's OpenAI-compatible API. Auth resolves in this order: a credential stored by `/login`, then the config's key, then the provider's environment variable; a provider of the user's without an `apiKey` needs none.
 
-It serves no classifiers or image models: `classifiers` and `imageModels` list none, and `classify` and `generateImages` fail `UnknownModel`. Anthropic's subscription sign-in (Claude Pro/Max) is not offered.
+Anthropic's subscription sign-in (Claude Pro/Max) is not offered.
+
+**Classifiers and image models.** `classify` and `generateImages` send one JSON request each and read its answer, on three more protocols: TypeSafe's System One (`typesafe-system-one`, `POST <base>/systemone`) for TypeSafe's Jev (`typesafe/jev-latest`) and the classifiers OpenRouter and OpenCode serve; OpenAI's Decisions API (`openai-decisions`, `POST /v1/decisions`) for `openai/gpt-6-luna`; and OpenRouter's Chat Completions asked for images (`openrouter-images`) for its image models. OpenRouter's are those its own list (`openrouter.ai/api/v1/models?output_modalities=all`) has answering in `decisions` or in images, kept in `src/nonchat.json`, which the catalog script writes; TypeSafe, OpenCode, and OpenAI publish no list, so `src/endpoints.ts` keeps theirs by hand. Neither list is refreshed live. System One takes no images, so its classifiers' `input` is text, whatever OpenRouter lists. A yes-or-no question goes to System One as its `noul`, and to Decisions as a `predicate`, its criteria put in its instructions. Decisions takes only an API key: with OpenAI signed in with ChatGPT, `classifiers({ available: true })` leaves it out, and `classify` answers an error without sending anything. Neither call is a model request: no hook runs around it, and its only header beside the key is Lemma's `User-Agent`. A refusal is asked again as a stream's is, but for Decisions' 504 (Cloudflare ends its requests at about five seconds, and a large input takes that long again); the answer is waited for `streamTimeout` seconds. Any failure, missing auth included, is the result's `error`, and an answer missing a question's, or of another type, is one, keeping its usage, as it was billed; interrupting the call aborts the request.
 
 ## Config
 
@@ -110,4 +113,4 @@ A provider that has said how the answer ends is taken at its word, though the co
 
 `makeLlmPlugin({ providers, env, fetch })` replaces the built-in provider list, the environment keys are read from, and how requests, sign-ins, and catalogs are fetched. Tests serve their own providers from a scripted `fetch` that answers with server-sent events, and keep catalogs offline. The plugin runs the `Llm` contract's suite, [`llmConformance`](../../../packages/testing/README.md#conformance-suites).
 
-`scripts/live.ts` checks it against the real providers with a Lemma home's sign-ins and keys, which tests cannot: a streamed answer with its usage and cost, a tool round trip sending its thinking back and reading the prompt cache, every thinking level a model offers, and a stop midway, for the models named or a few of each provider with a credential; `--login`, `--refresh`, and `--websocket` check a sign-in, a token's refresh, and OpenAI's WebSocket mode. Its header says how to run it; each request costs a little.
+`scripts/live.ts` checks it against the real providers with a Lemma home's sign-ins and keys, which tests cannot: a streamed answer with its usage and cost, a tool round trip sending its thinking back and reading the prompt cache, every thinking level a model offers, and a stop midway, for the models named or a few of each provider with a credential; a classifier (each such provider's first) is asked about a spam message, and an image model named for an image; `--login`, `--refresh`, and `--websocket` check a sign-in, a token's refresh, and OpenAI's WebSocket mode. Its header says how to run it; each request costs a little.

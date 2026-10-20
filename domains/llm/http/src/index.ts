@@ -24,10 +24,12 @@ import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, StreamEvent }
 import { STOP_DEADLINE_MS, authSource, makeRefresher, resolveAuth } from "./auth.ts";
 import type { Env } from "./auth.ts";
 import { devSource, mustThinkSource, planModels, planSource } from "./catalog.ts";
+import { accepts, classify, toClassifierInfo } from "./classify.ts";
 import { deviceId } from "./device.ts";
 import { headerRecord } from "./http.ts";
 import { identityHeaders } from "./identity.ts";
 import { classifyFailure, JudgedError } from "./failure.ts";
+import { generateImages, toImageModelInfo } from "./images.ts";
 import { isWireApi, thinkFor, toModelInfo } from "./model.ts";
 import type { Model } from "./model.ts";
 import { Output } from "./output.ts";
@@ -313,6 +315,20 @@ export function makeLlmPlugin(options: Options = {}) {
         const parsed = parseModelRef(ref);
         return parsed === undefined ? undefined : providers.get(parsed.provider)?.models.find((model) => model.id === parsed.model);
       };
+      /** The classifier `ref` names, and its provider. */
+      const findClassifier = (ref: string) => {
+        const parsed = parseModelRef(ref);
+        const provider = parsed === undefined ? undefined : providers.get(parsed.provider);
+        const model = provider?.classifiers.find((entry) => entry.id === parsed?.model);
+        return provider === undefined || model === undefined ? undefined : { provider, model };
+      };
+      /** The image model `ref` names, and its provider. */
+      const findImageModel = (ref: string) => {
+        const parsed = parseModelRef(ref);
+        const provider = parsed === undefined ? undefined : providers.get(parsed.provider);
+        const model = provider?.images.find((entry) => entry.id === parsed?.model);
+        return provider === undefined || model === undefined ? undefined : { provider, model };
+      };
 
       const terminal = (request: LlmRequest) =>
         Effect.gen(function* () {
@@ -476,6 +492,43 @@ export function makeLlmPlugin(options: Options = {}) {
         };
       };
 
+      /**
+       * Every provider's models of a kind, as `pick` chooses them given where the provider authenticates from; with
+       * `available`, only a configured provider's.
+       */
+      const others = <M>(query: { readonly available?: boolean } | undefined, pick: (provider: Provider, source: string | undefined) => readonly M[]) =>
+        Effect.suspend(() =>
+          Effect.forEach(
+            [...providers.values()],
+            (provider) =>
+              query?.available === true
+                ? Effect.map(configured(provider), (source) => (source === undefined ? [] : pick(provider, source)))
+                : Effect.succeed(pick(provider, undefined)),
+            { concurrency: "unbounded" },
+          ),
+        ).pipe(Effect.map((lists) => lists.flat()));
+      /** How a classifier or image request is sent: naming Lemma, and cut off as stalled when a stream would be. */
+      const requestOptions = (signal: AbortSignal) => ({
+        fetch: fetchImpl,
+        headers: identityHeaders({}) ?? {},
+        signal,
+        timeoutMs: config.streamTimeout * 1000,
+      });
+      /**
+       * `request` asked with `provider`'s auth; interrupting it aborts the request. No auth, or auth that fails, is the
+       * result's error (`failed`), as a provider's failure is.
+       */
+      const ask = <R>(provider: Provider, request: (auth: Auth, signal: AbortSignal) => Promise<R>, failed: (message: string) => R) =>
+        authOf(provider).pipe(
+          Effect.matchEffect({
+            onFailure: (error) => Effect.succeed(failed(error.message)),
+            onSuccess: (auth) =>
+              auth === undefined
+                ? Effect.succeed(failed(`${provider.name} is not authenticated. Run /login ${provider.id} or set its API key environment variable.`))
+                : Effect.promise((signal) => request(auth, signal)),
+          }),
+        );
+
       const notice = (origin: string | undefined, payload: Omit<NoticePayload, "level" | "source" | "origin">) =>
         events.publish(Notice, { level: "info", source: plugin.id, ...payload, ...(origin === undefined ? {} : { origin }) });
 
@@ -507,11 +560,37 @@ export function makeLlmPlugin(options: Options = {}) {
 
         stream: (request) => streamThroughHook(hooks, request, terminal),
 
-        // Classifiers and image models are other protocols than this plugin speaks: it serves none.
-        classifiers: () => Effect.succeed([]),
-        classify: (ref) => Effect.fail(unknownModel(ref)),
-        imageModels: () => Effect.succeed([]),
-        generateImages: (ref) => Effect.fail(unknownModel(ref)),
+        // A provider configured with a sign-in has none of the classifiers whose protocol takes only API keys (OpenAI's Decisions).
+        classifiers: (query) =>
+          others(query, (provider, source) => provider.classifiers.filter((model) => source !== "OAuth" || accepts(model, { oauth: true }))).pipe(
+            Effect.map((models) => models.map(toClassifierInfo)),
+          ),
+
+        classify: (ref, context) =>
+          Effect.suspend(() => {
+            const found = findClassifier(ref);
+            if (found === undefined) return Effect.fail(unknownModel(ref));
+            const { provider, model } = found;
+            return ask(
+              provider,
+              (auth, signal) => classify(model, context, auth, requestOptions(signal)),
+              (message) => ({ provider: model.provider, model: model.id, answers: {}, stopReason: "error", errorMessage: message }),
+            );
+          }),
+
+        imageModels: (query) => others(query, (provider) => provider.images).pipe(Effect.map((models) => models.map(toImageModelInfo))),
+
+        generateImages: (ref, context) =>
+          Effect.suspend(() => {
+            const found = findImageModel(ref);
+            if (found === undefined) return Effect.fail(unknownModel(ref));
+            const { provider, model } = found;
+            return ask(
+              provider,
+              (auth, signal) => generateImages(model, context, auth, requestOptions(signal)),
+              (message) => ({ provider: model.provider, model: model.id, output: [], stopReason: "error", errorMessage: message }),
+            );
+          }),
 
         login: (providerId: string, type: AuthType) =>
           Effect.gen(function* () {

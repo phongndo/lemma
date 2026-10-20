@@ -394,7 +394,7 @@ describe("providers", () => {
       plugins,
       Effect.flatMap(Llm, (l) => Effect.all({ providers: l.providers, available: l.models({ available: true }), go: l.models() })),
     );
-    expect(result.providers.map((p) => p.id)).toEqual(["anthropic", "openai", "openrouter", "opencode", "opencode-go"]);
+    expect(result.providers.map((p) => p.id)).toEqual(["anthropic", "openai", "openrouter", "opencode", "opencode-go", "typesafe"]);
     const anthropic = result.providers.find((p) => p.id === "anthropic")!;
     expect(anthropic).toMatchObject({ auth: [{ type: "api_key", name: "Anthropic API key" }], configured: true, source: "ANTHROPIC_API_KEY" });
     expect(result.providers.find((p) => p.id === "openai")?.auth).toEqual([
@@ -536,22 +536,6 @@ describe("providers", () => {
       { "llm.http": { include: ["faux", "other"], exclude: ["other"] } },
     );
     expect(ids).toEqual(["faux"]);
-  });
-
-  it("serves no classifiers or image models: they are other protocols", async () => {
-    const { plugins } = setup();
-    const result = await runWith(
-      plugins,
-      Effect.flatMap(Llm, (llm) =>
-        Effect.all({
-          classifiers: llm.classifiers(),
-          images: llm.imageModels({ available: true }),
-          classify: Effect.flip(llm.classify("faux/plain", { state: {}, questions: {} })),
-          generate: Effect.flip(llm.generateImages("faux/plain", { input: [] })),
-        }),
-      ),
-    );
-    expect(result).toMatchObject({ classifiers: [], images: [], classify: { reason: "UnknownModel" }, generate: { reason: "UnknownModel" } });
   });
 });
 

@@ -1,4 +1,6 @@
+import type { CatalogClassifier } from "./classify.ts";
 import { thinkingFormat } from "./completions.ts";
+import type { CatalogImageModel } from "./images.ts";
 import { USER_AGENT } from "./identity.ts";
 import { BUDGET_LEVELS, effortThinking } from "./model.ts";
 import type { CatalogModel, Model, Thinking, WireApi } from "./model.ts";
@@ -240,6 +242,63 @@ export function mustThinkSource(fetchImpl: typeof fetch): (provider: string, sig
     });
     return ids;
   };
+}
+
+/** OpenRouter's list of its models answering in any modality, not only text: its classifiers and image models among them. */
+export const OPENROUTER_ALL = "https://openrouter.ai/api/v1/models?output_modalities=all";
+
+/** A provider's classifier and image models, as `nonchat.json` keeps them. */
+export interface Nonchat {
+  readonly classifiers: readonly CatalogClassifier[];
+  readonly images: readonly CatalogImageModel[];
+}
+
+/** The parts of an OpenRouter model this reads. */
+interface RouterModel {
+  readonly id?: unknown;
+  readonly name?: unknown;
+  readonly context_length?: unknown;
+  readonly architecture?: { readonly input_modalities?: unknown; readonly output_modalities?: unknown };
+  readonly pricing?: Readonly<Record<string, unknown>>;
+}
+
+/**
+ * OpenRouter's classifiers (the models answering in `decisions`) and image models, from its list (`OPENROUTER_ALL`);
+ * undefined for a list that is not one. Its prices are USD a token, as strings, and -1 for a router's that vary.
+ */
+export function openrouterNonchat(list: unknown): Nonchat | undefined {
+  const data = (list as { data?: unknown } | null)?.data;
+  if (!Array.isArray(data)) return undefined;
+  const modalities = (value: unknown) => (Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []);
+  const perMillion = (value: unknown) => {
+    const perToken = typeof value === "string" ? Number.parseFloat(value) : Number.NaN;
+    return Number.isFinite(perToken) && perToken > 0 ? Math.round(perToken * 1e12) / 1e6 : 0;
+  };
+  const classifiers: CatalogClassifier[] = [];
+  const images: CatalogImageModel[] = [];
+  for (const entry of data as readonly (RouterModel | null)[]) {
+    if (typeof entry?.id !== "string") continue;
+    const name = typeof entry.name === "string" ? entry.name : entry.id;
+    const output = modalities(entry.architecture?.output_modalities);
+    const cost = { input: perMillion(entry.pricing?.prompt), output: perMillion(entry.pricing?.completion) };
+    if (output.includes("decisions")) {
+      // System One, as OpenRouter serves it, takes no images, whatever the model would. A context of 0 is one its
+      // listing does not name.
+      const context = typeof entry.context_length === "number" && entry.context_length > 0 ? entry.context_length : 0;
+      classifiers.push({ id: entry.id, name, input: ["text"], contextWindow: context, cost });
+    } else if (output.includes("image")) {
+      const input = modalities(entry.architecture?.input_modalities).filter((item) => item === "text" || item === "image");
+      images.push({
+        id: entry.id,
+        name,
+        input: input.includes("text") ? input : ["text", ...input],
+        output: output.includes("text") ? ["image", "text"] : ["image"],
+        cost: { ...cost, cacheRead: perMillion(entry.pricing?.input_cache_read), cacheWrite: perMillion(entry.pricing?.input_cache_write) },
+      });
+    }
+  }
+  const byId = (a: { readonly id: string }, b: { readonly id: string }) => a.id.localeCompare(b.id);
+  return { classifiers: classifiers.sort(byId), images: images.sort(byId) };
 }
 
 /** The parts of a model this reads from the list `GET /v1/models` answers a ChatGPT sign-in with. */
