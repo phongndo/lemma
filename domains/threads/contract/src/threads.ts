@@ -35,7 +35,10 @@ export interface ThreadsService {
   readonly busy: Accessor<boolean>;
   /** Nothing has gone into the thread shown yet (`isBlank`), or no thread is shown: what is sent next starts it. */
   readonly blank: Accessor<boolean>;
-  /** Where a new thread starts when nothing else says, rather than in the host's directory. */
+  /**
+   * Where a new thread starts when nothing else says, rather than in the shown thread's directory or the host's: a
+   * plugin keeps it (`startIn`), as the workspace keeps it at the shown thread's project.
+   */
   readonly pendingCwd: Accessor<string | undefined>;
   /**
    * The prompts written in threads and not yet sent, by thread id: what the composer holds for each (it writes them,
@@ -56,7 +59,7 @@ export interface ThreadsService {
   /** Fetches a thread's log ahead of opening it (a link to it hovered), so it shows at once. */
   readonly preload: (sessionId: string) => void;
   /**
-   * Creates an empty thread, as a browser opens a tab, in `cwd` (else the shown thread's directory, else `pendingCwd`,
+   * Creates an empty thread, as a browser opens a tab, in `cwd` (else `pendingCwd`, else the shown thread's directory,
    * else the host's) and goes to it; one made here in `cwd` with nothing sent or written yet (no `drafts` entry) is
    * gone to instead. `inPlace`: while the shown thread is blank and made here, it moves to `cwd` instead
    * (`sessions.relocate`), keeping its id. A blank thread made here and left with nothing written in it is deleted.

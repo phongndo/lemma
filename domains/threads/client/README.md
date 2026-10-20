@@ -22,7 +22,9 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   thread's own.
 - **Threads exist before their first prompt**, as a browser's tabs do:
   `newThread` creates an empty session (`isBlank`, with no prompt on its way)
-  in the shown thread's directory unless told another, and goes to it; one
+  where it is told, else in `pendingCwd` (where a plugin says new threads
+  start: the workspace keeps it at the shown thread's project), else in the
+  shown thread's directory, and goes to it; one
   this tab made and still empty in that directory (nothing written in it
   either) is gone to instead, so there is one new thread per directory. Asked
   for with nowhere to start one yet (the workspace not yet known), it goes to

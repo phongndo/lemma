@@ -10,7 +10,7 @@ has the `SidebarFooter`. Each thread is a `SidebarRowPart` and its menu the
 `ThreadActions` ([`@lemma/threads`](../../threads/contract/src/index.ts)).
 Adds to `ThreadWaits` the threads a host question waits in (`Interactions`,
 asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
-`Threads`, `Slots`, `WebPlugins`, `Layout`, `Workspace`, `Client`, and
+`Threads`, `Slots`, `WebPlugins`, `Layout`, `Workspace`, and
 `Interactions`.
 
 ## Behavior
@@ -35,9 +35,8 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
 - **A card** is two lines of one height each, so nothing it shows, or the
   pointer, changes its size. The first is its title alone, which nothing cuts
   short; a title too long fades out. The second is its project and the branch
-  its folder has checked out (asked of the host a few folders at a time, once
-  per folder, again when a turn in it ends; marked when the folder is a
-  worktree), then at its end its state, the most pressing first, as T3 Code
+  its folder has checked out (`Workspace.place`: a thread in a worktree is
+  under its repository's project, its branch marked as a worktree's), then at its end its state, the most pressing first, as T3 Code
   shows it: what it waits on the person for (`ThreadWaits`: `Needs input`),
   `Working` and how long while a turn runs, `Done` once one finished unseen,
   else how long ago it was used. An archived thread is one slim line.

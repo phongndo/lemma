@@ -1,6 +1,6 @@
 import type { MenuAction } from "@lemma/frame";
 import { defineSlot } from "@lemma/web";
-import type { WorkspaceStatus } from "../workspace.ts";
+import type { Place, WorkspaceStatus } from "../workspace.ts";
 import { Context } from "effect";
 import type { Accessor } from "solid-js";
 import type { ProjectSettings } from "./projects.ts";
@@ -17,7 +17,10 @@ export interface WorktreeDraft {
  * calls through `Client`.
  */
 export interface WorkspaceService {
-  /** Folders with threads, most recently used first, then ones added by hand; never `standaloneDir`. */
+  /**
+   * The projects of folders with threads, most recently used first, then ones added by hand; never `standaloneDir`, and
+   * never a worktree: its threads are its repository's project's.
+   */
   readonly projects: Accessor<readonly string[]>;
   /** Added by hand (remembered), so they are offered before they have threads. */
   readonly added: Accessor<readonly string[]>;
@@ -28,8 +31,17 @@ export interface WorkspaceService {
   readonly projectSettings: (cwd: string) => ProjectSettings;
   /** Changes some of them; an undefined field, or a blank name, returns to the default. */
   readonly configureProject: (cwd: string, patch: { readonly [K in keyof ProjectSettings]?: ProjectSettings[K] | undefined }) => void;
-  /** What to call a project: its name setting, else its folder's name. */
+  /** What to call the project `cwd` belongs to (`projectOf`): its name setting, else its folder's name. */
   readonly projectName: (cwd: string) => string;
+  /**
+   * Where a folder sits (`Place`), once known: every thread's folder is asked of the host, all at once, and again when a
+   * turn there ends or `refreshPlaces` asks.
+   */
+  readonly place: (cwd: string) => Place | undefined;
+  /** The project a folder belongs to: a worktree's is its repository's main work tree; a folder not yet placed is its own. */
+  readonly projectOf: (cwd: string) => string;
+  /** Asks the host again where these folders sit: a worktree removed or made again. */
+  readonly refreshPlaces: (paths: readonly string[]) => Promise<void>;
   /** Where threads with no project run: a folder of the host's own (`<home>/scratch`), never listed among `projects`. */
   readonly standaloneDir: Accessor<string | undefined>;
   readonly isStandalone: (cwd: string | undefined) => boolean;
@@ -39,12 +51,16 @@ export interface WorkspaceService {
   readonly open: (input: string) => Promise<boolean>;
   /** Where the composer works: the active session's directory, else the new chat's, else `standaloneDir`. */
   readonly workingDir: Accessor<string | undefined>;
+  /** The project the working directory belongs to (`projectOf`). New threads start in it, unless told another folder (`Threads.startIn`). */
+  readonly project: Accessor<string | undefined>;
   /** The working directory's status, kept fresh while connected. */
   readonly status: Accessor<WorkspaceStatus | undefined>;
   readonly setStatus: (status: WorkspaceStatus) => void;
   readonly refresh: () => Promise<void>;
   /** For a new thread in a git repository: whether it starts in a fresh worktree (the project's setting, else the remembered global one), and from which branch. */
   readonly worktree: Accessor<WorktreeDraft>;
+  /** A new thread here starts in a new worktree: the draft is on, and the working directory is a checkout of a repository that is not a worktree already. */
+  readonly newWorktree: Accessor<boolean>;
   readonly setWorktree: (enabled: boolean) => void;
   readonly setWorktreeBase: (base: string | undefined) => void;
   /** Whether a new worktree starts from its branch's remote version, fetched first, rather than the local one; kept in this browser. */
