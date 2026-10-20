@@ -48,6 +48,9 @@ export interface WorkspaceService {
   readonly worktree: Accessor<WorktreeDraft>;
   readonly setWorktree: (enabled: boolean) => void;
   readonly setWorktreeBase: (base: string | undefined) => void;
+  /** Whether a new worktree starts from its branch's remote version, fetched first, rather than the local one; kept in this browser. */
+  readonly fromRemote: Accessor<boolean>;
+  readonly setFromRemote: (on: boolean) => void;
   /** Where a new chat's session goes: a fresh worktree named from `text` when one is chosen, else undefined. Throws when git refuses. */
   readonly newChatDir: (text: string) => Promise<string | undefined>;
 }

@@ -10,6 +10,7 @@ import { Client, Notify, defineWebPlugin } from "@lemma/web";
 
 const PROJECTS_KEY = "lemma.projects";
 const WORKTREE_KEY = "lemma.newWorktree";
+const FROM_REMOTE_KEY = "lemma.worktreeFromRemote";
 const PROJECT_SETTINGS_KEY = "lemma.projectSettings";
 const HIDDEN_KEY = "lemma.hiddenProjects";
 
@@ -36,6 +37,7 @@ export default defineWebPlugin({
     const statusOf = (path: string) => client.channel.call(WorkspaceChannels.status, { path });
     const [settings, setSettings] = createSignal<Readonly<Record<string, ProjectSettings>>>(loadJson(PROJECT_SETTINGS_KEY, {}, recordOf(isProjectSettings)));
     const [worktree, setWorktreeDraft] = createSignal<WorktreeDraft>({ enabled: load(WORKTREE_KEY) === "1" });
+    const [fromRemote, setFromRemote] = createSignal(load(FROM_REMOTE_KEY) === "1");
     /** Whether a new thread in `cwd` starts in a worktree: its project's setting, else the global one. */
     const worktreeDefault = (cwd: string | undefined) => (cwd === undefined ? undefined : settings()[cwd]?.worktree) ?? load(WORKTREE_KEY) === "1";
 
@@ -163,6 +165,11 @@ export default defineWebPlugin({
           setWorktreeDraft({ enabled });
         },
         setWorktreeBase,
+        fromRemote,
+        setFromRemote: (on: boolean) => {
+          save(FROM_REMOTE_KEY, on ? "1" : undefined);
+          setFromRemote(on);
+        },
         newChatDir: async (text: string) => {
           const current = status();
           const draft = worktree();
@@ -171,6 +178,7 @@ export default defineWebPlugin({
             path: current.path,
             branch: branchSlug(text),
             ...(draft.base === undefined ? {} : { base: draft.base }),
+            ...(fromRemote() ? { fromRemote: true } : {}),
           });
           setWorktreeBase(undefined);
           return created.path;

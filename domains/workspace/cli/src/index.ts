@@ -87,13 +87,18 @@ export const workspaceCommands = (registries: Reader) => [
     path: ["workspace", "worktree"],
     summary: 'A linked worktree on a new branch, as the web app\'s "new worktree"',
     args: [{ name: "branch", description: "The new branch", required: true }],
-    flags: { ...pathFlag, base: { type: "string", placeholder: "ref", description: "What it starts from (default: the current head)" } },
+    flags: {
+      ...pathFlag,
+      base: { type: "string", placeholder: "ref", description: "What it starts from (default: the current head)" },
+      "from-remote": { type: "boolean", description: "Start from the base's remote version (its upstream, else origin's), fetched first" },
+    },
     run: ({ args, flags, cwd }) =>
       Effect.map(
         callHere(registries, WorkspaceChannels.createWorktree, {
           path: hostPath(cwd, flags.path),
           branch: args.branch,
           ...(flags.base === undefined ? {} : { base: flags.base }),
+          ...(flags["from-remote"] === true ? { fromRemote: true } : {}),
         }),
         (status) => ({ json: status, text: formatWorkspace(status) }),
       ),

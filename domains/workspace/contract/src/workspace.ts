@@ -92,10 +92,16 @@ export class Workspace extends Context.Service<
     /**
      * Create a linked worktree of the repository at `path` on a new branch
      * `branch` (made unique with a numeric suffix if taken), started from `base`
-     * (default HEAD). Worktrees live under the host's worktree directory, one
-     * folder per repository. Returns the new worktree's status.
+     * (default HEAD). With `fromRemote`, it starts from `base`'s version on its
+     * remote instead (its upstream, else `origin`'s branch of the name), fetched
+     * first, and does not track it, so the new branch pushes as itself. Worktrees
+     * live under the host's worktree directory, one folder per repository.
+     * Returns the new worktree's status.
      */
-    readonly createWorktree: (path: string, options: { readonly branch: string; readonly base?: string }) => Effect.Effect<WorkspaceStatus, WorkspaceError>;
+    readonly createWorktree: (
+      path: string,
+      options: { readonly branch: string; readonly base?: string; readonly fromRemote?: boolean },
+    ) => Effect.Effect<WorkspaceStatus, WorkspaceError>;
     /** Switch to `branch`, creating it from HEAD when `create` is set. Returns the new status. */
     readonly checkout: (path: string, branch: string, options?: { readonly create?: boolean }) => Effect.Effect<WorkspaceStatus, WorkspaceError>;
   }
@@ -140,8 +146,9 @@ export const WorkspaceChannels = {
     kind: "call",
     id: "workspace.create-worktree",
     title: "Create worktree",
-    description: "Creates a linked worktree of the repository at `path` on a new branch started from `base` (default HEAD), and gives its status",
-    payload: Schema.Struct({ path: Schema.String, branch: Schema.String, base: Schema.optional(Schema.String) }),
+    description:
+      "Creates a linked worktree of the repository at `path` on a new branch started from `base` (default HEAD), or from its remote version, fetched first (`fromRemote`), and gives its status",
+    payload: Schema.Struct({ path: Schema.String, branch: Schema.String, base: Schema.optional(Schema.String), fromRemote: Schema.optional(Schema.Boolean) }),
     success: WorkspaceStatus,
   }),
   branches: defineChannel({
@@ -168,8 +175,8 @@ export const serveWorkspace = (workspace: Context.Service.Shape<typeof Workspace
   serveChannel(WorkspaceChannels.status, ({ path }) => workspace.status(path)),
   serveChannel(WorkspaceChannels.browse, ({ partialPath }) => workspace.browse(partialPath)),
   serveChannel(WorkspaceChannels.createDirectory, ({ path }) => workspace.createDirectory(path)),
-  serveChannel(WorkspaceChannels.createWorktree, ({ path, branch, base }) =>
-    workspace.createWorktree(path, base === undefined ? { branch } : { branch, base }),
+  serveChannel(WorkspaceChannels.createWorktree, ({ path, branch, base, fromRemote }) =>
+    workspace.createWorktree(path, { branch, ...(base === undefined ? {} : { base }), ...(fromRemote === undefined ? {} : { fromRemote }) }),
   ),
   serveChannel(WorkspaceChannels.branches, ({ path }) => workspace.branches(path)),
   serveChannel(WorkspaceChannels.checkout, ({ path, branch, create }) => workspace.checkout(path, branch, create === undefined ? undefined : { create })),
