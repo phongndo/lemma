@@ -914,6 +914,38 @@
   border-top: 1px dashed var(--border-strong);
 }
 
+/* A turn the person stopped ends with a line saying so, which stands in for the line between turns. */
+.turn-interrupted {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--err);
+  font-size: calc(12.5px * var(--text-scale));
+}
+
+.turn-interrupted::before,
+.turn-interrupted::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--border);
+}
+
+.turn-interrupted > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.turn-interrupted .icon {
+  width: 14px;
+  height: 14px;
+}
+
+.turn[data-end="cancelled"] + .turn {
+  border-top: none;
+  margin-top: 0;
+}
+
 .turn-footer {
   display: flex;
   flex-wrap: wrap;

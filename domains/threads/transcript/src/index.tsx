@@ -387,7 +387,7 @@ function TurnFooter(props: ChatTurnFooterProps) {
   return (
     <footer class="turn-footer">
       <Show when={answer()}>{(text) => <CopyButton text={text()} label="Copy response" class="turn-copy" />}</Show>
-      {/* A turn the person stopped has no badge: they know, and its section says so (`data-end`) for a style that would show it. */}
+      {/* A turn the person stopped has no badge: its section ends with a line saying so. */}
       <Show when={reason() === "max-steps"}>
         <span class="badge badge-warn">step limit</span>
       </Show>
@@ -624,6 +624,14 @@ function Turn(props: { chat: Chat; turn: TurnView; running: boolean; drafts: rea
       </Show>
       <Show when={ended()}>
         <ChatTurnFooter turn={props.turn} answer={answerText(props.turn)} />
+      </Show>
+      <Show when={props.turn.end?.reason === "cancelled"}>
+        <div class="turn-interrupted">
+          <span>
+            <XIcon />
+            Interrupted
+          </span>
+        </div>
       </Show>
       <For each={props.steers}>{(steer) => <PendingSteer chat={props.chat} steer={steer} />}</For>
     </section>

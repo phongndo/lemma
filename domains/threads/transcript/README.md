@@ -51,13 +51,13 @@ Conversation (`SettingsGroups`). Requires `Threads` and the runtime's `Client`, 
   then copying the prompt and copying a link to it. The link is the thread's
   address ending `#prompt-<event id>`: opened, the chat shows that prompt at
   its top, ringed for a moment, rather than where it was left.
-- **Stopped turns.** A turn the person stopped ends quietly: no badge, and no
+- **Stopped turns.** A turn the person stopped ends with a red "Interrupted"
+  line between rules, in place of the line between turns: no badge, and no
   note on its last message. Its last step's calls that failed failed by the
   stop (`ToolResultView.stopped`), so they are not counted as failed, and show
   "stopped" rather than "failed" (`state` `interrupted`); a model call the stop
   cut off shows what it had written, as it was, and nothing when it had not
-  begun. The turn's section says how it ended (`data-end`), for a stylesheet
-  that would show it.
+  begun. The turn's section says how it ended (`data-end`), for a stylesheet.
 - **Open and closed.** What the reader opens or closes stays so across thread
   switches, for as long as the plugin runs.
 - **Tool results.** A call with no result once its turn has ended, or with no
