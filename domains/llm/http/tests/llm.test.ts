@@ -4,15 +4,18 @@ import type { AddressInfo } from "node:net";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope, Stream } from "effect";
 import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
 import { InteractionError, InteractionOrigin } from "@lemma/contracts";
+import { CredentialError, Credentials } from "@lemma/credentials";
 import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import { llmConformance } from "@lemma/testing";
+import { resolveAuth } from "../src/auth.ts";
 import { deviceId } from "../src/device.ts";
 import { ProviderError } from "../src/http.ts";
 import { makeLlmPlugin } from "../src/index.ts";
 import type { OAuthMethod } from "../src/index.ts";
+import { builtin } from "../src/providers.ts";
 import {
   catalogModel,
   chunk,
@@ -918,6 +921,57 @@ describe("login", () => {
     );
   });
 
+  it("keeps a refreshed token though the plugin stops while the provider answers", async () => {
+    let asked = false;
+    let release!: () => void;
+    const sso: OAuthMethod = {
+      name: "SSO",
+      login: () => Effect.die("not used"),
+      refresh: async (credential) => {
+        asked = true;
+        await new Promise<void>((resolve) => (release = resolve));
+        return { ...credential, access: "rotated", refresh: "rotated-refresh", expires: Date.now() + 3_600_000 };
+      },
+    };
+    const { service, store } = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        // The plugin's scope, as `detached` runs a refresh in it.
+        const scope = yield* Scope.make();
+        const detached = <A, E>(effect: Effect.Effect<A, E>) => Effect.flatMap(Effect.forkIn(effect, scope), Fiber.join);
+        yield* Effect.forkChild(resolveAuth(builtin(faux({ oauth: sso })), service, () => undefined, offline, detached));
+        yield* Effect.promise(() => expect.poll(() => asked).toBe(true));
+        // The plugin stops while the provider, asked, has not answered yet; then it answers.
+        const stopping = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        release();
+        yield* Fiber.join(stopping);
+      }),
+    );
+    expect(store.get("faux")).toMatchObject({ access: "rotated", refresh: "rotated-refresh" });
+  });
+
+  it("fails a request whose credential store is busy as one to ask again, without sending the user to sign in", async () => {
+    const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh: async (credential) => credential };
+    const { service } = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
+    const locked = definePlugin({
+      id: "credentials",
+      provides: [Credentials],
+      layer: Layer.succeed(Credentials, {
+        ...service,
+        modify: () => Effect.fail(new CredentialError({ reason: "Locked", message: "auth.json is held by another process; gave up after 10000ms" })),
+      }),
+    });
+    const plugins = [
+      locked,
+      fakeInteraction(() => Effect.succeed("")).plugin,
+      makeLlmPlugin({ fetch: offline, providers: () => [faux({ oauth: sso })], env: {} }),
+    ];
+    const events = await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] })));
+    expect(events.at(-1)).toMatchObject({ type: "error", failure: { kind: "transient" } });
+    expect((events.at(-1) as { message: { errorMessage: string } }).message.errorMessage).not.toContain("/login");
+  });
+
   it("tells a request whose sign-in cannot be refreshed to sign in again", async () => {
     const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh: () => Promise.reject(new Error("invalid_grant")) };
     const credentials = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
@@ -956,9 +1010,12 @@ describe("login", () => {
     // What the refusal is stays what its status made it, whatever its words.
     const slowed = await outcome(() => Promise.reject(new ProviderError("429 Slow down", { status: 429, retryAfterMs: 120_000 })));
     expect(slowed.last).toMatchObject({ type: "error", failure: { kind: "rate-limit", retryAfterMs: 120_000 } });
-    const denied = await outcome(() => Promise.reject(new ProviderError("400 invalid_grant: Refresh denied by network policy", { status: 400 })));
-    expect(denied.last).toMatchObject({ type: "error", failure: { kind: "fatal" } });
-    expect((denied.last as { message: { errorMessage: string } }).message.errorMessage).toContain("Run /login faux");
+    const denied = await outcome(() => Promise.reject(new ProviderError("400 invalid_grant: Refresh denied by network policy.", { status: 400 })));
+    expect(denied.last).toMatchObject({
+      type: "error",
+      failure: { kind: "fatal" },
+      message: { errorMessage: "Faux sign-in could not be refreshed: 400 invalid_grant: Refresh denied by network policy. Run /login faux to sign in again." },
+    });
   });
 });
 

@@ -1,5 +1,6 @@
 import { Effect } from "effect";
 import type { Context } from "effect";
+import { CredentialError } from "@lemma/credentials";
 import type { Credential, Credentials } from "@lemma/credentials";
 import { classifyFailure, JudgedError } from "./failure.ts";
 import { ConnectionError, networkError, ProviderError } from "./http.ts";
@@ -57,24 +58,34 @@ export const resolveAuth = (
     if (isOAuth(stored) && oauth !== undefined) {
       if (stored.expires > Date.now()) return { key: stored.access, oauth: true };
       const fresh = yield* detached(
-        credentials.modify(provider.id, (current) =>
-          // Another request may have refreshed it while this one waited for the lock.
-          isOAuth(current) && current.expires <= Date.now()
-            ? Effect.tryPromise({
-                try: () => oauth.refresh(current, fetchImpl, AbortSignal.timeout(REFRESH_TIMEOUT_MS)) as Promise<Credential>,
-                catch: (error) => error,
-              })
-            : undefined,
+        // Uninterruptible, the plugin stopping too: once asked, the provider may have rotated the refresh token, and the
+        // new one is kept (stopping waits for it, `REFRESH_TIMEOUT_MS` at most).
+        Effect.uninterruptible(
+          credentials.modify(provider.id, (current) =>
+            // Another request may have refreshed it while this one waited for the lock.
+            isOAuth(current) && current.expires <= Date.now()
+              ? Effect.tryPromise({
+                  try: () => oauth.refresh(current, fetchImpl, AbortSignal.timeout(REFRESH_TIMEOUT_MS)) as Promise<Credential>,
+                  catch: (error) => error,
+                })
+              : undefined,
+          ),
         ),
       ).pipe(
         Effect.mapError((error) => {
+          const message = `${provider.name} sign-in could not be refreshed`;
+          // The store, not the sign-in, failed: busy (another process holds its lock) it may pass when asked again.
+          if (error instanceof CredentialError) {
+            return new JudgedError(`${message}: ${error.message}`, { kind: error.reason === "Locked" ? "transient" : "fatal" }, { cause: error });
+          }
           // Judged as a request's failure is: only a refusal (the refresh token revoked or spent) needs a new sign-in;
           // the network, or the provider, failing may pass when asked again, and the sign-in is still good. Decided
           // here, where the cause is known, it travels with the error whatever its message says.
           const failed = error instanceof ProviderError || error instanceof ConnectionError ? error : networkError(error);
           const failure = classifyFailure(failed, failed.message);
+          const detail = failed.message.replace(/\.+$/, "");
           const advice = failure.kind === "fatal" ? `. Run /login ${provider.id} to sign in again.` : "";
-          return new JudgedError(`${provider.name} sign-in could not be refreshed: ${failed.message}${advice}`, failure, { cause: error });
+          return new JudgedError(`${message}: ${detail}${advice}`, failure, { cause: error });
         }),
       );
       if (isOAuth(fresh)) return { key: fresh.access, oauth: true };
