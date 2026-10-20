@@ -18,7 +18,7 @@
     "./vitest": "./vitest.web.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -26,13 +26,13 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/router": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "solid-js": "1.9.17"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vite-plugin-solid": "2.11.14",
-    "vitest": "5.0.4"
+    "vitest": "5.0.5"
   }
 }

@@ -258,6 +258,8 @@ describe("against a running host", () => {
       "llm.models",
       "llm.login",
       "llm.cancel-login",
+      "llm.sign-ins",
+      "llm.answer-sign-in",
       "llm.logout",
       "llm.add-custom",
       "llm.remove-custom",

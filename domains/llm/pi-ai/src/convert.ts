@@ -240,12 +240,13 @@ function toAssistantMessage(message: Pi.AssistantMessage, errorMessage?: string)
 /** Rewrites pi's terse auth failures into something a user can act on. */
 function explainError(message: string | undefined, provider: { readonly id: string; readonly name: string }): string | undefined {
   if (message === undefined) return undefined;
-  const login = `Run /login ${provider.id}`;
+  // Clients offer the way in themselves (the web app's button, `lemma login` at a terminal); the text names both.
+  const login = `on the Providers page, or with \`lemma login ${provider.id}\``;
   if (message.startsWith("Provider is not configured:") || message.startsWith("No API key for provider:")) {
-    return `${provider.name} is not authenticated. ${login} or set its API key environment variable.`;
+    return `${provider.name} is not connected. Connect it ${login}, or set its API key environment variable.`;
   }
   if (message.startsWith("OAuth refresh failed") || message.startsWith("OAuth refresh returned")) {
-    return `${message}. ${login} to sign in again.`;
+    return `${message}. Sign in to ${provider.name} again ${login}.`;
   }
   return message;
 }

@@ -7,7 +7,7 @@
   "scripts": {
     "start": "pnpm --filter @lemma/core --filter @lemma/web-app build && env -u ELECTRON_RUN_AS_NODE electron .",
     "dev": "pnpm --filter @lemma/core build && LEMMA_WEB_URL=${LEMMA_WEB_URL:-http://127.0.0.1:5173} env -u ELECTRON_RUN_AS_NODE electron .",
-    "check": "tsc --noEmit"
+    "check": "tsrs --noEmit"
   },
   "dependencies": {
     "@lemma/cli": "workspace:*",
@@ -15,11 +15,11 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "electron": "44.7.0",
-    "typescript": "7.0.2"
+    "electron": "44.9.0",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929"
   }
 }

@@ -8,7 +8,7 @@
   },
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run",
     "build": "node scripts/build.ts"
   },
@@ -17,13 +17,13 @@
     "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   }
 }

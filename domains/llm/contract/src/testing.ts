@@ -100,6 +100,8 @@ export const scriptedLlm = (scripts: readonly (Script | ((request: LlmRequest) =
             }),
           ),
         login: () => Effect.void,
+        signIns: Stream.make([]),
+        answerSignIn: (provider) => Effect.fail(new LlmError({ reason: "NotAsked", provider, message: "no sign-in" })),
         logout: () => Effect.void,
         addCustom: () => Effect.succeed("custom"),
         removeCustom: () => Effect.void,

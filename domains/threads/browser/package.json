@@ -8,7 +8,7 @@
     ".": "./src/index.tsx"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -18,13 +18,13 @@
     "@lemma/settings": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "solid-js": "1.9.17"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "web": "./src/index.tsx"

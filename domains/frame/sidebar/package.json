@@ -8,13 +8,13 @@
     ".": "./src/index.tsx"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@dnd-kit/abstract": "0.5.0",
-    "@dnd-kit/dom": "0.5.0",
-    "@dnd-kit/solid": "0.5.0",
+    "@dnd-kit/abstract": "0.5.1",
+    "@dnd-kit/dom": "0.5.1",
+    "@dnd-kit/solid": "0.5.1",
     "@lemma/actions": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
@@ -26,8 +26,8 @@
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "web": "./src/index.tsx"

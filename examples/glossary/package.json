@@ -5,14 +5,14 @@
   "description": "The plugin docs/building.md builds: a tool, a view of what it keeps, and a profile that uses it",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@lemma/core": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/agent": "workspace:*",
@@ -23,8 +23,8 @@
     "@lemma/sessions-files": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "host": "./glossary.ts",

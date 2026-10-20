@@ -73,7 +73,8 @@ leaves the channel uncalled, and the call is an error saying which.
 
 Never offered, whatever the config says: a channel that declares `secret`
 (a credential can cross it), and, even when a replacement declares less,
-signing in and out (`llm.login`, `llm.logout`, `llm.cancel-login`), the
+signing in and out (`llm.login`, `llm.sign-ins`, `llm.answer-sign-in`,
+`llm.logout`, `llm.cancel-login`), the
 provider and server entries that can hold a credential (`llm.add-custom`,
 `llm.remove-custom`, `llm.set-logo`, `mcp.put`), their state as written
 (`mcp.state`, `mcp.changes`, where a credential may be typed in place of a

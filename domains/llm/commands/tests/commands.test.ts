@@ -18,7 +18,9 @@ describe("llm commands", () => {
       }) as unknown as Context.Service.Shape<typeof Llm>;
 
     const { ask, asked } = scripted("a");
-    expect(await run(find(llmCommands(llm(true), ask), "llm.logout"))).toMatchObject({ success: { message: "Logged out of Alpha" } });
+    expect(await run(find(llmCommands(llm(true), ask), "llm.logout"))).toMatchObject({
+      success: { message: "Logged out of Alpha. To end its access there too, revoke it with Alpha." },
+    });
     expect(asked[0]?.options).toEqual(["a"]);
     expect(loggedOut).toEqual(["a"]);
 

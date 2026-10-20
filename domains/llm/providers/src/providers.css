@@ -332,3 +332,17 @@
   font-size: calc(12.5px * var(--text-scale));
   color: var(--text-3);
 }
+
+/* Why the last answer was refused: a key the provider would not take, a code that expired. */
+.connect-problem {
+  margin: 0;
+  color: var(--err);
+  font-size: calc(13px * var(--text-scale));
+}
+
+/* Beside Cancel, for a page from another machine: where what the sign-in stores ends up. */
+.connect-host {
+  margin-right: auto;
+  color: var(--text-3);
+  font-size: calc(12px * var(--text-scale));
+}

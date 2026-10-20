@@ -11,7 +11,7 @@ export const separate = async (): Promise<string> => {
   await fresh.goto(`${url}/?mock`);
   await fresh.waitForSelector(".composer-callout, .settings");
   assert.equal(await fresh.locator(".settings").count(), 0, "with no provider set up, the app opened settings rather than the chat");
-  await fresh.click(".composer-callout >> text=Log in to a provider");
+  await fresh.click(".composer-callout button >> text=Connect");
   await fresh.waitForSelector(".settings >> text=Connect a provider to start chatting");
   await fresh.locator(".provider", { hasText: "OpenCode Zen" }).locator(".provider-connect").click();
   await fresh.fill(".connect input[type=password]", "sk-check");
@@ -104,6 +104,20 @@ export const separate = async (): Promise<string> => {
   await connect.click(".custom-provider >> text=Add provider");
   await connect.waitForSelector(".custom-provider", { state: "detached", timeout: 10_000 });
   assert.notEqual(await connect.evaluate(() => (window as any).sawConnect), true, "adding a custom provider with a key opened the connect dialog too");
+  // One whose key the host refuses (the mock refuses any with "wrong" in it): the connect dialog says why, and takes another.
+  await connect.locator(".provider", { hasText: "Custom provider" }).locator(".provider-connect").click();
+  await connect.waitForSelector(".custom-provider-form");
+  await fields.nth(0).fill("Proxy");
+  await fields.nth(1).fill("http://localhost:4001/v1");
+  await fields.nth(2).fill("m1");
+  await fields.nth(3).fill("sk-wrong");
+  await connect.click(".custom-provider >> text=Add provider");
+  await connect
+    .waitForSelector(".dialog.connect:not(.custom-provider) .connect-problem", { timeout: 10_000 })
+    .catch(() => assert.fail("a custom provider's refused key did not open the connect dialog to say why"));
+  await connect.fill(".dialog.connect:not(.custom-provider) input[type=password]", "sk-right");
+  await connect.press(".dialog.connect:not(.custom-provider) input[type=password]", "Enter");
+  await connect.waitForSelector(".dialog.connect", { state: "detached", timeout: 10_000 });
   await connect.close();
   expectNoErrors("connecting providers each way");
 

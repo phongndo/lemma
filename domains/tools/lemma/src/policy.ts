@@ -31,6 +31,8 @@ export const DEFAULT_CONFIRM: readonly string[] = [
  */
 export const NEVER: ReadonlySet<string> = new Set([
   "llm.login",
+  "llm.sign-ins",
+  "llm.answer-sign-in",
   "llm.logout",
   "llm.cancel-login",
   "llm.add-custom",

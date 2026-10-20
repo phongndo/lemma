@@ -45,19 +45,20 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsrs -p tsconfig.build.json",
     "prepack": "pnpm build",
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run",
     "bench": "node bench/core.ts"
   },
   "dependencies": {
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
     "fast-check": "4.10.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "vitest": "5.0.5"
   }
 }

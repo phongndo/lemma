@@ -106,6 +106,8 @@ const llm = definePlugin({
             })
           : Effect.fail(new LlmError({ reason: "UnknownModel", message: `Unknown model: ${ref}` })),
       login: () => Effect.void,
+      signIns: Stream.make([]),
+      answerSignIn: () => Effect.void,
       logout: () => Effect.void,
       addCustom: (spec) => Effect.succeed(spec.name),
       removeCustom: () => Effect.void,

@@ -9,11 +9,11 @@
     "./web": "./src/web.tsx"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@earendil-works/pi-codemode": "1.2.0",
+    "@earendil-works/pi-codemode": "1.3.0",
     "@lemma/agent": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
@@ -22,7 +22,7 @@
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "solid-js": "1.9.17"
   },
   "devDependencies": {
@@ -33,8 +33,8 @@
     "@lemma/tools-registry": "workspace:*",
     "@lemma/tools-write": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "host": "./src/index.ts",

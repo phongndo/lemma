@@ -10,7 +10,7 @@
   },
   "scripts": {
     "start": "node --conditions=lemma-source src/main.ts",
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -68,12 +68,12 @@
     "@lemma/workspace-commands": "workspace:*",
     "@lemma/workspace-local": "workspace:*",
     "@lemma/workspace-search-fff": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   }
 }

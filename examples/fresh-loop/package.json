@@ -5,7 +5,7 @@
   "description": "An agent of another kind built on the agent kit: each turn starts from a short handoff of the last, not the whole history",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -15,15 +15,15 @@
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/sessions-files": "workspace:*",
     "@lemma/sim": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "host": "./fresh-loop.ts"

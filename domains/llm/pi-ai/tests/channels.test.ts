@@ -3,15 +3,15 @@ import { Duration, Effect, Schema, Stream } from "effect";
 import { connect } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { Channels, defineChannel, HostError, serveChannel } from "@lemma/contracts";
-import { LlmChannels } from "@lemma/llm";
-import type { LlmChange } from "@lemma/llm";
+import { asksAnswer, LlmChannels } from "@lemma/llm";
+import type { LlmChange, SignIn, SignInStep } from "@lemma/llm";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { definePlugin, makeCore } from "@lemma/core";
 import type { Core, CoreOptions, Plugin } from "@lemma/core";
 import transport from "@lemma/transport-server";
 import { settled } from "../../../../scripts/e2e.ts";
 import { makeLlmPlugin } from "../src/index.ts";
-import { envContext, fakeCredentials, fakeHost, fakeInteraction, offline } from "./helpers.ts";
+import { envContext, fakeCredentials, fakeHost, offline } from "./helpers.ts";
 
 /**
  * Runs `plugins` behind the transport and a fake host, which gives the
@@ -52,12 +52,40 @@ const gateway = {
   ],
 };
 
-/** The llm plugin with only `gateway`, offline, asking its questions of `answer`. */
-const gatewayLlm = (answer: Parameters<typeof fakeInteraction>[0]) => {
+/** The llm plugin with only `gateway`, offline. */
+const gatewayLlm = () => {
   const credentials = fakeCredentials();
-  const interaction = fakeInteraction(answer);
   const llm = makeLlmPlugin({ fetch: offline, providers: () => [], authContext: envContext() });
-  return { credentials, interaction, plugins: [credentials.plugin, interaction.plugin, llm] };
+  return { credentials, plugins: [credentials.plugin, llm] };
+};
+
+/**
+ * A client answering each sign-in step that asks, as the web app does: it opens `llm.sign-ins` and answers with
+ * `llm.answer-sign-in` what `answer` gives (nothing: it leaves the step open). Every step asked is recorded, and every
+ * list seen.
+ */
+const answering = (host: Host, answer: (step: SignInStep) => string | Promise<string> | undefined) => {
+  const asked: SignInStep[] = [];
+  const seen: (readonly SignIn[])[] = [];
+  const handled = new Set<number>();
+  const close = host.channel.open(LlmChannels.signIns, undefined, (list) => {
+    seen.push(list);
+    for (const signIn of list) {
+      if (signIn.ended !== undefined || !asksAnswer(signIn.step) || handled.has(signIn.seq)) continue;
+      handled.add(signIn.seq);
+      asked.push(signIn.step);
+      void Promise.resolve(answer(signIn.step))
+        .then((value) => (value === undefined ? undefined : host.channel.call(LlmChannels.answerSignIn, { provider: signIn.provider, seq: signIn.seq, value })))
+        .catch(() => undefined);
+    }
+  });
+  /** How the provider's latest sign-in seen ended. */
+  const ended = (provider: string) =>
+    seen
+      .flat()
+      .filter((signIn) => signIn.provider === provider && signIn.ended !== undefined)
+      .at(-1)?.ended;
+  return { asked, seen, ended, close };
 };
 
 /** Waits until `done` holds, failing the test if it never does. */
@@ -90,7 +118,7 @@ const rejection = (promise: Promise<unknown>) =>
 
 describe("llm's channels, through the transport", () => {
   it("lists every llm call and stream as the llm plugin's, and answers typed calls", () => {
-    const { plugins } = gatewayLlm(() => Effect.succeed("unused"));
+    const { plugins } = gatewayLlm();
     return served(
       plugins,
       async (client) => {
@@ -101,6 +129,8 @@ describe("llm's channels, through the transport", () => {
           ["llm.models", "call", "llm.pi-ai"],
           ["llm.login", "call", "llm.pi-ai"],
           ["llm.cancel-login", "call", "llm.pi-ai"],
+          ["llm.sign-ins", "stream", "llm.pi-ai"],
+          ["llm.answer-sign-in", "call", "llm.pi-ai"],
           ["llm.logout", "call", "llm.pi-ai"],
           ["llm.add-custom", "call", "llm.pi-ai"],
           ["llm.remove-custom", "call", "llm.pi-ai"],
@@ -119,13 +149,16 @@ describe("llm's channels, through the transport", () => {
   }, 30_000);
 
   it("logs in, and fails with the error's reason as the code and its provider as the subject", () => {
-    const { plugins, credentials, interaction } = gatewayLlm(() => Effect.succeed("sk-test"));
+    const { plugins, credentials } = gatewayLlm();
     return served(
       plugins,
       async (client) => {
         const host = await client();
+        const answers = answering(host, () => "sk-test");
         await host.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
-        expect(interaction.origins).toEqual(["login:gateway"]);
+        expect(answers.asked).toEqual([{ type: "key", label: "Gateway API key" }]);
+        await until(() => answers.ended("gateway") !== undefined);
+        expect(answers.ended("gateway")).toEqual({ outcome: "signed-in" });
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-test" });
         expect((await host.channel.call(LlmChannels.providers, undefined))[0]).toMatchObject({ configured: true, source: "stored credential" });
 
@@ -152,19 +185,25 @@ describe("llm's channels, through the transport", () => {
     );
   }, 30_000);
 
-  it("lets any client cancel a running login: its question is withdrawn and the call fails Cancelled", () => {
-    let withdrawn = false;
-    const { plugins, interaction } = gatewayLlm(() => Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => (withdrawn = true)))));
+  it("lets any client cancel a running login: its sign-in ends cancelled, its step no longer answerable, and the call fails Cancelled", () => {
+    const { plugins } = gatewayLlm();
     return served(
       plugins,
       async (client) => {
         const [starter, other] = [await client(), await client()];
+        const answers = answering(other, () => undefined);
         expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(false);
         const login = rejection(starter.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" }));
-        await until(() => interaction.asked.length === 1);
+        await until(() => answers.asked.length === 1);
+        const asking = answers.seen.flat().find((signIn) => signIn.step.type === "key")!;
         expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(true);
         expect(await login).toMatchObject({ code: "Cancelled", subject: "gateway" });
-        expect(withdrawn).toBe(true);
+        await until(() => answers.ended("gateway") !== undefined);
+        expect(answers.ended("gateway")).toEqual({ outcome: "cancelled" });
+        expect(await rejection(other.channel.call(LlmChannels.answerSignIn, { provider: "gateway", seq: asking.seq, value: "late" }))).toMatchObject({
+          code: "NotAsked",
+          subject: "gateway",
+        });
         expect(await other.channel.call(LlmChannels.cancelLogin, { provider: "gateway" })).toBe(false);
       },
       { "llm.pi-ai": gateway },
@@ -172,64 +211,58 @@ describe("llm's channels, through the transport", () => {
   }, 30_000);
 
   it("keeps a login running when its caller's connection drops; another client's call waits for it, and one of the other type is Busy", () => {
-    let answer!: () => void;
-    const answered = new Promise<void>((resolve) => (answer = resolve));
-    let withdrawn = false;
-    const { plugins, interaction, credentials } = gatewayLlm(() =>
-      Effect.promise(() => answered).pipe(
-        Effect.as("sk-late"),
-        Effect.onInterrupt(() => Effect.sync(() => (withdrawn = true))),
-      ),
-    );
+    const { plugins, credentials } = gatewayLlm();
     return served(
       [...plugins, probe],
       async (client) => {
         const [leaving, staying] = [await client(), await client()];
         leaving.channel.open("probe.open", undefined, () => {});
         await until(() => probes === 1);
+        let answer!: (key: string) => void;
+        const answers = answering(staying, () => new Promise<string>((resolve) => (answer = resolve)));
         void leaving.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" }).catch(() => undefined);
-        await until(() => interaction.asked.length === 1);
+        await until(() => answers.asked.length === 1);
         await leaving.close();
         // The host has dropped the leaving client's requests: its login call among them.
         await until(() => probes === 0);
-        expect(withdrawn).toBe(false);
+        // Its sign-in is still there, asking.
+        expect(answers.seen.at(-1)).toMatchObject([{ provider: "gateway", step: { type: "key" } }]);
         const joined = staying.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
         expect(await rejection(staying.channel.call(LlmChannels.login, { provider: "gateway", type: "oauth" }))).toMatchObject({
           code: "Busy",
           subject: "gateway",
           message: 'A api_key login to "gateway" is in progress',
         });
-        answer();
+        answer("sk-late");
         await joined;
-        // One flow, one question: the second call waited for the first's.
-        expect(interaction.asked).toHaveLength(1);
+        // One flow, one step asked: the second call waited for the first's.
+        expect(answers.asked).toHaveLength(1);
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-late" });
       },
       { "llm.pi-ai": gateway },
     );
   }, 30_000);
 
-  it("ends a login call waiting on its question Withdrawn at once when llm leaves, despite a long dispose deadline; called again, it logs in on the replacement", () => {
-    let logins = 0;
-    let withdrawn = false;
-    // The first login's question is never answered: only llm stopping ends it.
-    const { plugins, interaction, credentials } = gatewayLlm(() =>
-      ++logins === 1 ? Effect.never.pipe(Effect.onInterrupt(() => Effect.sync(() => void (withdrawn = true)))) : Effect.succeed("sk-again"),
-    );
+  it("ends a login call waiting on its step Withdrawn at once when llm leaves, despite a long dispose deadline; called again, it logs in on the replacement", () => {
+    const { plugins, credentials } = gatewayLlm();
     return served(
       plugins,
       async (client, _, core) => {
         const host = await client();
+        // The first login's step is never answered: only llm stopping ends it.
+        const first = answering(host, () => undefined);
         const login = rejection(host.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" }));
-        await until(() => interaction.asked.length === 1);
+        await until(() => first.asked.length === 1);
         // The transport needs nothing llm provides, so the connection stays: llm alone restarts.
         const started = Date.now();
         await Effect.runPromise(core.restart("llm.pi-ai", { force: true }));
         expect(await login).toMatchObject({ code: "Withdrawn", subject: "llm.login" });
         expect(Date.now() - started).toBeLessThan(5_000);
-        expect(withdrawn).toBe(true);
+        first.close();
+        // The replacement's sign-ins, as a client reopening the stream sees them.
+        const again = answering(host, () => "sk-again");
         await host.channel.call(LlmChannels.login, { provider: "gateway", type: "api_key" });
-        expect(interaction.asked).toHaveLength(2);
+        expect(again.asked).toHaveLength(1);
         expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-again" });
       },
       { "llm.pi-ai": gateway },
@@ -238,7 +271,7 @@ describe("llm's channels, through the transport", () => {
   }, 30_000);
 
   it("adds and removes providers of the user's, and sets their logos, in the llm plugin's config", () => {
-    const { plugins } = gatewayLlm(() => Effect.succeed("unused"));
+    const { plugins } = gatewayLlm();
     return served(
       plugins,
       async (client, host) => {
@@ -267,11 +300,12 @@ describe("llm's channels, through the transport", () => {
   }, 30_000);
 
   it("says a stream of changes is live with its first element, then sends models-changed after any client's login or logout", () => {
-    const { plugins } = gatewayLlm(() => Effect.succeed("sk-test"));
+    const { plugins } = gatewayLlm();
     return served(
       plugins,
       async (client) => {
         const [watching, other] = [await client(), await client()];
+        answering(other, () => "sk-test");
         const changes: LlmChange[] = [];
         const close = watching.channel.open(LlmChannels.changes, undefined, (change) => changes.push(change));
         await until(() => changes.length === 1);

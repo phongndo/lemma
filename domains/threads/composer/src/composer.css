@@ -19,30 +19,6 @@
   pointer-events: auto;
 }
 
-/*
- * A notice docks to the composer: inset as the workspace bar under it is, its
- * bottom tucked behind the box, so the two read as one shape. Its background
- * is the page's, so what passes under does not show through its tint.
- */
-.composer-notice {
-  margin: 0 20px -16px;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  background: var(--bg);
-}
-
-.composer-notice > .composer-callout {
-  margin: 0;
-  padding-bottom: calc(9px + 16px);
-  border: 1px solid var(--border);
-  border-bottom: 0;
-  border-radius: inherit;
-}
-
-/* One whose plugin draws nothing now takes no room, so it pulls nothing under the box. */
-.composer-notice:not(:has(> *)) {
-  display: none;
-}
-
 .composer {
   position: relative;
   border-radius: var(--radius-xl);
@@ -165,11 +141,12 @@
 
 /*
  * Just above the box and as wide as it, one look: what the word at the cursor could become (`ComposerCompletions`),
- * over the conversation while it is asked for, and the prompts queued for after the turn and a taker's banner
- * (`ComposerTakeovers`), in the page's flow, so the conversation makes room for them rather than going under them. The
- * menu, while open, covers them.
+ * over the conversation while it is asked for, and the plugins' notices (`ComposerNotices`), the prompts queued for
+ * after the turn, and a taker's banner (`ComposerTakeovers`), in the page's flow, so the conversation makes room for them
+ * rather than going under them. The menu, while open, covers them.
  */
 .completions,
+.composer-notice,
 .composer-queue,
 .composer-takeover {
   padding: 4px;
@@ -188,9 +165,37 @@
   bottom: calc(100% + 6px);
 }
 
+.composer-notice,
 .composer-queue,
 .composer-takeover {
   margin-bottom: 6px;
+}
+
+/* A notice is a line in its bubble, as a queued prompt is: a menu row's height and padding, untinted, its icon muted unless it warns. */
+.composer-notice {
+  padding: 2px 4px;
+}
+
+.composer-notice > .composer-callout {
+  align-items: center;
+  min-height: 32px;
+  margin: 0;
+  padding: 3px 2px 3px 10px;
+  background: transparent;
+}
+
+.composer-notice > .composer-callout > .icon {
+  margin: 0;
+  color: var(--text-3);
+}
+
+.composer-notice > .callout-warn > .icon {
+  color: var(--warn);
+}
+
+/* One whose plugin draws nothing now takes no room, and draws no empty bubble. */
+.composer-notice:not(:has(> *)) {
+  display: none;
 }
 
 .completions {

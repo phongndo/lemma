@@ -5,14 +5,14 @@
   "description": "Research notes: tools to write, search, and read notes in the project, a prompt section listing them, a research profile, and a skill",
   "type": "module",
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
     "@lemma/agent": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",
@@ -24,8 +24,8 @@
     "@lemma/skills-files": "workspace:*",
     "@lemma/tools-registry": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "host": "./notes.ts",

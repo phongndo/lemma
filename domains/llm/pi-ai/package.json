@@ -8,24 +8,24 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-ai": "1.3.0",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/credentials": "workspace:*",
     "@lemma/llm": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/client": "workspace:*",
     "@lemma/testing": "workspace:*",
     "@lemma/transport-server": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
   },
   "lemma": {
     "host": "./src/index.ts"
