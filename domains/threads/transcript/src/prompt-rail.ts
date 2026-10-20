@@ -6,6 +6,11 @@
 
 /** A jump to a turn stops this far above its start. */
 export const JUMP_MARGIN = 8;
+/**
+ * A turn whose jump stop is this little above or below where the view is counts as where it is: a step goes on to the
+ * one after, as a step of a few pixels would seem to do nothing.
+ */
+const STEP_SLACK = 24;
 /** A tick's length by how far it is from the one pointed at, then the length of the rest. */
 const TICK_SCALES = [1, 0.667, 0.417];
 const TICK_SCALE_REST = 0.333;
@@ -32,7 +37,8 @@ export interface Located {
  * one not drawn): a turn runs to the next prompt's, the last to the end. The
  * one being read is the last whose turn starts above the top third of the
  * view, or the last one at the bottom; stepping goes to the nearest turns
- * starting above and below where the view is, or is `heading` in a jump.
+ * starting above and below where the view is, or is `heading` in a jump,
+ * past one only a few pixels away (`STEP_SLACK`).
  */
 export function locate(tops: readonly (number | undefined)[], view: Scrolled, heading?: number): Located {
   const bottom = view.top + view.height;
@@ -54,8 +60,8 @@ export function locate(tops: readonly (number | undefined)[], view: Scrolled, he
     }
     if (found === undefined && start <= line) found = index;
     const target = Math.max(0, start - JUMP_MARGIN);
-    if (previous === undefined && target < from - 1) previous = index;
-    if (!atEnd && target > from + 1) next = index;
+    if (previous === undefined && target < from - STEP_SLACK) previous = index;
+    if (!atEnd && target > from + STEP_SLACK) next = index;
     end = start;
   }
   return {
