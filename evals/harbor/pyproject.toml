@@ -6,6 +6,10 @@ requires-python = ">=3.12"
 # Pinned: Harbor's agent interfaces change between releases.
 dependencies = ["harbor==0.24.0"]
 
+[tool.uv]
+# Lock only releases a day old, as pnpm's minimumReleaseAge does for the workspace.
+exclude-newer = "1 day"
+
 [project.scripts]
 lemma-harbor-summary = "lemma_harbor.summary:main"
 
