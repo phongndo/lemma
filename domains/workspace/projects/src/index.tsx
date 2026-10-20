@@ -56,7 +56,9 @@ function DeleteProjectDialog(props: { client: ClientService; threads: ThreadsSer
           {archived() > 0 ? `, ${archived()} of them archived` : ""}, and removes the project from your list. It cannot be undone.
         </Show>
       </p>
-      <p class="dialog-detail muted">The project's files on disk are not touched.</p>
+      <p class="dialog-detail muted">
+        The project's folder is not touched. Worktrees Lemma made for its threads may go with them, unless they hold uncommitted work; their branches stay.
+      </p>
       <Show when={running() > 0}>
         <p class="dialog-detail delete-project-running">
           {threadCount(running())} still running {running() === 1 ? "is" : "are"} kept; stop {running() === 1 ? "it" : "them"} to delete the project.
@@ -414,8 +416,8 @@ export default defineWebPlugin({
               title="Delete project"
               description={
                 count() === 0
-                  ? "Removes it from your projects. Files on disk are not touched."
-                  : `Deletes its ${threadCount(count())} for good, archived ones included, and removes it from your projects. Files on disk are not touched.`
+                  ? "Removes it from your projects. Its folder is not touched."
+                  : `Deletes its ${threadCount(count())} for good, archived ones included, and removes it from your projects. Its folder is not touched; worktrees Lemma made for them may go with them.`
               }
             >
               <button class="button small button-danger" onClick={() => askDelete(cwd)}>
