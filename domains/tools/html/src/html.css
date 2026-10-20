@@ -1,5 +1,6 @@
 /* A page `html_render` drew: borderless on the chat's background, as wide as the column. */
 .html-render {
+  position: relative;
   margin: 0;
   min-width: 0;
 }
@@ -9,6 +10,134 @@
   width: 100%;
   border: 0;
   background: transparent;
+}
+
+/* Full screen, or a tab of the pane: the frame fills its box, and the page scrolls inside it. */
+.html-frame-fill {
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
+/* Where a link in the page went, which the chat scrolls to: clear of the view's top edge. */
+.html-render-mark {
+  position: absolute;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  scroll-margin-top: 16px;
+}
+
+/*
+ * The page's buttons, in a rail as tall as the page whose top they stick to while the page runs on below the chat's
+ * top: beside the page where the chat has room (`beside`), so they cover none of it, else over its top right. Shown
+ * while the pointer is over the page or them, or one has focus; beside the page, always where there is no pointer.
+ */
+.html-render-rail {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  bottom: 6px;
+  pointer-events: none;
+}
+
+.html-render-rail.beside {
+  top: 0;
+  right: auto;
+  bottom: 0;
+  left: 100%;
+  padding-left: 8px;
+  pointer-events: auto;
+}
+
+.html-render-actions {
+  position: sticky;
+  top: 8px;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow);
+  pointer-events: auto;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.html-render-rail.beside .html-render-actions {
+  flex-direction: column;
+}
+
+.html-render-actions .icon-button {
+  border-radius: var(--radius-xs);
+}
+
+.html-render:hover .html-render-actions,
+.html-render-actions:focus-within {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .html-render-rail.beside .html-render-actions {
+    opacity: 1;
+  }
+}
+
+/* A page full screen: as large as the window allows, on the chat's background, which pages are drawn for. */
+.backdrop:has(.html-viewer) {
+  place-items: center;
+  padding: 24px;
+}
+
+.dialog.html-viewer {
+  width: min(1200px, calc(100vw - 48px));
+  height: calc(100vh - 48px);
+  max-height: none;
+  background: var(--bg);
+}
+
+.html-viewer .dialog-body {
+  flex: 1;
+  min-height: 0;
+  padding: 0 24px 16px;
+  overflow: hidden;
+}
+
+.html-viewer-page {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Where Tab out of the page's end lands, to come round to the dialog's first stop. */
+.html-viewer-end {
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+
+/* A page in a tab of the pane. */
+.html-page-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 16px;
+}
+
+.html-page-choices {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+
+.html-page-choices > p {
+  margin: 0 0 6px;
 }
 
 .html-render-body {

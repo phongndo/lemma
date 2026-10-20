@@ -8,6 +8,12 @@
 /** The largest page a tool takes, in characters, before local images are inlined. */
 export const HTML_MAX_CHARS = 512_000;
 
+/**
+ * How tall a page may be, in CSS pixels at the chat's width, and still read as part of a reply rather than a document
+ * of its own. `html_render`'s description asks for pages within it, and `html_preview` says when one is not.
+ */
+export const HTML_TALL_PAGE = 1500;
+
 /** The CSS custom properties a page reads, set on its `:root`: the app's own names, and six categorical chart colors. */
 export const HTML_THEME_VARIABLES = [
   "--bg",
@@ -114,6 +120,14 @@ export const HtmlMessages = {
   height: "lemma:html-height",
   /** `{ type, href }`: the person clicked a link, which the app opens rather than the frame. */
   open: "lemma:html-open",
+  /**
+   * `{ type, top }`: the person followed a link to a place in the page (`#id`, `#top`), which the page has scrolled to
+   * as far as it scrolls itself; `top` is where that place now is from the frame's top, less its `scroll-margin-top`,
+   * for the app to bring into view.
+   */
+  reveal: "lemma:html-reveal",
+  /** `{ type }`: Escape was pressed in the page, which had no use for it: a page over the app closes. */
+  escape: "lemma:html-escape",
   /** `{ type, css }`, to the page: the app's theme changed (`htmlThemeCss`). */
   theme: "lemma:html-theme",
 } as const;
@@ -137,8 +151,11 @@ export const HTML_MEASURE_SOURCE = `(() => {
 /**
  * Put first in a page's head: the theme, a base stylesheet (no margin, no background of its own, the app's text color
  * and font), and a script that reports the page's height (`HTML_MEASURE_SOURCE`), follows theme changes, and hands link
- * clicks on. A page's own CSS overrides the base. Scrollbars show: a page held to a height, or wider than its frame,
- * scrolls, and says so.
+ * clicks on: a link elsewhere for the app to open, and a link to a place in the page, which the page follows itself
+ * and the app then brings into view (a frame as tall as its page does not scroll); and Escape, for a page over the app
+ * to close. A link or Escape the page's own script took (preventDefault), and Escape in a field or with the page's own
+ * dialog or popover open, stay the page's. A page's own CSS overrides the base. Scrollbars show: a page held to a height, or wider
+ * than its frame, scrolls, and says so.
  */
 export const htmlBootstrap = (themeCss: string): string =>
   `<style id="lemma-theme">${themeCss}</style>` +
@@ -157,9 +174,52 @@ export const htmlBootstrap = (themeCss: string): string =>
   });
   addEventListener("click", (event) => {
     const link = event.target instanceof Element ? event.target.closest("a[href]") : null;
-    if (link === null || link.getAttribute("href").startsWith("#")) return;
+    // A link the page's own script took is the page's.
+    if (link === null || event.defaultPrevented) return;
+    const href = link.getAttribute("href");
+    if (href.startsWith("#")) {
+      let id = href.slice(1);
+      try { id = decodeURIComponent(id); } catch {}
+      const named = id === "" ? null : (document.getElementById(id) ?? document.getElementsByName(id)[0] ?? null);
+      const target = named ?? (id === "" || id.toLowerCase() === "top" ? document.documentElement : null);
+      if (target === null) return;
+      // A srcdoc page's links resolve against the app's address, so followed as they are they would load the app in
+      // the frame: the page goes to the place on its own address instead, which it follows as a link (its address,
+      // :target, hashchange, and every box it scrolls to show the place). Once it has scrolled, or a moment later
+      // when nothing scrolls, the app brings the place into view.
+      event.preventDefault();
+      let moved = false;
+      let done = false;
+      const scrolled = () => { moved = true; };
+      const reveal = () => {
+        if (done) return;
+        done = true;
+        removeEventListener("scroll", scrolled, true);
+        removeEventListener("scrollend", reveal, true);
+        const margin = target === document.documentElement ? 0 : parseFloat(getComputedStyle(target).scrollMarginTop) || 0;
+        post({ type: ${JSON.stringify(HtmlMessages.reveal)}, top: target.getBoundingClientRect().top - margin });
+      };
+      addEventListener("scroll", scrolled, true);
+      addEventListener("scrollend", reveal, true);
+      // The address it has already: going there again would not scroll.
+      if (location.hash === href || (href === "#" && location.hash === "")) target.scrollIntoView();
+      else location.hash = href;
+      requestAnimationFrame(() => requestAnimationFrame(() => { if (!moved) reveal(); }));
+      setTimeout(reveal, 1500);
+      return;
+    }
     event.preventDefault();
     post({ type: ${JSON.stringify(HtmlMessages.open)}, href: link.href });
+  });
+  addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
+    // Escape the page has a use for: leaving a field, or closing its own dialog or popover.
+    const target = event.target instanceof Element ? event.target : null;
+    if (target !== null && target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])") !== null) return;
+    if (document.querySelector("dialog[open]") !== null) return;
+    try { if (document.querySelector(":popover-open") !== null) return; } catch {}
+    // Once every listener has had it, the page's own too: one that took it (preventDefault) keeps it.
+    setTimeout(() => { if (!event.defaultPrevented) post({ type: ${JSON.stringify(HtmlMessages.escape)} }); }, 0);
   });
 })();</script>`;
 

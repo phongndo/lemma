@@ -14,6 +14,9 @@
   },
   "dependencies": {
     "@lemma/core": "workspace:*",
+    "@lemma/frame": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
