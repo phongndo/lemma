@@ -13,7 +13,8 @@
  *   --provider <json>    add a provider of the user's, as the config's `providers` row takes it (a local server)
  *
  * Without models, it checks those `DEFAULTS` names for each provider that has a credential, or the first model it
- * serves where it serves none of them (a ChatGPT plan lists its own). It exits non-zero when a check fails.
+ * serves where it serves none of them. A ChatGPT plan lists its own models once the catalog has read them, so name one
+ * (`openai/gpt-6-luna`) to check a sign-in. It exits non-zero when a check fails.
  */
 import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
@@ -255,23 +256,24 @@ const program = Effect.gen(function* () {
   const available = yield* llm.models({ available: true });
   const pick = (provider: string): string[] => {
     const served = available.filter((model) => model.provider === provider).map((model) => model.ref);
-    const named = (DEFAULTS[provider] ?? []).map((id) => `${provider}/${id}`).filter((ref) => served.includes(ref));
-    return named.length > 0 ? named : served.slice(0, 1);
+    const listed = (DEFAULTS[provider] ?? []).map((id) => `${provider}/${id}`).filter((ref) => served.includes(ref));
+    return listed.length > 0 ? listed : served.slice(0, 1);
   };
+  const refs = asked.length > 0 ? asked : providers.flatMap((provider) => pick(provider.id));
+  // A model named for a provider is the one its refresh is checked with: a sign-in's plan may serve none of `DEFAULTS`.
+  const named = (provider: string) => refs.find((ref) => ref.startsWith(`${provider}/`)) ?? pick(provider)[0];
   if (refresh) {
     for (const provider of providers) {
       const stored = yield* credentials.read(provider.id);
-      if (stored?.type !== "oauth") continue;
+      const ref = named(provider.id);
+      if (stored?.type !== "oauth" || ref === undefined) continue;
       yield* credentials.modify(provider.id, (current) => (current?.type === "oauth" ? { ...current, expires: 0 } : undefined));
-      const ref = pick(provider.id)[0];
-      if (ref === undefined) continue;
       const asking = yield* run(llm, new LlmRequest({ model: ref, messages: [user("Reply with: ok")] }));
       const now = yield* credentials.read(provider.id);
       const renewed = now?.type === "oauth" && now.expires > Date.now() && now.access !== stored.access;
       report(provider.id, "refresh", asking.failure === undefined && renewed, asking.failure ?? (renewed ? "a new token stored" : "the token was not renewed"));
     }
   }
-  const refs = asked.length > 0 ? asked : providers.flatMap((provider) => pick(provider.id));
   if (refs.length === 0) console.log(`No models to check: no provider has a credential in ${home}, and none was named.`);
   for (const ref of refs) yield* check(llm, ref);
 });

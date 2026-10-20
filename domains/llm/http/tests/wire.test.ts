@@ -408,6 +408,16 @@ describe("openai-responses", () => {
   const gpt = model({ provider: "openai", api: "openai-responses", baseUrl: "https://api.openai.com/v1", id: "gpt", reasoning: true });
   const thinking = { kind: "effort" as const, levels: ["off", "low", "high"] as const, values: { off: "none" } };
 
+  it("names the session as Codex does, which keeps a conversation on the server holding its prompt cache", () => {
+    const headers = (target: Model, sessionId?: string) => openaiResponses.build(call(target, sessionId === undefined ? {} : { sessionId })).headers;
+    expect(headers(gpt, "s1")).toMatchObject({ session_id: "s1", "x-client-request-id": "s1" });
+    // Another server on the protocol is told the session as pi told it, not OpenAI's affinity.
+    const zen = model({ provider: "opencode", api: "openai-responses", baseUrl: "https://opencode.ai/zen/v1", id: "gpt" });
+    expect(headers(zen, "s1")).toMatchObject({ "x-client-request-id": "s1" });
+    expect(headers(zen, "s1")).not.toHaveProperty("session_id");
+    expect(headers(gpt)).not.toHaveProperty("session_id");
+  });
+
   it("sends history statelessly: its own reasoning items and message ids back, paired with their calls", () => {
     const reasoning = { type: "reasoning", id: "rs_1", summary: [], encrypted_content: "enc" };
     const built = openaiResponses.build(

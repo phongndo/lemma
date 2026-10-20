@@ -171,9 +171,21 @@ function build(call: WireCall) {
   return {
     url: `${model.baseUrl}/responses`,
     body: merged(body, options.samplingParams),
-    headers: { "content-type": "application/json", accept: "text/event-stream", authorization: `Bearer ${auth.key}` },
+    headers: {
+      "content-type": "application/json",
+      accept: "text/event-stream",
+      authorization: `Bearer ${auth.key}`,
+      ...sessionHeaders(model, request.sessionId),
+    },
   };
 }
+
+/**
+ * The session, as the Codex CLI and pi send it: OpenAI keeps a conversation whose requests name it (`session_id`) on the
+ * server holding its prompt cache, which a ChatGPT sign-in's requests otherwise all but miss, `prompt_cache_key` or not.
+ */
+const sessionHeaders = (model: WireCall["model"], sessionId: string | undefined): Record<string, string> =>
+  sessionId === undefined ? {} : { ...(model.baseUrl.includes("api.openai.com") ? { session_id: sessionId } : {}), "x-client-request-id": sessionId };
 
 interface Item {
   readonly type: string;
