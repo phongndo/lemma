@@ -4,11 +4,11 @@ import { errorView } from "../src/error.ts";
 describe("errorView", () => {
   it("shows an embedded JSON body by the description it holds", () => {
     const message =
-      'OAuth refresh failed for openai: OpenAI OAuth token request failed (400): { "error": "invalid_grant", "error_description": "A fresh sign-in is required." }. Run /login openai to sign in again.';
+      'OAuth refresh failed for openai: OpenAI OAuth token request failed (400): { "error": "invalid_grant", "error_description": "A fresh sign-in is required." }. Sign in to OpenAI again on the Providers page, or with `lemma login openai`.';
     expect(errorView(message)).toEqual({
       summary: "OAuth refresh failed for openai: OpenAI OAuth token request failed (400)",
       description: "A fresh sign-in is required.",
-      hint: "Run /login openai to sign in again.",
+      hint: "Sign in to OpenAI again on the Providers page, or with `lemma login openai`.",
     });
   });
 

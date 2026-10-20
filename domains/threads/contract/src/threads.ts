@@ -194,6 +194,19 @@ export interface PromptActionProps {
  */
 export const PromptActions = defineSlot<Region<PromptActionProps>>("prompt.actions");
 
+/** A model request that failed, as the transcript shows it: the provider and model asked, and what went wrong. */
+export interface ErrorActionProps {
+  readonly provider: string;
+  readonly model: string;
+  readonly message: string;
+}
+
+/**
+ * Buttons under a failed model request in the transcript, in order: what would fix it, such as signing in again to
+ * the provider that refused it. An item draws its own button (`button small`), or nothing for an error it cannot help.
+ */
+export const ErrorActions = defineSlot<Region<ErrorActionProps>>("transcript.error-actions");
+
 /** What a session's menu item can do to its row. */
 export interface ThreadRowControl {
   /** Edits the title in place. */
