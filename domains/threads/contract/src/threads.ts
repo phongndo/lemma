@@ -228,7 +228,7 @@ export interface ThreadView {
 }
 
 /**
- * Views of a thread over the same log: the transcript (order 0), the trajectory (10), a browser (20). The first by
+ * Views of a thread over the same log: the transcript (order 0), the trajectory (10), a browser (20), a page (30). The first by
  * order fills the page; the others open as tabs in the thread's inspection pane beside it (`Pane`), by its + or the
  * palette, as many of each as are wanted.
  */

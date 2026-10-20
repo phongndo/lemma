@@ -2,8 +2,9 @@
 
 The `html_render` tool: a page the model made (a chart, a table, a diagram, a
 mockup) shown to the person in the chat, above the model's reply. Adds it to
-`Tools`; its web half (`./web`) draws the page and shows calls by the page's
-title. No config.
+`Tools`; its web half (`./web`) draws the page, shows calls by the page's
+title, shows a page full screen, and adds a view of a page to the thread's
+pane (`Page`, P in its + menu). No config.
 
 | Input     | Limits                                                                                                                      |
 | --------- | --------------------------------------------------------------------------------------------------------------------------- |
@@ -47,11 +48,41 @@ shows the page's source and the images not inlined.
   (`100vh`) stays the frame's height, and one that overflows each new height by
   the same amount (`min-height: 100vh` and a margin) stops the frame growing
   after three rounds; the rest scrolls inside. A frame out of view reports
-  nothing until it is scrolled to (Chromium pauses rendering in it).
+  nothing until it is scrolled to (Chromium pauses rendering in it), so a
+  frame starts at the height it took before at about that width: a thread read
+  again, or scrolled back through, does not move as its pages load. A height is
+  kept once it has stood 300 ms as the height the page asks for, so a page sized
+  by its frame, which never asks for the height it has, is kept at none. They
+  are kept in the browser's storage for the last 200 pages, written a moment
+  after they settle and as the window goes; each window lays its own over what
+  another stored.
+- **Its buttons.** A page's buttons, full screen and the thread's pane, show
+  while the pointer is over the page or one has focus, and stay at the top of
+  the chat while the page runs on below it. They sit beside the page where the
+  chat has room, covering none of it (and show there always on a touch
+  screen), else over its top right.
+- **Full screen.** A dialog over the app, the page filling it and scrolling
+  inside it, as a long page reads best. Focus goes into the page, and Tab comes
+  round from its end to the dialog's ×. It closes on its ×, a click outside, or
+  Escape, pressed in the page too, unless the page has a use for it: in a
+  field, with its own dialog or popover open, or taken by its own script.
+- **The pane.** A page opens in the thread's pane through the thread's address
+  (`ThreadRoute` with the view `page`), so the plugin needs nothing of the
+  pane's, and draws pages in the chat without it. It shows in the page tab the
+  pane shows, else its first, else a new one, filling the tab. A tab names its
+  page by its call and finds it among the pages the chat draws, so it survives
+  a reload; a tab whose page the chat does not draw (on another branch), or one
+  opened from the + menu, lists the pages it does.
 - **Links.** The page hands its link clicks to the app, which opens web and
   mail links in the person's browser, only for a click in that page just now
   (it has focus, and the app the person's activation): a page's script posting
-  on its own, or a moment after a click elsewhere, opens nothing.
+  on its own, or a moment after a click elsewhere, opens nothing, and a link
+  the page's own script took stays the page's. A link to a place in the page
+  (`#id`, `#top`) goes to it on the page's own address, since a `srcdoc`
+  page's links resolve against the app's and would load the app in its frame:
+  the page follows it as a link (its address, `:target`, `hashchange`, and
+  every box it scrolls to show the place), then the chat scrolls to where the
+  place is, no further than the frame.
 
 ## Rationale
 
@@ -64,3 +95,12 @@ shows the page's source and the images not inlined.
 - **Recorded, not run.** The host only prepares and records the page, so the
   tool is `replay: "safe"` and `parallel: "safe"`; the page's scripts run in
   the person's client, in the sandbox.
+- **A page is part of a reply.** In the chat a page is read between the
+  model's text, and a page taller than the view scrolls inside the chat's own
+  scroll. So the description asks for a page of one idea within
+  `HTML_TALL_PAGE` (1,500 pixels), `html_preview` says when a page is taller,
+  and a longer page has full screen and the pane, where it scrolls on its own.
+- **Heights the client remembers.** Measuring a page before it is shown would
+  take a browser on the host each time the tool runs; the height a page's frame
+  took is known in the client once it is drawn, and is what a thread read again
+  needs.
