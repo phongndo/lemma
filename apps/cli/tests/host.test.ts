@@ -269,9 +269,13 @@ describe("against a running host", () => {
     expect(servedBy("commands.registry")).toEqual(["commands.list", "commands.run", "commands.changes"]);
     expect(servedBy("workspace.local")).toEqual([
       "workspace.status",
+      "workspace.places",
       "workspace.browse",
       "workspace.create-directory",
       "workspace.create-worktree",
+      "workspace.worktrees",
+      "workspace.remove-worktree",
+      "workspace.restore-worktree",
       "workspace.branches",
       "workspace.checkout",
       "files.search",

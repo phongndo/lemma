@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Registries } from "@lemma/core";
 import { FILE_SEARCH_LIMIT, FileChannels, WorkspaceChannels } from "@lemma/workspace";
-import type { DirectoryListing, FileSearchResult, GitBranch, WorkspaceStatus } from "@lemma/workspace";
+import type { DirectoryListing, FileSearchResult, GitBranch, Worktree, WorkspaceStatus } from "@lemma/workspace";
 import { callHere, CliCommands, defineCliCommand, table, time, usageError } from "@lemma/cli";
 
 type Reader = Context.Service.Shape<typeof Registries>;
@@ -34,6 +34,9 @@ export const formatBranches = (branches: readonly GitBranch[]): string =>
           branch.worktree === undefined ? "" : `in ${branch.worktree}`,
         ]),
       );
+
+export const formatWorktrees = (worktrees: readonly Worktree[]): string =>
+  worktrees.length === 0 ? "No worktrees." : table(worktrees.map((tree) => [tree.branch ?? "(detached)", tree.path, tree.missing === true ? "missing" : ""]));
 
 export const formatListing = (listing: DirectoryListing): string =>
   [listing.parent, ...listing.entries.map((entry) => `  ${entry.name}/${entry.git ? "  (git)" : ""}`), ...(listing.truncated ? ["  …"] : [])].join("\n");
@@ -104,6 +107,40 @@ export const workspaceCommands = (registries: Reader) => [
       ),
   }),
   defineCliCommand({
+    path: ["workspace", "worktrees"],
+    summary: "A project's linked worktrees: their branches and where they are",
+    args: [{ name: "path", description: "The project directory (default: here)" }],
+    run: ({ args, cwd }) =>
+      Effect.map(callHere(registries, WorkspaceChannels.worktrees, { path: hostPath(cwd, args.path) }), (worktrees) => ({
+        json: worktrees,
+        text: formatWorktrees(worktrees),
+        ids: worktrees.map((tree) => tree.path),
+      })),
+  }),
+  defineCliCommand({
+    path: ["workspace", "remove-worktree"],
+    summary: "Remove a linked worktree, keeping its branch and commits",
+    args: [{ name: "path", description: "The worktree", required: true }],
+    flags: { force: { type: "boolean", description: "Remove it though it has uncommitted changes or untracked files, losing them" } },
+    run: ({ args, flags, cwd }) => {
+      const path = hostPath(cwd, args.path);
+      return Effect.map(callHere(registries, WorkspaceChannels.removeWorktree, { path, ...(flags.force ? { force: true } : {}) }), () => ({
+        json: { path },
+        text: `Removed ${path}`,
+      }));
+    },
+  }),
+  defineCliCommand({
+    path: ["workspace", "restore-worktree"],
+    summary: "Make a removed worktree again, where it was, on its branch",
+    args: [{ name: "path", description: "Where the worktree was", required: true }],
+    run: ({ args, cwd }) =>
+      Effect.map(callHere(registries, WorkspaceChannels.restoreWorktree, { path: hostPath(cwd, args.path) }), (status) => ({
+        json: status,
+        text: formatWorkspace(status),
+      })),
+  }),
+  defineCliCommand({
     path: ["workspace", "mkdir"],
     summary: "Create a directory",
     args: [{ name: "path", description: "The directory", required: true }],
@@ -149,7 +186,7 @@ export const workspaceCommands = (registries: Reader) => [
 
 /**
  * The project directory's commands for the `lemma` command (`CliCommands`):
- * `workspace status|branches|checkout|worktree|mkdir|browse|files`, the
+ * `workspace status|branches|checkout|worktree|worktrees|remove-worktree|restore-worktree|mkdir|browse|files`, the
  * controls the web app's workspace bar and add-project dialog offer. It
  * reaches the workspace through its channels, so it requires nothing.
  */

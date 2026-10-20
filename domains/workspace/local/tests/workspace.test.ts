@@ -13,7 +13,7 @@ import { FileChannels, FileSearchError, FileSearchers, Workspace, WorkspaceChann
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import transport from "@lemma/transport-server";
-import workspace, { makeWorkspace, matchName } from "../src/index.ts";
+import workspace, { makeWorkspace, matchName, parseWorktrees } from "../src/index.ts";
 
 // Isolate every git call, ours and the plugin's, from the machine's config.
 beforeAll(() => {
@@ -486,5 +486,169 @@ describe("worktrees", () => {
     expect((await failure(ws.createWorktree(root, { branch: "bad..name" }))).reason).toBe("InvalidName");
     await fs.mkdir(path.join(dir, "plain"));
     expect((await failure(ws.createWorktree(path.join(dir, "plain"), { branch: "x" }))).reason).toBe("NotRepository");
+  });
+});
+
+describe("places", () => {
+  it("files a worktree, and a folder inside one, under its repository's main work tree", async () => {
+    const root = await repo();
+    await fs.mkdir(path.join(root, "pkg"));
+    const ws2 = makeWorkspace({ home: dir, worktrees: path.join(dir, "trees"), record: path.join(dir, "worktrees.json") });
+    const tree = await run(ws2.createWorktree(root, { branch: "feat/x" }));
+    await fs.mkdir(path.join(tree.path, "pkg"));
+    const plain = path.join(dir, "plain");
+    await fs.mkdir(plain);
+    expect(await run(ws2.places([root, tree.path, path.join(tree.path, "pkg"), plain, "~/plain"]))).toEqual([
+      { path: root, exists: true, project: root, worktree: false, branch: "main" },
+      { path: tree.path, exists: true, project: root, worktree: true, branch: "feat/x", made: true },
+      { path: path.join(tree.path, "pkg"), exists: true, project: path.join(root, "pkg"), worktree: true, branch: "feat/x", made: true },
+      { path: plain, exists: true, project: plain, worktree: false },
+      { path: plain, exists: true, project: plain, worktree: false },
+    ]);
+    sh(tree.path, "checkout", "-q", "--detach");
+    expect((await run(ws2.places([tree.path])))[0]?.branch).toBeNull();
+  });
+
+  it("files a repository reached through a symlink, and its worktrees, as git names it", async () => {
+    const root = await repo();
+    const link = path.join(dir, "link");
+    await fs.symlink(dir, link);
+    const ws2 = makeWorkspace({ home: dir, worktrees: path.join(link, "trees"), record: path.join(dir, "worktrees.json") });
+    const tree = await run(ws2.createWorktree(path.join(link, "repo"), { branch: "x" }));
+    const [main, worktree] = await run(ws2.places([path.join(link, "repo"), tree.path]));
+    expect(main).toMatchObject({ path: path.join(link, "repo"), project: root, worktree: false });
+    expect(worktree).toMatchObject({ path: tree.path, project: root, worktree: true, made: true });
+    // Gone, it is found by the path it was reached by, through the symlink, and a folder in it too.
+    await run(ws2.removeWorktree(tree.path));
+    expect(await run(ws2.places([tree.path, path.join(tree.path, "pkg")]))).toEqual([
+      { path: tree.path, exists: false, project: root, worktree: true, branch: "x", made: true },
+      { path: path.join(tree.path, "pkg"), exists: false, project: path.join(root, "pkg"), worktree: true, branch: "x", made: true },
+    ]);
+  });
+
+  it("reads the branch of a repository whose refs are a reftable, which a HEAD file does not hold", async (context) => {
+    const root = path.join(dir, "reftable");
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main", "--ref-format=reftable", root], { stdio: "ignore" });
+    } catch {
+      return context.skip("this git has no reftable");
+    }
+    expect((await run(ws.places([root])))[0]).toMatchObject({ project: root, branch: "main" });
+  });
+
+  it("keeps a removed worktree made or removed here under its project, and forgets one deleted by hand", async () => {
+    const root = await repo();
+    const record = path.join(dir, "worktrees.json");
+    const ws2 = makeWorkspace({ home: dir, worktrees: path.join(dir, "trees"), record });
+    const tree = await run(ws2.createWorktree(root, { branch: "feat/x" }));
+    const elsewhere = path.join(dir, "elsewhere");
+    sh(root, "worktree", "add", "-q", "-b", "other", elsewhere);
+    const byHand = path.join(dir, "by-hand");
+    sh(root, "worktree", "add", "-q", "-b", "third", byHand);
+    await run(ws2.removeWorktree(tree.path));
+    await run(ws2.removeWorktree(elsewhere));
+    sh(root, "worktree", "remove", byHand);
+    expect(await run(ws2.places([tree.path, elsewhere, byHand]))).toEqual([
+      { path: tree.path, exists: false, project: root, worktree: true, branch: "feat/x", made: true },
+      { path: elsewhere, exists: false, project: root, worktree: true, branch: "other" },
+      { path: byHand, exists: false, project: byHand, worktree: false },
+    ]);
+    // One made elsewhere and removed here can be made again too.
+    expect((await run(ws2.restoreWorktree(elsewhere))).git?.branch).toBe("other");
+    // Without a record, a removed worktree is just a missing folder.
+    expect((await run(makeWorkspace({ home: dir, worktrees: path.join(dir, "trees") }).places([tree.path])))[0]).toMatchObject({
+      project: tree.path,
+      worktree: false,
+    });
+  });
+});
+
+describe("worktree lifecycle", () => {
+  it("lists a repository's linked worktrees, from it or from one of them", async () => {
+    const root = await repo();
+    const ws2 = makeWorkspace({ home: dir, worktrees: path.join(dir, "trees") });
+    const a = await run(ws2.createWorktree(root, { branch: "a" }));
+    const b = await run(ws2.createWorktree(root, { branch: "b" }));
+    sh(b.path, "checkout", "-q", "--detach");
+    expect(await run(ws2.worktrees(root))).toEqual([
+      { path: a.path, branch: "a" },
+      { path: b.path, branch: null },
+    ]);
+    expect(await run(ws2.worktrees(a.path))).toEqual(await run(ws2.worktrees(root)));
+    await fs.rm(a.path, { recursive: true });
+    expect((await run(ws2.worktrees(root)))[0]).toEqual({ path: a.path, branch: "a", missing: true });
+    expect(await run(ws2.worktrees(await repo("lonely")))).toEqual([]);
+  });
+
+  it("removes a clean worktree and keeps its branch; refuses one with changes unless forced, and the main work tree", async () => {
+    const root = await repo();
+    const ws2 = makeWorkspace({ home: dir, worktrees: path.join(dir, "trees") });
+    const tree = await run(ws2.createWorktree(root, { branch: "feat/x" }));
+    await commit(tree.path, "b.txt", "two\n", "on the branch");
+    await run(ws2.removeWorktree(tree.path));
+    expect(await fs.stat(tree.path).catch(() => undefined)).toBeUndefined();
+    expect(sh(root, "branch", "--list", "feat/x")).toContain("feat/x");
+
+    const dirty = await run(ws2.createWorktree(root, { branch: "dirty" }));
+    await fs.writeFile(path.join(dirty.path, "new.txt"), "untracked\n");
+    expect((await failure(ws2.removeWorktree(dirty.path))).message).toContain("--force");
+    await run(ws2.removeWorktree(dirty.path, { force: true }));
+    expect(await fs.stat(dirty.path).catch(() => undefined)).toBeUndefined();
+
+    expect((await failure(ws2.removeWorktree(root))).reason).toBe("NotRepository");
+    expect((await failure(ws2.removeWorktree(path.join(dir, "missing")))).reason).toBe("NotFound");
+  });
+
+  it("restores a removed worktree made here on its branch, with its commits", async () => {
+    const root = await repo();
+    const ws2 = makeWorkspace({ home: dir, worktrees: path.join(dir, "trees"), record: path.join(dir, "worktrees.json") });
+    const tree = await run(ws2.createWorktree(root, { branch: "feat/x" }));
+    await commit(tree.path, "b.txt", "two\n", "on the branch");
+    const tip = sh(tree.path, "rev-parse", "HEAD");
+    expect((await failure(ws2.restoreWorktree(tree.path))).reason).toBe("Exists");
+    await run(ws2.removeWorktree(tree.path));
+    const restored = await run(ws2.restoreWorktree(tree.path));
+    expect(restored.git).toMatchObject({ branch: "feat/x", worktreeOf: root });
+    expect(sh(tree.path, "rev-parse", "HEAD")).toBe(tip);
+
+    // Deleted by hand, git still lists it, and restoring forgets that entry first: that one only, not another worktree
+    // whose folder is missing now (on a drive not mounted, say), as a prune would.
+    const other = await run(ws2.createWorktree(root, { branch: "other" }));
+    await fs.rename(other.path, `${other.path}-away`);
+    await fs.rm(tree.path, { recursive: true });
+    expect((await run(ws2.restoreWorktree(tree.path))).git?.branch).toBe("feat/x");
+    expect((await run(ws2.worktrees(root))).find((listed) => listed.branch === "other")).toMatchObject({ missing: true });
+    await fs.rename(`${other.path}-away`, other.path);
+
+    await run(ws2.removeWorktree(tree.path));
+    sh(root, "branch", "-D", "feat/x");
+    expect((await failure(ws2.restoreWorktree(tree.path))).message).toContain("feat/x is gone");
+    expect((await failure(ws2.restoreWorktree(path.join(dir, "never")))).reason).toBe("NotFound");
+  });
+
+  it("reads git's porcelain list, its fields NUL-terminated, or ended by newlines from a git before -z", () => {
+    const fields = [
+      "worktree /r",
+      "HEAD 1",
+      "branch refs/heads/main",
+      "",
+      "worktree /t/a b",
+      "HEAD 2",
+      "detached",
+      "",
+      "worktree /t/c",
+      "HEAD 3",
+      "branch refs/heads/feat/c",
+      "prunable gitdir file points to non-existent location",
+      "",
+      "",
+    ];
+    const expected = [
+      { path: "/r", branch: "main" },
+      { path: "/t/a b", branch: null },
+      { path: "/t/c", branch: "feat/c", missing: true },
+    ];
+    expect(parseWorktrees(fields.join("\0"))).toEqual(expected);
+    expect(parseWorktrees(fields.slice(0, -1).join("\n"), "\n")).toEqual(expected);
   });
 });
