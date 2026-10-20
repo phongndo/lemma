@@ -86,7 +86,7 @@
     "@lemma/workspace-file-mentions": "workspace:*",
     "@lemma/workspace-projects": "workspace:*",
     "dompurify": "3.4.17",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "marked": "18.1.1",
     "mermaid": "12.1.0",
     "shiki": "4.5.0",

@@ -17,7 +17,7 @@
     "@lemma/client": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/host": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "jsonc-parser": "3.3.1"
   },
   "devDependencies": {

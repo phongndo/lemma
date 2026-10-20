@@ -10,7 +10,7 @@
   "dependencies": {
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/cli-app": "workspace:*",

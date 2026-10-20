@@ -19,7 +19,7 @@
     "@lemma/threads": "workspace:*",
     "@lemma/tools": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/tools-registry": "workspace:*",

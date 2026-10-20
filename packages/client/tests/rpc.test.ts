@@ -28,6 +28,8 @@ class SilentWebSocket extends EventTarget {
 interface FakeHost {
   /** Whether it answers each ping at once, as a live host on the same machine does. */
   answering: boolean;
+  /** Answers it holds back until the test sends them, as a live host behind a slow or reconnecting network's are; none while undefined. */
+  held: (() => void)[] | undefined;
   /** How long after it was asked to each sleep ends, as a busy, throttled, or sleeping machine's timers do. */
   lateMillis: number;
   /** When each ping was written, by the test clock, from the start. */
@@ -47,7 +49,9 @@ class AnsweringWebSocket extends SilentWebSocket {
     super.send(data);
     if (!data.includes('"Ping"')) return;
     this.#host.pings.push(this.#now());
-    if (this.#host.answering) queueMicrotask(() => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ _tag: "Pong" }) })));
+    const answer = () => this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify({ _tag: "Pong" }) }));
+    if (this.#host.held !== undefined) this.#host.held.push(answer);
+    else if (this.#host.answering) queueMicrotask(answer);
   }
 }
 
@@ -70,7 +74,7 @@ const withFakeHost = <A>(body: (host: FakeHost, events: Fiber.Fiber<void, unknow
       Effect.gen(function* () {
         const clock = yield* Clock.Clock;
         const start = clock.currentTimeMillisUnsafe();
-        const host: FakeHost = { answering: true, lateMillis: 20, pings: [], sockets: [] };
+        const host: FakeHost = { answering: true, held: undefined, lateMillis: 20, pings: [], sockets: [] };
         const onTime = clock.sleep;
         clock.sleep = (duration) => onTime(Duration.sum(duration, Duration.millis(host.lateMillis)));
         const constructor = Layer.succeed(Socket.WebSocketConstructor, () => {
@@ -156,7 +160,31 @@ describe("makeHostRpc", () => {
     expect(pingTimedOut(result.ended)).toBe(true);
   });
 
-  test("a connection that died while the machine slept fails within a second of waking", async () => {
+  test("a live connection stays up across the machine sleeping, though its first answer on waking is slow", async () => {
+    const result = await withFakeHost((host, events) =>
+      Effect.gen(function* () {
+        // The tick after the first ping is held back an hour, and on waking the network takes two seconds to answer.
+        host.lateMillis = HOUR;
+        yield* advance(host, events, 5020, 1);
+        host.lateMillis = 20;
+        host.held = [];
+        yield* advance(host, events, HOUR + 5000, 2);
+        yield* TestClock.adjust("2 seconds");
+        yield* tick;
+        const slow = events.pollUnsafe();
+        for (const answer of host.held.splice(0)) answer();
+        host.held = undefined;
+        yield* tick;
+        yield* advance(host, events, 3020, 3);
+        yield* advance(host, events, 5020, 4);
+        return { pings: host.pings, slow, sockets: host.sockets.length, ended: events.pollUnsafe() };
+      }),
+    );
+    // Waking, it pings rather than failing a connection that may be live, waits for the answer until the next tick, and then pings as before.
+    expect(result).toEqual({ pings: [5020, HOUR + 10020, HOUR + 15040, HOUR + 20060], slow: undefined, sockets: 1, ended: undefined });
+  });
+
+  test("a connection that died while the machine slept fails a tick after waking", async () => {
     const result = await withFakeHost((host, events) =>
       Effect.gen(function* () {
         // The tick after the first ping is held back an hour, and the host goes away meanwhile.
@@ -166,12 +194,11 @@ describe("makeHostRpc", () => {
         host.answering = false;
         yield* advance(host, events, HOUR + 5000, 2);
         const woke = events.pollUnsafe();
-        yield* advance(host, events, 1020, 3);
+        yield* advance(host, events, 5020, 3);
         yield* until(() => Effect.sync(() => events.pollUnsafe() !== undefined));
         return { pings: host.pings, woke, ended: events.pollUnsafe() };
       }),
     );
-    // Waking, it pings rather than failing a connection that may be live, and checks the answer a second later.
     expect(result.pings).toEqual([5020, HOUR + 10020]);
     expect(result.woke).toBeUndefined();
     expect(pingTimedOut(result.ended)).toBe(true);

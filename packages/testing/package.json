@@ -18,7 +18,7 @@
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

@@ -11,7 +11,7 @@
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/cli-app": "workspace:*",

@@ -17,7 +17,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/router": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@types/node": "24.19.2",

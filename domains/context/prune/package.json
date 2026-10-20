@@ -17,7 +17,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/llm": "workspace:*",
     "@lemma/sessions": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/agent-loop": "workspace:*",

@@ -12,7 +12,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/sessions": "workspace:*",
     "@lemma/tools": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/agent": "workspace:*",
