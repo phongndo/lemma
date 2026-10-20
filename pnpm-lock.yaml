@@ -1875,6 +1875,9 @@ importers:
       '@lemma/client':
         specifier: workspace:*
         version: link:../../../packages/client
+      '@lemma/credentials-file':
+        specifier: workspace:*
+        version: link:../../credentials/file
       '@lemma/testing':
         specifier: workspace:*
         version: link:../../../packages/testing

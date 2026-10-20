@@ -109,3 +109,5 @@ A provider that has said how the answer ends is taken at its word, though the co
 ## Testing
 
 `makeLlmPlugin({ providers, env, fetch })` replaces the built-in provider list, the environment keys are read from, and how requests, sign-ins, and catalogs are fetched. Tests serve their own providers from a scripted `fetch` that answers with server-sent events, and keep catalogs offline. The plugin runs the `Llm` contract's suite, [`llmConformance`](../../../packages/testing/README.md#conformance-suites).
+
+`scripts/live.ts` checks it against the real providers with a Lemma home's sign-ins and keys, which tests cannot: a streamed answer with its usage and cost, a tool round trip sending its thinking back and reading the prompt cache, every thinking level a model offers, and a stop midway, for the models named or a few of each provider with a credential; `--login`, `--refresh`, and `--websocket` check a sign-in, a token's refresh, and OpenAI's WebSocket mode. Its header says how to run it; each request costs a little.
