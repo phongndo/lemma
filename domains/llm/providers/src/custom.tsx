@@ -55,7 +55,7 @@ export function CustomProviderDialog(props: {
           </span>
           <span>
             Add a custom provider
-            <span class="connect-method">Any OpenAI-, Anthropic-, or Gemini-compatible endpoint</span>
+            <span class="connect-method">Any OpenAI- or Anthropic-compatible endpoint</span>
           </span>
         </span>
       }

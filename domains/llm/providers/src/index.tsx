@@ -182,7 +182,7 @@ function CustomProviderRow(props: { open: () => void }) {
       </span>
       <span class="provider-info">
         <span class="provider-name">Custom provider</span>
-        <span class="provider-desc">Any OpenAI-, Anthropic-, or Gemini-compatible endpoint, like Ollama or a gateway</span>
+        <span class="provider-desc">Any OpenAI- or Anthropic-compatible endpoint, like Ollama or a gateway</span>
       </span>
       <button class="button small provider-connect" onClick={props.open}>
         Add

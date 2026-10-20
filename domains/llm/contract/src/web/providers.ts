@@ -74,7 +74,11 @@ const brands: Readonly<Record<string, ProviderBrand>> = {
     keyUrl: "https://platform.openai.com/api-keys",
   },
   google: { logo: { light: gemini }, keywords: "gemini", blurb: "Gemini models with an API key", keyUrl: "https://aistudio.google.com/apikey" },
-  openrouter: { logo: { light: openrouter, dark: openrouterDark }, blurb: "Hundreds of models behind one key", keyUrl: "https://openrouter.ai/settings/keys" },
+  openrouter: {
+    logo: { light: openrouter, dark: openrouterDark },
+    blurb: "Hundreds of models: sign in, or use one key",
+    keyUrl: "https://openrouter.ai/settings/keys",
+  },
   "google-vertex": { logo: { light: vertex } },
   "azure-openai-responses": { logo: { light: azure } },
   "amazon-bedrock": { logo: { light: aws, dark: awsDark } },
@@ -87,14 +91,19 @@ const brands: Readonly<Record<string, ProviderBrand>> = {
   deepseek: { logo: { light: deepseek }, keyUrl: "https://platform.deepseek.com/api_keys" },
   mistral: { logo: { light: mistral }, keyUrl: "https://console.mistral.ai/api-keys" },
   groq: { logo: { light: groq }, keyUrl: "https://console.groq.com/keys" },
-  xai: { logo: { light: xai, dark: xaiDark }, keywords: "grok", keyUrl: "https://console.x.ai" },
+  xai: {
+    logo: { light: xai, dark: xaiDark },
+    keywords: "grok supergrok",
+    blurb: "Grok with your SuperGrok or X Premium plan, or an API key",
+    keyUrl: "https://console.x.ai",
+  },
   huggingface: { logo: { light: huggingface }, keyUrl: "https://huggingface.co/settings/tokens" },
-  meta: { logo: { light: meta } },
+  meta: { logo: { light: meta }, keywords: "muse", blurb: "Muse models with your Meta subscription, or an API key" },
   minimax: { logo: { light: minimax } },
   "minimax-cn": { logo: { light: minimax } },
   moonshotai: { logo: { mono: moonshot } },
   "moonshotai-cn": { logo: { mono: moonshot } },
-  "kimi-coding": { logo: { light: kimi }, keywords: "moonshot" },
+  "kimi-coding": { logo: { light: kimi }, keywords: "moonshot kimi", blurb: "Kimi models with your Kimi Code plan, or an API key" },
   nvidia: { logo: { light: nvidia } },
   "qwen-token-plan": { logo: { light: qwen, dark: qwenDark } },
   "qwen-token-plan-cn": { logo: { light: qwen, dark: qwenDark } },
@@ -178,7 +187,6 @@ export const CUSTOM_APIS = [
   { value: "openai-completions", label: "OpenAI-compatible (Chat Completions)" },
   { value: "openai-responses", label: "OpenAI Responses" },
   { value: "anthropic-messages", label: "Anthropic Messages" },
-  { value: "google-generative-ai", label: "Google Gemini" },
 ] as const;
 
 export interface CustomProviderDraft {

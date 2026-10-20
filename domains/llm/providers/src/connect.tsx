@@ -309,7 +309,17 @@ export function ConnectDialog(props: {
           {(device) => (
             <>
               <p class="connect-lead">
-                Enter this code at <strong>{hostOf(device().url)}</strong> to approve Lemma.
+                <Show
+                  when={device().url.includes(device().code)}
+                  fallback={
+                    <>
+                      Enter this code at <strong>{hostOf(device().url)}</strong> to approve Lemma.
+                    </>
+                  }
+                >
+                  {/* The page opens with the code filled in: the person checks it rather than types it. */}
+                  Open <strong>{hostOf(device().url)}</strong>, check it shows this code, and approve Lemma.
+                </Show>
               </p>
               <div class="connect-code">
                 <code aria-label="One-time code">{device().code}</code>
@@ -324,11 +334,13 @@ export function ConnectDialog(props: {
                 // Copied on the way, so the code is ready to paste on the page that opens.
                 onClick={plugin.action("copy code", () => copyText(device().code))}
               >
-                Copy code and open {hostOf(device().url)} <ExternalIcon />
+                {device().url.includes(device().code) ? "Open" : "Copy code and open"} {hostOf(device().url)} <ExternalIcon />
               </a>
               <LinkBox url={device().url} label="Copy link" />
               <Waiting text={state().status ?? "Waiting for you to approve"} />
-              <p class="connect-note">Only enter this code if you started this sign-in in Lemma.</p>
+              <p class="connect-note">
+                {device().url.includes(device().code) ? "Only approve it" : "Only enter this code"} if you started this sign-in in Lemma.
+              </p>
             </>
           )}
         </Match>
