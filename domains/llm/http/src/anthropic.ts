@@ -153,7 +153,8 @@ function build(call: WireCall) {
       "content-type": "application/json",
       accept: "text/event-stream",
       "anthropic-version": "2023-06-01",
-      "x-api-key": call.auth.key,
+      // An account's token goes as a bearer token (Copilot's Claude), a key as `x-api-key`.
+      ...(call.auth.oauth ? { authorization: `Bearer ${call.auth.key}` } : { "x-api-key": call.auth.key }),
       ...(betas.length === 0 ? {} : { "anthropic-beta": betas.join(",") }),
     },
   };

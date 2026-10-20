@@ -477,7 +477,7 @@ describe("openai-responses", () => {
       call(
         { ...gpt, thinking } as Model,
         { providerOptions: { temperature: 0.3 } },
-        { level: "off", auth: { key: "tok", oauth: true }, cacheRetention: "long" },
+        { level: "off", auth: { key: "tok", oauth: true, signIn: "chatgpt" }, cacheRetention: "long" },
       ),
     ).body;
     expect(body.reasoning).toEqual({ effort: "none" });

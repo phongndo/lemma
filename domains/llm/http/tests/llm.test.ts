@@ -767,6 +767,7 @@ describe("login", () => {
     let withdrawn = false;
     const devices: string[] = [];
     const sso: OAuthMethod = {
+      id: "sso",
       name: "SSO account",
       login: (context) =>
         Effect.gen(function* () {
@@ -835,7 +836,7 @@ describe("login", () => {
 
   it("announces a failed login as ended, under its origin", async () => {
     const recorder = noticeRecorder();
-    const denied: OAuthMethod = { name: "SSO", login: () => Effect.fail(new Error("denied")), refresh: async (credential) => credential };
+    const denied: OAuthMethod = { id: "sso", name: "SSO", login: () => Effect.fail(new Error("denied")), refresh: async (credential) => credential };
     const plugins = [
       fakeCredentials().plugin,
       fakeInteraction(() => Effect.succeed("unused")).plugin,
@@ -871,6 +872,7 @@ describe("login", () => {
   it("refreshes an expired sign-in once, under the credential's lock, before a request", async () => {
     let refreshed = 0;
     const sso: OAuthMethod = {
+      id: "sso",
       name: "SSO",
       login: () => Effect.die("not used"),
       refresh: async (credential) => {
@@ -896,6 +898,7 @@ describe("login", () => {
     let asked = false;
     let release!: () => void;
     const sso: OAuthMethod = {
+      id: "sso",
       name: "SSO",
       login: () => Effect.die("not used"),
       refresh: async (credential) => {
@@ -928,6 +931,7 @@ describe("login", () => {
     let asked = false;
     let release!: () => void;
     const sso: OAuthMethod = {
+      id: "sso",
       name: "SSO",
       login: () => Effect.die("not used"),
       refresh: async (credential) => {
@@ -967,6 +971,7 @@ describe("login", () => {
     let asked = 0;
     let refuse!: () => void;
     const sso: OAuthMethod = {
+      id: "sso",
       name: "SSO",
       login: () => Effect.die("not used"),
       refresh: async () => {
@@ -1006,6 +1011,7 @@ describe("login", () => {
     const asked: string[] = [];
     let release!: () => void;
     const sso: OAuthMethod = {
+      id: "sso",
       name: "SSO",
       login: () => Effect.die("not used"),
       refresh: async (credential) => {
@@ -1059,7 +1065,7 @@ describe("login", () => {
   });
 
   it("fails a request whose credential store is busy as one to ask again, without sending the user to sign in", async () => {
-    const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh: async (credential) => credential };
+    const sso: OAuthMethod = { id: "sso", name: "SSO", login: () => Effect.die("not used"), refresh: async (credential) => credential };
     const { service } = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
     const locked = definePlugin({
       id: "credentials",
@@ -1080,7 +1086,7 @@ describe("login", () => {
   });
 
   it("tells a request whose sign-in cannot be refreshed to sign in again", async () => {
-    const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh: () => Promise.reject(new Error("invalid_grant")) };
+    const sso: OAuthMethod = { id: "sso", name: "SSO", login: () => Effect.die("not used"), refresh: () => Promise.reject(new Error("invalid_grant")) };
     const credentials = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
     const plugins = [
       credentials.plugin,
@@ -1097,7 +1103,7 @@ describe("login", () => {
 
   it("fails a request whose sign-in could not be refreshed for the network as one to ask again, the sign-in kept", async () => {
     const outcome = async (refresh: OAuthMethod["refresh"]) => {
-      const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh };
+      const sso: OAuthMethod = { id: "sso", name: "SSO", login: () => Effect.die("not used"), refresh };
       const credentials = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
       const plugins = [
         credentials.plugin,
@@ -1421,7 +1427,7 @@ describe("identity", () => {
 
   it("sends OpenCode's session header, which it routes a conversation by", async () => {
     const { fetch, sent } = scriptedFetch(() => sseResponse(completion("ok")));
-    const { plugins } = setup({ fetch, providers: [faux({ headers: (sessionId) => ({ "x-opencode-session": sessionId ?? "fresh" }) })] });
+    const { plugins } = setup({ fetch, providers: [faux({ headers: (request) => ({ "x-opencode-session": request.sessionId ?? "fresh" }) })] });
     await runWith(plugins, collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")], sessionId: "s9" })));
     expect(sent[0]!.headers.get("x-opencode-session")).toBe("s9");
   });

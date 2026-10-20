@@ -150,7 +150,7 @@ function build(call: WireCall) {
   const body: Record<string, unknown> = { model: model.id, input: input(call), stream: true, store: false };
   if (request.sessionId !== undefined) body.prompt_cache_key = Array.from(request.sessionId).slice(0, PROMPT_CACHE_KEY_MAX).join("");
   // Signed in with ChatGPT, these fields are refused.
-  if (!auth.oauth) {
+  if (auth.signIn !== "chatgpt") {
     if (call.cacheRetention === "long") body.prompt_cache_retention = "24h";
     body.max_output_tokens = Math.max(maxTokens(model, request), MIN_OUTPUT_TOKENS);
     if (options.temperature !== undefined && model.temperature !== false) body.temperature = options.temperature;

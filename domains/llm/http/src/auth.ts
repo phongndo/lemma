@@ -4,7 +4,7 @@ import { CredentialError } from "@lemma/credentials";
 import type { Credential, Credentials } from "@lemma/credentials";
 import { classifyFailure, JudgedError } from "./failure.ts";
 import { ConnectionError, networkError, ProviderError } from "./http.ts";
-import type { OAuthCredential, Provider } from "./providers.ts";
+import type { OAuthCredential, OAuthMethod, Provider } from "./providers.ts";
 import type { Auth } from "./wire.ts";
 
 type CredentialsService = Context.Service.Shape<typeof Credentials>;
@@ -32,6 +32,12 @@ export function authSource(provider: Provider, stored: Credential | undefined, e
   const variable = fromEnv(provider, env);
   if (variable !== undefined) return variable;
   return provider.apiKey.keyless === true ? "no key required" : undefined;
+}
+
+/** A request's auth, signed in with `method`. */
+function signedIn(method: OAuthMethod, credential: OAuthCredential): Auth {
+  const baseUrl = method.baseUrl?.(credential);
+  return { key: credential.access, oauth: true, signIn: method.id, ...(baseUrl === undefined ? {} : { baseUrl }) };
 }
 
 /** How long a token refresh may take: it holds the credential's lock meanwhile. */
@@ -96,7 +102,7 @@ export const resolveAuth = (
     if (stored?.type === "api_key" && stored.key) return { key: stored.key, oauth: false };
     const oauth = provider.oauth;
     if (isOAuth(stored) && oauth !== undefined) {
-      if (stored.expires > Date.now()) return { key: stored.access, oauth: true };
+      if (stored.expires > Date.now()) return signedIn(oauth, stored);
       const fresh = yield* refresher
         .run(provider.id, (stopping) =>
           credentials.modify(provider.id, (current) =>
@@ -130,7 +136,7 @@ export const resolveAuth = (
       if (isOAuth(fresh) && fresh.expires <= Date.now()) {
         return yield* Effect.fail(new JudgedError(`${provider.name} sign-in was not refreshed: Lemma's model plugin is stopping`, { kind: "transient" }));
       }
-      if (isOAuth(fresh)) return { key: fresh.access, oauth: true };
+      if (isOAuth(fresh)) return signedIn(oauth, fresh);
       // Logged in with a key meanwhile.
       if (fresh?.type === "api_key" && fresh.key) return { key: fresh.key, oauth: false };
     }

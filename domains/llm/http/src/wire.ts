@@ -7,6 +7,10 @@ import type { Output } from "./output.ts";
 export interface Auth {
   readonly key: string;
   readonly oauth: boolean;
+  /** The sign-in's `OAuthMethod.id`, signed in. */
+  readonly signIn?: string;
+  /** Where the request goes in place of the model's `baseUrl`, as the sign-in names it. */
+  readonly baseUrl?: string;
 }
 
 /** One model request, as a wire adapter builds it. */

@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Effect } from "effect";
 import { ThinkingLevel } from "@lemma/llm";
-import type { CustomProviderSpec, ProviderModelSpec, ProviderSpec } from "@lemma/llm";
+import type { CustomProviderSpec, LlmRequest, ProviderModelSpec, ProviderSpec } from "@lemma/llm";
 import type { InteractionError, NoticePayload } from "@lemma/contracts";
 import snapshot from "./catalog.json" with { type: "json" };
 import { catalogOf } from "./catalog.ts";
@@ -17,6 +17,7 @@ import { WIRES } from "./request.ts";
 import type { Endpoint } from "./endpoints.ts";
 import { BUDGET_LEVELS, WIRE_APIS } from "./model.ts";
 import type { CatalogModel, Model, Thinking, WireApi } from "./model.ts";
+import type { Auth } from "./wire.ts";
 
 /** A stored OAuth credential: the shape `Credentials` keeps, its provider's own fields (an issued client id) kept. */
 export interface OAuthCredential {
@@ -41,12 +42,21 @@ export interface LoginContext {
 
 /** Signing in with an account, as `/login <provider>` offers it beside an API key. */
 export interface OAuthMethod {
+  /** Which sign-in it is (`chatgpt`), for what only it does (a ChatGPT plan refuses some request fields). */
+  readonly id: string;
   /** As `ProviderInfo.auth` names it: "Sign in with ChatGPT". */
   readonly name: string;
   /** Runs the flow; interrupting it withdraws its open question. */
   readonly login: (context: LoginContext) => Effect.Effect<OAuthCredential, unknown>;
   /** A new access token for `credential`, once it has expired. */
   readonly refresh: (credential: OAuthCredential, fetchImpl: typeof globalThis.fetch, signal: AbortSignal) => Promise<OAuthCredential>;
+  /** Where its requests go, when the account names its own host (Copilot's token does): the provider's otherwise. */
+  readonly baseUrl?: (credential: OAuthCredential) => string | undefined;
+  /**
+   * The models an account signed in this way may use, from the provider's catalog (`known`), asked with its access:
+   * a ChatGPT plan's, a Copilot account's. Undefined when they cannot be read, and the list it had stands.
+   */
+  readonly models?: (known: readonly Model[], auth: Auth, fetchImpl: typeof globalThis.fetch, signal: AbortSignal) => Promise<readonly Model[] | undefined>;
 }
 
 /** How a provider takes an API key: stored by `/login`, else from its config or environment. */
@@ -59,6 +69,8 @@ export interface ApiKeyMethod {
   readonly value?: string;
   /** It needs none (a local server): a placeholder is sent, since OpenAI-compatible servers refuse an empty key. */
   readonly keyless?: boolean;
+  /** False: `/login` does not offer a key, as the provider takes none it can be given (Copilot signs in). */
+  readonly login?: false;
 }
 
 /** A provider as this plugin serves it. Its `models` change as its catalog refreshes. */
@@ -67,8 +79,8 @@ export interface Provider {
   readonly name: string;
   readonly apiKey: ApiKeyMethod;
   readonly oauth?: OAuthMethod;
-  /** Headers each of its requests sends beside the model's own, given the request's session. */
-  readonly headers?: (sessionId: string | undefined) => Record<string, string>;
+  /** Headers each of its requests sends beside the model's own, given the request. */
+  readonly headers?: (request: LlmRequest) => Record<string, string>;
   /** The base URL of each wire API it serves its models on; a refresh leaves out a model on any other. */
   readonly apis: Readonly<Partial<Record<WireApi, string>>>;
   /** Its catalog is models.dev's provider of this id, refreshed live. */
@@ -87,7 +99,7 @@ export interface BuiltinProvider extends Endpoint {
   readonly oauth?: OAuthMethod;
   /** Its Responses API also speaks OpenAI's WebSocket mode (`socket.ts`), which the `webSocket` config turns on. */
   readonly webSocket?: boolean;
-  readonly headers?: (sessionId: string | undefined) => Record<string, string>;
+  readonly headers?: (request: LlmRequest) => Record<string, string>;
   /** Its models before a live catalog is read. */
   readonly models: readonly CatalogModel[];
   /** The classifier and image models it lists, where it serves them (`nonchat.json`); `classifiers.models` are kept by hand. */
@@ -98,7 +110,7 @@ const catalog = snapshot as unknown as Readonly<Record<string, readonly CatalogM
 const nonchat = nonchatSnapshot as unknown as Readonly<Record<string, Nonchat>>;
 
 /** OpenCode routes a conversation's requests by its session, and refuses a request without one. */
-const opencodeSession = (sessionId: string | undefined) => ({ "x-opencode-session": sessionId ?? randomUUID() });
+const opencodeSession = (request: LlmRequest) => ({ "x-opencode-session": request.sessionId ?? randomUUID() });
 
 /** What each built-in provider adds to its endpoints: a sign-in, the headers its requests need. */
 const extras: Readonly<Record<string, Pick<BuiltinProvider, "oauth" | "headers" | "webSocket">>> = {

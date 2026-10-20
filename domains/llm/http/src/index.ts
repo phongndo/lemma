@@ -23,11 +23,11 @@ import {
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, StreamEvent } from "@lemma/llm";
 import { STOP_DEADLINE_MS, authSource, makeRefresher, resolveAuth } from "./auth.ts";
 import type { Env } from "./auth.ts";
-import { devSource, mustThinkSource, planModels, planSource } from "./catalog.ts";
+import { devSource, mustThinkSource } from "./catalog.ts";
 import { accepts, classify, toClassifierInfo } from "./classify.ts";
 import { deviceId } from "./device.ts";
 import { headerRecord } from "./http.ts";
-import { identityHeaders } from "./identity.ts";
+import { withIdentity } from "./identity.ts";
 import { classifyFailure, JudgedError } from "./failure.ts";
 import { generateImages, toImageModelInfo } from "./images.ts";
 import { isWireApi, thinkFor, toModelInfo } from "./model.ts";
@@ -202,11 +202,11 @@ export function makeLlmPlugin(options: Options = {}) {
 
       const dev = devSource(fetchImpl);
       const mustThinkOfProvider = mustThinkSource(fetchImpl);
-      const plan = planSource(fetchImpl);
       /** One refresh of a provider at a time, so a slow one cannot finish after a later one and put back what it replaced. */
       const refreshing = new Map(builtins.map((provider) => [provider.id, Semaphore.makeUnsafe(1)]));
-      const signedInWithChatGPT = (provider: Provider) =>
-        provider.id === "openai"
+      /** Whether the provider is signed in with an account whose models are its own (a ChatGPT plan, a Copilot account). */
+      const signedInWithAccount = (provider: Provider) =>
+        provider.oauth?.models !== undefined
           ? credentials.read(provider.id).pipe(
               Effect.map((stored) => stored?.type === "oauth"),
               Effect.orElseSucceed(() => false),
@@ -219,8 +219,8 @@ export function makeLlmPlugin(options: Options = {}) {
        */
       const refreshOne = (provider: Provider, signal: AbortSignal) =>
         Effect.gen(function* () {
-          // Signed out of a plan, the API's list returns at once, before anything waits on the network.
-          if (!(yield* signedInWithChatGPT(provider))) provider.models = apiModels.get(provider.id) ?? provider.models;
+          // Signed out of an account, the catalog returns at once, before anything waits on the network.
+          if (!(yield* signedInWithAccount(provider))) provider.models = apiModels.get(provider.id) ?? provider.models;
           if (config.liveCatalogs) {
             // Read from models.dev and the provider's word on which models must reason: either out of reach, the list stands.
             const listing = (yield* Effect.promise(() => dev(signal)))?.[provider.id];
@@ -229,15 +229,16 @@ export function makeLlmPlugin(options: Options = {}) {
             if (fresh.length > 0) apiModels.set(provider.id, fresh);
           }
           const api = apiModels.get(provider.id) ?? provider.models;
-          if (!(yield* signedInWithChatGPT(provider))) {
+          const account = provider.oauth?.models;
+          if (account === undefined || !(yield* signedInWithAccount(provider))) {
             provider.models = api;
             return;
           }
           const auth = yield* authOf(provider).pipe(Effect.orElseSucceed(() => undefined));
-          const offered = auth === undefined ? undefined : yield* Effect.promise(() => plan(auth.key, signal));
-          // Out of reach, the plan's list it had stands; signed out meanwhile, the API's does.
-          if (offered !== undefined && (yield* signedInWithChatGPT(provider))) provider.models = planModels(api, offered);
-          else if (!(yield* signedInWithChatGPT(provider))) provider.models = api;
+          const offered = auth?.signIn === undefined ? undefined : yield* Effect.promise(() => account(api, auth, fetchImpl, signal).catch(() => undefined));
+          // Out of reach, the account's list it had stands; signed out meanwhile, the catalog does.
+          if (offered !== undefined && (yield* signedInWithAccount(provider))) provider.models = [...offered];
+          else if (!(yield* signedInWithAccount(provider))) provider.models = api;
         });
       /** Updates the built-ins' catalogs (or `ids`'); failures keep the previous list. Whether the models listed changed. */
       const refresh = (ids?: readonly string[]) =>
@@ -341,7 +342,7 @@ export function makeLlmPlugin(options: Options = {}) {
           const headers = yield* hooks
             .invoke(
               LlmProviderHeadersHook,
-              { request, provider: model.provider, headers: { ...model.headers, ...provider.headers?.(request.sessionId), ...identityHeaders(model) } },
+              { request, provider: model.provider, headers: withIdentity({ ...model.headers, ...provider.headers?.(request) }) },
               (input) => Effect.succeed(input.headers),
               { onStep: (step) => void steps.push(step) },
             )
@@ -417,7 +418,9 @@ export function makeLlmPlugin(options: Options = {}) {
                       const message = `${provider.name} is not authenticated. Run /login ${provider.id} or set its API key environment variable.`;
                       return output.fail(new Error(message), { kind: "fatal" });
                     }
-                    await send({ model, request, think, auth, cacheRetention: config.cacheRetention }, output, {
+                    // An account naming its own host (Copilot's) is asked there.
+                    const target = auth.baseUrl === undefined ? model : { ...model, baseUrl: auth.baseUrl };
+                    await send({ model: target, request, think, auth, cacheRetention: config.cacheRetention }, output, {
                       fetch: fetchImpl,
                       headers,
                       signal: controller.signal,
@@ -446,7 +449,7 @@ export function makeLlmPlugin(options: Options = {}) {
                     const aborted = controller.signal.aborted && !stalled;
                     const message = error instanceof Error ? error.message : String(error);
                     output.fail(
-                      auth?.oauth === true && message.includes("usage_limit_exceeded")
+                      auth?.signIn === "chatgpt" && message.includes("usage_limit_exceeded")
                         ? new JudgedError(`${message}\nCheck your ChatGPT usage: ${CHATGPT_USAGE}`, classifyFailure(error, message), { cause: error })
                         : error,
                       undefined,
@@ -481,7 +484,7 @@ export function makeLlmPlugin(options: Options = {}) {
           id: provider.id,
           name: provider.name,
           auth: [
-            { type: "api_key" as const, name: provider.apiKey.name, interactive: true },
+            ...(provider.apiKey.login === false ? [] : [{ type: "api_key" as const, name: provider.apiKey.name, interactive: true }]),
             ...(provider.oauth === undefined ? [] : [{ type: "oauth" as const, name: provider.oauth.name, interactive: true }]),
           ],
           configured: source !== undefined,
@@ -510,7 +513,7 @@ export function makeLlmPlugin(options: Options = {}) {
       /** How a classifier or image request is sent: naming Lemma, and cut off as stalled when a stream would be. */
       const requestOptions = (signal: AbortSignal) => ({
         fetch: fetchImpl,
-        headers: identityHeaders({}) ?? {},
+        headers: withIdentity({}),
         signal,
         timeoutMs: config.streamTimeout * 1000,
       });

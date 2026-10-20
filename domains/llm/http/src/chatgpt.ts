@@ -1,4 +1,5 @@
 import { Effect } from "effect";
+import { planModels, planSource } from "./catalog.ts";
 import { refused } from "./http.ts";
 import type { LoginContext, OAuthCredential, OAuthMethod } from "./providers.ts";
 import { callbackOrPaste, loopback, pkce, random } from "./signin.ts";
@@ -142,4 +143,10 @@ async function refresh(credential: OAuthCredential, fetchImpl: typeof fetch, sig
   );
 }
 
-export const chatgpt: OAuthMethod = { name: "Sign in with ChatGPT", login, refresh };
+/** A ChatGPT plan's models, as the Codex CLI and app list them, rather than the API's, many of which a plan does not serve. */
+const models: NonNullable<OAuthMethod["models"]> = async (known, auth, fetchImpl, signal) => {
+  const listed = await planSource(fetchImpl)(auth.key, signal);
+  return listed === undefined ? undefined : planModels(known, listed);
+};
+
+export const chatgpt: OAuthMethod = { id: "chatgpt", name: "Sign in with ChatGPT", login, refresh, models };
