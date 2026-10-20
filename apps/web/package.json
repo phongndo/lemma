@@ -85,6 +85,7 @@
     "@lemma/workspace-client": "workspace:*",
     "@lemma/workspace-file-mentions": "workspace:*",
     "@lemma/workspace-projects": "workspace:*",
+    "@lemma/workspace-tidy": "workspace:*",
     "dompurify": "3.4.17",
     "effect": "4.0.5",
     "marked": "18.1.1",

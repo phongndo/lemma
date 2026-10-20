@@ -38,7 +38,11 @@ the palette read. It asks the host through `WorkspaceChannels` (`workspace.place
   it is missing: a new chat never defaults to the host's own directory.
 - **Status.** `workspace.status` is asked again when the working directory or
   the connection changes, when a turn starts or ends, when the window regains
-  focus, and on `refresh` (which `commands.client` calls after each command).
+  focus, and on `refresh` (which `commands.client` calls after each command),
+  and the working directory's place with it: the host may have removed its
+  worktree (`workspace.tidy`) or made it again. When the shown thread is
+  archived or unarchived, they are asked at once and again 1.5 seconds later,
+  when the host has had time to do that.
   A failed refresh keeps the last status; one for a directory no longer
   current is dropped.
 - **New worktrees.** With the worktree draft on and the working directory a

@@ -13,6 +13,8 @@ const WORKTREE_KEY = "lemma.newWorktree";
 const FROM_REMOTE_KEY = "lemma.worktreeFromRemote";
 const PROJECT_SETTINGS_KEY = "lemma.projectSettings";
 const HIDDEN_KEY = "lemma.hiddenProjects";
+/** How long the host may take to remove a worktree, or make it again, after its thread is archived or unarchived. */
+const WORKTREE_SETTLES = 1_500;
 
 /**
  * Projects and the directory the composer works in: its git status, kept
@@ -145,6 +147,8 @@ export default defineWebPlugin({
     const refresh = async () => {
       const path = workingDir();
       if (path === undefined || !client.connected()) return;
+      // Where it sits too: the host may have removed its worktree (its thread archived) or made it again.
+      void refreshPlaces([path]);
       try {
         const next = await statusOf(path);
         if (workingDir() === path) setStatus(next);
@@ -176,6 +180,18 @@ export default defineWebPlugin({
         void newStandalone(true);
     });
     plugin.listen(window, "focus", refresh);
+    // The shown thread archived or unarchived: the host may remove its worktree or make it again (workspace.tidy), a
+    // moment after. Asked now, and once more when it has had time.
+    createEffect(
+      on(
+        () => threads.active()?.archived === true,
+        () => {
+          void refresh();
+          plugin.after(WORKTREE_SETTLES, () => void refresh(), { name: "ask again where the thread works" });
+        },
+        { defer: true },
+      ),
+    );
 
     const add = (path: string) => {
       if (hidden().includes(path)) setHiddenSaved(hidden().filter((project) => project !== path));

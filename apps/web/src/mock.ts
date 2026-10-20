@@ -475,6 +475,12 @@ export const createMockHost = (): Host => {
         description: "Total text characters one result may carry to the model.",
       }),
     }),
+    "workspace.tidy": Schema.Struct({
+      removeOnArchive: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+        title: "Remove worktrees when archived",
+        description: "A worktree Lemma made goes once its last thread is archived or deleted, if nothing in it is uncommitted; its branch stays.",
+      }),
+    }),
     "workspace.search-fff": Schema.Struct({
       idleMinutes: Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 15))).annotate({
         title: "Keep an index for",
@@ -532,6 +538,7 @@ export const createMockHost = (): Host => {
       requires: ["lemma/Interaction", "lemma/Workspace"],
       contributes: [{ name: "lemma/commands", items: 2, keys: ["workspace.checkout", "workspace.new-branch"] }],
     },
+    "workspace.tidy": { requires: ["lemma/Workspace", "lemma/Sessions", "lemma/Agent"] },
     "commands.registry": { provides: ["lemma/CommandRunner"] },
     "commands.host": {
       requires: ["lemma/Interaction", "lemma/HostControl"],
@@ -1604,8 +1611,18 @@ export const createMockHost = (): Host => {
       const pinned = pin ?? session.info.pinned === true;
       const archived = archive ?? session.info.archived === true;
       const kept = keep ?? session.info.kept === true;
+      const wasArchived = session.info.archived === true;
       session.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}), ...(kept ? { kept } : {}) };
       sessionChanges.publish({ type: "session-changed", info: session.info });
+      // As workspace.tidy does: a worktree goes with its last thread archived, idle, and comes back when one is unarchived.
+      const tree = worktrees.get(session.info.cwd);
+      if (tree !== undefined && archived !== wasArchived) {
+        const open = [...sessions.values()].some(
+          (other) => other.info.cwd === session.info.cwd && (other.info.archived !== true || running.has(other.info.id)),
+        );
+        if (archived && !open) tree.removed = true;
+        if (!archived) tree.removed = false;
+      }
       return session.info;
     }),
     serveCall("sessions.files", SessionChannels.relocate, async ({ sessionId, cwd }) => {

@@ -480,6 +480,9 @@ importers:
       '@lemma/workspace-projects':
         specifier: workspace:*
         version: link:../../domains/workspace/projects
+      '@lemma/workspace-tidy':
+        specifier: workspace:*
+        version: link:../../domains/workspace/tidy
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
@@ -3603,6 +3606,55 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
 
+  domains/workspace/tidy:
+    dependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
+      '@lemma/core':
+        specifier: workspace:*
+        version: link:../../../packages/core
+      '@lemma/look':
+        specifier: workspace:*
+        version: link:../../look/contract
+      '@lemma/sessions':
+        specifier: workspace:*
+        version: link:../../sessions/contract
+      '@lemma/settings':
+        specifier: workspace:*
+        version: link:../../settings/contract
+      '@lemma/web':
+        specifier: workspace:*
+        version: link:../../../packages/web
+      '@lemma/workspace':
+        specifier: workspace:*
+        version: link:../contract
+      effect:
+        specifier: 4.0.5
+        version: 4.0.5
+      solid-js:
+        specifier: 1.9.17
+        version: 1.9.17
+    devDependencies:
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
+      '@lemma/sessions-files':
+        specifier: workspace:*
+        version: link:../../sessions/files
+      '@lemma/workspace-local':
+        specifier: workspace:*
+        version: link:../local
+      '@types/node':
+        specifier: 24.19.2
+        version: 24.19.2
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@24.19.2)(vite@8.3.4(@types/node@24.19.2)(esbuild@0.28.2)(jiti@2.7.0))
+
   examples/approvals:
     dependencies:
       '@lemma/contracts':
@@ -4234,6 +4286,9 @@ importers:
       '@lemma/workspace-search-fff':
         specifier: workspace:*
         version: link:../../domains/workspace/search-fff
+      '@lemma/workspace-tidy':
+        specifier: workspace:*
+        version: link:../../domains/workspace/tidy
       effect:
         specifier: 4.0.5
         version: 4.0.5

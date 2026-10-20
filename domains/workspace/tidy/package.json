@@ -1,0 +1,38 @@
+{
+  "name": "@lemma/workspace-tidy",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Removes a worktree once its last thread is archived, and makes it again when one is unarchived",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./web": "./src/web.tsx"
+  },
+  "scripts": {
+    "check": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/agent": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/settings": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "@lemma/workspace": "workspace:*",
+    "effect": "4.0.5",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/sessions-files": "workspace:*",
+    "@lemma/workspace-local": "workspace:*",
+    "@types/node": "24.19.2",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "host": "./src/index.ts",
+    "web": "./src/web.tsx"
+  }
+}
