@@ -164,7 +164,6 @@ settings:
 
 patchedDependencies:
   '@earendil-works/pi-ai@1.3.0': 915e8a7c03572c3b43a6019020d17325254f9f8239e82fec810d081d99c83176
-  effect@4.0.4: 360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125
 
 importers:
 
@@ -207,8 +206,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/host
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -244,8 +243,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -485,8 +484,8 @@ importers:
         specifier: 3.4.17
         version: 3.4.17
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       marked:
         specifier: 18.1.1
         version: 18.1.1
@@ -559,8 +558,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -664,8 +663,8 @@ importers:
         specifier: workspace:*
         version: link:../../sessions/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/cli-registry':
         specifier: workspace:*
@@ -704,8 +703,8 @@ importers:
         specifier: workspace:*
         version: link:../../tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -750,8 +749,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -808,8 +807,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -848,8 +847,8 @@ importers:
         specifier: workspace:*
         version: link:../../tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       playwright-core:
         specifier: 1.64.0
         version: 1.64.0
@@ -867,8 +866,8 @@ importers:
   domains/browser/contract:
     dependencies:
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -895,8 +894,8 @@ importers:
         specifier: workspace:*
         version: link:../../tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/browser-chromium':
         specifier: workspace:*
@@ -926,8 +925,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -951,8 +950,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -979,8 +978,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1032,8 +1031,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -1060,8 +1059,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1085,8 +1084,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1137,8 +1136,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -1174,8 +1173,8 @@ importers:
         specifier: workspace:*
         version: link:../../sessions/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1196,8 +1195,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1227,8 +1226,8 @@ importers:
         specifier: workspace:*
         version: link:../../sessions/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/agent-loop':
         specifier: workspace:*
@@ -1258,8 +1257,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1283,8 +1282,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1305,8 +1304,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -1397,8 +1396,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -1450,8 +1449,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -1761,8 +1760,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1814,8 +1813,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -1839,8 +1838,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -1907,8 +1906,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/client':
         specifier: workspace:*
@@ -1956,8 +1955,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2034,8 +2033,8 @@ importers:
         specifier: 3.4.17
         version: 3.4.17
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       marked:
         specifier: 18.1.1
         version: 18.1.1
@@ -2090,8 +2089,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2165,8 +2164,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -2214,8 +2213,8 @@ importers:
         specifier: 2.3.1
         version: 2.3.1
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2257,8 +2256,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -2285,8 +2284,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/router
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -2310,8 +2309,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/testing':
         specifier: workspace:*
@@ -2344,8 +2343,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2434,8 +2433,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/contracts
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -2477,8 +2476,8 @@ importers:
         specifier: workspace:*
         version: link:../../workspace/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2514,8 +2513,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2594,8 +2593,8 @@ importers:
         specifier: workspace:*
         version: link:../../workspace/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2634,8 +2633,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2739,8 +2738,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2834,8 +2833,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2880,8 +2879,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2926,8 +2925,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -2972,8 +2971,8 @@ importers:
         specifier: workspace:*
         version: link:../../llm/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3000,8 +2999,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3037,8 +3036,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -3074,8 +3073,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/tools-registry':
         specifier: workspace:*
@@ -3105,8 +3104,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3136,8 +3135,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3164,8 +3163,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/testing':
         specifier: workspace:*
@@ -3216,8 +3215,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/tools-registry':
         specifier: workspace:*
@@ -3247,8 +3246,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3263,8 +3262,8 @@ importers:
   domains/transport/server:
     dependencies:
       '@effect/platform-node':
-        specifier: 4.0.4
-        version: 4.0.4(effect@4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125))(redis@6.3.0)
+        specifier: 4.0.5
+        version: 4.0.5(effect@4.0.5)(redis@6.3.0)
       '@lemma/contracts':
         specifier: workspace:*
         version: link:../../../packages/contracts
@@ -3272,8 +3271,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/commands':
         specifier: workspace:*
@@ -3371,8 +3370,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3424,8 +3423,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3452,8 +3451,8 @@ importers:
         specifier: workspace:*
         version: link:../../../packages/web
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -3486,8 +3485,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -3514,8 +3513,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/client':
         specifier: workspace:*
@@ -3588,8 +3587,8 @@ importers:
         specifier: workspace:*
         version: link:../contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -3613,8 +3612,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/cli-app':
         specifier: workspace:*
@@ -3647,8 +3646,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/llm/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/agent-loop':
         specifier: workspace:*
@@ -3696,8 +3695,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/sessions-files':
         specifier: workspace:*
@@ -3730,8 +3729,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/agent':
         specifier: workspace:*
@@ -3779,8 +3778,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/agent-loop':
         specifier: workspace:*
@@ -3819,8 +3818,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/tools-registry':
         specifier: workspace:*
@@ -3847,8 +3846,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/agent-loop':
         specifier: workspace:*
@@ -3893,8 +3892,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/cli-app':
         specifier: workspace:*
@@ -3924,8 +3923,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/tools-registry':
         specifier: workspace:*
@@ -3952,8 +3951,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/agent-loop':
         specifier: workspace:*
@@ -3992,8 +3991,8 @@ importers:
         specifier: workspace:*
         version: link:../contracts
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@lemma/core':
         specifier: workspace:*
@@ -4020,8 +4019,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -4039,8 +4038,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -4055,8 +4054,8 @@ importers:
   packages/core:
     dependencies:
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -4233,8 +4232,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/workspace/search-fff
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -4252,8 +4251,8 @@ importers:
   packages/router:
     dependencies:
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -4323,8 +4322,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/registry
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -4354,8 +4353,8 @@ importers:
         specifier: workspace:*
         version: link:../../domains/tools/contract
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
     devDependencies:
       '@types/node':
         specifier: 24.19.2
@@ -4382,8 +4381,8 @@ importers:
         specifier: workspace:*
         version: link:../router
       effect:
-        specifier: 4.0.4
-        version: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+        specifier: 4.0.5
+        version: 4.0.5
       solid-js:
         specifier: 1.9.17
         version: 1.9.17
@@ -4631,17 +4630,17 @@ packages:
     resolution: {integrity: sha512-ERGZr+aXjNJzoUbB7ZzHVH3g5otzMHjHLs2Fyizm12By5X+gBEhod9cJXFOk13S7M8a29Am+Mq21zm73mRJFLg==}
     engines: {node: '>=22.19.0'}
 
-  '@effect/platform-node-shared@4.0.4':
-    resolution: {integrity: sha512-gh2KRmqGWrJ0FVL8GqnI1GpB+fCfCUI7sGiUZkxxBHyHj1t94rm6VDJffCfuVZWe6GpvYXtizifVczUrgOce8A==}
+  '@effect/platform-node-shared@4.0.5':
+    resolution: {integrity: sha512-a8rCdEkfZBGe9C6bsIjxVZuRp73svIyK5IHwHdDAVsvZXjrbkxusfI+rZ8WlX31RP1mKizwI/E72GQTNfdMWHw==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
 
-  '@effect/platform-node@4.0.4':
-    resolution: {integrity: sha512-SdoyQMrO5zmqBebb2fxDk0sHYyJjBiw4QmLdV2ZcWf3ATpQPge3B5sTLijZg49PadekOwNeO83o5TfdtiiFEig==}
+  '@effect/platform-node@4.0.5':
+    resolution: {integrity: sha512-v4KD5fWvEUa4QmWFpZFbBsRhmfnTP6ETCME2r9ifyXVDPjhfpxpTZl41prjgQFMqZBHdWWCl7YC5ImbXv5ui5g==}
     engines: {node: '>=18.0.0'}
     peerDependencies:
-      effect: ^4.0.4
+      effect: ^4.0.5
       redis: '>=5.0.0 <7.0.0'
 
   '@electron-internal/extract-zip@1.0.5':
@@ -6115,8 +6114,8 @@ packages:
   ecdsa-sig-formatter@1.0.11:
     resolution: {integrity: sha512-nagl3RYrbNv6kQkeJIpt6NJZy8twLB/2vtz6yN9Z4vRKHN4/QZJIEbqohALSgwKdnksuY3k5Addp5lg8sVoVcQ==}
 
-  effect@4.0.4:
-    resolution: {integrity: sha512-Sr50OeVSC3M5UkoUYUhFf3EULryhGaZZUf6OzDHTvaznOw7HRlxOKdF3/4nvQXHL22StOyMG3Cvo8Bt7xUp+Ng==}
+  effect@4.0.5:
+    resolution: {integrity: sha512-BY4/28NlpOd99yzmV741xbVGmp+1U7tks4oB7F/Png64bTa5tm5eCA6W0RiXsnuLDDoJpjfVSo4Dnq4BZb/89Q==}
 
   electron-to-chromium@1.5.439:
     resolution: {integrity: sha512-qu6QIPXhsb+CRcAiTMNjR4A1y/7tCYKkKjr5CZXRVih6qkDf79peZ2BpEU3qoDBNCRrcy3Mra3X9nG5oruuA7Q==}
@@ -7404,19 +7403,19 @@ snapshots:
 
   '@earendil-works/pi-telemetry@1.3.0': {}
 
-  '@effect/platform-node-shared@4.0.4(effect@4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125))':
+  '@effect/platform-node-shared@4.0.5(effect@4.0.5)':
     dependencies:
       '@types/ws': 8.18.2
-      effect: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      effect: 4.0.5
       ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
 
-  '@effect/platform-node@4.0.4(effect@4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125))(redis@6.3.0)':
+  '@effect/platform-node@4.0.5(effect@4.0.5)(redis@6.3.0)':
     dependencies:
-      '@effect/platform-node-shared': 4.0.4(effect@4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125))
-      effect: 4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125)
+      '@effect/platform-node-shared': 4.0.5(effect@4.0.5)
+      effect: 4.0.5
       redis: 6.3.0
       undici: 8.11.2
     transitivePeerDependencies:
@@ -8138,7 +8137,7 @@ snapshots:
 
   '@types/ws@8.18.2':
     dependencies:
-      '@types/node': 24.19.0
+      '@types/node': 24.19.2
 
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
@@ -8549,7 +8548,7 @@ snapshots:
     dependencies:
       safe-buffer: 5.2.1
 
-  effect@4.0.4(patch_hash=360f3260a5d53d26e7f9ef0c8e8ad9ef2a14bff4406a99bb71fc346d58cf2125): {}
+  effect@4.0.5: {}
 
   electron-to-chromium@1.5.439: {}
 

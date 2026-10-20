@@ -17,7 +17,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/frame": "workspace:*",
     "@lemma/web": "workspace:*",
-    "effect": "4.0.4",
+    "effect": "4.0.5",
     "solid-js": "1.9.17"
   },
   "devDependencies": {

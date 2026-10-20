@@ -17,7 +17,7 @@
     "@lemma/core": "workspace:*",
     "@lemma/credentials": "workspace:*",
     "@lemma/llm": "workspace:*",
-    "effect": "4.0.4"
+    "effect": "4.0.5"
   },
   "devDependencies": {
     "@lemma/client": "workspace:*",
