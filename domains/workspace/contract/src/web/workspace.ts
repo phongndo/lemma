@@ -77,5 +77,14 @@ export type ProjectAction = MenuAction<string>;
 
 export const ProjectActions = defineSlot<ProjectAction>("project.actions");
 
+/** An item in a worktree's menu (the thread card's, the projects page's), by the worktree's path. */
+export type WorktreeAction = MenuAction<string>;
+
+/**
+ * What can be done with a worktree: open a thread in it, copy its path, remove it, make it again. Shown in the menu of
+ * each worktree listed, in order; an item's `when` says which worktrees it applies to.
+ */
+export const WorktreeActions = defineSlot<WorktreeAction>("worktree.actions");
+
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const WorkspaceActionIds = { addProject: "add-project.open" } as const;

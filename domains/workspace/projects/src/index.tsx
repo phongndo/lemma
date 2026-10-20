@@ -2,9 +2,11 @@ import { For, Show, createEffect, createMemo, createSignal, on } from "solid-js"
 import type { JSX } from "solid-js";
 import { tildePath, relativeTime } from "@lemma/web/format";
 import { createNow } from "@lemma/web/now";
-import { folderName, ProjectActions, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
+import { WorkspaceChannels } from "@lemma/workspace";
+import type { Worktree } from "@lemma/workspace";
+import { folderName, ProjectActions, Workspace, WorkspaceActionIds, WorktreeActions } from "@lemma/workspace/web";
 import { Actions } from "@lemma/actions";
-import { Dialogs, Layers } from "@lemma/frame";
+import { ActionMenu, Dialogs, Layers } from "@lemma/frame";
 import { Settings, SettingsGroups, SettingsSections } from "@lemma/settings";
 import type { SettingsEntry } from "@lemma/settings";
 import { Threads } from "@lemma/threads";
@@ -12,8 +14,8 @@ import { Client, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { SlotsService, ClientService } from "@lemma/web";
 import type { ThreadsService } from "@lemma/threads";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { CopyButton, Dialog, FolderIcon, FolderPlusIcon, GearIcon, PenSquareIcon, Segmented, SettingRow, TrashIcon } from "@lemma/look";
-import { initialOf, projectStats, threadCount, threadsIn } from "./model.ts";
+import { CopyButton, Dialog, FolderIcon, FolderPlusIcon, GearIcon, MoreIcon, PenSquareIcon, Popover, Segmented, SettingRow, TrashIcon } from "@lemma/look";
+import { initialOf, projectStats, threadCount, threadsIn, worktreeRows } from "./model.ts";
 import type { ProjectStats } from "./model.ts";
 import styles from "./projects-page.css?inline";
 
@@ -23,7 +25,7 @@ const DELETE_DIALOG = "projects-page.delete";
 /** Asks before deleting a project's threads, saying what goes and what stays. */
 function DeleteProjectDialog(props: { client: ClientService; threads: ThreadsService; workspace: WorkspaceService; cwd: string; close: () => void }) {
   const { threads, workspace } = props;
-  const inProject = () => threadsIn(threads.list(), props.cwd);
+  const inProject = () => threadsIn(threads.list(), props.cwd, workspace.projectOf);
   const archived = () => inProject().filter((session) => session.archived === true).length;
   const running = () => inProject().filter((session) => threads.running().includes(session.id)).length;
   const remove = () => {
@@ -228,10 +230,10 @@ export default defineWebPlugin({
       const pick = chosen();
       return pick !== undefined && workspace.projects().includes(pick) ? pick : workspace.projects()[0];
     });
-    // Opening the section without a project in mind shows the one being worked in.
+    // Opening the section without a project in mind shows the one being worked in: a worktree's, its repository.
     createEffect(
       on(settings.section, (section, previous) => {
-        const here = workspace.workingDir();
+        const here = workspace.project();
         if (section === SECTION && previous !== SECTION && chosen() === undefined && here !== undefined && !workspace.isStandalone(here)) setChosen(here);
       }),
     );
@@ -241,7 +243,7 @@ export default defineWebPlugin({
       dialogs.open(DELETE_DIALOG);
     };
     const path = (cwd: string) => tildePath(cwd, client.info()?.home);
-    const stats = (cwd: string) => projectStats(threads.list(), threads.running(), cwd);
+    const stats = (cwd: string) => projectStats(threads.list(), threads.running(), cwd, workspace.projectOf);
     // "Active 3m ago" moves on while the page shows.
     const now = createNow(30_000, () => settings.section() === SECTION);
     const addAction = () => slots.get(Actions, WorkspaceActionIds.addProject);
@@ -345,11 +347,68 @@ export default defineWebPlugin({
       },
     ]);
 
+    // The project's worktrees, as git lists them and as its threads worked in them: asked again when the project changes,
+    // and when one of them comes or goes (removed or made again). Each listed is placed, so its menu knows whether it is
+    // there to work in or remove, or gone and to restore. An answer for a project no longer shown is dropped.
+    const [listed, setListed] = createSignal<{ readonly project: string; readonly worktrees: readonly Worktree[] }>();
+    /** Which of the project's worktrees are there, as one string: it changes only when one of them comes or goes. */
+    const presence = createMemo(() => {
+      const project = current();
+      if (project === undefined) return "";
+      const paths = new Set([
+        ...threads.list().map((session) => session.cwd),
+        ...(listed()?.project === project ? listed()!.worktrees.map((tree) => tree.path) : []),
+      ]);
+      return [...paths]
+        .flatMap((path) => {
+          const place = workspace.place(path);
+          return place?.worktree === true && place.project === project ? [`${path}:${place.exists}`] : [];
+        })
+        .sort()
+        .join("|");
+    });
+    let listing = 0;
+    createEffect(
+      on([current, () => settings.section() === SECTION, presence], ([project, shown]) => {
+        if (project === undefined || !shown) return;
+        const request = ++listing;
+        void client.channel.call(WorkspaceChannels.worktrees, { path: project }).then(
+          (worktrees) => {
+            if (request !== listing) return;
+            setListed({ project, worktrees });
+            const unplaced = worktrees.filter((tree) => workspace.place(tree.path) === undefined).map((tree) => tree.path);
+            void workspace.refreshPlaces(unplaced);
+          },
+          () => {
+            if (request === listing) setListed({ project, worktrees: [] });
+          },
+        );
+      }),
+    );
+    group("projects-page.worktrees", 20, "Worktrees", (cwd) =>
+      worktreeRows(listed()?.project === cwd ? listed()!.worktrees : [], threads.list(), workspace.place, cwd).map((row) => ({
+        text: `worktree worktrees branch checkout remove restore clean up ${row.branch ?? ""} ${row.path}`,
+        view: () => {
+          const actions = () => slots.list(WorktreeActions).filter((action) => action.when?.(row.path) ?? true);
+          return (
+            <SettingRow
+              title={row.branch ?? `${folderName(row.path)} (detached)`}
+              description={[row.path, row.threads === 0 ? "no threads" : threadCount(row.threads), ...(row.removed ? ["removed"] : [])].join(" · ")}
+            >
+              <Popover label={`Worktree ${row.branch ?? folderName(row.path)}`} trigger={<MoreIcon />} triggerClass="icon-button" placement="bottom-end">
+                {(close) => <ActionMenu subject={row.path} control={undefined} slot={WorktreeActions} actions={actions()} close={close} />}
+              </Popover>
+            </SettingRow>
+          );
+        },
+      })),
+    );
+
     group("projects-page.danger", 90, "Danger zone", (cwd) => [
       {
         text: "project delete remove forget threads",
         view: () => {
-          const count = () => threadsIn(threads.list(), cwd).length;
+          const count = () => threadsIn(threads.list(), cwd, workspace.projectOf).length;
           return (
             <SettingRow
               title="Delete project"

@@ -3326,6 +3326,9 @@ importers:
       '@lemma/actions':
         specifier: workspace:*
         version: link:../../actions/contract
+      '@lemma/frame':
+        specifier: workspace:*
+        version: link:../../frame/contract
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract
