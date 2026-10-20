@@ -299,6 +299,8 @@ function Composer(props: { deps: Deps }) {
     settled: () => queueMicrotask(resize),
   });
   const canSend = sender.canSend;
+  /** The person has a prompt of their own in the box: while a turn runs, its steer or queue button takes the stop button's place. */
+  const written = () => unsent({ text: text(), images: images() });
   /** Enter, or the send button: the takeover's, while the box is given to one, else the person's prompt goes. */
   const submit = async (whenBusy: SendWhenBusy = busyMode()) => {
     const item = taken();
@@ -749,11 +751,24 @@ function Composer(props: { deps: Deps }) {
                 </Show>
               }
             >
-              <Show when={canSend() && taken() === undefined}>
+              <Show when={stopping()}>
+                <span class="composer-hint" role="status">
+                  {formatKeys("escape")} again to stop
+                </span>
+              </Show>
+              <Show
+                when={written() && taken() === undefined}
+                fallback={
+                  <button type="button" class="send stop" aria-label="Stop" data-tip="Stop" onClick={() => threads.cancel()}>
+                    <StopIcon />
+                  </button>
+                }
+              >
                 {/* With Alt, the other of steering and queueing, as with the send key. */}
                 <button
                   type="submit"
                   class="send"
+                  disabled={!canSend()}
                   aria-label={busyMode() === "steer" ? "Steer" : "Queue"}
                   data-tip={
                     busyMode() === "steer"
@@ -768,14 +783,6 @@ function Composer(props: { deps: Deps }) {
                   <SendIcon />
                 </button>
               </Show>
-              <Show when={stopping()}>
-                <span class="composer-hint" role="status">
-                  {formatKeys("escape")} again to stop
-                </span>
-              </Show>
-              <button type="button" class="send stop" aria-label="Stop" data-tip="Stop" onClick={() => threads.cancel()}>
-                <StopIcon />
-              </button>
             </Show>
           </div>
         </div>

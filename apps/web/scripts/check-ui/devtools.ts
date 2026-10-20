@@ -225,6 +225,11 @@ export const devtools = async (): Promise<string> => {
   await page.keyboard.press("Enter");
   await page.waitForSelector(".send.stop");
   await page.fill("textarea", "steer it");
+  // Something written takes the stop button's place with the steer button, rather than adding one beside it.
+  await page
+    .waitForSelector(".send.stop", { state: "detached" })
+    .catch(() => assert.fail("the stop button stays beside the steer button while a prompt is written"));
+  assert.equal(await page.locator(".send:not(.stop)").count(), 1, "no steer button takes the stop button's place");
   await page.keyboard.press("Enter");
   assert.equal(await page.locator(".steer-pending:has-text('steer it')").count(), 0, "a steer went out before the prompt before it was taken");
   await page.evaluate(() => (window as any).lemmaMock.releaseTurnStarted());
@@ -245,6 +250,7 @@ export const devtools = async (): Promise<string> => {
     .catch(async () => assert.fail(`a steer not yet placed has no tick on the prompt rail: ${(await railTicks()).join(", ")}`));
   assert.equal(await page.locator(".queued").count(), 0, "a steer has a row in the composer's queue");
   assert.equal(await page.inputValue("textarea"), "", "a steer that was taken stayed in the composer");
+  await page.waitForSelector(".send.stop").catch(() => assert.fail("the stop button does not come back once the box is empty"));
   // Until the turn takes it, a steer can be withdrawn from beside it.
   await page.fill("textarea", "never mind");
   await page.keyboard.press("Enter");
