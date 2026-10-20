@@ -17,9 +17,13 @@ describe("serveWorkspace", () => {
     const status = { path: "/w", exists: true };
     const workspace: Context.Service.Shape<typeof Workspace> = {
       status: answer("status", status),
+      places: answer("places", []),
       browse: answer("browse", { parent: "/", entries: [], truncated: false }),
       createDirectory: answer("createDirectory", status),
       createWorktree: answer("createWorktree", status),
+      worktrees: answer("worktrees", []),
+      removeWorktree: answer("removeWorktree", undefined),
+      restoreWorktree: answer("restoreWorktree", status),
       branches: answer("branches", []),
       checkout: answer("checkout", status),
     };
@@ -45,6 +49,8 @@ describe("serveWorkspace", () => {
         call(channels, "workspace.create-worktree", { path: "/w", branch: "x", base: "main" }),
         call(channels, "workspace.checkout", { path: "/w", branch: "x" }),
         call(channels, "workspace.checkout", { path: "/w", branch: "x", create: true }),
+        call(channels, "workspace.remove-worktree", { path: "/w" }),
+        call(channels, "workspace.remove-worktree", { path: "/w", force: true }),
       ]),
     );
     // Strictly: an option the client left out is no key at all, not one set to undefined.
@@ -53,6 +59,8 @@ describe("serveWorkspace", () => {
       ["createWorktree", "/w", { branch: "x", base: "main" }],
       ["checkout", "/w", "x", undefined],
       ["checkout", "/w", "x", { create: true }],
+      ["removeWorktree", "/w", undefined],
+      ["removeWorktree", "/w", { force: true }],
     ]);
   });
 });

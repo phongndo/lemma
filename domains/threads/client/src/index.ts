@@ -583,7 +583,7 @@ export default defineWebPlugin({
     const moving = new Map<string, Promise<void>>();
     const newThread = async (cwd?: string, options: { readonly inPlace?: boolean } = {}): Promise<void> => {
       const shown = active();
-      const dir = cwd ?? shown?.cwd ?? pendingCwd();
+      const dir = cwd ?? pendingCwd() ?? shown?.cwd;
       const over = options.inPlace === true && shown !== undefined && unsent(shown) && made.has(shown.id) ? shown : undefined;
       // Nowhere said yet (the workspace not yet known): the new-thread page, which makes one once there is somewhere.
       if (over === undefined && dir === undefined) return select(undefined);

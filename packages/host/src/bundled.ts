@@ -39,6 +39,7 @@ import workspaceCli from "@lemma/workspace-cli";
 import workspaceCommands from "@lemma/workspace-commands";
 import workspaceLocal from "@lemma/workspace-local";
 import workspaceSearchFff from "@lemma/workspace-search-fff";
+import workspaceTidy from "@lemma/workspace-tidy";
 
 /** Bundled plugins that start off, each until a row turns it on: what changes behavior not yet measured to help everyone. */
 export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
@@ -81,6 +82,7 @@ export const bundled: readonly Plugin[] = [
   workspaceLocal,
   workspaceSearchFff,
   workspaceCommands,
+  workspaceTidy,
   commandsRegistry,
   commandsHost,
   devtoolsTrace,
@@ -163,6 +165,7 @@ export const bundledWeb: readonly string[] = [
   "workspace.client",
   "workspace.file-mentions",
   "workspace.projects",
+  "workspace.tidy",
 ];
 
 /**

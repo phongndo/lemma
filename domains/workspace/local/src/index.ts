@@ -1,20 +1,22 @@
 import { execFile } from "node:child_process";
-import { mkdir, readdir } from "node:fs/promises";
+import { mkdir, readdir, realpath } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { Effect, Schema } from "effect";
 import type { Context } from "effect";
 import { definePlugin, Registries } from "@lemma/core";
 import { Channels, Paths } from "@lemma/contracts";
 import { serveFiles, serveWorkspace, Workspace, WORKSPACE_CONTRACT, WorkspaceError } from "@lemma/workspace";
-import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, WorkspaceStatus } from "@lemma/workspace";
-import { expandHome, kindOf } from "@lemma/contracts/fs";
+import type { DirectoryEntry, DirectoryListing, GitBranch, GitStatus, Place, Worktree, WorkspaceStatus } from "@lemma/workspace";
+import { expandHome, isInside, kindOf, readJsonFile, writeFileAtomic } from "@lemma/contracts/fs";
 
 const READ_TIMEOUT_MS = 5_000;
 const CHECKOUT_TIMEOUT_MS = 15_000;
 /** A fetch of one branch from its remote, which a slow network may take a while over. */
 const FETCH_TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
+/** How many directories `places` asks git about at once. */
+const PLACES_AT_ONCE = 8;
 
 type GitResult = { readonly ok: true; readonly stdout: string } | { readonly ok: false; readonly message: string };
 
@@ -129,17 +131,83 @@ interface WorkspaceOptions {
   readonly home?: string;
   /** Where `createWorktree` puts worktrees, one folder per repository. */
   readonly worktrees: string;
+  /** The file recording the worktrees made or removed here (`Made`); none are recorded without one. */
+  readonly record?: string;
 }
+
+/**
+ * A worktree made or removed here, by its path: its repository's main work tree and its branch. Kept after the worktree
+ * is removed, so its threads stay filed under its project and it can be made again.
+ */
+const Made = Schema.Record(Schema.String, Schema.Struct({ project: Schema.String, branch: Schema.String }));
+type Made = typeof Made.Type;
+
+/**
+ * Parses `git worktree list --porcelain`: one record per worktree, the main one first, each field ended by `separator`
+ * and each record by one more: NUL with `-z`, else a newline.
+ */
+export const parseWorktrees = (output: string, separator = "\0"): Worktree[] => {
+  const trees: Worktree[] = [];
+  let current: { path?: string; branch: string | null; missing: boolean } = { branch: null, missing: false };
+  const end = () => {
+    if (current.path !== undefined) trees.push({ path: current.path, branch: current.branch, ...(current.missing ? { missing: true } : {}) });
+    current = { branch: null, missing: false };
+  };
+  for (const field of output.split(separator)) {
+    if (field === "") end();
+    else if (field.startsWith("worktree ")) current.path = field.slice("worktree ".length);
+    else if (field.startsWith("branch ")) current.branch = field.slice("branch ".length).replace(/^refs\/heads\//, "");
+    else if (field === "prunable" || field.startsWith("prunable ")) current.missing = true;
+  }
+  end();
+  return trees;
+};
 
 /** The work tree owning a common git dir: `/repo/.git` → `/repo`; a bare repository has none. */
 const mainWorkTree = (commonDir: string): string | undefined => (basename(commonDir) === ".git" ? dirname(commonDir) : undefined);
+
+/** A path that may not exist with its symlinks resolved, as git names paths: its nearest existing ancestor's real path, and the rest. */
+const realOf = async (path: string): Promise<string> => {
+  const rest: string[] = [];
+  for (let at = path; ; at = dirname(at)) {
+    const real = await realpath(at).catch(() => undefined);
+    if (real !== undefined) return join(real, ...rest.reverse());
+    if (dirname(at) === at) return path;
+    rest.push(basename(at));
+  }
+};
+
+/**
+ * The recorded worktree holding `path` (its root, or a folder in it, by the path as given or as git names it): where it
+ * was, and the project and branch the path had in it.
+ */
+const recordedAt = async (known: Made, path: string): Promise<{ readonly root: string; readonly project: string; readonly branch: string } | undefined> => {
+  for (const candidate of new Set([path, await realOf(path)])) {
+    for (const [root, entry] of Object.entries(known)) {
+      if (candidate === root) return { root, ...entry };
+      if (candidate.startsWith(`${root}${sep}`)) return { root, project: join(entry.project, candidate.slice(root.length + 1)), branch: entry.branch };
+    }
+  }
+  return undefined;
+};
 
 /** A branch name as a single path segment: `feat/x` → `feat-x`. */
 const folderName = (branch: string) => branch.replace(/[/\\]+/g, "-");
 
 export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<typeof Workspace> => {
   const home = options.home ?? homedir();
-  const { worktrees } = options;
+  const { worktrees, record } = options;
+
+  const made = async (): Promise<Made> => (record === undefined ? {} : ((await readJsonFile(record, Made)) ?? {}));
+  // One write at a time, each reading what is there first.
+  let recording: Promise<unknown> = Promise.resolve();
+  /** Records a worktree made or removed here. A failure loses only the record, not the work. */
+  const remember = (path: string, entry: Made[string]): Promise<void> =>
+    (recording = recording
+      .then(async () => {
+        if (record !== undefined) await writeFileAtomic(record, `${JSON.stringify({ ...(await made()), [path]: entry }, null, 2)}\n`);
+      })
+      .catch(() => {})) as Promise<void>;
 
   const gitStatus = async (dir: string): Promise<GitStatus | undefined> => {
     const [root, status, short, common] = await Promise.all([
@@ -173,6 +241,45 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<
       const state = await gitStatus(dir);
       return { path: dir, exists: true, ...(state === undefined ? {} : { git: state }) };
     });
+
+  /**
+   * Where one directory sits: a `git rev-parse` and a `git branch --show-current` (which, unlike the HEAD file, also
+   * reads a reftable repository's), rather than `status`'s full `git status`. A folder in a work tree is filed as git
+   * names it, symlinks resolved, so a repository reached by two paths, and each of its worktrees, are one project.
+   */
+  const place = async (path: string, known: Made, ours: string): Promise<Place> => {
+    const dir = expandHome(path, home);
+    if (!isAbsolute(dir) || !(await isDirectory(dir))) {
+      const gone = await recordedAt(known, dir);
+      return gone === undefined
+        ? { path: dir, exists: false, project: dir, worktree: false }
+        : { path: dir, exists: false, project: gone.project, worktree: true, branch: gone.branch, ...(isInside(ours, gone.root) ? { made: true } : {}) };
+    }
+    const [found, current] = await Promise.all([
+      git(dir, ["rev-parse", "--path-format=absolute", "--show-toplevel", "--git-common-dir", "--show-prefix"]),
+      git(dir, ["branch", "--show-current"]),
+    ]);
+    if (!found.ok) return { path: dir, exists: true, project: dir, worktree: false };
+    const [root = "", common = "", prefix = ""] = found.stdout.split("\n");
+    // A bare repository's worktrees have no main work tree to belong to: each is its own.
+    const main = mainWorkTree(common) ?? root;
+    const inside = prefix.replace(/\/+$/, "");
+    const branch = current.ok ? current.stdout.trim() || null : undefined;
+    return {
+      path: dir,
+      exists: true,
+      project: inside === "" ? main : join(main, inside),
+      worktree: main !== root,
+      ...(branch === undefined ? {} : { branch }),
+      ...(main !== root && isInside(ours, root) ? { made: true } : {}),
+    };
+  };
+
+  const places = (paths: readonly string[]): Effect.Effect<readonly Place[]> =>
+    Effect.flatMap(
+      Effect.promise(() => Promise.all([made(), realOf(worktrees)])),
+      ([known, ours]) => Effect.forEach(paths, (path) => Effect.promise(() => place(path, known, ours)), { concurrency: PLACES_AT_ONCE }),
+    );
 
   const browse = (partialPath: string): Effect.Effect<DirectoryListing> =>
     Effect.promise(async () => {
@@ -336,10 +443,63 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<
         ["worktree", "add", ...(options.fromRemote === true ? ["--no-track"] : []), "-b", branch, "--", target, base ?? "HEAD"],
         CHECKOUT_TIMEOUT_MS,
       );
-      return yield* status(target);
+      const created = yield* status(target);
+      const project = created.git?.worktreeOf;
+      if (project !== undefined) yield* Effect.promise(() => remember(created.git?.root ?? created.path, { project, branch }));
+      return created;
     });
 
-  return { status, browse, createDirectory, createWorktree, branches, checkout };
+  const listWorktrees = (path: string) =>
+    Effect.gen(function* () {
+      const dir = yield* repository(path);
+      // `-z`'s NUL-terminated fields read a path with a newline in it whole; git before 2.36 has only newlines.
+      const nul = yield* Effect.promise(() => git(dir, ["worktree", "list", "--porcelain", "-z"]));
+      const listed = nul.ok ? parseWorktrees(nul.stdout) : parseWorktrees(yield* run(dir, ["worktree", "list", "--porcelain"]), "\n");
+      return listed.slice(1);
+    });
+
+  /** The linked worktree at `path` (or a folder in it): its root, where it sits, and its repository's main work tree. */
+  const linked = (path: string) =>
+    Effect.gen(function* () {
+      const dir = expandHome(path, home);
+      const [at] = yield* places([dir]);
+      if (at === undefined || !at.exists) return yield* new WorkspaceError({ path: dir, reason: "NotFound", message: `"${dir}" is not a directory` });
+      if (!at.worktree) return yield* new WorkspaceError({ path: dir, reason: "NotRepository", message: `"${dir}" is not a linked worktree` });
+      const root = (yield* run(dir, ["rev-parse", "--show-toplevel"])).trim();
+      const [tree] = yield* places([root]);
+      return { root, main: tree?.project ?? at.project, branch: tree?.branch };
+    });
+
+  const removeWorktree = (path: string, options?: { readonly force?: boolean }) =>
+    Effect.gen(function* () {
+      const { root, main, branch } = yield* linked(path);
+      // Recorded first, made here or not, so its threads stay under its project once it is gone, and it can be restored.
+      if (typeof branch === "string") yield* Effect.promise(() => remember(root, { project: main, branch }));
+      yield* run(main, ["worktree", "remove", ...(options?.force === true ? ["--force"] : []), "--", root], CHECKOUT_TIMEOUT_MS);
+    });
+
+  const restoreWorktree = (path: string) =>
+    Effect.gen(function* () {
+      const dir = expandHome(path, home);
+      const known = yield* Effect.promise(made);
+      const gone = yield* Effect.promise(() => recordedAt(known, dir));
+      if (gone === undefined) return yield* new WorkspaceError({ path: dir, reason: "NotFound", message: `No worktree made or removed here was at "${dir}"` });
+      if ((yield* Effect.promise(() => kindOf(gone.root))) !== undefined)
+        return yield* new WorkspaceError({ path: dir, reason: "Exists", message: `${gone.root} already exists` });
+      const main = known[gone.root]!.project;
+      const project = yield* repository(main);
+      const branch = known[gone.root]!.branch;
+      if (!(yield* exists(project, `refs/heads/${branch}`))) {
+        return yield* new WorkspaceError({ path: dir, reason: "Failed", message: `Its branch ${branch} is gone` });
+      }
+      // git still lists a worktree whose folder was deleted by hand, and would refuse its path and branch: forget that one
+      // alone, not every worktree whose folder is missing now (one on a drive not mounted, say), as a prune would.
+      if ((yield* listWorktrees(project)).some((tree) => tree.path === gone.root)) yield* run(project, ["worktree", "remove", "--", gone.root]);
+      yield* run(project, ["worktree", "add", "--", gone.root, branch], CHECKOUT_TIMEOUT_MS);
+      return yield* status(dir);
+    });
+
+  return { status, places, browse, createDirectory, createWorktree, worktrees: listWorktrees, removeWorktree, restoreWorktree, branches, checkout };
 };
 
 const WorkspaceConfig = Schema.Struct({
@@ -361,7 +521,7 @@ export default definePlugin({
   provides: { workspace: Workspace },
   requires: { paths: Paths },
   setup: function* ({ paths }, owner) {
-    const workspace = makeWorkspace({ worktrees: owner.config.worktrees ?? join(paths.home, "worktrees") });
+    const workspace = makeWorkspace({ worktrees: owner.config.worktrees ?? join(paths.home, "worktrees"), record: join(paths.home, "worktrees.json") });
     const channels = [...serveWorkspace(workspace), ...serveFiles(yield* Registries)];
     yield* Effect.forEach(channels, (channel) => owner.add(Channels, channel));
     return { workspace };

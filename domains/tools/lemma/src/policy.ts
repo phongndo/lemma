@@ -20,6 +20,8 @@ export const DEFAULT_CONFIRM: readonly string[] = [
   "commands.run",
   "workspace.create-directory",
   "workspace.create-worktree",
+  "workspace.remove-worktree",
+  "workspace.restore-worktree",
   "workspace.checkout",
   "mcp.reconnect",
 ];

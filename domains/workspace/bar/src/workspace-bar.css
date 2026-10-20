@@ -85,6 +85,22 @@ button.strip-chip:hover:not(:disabled),
   max-width: calc(100vw - 16px);
 }
 
+.where-menu {
+  width: 360px;
+  max-width: calc(100vw - 16px);
+}
+
+/* The worktrees a project's threads work in: a list of its own under Local and New worktree, scrolling past a few. */
+.where-list {
+  flex: none;
+  max-height: 220px;
+  padding: 0;
+}
+
+.workspace-warning-text {
+  color: var(--warn);
+}
+
 .menu-search {
   flex: none;
   width: 100%;
@@ -140,4 +156,14 @@ button.strip-chip:hover:not(:disabled),
   font-size: calc(11.5px * var(--text-scale));
   line-height: 1.45;
   white-space: normal;
+}
+
+.remove-worktree-dialog p {
+  margin: 0 0 8px;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+
+.remove-worktree-dialog code {
+  font-size: calc(12px * var(--text-scale));
 }

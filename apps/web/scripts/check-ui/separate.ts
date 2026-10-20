@@ -281,16 +281,16 @@ export const separate = async (): Promise<string> => {
     .catch(() => assert.fail("a form's answer did not reach the command that asked it"));
   await form.close();
   expectNoErrors("answering a form");
-  // A new thread in a git project can start in a new worktree, from the remote's version of its branch: the project's
-  // menu chooses the worktree, the branch menu's switch the remote, which the branch says, and the first prompt asks for it.
+  // A new thread in a git project can start in a new worktree, from the remote's version of its branch: the menu of where
+  // to work chooses the worktree, the branch menu's switch the remote, which the branch says, and the first prompt asks for it.
   const fork = await open();
   fork.on("pageerror", (error) => errors.push(error.message));
   await fork.goto(`${url}/?mock`);
   await fork.waitForSelector(".thread-chat.starting .thread-start [aria-label=Project]", { timeout: 10_000 });
   await fork.click(".thread-start [aria-label=Project]");
   await fork.click(".project-menu .menu-item >> text=lemma");
-  await fork.click(".thread-start [aria-label=Project]");
-  await fork.click(".project-menu .menu-item >> text=New worktree");
+  await fork.click(".thread-start [aria-label='Where to work']");
+  await fork.click(".where-menu .menu-item >> text=New worktree");
   await fork.click(".thread-start [aria-label='Worktree base branch']");
   await fork.click(".branch-menu .menu-toggle-row [role=switch]");
   await fork
@@ -307,8 +307,39 @@ export const separate = async (): Promise<string> => {
     true,
     "a new worktree to start from the remote was asked for without it",
   );
+  // The worktree is a place in its project, never a project: its thread is the project's, and a new thread started from
+  // it starts in the project, which offers the worktree to go on in.
+  await fork
+    .waitForSelector(".thread-card [aria-label=Worktree]", { timeout: 10_000 })
+    .catch(() => assert.fail("a thread in a worktree does not say so in its card"));
+  await fork.keyboard.press("ControlOrMeta+Shift+o");
+  await fork.waitForSelector(".thread-chat.starting .thread-start [aria-label=Project] >> text=lemma", { timeout: 10_000 }).catch(() => {
+    assert.fail("a new thread started from one in a worktree is not in the worktree's project");
+  });
+  await fork.click(".thread-start [aria-label=Project]");
+  const projects = await fork.locator(".project-menu .menu-item .menu-label").allTextContents();
+  assert.ok(!projects.some((name) => name.startsWith("lemma-")), `a worktree is listed as a project: ${projects.join(", ")}`);
+  await fork.keyboard.press("Escape");
+  await fork.click(".thread-start [aria-label='Where to work']");
+  await fork
+    .waitForSelector(".where-menu .where-list .menu-item >> text=lemma/work-apart", { timeout: 5_000 })
+    .catch(() => assert.fail("the project does not offer its worktree to go on in"));
+  await fork.keyboard.press("Escape");
+  // A project deleted with the thread shown in it stays gone: the new thread the page lands on is not made there.
+  await fork.click(".sidebar >> text=Landing page copy");
+  await fork.keyboard.press("ControlOrMeta+,");
+  await fork.click(".settings-nav >> text=Projects");
+  await fork.click(".projects-list >> text=website");
+  await fork.click(".settings button:has-text('Delete…')");
+  await fork.click(".delete-project-dialog .button-danger");
+  await fork.waitForSelector(".sidebar >> text=Landing page copy", { state: "detached", timeout: 5_000 });
+  await fork.keyboard.press("Escape");
+  await fork.waitForSelector(".thread-chat.starting .thread-start [aria-label=Project]", { timeout: 10_000 });
+  await fork.click(".thread-start [aria-label=Project]");
+  const left = await fork.locator(".project-menu .menu-item .menu-label").allTextContents();
+  assert.ok(!left.includes("website"), `a deleted project came back with a new thread made in it: ${left.join(", ")}`);
   await fork.close();
-  expectNoErrors("starting a new thread in a new worktree from the remote");
+  expectNoErrors("starting a new thread in a new worktree from the remote, and a new thread after it");
 
-  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over; a new thread starts in a new worktree from the remote's branch when asked";
+  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over; a new thread starts in a new worktree from the remote's branch when asked, files it under its project, and a new thread after it starts in the project; a project deleted under the thread shown stays gone";
 };

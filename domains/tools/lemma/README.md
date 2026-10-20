@@ -67,7 +67,8 @@ do: prompting, cancelling, withdrawing, and promoting (`agent.prompt`,
 and forking sessions (`sessions.create`, `.set-title`, `.mark`, `.checkout`,
 `.fork`), running a
 command (`commands.run`), the workspace's writes
-(`workspace.create-directory`, `.create-worktree`, `.checkout`), and
+(`workspace.create-directory`, `.create-worktree`, `.remove-worktree`,
+`.restore-worktree`, `.checkout`), and
 `mcp.reconnect`. A declined question, a dismissed one, or nobody to ask
 leaves the channel uncalled, and the call is an error saying which.
 

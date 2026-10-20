@@ -475,6 +475,12 @@ export const createMockHost = (): Host => {
         description: "Total text characters one result may carry to the model.",
       }),
     }),
+    "workspace.tidy": Schema.Struct({
+      removeOnArchive: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+        title: "Remove worktrees when archived",
+        description: "A worktree Lemma made goes once its last thread is archived or deleted, if nothing in it is uncommitted; its branch stays.",
+      }),
+    }),
     "workspace.search-fff": Schema.Struct({
       idleMinutes: Schema.Number.pipe(Schema.check(Schema.isGreaterThan(0)), Schema.withDecodingDefaultType(Effect.sync(() => 15))).annotate({
         title: "Keep an index for",
@@ -532,6 +538,7 @@ export const createMockHost = (): Host => {
       requires: ["lemma/Interaction", "lemma/Workspace"],
       contributes: [{ name: "lemma/commands", items: 2, keys: ["workspace.checkout", "workspace.new-branch"] }],
     },
+    "workspace.tidy": { requires: ["lemma/Workspace", "lemma/Sessions", "lemma/Agent"] },
     "commands.registry": { provides: ["lemma/CommandRunner"] },
     "commands.host": {
       requires: ["lemma/Interaction", "lemma/HostControl"],
@@ -551,7 +558,7 @@ export const createMockHost = (): Host => {
       ],
     },
     "sessions.cli": { contributes: [{ name: "lemma/cli-commands", items: 6 }] },
-    "workspace.cli": { contributes: [{ name: "lemma/cli-commands", items: 7 }] },
+    "workspace.cli": { contributes: [{ name: "lemma/cli-commands", items: 10 }] },
     // Pinned by the host, and needing the runtime only: nothing else is locked with it.
     "transport.server": {
       requires: ["lemma/Paths", "lemma/HostControl"],
@@ -1444,11 +1451,20 @@ export const createMockHost = (): Host => {
 
   const mockBranches = ["main", "harness", "composer-polish", "origin/release"];
   let currentBranch = "harness";
-  const workspaceStatus = (path: string) => ({
-    path,
-    exists: true,
-    git: { root: path, branch: currentBranch, head: "84c3bfc", changes: 3, upstream: `origin/${currentBranch}`, ahead: 1, behind: 0 },
-  });
+  /** The worktrees made, by path: the project each is of, its branch, and whether it was removed since. */
+  const worktrees = new Map<string, { readonly project: string; readonly branch: string; removed: boolean }>();
+  const workspaceStatus = (path: string) => {
+    const tree = worktrees.get(path);
+    if (tree?.removed === true) return { path, exists: false };
+    return {
+      path,
+      exists: true,
+      git:
+        tree === undefined
+          ? { root: path, branch: currentBranch, head: "84c3bfc", changes: 3, upstream: `origin/${currentBranch}`, ahead: 1, behind: 0 }
+          : { root: path, branch: tree.branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: tree.project },
+    };
+  };
 
   const notFound = (sessionId: string) => new HostError({ code: "NotFound", subject: sessionId, message: `Session ${sessionId} not found` });
   const sessionOf = (sessionId: string) => {
@@ -1605,8 +1621,18 @@ export const createMockHost = (): Host => {
       const pinned = pin ?? session.info.pinned === true;
       const archived = archive ?? session.info.archived === true;
       const kept = keep ?? session.info.kept === true;
+      const wasArchived = session.info.archived === true;
       session.info = { ...rest, ...(pinned ? { pinned } : {}), ...(archived ? { archived } : {}), ...(kept ? { kept } : {}) };
       sessionChanges.publish({ type: "session-changed", info: session.info });
+      // As workspace.tidy does: a worktree goes with its last thread archived, idle, and comes back when one is unarchived.
+      const tree = worktrees.get(session.info.cwd);
+      if (tree !== undefined && archived !== wasArchived) {
+        const open = [...sessions.values()].some(
+          (other) => other.info.cwd === session.info.cwd && (other.info.archived !== true || running.has(other.info.id)),
+        );
+        if (archived && !open) tree.removed = true;
+        if (!archived) tree.removed = false;
+      }
       return session.info;
     }),
     serveCall("sessions.files", SessionChannels.relocate, async ({ sessionId, cwd }) => {
@@ -1881,12 +1907,39 @@ export const createMockHost = (): Host => {
       return { parent, entries, truncated: false };
     }),
     serveCall("workspace.local", WorkspaceChannels.createDirectory, async ({ path }) => ({ path, exists: true })),
+    serveCall("workspace.local", WorkspaceChannels.places, async ({ paths }) =>
+      paths.map((path) => {
+        const tree = worktrees.get(path);
+        return tree === undefined
+          ? { path, exists: true, project: path, worktree: false, branch: path === CWD ? currentBranch : "main" }
+          : { path, exists: !tree.removed, project: tree.project, worktree: true, branch: tree.branch };
+      }),
+    ),
     serveCall("workspace.local", WorkspaceChannels.createWorktree, async (asked) => {
-      const { path, branch } = asked;
+      const { path } = asked;
       worktreesAsked.push(asked);
       await sleep(300);
-      const tree = `${HOME}/worktrees/${path.split("/").pop()}/${branch.replace(/\//g, "-")}`;
-      return { path: tree, exists: true, git: { root: tree, branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: path } };
+      let branch = asked.branch;
+      for (let n = 2; [...worktrees.values()].some((tree) => tree.branch === branch); n++) branch = `${asked.branch}-${n}`;
+      const tree = `${HOME}/.lemma/worktrees/${path.split("/").pop()}/${branch.replace(/\//g, "-")}`;
+      worktrees.set(tree, { project: path, branch, removed: false });
+      return workspaceStatus(tree);
+    }),
+    serveCall("workspace.local", WorkspaceChannels.worktrees, async ({ path }) =>
+      [...worktrees.entries()].filter(([, tree]) => tree.project === path && !tree.removed).map(([tree, { branch }]) => ({ path: tree, branch })),
+    ),
+    serveCall("workspace.local", WorkspaceChannels.removeWorktree, async ({ path }) => {
+      await sleep(200);
+      const tree = worktrees.get(path);
+      if (tree === undefined || tree.removed) throw new HostError({ code: "NotRepository", subject: path, message: `"${path}" is not a linked worktree` });
+      tree.removed = true;
+    }),
+    serveCall("workspace.local", WorkspaceChannels.restoreWorktree, async ({ path }) => {
+      await sleep(200);
+      const tree = worktrees.get(path);
+      if (tree === undefined) throw new HostError({ code: "NotFound", subject: path, message: `No worktree made here was at "${path}"` });
+      tree.removed = false;
+      return workspaceStatus(path);
     }),
     serveCall("workspace.local", WorkspaceChannels.branches, async () =>
       mockBranches.map((name, index) => ({

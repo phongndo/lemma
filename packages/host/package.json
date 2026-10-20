@@ -68,6 +68,7 @@
     "@lemma/workspace-commands": "workspace:*",
     "@lemma/workspace-local": "workspace:*",
     "@lemma/workspace-search-fff": "workspace:*",
+    "@lemma/workspace-tidy": "workspace:*",
     "effect": "4.0.5",
     "jsonc-parser": "3.3.1"
   },

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@lemma/actions": "workspace:*",
+    "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/settings": "workspace:*",
     "@lemma/threads": "workspace:*",

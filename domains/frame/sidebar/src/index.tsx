@@ -13,10 +13,9 @@ import { ActionIds, Actions, shownKeys } from "@lemma/actions";
 import { sessionTitle, ThreadActions, Threads, ThreadWaits, SidebarRowPart, SidebarRow, waitingOn } from "@lemma/threads";
 import { ActionMenu, Layout, SidebarActions, SidebarFooter, SidebarRegion } from "@lemma/frame";
 import type { LayoutService } from "@lemma/frame";
-import { WorkspaceChannels } from "@lemma/workspace";
 import { Workspace } from "@lemma/workspace/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
-import { Client, Interactions, Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
+import { Interactions, Slots, WebPlugins, defineWebPlugin, Each, usePlugin } from "@lemma/web";
 import type { Action } from "@lemma/actions";
 import type { SidebarRowProps, ThreadDraft, ThreadsService } from "@lemma/threads";
 import type { SlotsService, WebPluginsService } from "@lemma/web";
@@ -64,8 +63,6 @@ const ARCHIVED_HEIGHT = 220;
 const ARCHIVED_MIN = 96;
 const ARCHIVED_STEP = 24;
 const LIST_MIN = 120;
-/** How many folders' git status the sidebar asks the host for at once. */
-const STATUS_AT_ONCE = 4;
 /** How long the pointer rests on a row before its details show, and how soon after one closes the next opens at once. */
 const CARD_DELAY = 150;
 const CARD_CHAIN = 400;
@@ -843,10 +840,9 @@ export default defineWebPlugin({
     webPlugins: WebPlugins,
     layout: Layout,
     workspace: Workspace,
-    client: Client,
     interactions: Interactions,
   },
-  setup: ({ threads, slots, webPlugins, layout, workspace, client, interactions }, plugin) => {
+  setup: ({ threads, slots, webPlugins, layout, workspace, interactions }, plugin) => {
     // Times tick once a second while a turn runs (its time shows), else once a minute.
     const [now, setNow] = createSignal(Date.now());
     createEffect(() => {
@@ -902,66 +898,13 @@ export default defineWebPlugin({
       setUnread(next);
     });
 
-    // What each listed thread's folder has checked out (the archived ones' are not shown): asked once per folder, and
-    // again when a turn in it ends; a few at a time, as each asks git on the host.
-    const [places, setPlaces] = createSignal<Readonly<Record<string, { readonly branch?: string; readonly worktreeOf?: string }>>>({});
-    const asked = new Set<string>();
-    const waiting: string[] = [];
-    let asking = 0;
-    const next = () => {
-      const cwd = waiting.shift();
-      if (cwd === undefined || asking >= STATUS_AT_ONCE) {
-        if (cwd !== undefined) waiting.unshift(cwd);
-        return;
-      }
-      asking++;
-      client.channel
-        .call(WorkspaceChannels.status, { path: cwd })
-        .then(
-          (status) => {
-            const git = status.git;
-            setPlaces({
-              ...places(),
-              [cwd]: {
-                ...(git?.branch === null || git?.branch === undefined ? {} : { branch: git.branch }),
-                ...(git?.worktreeOf === undefined ? {} : { worktreeOf: git.worktreeOf }),
-              },
-            });
-          },
-          () => {
-            // A folder gone or unreadable shows no branch.
-          },
-        )
-        .finally(() => {
-          asking--;
-          next();
-        });
-      next();
-    };
-    const ask = (cwd: string) => {
-      asked.add(cwd);
-      if (!waiting.includes(cwd)) waiting.push(cwd);
-      next();
-    };
-    createEffect(() => {
-      if (!client.connected()) return;
-      for (const session of threads.list()) if (session.archived !== true && !asked.has(session.cwd)) ask(session.cwd);
-    });
-    createEffect(
-      on(threads.running, (running, before) => {
-        for (const id of (before ?? []).filter((id) => !running.includes(id))) {
-          const cwd = threads.list().find((session) => session.id === id)?.cwd;
-          if (cwd !== undefined) ask(cwd);
-        }
-      }),
-    );
+    // Where each thread works: its project (a worktree's is its repository's), and the branch its folder has checked out.
     const place = (cwd: string) => {
-      const known = places()[cwd];
-      const home = known?.worktreeOf ?? cwd;
+      const known = workspace.place(cwd);
       return {
-        project: workspace.isStandalone(cwd) ? "No project" : workspace.projectName(home),
-        ...(known?.branch === undefined ? {} : { branch: known.branch }),
-        worktree: known?.worktreeOf !== undefined,
+        project: workspace.isStandalone(cwd) ? "No project" : workspace.projectName(cwd),
+        ...(known?.branch === undefined || known.branch === null ? {} : { branch: known.branch }),
+        worktree: known?.worktree === true,
       };
     };
 
@@ -971,7 +914,7 @@ export default defineWebPlugin({
       const shown = threads.activeId() === session.id;
       const next = shown ? afterArchiving(order(), session.id) : undefined;
       const marking = threads.mark(session.id, { archived: true });
-      if (shown) void (next !== undefined ? threads.select(next) : threads.newThread(session.cwd));
+      if (shown) void (next !== undefined ? threads.select(next) : threads.newThread(workspace.projectOf(session.cwd)));
       await marking;
     };
     const unarchive = (session: SessionInfo) => void threads.mark(session.id, { archived: false });
