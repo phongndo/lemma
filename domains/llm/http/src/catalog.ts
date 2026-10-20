@@ -20,7 +20,14 @@ export interface DevModel {
   readonly tool_call?: boolean;
   readonly modalities?: { readonly input?: readonly string[]; readonly output?: readonly string[] };
   readonly limit?: { readonly context?: number; readonly output?: number };
-  readonly cost?: { readonly input?: number; readonly output?: number; readonly cache_read?: number; readonly cache_write?: number };
+  readonly cost?: {
+    readonly input?: number;
+    readonly output?: number;
+    readonly cache_read?: number;
+    readonly cache_write?: number;
+    /** Higher prices from a size on: a `context` tier's apply to a request of more than `size` tokens. */
+    readonly tiers?: readonly { readonly tier?: { readonly type?: string; readonly size?: unknown } }[];
+  };
   /** Per-model override of the provider's SDK package, which names its wire API. */
   readonly provider?: { readonly npm?: string };
 }
@@ -42,14 +49,25 @@ const API_OF_NPM: Readonly<Record<string, WireApi>> = {
 };
 
 /**
+ * How a server is asked for thinking beyond the efforts a model names: `effort`, by those alone (OpenAI's formats have
+ * no switch); `switch`, also by a switch every model there has (DeepSeek's `thinking`, whatever models.dev lists);
+ * `any`, by any effort, which the server turns into a budget for a model thinking in one, and stopped at `none`
+ * (OpenRouter's).
+ */
+export type Asking = "effort" | "switch" | "any";
+
+/** The efforts a model asked by any (`any`) takes where models.dev names none: those every reasoning model takes (OpenAI's o-series refuses `minimal`). */
+const ANY_EFFORTS: readonly string[] = ["low", "medium", "high"];
+
+/**
  * How a model on `api` is asked to think, from models.dev's options. Anthropic's adaptive thinking is the one with a
  * `max` effort (every Claude model agrees); its other thinking models, and those speaking its protocol, think in a
- * token budget. A model that only turns thinking on and off has no level to pick where its protocol has no switch
- * (`toggles`: OpenAI's `reasoning_effort` has none). Off is a level only for a model that can stop thinking: one its
+ * token budget. A model that only turns thinking on and off has no level to pick where its server is asked by efforts
+ * it names, and every effort where it takes any. Off is a level only for a model that can stop thinking: one its
  * provider says must reason (`mustThink`) cannot, whatever models.dev says, nor can one whose least budget is more
  * than none.
  */
-export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"], toggles: boolean, mustThink = false): Thinking | undefined {
+export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"], asking: Asking, mustThink = false): Thinking | undefined {
   const effort = options?.find((option) => option.type === "effort")?.values?.filter((value): value is string => typeof value === "string") ?? [];
   const toggle = options?.some((option) => option.type === "toggle") ?? false;
   const budgeted = options?.find((option) => option.type === "budget_tokens");
@@ -61,36 +79,59 @@ export function thinkingOf(api: WireApi, options: DevModel["reasoning_options"],
     if (budget) return { kind: "budget", levels: BUDGET_LEVELS };
     return toggle ? { kind: "toggle", levels: ["off", "high"] } : undefined;
   }
-  // Elsewhere it stops by its switch, or at a budget of none.
-  const stops = !mustThink && (toggle || (budget && !(typeof budgeted.min === "number" && budgeted.min > 0)));
+  const leastBudget = typeof budgeted?.min === "number" && budgeted.min > 0;
+  // Elsewhere it stops by a switch, its own or its server's, or at a budget of none.
+  const switched = toggle || asking === "switch";
+  const stops = !mustThink && (switched || (budget && !leastBudget));
   // One that must reason has no `none` to stop at either.
-  if (effort.length > 0) return effortThinking(mustThink ? effort.filter((value) => value !== "none") : effort, toggle && stops);
-  return (toggle || budget) && toggles ? { kind: "toggle", levels: stops ? ["off", "high"] : ["high"] } : undefined;
+  if (effort.length > 0) return effortThinking(mustThink ? effort.filter((value) => value !== "none") : effort, switched && stops);
+  // Taking any effort, it stops at `none` unless it must reason.
+  if (asking === "any") return effortThinking([...ANY_EFFORTS, ...(mustThink || leastBudget ? [] : ["none"])], false);
+  return asking === "switch" ? { kind: "toggle", levels: stops ? ["off", "high"] : ["high"] } : undefined;
 }
 
 /**
- * models.dev's chat models of a provider, on the wire APIs it serves (`serves`), each as the catalog keeps it. A
- * model without tool calls, or making no text, is not one an agent can use.
+ * Claude models whose API takes `thinking: disabled` though models.dev lists no switch for them: Opus 4.7 and 4.8, and
+ * Opus 5 at an effort of `high` or below, its default.
  */
-export function fromDev(
-  dev: DevProvider,
-  serves: (api: WireApi) => boolean,
-  toggles: (api: WireApi, id: string) => boolean,
-  mustThink: ReadonlySet<string> = new Set(),
-): CatalogModel[] {
+const CLAUDE_STOPS: ReadonlySet<string> = new Set(["claude-opus-4-7", "claude-opus-4-8", "claude-opus-5"]);
+
+/** How a provider's models are placed in its catalog. */
+export interface Placing {
+  /** Whether it serves a wire API. */
+  readonly serves: (api: WireApi) => boolean;
+  /** How its server is asked for a model's thinking. */
+  readonly asking: (api: WireApi, id: string) => Asking;
+  /** The models it says must reason. */
+  readonly mustThink?: ReadonlySet<string>;
+  /** Its models fill their context window only up to the size at which their price rises (models.dev's `tiers`). */
+  readonly windowAtPriceTier?: boolean;
+}
+
+/**
+ * models.dev's chat models of a provider, on the wire APIs it serves, each as the catalog keeps it. A model without
+ * tool calls, or making no text, is not one an agent can use.
+ */
+export function fromDev(dev: DevProvider, placing: Placing): CatalogModel[] {
   const models: CatalogModel[] = [];
   for (const [id, info] of Object.entries(dev.models)) {
     const api = API_OF_NPM[info.provider?.npm ?? dev.npm ?? ""];
-    if (api === undefined || !serves(api) || info.tool_call === false) continue;
+    if (api === undefined || !placing.serves(api) || info.tool_call === false) continue;
     if (info.modalities?.output !== undefined && !info.modalities.output.includes("text")) continue;
     const reasoning = info.reasoning === true;
-    const thinking = reasoning ? thinkingOf(api, info.reasoning_options, toggles(api, id), mustThink.has(id)) : undefined;
+    const options = api === "anthropic-messages" && CLAUDE_STOPS.has(id) ? [...(info.reasoning_options ?? []), { type: "toggle" }] : info.reasoning_options;
+    const thinking = reasoning ? thinkingOf(api, options, placing.asking(api, id), placing.mustThink?.has(id)) : undefined;
+    const window = info.limit?.context ?? 128_000;
+    const tiers =
+      placing.windowAtPriceTier === true
+        ? (info.cost?.tiers ?? []).flatMap((tier) => (tier.tier?.type === "context" && typeof tier.tier.size === "number" ? [tier.tier.size] : []))
+        : [];
     models.push({
       id,
       name: info.name ?? id,
       api,
       input: info.modalities?.input?.includes("image") === true ? ["text", "image"] : ["text"],
-      contextWindow: info.limit?.context ?? 128_000,
+      contextWindow: Math.min(window, ...tiers),
       maxTokens: info.limit?.output ?? 16_384,
       cost: { input: info.cost?.input ?? 0, output: info.cost?.output ?? 0, cacheRead: info.cost?.cache_read ?? 0, cacheWrite: info.cost?.cache_write ?? 0 },
       reasoning,
@@ -102,21 +143,33 @@ export function fromDev(
 }
 
 /**
+ * Providers whose models fill their context window only up to where their price rises: OpenAI's, which bills a request
+ * over 272k tokens at double (the Codex CLI and pi keep to 272k too), so a session compacts before its requests cost
+ * more.
+ */
+const WINDOW_AT_PRICE_TIER: ReadonlySet<string> = new Set(["openai"]);
+
+/**
  * `provider`'s models as models.dev lists them (`dev`), on the wire APIs it serves, those it says must reason
  * (`mustThink`, from `mustThinkSource`) never asked to stop. A model that only turns thinking on and off has a level
- * to pick where the protocol has a switch: OpenAI's Chat Completions has none, but OpenRouter's and DeepSeek's do.
+ * to pick where the protocol has a switch (DeepSeek's) or takes any effort (OpenRouter's); OpenAI's Chat Completions
+ * format has neither.
  */
 export const catalogOf = (
   provider: { readonly id: string; readonly apis: Readonly<Partial<Record<WireApi, string>>> },
   dev: DevProvider,
   mustThink?: ReadonlySet<string>,
 ): CatalogModel[] =>
-  fromDev(
-    dev,
-    (api) => provider.apis[api] !== undefined,
-    (api, id) => api !== "openai-completions" || thinkingFormat({ provider: provider.id, baseUrl: provider.apis[api] ?? "", id }) !== "openai",
-    mustThink,
-  );
+  fromDev(dev, {
+    serves: (api) => provider.apis[api] !== undefined,
+    asking: (api, id) => {
+      if (api !== "openai-completions") return "effort";
+      const format = thinkingFormat({ provider: provider.id, baseUrl: provider.apis[api] ?? "", id });
+      return format === "openrouter" ? "any" : format === "deepseek" ? "switch" : "effort";
+    },
+    ...(mustThink === undefined ? {} : { mustThink }),
+    windowAtPriceTier: WINDOW_AT_PRICE_TIER.has(provider.id),
+  });
 
 /** `url`'s JSON, as Lemma asks for it, given up on after 20 seconds; rejects on an HTTP error. */
 export const fetchJson = async (fetchImpl: typeof fetch, url: string, headers: Record<string, string>, signal: AbortSignal): Promise<unknown> => {

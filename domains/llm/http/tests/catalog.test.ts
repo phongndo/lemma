@@ -15,45 +15,61 @@ describe("thinkingOf", () => {
   const effort = (...values: string[]) => [{ type: "effort", values }];
 
   it("asks Anthropic's adaptive models (a max effort) for an effort, its others for a budget", () => {
-    expect(thinkingOf("anthropic-messages", effort("low", "medium", "high", "xhigh", "max"), true)).toEqual({
+    expect(thinkingOf("anthropic-messages", effort("low", "medium", "high", "xhigh", "max"), "switch")).toEqual({
       kind: "effort",
       levels: ["low", "medium", "high", "xhigh", "max"],
     });
     // One that also thinks in a budget (Claude 4.6) can stop.
-    expect(thinkingOf("anthropic-messages", [...effort("low", "high", "max"), { type: "budget_tokens" }], true)).toEqual({
+    expect(thinkingOf("anthropic-messages", [...effort("low", "high", "max"), { type: "budget_tokens" }], "switch")).toEqual({
       kind: "effort",
       levels: ["off", "low", "high", "max"],
     });
-    expect(thinkingOf("anthropic-messages", [...effort("low", "medium", "high"), { type: "budget_tokens" }], true)).toEqual({
+    expect(thinkingOf("anthropic-messages", [...effort("low", "medium", "high"), { type: "budget_tokens" }], "switch")).toEqual({
       kind: "budget",
       levels: ["off", "minimal", "low", "medium", "high"],
     });
-    expect(thinkingOf("anthropic-messages", [{ type: "toggle" }], true)).toEqual({ kind: "toggle", levels: ["off", "high"] });
+    expect(thinkingOf("anthropic-messages", [{ type: "toggle" }], "switch")).toEqual({ kind: "toggle", levels: ["off", "high"] });
   });
 
   it("takes an effort's levels as named, none as off, and a toggle only where the protocol has a switch", () => {
-    expect(thinkingOf("openai-responses", effort("none", "low", "medium", "high", "xhigh"), false)).toEqual({
+    expect(thinkingOf("openai-responses", effort("none", "low", "medium", "high", "xhigh"), "effort")).toEqual({
       kind: "effort",
       levels: ["off", "low", "medium", "high", "xhigh"],
       values: { off: "none" },
     });
-    expect(thinkingOf("openai-completions", effort("high", "max"), false)).toEqual({ kind: "effort", levels: ["high", "max"] });
-    expect(thinkingOf("openai-completions", [{ type: "toggle" }], false)).toBeUndefined();
-    expect(thinkingOf("openai-completions", [{ type: "toggle" }], true)).toEqual({ kind: "toggle", levels: ["off", "high"] });
-    expect(thinkingOf("openai-completions", [], true)).toBeUndefined();
+    expect(thinkingOf("openai-completions", effort("high", "max"), "effort")).toEqual({ kind: "effort", levels: ["high", "max"] });
+    expect(thinkingOf("openai-completions", [{ type: "toggle" }], "effort")).toBeUndefined();
+    expect(thinkingOf("openai-completions", [{ type: "toggle" }], "switch")).toEqual({ kind: "toggle", levels: ["off", "high"] });
+    // DeepSeek's switch stops every model there, whatever models.dev lists for it.
+    expect(thinkingOf("openai-completions", [], "switch")).toEqual({ kind: "toggle", levels: ["off", "high"] });
+    expect(thinkingOf("openai-completions", effort("high", "max"), "switch")).toEqual({ kind: "effort", levels: ["off", "high", "max"] });
+  });
+
+  it("gives a model on a server taking any effort (OpenRouter) every effort, where models.dev names none", () => {
+    const any = { kind: "effort", levels: ["off", "low", "medium", "high"], values: { off: "none" } };
+    // OpenRouter turns an effort into a budget for a model thinking in one, as Claude and Gemini do there.
+    expect(thinkingOf("openai-completions", [{ type: "toggle" }], "any")).toEqual(any);
+    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 0 }], "any")).toEqual(any);
+    expect(thinkingOf("openai-completions", [], "any")).toEqual(any);
+    // Its own efforts stand.
+    expect(thinkingOf("openai-completions", [...effort("low", "high"), { type: "toggle" }], "any")).toEqual({ kind: "effort", levels: ["off", "low", "high"] });
   });
 
   it("gives off only to a model that can stop thinking: not one whose least budget is more than none, nor one its provider says must reason", () => {
+    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 0 }], "switch")).toEqual({ kind: "toggle", levels: ["off", "high"] });
     // Gemini 2.5 Pro behind OpenRouter: it thinks in at least 128 tokens.
-    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 128 }], true)).toEqual({ kind: "toggle", levels: ["high"] });
-    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 0 }], true)).toEqual({ kind: "toggle", levels: ["off", "high"] });
+    expect(thinkingOf("openai-completions", [{ type: "budget_tokens", min: 128 }], "any")).toEqual({
+      kind: "effort",
+      levels: ["low", "medium", "high"],
+    });
     // OpenAI's o3 behind OpenRouter, which models.dev has switching thinking off.
-    expect(thinkingOf("openai-completions", [{ type: "toggle" }], true, true)).toEqual({ kind: "toggle", levels: ["high"] });
-    expect(thinkingOf("openai-completions", [...effort("low", "high"), { type: "toggle" }], true, true)).toEqual({ kind: "effort", levels: ["low", "high"] });
+    expect(thinkingOf("openai-completions", [{ type: "toggle" }], "any", true)).toEqual({ kind: "effort", levels: ["low", "medium", "high"] });
+    expect(thinkingOf("openai-completions", [{ type: "toggle" }], "switch", true)).toEqual({ kind: "toggle", levels: ["high"] });
+    expect(thinkingOf("openai-completions", [...effort("low", "high"), { type: "toggle" }], "any", true)).toEqual({ kind: "effort", levels: ["low", "high"] });
     // Nor at a `none` models.dev gives one.
-    expect(thinkingOf("openai-completions", effort("none", "low", "high"), true, true)).toEqual({ kind: "effort", levels: ["low", "high"] });
+    expect(thinkingOf("openai-completions", effort("none", "low", "high"), "any", true)).toEqual({ kind: "effort", levels: ["low", "high"] });
     // Anthropic's budget models turn thinking off however little they think in.
-    expect(thinkingOf("anthropic-messages", [{ type: "budget_tokens", min: 1024 }], true)?.levels).toContain("off");
+    expect(thinkingOf("anthropic-messages", [{ type: "budget_tokens", min: 1024 }], "switch")?.levels).toContain("off");
   });
 });
 
@@ -78,13 +94,7 @@ describe("fromDev", () => {
   };
 
   it("keeps the chat models on the protocols a provider serves, as the catalog describes them", () => {
-    expect(
-      fromDev(
-        dev,
-        () => true,
-        () => false,
-      ),
-    ).toEqual([
+    expect(fromDev(dev, { serves: () => true, asking: () => "effort" })).toEqual([
       {
         id: "claude-x",
         name: "Claude X",
@@ -108,13 +118,41 @@ describe("fromDev", () => {
         temperature: false,
       },
     ]);
-    expect(
-      fromDev(
-        dev,
-        (api) => api === "openai-completions",
-        () => false,
-      ).map((model) => model.id),
-    ).toEqual(["kimi-k3"]);
+    expect(fromDev(dev, { serves: (api) => api === "openai-completions", asking: () => "effort" }).map((model) => model.id)).toEqual(["kimi-k3"]);
+  });
+
+  it("lets the Claude models whose API takes thinking off have it, though models.dev lists no switch", () => {
+    const claude = (id: string) => ({
+      name: id,
+      reasoning: true,
+      tool_call: true,
+      reasoning_options: [{ type: "effort", values: ["low", "medium", "high", "xhigh", "max"] }],
+    });
+    const anthropic: DevProvider = {
+      npm: "@ai-sdk/anthropic",
+      models: { "claude-opus-4-7": claude("claude-opus-4-7"), "claude-fable-5": claude("claude-fable-5") },
+    };
+    const levels = fromDev(anthropic, { serves: () => true, asking: () => "switch" }).map((model) => [model.id, model.thinking?.levels]);
+    expect(levels).toEqual([
+      ["claude-fable-5", ["low", "medium", "high", "xhigh", "max"]],
+      ["claude-opus-4-7", ["off", "low", "medium", "high", "xhigh", "max"]],
+    ]);
+  });
+
+  it("fills a model's window only up to where its price rises, for a provider that says so", () => {
+    const tiered: DevProvider = {
+      npm: "@ai-sdk/openai",
+      models: {
+        "gpt-x": {
+          tool_call: true,
+          limit: { context: 1_050_000, output: 128_000 },
+          cost: { input: 2.5, output: 15, tiers: [{ tier: { type: "context", size: 272_000 } }] },
+        },
+      },
+    };
+    const window = (windowAtPriceTier: boolean) => fromDev(tiered, { serves: () => true, asking: () => "effort", windowAtPriceTier })[0]?.contextWindow;
+    expect(window(true)).toBe(272_000);
+    expect(window(false)).toBe(1_050_000);
   });
 
   it("offers a catalog model off only where its protocol can say it", () => {

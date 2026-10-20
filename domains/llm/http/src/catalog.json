@@ -171,7 +171,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "medium", "high", "xhigh", "max"]
+        "levels": ["off", "low", "medium", "high", "xhigh", "max"]
       },
       "temperature": false
     },
@@ -191,7 +191,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "medium", "high", "xhigh", "max"]
+        "levels": ["off", "low", "medium", "high", "xhigh", "max"]
       },
       "temperature": false
     },
@@ -211,7 +211,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "medium", "high", "xhigh", "max"]
+        "levels": ["off", "low", "medium", "high", "xhigh", "max"]
       },
       "temperature": false
     },
@@ -678,7 +678,7 @@
       "name": "GPT-5.4",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 2.5,
@@ -744,7 +744,7 @@
       "name": "GPT-5.4 Pro",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 30,
@@ -764,7 +764,7 @@
       "name": "GPT-5.5",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 5,
@@ -787,7 +787,7 @@
       "name": "GPT-5.5 Pro",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 30,
@@ -807,7 +807,7 @@
       "name": "GPT-5.6",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 4,
@@ -830,7 +830,7 @@
       "name": "GPT-5.6 Luna",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 0.2,
@@ -853,7 +853,7 @@
       "name": "GPT-5.6 Sol",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 4,
@@ -876,7 +876,7 @@
       "name": "GPT-5.6 Terra",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 2,
@@ -899,7 +899,7 @@
       "name": "GPT-6 Astra",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 10,
@@ -919,7 +919,7 @@
       "name": "GPT-6 Luna",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 0.1,
@@ -942,7 +942,7 @@
       "name": "GPT-6 Sol",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 2,
@@ -965,7 +965,7 @@
       "name": "GPT-6.1 Sol",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 2,
@@ -985,7 +985,7 @@
       "name": "Daybreak Blue",
       "api": "openai-responses",
       "input": ["text", "image"],
-      "contextWindow": 1050000,
+      "contextWindow": 272000,
       "maxTokens": 128000,
       "cost": {
         "input": 4,
@@ -1571,7 +1571,11 @@
         "cacheRead": 0.2,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "aion-labs/aion-3.0",
@@ -1586,7 +1590,11 @@
         "cacheRead": 0.75,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "aion-labs/aion-3.0-mini",
@@ -1601,7 +1609,11 @@
         "cacheRead": 0.18,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "aion-labs/aion-3.5",
@@ -1656,8 +1668,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -1775,8 +1790,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -1817,8 +1835,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -1836,8 +1857,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -1966,8 +1990,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2048,7 +2075,11 @@
         "cacheRead": 0.06,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "bytedance-seed/seed-1.6",
@@ -2065,8 +2096,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2084,8 +2118,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2103,8 +2140,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2203,8 +2243,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2252,8 +2295,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2301,8 +2347,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2318,7 +2367,11 @@
         "cacheRead": 0.35,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "deepseek/deepseek-v3.1-terminus",
@@ -2335,8 +2388,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2354,8 +2410,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2373,8 +2432,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2546,8 +2608,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2565,8 +2630,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2606,8 +2674,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2625,8 +2696,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2644,8 +2718,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       }
     },
     {
@@ -2663,8 +2737,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       }
     },
     {
@@ -2702,7 +2776,11 @@
         "cacheRead": 0.2,
         "cacheWrite": 0.375
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "google/gemini-3.1-flash-lite",
@@ -2967,8 +3045,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -2986,8 +3067,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3005,8 +3089,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3024,8 +3111,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3131,8 +3221,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3150,8 +3243,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3169,8 +3265,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3186,7 +3285,11 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "liquid/lfm-2.5-24b-a2b",
@@ -3201,7 +3304,11 @@
         "cacheRead": 0.025,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "meituan/longcat-2.0",
@@ -3218,8 +3325,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3464,8 +3574,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3481,7 +3594,11 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "minimax/minimax-m2.1",
@@ -3496,7 +3613,11 @@
         "cacheRead": 0.03,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "minimax/minimax-m2.5",
@@ -3511,7 +3632,11 @@
         "cacheRead": 0.03,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "minimax/minimax-m2.7",
@@ -3526,7 +3651,11 @@
         "cacheRead": 0.06,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "minimax/minimax-m3",
@@ -3543,8 +3672,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3915,7 +4047,11 @@
         "cacheRead": 0.15,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "moonshotai/kimi-k2.5",
@@ -3932,8 +4068,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3951,8 +4090,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -3968,7 +4110,11 @@
         "cacheRead": 0.18,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "moonshotai/kimi-k3",
@@ -4029,8 +4175,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -4048,8 +4197,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -4155,8 +4307,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -4174,8 +4329,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -4193,8 +4351,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -4212,8 +4373,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5251,8 +5415,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       },
       "temperature": false
     },
@@ -5271,8 +5435,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       },
       "temperature": false
     },
@@ -5291,8 +5455,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       },
       "temperature": false
     },
@@ -5331,8 +5495,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       },
       "temperature": false
     },
@@ -5351,8 +5515,8 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["high"]
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
       },
       "temperature": false
     },
@@ -5389,7 +5553,14 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
+      }
     },
     {
       "id": "openrouter/free",
@@ -5404,7 +5575,14 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
+      }
     },
     {
       "id": "perceptron/perceptron-mk1.5",
@@ -5443,8 +5621,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5462,8 +5643,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5481,8 +5665,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5500,8 +5687,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5586,8 +5776,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5618,7 +5811,11 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "qwen/qwen3-30b-a3b",
@@ -5635,8 +5832,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5669,8 +5869,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5761,7 +5964,11 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "qwen/qwen3-vl-235b-a22b-instruct",
@@ -5806,7 +6013,11 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "qwen/qwen3-vl-8b-instruct",
@@ -5838,8 +6049,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5857,8 +6071,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5876,8 +6093,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5895,8 +6115,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5914,8 +6137,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5933,8 +6159,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5952,8 +6181,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5971,8 +6203,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -5990,8 +6225,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6009,8 +6247,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6028,8 +6269,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6047,8 +6291,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6066,8 +6313,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6085,8 +6335,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6104,8 +6357,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6164,8 +6420,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6221,8 +6480,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6370,7 +6632,11 @@
         "cacheRead": 0,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "stepfun/step-3.7-flash",
@@ -6675,8 +6941,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6771,7 +7040,11 @@
         "cacheRead": 0.2,
         "cacheWrite": 0
       },
-      "reasoning": true
+      "reasoning": true,
+      "thinking": {
+        "kind": "effort",
+        "levels": ["low", "medium", "high"]
+      }
     },
     {
       "id": "xiaomi/mimo-v2.5",
@@ -6788,8 +7061,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6807,8 +7083,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6826,8 +7105,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6845,8 +7127,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6864,8 +7149,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6883,8 +7171,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6902,8 +7193,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6921,8 +7215,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6940,8 +7237,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6959,8 +7259,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6978,8 +7281,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -6997,8 +7303,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -7016,8 +7325,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -7035,8 +7347,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -7054,8 +7369,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -7073,8 +7391,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     },
     {
@@ -7190,8 +7511,11 @@
       },
       "reasoning": true,
       "thinking": {
-        "kind": "toggle",
-        "levels": ["off", "high"]
+        "kind": "effort",
+        "levels": ["off", "low", "medium", "high"],
+        "values": {
+          "off": "none"
+        }
       }
     }
   ],
@@ -7416,7 +7740,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "medium", "high", "xhigh", "max"]
+        "levels": ["off", "low", "medium", "high", "xhigh", "max"]
       },
       "temperature": false
     },
@@ -7436,7 +7760,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "medium", "high", "xhigh", "max"]
+        "levels": ["off", "low", "medium", "high", "xhigh", "max"]
       },
       "temperature": false
     },
@@ -7456,7 +7780,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "medium", "high", "xhigh", "max"]
+        "levels": ["off", "low", "medium", "high", "xhigh", "max"]
       },
       "temperature": false
     },
@@ -7612,7 +7936,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "high", "max"]
+        "levels": ["off", "low", "high", "max"]
       }
     },
     {
@@ -7669,7 +7993,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "high", "max"]
+        "levels": ["off", "low", "high", "max"]
       }
     },
     {
@@ -7688,7 +8012,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "high", "max"]
+        "levels": ["off", "low", "high", "max"]
       }
     },
     {
@@ -9427,7 +9751,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["high", "max"]
+        "levels": ["off", "high", "max"]
       }
     },
     {
@@ -9446,7 +9770,7 @@
       "reasoning": true,
       "thinking": {
         "kind": "effort",
-        "levels": ["low", "high", "max"]
+        "levels": ["off", "low", "high", "max"]
       }
     },
     {

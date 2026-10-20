@@ -479,7 +479,7 @@ describe("providers", () => {
     expect(sent[0]!.body).toMatchObject({ thinking: { type: "adaptive" }, output_config: { effort: "low" } });
   });
 
-  it("asks a model the catalog has toggling behind OpenRouter by an effort on a server with no switch", async () => {
+  it("asks a model the catalog has behind OpenRouter by the effort asked, on a server of either format", async () => {
     const { fetch, sent } = scriptedFetch(() => new Response("no", { status: 400 }));
     const { plugins } = setup({ providers: [], fetch });
     const ask = (model: string) => collect(new LlmRequest({ model, messages: [user("hi")], thinking: "high" }));
@@ -494,8 +494,8 @@ describe("providers", () => {
       "llm.http": { providers: [gateway("gateway"), gateway("router", { thinkingFormat: "openrouter" })] },
     });
     expect(sent[0]!.body).toMatchObject({ reasoning_effort: "high" });
-    // A server whose config says it takes OpenRouter's format has the switch.
-    expect(sent[1]!.body).toMatchObject({ reasoning: { enabled: true } });
+    // A server whose config says it takes OpenRouter's format is asked in its `reasoning` object.
+    expect(sent[1]!.body).toMatchObject({ reasoning: { effort: "high" } });
   });
 
   it("asks a provider whose base URL ends in a slash at its paths, as one without", async () => {
@@ -589,7 +589,7 @@ describe("model catalogs", () => {
     expect(models[1]).toMatchObject({ name: "Plain", contextWindow: 50_000, maxTokens: 4_000 });
   });
 
-  it("never asks a model OpenRouter says must reason to stop, though models.dev has it switching off", async () => {
+  it("gives OpenRouter's reasoning models efforts, and never asks one it says must reason to stop, though models.dev has it switching off", async () => {
     const heard = Deferred.makeUnsafe<void>();
     const listener = definePlugin({
       id: "listener",
@@ -622,10 +622,11 @@ describe("model catalogs", () => {
       }),
     );
     expect(models.map((model) => [model.id, model.thinkingLevels])).toEqual([
-      ["deepseek/v3", ["off", "high"]],
-      ["openai/o3", ["high"]],
+      ["deepseek/v3", ["off", "low", "medium", "high"]],
+      ["openai/o3", ["low", "medium", "high"]],
     ]);
-    expect(sent[0]).toMatchObject({ reasoning: { enabled: true } });
+    // Asked at off, it thinks at its least effort.
+    expect(sent[0]).toMatchObject({ reasoning: { effort: "low" } });
   });
 
   it("keeps OpenRouter's models as they are while its list of those that must reason is out of reach", async () => {
