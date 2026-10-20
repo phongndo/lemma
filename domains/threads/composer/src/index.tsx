@@ -524,7 +524,7 @@ function Composer(props: { deps: Deps }) {
 
   return (
     <div class="composer-wrap">
-      {/* Over the conversation: each notice on the page's background, so what passes under does not show through its tint. */}
+      {/* Each notice a bubble above the box, as the queue and a taker's banner are. */}
       <For each={slots.list(ComposerNotices)}>
         {(item) => (
           <div class="composer-notice">

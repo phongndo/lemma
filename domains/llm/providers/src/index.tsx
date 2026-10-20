@@ -34,8 +34,6 @@ const CONNECT_DIALOG = "providers.connect";
 const CUSTOM_DIALOG = "providers.custom";
 const LOGOUT_DIALOG = "providers.logout";
 const GROUPS = ["Results", "Connected", "Popular", "All providers"];
-/** The sign-ins a first chat offers, in order: each uses a plan the person may have already. */
-const QUICK_START = ["openai", "github-copilot", "openrouter"];
 
 type Login = (provider: ProviderInfo, type: AuthType) => void;
 type Method = ProviderInfo["auth"][number];
@@ -591,41 +589,17 @@ export default defineWebPlugin({
           ? [{ text: "provider add custom openai compatible ollama gateway", view: () => <CustomProviderRow open={() => dialogs.open(CUSTOM_DIALOG)} /> }]
           : [],
     });
-    /** The quickest ways in, offered where a first chat starts: the popular sign-ins, then everything else. */
-    const quickStarts = createMemo(() =>
-      QUICK_START.flatMap((id) => {
-        const provider = models.providers().find((candidate) => candidate.id === id);
-        const method = provider?.auth.find((candidate) => candidate.type === "oauth" && candidate.interactive);
-        return provider === undefined || method === undefined ? [] : [{ provider, method }];
-      }),
-    );
     slots.add(ComposerNotices, {
       id: SECTION,
       order: 10,
       component: () => (
         <Show when={models.providersLoaded() && !models.configured()}>
-          <div class="callout callout-info composer-callout provider-start">
+          <div class="callout callout-info composer-callout">
             <KeyIcon />
-            <div class="provider-start-body">
-              <span>Connect a model provider to start: sign in with a plan you have, or paste an API key.</span>
-              <span class="provider-start-ways">
-                <For each={quickStarts()}>
-                  {({ provider, method }) => (
-                    <button
-                      class="button small provider-start-way"
-                      disabled={models.loggingIn() !== undefined}
-                      onClick={plugin.action("connect", () => login(provider, method.type))}
-                    >
-                      <ProviderLogo id={provider.id} name={provider.name} custom={provider.logo} />
-                      {provider.id === "openai" ? "ChatGPT" : provider.name}
-                    </button>
-                  )}
-                </For>
-                <button class="button button-primary small" onClick={open}>
-                  {quickStarts().length === 0 ? "Log in to a provider" : "All providers…"}
-                </button>
-              </span>
-            </div>
+            <span>No model provider connected.</span>
+            <button class="button button-primary small" onClick={open}>
+              Connect
+            </button>
           </div>
         </Show>
       ),

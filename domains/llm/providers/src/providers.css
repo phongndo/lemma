@@ -346,38 +346,3 @@
   color: var(--text-3);
   font-size: calc(12px * var(--text-scale));
 }
-
-/* A first chat's ways in, under what it says: the popular sign-ins, each its logo and name, then the rest. */
-.provider-start {
-  align-items: flex-start;
-}
-
-.provider-start > .icon {
-  margin-top: 3px;
-}
-
-.provider-start-body {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  min-width: 0;
-}
-
-.provider-start-ways {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.provider-start-way {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.provider-start-way .provider-mark,
-.provider-start-way .provider-logo,
-.provider-start-way .provider-logo svg {
-  width: 14px;
-  height: 14px;
-}

@@ -46,7 +46,5 @@ its row as the default of `ProviderRowPart`
   of it first, unless its key comes from the environment or it needs none.
 - **Opened with nothing set up**, from the composer's notice or the palette,
   the section says why, and Settings closes once a login connects a provider.
-  The composer's notice offers the popular sign-ins themselves (ChatGPT,
-  GitHub Copilot, OpenRouter) before the full list.
 - **Enter in the search** starts the first unconnected match's sign-in, else
   its first way in.
