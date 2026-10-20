@@ -1,17 +1,17 @@
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Layer, Semaphore } from "effect";
+import { Effect, Fiber, Layer, Semaphore, Stream } from "effect";
 import type { AuthContext } from "@earendil-works/pi-ai";
 import { PluginContext, awaitable, definePlugin, makeCore } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
-import { HostControl, Interaction, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
+import { HostControl, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
-import { InteractionError } from "@lemma/contracts";
 import type { ConfigScope, NoticePayload, PluginChange } from "@lemma/contracts";
 import type { Credential } from "@lemma/credentials";
-import type { Llm } from "@lemma/llm";
+import { asksAnswer, Llm as LlmService } from "@lemma/llm";
+import type { Llm, SignIn, SignInStep } from "@lemma/llm";
 
 export function fakeCredentials(initial: Record<string, Credential> = {}) {
   const store = new Map<string, Credential>(Object.entries(initial));
@@ -33,28 +33,47 @@ export function fakeCredentials(initial: Record<string, Credential> = {}) {
   return { store, service, plugin };
 }
 
-type Question =
-  | { readonly type: "ask"; readonly title: string; readonly secret?: boolean; readonly placeholder?: string }
-  | { readonly type: "select"; readonly title: string; readonly options: readonly string[] };
-
-/** Answers questions with `answer`; every question is recorded, with the origin it was asked under. */
-export function fakeInteraction(answer: (question: Question) => Effect.Effect<string, InteractionError>) {
-  const asked: Question[] = [];
-  const origins: (string | undefined)[] = [];
-  const respond = (question: Question) =>
-    Effect.flatMap(InteractionOrigin, (origin) => {
-      asked.push(question);
-      origins.push(origin);
-      return answer(question);
-    });
-  const service: typeof Interaction.Service = {
-    confirm: () => Effect.succeed(true),
-    ask: (title, options) => respond({ type: "ask", title, ...options }),
-    select: (title, options) => respond({ type: "select", title, options: options.map((option) => option.value) }) as Effect.Effect<never, InteractionError>,
-    form: (title) => Effect.fail(new InteractionError({ reason: "Unavailable", message: `No form is answered here: "${title}"` })),
-  };
-  const plugin = definePlugin({ id: "interaction", provides: [Interaction], layer: Layer.succeed(Interaction, service) });
-  return { asked, origins, plugin };
+/**
+ * Answers each sign-in step that asks with `answer`, as a client would, through `Llm.signIns` and `Llm.answerSignIn`:
+ * every step asked is recorded, and every list seen. An answer still pending when its step goes (the flow withdrew it,
+ * or the login ended) is interrupted, as a client closes the question.
+ */
+export function signInAnswers(answer: (step: SignInStep, signIn: SignIn) => Effect.Effect<string>) {
+  const asked: SignInStep[] = [];
+  const seen: (readonly SignIn[])[] = [];
+  const plugin = definePlugin({
+    id: "sign-in-answers",
+    requires: { llm: LlmService },
+    setup: function* ({ llm }, owner) {
+      const answering = new Map<string, { readonly seq: number; readonly fiber: Fiber.Fiber<unknown, unknown> }>();
+      yield* owner.background(
+        "answer sign-ins",
+        Stream.runForEach(llm.signIns, (list) =>
+          Effect.gen(function* () {
+            seen.push(list);
+            for (const [provider, running] of answering) {
+              const now = list.find((signIn) => signIn.provider === provider);
+              if (now?.seq === running.seq && now.ended === undefined) continue;
+              answering.delete(provider);
+              yield* Fiber.interrupt(running.fiber);
+            }
+            for (const signIn of list) {
+              if (signIn.ended !== undefined || !asksAnswer(signIn.step) || answering.get(signIn.provider)?.seq === signIn.seq) continue;
+              asked.push(signIn.step);
+              const fiber = yield* Effect.forkChild(
+                answer(signIn.step, signIn).pipe(
+                  Effect.flatMap((value) => llm.answerSignIn(signIn.provider, signIn.seq, value)),
+                  Effect.ignore,
+                ),
+              );
+              answering.set(signIn.provider, { seq: signIn.seq, fiber });
+            }
+          }),
+        ),
+      );
+    },
+  });
+  return { asked, seen, plugin };
 }
 
 /** Records every `Notice` through a plugin observer, so no publish races a late subscriber. */

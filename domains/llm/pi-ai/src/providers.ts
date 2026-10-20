@@ -91,6 +91,37 @@ export function withoutAnthropicOAuth(provider: Provider): Provider {
   return { ...provider, auth };
 }
 
+/** How a refresh the provider refused reads: the refresh token spent or revoked, so only a new sign-in helps. */
+const REFUSED = /\((?:400|401|403)\)|\b(?:400|401|403)\b|invalid_grant|invalid_token|unauthori[sz]ed|revoked|fresh sign-in|sign in again|re-?authenticate/i;
+/** How a refresh that never reached the provider, or that it failed to answer, reads: asking again may pass. */
+const UNREACHED =
+  /\b(?:ECONNRESET|ECONNREFUSED|ECONNABORTED|ETIMEDOUT|EPIPE|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_[A-Z_]+)\b|fetch failed|\b5\d\d\b/i;
+
+/** Whether a refresh failed because the provider refused it, by its message: only then does signing in again help. */
+export const refusedRefresh = (message: string) => REFUSED.test(message) && !UNREACHED.test(message);
+
+/**
+ * The provider with its sign-in's refresh watched: `report` hears that it expired (the provider refused to renew it,
+ * as the message says) or works again (a refresh went through). pi-ai's refresh does the work, under the credential's
+ * lock, as before.
+ */
+export function watchRefresh(provider: Provider, report: (provider: string, expired: string | undefined) => void): Provider {
+  const oauth = provider.auth.oauth;
+  if (oauth === undefined) return provider;
+  const refresh: typeof oauth.refresh = async (credential, signal) => {
+    try {
+      const fresh = await oauth.refresh(credential, signal);
+      report(provider.id, undefined);
+      return fresh;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!signal.aborted && refusedRefresh(message)) report(provider.id, message);
+      throw error;
+    }
+  };
+  return { ...provider, auth: { ...provider.auth, oauth: { ...oauth, refresh } } };
+}
+
 export function selectProviders(
   providers: readonly Provider[],
   filter: { readonly include?: readonly string[] | undefined; readonly exclude?: readonly string[] | undefined },

@@ -1,10 +1,11 @@
-import { Cause, Effect, Fiber, Queue, Schedule, Schema, Stream } from "effect";
+import { Effect, Queue, Schedule, Schema, Stream } from "effect";
 import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import { setOAuthPageRenderer } from "@earendil-works/pi-ai/utils/oauth-page";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
 import type { Contribution, HandlerStep } from "@lemma/core";
-import { Channels, creditOf, HostControl, inChainOrder, Interaction, InteractionError, InteractionOrigin, Notice, Paths } from "@lemma/contracts";
+import { Channels, creditOf, HostControl, inChainOrder, Notice, Paths } from "@lemma/contracts";
 import { Credentials } from "@lemma/credentials";
 import {
   Llm,
@@ -13,15 +14,17 @@ import {
   LlmProviderHeadersHook,
   LlmProviderResponse,
   LlmProviderStreamEvent,
+  makeSignIns,
   ModelsChanged,
   parseModelRef,
   Providers,
   serveLlm,
   streamThroughHook,
 } from "@lemma/llm";
-import type { NoticePayload } from "@lemma/contracts";
-import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
-import { authInteraction, credentialStore, runner, toNotice } from "./auth.ts";
+import type { AuthType, LlmRequest, LoginOptions, ProviderHeaders, ProviderInfo, ProviderSpec, StreamEvent } from "@lemma/llm";
+import { accountOf } from "./account.ts";
+import type { Account } from "./account.ts";
+import { credentialStore, runner, signInInteraction } from "./auth.ts";
 import {
   makeEventMapper,
   reasoningFor,
@@ -37,7 +40,18 @@ import {
 import { networkSources, planSource, withLiveCatalog, withPlanCatalog } from "./catalog.ts";
 import { deviceId } from "./device.ts";
 import { identityHeaders } from "./identity.ts";
-import { CustomProvider, customEntry, customProvider, knownApi, selectProviders, withBuiltinIdentity, withoutAnthropicOAuth } from "./providers.ts";
+import { keyCheck } from "./keycheck.ts";
+import { signInPage } from "./page.ts";
+import {
+  CustomProvider,
+  customEntry,
+  customProvider,
+  knownApi,
+  selectProviders,
+  watchRefresh,
+  withBuiltinIdentity,
+  withoutAnthropicOAuth,
+} from "./providers.ts";
 
 const Config = Schema.Struct({
   include: Schema.optional(Schema.Array(Schema.String)).annotate({ description: "Built-in provider ids to register; default all." }),
@@ -115,12 +129,17 @@ interface Options {
   readonly fetch?: typeof fetch;
 }
 
-/** `custom`: the user's entry for a provider they added; `from`: the plugin that added it to `Providers`. */
+/**
+ * `custom`: the user's entry for a provider they added; `from`: the plugin that added it to `Providers`; `account`: who
+ * its sign-in is; `expired`: why its sign-in stopped working.
+ */
 function toProviderInfo(
   provider: Provider,
   check: AuthCheck | undefined,
   custom: CustomProvider | undefined,
   from: Contribution<ProviderSpec> | undefined,
+  account: Account,
+  expired: string | undefined,
 ): ProviderInfo {
   // The user's logo for their own provider; a plugin's provider brings its own.
   const logo = custom?.logo ?? from?.item.logo;
@@ -130,22 +149,52 @@ function toProviderInfo(
     name: provider.name,
     auth: [
       ...(apiKey === undefined ? [] : [{ type: "api_key" as const, name: apiKey.name, interactive: apiKey.login !== undefined }]),
-      ...(oauth === undefined ? [] : [{ type: "oauth" as const, name: oauth.loginLabel ?? oauth.name, interactive: true }]),
+      ...(oauth === undefined
+        ? []
+        : [
+            {
+              type: "oauth" as const,
+              name: oauth.loginLabel ?? oauth.name,
+              interactive: true,
+              ...(oauth.isSubscription === true ? { subscription: true } : {}),
+            },
+          ]),
     ],
     configured: check !== undefined,
     ...(check?.source === undefined ? {} : { source: check.source }),
+    // Who it is signed in as, while the sign-in is what requests use.
+    ...(check?.type === "oauth" ? account : {}),
+    ...(check?.type === "oauth" && expired !== undefined ? { expired } : {}),
     ...(custom === undefined ? {} : { custom: true }),
     ...(logo === undefined ? {} : { logo }),
     ...(from === undefined ? {} : { from: from.pluginId }),
   };
 }
 
+/**
+ * pi-ai's page renderer is process-wide: the latest running plugin's is the one shown, and one stopping (as a reload
+ * replaces it) puts back the one before it.
+ */
+const pages = (() => {
+  const stack: ((page: Parameters<typeof signInPage>[0]) => string)[] = [];
+  const apply = () => setOAuthPageRenderer(stack.at(-1));
+  return {
+    push: (render: (typeof stack)[number]) => {
+      stack.push(render);
+      apply();
+    },
+    remove: (render: (typeof stack)[number]) => {
+      const at = stack.lastIndexOf(render);
+      if (at >= 0) stack.splice(at, 1);
+      apply();
+    },
+  };
+})();
+
 const isAbort = (error: unknown) => error instanceof Error && error.name === "AbortError";
 
 function loginError(error: unknown, provider: Provider): LlmError {
-  const cause = error instanceof Error && error.cause !== undefined ? error.cause : undefined;
-  const dismissed = [error, cause].some((e) => e instanceof InteractionError && e.reason === "Dismissed");
-  if (dismissed || isAbort(error)) {
+  if (isAbort(error)) {
     return new LlmError({ reason: "Cancelled", provider: provider.id, message: `${provider.name} login was cancelled`, cause: error });
   }
   const detail = error instanceof Error ? error.message : String(error);
@@ -159,14 +208,25 @@ export function makeLlmPlugin(options: Options = {}) {
     version: "0.1.0",
     config: Config,
     provides: { llm: Llm },
-    requires: { credentials: Credentials, interaction: Interaction, host: HostControl, paths: Paths },
-    setup: function* ({ credentials, interaction, host, paths }, plugin) {
+    requires: { credentials: Credentials, host: HostControl, paths: Paths },
+    setup: function* ({ credentials, host, paths }, plugin) {
       const config = plugin.config;
       const hooks = yield* Hooks;
       const events = yield* Events;
       const { home } = paths;
       const run = runner(yield* Effect.context<never>());
       const scope = yield* Effect.scope;
+      const fetchImpl = options.fetch ?? fetch;
+      const signIns = yield* makeSignIns();
+      /** Where each running sign-in's page offers to go back to, by provider. */
+      const returnTo = new Map<string, string>();
+      /** The sign-ins whose refresh the provider refused, by provider: why. A new sign-in, or a refresh that works, clears it. */
+      const expired = new Map<string, string>();
+      /**
+       * Who each sign-in is, by provider: from its login, else read once when providers are listed. A refresh keeps the
+       * account; a login replaces it and a logout forgets it.
+       */
+      const accounts = new Map<string, Account>();
 
       const models = createModels({
         credentials: credentialStore(credentials, run),
@@ -174,8 +234,8 @@ export function makeLlmPlugin(options: Options = {}) {
       });
       // A missing model may be described already by another built-in provider's catalog.
       const siblings = () => builtins.flatMap((provider) => provider.getModels());
-      const sources = networkSources(options.fetch ?? fetch, siblings);
-      const plan = planSource(options.fetch ?? fetch);
+      const sources = networkSources(fetchImpl, siblings);
+      const plan = planSource(fetchImpl);
       // OpenAI signed in with ChatGPT lists the plan's models, as the Codex CLI and app do, not the API's.
       const live = (provider: Provider) => {
         const caught = withLiveCatalog(provider, sources);
@@ -185,7 +245,7 @@ export function makeLlmPlugin(options: Options = {}) {
       const builtins = selectProviders(
         (options.providers ?? builtinProviders)().map((provider) => withBuiltinIdentity(config.liveCatalogs ? live(provider) : provider)),
         config,
-      ).map(withoutAnthropicOAuth);
+      ).map((provider) => watchRefresh(withoutAnthropicOAuth(provider), (id, why) => reportRefresh(id, why)));
       for (const provider of builtins) models.setProvider(provider);
       for (const provider of config.providers ?? []) models.setProvider(customProvider(provider));
       const custom = new Map((config.providers ?? []).map((provider) => [provider.id, provider]));
@@ -243,6 +303,28 @@ export function makeLlmPlugin(options: Options = {}) {
           .join("\n");
       /** Clients hear that what `providers` and `models` list changed, and list them again. */
       const announce = events.publish(ModelsChanged, {});
+      /** A refresh refused (`why`) or working again: told when it changes, as the provider's row says so. */
+      function reportRefresh(id: string, why: string | undefined) {
+        if (expired.get(id) === why) return;
+        if (why === undefined) expired.delete(id);
+        else expired.set(id, why);
+        Effect.runFork(announce);
+      }
+
+      // The page a sign-in's browser comes back to is Lemma's, about the sign-in showing its page now (the latest, when
+      // two do), offering the way back its client named.
+      const page = (shown: Parameters<typeof signInPage>[0]) => {
+        const waiting = signIns
+          .current()
+          .filter((signIn) => signIn.ended === undefined && signIn.step.type !== "code")
+          .at(-1);
+        const provider = waiting === undefined ? undefined : models.getProvider(waiting.provider);
+        return signInPage(shown, { provider: provider?.name, returnTo: waiting === undefined ? undefined : returnTo.get(waiting.provider) });
+      };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => pages.push(page)),
+        () => Effect.sync(() => pages.remove(page)),
+      );
       /**
        * Updates provider catalogs (live catalogs, a ChatGPT plan's, Radius's own); failures keep the previous list.
        * Whether the models listed changed.
@@ -455,7 +537,21 @@ export function makeLlmPlugin(options: Options = {}) {
             (provider) =>
               Effect.tryPromise((signal) => models.checkAuth(provider.id, { signal })).pipe(
                 Effect.orElseSucceed(() => undefined),
-                Effect.map((check) => toProviderInfo(provider, check, custom.get(provider.id), added.get(provider.id))),
+                // Who a sign-in is: kept from its login, else read from its credential once, beside the other checks.
+                Effect.flatMap((check) =>
+                  check?.type !== "oauth" || accounts.has(provider.id)
+                    ? Effect.succeed(check)
+                    : Effect.as(
+                        Effect.tap(
+                          Effect.orElseSucceed(credentials.read(provider.id), () => undefined),
+                          (credential) => Effect.sync(() => void accounts.set(provider.id, accountOf(credential))),
+                        ),
+                        check,
+                      ),
+                ),
+                Effect.map((check) =>
+                  toProviderInfo(provider, check, custom.get(provider.id), added.get(provider.id), accounts.get(provider.id) ?? {}, expired.get(provider.id)),
+                ),
               ),
             { concurrency: "unbounded" },
           ),
@@ -522,7 +618,7 @@ export function makeLlmPlugin(options: Options = {}) {
             return toImagesResult(result);
           }),
 
-        login: (providerId: string, type: AuthType) =>
+        login: (providerId: string, type: AuthType, login: LoginOptions = {}) =>
           Effect.gen(function* () {
             const provider = models.getProvider(providerId);
             if (provider === undefined) {
@@ -535,62 +631,58 @@ export function makeLlmPlugin(options: Options = {}) {
                 new LlmError({ reason: "LoginFailed", provider: providerId, message: `${provider.name} does not support ${kind} login` }),
               );
             }
-            // Provider flows notify synchronously; a queue keeps notices ordered, and
-            // `undefined` ends it so every notice is published before login returns.
-            const notices = yield* Queue.unbounded<NoticePayload | undefined>();
-            // Its questions and its link or code share the origin, so a client shows them together.
-            const origin = yield* InteractionOrigin;
-            const publishAll: Effect.Effect<void> = Queue.take(notices).pipe(
-              Effect.flatMap((notice) =>
-                notice === undefined
-                  ? Effect.void
-                  : Effect.andThen(
-                      events.publish(Notice, notice),
-                      Effect.suspend(() => publishAll),
-                    ),
-              ),
-            );
-            const publisher = yield* Effect.forkChild(publishAll);
-            const flush = Effect.andThen(Queue.offer(notices, undefined), Fiber.join(publisher));
-            const stamp = (notice: NoticePayload): NoticePayload => (origin === undefined ? notice : { ...notice, origin });
-            yield* Effect.tryPromise({
-              try: (signal) =>
-                models.login(
-                  providerId,
-                  type,
-                  authInteraction(interaction, run, signal, origin, (event) => {
-                    Queue.offerUnsafe(notices, stamp(toNotice(event, provider.name)));
+            const check = type === "api_key" ? keyCheck(provider, fetchImpl) : undefined;
+            const credential = yield* signIns
+              .run(
+                providerId,
+                type,
+                (signIn) =>
+                  Effect.suspend(() => {
+                    if (login.returnTo === undefined) returnTo.delete(providerId);
+                    else returnTo.set(providerId, login.returnTo);
+                    let found: (() => { readonly models?: number } | undefined) | undefined;
+                    return Effect.tryPromise({
+                      try: (signal) => {
+                        const flow = signInInteraction(signIn, run, signal, { browser: login.browser, keys: type === "api_key", check });
+                        found = flow.found;
+                        // Providers see Lemma, at sign-in too: OpenAI names the agent it lets in.
+                        return models.login(providerId, type, flow.interaction, { getDeviceId: () => deviceId(home), agentName: "Lemma" });
+                      },
+                      catch: (error) => loginError(error, provider),
+                    }).pipe(Effect.map((stored) => ({ stored, found: found?.() })));
                   }),
-                  { getDeviceId: () => deviceId(home) },
-                ),
-              catch: (error) => loginError(error, provider),
-            }).pipe(
-              Effect.ensuring(flush),
-              // Failed or cancelled: a client showing the login (one that did not start it, say) closes it.
-              Effect.onError((cause) =>
-                events.publish(
-                  Notice,
-                  stamp({
-                    level: "info",
-                    source: "llm.pi-ai",
-                    kind: "ended",
-                    message: Cause.hasInterruptsOnly(cause) ? `${provider.name} login was cancelled` : `${provider.name} login failed`,
-                  }),
-                ),
-              ),
-            );
+                ({ stored, found }) => {
+                  const { account } = accountOf(stored as Parameters<typeof accountOf>[0]);
+                  if (account !== undefined) return `Signed in as ${account}`;
+                  if (found?.models !== undefined) return `The key works: ${found.models} model${found.models === 1 ? "" : "s"} listed`;
+                  return found === undefined ? undefined : "The key works";
+                },
+              )
+              .pipe(Effect.ensuring(Effect.sync(() => returnTo.delete(providerId))));
+            // Signed in afresh: whatever expired is gone, and who it is may have changed.
+            expired.delete(providerId);
+            accounts.set(providerId, accountOf(credential.stored as Parameters<typeof accountOf>[0]));
             // The credential is stored: the rest runs in the plugin's scope, so cancelling the login can no
             // longer report it cancelled. Its live catalog and `ModelsChanged` first, so clients that list
             // models on hearing of the login see all of them; every client learns of it, including one that
             // reloaded meanwhile.
+            const { account } = accountOf(credential.stored as Parameters<typeof accountOf>[0]);
             yield* Effect.forkIn(
               Effect.andThen(
                 authChanged(providerId),
-                events.publish(Notice, stamp({ level: "info", source: "llm.pi-ai", kind: "signed-in", message: `Logged in to ${provider.name}` })),
+                events.publish(Notice, {
+                  level: "info",
+                  source: "llm.pi-ai",
+                  message: `Signed in to ${provider.name}${account === undefined ? "" : ` as ${account}`}`,
+                }),
               ),
               scope,
             );
           }),
+
+        signIns: signIns.list,
+
+        answerSignIn: signIns.answer,
 
         logout: (providerId) =>
           Effect.tryPromise({
@@ -602,8 +694,16 @@ export function makeLlmPlugin(options: Options = {}) {
                 message: `Could not remove the ${providerId} credential: ${error instanceof Error ? error.message : String(error)}`,
                 cause: error,
               }),
-            // Signed out of a plan, the provider's own list returns.
-          }).pipe(Effect.tap(() => authChanged(providerId))),
+            // Signed out of a plan, the provider's own list returns; who it was, and why it expired, go with it.
+          }).pipe(
+            Effect.tap(() =>
+              Effect.sync(() => {
+                accounts.delete(providerId);
+                expired.delete(providerId);
+              }),
+            ),
+            Effect.tap(() => authChanged(providerId)),
+          ),
 
         addCustom: (spec) =>
           Effect.gen(function* () {

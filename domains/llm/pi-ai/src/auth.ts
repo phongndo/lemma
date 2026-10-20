@@ -1,12 +1,11 @@
 import { Cause, Effect, Exit } from "effect";
 import type { Context } from "effect";
 import type * as Pi from "@earendil-works/pi-ai";
-import { InteractionOrigin } from "@lemma/contracts";
-import type { Interaction, NoticePayload } from "@lemma/contracts";
 import type { Credential, Credentials } from "@lemma/credentials";
+import type { AskOptions, LoginOptions, SignInFlow, SignInStep } from "@lemma/llm";
+import type { KeyCheck } from "./keycheck.ts";
 
 type CredentialsService = typeof Credentials.Service;
-type InteractionService = typeof Interaction.Service;
 
 /**
  * Runs an Effect as a promise for pi-ai: typed failures reject with the error
@@ -47,85 +46,144 @@ export function credentialStore(credentials: CredentialsService, run: Run): Pi.C
   };
 }
 
+/** pi-ai's wording without what a terminal prompt ends with: `Enter the code:` is `Enter the code`. */
+export const tidy = (text: string) => text.trim().replace(/\s*(?::|\.{3}|…)$/, "");
+
+/** What a key prompt asks for: `Enter the Gateway API key` asks for the `Gateway API key`. */
+const keyLabel = (message: string) => tidy(message).replace(/^enter\s+(?:the\s+|your\s+)?/i, "") || "API key";
+
+/** The ways in a flow offers when the browser is not on the host's machine: a device code, or a code the page shows. */
+const AWAY = new Set(["device-code", "device_code", "copy_code"]);
+
 /**
- * Login prompts become `Interaction` questions, asked under the login's
- * `origin`: pi-ai calls back through promises, outside the login's fiber, so
- * the origin is carried here rather than inherited. A prompt's own signal (a
- * callback server that won the race against a paste-the-code prompt) and the
- * login's signal both withdraw the pending question by interrupting it.
+ * The option a flow's choice of how to sign in takes without asking: the device or copied code, when the client said
+ * the browser is elsewhere, as it works from any browser. A browser said to be `here` may not be (a page reached through
+ * an SSH port forward looks local), and the browser's way back would then reach nothing, so the person picks.
+ * Undefined: the person picks.
  */
-export function authInteraction(
-  interaction: InteractionService,
+export const chooseWay = (options: readonly { readonly id: string }[], browser: LoginOptions["browser"]): string | undefined => {
+  const away = options.filter((option) => AWAY.has(option.id));
+  if (browser !== "elsewhere" || !options.some((option) => option.id === "browser") || away.length !== 1 || options.length !== 2) return undefined;
+  return away[0]!.id;
+};
+
+/** What a sign-in shows once its browser has come back, or its address was pasted: the code is being exchanged. */
+const FINISHING: SignInStep = { type: "working", message: "Finishing sign-in" };
+
+/** What the key check found, for the sign-in's end: how many models the key lists. */
+export interface KeyFound {
+  readonly models?: number;
+}
+
+/**
+ * pi-ai's login callbacks as the steps of a `SignIn`:
+ * - its link to open (`auth_url`) is a `browser` step, and the paste prompt that races its callback (`manual_code`) the
+ *   same step taking a paste; a device code is a `code` step; progress is `working`; documentation is `info`.
+ * - a secret prompt is a `key` step (in a login with a key; a `text` step masked otherwise), checked with `check` when
+ *   given: a key the provider refuses is asked again, saying why. Text prompts are `text` steps, choices `choice`
+ *   steps, but a choice between the browser and a code elsewhere, which `chooseWay` takes when the client said the
+ *   browser is elsewhere.
+ * A prompt's own signal (a callback that won the race against the paste) and the login's withdraw its step; a paste
+ * withdrawn so, or answered, shows the code being exchanged rather than the page again.
+ */
+export function signInInteraction(
+  signIn: SignInFlow,
   run: Run,
   signal: AbortSignal,
-  origin: string | undefined,
-  notify: (event: Pi.AuthEvent) => void,
-): Pi.AuthInteraction {
-  const ask = <A>(effect: Effect.Effect<A, unknown>, withdraw: AbortSignal) =>
-    run(origin === undefined ? effect : Effect.provideService(effect, InteractionOrigin, origin), withdraw);
-  return {
+  options: { readonly browser?: LoginOptions["browser"]; readonly keys: boolean; readonly check?: KeyCheck | undefined },
+): { readonly interaction: Pi.AuthInteraction; readonly found: () => KeyFound | undefined } {
+  /** The page the flow sent the person to, which a paste prompt is about. */
+  let page: string | undefined;
+  let found: KeyFound | undefined;
+  let checked = false;
+  const ask = (step: SignInStep, withdraw: AbortSignal, then?: AskOptions) => run(signIn.ask(step, then), withdraw);
+  const key = async (message: string, withdraw: AbortSignal): Promise<string> => {
+    const label = keyLabel(message);
+    const check = checked ? undefined : options.check;
+    checked = true;
+    let problem: string | undefined;
+    for (;;) {
+      const value = await ask({ type: "key", label, ...(problem === undefined ? {} : { problem }) }, withdraw, {
+        answered: { type: "working", message: check === undefined ? "Saving the key" : "Checking the key" },
+      });
+      if (check === undefined || value.trim() === "") return value;
+      const verdict = await check(value.trim(), withdraw);
+      if (verdict.verdict !== "refused") {
+        if (verdict.verdict === "works") found = verdict.models === undefined ? {} : { models: verdict.models };
+        return value;
+      }
+      problem = verdict.problem;
+    }
+  };
+  const interaction: Pi.AuthInteraction = {
     signal,
-    notify,
+    notify: (event) => {
+      switch (event.type) {
+        case "auth_url":
+          page = event.url;
+          signIn.show({ type: "browser", url: event.url });
+          return;
+        case "device_code":
+          signIn.show({
+            type: "code",
+            code: event.userCode,
+            url: event.verificationUri,
+            ...(event.expiresInSeconds === undefined ? {} : { expiresIn: event.expiresInSeconds }),
+          });
+          return;
+        case "progress":
+          signIn.show({ type: "working", message: tidy(event.message) });
+          return;
+        case "info":
+          signIn.info(
+            tidy(event.message),
+            (event.links ?? []).map((link) => (link.label === undefined ? { url: link.url } : { url: link.url, label: link.label })),
+          );
+          return;
+      }
+    },
     prompt: (prompt) => {
       const withdraw = prompt.signal === undefined ? signal : AbortSignal.any([signal, prompt.signal]);
       switch (prompt.type) {
-        case "select":
+        case "select": {
+          const chosen = chooseWay(prompt.options, options.browser);
+          if (chosen !== undefined) return Promise.resolve(chosen);
           return ask(
-            interaction.select(
-              prompt.message,
-              prompt.options.map((option) => ({
+            {
+              type: "choice",
+              title: tidy(prompt.message),
+              options: prompt.options.map((option) => ({
                 value: option.id,
                 label: option.label,
                 ...(option.description === undefined ? {} : { description: option.description }),
               })),
-            ),
+            },
             withdraw,
           );
+        }
         case "secret":
-        case "text":
-        case "manual_code":
+          if (options.keys) return key(prompt.message, withdraw);
           return ask(
-            interaction.ask(prompt.message, {
-              ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }),
-              ...(prompt.type === "secret" ? { secret: true } : {}),
-              ...(prompt.type === "manual_code" ? { kind: "sign-in-code" as const } : {}),
-            }),
+            { type: "text", title: tidy(prompt.message), secret: true, ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }) },
             withdraw,
           );
+        case "text":
+          return ask({ type: "text", title: tidy(prompt.message), ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }) }, withdraw);
+        case "manual_code":
+          // Without a page to open, it is a code the person was given some other way.
+          if (page === undefined) {
+            return ask(
+              { type: "text", title: tidy(prompt.message), ...(prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder }) },
+              withdraw,
+            );
+          }
+          // Answered, or withdrawn as the browser came back first, the code is being exchanged: the page is done with.
+          return ask({ type: "browser", url: page, paste: prompt.placeholder === undefined ? {} : { placeholder: prompt.placeholder } }, withdraw, {
+            answered: FINISHING,
+            withdrawn: FINISHING,
+          });
       }
     },
   };
-}
-
-export function toNotice(event: Pi.AuthEvent, providerName: string): NoticePayload {
-  const base = { level: "info", source: "llm.pi-ai" } as const;
-  switch (event.type) {
-    case "auth_url":
-      return {
-        ...base,
-        kind: "sign-in",
-        message: event.instructions ?? `Open the link to sign in to ${providerName}.`,
-        links: [{ url: event.url, label: `Sign in to ${providerName}` }],
-      };
-    case "device_code":
-      return {
-        ...base,
-        kind: "device-code",
-        message: `Enter code ${event.userCode} at ${event.verificationUri} to sign in to ${providerName}.`,
-        code: event.userCode,
-        links: [{ url: event.verificationUri, label: "Enter code" }],
-      };
-    case "info":
-      return {
-        ...base,
-        message: event.message,
-        ...(event.links === undefined
-          ? {}
-          : {
-              links: event.links.map((link) => ({ url: link.url, ...(link.label === undefined ? {} : { label: link.label }) })),
-            }),
-      };
-    case "progress":
-      return { ...base, kind: "progress", message: event.message };
-  }
+  return { interaction, found: () => found };
 }

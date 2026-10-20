@@ -4,18 +4,17 @@ import type { AddressInfo } from "node:net";
 import { arch, platform, release, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Context, Deferred, Effect, Fiber, Layer, Option, Schema, Stream } from "effect";
 import { createProvider, envApiKeyAuth, fauxAssistantMessage, fauxProvider, fauxText, fauxThinking, fauxToolCall } from "@earendil-works/pi-ai";
 import { openAICompletionsApi } from "@earendil-works/pi-ai/api/openai-completions.lazy";
 import type { ClassifierContext, ClassifierOptions, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { Events, PluginContext, definePlugin, makeCore } from "@lemma/core";
-import { InteractionError, InteractionOrigin } from "@lemma/contracts";
 import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import type { Credential } from "@lemma/credentials";
 import { deviceId } from "../src/device.ts";
 import { credentialStore, makeEventMapper, makeLlmPlugin, runner } from "../src/index.ts";
-import { envContext, fakeCredentials, fakeHost, fakeInteraction, noticeRecorder, offline, runWith } from "./helpers.ts";
+import { envContext, fakeCredentials, fakeHost, noticeRecorder, offline, runWith, signInAnswers } from "./helpers.ts";
 import { llmConformance } from "@lemma/testing";
 
 const decodeEvent = Schema.decodeUnknownSync(StreamEvent, { onExcessProperty: "error" });
@@ -48,9 +47,9 @@ function setup(options: { providers?: () => readonly Provider[]; env?: Record<st
     ],
   });
   const credentials = fakeCredentials();
-  const interaction = fakeInteraction(() => Effect.succeed("sk-test"));
+  const answers = signInAnswers(() => Effect.succeed("sk-test"));
   const llm = makeLlmPlugin({ fetch: offline, providers: options.providers ?? (() => [faux.provider]), authContext: envContext(options.env) });
-  return { faux, credentials, interaction, plugins: [credentials.plugin, interaction.plugin, llm] as const };
+  return { faux, credentials, answers, plugins: [credentials.plugin, answers.plugin, llm] as const };
 }
 
 const collect = (request: LlmRequest) => Effect.flatMap(Llm, (llm) => Stream.runCollect(llm.stream(request)));
@@ -278,7 +277,7 @@ describe("stream", () => {
     events.forEach((event) => decodeEvent(event));
     expect(events.map((e) => e.type)).toEqual(["start", "error"]);
     const last = events[1]!;
-    expect(last.type === "error" && last.message.errorMessage).toContain("/login gateway");
+    expect(last.type === "error" && last.message.errorMessage).toContain("`lemma login gateway`");
   });
 });
 
@@ -391,7 +390,7 @@ describe("catalog", () => {
   it("keeps Anthropic API keys but not its subscription OAuth", async () => {
     // Default built-ins: the plugin's real provider list.
     const llm = makeLlmPlugin({ fetch: offline, authContext: envContext({ ANTHROPIC_API_KEY: "sk-ant" }) });
-    const plugins = [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("")).plugin, llm];
+    const plugins = [fakeCredentials().plugin, signInAnswers(() => Effect.succeed("")).plugin, llm];
     const providers = await runWith(
       plugins,
       Effect.flatMap(Llm, (l) => l.providers),
@@ -409,7 +408,7 @@ describe("catalog", () => {
     const id = "azure-openai-responses";
     const credentials = fakeCredentials({ [id]: { type: "api_key", key: "sk-existing-azure" } });
     const llm = makeLlmPlugin({ fetch: offline, authContext: envContext() });
-    const plugins = [credentials.plugin, fakeInteraction(() => Effect.succeed("sk-new-azure")).plugin, llm];
+    const plugins = [credentials.plugin, signInAnswers(() => Effect.succeed("sk-new-azure")).plugin, llm];
     const result = await runWith(
       plugins,
       Effect.flatMap(Llm, (service) =>
@@ -452,7 +451,7 @@ describe("catalog", () => {
         }),
     });
     const models = await runWith(
-      [fakeCredentials().plugin, fakeInteraction(() => Effect.succeed("sk-azure")).plugin, llm],
+      [fakeCredentials().plugin, signInAnswers(() => Effect.succeed("sk-azure")).plugin, llm],
       Effect.gen(function* () {
         const events = yield* Events;
         const service = yield* Llm;
@@ -699,7 +698,8 @@ describe("model catalogs", () => {
     });
     const { plugins } = setup({ providers: () => [growing(0)] });
     const refs = await runWith(
-      [listener, ...plugins],
+      // Without the answerer: it requires Llm, which starts the llm plugin before the listener.
+      [listener, ...plugins.filter((plugin) => plugin.id !== "sign-in-answers")],
       Effect.gen(function* () {
         const llm = yield* Llm;
         yield* Deferred.await(heard);
@@ -743,8 +743,8 @@ describe("login", () => {
     ],
   };
 
-  it("asks for an API key through Interaction and stores it", async () => {
-    const { plugins, credentials, interaction } = setup({ providers: () => [] });
+  it("asks for an API key as its sign-in's key step, and stores it", async () => {
+    const { plugins, credentials, answers } = setup({ providers: () => [] });
     const after = await runWith(
       plugins,
       Effect.gen(function* () {
@@ -755,7 +755,7 @@ describe("login", () => {
       { "llm.pi-ai": gateway },
     );
 
-    expect(interaction.asked).toEqual([{ type: "ask", title: "Enter the Gateway API key", secret: true }]);
+    expect(answers.asked).toEqual([{ type: "key", label: "Gateway API key" }]);
     expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-test" });
     expect(after[0]).toMatchObject({ configured: true, source: "stored credential" });
 
@@ -767,34 +767,21 @@ describe("login", () => {
     expect(credentials.store.has("gateway")).toBe(false);
   });
 
-  it("reports a dismissed prompt as Cancelled and unknown providers as UnknownProvider", async () => {
+  it("reports unknown providers as UnknownProvider, and a way in one lacks as LoginFailed", async () => {
     const credentials = fakeCredentials();
-    const interaction = fakeInteraction(() => Effect.fail(new InteractionError({ reason: "Dismissed", message: "closed" })));
-    const plugins = [credentials.plugin, interaction.plugin, makeLlmPlugin({ fetch: offline, providers: () => [], authContext: envContext() })];
-    const cancelled = await runWith(plugins, Effect.flip(Effect.flatMap(Llm, (l) => l.login("gateway", "api_key"))), { "llm.pi-ai": gateway });
-    expect(cancelled.reason).toBe("Cancelled");
+    const plugins = [credentials.plugin, makeLlmPlugin({ fetch: offline, providers: () => [], authContext: envContext() })];
     const unknown = await runWith(plugins, Effect.flip(Effect.flatMap(Llm, (l) => l.login("nope", "api_key"))), { "llm.pi-ai": gateway });
     expect(unknown.reason).toBe("UnknownProvider");
     const unsupported = await runWith(plugins, Effect.flip(Effect.flatMap(Llm, (l) => l.login("gateway", "oauth"))), { "llm.pi-ai": gateway });
     expect(unsupported.reason).toBe("LoginFailed");
   });
 
-  it("publishes auth events as notices under the login's origin and withdraws prompts the flow abandons", async () => {
-    let withdrawn = false;
+  it("shows a flow's steps as its sign-in, names Lemma to the provider, and withdraws the paste a callback beat", async () => {
     const credentials = fakeCredentials();
-    const interaction = fakeInteraction((question) =>
-      question.title === "Paste the code"
-        ? Effect.never.pipe(
-            Effect.onInterrupt(() =>
-              Effect.sync(() => {
-                withdrawn = true;
-              }),
-            ),
-          )
-        : Effect.succeed("unused"),
-    );
+    const answers = signInAnswers(() => Effect.never);
     const recorder = noticeRecorder();
     const devices: (string | undefined)[] = [];
+    const agents: (string | undefined)[] = [];
     const host = fakeHost();
     const oauthProvider = createProvider({
       id: "sso",
@@ -802,17 +789,20 @@ describe("login", () => {
       auth: {
         oauth: {
           name: "SSO account",
+          isSubscription: true,
           login: async (flow, options) => {
             devices.push(options?.getDeviceId?.(), options?.getDeviceId?.());
+            agents.push(options?.agentName);
+            flow.notify({ type: "info", message: "Read about SSO:", links: [{ url: "https://sso.test/docs" }] });
+            flow.notify({ type: "device_code", userCode: "ABCD-1234", verificationUri: "https://sso.test/device", expiresInSeconds: 600 });
             flow.notify({ type: "auth_url", url: "https://sso.test/authorize" });
-            flow.notify({ type: "device_code", userCode: "ABCD-1234", verificationUri: "https://sso.test/device" });
-            flow.notify({ type: "progress", message: "Waiting for the browser" });
+            flow.notify({ type: "progress", message: "Waiting for the browser..." });
             // Races a paste prompt against a callback that arrives first.
             const callback = new AbortController();
-            const pasted = flow.prompt({ type: "manual_code", message: "Paste the code", signal: callback.signal });
-            setTimeout(() => callback.abort(), 10);
+            const pasted = flow.prompt({ type: "manual_code", message: "Paste the code:", placeholder: "http://127.0.0.1:1/cb", signal: callback.signal });
+            setTimeout(() => callback.abort(), 20);
             await pasted.catch(() => undefined);
-            return { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3_600_000, accountId: "acct" };
+            return { type: "oauth", access: "token", refresh: "refresh", expires: Date.now() + 3_600_000, email: "you@example.com" };
           },
           refresh: async (credential) => credential,
           toAuth: async (credential) => ({ apiKey: credential.access }),
@@ -823,7 +813,7 @@ describe("login", () => {
     });
     const plugins = [
       credentials.plugin,
-      interaction.plugin,
+      answers.plugin,
       recorder.plugin,
       host.plugin,
       makeLlmPlugin({ fetch: offline, providers: () => [oauthProvider], authContext: envContext() }),
@@ -832,56 +822,66 @@ describe("login", () => {
       plugins,
       Effect.gen(function* () {
         const llm = yield* Llm;
-        yield* Effect.provideService(llm.login("sso", "oauth"), InteractionOrigin, "login:sso");
+        yield* llm.login("sso", "oauth");
         yield* Effect.sleep("20 millis");
         return yield* llm.providers;
       }),
     );
 
-    expect(withdrawn).toBe(true);
-    // pi-ai prompts from outside the login's fiber; its question still names the login, and says it is the paste fallback.
-    expect(interaction.origins).toEqual(["login:sso"]);
-    expect(interaction.asked).toEqual([{ type: "ask", title: "Paste the code", kind: "sign-in-code" }]);
+    const steps = answers.seen.flatMap((list) => list.filter((signIn) => signIn.provider === "sso" && signIn.ended === undefined).map((signIn) => signIn.step));
+    expect(steps.filter((step, at) => JSON.stringify(step) !== JSON.stringify(steps[at - 1]))).toEqual([
+      { type: "working", message: "Starting" },
+      { type: "code", code: "ABCD-1234", url: "https://sso.test/device", expiresIn: 600 },
+      { type: "browser", url: "https://sso.test/authorize" },
+      { type: "working", message: "Waiting for the browser" },
+      { type: "browser", url: "https://sso.test/authorize", paste: { placeholder: "http://127.0.0.1:1/cb" } },
+      // Withdrawn when the callback won: the code is being exchanged, not the page to open again.
+      { type: "working", message: "Finishing sign-in" },
+    ]);
+    expect(answers.asked).toEqual([{ type: "browser", url: "https://sso.test/authorize", paste: { placeholder: "http://127.0.0.1:1/cb" } }]);
+    expect(answers.seen.flat().find((signIn) => signIn.info !== undefined)?.info).toEqual({
+      message: "Read about SSO",
+      links: [{ url: "https://sso.test/docs" }],
+    });
+    expect(answers.seen.flat().find((signIn) => signIn.ended !== undefined)?.ended).toEqual({ outcome: "signed-in", detail: "Signed in as you@example.com" });
+    // OpenAI's consent screen names the agent: Lemma, not pi.
+    expect(agents).toEqual(["Lemma"]);
     // The installation's one device ID (OpenAI's ChatGPT sign-in requires it), kept in the host's home.
     expect(devices[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
     expect(devices[1]).toBe(devices[0]);
     expect(readFileSync(join(host.home, "device-id"), "utf8").trim()).toBe(devices[0]);
-    expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token", accountId: "acct" });
-    expect(info[0]).toMatchObject({ auth: [{ type: "oauth", name: "SSO account", interactive: true }], configured: true, source: "OAuth" });
-    expect(recorder.notices).toEqual([
-      {
-        level: "info",
-        source: "llm.pi-ai",
-        message: "Open the link to sign in to SSO.",
-        links: [{ url: "https://sso.test/authorize", label: "Sign in to SSO" }],
-        origin: "login:sso",
-        kind: "sign-in",
-      },
-      {
-        level: "info",
-        source: "llm.pi-ai",
-        message: "Enter code ABCD-1234 at https://sso.test/device to sign in to SSO.",
-        code: "ABCD-1234",
-        links: [{ url: "https://sso.test/device", label: "Enter code" }],
-        origin: "login:sso",
-        kind: "device-code",
-      },
-      { level: "info", source: "llm.pi-ai", message: "Waiting for the browser", origin: "login:sso", kind: "progress" },
-      // Success is announced to every client after the flow's own notices.
-      { level: "info", source: "llm.pi-ai", message: "Logged in to SSO", origin: "login:sso", kind: "signed-in" },
-    ]);
+    expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token", email: "you@example.com" });
+    expect(info[0]).toMatchObject({
+      auth: [{ type: "oauth", name: "SSO account", interactive: true, subscription: true }],
+      configured: true,
+      source: "OAuth",
+      account: "you@example.com",
+    });
+    // Every client hears of it once the catalog has refreshed.
+    expect(recorder.notices).toEqual([{ level: "info", source: "llm.pi-ai", message: "Signed in to SSO as you@example.com" }]);
   });
-});
 
-describe("login's end", () => {
-  const ssoProvider = (login: () => Promise<Credential>) =>
-    createProvider({
-      id: "sso",
-      name: "SSO",
+  it("takes the device code without asking for a browser elsewhere, and asks the person otherwise", async () => {
+    const chosen: string[] = [];
+    const twoWays = createProvider({
+      id: "gw",
+      name: "Gateway",
       auth: {
         oauth: {
-          name: "SSO account",
-          login: async () => (await login()) as never,
+          name: "Gateway account",
+          login: async (flow) => {
+            chosen.push(
+              await flow.prompt({
+                type: "select",
+                message: "Sign in to Gateway:",
+                options: [
+                  { id: "browser", label: "Sign in with browser" },
+                  { id: "device-code", label: "Sign in with device code" },
+                ],
+              }),
+            );
+            return { type: "oauth", access: "a", refresh: "r", expires: Date.now() + 3_600_000 };
+          },
           refresh: async (credential) => credential,
           toAuth: async (credential) => ({ apiKey: credential.access }),
         },
@@ -889,23 +889,120 @@ describe("login's end", () => {
       models: [],
       api: openAICompletionsApi(),
     });
+    const answers = signInAnswers(() => Effect.succeed("browser"));
+    const plugins = [
+      fakeCredentials().plugin,
+      answers.plugin,
+      fakeHost().plugin,
+      makeLlmPlugin({ fetch: offline, providers: () => [twoWays], authContext: envContext() }),
+    ];
+    await runWith(
+      plugins,
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        yield* llm.login("gw", "oauth", { browser: "elsewhere" });
+        // Here may be a forwarded page, and unsaid is unknown: the person picks.
+        yield* llm.login("gw", "oauth", { browser: "here" });
+        yield* llm.login("gw", "oauth");
+      }),
+    );
+    expect(chosen).toEqual(["device-code", "browser", "browser"]);
+    const choice = {
+      type: "choice",
+      title: "Sign in to Gateway",
+      options: [
+        { value: "browser", label: "Sign in with browser" },
+        { value: "device-code", label: "Sign in with device code" },
+      ],
+    };
+    expect(answers.asked).toEqual([choice, choice]);
+  });
 
-  it("announces a failed or cancelled login as ended, under its origin", async () => {
+  it("checks a key before storing it: one the provider refuses is asked again, saying why", async () => {
+    const keys = ["sk-wrong", "sk-right"];
+    const answers = signInAnswers(() => Effect.sync(() => keys.shift()!));
     const credentials = fakeCredentials();
+    const asked: (string | null)[] = [];
+    const check: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (!url.endsWith("/v1/models")) return Promise.reject(new Error("offline"));
+      const key = new Headers(init?.headers).get("authorization");
+      asked.push(key);
+      return key === "Bearer sk-right"
+        ? Response.json({ data: [{ id: "m" }, { id: "n" }] })
+        : Response.json({ error: { message: "Incorrect API key provided" } }, { status: 401 });
+    };
+    const plugins = [credentials.plugin, answers.plugin, fakeHost().plugin, makeLlmPlugin({ fetch: check, providers: () => [], authContext: envContext() })];
+    await runWith(
+      plugins,
+      Effect.flatMap(Llm, (llm) => llm.login("gateway", "api_key")),
+      { "llm.pi-ai": { providers: [{ ...gateway.providers[0], baseUrl: "http://gateway.test/v1" }], liveCatalogs: false } },
+    );
+    // Each key, then the list asked without one: a public list says nothing of a key.
+    expect(asked).toEqual(["Bearer sk-wrong", null, "Bearer sk-right", null]);
+    expect(answers.asked).toEqual([
+      { type: "key", label: "Gateway API key" },
+      { type: "key", label: "Gateway API key", problem: "Gateway refused this key (401: Incorrect API key provided)" },
+    ]);
+    expect(credentials.store.get("gateway")).toEqual({ type: "api_key", key: "sk-right" });
+    expect(answers.seen.flat().find((signIn) => signIn.ended !== undefined)?.ended).toEqual({ outcome: "signed-in", detail: "The key works: 2 models listed" });
+  });
+});
+
+describe("login's end", () => {
+  const ssoProvider = (login: () => Promise<Credential>, refresh: (credential: Credential) => Promise<Credential> = async (credential) => credential) =>
+    createProvider({
+      id: "sso",
+      name: "SSO",
+      auth: {
+        oauth: {
+          name: "SSO account",
+          login: async () => (await login()) as never,
+          refresh: async (credential) => (await refresh(credential)) as never,
+          toAuth: async (credential) => ({ apiKey: credential.access }),
+        },
+      },
+      models: [
+        {
+          id: "m",
+          name: "M",
+          api: "openai-completions",
+          provider: "sso",
+          baseUrl: "http://127.0.0.1:9/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 1000,
+          maxTokens: 100,
+        },
+      ],
+      api: openAICompletionsApi(),
+    });
+
+  it("lists a failed login as failed, with the provider's message", async () => {
+    const credentials = fakeCredentials();
+    const answers = signInAnswers(() => Effect.never);
     const recorder = noticeRecorder();
     const plugins = [
       credentials.plugin,
-      fakeInteraction(() => Effect.succeed("unused")).plugin,
+      answers.plugin,
       recorder.plugin,
       fakeHost().plugin,
       makeLlmPlugin({ fetch: offline, providers: () => [ssoProvider(() => Promise.reject(new Error("denied")))], authContext: envContext() }),
     ];
-    const failure = await runWith(
+    const [failure, ended] = await runWith(
       plugins,
-      Effect.flip(Effect.flatMap(Llm, (llm) => Effect.provideService(llm.login("sso", "oauth"), InteractionOrigin, "login:sso"))),
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        const failure = yield* Effect.flip(llm.login("sso", "oauth"));
+        // Listed ended for a few seconds after, so every client can say so.
+        const listed = yield* Stream.runHead(Stream.filter(llm.signIns, (list) => list.some((signIn) => signIn.ended !== undefined)));
+        return [failure, Option.getOrThrow(listed)[0]?.ended] as const;
+      }),
     );
     expect(failure.reason).toBe("LoginFailed");
-    expect(recorder.notices).toEqual([{ level: "info", source: "llm.pi-ai", kind: "ended", message: "SSO login failed", origin: "login:sso" }]);
+    expect(ended).toEqual({ outcome: "failed", message: "SSO login failed: denied" });
+    expect(recorder.notices).toEqual([]);
   });
 
   it("returns once the credential is stored, without waiting on the catalog refresh a cancel could interrupt", async () => {
@@ -914,7 +1011,6 @@ describe("login's end", () => {
     const hanging = (() => new Promise<Response>(() => {})) as typeof fetch;
     const plugins = [
       credentials.plugin,
-      fakeInteraction(() => Effect.succeed("unused")).plugin,
       fakeHost().plugin,
       makeLlmPlugin({
         fetch: hanging,
@@ -927,6 +1023,37 @@ describe("login's end", () => {
       Effect.flatMap(Llm, (llm) => llm.login("sso", "oauth").pipe(Effect.timeout("2 seconds"))),
     );
     expect(credentials.store.get("sso")).toMatchObject({ type: "oauth", access: "token" });
+  });
+
+  it("says a sign-in expired when the provider refuses to refresh it, until a new sign-in", async () => {
+    const credentials = fakeCredentials({ sso: { type: "oauth", access: "old", refresh: "spent", expires: 0 } });
+    const refused = () => Promise.reject(new Error('SSO token request failed (400): {"error":"invalid_grant"}'));
+    const plugins = [
+      credentials.plugin,
+      fakeHost().plugin,
+      makeLlmPlugin({
+        fetch: offline,
+        providers: () => [ssoProvider(async () => ({ type: "oauth", access: "new", refresh: "r", expires: Date.now() + 3_600_000 }), refused)],
+        authContext: envContext(),
+      }),
+    ];
+    const result = await runWith(
+      plugins,
+      Effect.gen(function* () {
+        const llm = yield* Llm;
+        const before = (yield* llm.providers)[0];
+        const events = Array.from(yield* Stream.runCollect(llm.stream(new LlmRequest({ model: "sso/m", messages: [user("hi")] }))));
+        const expired = (yield* llm.providers)[0];
+        yield* llm.login("sso", "oauth");
+        return { before, last: events.at(-1), expired, after: (yield* llm.providers)[0] };
+      }),
+      { "llm.pi-ai": { liveCatalogs: false } },
+    );
+    expect(result.before).toMatchObject({ configured: true, source: "OAuth" });
+    expect(result.before).not.toHaveProperty("expired");
+    expect(result.last).toMatchObject({ type: "error" });
+    expect(result.expired).toMatchObject({ configured: true, source: "OAuth", expired: expect.stringContaining("invalid_grant") });
+    expect(result.after).not.toHaveProperty("expired");
   });
 });
 
