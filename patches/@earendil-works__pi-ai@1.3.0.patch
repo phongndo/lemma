@@ -1,0 +1,51 @@
+diff --git a/dist/utils/oauth-page.d.ts b/dist/utils/oauth-page.d.ts
+index 2fe1a29d9f2d69bfcbe39ee80f4f1f1668cffb3f..5ea5954b2a7449942373bfbf20478e95c897f459 100644
+--- a/dist/utils/oauth-page.d.ts
++++ b/dist/utils/oauth-page.d.ts
+@@ -1,3 +1,14 @@
++/** A page an OAuth callback server shows the browser: `success` when the provider sent it back with a code, else `error`. */
++export interface OAuthPage {
++    type: "success" | "error";
++    message: string;
++    details?: string;
++}
++/**
++ * Lemma's patch: replaces the page every OAuth callback server shows the browser. Process-wide; `undefined` restores
++ * pi's page.
++ */
++export declare function setOAuthPageRenderer(render: ((page: OAuthPage) => string) | undefined): void;
+ export declare function oauthSuccessHtml(message: string): string;
+ export declare function oauthErrorHtml(message: string, details?: string): string;
+ //# sourceMappingURL=oauth-page.d.ts.map
+\ No newline at end of file
+diff --git a/dist/utils/oauth-page.js b/dist/utils/oauth-page.js
+index e88fef3637b295d03261445908e10e08f5749c2a..484a0c2857ca6323cd88110d420de4d63dfe7db0 100644
+--- a/dist/utils/oauth-page.js
++++ b/dist/utils/oauth-page.js
+@@ -87,7 +87,17 @@ function renderPage(options) {
+ </body>
+ </html>`;
+ }
++let renderer;
++/**
++ * Lemma's patch: replaces the page every OAuth callback server shows the browser, for `success` (the provider sent the
++ * browser back with a code) and `error`. Process-wide; `undefined` restores pi's page.
++ */
++export function setOAuthPageRenderer(render) {
++    renderer = render;
++}
+ export function oauthSuccessHtml(message) {
++    if (renderer)
++        return renderer({ type: "success", message });
+     return renderPage({
+         title: "Authentication successful",
+         heading: "Authentication successful",
+@@ -95,6 +105,8 @@ export function oauthSuccessHtml(message) {
+     });
+ }
+ export function oauthErrorHtml(message, details) {
++    if (renderer)
++        return renderer({ type: "error", message, ...(details === undefined ? {} : { details }) });
+     return renderPage({
+         title: "Authentication failed",
+         heading: "Authentication failed",
