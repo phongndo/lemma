@@ -1,10 +1,7 @@
-import { createHash, randomBytes } from "node:crypto";
-import { createServer } from "node:http";
-import type { Server } from "node:http";
 import { Effect } from "effect";
 import { refused } from "./http.ts";
-import { signInPage } from "./page.ts";
 import type { LoginContext, OAuthCredential, OAuthMethod } from "./providers.ts";
+import { callbackOrPaste, loopback, pkce, random } from "./signin.ts";
 
 /**
  * Sign in with ChatGPT: OpenAI's public OAuth client for agents, whose token a ChatGPT plan's account uses at
@@ -24,8 +21,8 @@ const SCOPE = `openid profile email offline_access resource.invoke ${DIRECT_SCOP
 /** A token is refreshed this long before it expires, so no request starts with one about to. */
 const EXPIRY_MARGIN_MS = 3 * 60 * 1000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const random = () => randomBytes(32).toString("base64url");
+/** How long exchanging a code for tokens may take. */
+const TOKEN_TIMEOUT_MS = 30_000;
 
 interface Authorization {
   readonly code: string;
@@ -47,8 +44,8 @@ function authorization(url: URL, state: string): Authorization {
   return { code, clientId };
 }
 
-/** A redirect URL the person pasted, when the browser could not reach the callback. */
-function pasted(input: string, state: string): Authorization {
+/** A redirect URL the person pasted, when the browser could not reach the callback: its state is checked as it is taken. */
+function pasted(input: string): URL {
   let url: URL;
   try {
     url = new URL(input.trim());
@@ -56,57 +53,8 @@ function pasted(input: string, state: string): Authorization {
     throw new Error("Paste the full URL the browser was sent to");
   }
   if (`${url.origin}${url.pathname}` !== REDIRECT_URI) throw new Error(`The pasted URL must start with ${REDIRECT_URI}`);
-  return authorization(url, state);
+  return url;
 }
-
-const NOT_A_SIGN_IN = "This address is where a ChatGPT sign-in comes back to Lemma.";
-
-/** The local server the browser is sent back to, and the authorization it brings, once one with this login's state does. */
-const callback = (state: string) =>
-  Effect.acquireRelease(
-    Effect.callback<{ readonly server: Server; readonly result: Promise<Authorization> }, Error>((resume) => {
-      let settle!: { resolve: (value: Authorization) => void; reject: (error: Error) => void };
-      const result = new Promise<Authorization>((resolve, reject) => (settle = { resolve, reject }));
-      // Kept from becoming an unhandled rejection when the paste wins and the server closes unanswered.
-      result.catch(() => undefined);
-      const server = createServer((request, response) => {
-        const send = (status: number, body: string) => response.writeHead(status, { "content-type": "text/html; charset=utf-8" }).end(body);
-        // Any page can send the browser here: a path that is no URL is answered, not thrown where nothing catches it.
-        let url: URL;
-        try {
-          url = new URL(request.url ?? "", REDIRECT_URI);
-        } catch {
-          return send(400, signInPage("failed", "Not a sign-in", NOT_A_SIGN_IN));
-        }
-        if (url.pathname !== CALLBACK_PATH) return send(404, signInPage("failed", "Not a sign-in", NOT_A_SIGN_IN));
-        try {
-          const found = authorization(url, state);
-          send(200, signInPage("signed-in", "Signed in to ChatGPT", "You can close this tab and go back to Lemma."));
-          settle.resolve(found);
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          send(400, signInPage("failed", "ChatGPT was not connected", message));
-          if (ours(url, state) && url.searchParams.has("error")) settle.reject(new Error(message));
-        }
-      });
-      server.once("error", (error: NodeJS.ErrnoException) =>
-        resume(
-          Effect.fail(
-            error.code === "EADDRINUSE"
-              ? new Error(`Port ${CALLBACK_PORT} is in use, probably by an unfinished login elsewhere or by the Codex CLI. Cancel that login and try again.`)
-              : error,
-          ),
-        ),
-      );
-      server.listen(CALLBACK_PORT, "127.0.0.1", () => resume(Effect.succeed({ server, result })));
-    }),
-    ({ server }) =>
-      Effect.sync(() => {
-        server.close();
-        // A connection the browser opened ahead of time could otherwise take a later login's callback.
-        server.closeAllConnections();
-      }),
-  );
 
 async function token(fetchImpl: typeof fetch, body: URLSearchParams, clientId: string, signal: AbortSignal): Promise<OAuthCredential> {
   const response = await fetchImpl(TOKEN_URL, {
@@ -131,10 +79,34 @@ function login(context: LoginContext) {
     Effect.gen(function* () {
       const device = yield* Effect.try({ try: () => context.deviceId(), catch: (error) => error });
       if (!UUID.test(device)) return yield* Effect.fail(new Error("Sign in with ChatGPT needs this installation's device id"));
-      const verifier = random();
-      const challenge = createHash("sha256").update(verifier).digest("base64url");
+      const { verifier, challenge } = pkce();
       const state = random();
-      const server = yield* callback(state);
+      // The code the callback brings, exchanged for tokens before the browser is told the sign-in went through.
+      const accept = (url: URL) => {
+        const found = authorization(url, state);
+        return token(
+          context.fetch,
+          new URLSearchParams({
+            grant_type: "authorization_code",
+            client_id: found.clientId,
+            code: found.code,
+            code_verifier: verifier,
+            redirect_uri: REDIRECT_URI,
+            resource: RESOURCE,
+          }),
+          found.clientId,
+          AbortSignal.timeout(TOKEN_TIMEOUT_MS),
+        );
+      };
+      const server = yield* loopback({
+        provider: "ChatGPT",
+        port: CALLBACK_PORT,
+        path: CALLBACK_PATH,
+        holders: "by the Codex CLI",
+        ours: (url) => ours(url, state),
+        accept,
+        exchanging: () => Effect.runFork(context.notify({ kind: "progress", message: "Exchanging the authorization code for tokens…" })),
+      });
       const url = new URL(AUTHORIZE_URL);
       url.search = new URLSearchParams({
         client_id: DYNAMIC_CLIENT_ID,
@@ -154,36 +126,7 @@ function login(context: LoginContext) {
         message: "Complete sign-in in your browser. If the callback does not complete, paste the final redirect URL here.",
         links: [{ url: url.toString(), label: "Sign in to OpenAI" }],
       });
-      // The browser's callback, or the URL pasted by hand: whichever comes first, the other withdrawn.
-      const found = yield* Effect.raceFirst(
-        Effect.promise(() =>
-          server.result.then(
-            (value) => ({ value }),
-            (error: Error) => ({ error }),
-          ),
-        ).pipe(Effect.flatMap((settled) => ("error" in settled ? Effect.fail(settled.error) : Effect.succeed(settled.value)))),
-        context
-          .ask("Complete login in your browser, or paste the final redirect URL here:", { placeholder: REDIRECT_URI, kind: "sign-in-code" })
-          .pipe(Effect.flatMap((input) => Effect.try({ try: () => pasted(input, state), catch: (error) => error }))),
-      );
-      yield* context.notify({ kind: "progress", message: "Exchanging the authorization code for tokens…" });
-      return yield* Effect.tryPromise({
-        try: (signal) =>
-          token(
-            context.fetch,
-            new URLSearchParams({
-              grant_type: "authorization_code",
-              client_id: found.clientId,
-              code: found.code,
-              code_verifier: verifier,
-              redirect_uri: REDIRECT_URI,
-              resource: RESOURCE,
-            }),
-            found.clientId,
-            signal,
-          ),
-        catch: (error) => error,
-      });
+      return yield* callbackOrPaste(context, server, "Complete login in your browser, or paste the final redirect URL here:", pasted);
     }),
   );
 }
