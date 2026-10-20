@@ -4,11 +4,12 @@
   "type": "module",
   "scripts": {
     "build": "pnpm --filter @lemma/core --filter @lemma/router build",
-    "check": "pnpm build && node scripts/check-boundaries.ts && node scripts/size.ts && node scripts/examples-coverage.ts && tsc -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
+    "check": "pnpm build && node scripts/check-boundaries.ts && node scripts/size.ts && node scripts/examples-coverage.ts && tsrs -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "test": "pnpm build && vitest run",
+    "test:durations": "pnpm build && node scripts/test-durations.ts",
     "ci": "pnpm check && pnpm test",
     "stress": "node scripts/stress.ts",
     "start": "pnpm --filter @lemma/web-app build && pnpm --filter @lemma/host start",
@@ -40,7 +41,7 @@
     "oxfmt": "0.74.0",
     "oxlint": "1.89.0",
     "playwright": "1.64.1",
-    "typescript": "7.0.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vitest": "5.0.5"
   },
   "engines": {
