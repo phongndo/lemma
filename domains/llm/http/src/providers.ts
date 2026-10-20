@@ -40,6 +40,11 @@ export interface LoginContext {
   readonly notify: (notice: Omit<NoticePayload, "level" | "source" | "origin">) => Effect.Effect<void>;
   /** Asks the person something; dismissing it fails the login `Cancelled`. */
   readonly ask: (title: string, options: { readonly placeholder?: string; readonly kind?: "sign-in-code" }) => Effect.Effect<string, InteractionError>;
+  /** Asks the person to choose, as buttons; dismissing it fails the login `Cancelled`. */
+  readonly choose: <V extends string>(
+    title: string,
+    options: readonly { readonly value: V; readonly label: string; readonly description?: string }[],
+  ) => Effect.Effect<V, InteractionError>;
   /** This installation's stable id (`<home>/device-id`), for a provider that names installations. */
   readonly deviceId: () => string;
   readonly fetch: typeof globalThis.fetch;

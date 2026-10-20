@@ -43,11 +43,17 @@ function provider(answer: (sent: Sent, count: number) => Response | Promise<Resp
 
 const form = (sent: Sent) => Object.fromEntries(new URLSearchParams(sent.body));
 
-function context(fetchImpl: typeof fetch, answer: () => Promise<string> = () => new Promise<string>(() => {})) {
+function context(fetchImpl: typeof fetch, answer: () => Promise<string> = () => new Promise<string>(() => {}), choice?: string) {
   const notices: Notice[] = [];
+  const choices: string[] = [];
   const login: LoginContext = {
     notify: (notice) => Effect.sync(() => void notices.push(notice)),
     ask: () => Effect.promise(answer),
+    choose: (title, options) =>
+      Effect.sync(() => {
+        choices.push(title);
+        return (options.find((option) => option.value === choice) ?? options[0]!).value;
+      }),
     deviceId: () => "0b5c3f6e-6a9f-4a51-9a35-2f6f0e3b8a10",
     fetch: fetchImpl,
   };
@@ -276,6 +282,22 @@ describe("Sign in with GitHub Copilot", () => {
       "https://api.business.githubcopilot.com/models/claude-sonnet-5.5/policy",
     ]);
     expect(form(to("https://github.com/login/device/code")[0]!)).toEqual({ client_id: "Iv1.b507a08c87ecfe98", scope: "read:user" });
+  });
+
+  it("asks only an enterprise's account for its domain, and signs in at its own GitHub", async () => {
+    const { fetchImpl, to } = provider((request) =>
+      request.url === "https://company.ghe.com/login/device/code"
+        ? Response.json(grant)
+        : request.url === "https://company.ghe.com/login/oauth/access_token"
+          ? Response.json({ access_token: "ghe_token" })
+          : request.url === "https://api.company.ghe.com/copilot_internal/v2/token"
+            ? Response.json({ token: "tid=1", expires_at: 4_000_000_000 })
+            : Response.json({ data: [] }),
+    );
+    const { login } = context(fetchImpl, async () => "https://company.ghe.com/", "enterprise");
+    const exit = await onClock(copilot.login(login), () => to("https://company.ghe.com/login/oauth/access_token").length, [[5, 1]]);
+    expect(Exit.isSuccess(exit) && exit.value).toMatchObject({ refresh: "ghe_token", enterpriseUrl: "company.ghe.com" });
+    expect(copilot.baseUrl!(Exit.isSuccess(exit) ? (exit.value as OAuthCredential) : ({} as OAuthCredential))).toBe("https://copilot-api.company.ghe.com");
   });
 
   it("asks an enterprise's own GitHub, and its account's host when its token names none", () => {

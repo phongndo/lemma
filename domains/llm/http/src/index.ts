@@ -612,6 +612,7 @@ export function makeLlmPlugin(options: Options = {}) {
             const context: LoginContext = {
               notify: (payload) => notice(origin, payload),
               ask: (title, askOptions) => interaction.ask(title, askOptions),
+              choose: (title, choices) => interaction.select(title, choices),
               deviceId: () => deviceId(paths.home),
               fetch: fetchImpl,
             };

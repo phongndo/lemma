@@ -126,9 +126,17 @@ async function turnOn(fetchImpl: typeof fetch, token: string, baseUrl: string, i
 
 function login(context: LoginContext) {
   return Effect.gen(function* () {
-    const enterprise = yield* context
-      .ask("GitHub Enterprise URL or domain, or leave blank for github.com", { placeholder: "company.ghe.com" })
-      .pipe(Effect.flatMap((input) => Effect.try({ try: () => domainOf(input), catch: (error) => error })));
+    // Most accounts are github.com's: only an enterprise's is asked for its domain.
+    const where = yield* context.choose("Where is your Copilot subscription?", [
+      { value: "github", label: "GitHub.com", description: "A personal, Pro, or Business plan" },
+      { value: "enterprise", label: "GitHub Enterprise", description: "Your company's own GitHub, such as company.ghe.com" },
+    ]);
+    const enterprise =
+      where === "enterprise"
+        ? yield* context
+            .ask("Your GitHub Enterprise URL or domain", { placeholder: "company.ghe.com" })
+            .pipe(Effect.flatMap((input) => Effect.try({ try: () => domainOf(input) ?? "github.com", catch: (error) => error })))
+        : undefined;
     const domain = enterprise ?? "github.com";
     const github = yield* deviceFlow(context, {
       provider: "GitHub Copilot",

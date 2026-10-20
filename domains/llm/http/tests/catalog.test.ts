@@ -342,6 +342,7 @@ describe("Sign in with ChatGPT", () => {
     const login: LoginContext = {
       notify: (notice) => Effect.sync(() => void notices.push(notice)),
       ask: () => Effect.sync(() => paste(new URL(notices[0]!.links![0]!.url))),
+      choose: () => Effect.die("not asked"),
       deviceId: () => "0b5c3f6e-6a9f-4a51-9a35-2f6f0e3b8a10",
       fetch: fetchImpl,
     };
@@ -395,6 +396,7 @@ describe("Sign in with ChatGPT", () => {
     const login = (answer: (state: string) => Promise<string>): LoginContext => ({
       notify: (notice) => Effect.sync(() => void notices.push(notice)),
       ask: () => Effect.promise(() => answer(new URL(notices.at(-1)!.links![0]!.url).searchParams.get("state")!)),
+      choose: () => Effect.die("not asked"),
       deviceId: () => "0b5c3f6e-6a9f-4a51-9a35-2f6f0e3b8a10",
       fetch: fetchImpl,
     });
