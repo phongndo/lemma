@@ -2,11 +2,14 @@ import { describe, expect, test } from "vitest";
 import { Effect, Exit, Layer } from "effect";
 import { SessionError, SessionRemoveHook, Sessions, SessionChannels } from "@lemma/sessions";
 import type { ChannelInfo } from "@lemma/contracts";
-import type { SessionEvent, SessionInfo } from "@lemma/sessions";
+import type { EventData, RequestView, SessionEvent, SessionInfo, SessionRecords } from "@lemma/sessions";
 import { definePlugin, PluginContext } from "@lemma/core";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import sessions from "../src/index.ts";
 import { call, collect, hostError, open, served } from "./served.ts";
+
+/** The assistant message a `message` event carries. */
+type AssistantMessage = Extract<Extract<EventData, { readonly type: "message" }>["message"], { readonly role: "assistant" }>;
 
 const withSessions = <A, E>(body: Parameters<typeof served<A, E>>[1]) => served((home) => [pathsPlugin(home, { cwd: "/work" }), sessions], body);
 
@@ -148,6 +151,95 @@ describe("the sessions channels, through the transport", () => {
         expect(hostError(yield* whole.end)).toMatchObject({ code: "NotFound", subject: id });
         expect(hostError(yield* rest.end)).toMatchObject({ code: "NotFound", subject: id });
         expect(hostError(yield* (yield* open(client, "sessions.log", { sessionId: id })).end)).toMatchObject({ code: "NotFound", subject: id });
+      }),
+    ));
+
+  test("records, request, and cache read a session's branch as its Trajectory view does", () =>
+    withSessions((client, core) =>
+      Effect.gen(function* () {
+        const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        const usage = {
+          input: 10,
+          output: 5,
+          cacheRead: 4,
+          cacheWrite: 0,
+          totalTokens: 15,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        };
+        const reply = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): AssistantMessage => ({
+          role: "assistant",
+          content,
+          api: "x",
+          provider: "p",
+          model: "m",
+          usage,
+          stopReason,
+          timestamp: 0,
+        });
+        const asked = (stepId: string, prompt: string): EventData => ({
+          type: "request",
+          turnId: "t1",
+          stepId,
+          model: "p/m",
+          composition: "c1",
+          system: prompt,
+          contributions: [{ source: "agent", kind: "system", label: "base", chars: prompt.length }],
+        });
+        const events: EventData[] = [
+          { type: "turn-start", turnId: "t1" },
+          { type: "message", turnId: "t1", message: { role: "user", content: [{ type: "text", text: "fix the test" }], timestamp: 0 } },
+          { type: "step-start", turnId: "t1", stepId: "t1.1" },
+          asked("t1.1", "You are an agent."),
+          {
+            type: "message",
+            turnId: "t1",
+            stepId: "t1.1",
+            message: reply([{ type: "toolCall", id: "c1", name: "bash", arguments: { command: "false" } }], "toolUse"),
+          },
+          {
+            type: "message",
+            turnId: "t1",
+            stepId: "t1.1",
+            message: { role: "toolResult", toolCallId: "c1", toolName: "bash", content: [{ type: "text", text: "exit 1" }], isError: true, timestamp: 0 },
+          },
+          { type: "step-end", turnId: "t1", stepId: "t1.1" },
+          { type: "step-start", turnId: "t1", stepId: "t1.2" },
+          asked("t1.2", "You are a careful agent."),
+          { type: "message", turnId: "t1", stepId: "t1.2", message: reply([{ type: "text", text: "Fixed." }], "stop") },
+          { type: "step-end", turnId: "t1", stepId: "t1.2" },
+          { type: "turn-end", turnId: "t1", reason: "done" },
+        ];
+        yield* core.run(Effect.flatMap(Sessions, (store) => Effect.forEach(events, (data) => store.append(id, data))));
+
+        const all = (yield* call(client, "sessions.records", { sessionId: id })) as SessionRecords;
+        expect(all.running).toBe(false);
+        expect(all.records.map((record) => [record.kind, record.status])).toEqual([
+          ["user", "sent"],
+          ["system", "initial"],
+          ["assistant", "tool use"],
+          ["tool", "error"],
+          ["system", "changed"],
+          ["assistant", "stop"],
+        ]);
+        const failed = (yield* call(client, "sessions.records", { sessionId: id, filter: "is:error tool:bash" })) as SessionRecords;
+        expect(failed.records).toEqual([
+          expect.objectContaining({ kind: "tool", tool: "bash", arguments: { command: "false" }, result: "exit 1", error: true }),
+        ]);
+
+        const last = (yield* call(client, "sessions.request", { sessionId: id })) as RequestView;
+        expect(last).toMatchObject({ number: 2, turn: 1, step: 2, composition: "c1", previous: expect.any(String) });
+        expect(last.sections).toEqual([{ id: "base", source: "agent", chars: 24, changed: true, text: "You are a careful agent." }]);
+        expect(last.plugins).toEqual([expect.objectContaining({ source: "agent", systemChars: 24, changed: ["base"] })]);
+        expect(last.rebuilt).toBeUndefined();
+        const first = (yield* call(client, "sessions.request", { sessionId: id, request: 1, rebuilt: true })) as RequestView;
+        expect(first).toMatchObject({ number: 1, step: 1, rebuilt: { model: "p/m", system: "You are an agent." } });
+        expect(first.previous).toBeUndefined();
+        expect(hostError(yield* Effect.exit(call(client, "sessions.request", { sessionId: id, request: 3 })))).toMatchObject({ code: "NotFound", subject: id });
+        // A number is a request's number: one with a fraction would read as <turn>.<step>, and 2.10 as "2.1".
+        expect(hostError(yield* Effect.exit(call(client, "sessions.request", { sessionId: id, request: 1.5 })))).toMatchObject({ code: "InvalidPayload" });
+        expect(yield* call(client, "sessions.request", { sessionId: id, request: "1.2" })).toMatchObject({ number: 2, turn: 1, step: 2 });
+
+        expect(yield* call(client, "sessions.cache", { sessionId: id })).toEqual({ requests: 2, changed: 1, changedBy: { agent: 1 }, input: 28, cacheRead: 8 });
       }),
     ));
 });

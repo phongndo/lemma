@@ -5,8 +5,11 @@ Provides `Sessions` (`@lemma/sessions`): each session is an append-only tree of
 `sessions.*` channels (`SessionChannels`, through `serveSessions`): the calls
 clients make on sessions (`sessions.relocate` moves an empty one, its file
 into its new directory's folder); `sessions.search`, what was said in them;
-`sessions.log`, one session's log as it grows; and `sessions.changes`, every
-session created, changed, or removed.
+`sessions.log`, one session's log as it grows; `sessions.changes`, every
+session created, changed, or removed; and `sessions.records`,
+`sessions.request`, and `sessions.cache`, a session's branch as its Trajectory
+view reads it (its records, one request by part and plugin, how it kept the
+prompt cache).
 
 ```ts
 Effect.gen(function* () {

@@ -170,6 +170,7 @@ export const WorkspaceChannels = {
   status: defineChannel({
     kind: "call",
     id: "workspace.status",
+    access: "read",
     title: "Workspace status",
     description: "Whether a directory exists, and its git state when it is in a work tree; never fails",
     payload: AtPath,
@@ -179,6 +180,7 @@ export const WorkspaceChannels = {
   places: defineChannel({
     kind: "call",
     id: "workspace.places",
+    access: "read",
     title: "Places",
     description:
       "For each directory, the project it belongs to (a linked worktree's is its repository's main work tree), whether it is a worktree, and its branch; never fails",
@@ -189,6 +191,7 @@ export const WorkspaceChannels = {
   browse: defineChannel({
     kind: "call",
     id: "workspace.browse",
+    access: "read",
     title: "Browse directories",
     description: "The directories a partly typed path completes to (`~/code/ba`), best match first; never fails",
     payload: Schema.Struct({ partialPath: Schema.String }),
@@ -198,6 +201,7 @@ export const WorkspaceChannels = {
   createDirectory: defineChannel({
     kind: "call",
     id: "workspace.create-directory",
+    access: "operate",
     title: "Create directory",
     description: "Creates a directory and its missing parents, and gives its status; fails Exists when something is there already",
     payload: AtPath,
@@ -206,6 +210,7 @@ export const WorkspaceChannels = {
   createWorktree: defineChannel({
     kind: "call",
     id: "workspace.create-worktree",
+    access: "operate",
     title: "Create worktree",
     description:
       "Creates a linked worktree of the repository at `path` on a new branch started from `base` (default HEAD), or from its remote version, fetched first (`fromRemote`), and gives its status",
@@ -215,6 +220,7 @@ export const WorkspaceChannels = {
   worktrees: defineChannel({
     kind: "call",
     id: "workspace.worktrees",
+    access: "read",
     title: "Worktrees",
     description: "The linked worktrees of the repository at `path`, not its main work tree",
     payload: AtPath,
@@ -224,6 +230,7 @@ export const WorkspaceChannels = {
   removeWorktree: defineChannel({
     kind: "call",
     id: "workspace.remove-worktree",
+    access: "operate",
     title: "Remove worktree",
     description:
       "Removes the linked worktree at `path`, keeping its branch and commits; refuses one with uncommitted changes or untracked files unless `force`",
@@ -233,6 +240,7 @@ export const WorkspaceChannels = {
   restoreWorktree: defineChannel({
     kind: "call",
     id: "workspace.restore-worktree",
+    access: "operate",
     title: "Restore worktree",
     description: "Makes again a worktree this host made or removed, at its path on its branch, and gives its status",
     payload: AtPath,
@@ -241,6 +249,7 @@ export const WorkspaceChannels = {
   branches: defineChannel({
     kind: "call",
     id: "workspace.branches",
+    access: "read",
     title: "Branches",
     description: "Local branches by recency, then remote-tracking ones without a local counterpart",
     payload: AtPath,
@@ -250,6 +259,7 @@ export const WorkspaceChannels = {
   checkout: defineChannel({
     kind: "call",
     id: "workspace.checkout",
+    access: "operate",
     title: "Switch branch",
     description: "Switches to `branch` as `git switch` would, creating it from HEAD with `create`, and gives the new status",
     payload: Schema.Struct({ path: Schema.String, branch: Schema.String, create: Schema.optional(Schema.Boolean) }),

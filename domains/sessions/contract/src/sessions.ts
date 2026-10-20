@@ -7,6 +7,8 @@ import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit,
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, IMAGE_TYPES, ImageContent, LlmFailure, MAX_IMAGE_BYTES, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 import { SessionSearchMatch } from "./search.ts";
+import { cacheReport, trajectory } from "./trajectory.ts";
+import { recordsOf, RequestView, requestOf, SessionCache, SessionRecords } from "./views.ts";
 
 /**
  * A session is an append-only log of events. Each event names its parent, so
@@ -472,6 +474,7 @@ export const SessionChannels = {
   list: defineChannel({
     kind: "call",
     id: "sessions.list",
+    access: "read",
     title: "List sessions",
     description: "Every session, or those in a directory (cwd), most recently updated first",
     payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
@@ -481,6 +484,7 @@ export const SessionChannels = {
   get: defineChannel({
     kind: "call",
     id: "sessions.get",
+    access: "read",
     title: "Get a session",
     description: "One session's info",
     payload: Schema.Struct(sessionField),
@@ -490,6 +494,7 @@ export const SessionChannels = {
   create: defineChannel({
     kind: "call",
     id: "sessions.create",
+    access: "operate",
     title: "Create a session",
     description: "A new, empty session in a directory (cwd), the host's when absent",
     payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
@@ -503,6 +508,7 @@ export const SessionChannels = {
   events: defineChannel({
     kind: "call",
     id: "sessions.events",
+    access: "read",
     title: "Read a session's log",
     description: "A session's log in file order: every event, or those past a seq (after)",
     payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
@@ -523,6 +529,7 @@ export const SessionChannels = {
   log: defineChannel({
     kind: "stream",
     id: "sessions.log",
+    access: "read",
     title: "Session log",
     description: "A subscribed acknowledgement carrying a session's log past a seq (after), then each event appended to it, in order and without gaps",
     payload: Schema.Struct({ ...sessionField, after: Schema.optional(Schema.Number) }),
@@ -531,6 +538,7 @@ export const SessionChannels = {
   checkout: defineChannel({
     kind: "call",
     id: "sessions.checkout",
+    access: "operate",
     title: "Check out an event",
     description: "Points a session's leaf at one of its events: later turns branch from there",
     payload: Schema.Struct({ ...sessionField, eventId: Schema.String }),
@@ -539,6 +547,7 @@ export const SessionChannels = {
   setTitle: defineChannel({
     kind: "call",
     id: "sessions.set-title",
+    access: "operate",
     title: "Rename a session",
     description: "Appends a title event and answers with the session's info",
     payload: Schema.Struct({ ...sessionField, title: Schema.String }),
@@ -547,6 +556,7 @@ export const SessionChannels = {
   mark: defineChannel({
     kind: "call",
     id: "sessions.mark",
+    access: "operate",
     title: "Pin, archive, or keep a session",
     description: "Sets how a session is filed; an absent mark keeps its value",
     payload: Schema.Struct({
@@ -560,6 +570,7 @@ export const SessionChannels = {
   relocate: defineChannel({
     kind: "call",
     id: "sessions.relocate",
+    access: "operate",
     title: "Move an empty session",
     description: "Moves a session nothing has gone into yet to another directory (cwd); fails NotEmpty once it has an event",
     payload: Schema.Struct({ ...sessionField, cwd: Schema.String }),
@@ -568,6 +579,7 @@ export const SessionChannels = {
   fork: defineChannel({
     kind: "call",
     id: "sessions.fork",
+    access: "operate",
     title: "Fork a session",
     description: "A new session holding the branch that ends at an event (eventId), as it reads; how a damaged session goes on",
     payload: Schema.Struct({ ...sessionField, eventId: Schema.String }),
@@ -577,16 +589,67 @@ export const SessionChannels = {
   search: defineChannel({
     kind: "call",
     id: "sessions.search",
+    access: "read",
     title: "Search sessions",
     description: "The newest prompt or reply in each session holding every word of a query, most recently updated sessions first",
     payload: Schema.Struct({ query: Schema.String, limit: Schema.optional(Schema.Number) }),
     success: Schema.Array(SessionSearchMatch),
     repeatable: true,
   }),
+  /**
+   * The Trajectory view's records of a session's branch, as `lemma sessions inspect --records` lists them: each
+   * prompt, change to the system prompt, model call, and tool run, flat, those `filter` keeps as the view's filter box
+   * reads it (`parseLedgerFilter`). It reads the branch as `Sessions.branch` does, which loads the session's log, as
+   * `sessions.request` and `sessions.cache` do too: a client reads the sessions it needs, not every one.
+   */
+  records: defineChannel({
+    kind: "call",
+    id: "sessions.records",
+    access: "read",
+    title: "A session's records",
+    description:
+      "Each prompt, system prompt change, model call, and tool run on a session's branch, as its Trajectory view lists them; filter as its filter box does: is:error, is:running, kind:model, tool:bash, turn:2, req:5, text, -term to exclude",
+    payload: Schema.Struct({ ...sessionField, filter: Schema.optional(Schema.String) }),
+    success: SessionRecords,
+    repeatable: true,
+  }),
+  /**
+   * One request a session's branch sent the model, by `request`: its number (`5`), `<turn>.<step>` (`2.1`), a step
+   * id, or `last` (the default). Fails `NotFound` when no step there sent one.
+   */
+  request: defineChannel({
+    kind: "call",
+    id: "sessions.request",
+    access: "read",
+    title: "One request",
+    description:
+      "One request a session sent the model (its number, <turn>.<step>, a step id, or last): each system section and tool with the plugin that contributed it and whether it changed, each plugin's share, and with rebuilt, the exact request",
+    payload: Schema.Struct({
+      ...sessionField,
+      /** A request's number, a whole number from 1; `<turn>.<step>` goes as text (`"2.10"`), which a number cannot keep. */
+      request: Schema.optional(Schema.Union([Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)), Schema.String])),
+      rebuilt: Schema.optional(Schema.Boolean),
+    }),
+    success: RequestView,
+    repeatable: true,
+  }),
+  /** How a session's branch kept the provider's prompt cache (`cacheReport`), as `lemma sessions cache` reports it. */
+  cache: defineChannel({
+    kind: "call",
+    id: "sessions.cache",
+    access: "read",
+    title: "Prompt cache",
+    description:
+      "How a session's branch kept the provider's prompt cache: its requests, those that changed the system prompt or tools and the plugins that did, and the input read from the cache",
+    payload: Schema.Struct(sessionField),
+    success: SessionCache,
+    repeatable: true,
+  }),
   /** `Sessions.remove`: fails `Busy` while the session is held, as it is while a turn runs in it. */
   delete: defineChannel({
     kind: "call",
     id: "sessions.delete",
+    access: "operate",
     title: "Delete a session",
     description: "Deletes a session for good; fails Busy while it is in use, as while a turn runs in it",
     payload: Schema.Struct(sessionField),
@@ -605,6 +668,7 @@ export const SessionChannels = {
   changes: defineChannel({
     kind: "stream",
     id: "sessions.changes",
+    access: "read",
     title: "Session changes",
     description: "Every session created, changed, or removed, after a subscribed acknowledgement",
     payload: Schema.Void,
@@ -678,6 +742,17 @@ export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, 
   serveChannel(SessionChannels.relocate, ({ sessionId, cwd }) => sessions.relocate(sessionId, cwd)),
   serveChannel(SessionChannels.fork, ({ sessionId, eventId }) => sessions.fork(sessionId, eventId)),
   serveChannel(SessionChannels.search, ({ query, limit }) => sessions.search(query, limit === undefined ? undefined : { limit })),
+  serveChannel(SessionChannels.records, ({ sessionId, filter }) => Effect.map(sessions.branch(sessionId), (branch) => recordsOf(trajectory(branch), filter))),
+  serveChannel(SessionChannels.request, ({ sessionId, request, rebuilt }) =>
+    Effect.flatMap(sessions.branch(sessionId), (branch) => {
+      const selector = String(request ?? "last");
+      const found = requestOf(branch, trajectory(branch), selector, { sessionId, ...(rebuilt === undefined ? {} : { rebuilt }) });
+      return found === undefined
+        ? Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `No request "${selector}" on the current branch of ${sessionId}` }))
+        : Effect.succeed(found);
+    }),
+  ),
+  serveChannel(SessionChannels.cache, ({ sessionId }) => Effect.map(sessions.branch(sessionId), (branch) => cacheReport(trajectory(branch)))),
   serveChannel(SessionChannels.delete, ({ sessionId }) => sessions.remove(sessionId)),
   serveChannel(SessionChannels.changes, () =>
     eventFeed(Effect.succeed<SessionsChange>({ type: "subscribed" }), [

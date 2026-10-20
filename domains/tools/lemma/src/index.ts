@@ -6,9 +6,9 @@ import type { Channel } from "@lemma/contracts";
 import { ToolNamespaces, Tools } from "@lemma/tools";
 import { answering, channelTool, NAMESPACE } from "./channels.ts";
 import { delegateTool } from "./delegate.ts";
-import { access, DEFAULT_CHANNELS, DEFAULT_CONFIRM, toolName } from "./policy.ts";
+import { DEFAULT_CONFIRM, EVERY_READ, termsOf, toolName } from "./policy.ts";
 
-export { DEFAULT_CHANNELS, DEFAULT_CONFIRM, NEVER, toolName } from "./policy.ts";
+export { DEFAULT_CONFIRM, EVERY_READ, NEVER, termsOf, toolName } from "./policy.ts";
 export { depthOf, DelegateInput, DelegateOutput } from "./delegate.ts";
 
 const ids = (defaults: readonly string[]) => Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultType(Effect.sync(() => [...defaults])));
@@ -16,9 +16,10 @@ const count = (fallback: number) =>
   Schema.Number.check(Schema.isInt(), Schema.isGreaterThan(0)).pipe(Schema.withDecodingDefaultType(Effect.sync(() => fallback)));
 
 const Config = Schema.Struct({
-  channels: ids(DEFAULT_CHANNELS).annotate({
+  channels: ids([EVERY_READ]).annotate({
     title: "Channels scripts call",
-    description: "Channel ids offered as tools, called freely: by default those that only read. Credential channels are never offered.",
+    description:
+      "Channel ids offered as tools, called freely; * is every channel that declares it only reads. One that declares a write asks you first all the same, and credential channels are never offered.",
   }),
   confirm: ids(DEFAULT_CONFIRM).annotate({
     title: "Channels that ask first",
@@ -44,18 +45,22 @@ const Config = Schema.Struct({
   }),
 });
 
-const INSTRUCTIONS = `Lemma itself, through the channels its plugins serve clients (the web app, the \`lemma\` command): each tool \`lemma_<channel id, . and - as _>\` takes the channel's payload as JSON (a payload that is not an object goes in \`{ payload }\`) and resolves to its result's JSON. Streams take \`{ payload?, take?, timeoutMs? }\` and resolve to \`{ elements, ended, timedOut }\`; most begin with a \`subscribed\` element. Tools whose description says so ask the person before each call and reject when they decline.
+const INSTRUCTIONS = `Lemma itself, through the channels its plugins serve clients (the web app, the \`lemma\` command): each tool \`lemma_<channel id, . and - as _>\` takes the channel's payload as JSON (a payload that is not an object goes in \`{ payload }\`) and resolves to its result's JSON. Streams take \`{ payload?, take?, timeoutMs? }\` and resolve to \`{ elements, ended, timedOut }\`; most begin with a \`subscribed\` element. Tools whose description says so ask the person before each call and reject when they decline. Loop and filter in the script, and return only what answers the question.
 
 - Recent sessions: \`const sessions = await tools.lemma_sessions_list({})\` (newest first), \`await tools.lemma_sessions_search({ query: "flaky test" })\`.
 - A session's log, or its tail: \`await tools.lemma_sessions_events({ sessionId, after: seq })\`; which are running: \`await tools.lemma_agent_running({})\`.
+- What happened in a session, as its Trajectory view lists it: \`const { records } = await tools.lemma_sessions_records({ sessionId, filter: "is:error tool:bash" })\`, each \`{ kind, turn, status, name, error }\` and more by kind (a tool run's \`tool\`, \`arguments\`, \`result\`; a model call's \`model\`, \`usage\`, \`text\`). The filter takes \`is:error\`, \`kind:model\`, \`tool:bash\`, \`turn:2\`, \`req:5\`, words, and \`-term\`.
+- Failures across sessions: \`for (const s of (await tools.lemma_sessions_list({})).slice(0, 20)) failed.push(...(await tools.lemma_sessions_records({ sessionId: s.id, filter: "is:error" })).records)\`, then count them by \`tool\` or \`name\`. Each read loads that session's whole log into the host for a while, so read the sessions the question needs (the recent ones, a directory's, \`lemma_sessions_search\`'s matches), not every one.
+- What the model was sent: \`await tools.lemma_sessions_request({ sessionId, request: "last" })\` (or its number, or \`"2.1"\` for turn 2's first step): each system section and tool with the plugin that contributed it, and each plugin's share (\`plugins\`); \`rebuilt: true\` adds the exact request. How a session kept the prompt cache: \`await tools.lemma_sessions_cache({ sessionId })\`.
+- The host and its plugins: \`await tools.lemma_devtools_host_info({})\` (where it runs, its plugin set); \`const plugins = await tools.lemma_devtools_host_plugins({})\`, every plugin on or off with its \`state\`, \`fault\`, \`problem\`, \`haltedBy\`, and \`config\`; those not running as enabled: \`plugins.filter((p) => p.enabled && p.state !== "active")\`. What a plugin shows of its state: \`await tools.lemma_devtools_host_inspectors({})\`, then \`await tools.lemma_devtools_host_inspect({ id })\`.
 - Delegate tasks in parallel, each to a new session that sees only its prompt:
   \`const results = await Promise.all(tasks.map((prompt) => tools.lemma_delegate({ prompt })))\`, each \`{ sessionId, ended, answer, error? }\`.
 - Judge many sessions cheaply: read their titles or answers, then ask a classifier (\`models.classify\`) about each, and return only the summary.`;
 
 /**
- * Lemma's own channels as tools scripts call, in the `lemma` namespace: those the config allows, kept in step with the
- * channels plugins serve as they come and go; and `lemma_delegate`, a task handed to a new session. Writing channels ask
- * the person first (`Interaction`); credential channels are never offered.
+ * Lemma's own channels as tools scripts call, in the `lemma` namespace: those that declare they only read, and those the
+ * config allows, kept in step with the channels plugins serve as they come and go; and `lemma_delegate`, a task handed
+ * to a new session. Writing channels ask the person first (`Interaction`); credential channels are never offered.
  */
 export default definePlugin({
   id: "tools.lemma",
@@ -70,7 +75,8 @@ export default definePlugin({
 
     yield* owner.add(ToolNamespaces, {
       name: NAMESPACE,
-      description: "Lemma itself: its sessions, agent, commands, skills, models, and workspace, as the app's own channels; and tasks delegated to new sessions",
+      description:
+        "Lemma itself: its sessions and what happened in them, agent, plugins, commands, skills, models, and workspace, as the app's own channels; and tasks delegated to new sessions",
       instructions: INSTRUCTIONS,
     });
     if (config.maxDepth > 0) {
@@ -88,7 +94,7 @@ export default definePlugin({
       Effect.gen(function* () {
         const wanted = new Map<string, { readonly channel: Channel; readonly confirm: boolean }>();
         for (const { item } of answering(items)) {
-          const offered = access(item.id, config);
+          const offered = termsOf(item, config);
           const name = toolName(item.id);
           // Two ids that read alike as a tool name: the first keeps it.
           if (offered === undefined || wanted.has(name)) continue;

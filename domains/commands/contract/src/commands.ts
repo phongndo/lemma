@@ -110,6 +110,7 @@ export const CommandChannels = {
   list: defineChannel({
     kind: "call",
     id: "commands.list",
+    access: "read",
     title: "Commands",
     description: "Every command clients can run, by category then title",
     payload: Schema.Void,
@@ -125,11 +126,14 @@ export const CommandChannels = {
    * what it does once (`host.toggle-plugin` flips the plugin back), and it may
    * ask the person again. It runs in `cwd`, the host's when absent; its questions
    * carry `origin` as their `InteractionOrigin`, so the client that ran it can
-   * tell them from others'.
+   * tell them from others'. It declares `change`, the most a command does
+   * (`host.toggle-plugin`, `llm.logout`): no credential crosses it, as a
+   * command answers with how it ended, not what it read.
    */
   run: defineChannel({
     kind: "call",
     id: "commands.run",
+    access: "change",
     title: "Run command",
     description: "Runs a command in `cwd` (default: the host's) and answers when it ends; its questions carry `origin`",
     payload: Schema.Struct({
@@ -154,6 +158,7 @@ export const CommandChannels = {
   changes: defineChannel({
     kind: "stream",
     id: "commands.changes",
+    access: "read",
     title: "Command changes",
     description: "Every command now, then the whole list again whenever one is added or removed",
     payload: Schema.Void,

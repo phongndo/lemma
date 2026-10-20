@@ -281,7 +281,8 @@ const channelArgs = [
 const channels = defineBuiltin({
   path: ["channels"],
   group: LOOK,
-  summary: "What host plugins serve their clients: id, call or stream, title, plugin, and what it does",
+  summary:
+    "What host plugins serve their clients: id, call or stream, what calling it does (read, operate, change, or secret, by which agents' scripts reach it), title, plugin, and what it does",
   run: ({ connect }) =>
     Effect.gen(function* () {
       const { rpc } = yield* connect;

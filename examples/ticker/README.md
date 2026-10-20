@@ -49,7 +49,9 @@ when a `channels-changed` event lists `ticker.prices` again after the plugin
 was off. A client that falls behind
 gets the latest prices rather than a backlog. `ticker.quote` only reads, so
 it is declared `repeatable`: one asked across a reload the host asks of the
-new instance itself.
+new instance itself. Both declare `access: "read"`, so an agent's scripts call
+them as `lemma_ticker_quote` and `lemma_ticker_prices` with nothing configured
+([tools.lemma](../../domains/tools/lemma/README.md)).
 
 `nix develop -c pnpm --filter @lemma/example-ticker test` checks the walk and
 the channels, and runs the plugin as a folder in a real host, using it from

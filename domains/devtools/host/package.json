@@ -1,0 +1,28 @@
+{
+  "name": "@lemma/devtools-host",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The host's own state as channels: its process and plugin set, its plugins, and its inspectors",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/contracts": "workspace:*",
+    "@lemma/core": "workspace:*",
+    "@lemma/devtools": "workspace:*",
+    "effect": "4.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "host": "./src/index.ts"
+  }
+}

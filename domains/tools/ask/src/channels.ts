@@ -21,6 +21,7 @@ export const AskChannels = {
   open: defineChannel({
     kind: "stream",
     id: "ask.open",
+    access: "read",
     title: "Open questions",
     description: "Questions the agent is waiting on, now and whenever they change",
     payload: Schema.Void,
@@ -33,6 +34,7 @@ export const AskChannels = {
   answer: defineChannel({
     kind: "call",
     id: "ask.answer",
+    access: "operate",
     title: "Answer questions",
     description: "Answers the agent's open questions, one answer per question",
     payload: Schema.Struct({ sessionId: Schema.String, toolCallId: Schema.String, answers: Schema.Array(QuestionAnswer) }),

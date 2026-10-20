@@ -5,8 +5,8 @@ import { AgentChannels, ProfileChannels } from "@lemma/agent";
 import { McpChannels } from "@lemma/mcp";
 import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
-import { branchOf, SessionChannels, searchLog, searchWords } from "@lemma/sessions";
-import { matches, selectSpans, TraceChannels } from "@lemma/devtools";
+import { branchOf, cacheReport, recordsOf, requestOf, SessionChannels, searchLog, searchWords, trajectory } from "@lemma/sessions";
+import { HostChannels, matches, redactJson, redactTexts, selectSpans, TraceChannels } from "@lemma/devtools";
 import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { SkillChannels } from "@lemma/skills";
@@ -568,6 +568,11 @@ export const createMockHost = (): Host => {
   const strays = Object.keys(described).filter((id) => !HOST_PLUGINS.includes(id));
   if (strays.length > 0) throw new Error(`The mock host describes plugins no domain has: ${strays.join(", ")}`);
   const plugins: PluginStatus[] = HOST_PLUGINS.map((id) => bundled(id, described[id]));
+  /** The plugin set it runs, as `Host.Info` and `devtools.host.info` give it. */
+  const compositionInfo = () => ({
+    id: "c0ffee1234abcd",
+    plugins: plugins.map((p) => ({ id: p.id, ...(p.version === undefined ? {} : { version: p.version }) })),
+  });
 
   // Wiring as the kernel reports it, so the inspector has hooks and observers to show.
   const wiring: Record<string, Partial<PluginStatus>> = {
@@ -1467,6 +1472,11 @@ export const createMockHost = (): Host => {
     if (session === undefined) throw notFound(sessionId);
     return session;
   };
+  /** A session's current branch, as `Sessions.branch` reads it. */
+  const branchOfSession = (sessionId: string) => {
+    const { info, events } = sessionOf(sessionId);
+    return branchOf(events, info.leaf);
+  };
 
   /** Every project has these: the composer's `@` searches them. */
   const mockFiles = [
@@ -1647,6 +1657,16 @@ export const createMockHost = (): Host => {
       sessionChanges.publish({ type: "session-changed", info: forked.info });
       return forked.info;
     }),
+    serveCall("sessions.files", SessionChannels.records, async ({ sessionId, filter }) => recordsOf(trajectory(branchOfSession(sessionId)), filter)),
+    serveCall("sessions.files", SessionChannels.request, async ({ sessionId, request, rebuilt }) => {
+      const branch = branchOfSession(sessionId);
+      const selector = String(request ?? "last");
+      const found = requestOf(branch, trajectory(branch), selector, { sessionId, ...(rebuilt === undefined ? {} : { rebuilt }) });
+      if (found === undefined)
+        throw new HostError({ code: "NotFound", subject: sessionId, message: `No request "${selector}" on the current branch of ${sessionId}` });
+      return found;
+    }),
+    serveCall("sessions.files", SessionChannels.cache, async ({ sessionId }) => cacheReport(trajectory(branchOfSession(sessionId)))),
     serveCall("sessions.files", SessionChannels.delete, async ({ sessionId }) => {
       sessionOf(sessionId);
       if (running.has(sessionId))
@@ -2031,6 +2051,16 @@ export const createMockHost = (): Host => {
       }),
     ),
     serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.history.get()),
+    serveCall("devtools.host", HostChannels.info, async () => ({ cwd: CWD, home: HOME, composition: compositionInfo(), runtime })),
+    serveCall("devtools.host", HostChannels.plugins, async ({ ids }) =>
+      (ids === undefined ? plugins : plugins.filter((plugin) => ids.includes(plugin.id))).map((plugin) => redactTexts(plugin) as PluginStatus),
+    ),
+    serveCall("devtools.host", HostChannels.inspectors, async () => MOCK_INSPECTORS.map(({ snapshot: _snapshot, ...info }) => info)),
+    serveCall("devtools.host", HostChannels.inspect, async ({ id }) => {
+      const found = MOCK_INSPECTORS.find((inspector) => inspector.id === id);
+      if (found === undefined) throw new HostError({ code: "NotFound", subject: id, message: `No inspector "${id}"` });
+      return redactJson(found.snapshot() ?? null);
+    }),
 
     serveCall("mcp.servers", McpChannels.state, async () => integrations.mcpState()),
     serveStream("mcp.servers", McpChannels.changes, (_, send) => integrations.followMcp(send)),
@@ -2039,12 +2069,13 @@ export const createMockHost = (): Host => {
     serveCall("mcp.servers", McpChannels.put, async ({ server, entry }) => integrations.putServer(server, entry)),
   ];
   const channels = new Map(served.map((channel) => [channel.declaration.id, channel]));
-  const infoOf = ({ declaration: { id, title, description }, kind, source }: Served): ChannelInfo => ({
+  const infoOf = ({ declaration: { id, title, description, access }, kind, source }: Served): ChannelInfo => ({
     id,
     kind,
     source,
     ...(title === undefined ? {} : { title }),
     ...(description === undefined ? {} : { description }),
+    ...(access === undefined ? {} : { access }),
   });
   /**
    * Payloads and results cross as they do to and from the host: in the JSON
@@ -2176,7 +2207,7 @@ export const createMockHost = (): Host => {
         version: "0.1.0-mock",
         cwd: CWD,
         home: HOME,
-        composition: { id: "c0ffee1234abcd", plugins: plugins.map((p) => ({ id: p.id, ...(p.version === undefined ? {} : { version: p.version }) })) },
+        composition: compositionInfo(),
         runtime,
       }),
       plugins: async () => plugins.slice(),

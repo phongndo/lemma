@@ -41,6 +41,11 @@ describe("channelProblem", () => {
     expect(channelProblem({ ...good, repeatable: "yes" })).toBe('"probe.call": its `repeatable` must be a boolean');
     expect(channelProblem({ ...good, kind: "stream", repeatable: true })).toBe('"probe.call": only a call is `repeatable`: a client reopens a stream itself');
     expect(channelProblem({ ...good, repeatable: true })).toBeUndefined();
+    // A value no client could list: refused here, not when every listing of the channels fails to send it.
+    expect(channelProblem({ ...good, access: "readonly" })).toBe(
+      '"probe.call": its `access` must be one of "read", "operate", "change", "secret", not "readonly"',
+    );
+    expect(channelProblem({ ...good, access: "read" })).toBeUndefined();
   });
 
   test("a typed declaration cannot make a stream repeatable, and Channels refuses an untyped one", () => {

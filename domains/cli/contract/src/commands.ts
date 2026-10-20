@@ -299,6 +299,7 @@ export const CliChannels = {
   commands: defineChannel({
     kind: "call",
     id: "cli.commands",
+    access: "read",
     title: "CLI commands",
     description: "The commands host plugins add to the lemma command, with what each takes",
     payload: Schema.Void,
@@ -308,6 +309,7 @@ export const CliChannels = {
   run: defineChannel({
     kind: "stream",
     id: "cli.run",
+    access: "secret",
     title: "Run a CLI command",
     description: "Runs a command, or rejoins one a dropped connection left, sending what it prints and then its result",
     payload: RunRequest,
@@ -316,14 +318,17 @@ export const CliChannels = {
   cancel: defineChannel({
     kind: "call",
     id: "cli.cancel",
+    access: "operate",
     title: "Cancel a CLI command",
     description: "Interrupts an invocation, as Ctrl+C does; false when there was none",
     payload: Schema.Struct({ invocation: Schema.String }),
     success: Schema.Boolean,
   }),
+  /** Runs what plugins add (`CliChecks`), which may reach a server or start a process: it declares `operate`, not `read`. */
   checks: defineChannel({
     kind: "call",
     id: "cli.checks",
+    access: "operate",
     title: "Checks",
     description: "Runs every check plugins add for lemma doctor",
     payload: optionalPayload({}),
@@ -333,6 +338,7 @@ export const CliChannels = {
   inProgress: defineChannel({
     kind: "call",
     id: "cli.in-progress",
+    access: "read",
     title: "In progress",
     description: "What stopping the host would cut off now, by the plugin that reports it",
     payload: optionalPayload({}),

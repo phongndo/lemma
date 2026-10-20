@@ -86,6 +86,7 @@ const listSessions = (handled: unknown[] = []) =>
       payload: optionalPayload({ cwd: Schema.optional(Schema.String) }),
       success: Schema.Array(Schema.Struct({ id: Schema.String, at: Schema.Date })),
       repeatable: true,
+      access: "read",
     },
     (payload) => {
       handled.push(payload);
@@ -120,6 +121,47 @@ describe("channels as tools", () => {
     expect(seen.listed.map((candidate) => candidate.spec.name)).toContain("lemma_delegate");
     expect(seen.after.map((candidate) => candidate.spec.name)).not.toContain("lemma_sessions_list");
     expect(seen.namespaces).toEqual(["lemma"]);
+  });
+
+  const declared = (id: string, access?: "read" | "operate" | "change" | "secret") =>
+    serveChannel({ kind: "call", id, ...(access === undefined ? {} : { access }), payload: Schema.Void, success: Schema.Number }, () => 1);
+  const offered = (config: Record<string, unknown>, ready: readonly string[]) =>
+    withCore(
+      { config },
+      Effect.gen(function* () {
+        const { add } = yield* Served;
+        for (const channel of [
+          declared("test.read", "read"),
+          declared("test.operate", "operate"),
+          declared("test.change", "change"),
+          declared("test.secret", "secret"),
+          declared("test.undeclared"),
+          declared("test.unlisted"),
+        ])
+          yield* add(channel);
+        const listed = yield* toolsWhen((list) => ready.every((name) => named(name)(list)));
+        return new Map(listed.filter((tool) => tool.spec.name.startsWith("lemma_test_")).map((tool) => [tool.spec.name, tool.spec.description]));
+      }),
+    );
+  const asks = (description: string | undefined) => description?.includes("asks the person first");
+
+  it("offers by what a channel declares: every read freely, a secret never, and anything else only as configured", async () => {
+    const tools = await offered({ channels: ["*", "test.secret", "test.undeclared"], confirm: ["test.change"] }, [
+      "lemma_test_read",
+      "lemma_test_change",
+      "lemma_test_undeclared",
+    ]);
+    // A write the config does not name, a secret the config names, and a channel that says nothing it does not name.
+    expect([...tools.keys()].sort()).toEqual(["lemma_test_change", "lemma_test_read", "lemma_test_undeclared"]);
+    expect(asks(tools.get("lemma_test_change"))).toBe(true);
+    expect(asks(tools.get("lemma_test_read"))).toBe(false);
+  });
+
+  it("keeps channels an allowlist: without * a read it does not name is not offered, and a write it names asks all the same", async () => {
+    const tools = await offered({ channels: ["test.operate", "test.undeclared"], confirm: [] }, ["lemma_test_operate", "lemma_test_undeclared"]);
+    expect([...tools.keys()].sort()).toEqual(["lemma_test_operate", "lemma_test_undeclared"]);
+    expect(asks(tools.get("lemma_test_operate"))).toBe(true);
+    expect(asks(tools.get("lemma_test_undeclared"))).toBe(false);
   });
 
   it("calls with the payload's JSON and resolves to the result's JSON", async () => {
@@ -234,7 +276,7 @@ describe("channels as tools", () => {
 
 describe("a stream as a tool", () => {
   const numbers = (stream: Stream.Stream<number>) =>
-    serveChannel({ kind: "stream", id: "sessions.changes", payload: Schema.Void, success: Schema.Number }, () => stream);
+    serveChannel({ kind: "stream", id: "sessions.changes", access: "read", payload: Schema.Void, success: Schema.Number }, () => stream);
 
   it("collects elements until `take` have come, or the stream ends", async () => {
     const results = await withCore(

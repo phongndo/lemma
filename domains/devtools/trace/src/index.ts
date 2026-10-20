@@ -2,16 +2,11 @@ import { Duration, Effect, Stream } from "effect";
 import { definePlugin } from "@lemma/core";
 import { Channels, serveChannel, Trace } from "@lemma/contracts";
 import type { SpanRecord } from "@lemma/contracts";
-import { matches, selectSpans, TraceChannels } from "@lemma/devtools";
+import { matches, redactText, SECRET_KEY, selectSpans, TraceChannels } from "@lemma/devtools";
 
 /** How long the follow stream gathers spans into one batch, and how many at most. */
 const BATCH = Duration.millis(250);
 const BATCH_SIZE = 1000;
-
-/** An attribute whose value is a secret by its name: a credential, a cookie, a token (not a count of tokens). */
-const SECRET_KEY = /authorization|cookie|token(?![a-z])|secret|password|api[-_.]?key/i;
-/** A secret in a value: a query parameter that carries one, in a URL (`?token=…`) or a query on its own (`token=…`). */
-const SECRET_PARAM = /((?:^|[?&])(?:token|key|secret|password|access_token|api[-_]?key)=)[^&#\s]+/gi;
 
 /**
  * `span` with its secrets hidden: what the host's own HTTP server records of a request (its headers, its URL) can hold
@@ -21,7 +16,7 @@ export const redacted = (span: SpanRecord): SpanRecord => {
   let changed = false;
   const attributes: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(span.attributes)) {
-    const hidden = SECRET_KEY.test(key) ? "<redacted>" : typeof value === "string" ? value.replace(SECRET_PARAM, "$1<redacted>") : value;
+    const hidden = SECRET_KEY.test(key) ? "<redacted>" : typeof value === "string" ? redactText(value) : value;
     if (hidden !== value) changed = true;
     attributes[key] = hidden;
   }

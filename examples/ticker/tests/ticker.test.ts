@@ -128,8 +128,8 @@ describe("as a plugin file in a real host", () => {
     // Beside the bundled plugins' own.
     const listed = JSON.parse(await lemma("channels", "--json")) as { readonly source: string }[];
     expect(listed.filter((channel) => channel.source === "ticker")).toEqual([
-      { id: "ticker.prices", kind: "stream", title: "Prices", description: "Every symbol's quote now, then on each tick", source: "ticker" },
-      { id: "ticker.quote", kind: "call", title: "Quote", description: "One symbol's quote now", source: "ticker" },
+      { id: "ticker.prices", kind: "stream", title: "Prices", description: "Every symbol's quote now, then on each tick", access: "read", source: "ticker" },
+      { id: "ticker.quote", kind: "call", title: "Quote", description: "One symbol's quote now", access: "read", source: "ticker" },
     ]);
     expect(JSON.parse(await lemma("channels", "call", "ticker.quote", '{"symbol":"GLOBEX"}', "--json"))).toMatchObject({ symbol: "GLOBEX" });
     const refused = await lemma("channels", "call", "ticker.quote", '{"symbol":"NOPE"}', "--json").catch((error: { code: number; stderr: string }) => error);

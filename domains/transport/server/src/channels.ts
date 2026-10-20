@@ -22,6 +22,7 @@ export const channelInfo = ({ item, pluginId }: Contribution<Channel>): ChannelI
   kind: item.kind,
   ...(item.title === undefined ? {} : { title: item.title }),
   ...(item.description === undefined ? {} : { description: item.description }),
+  ...(item.access === undefined ? {} : { access: item.access }),
   source: pluginId,
 });
 
