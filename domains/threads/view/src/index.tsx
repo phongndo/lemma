@@ -315,7 +315,8 @@ export default defineWebPlugin({
         </div>
       );
     });
-    header("thread.running", 0, "end", () => (
+    // First of the header's end: it comes and goes, and at the outer edge nothing beside it moves when it does.
+    header("thread.running", -20, "end", () => (
       <Show when={threads.busy()}>
         <span class="busy-chip">
           <Spinner /> Running
