@@ -69,9 +69,10 @@ export default defineWebPlugin({
   setup: ({ client, slots }) => {
     // Ticks only while a retry is being counted down to.
     const now = createNow(1_000, () => client.status().retryAt !== undefined);
+    // First of the header's end, before what the thread page puts there.
     slots.add(ThreadHeader, {
       id: "connection",
-      order: 18,
+      order: -10,
       side: "end",
       component: () => <ConnectionBadge status={client.status()} now={now} compact />,
     });

@@ -224,15 +224,59 @@
 /* The thread card: the open thread's facts, floating over its chat's top right while kept open, as a menu's rows. */
 .thread-card {
   position: absolute;
-  top: calc(var(--head-height) + 6px);
+  top: calc(var(--head-height) + 4px);
   right: 12px;
   z-index: 7;
-  width: 280px;
+  width: 260px;
+  min-width: 0;
   max-height: calc(100% - var(--head-height) - 24px);
-  border: 1px solid var(--border-strong);
+  padding: 4px;
+  border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-raised);
   box-shadow: var(--shadow-popover);
+}
+
+/* Its rows: quieter and tighter than a menu's, as they mostly show; numbers in columns. */
+.thread-card .menu-item {
+  min-height: 28px;
+  gap: 9px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--text-2);
+}
+
+.thread-card .menu-label {
+  font-weight: 450;
+}
+
+.thread-card .menu-check,
+.thread-card .menu-check .icon {
+  color: var(--text-3);
+}
+
+.thread-card .menu-hint {
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+/* A row with no icon of its own (what the thread cost) has a glyph in its place. */
+.thread-card-glyph {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Its groups, set apart by a rule; one whose rows draw nothing is left out. */
+.thread-card-group:not(:has(*)) {
+  display: none;
+}
+
+.thread-card-group:has(*) ~ .thread-card-group:has(*) {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
 }
 
 /* A row that does something (a menu's trigger) shows so under the pointer, as a menu's rows do. */

@@ -98,6 +98,7 @@ export default defineWebPlugin({
       slots.add(ThreadCard, {
         id: "context",
         order: 30,
+        group: "usage",
         component: () => <ContextRow threads={threads} models={models} at={plugin.config.at} />,
       }),
     );

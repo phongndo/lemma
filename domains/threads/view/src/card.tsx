@@ -21,7 +21,9 @@ export function CostRow(props: { threads: ThreadsService }) {
   return (
     <Show when={cost() > 0}>
       <div class="menu-item" data-tip="What this thread's model calls have cost, as their providers price them">
-        <span class="menu-check" />
+        <span class="menu-check thread-card-glyph" aria-hidden="true">
+          $
+        </span>
         <span class="menu-label">Cost</span>
         <span class="menu-hint">{formatCost(cost())}</span>
       </div>

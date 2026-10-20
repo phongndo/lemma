@@ -1099,7 +1099,8 @@ export const createMockHost = (): Host => {
         },
         step.id,
       );
-    append(sessionId, { type: "turn-start", turnId, model: by.ref });
+    // As the agent does: the turn logs each plugin's choice for it (a thread's mode, `agent.profiles`).
+    append(sessionId, { type: "turn-start", turnId, model: by.ref, ...(options?.plugins === undefined ? {} : { plugins: options.plugins }) });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     running.add(sessionId);
     const turn = { turnId, output: new Map<string, string>() };

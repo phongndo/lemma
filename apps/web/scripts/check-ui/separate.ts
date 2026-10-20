@@ -30,11 +30,13 @@ export const separate = async (): Promise<string> => {
     }),
     "reload is not an action",
   );
-  // The dot is the open thread's: in its header, just before the thread's menu.
-  const menu = fresh.locator(".main-head [aria-label='Thread actions']");
-  if ((await menu.count()) > 0) {
-    const [dot, menuButton] = await Promise.all([connection.boundingBox(), menu.boundingBox()]);
-    assert.ok(dot!.x < menuButton!.x, "the connection's dot should sit left of the thread's menu");
+  // The dot is the open thread's: first of its header's end, before the thread card's switch; the thread's actions are
+  // its sidebar row's menu, so the header has none.
+  assert.equal(await fresh.locator(".main-head [aria-label='Thread actions']").count(), 0, "the thread's header has a menu of its actions");
+  const cardToggle = fresh.locator(".main-head .card-toggle");
+  if ((await cardToggle.count()) > 0) {
+    const [dot, toggle] = await Promise.all([connection.boundingBox(), cardToggle.boundingBox()]);
+    assert.ok(dot!.x < toggle!.x, "the connection's dot should sit left of the thread card's switch");
   }
   // Reload is a command (the palette, its keys): run it as one is.
   await Promise.all([

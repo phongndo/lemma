@@ -466,10 +466,11 @@ export default defineWebPlugin({
     deps.slots.add(ThreadStart, { id: "workspace", order: 0, component: () => <WorkspaceStart deps={deps} /> });
     // An open thread's: where it works, and its branch, which the row's menu switches (git keeps a running turn's).
     const status = deps.workspace.status;
-    deps.slots.add(ThreadCard, { id: "workspace.folder", order: 10, component: () => <FolderRow deps={deps} /> });
+    deps.slots.add(ThreadCard, { id: "workspace.folder", order: 10, group: "workspace", component: () => <FolderRow deps={deps} /> });
     deps.slots.add(ThreadCard, {
       id: "workspace.branch",
       order: 20,
+      group: "workspace",
       component: () => (
         <Show when={!deps.workspace.isStandalone(deps.workspace.workingDir() ?? "") && status()?.git}>
           {(git) => <BranchPicker deps={deps} git={git()} onChanged={deps.workspace.setStatus} variant="row" placement="bottom-end" />}

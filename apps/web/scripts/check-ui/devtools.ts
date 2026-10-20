@@ -234,7 +234,8 @@ export const devtools = async (): Promise<string> => {
     modeMenu!.y > modeItem!.y && Math.abs(modeMenu!.x + modeMenu!.width / 2 - (modeItem!.x + modeItem!.width / 2)) < 2,
     "a start line's menu does not open below its item, centered on it",
   );
-  await page.keyboard.press("Escape");
+  // Started in Creator: a mode other than the default, which the thread card shows.
+  await page.click(".agent-mode-menu .agent-mode-item >> text=Creator");
   await page.waitForSelector(".agent-mode-menu", { state: "detached" });
   await page.evaluate(async () => {
     const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
@@ -252,9 +253,10 @@ export const devtools = async (): Promise<string> => {
   await page
     .waitForSelector(".thread-chat.starting", { state: "detached", timeout: 5_000 })
     .catch(() => assert.fail("a thread's prompt stays in the middle of the page once its first prompt is sent"));
-  // Its facts are in its card, open over the chat until closed, its mode first; the composer holds none of them.
+  // Its facts are in its card, open over the chat until closed, its mode first (not being the default); the composer
+  // holds none of them.
   await page
-    .waitForSelector(".thread-card .menu-item:first-child >> text=Work mode", { timeout: 5_000 })
+    .waitForSelector(".thread-card .menu-item:first-child >> text=Creator mode", { timeout: 5_000 })
     .catch(() => assert.fail("a started thread's card does not show its mode first"));
   assert.equal(
     await page.locator(".composer-dock .context-row, .composer-dock .agent-mode-chip, .workspace-bar").count(),

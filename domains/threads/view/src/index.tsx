@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
 import { isRoute } from "@lemma/router";
 import { tildePath } from "@lemma/web/format";
@@ -18,14 +18,14 @@ import {
   Views,
 } from "@lemma/threads";
 import { Actions } from "@lemma/actions";
-import { ActionMenu, Layout } from "@lemma/frame";
+import { Layout } from "@lemma/frame";
 import { NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { Client, Notify, Pages, Router, Slots, defineWebPlugin, Contained, Each, First } from "@lemma/web";
 import { Workspace } from "@lemma/workspace/web";
 import type { Action } from "@lemma/actions";
 import type { SlotItem } from "@lemma/web";
 import type { ThreadAction } from "@lemma/threads";
-import { ArchiveIcon, CopyIcon, LogIcon, MoreIcon, PenSquareIcon, PencilIcon, PinIcon, Popover, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
+import { ArchiveIcon, CopyIcon, LogIcon, PenSquareIcon, PencilIcon, PinIcon, SidebarIcon, Spinner, StopIcon, TrashIcon } from "@lemma/look";
 import { copyAndTell } from "@lemma/web/clipboard";
 import { CostRow } from "./card.tsx";
 import { createInspector } from "./inspector.tsx";
@@ -331,7 +331,7 @@ export default defineWebPlugin({
         </button>
       </Show>
     ));
-    // The thread card's switch, before the thread's menu.
+    // The thread card's switch. The thread's actions are its row's menu in the sidebar (a right-click), and the palette's.
     header("thread.card", 15, "end", () => (
       <Show when={started()}>
         <button
@@ -347,23 +347,9 @@ export default defineWebPlugin({
       </Show>
     ));
     // Its own row: what the thread has cost, after the others' (its mode, where it works, its context).
-    slots.add(ThreadCard, { id: "thread.cost", order: 100, component: () => <CostRow threads={threads} /> });
-    header("thread.menu", 20, "end", () => (
-      <Show when={threads.active()} keyed>
-        {(session) => {
-          const actions = () => slots.list(ThreadActions).filter((action) => action.when?.(session) ?? true);
-          return (
-            <Show when={actions().length > 0}>
-              <Popover label="Thread actions" tip="Thread" trigger={<MoreIcon />} triggerClass="icon-button" placement="bottom-end">
-                {(close) => (
-                  <ActionMenu subject={session} control={{ rename: () => setRenaming(true) }} slot={ThreadActions} actions={actions()} close={close} />
-                )}
-              </Popover>
-            </Show>
-          );
-        }}
-      </Show>
-    ));
+    slots.add(ThreadCard, { id: "thread.cost", order: 100, group: "usage", component: () => <CostRow threads={threads} /> });
+    /** The card's groups, in the order their first rows come. */
+    const cardGroups = createMemo(() => [...new Set(slots.list(ThreadCard).map((row) => row.group ?? row.id))]);
 
     /** The inspection pane's width, kept across reloads; the page narrows it to leave the chat room. */
     const [width, setWidth] = createSignal(Number(load(WIDTH_KEY)) || WIDTH);
@@ -413,7 +399,13 @@ export default defineWebPlugin({
             </header>
             <Show when={cardOpen() && started() && unknown() === undefined}>
               <aside class="menu thread-card" aria-label="Thread details">
-                <Each slot={ThreadCard} />
+                <For each={cardGroups()}>
+                  {(group) => (
+                    <div class="thread-card-group">
+                      <Each slot={ThreadCard} filter={(row) => (row.group ?? row.id) === group} />
+                    </div>
+                  )}
+                </For>
               </aside>
             </Show>
             <Show

@@ -34,7 +34,7 @@ You help the user write. Keep their voice; say what you changed and why.
 - **Kept.** The thread's first turn logs its mode (`turn-start`), the default
   written in when the prompt named none (an `AgentInputHook` handler), and the
   thread keeps it: a later prompt naming another goes with the thread's own, as
-  its turn then logs, and an open thread shows its mode, without a picker, as the first row of its thread card (`ThreadCard`).
+  its turn then logs, and an open thread shows its mode, without a picker, as the first row of its thread card (`ThreadCard`), unless it is the default.
   Another mode is another thread. Switching mid-thread would change the
   system prompt and tools under a conversation the model began with others,
   and start the prompt cache over.

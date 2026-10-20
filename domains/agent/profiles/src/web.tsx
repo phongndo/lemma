@@ -129,20 +129,21 @@ export default defineWebPlugin({
 
     // Only a new thread's first prompt names a mode: a thread's own is in its log, which the host keeps to.
     plugin.onCleanup(slots.add(TurnOptionSources, { id: PROFILES_PLUGIN, value: (sessionId) => (sessionId === undefined ? forNew() : undefined) }));
-    // An open thread's mode, kept since its first prompt: the thread card's first row.
+    // An open thread's mode, kept since its first prompt: the thread card's first row, unless it is the default, which goes
+    // without saying.
     plugin.onCleanup(
       slots.add(ThreadCard, {
         id: "profile",
         order: 0,
+        group: "thread",
         component: () => (
-          <Show when={profiles().length > 0 && thread()}>
+          <Show when={profiles().length > 0 && thread() !== fallback() && thread()}>
             {(name) => (
               <div class="menu-item" data-tip={`${describe(name()) ?? `${titled(name())} mode`}. Kept for this thread: start a new one for another mode.`}>
                 <span class="menu-check">
                   <SlidersIcon />
                 </span>
                 <span class="menu-label">{titled(name())} mode</span>
-                <span class="menu-hint">kept</span>
               </div>
             )}
           </Show>
