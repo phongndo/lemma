@@ -1,3 +1,4 @@
+import { get } from "node:http";
 import { describe, expect, it } from "vitest";
 import { Effect } from "effect";
 import { Llm } from "@lemma/llm";
@@ -325,10 +326,19 @@ describe("Sign in with ChatGPT", () => {
 
   it("leaves the login to a callback of its own, and shows what one carried as text", async () => {
     const pages: { status: number; body: string }[] = [];
-    const visit = async (query: string) => {
-      const response = await fetch(`http://127.0.0.1:1455/auth/callback?${query}`);
-      pages.push({ status: response.status, body: await response.text() });
-    };
+    // As a browser would, each on a connection of its own: one kept alive would reach a server closed since.
+    const visit = (path: string) =>
+      new Promise<void>((resolve, reject) => {
+        get({ host: "127.0.0.1", port: 1455, path, agent: false }, (response) => {
+          let body = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk: string) => (body += chunk));
+          response.on("end", () => {
+            pages.push({ status: response.statusCode ?? 0, body });
+            resolve();
+          });
+        }).on("error", reject);
+      });
     const fetchImpl: typeof fetch = async () =>
       Response.json({ access_token: "acc", refresh_token: "ref", scope: "openid chatgpt.tokens.use.direct", expires_in: 3600 });
     const notices: { links?: readonly { url: string }[] | undefined }[] = [];
@@ -338,11 +348,12 @@ describe("Sign in with ChatGPT", () => {
       deviceId: () => "0b5c3f6e-6a9f-4a51-9a35-2f6f0e3b8a10",
       fetch: fetchImpl,
     });
-    // A stale tab's refusal: this login goes on, and signs in with the redirect pasted after.
+    // A stale tab's refusal, and a path that is no URL: this login goes on, and signs in with the redirect pasted after.
     const signedIn = await Effect.runPromise(
       chatgpt.login(
         login(async (state) => {
-          await visit("state=old&error=access_denied");
+          await visit("/auth/callback?state=old&error=access_denied");
+          await visit("//[/auth/callback");
           return `http://127.0.0.1:1455/auth/callback?code=c&state=${state}&client_id=issued`;
         }),
       ),
@@ -354,7 +365,7 @@ describe("Sign in with ChatGPT", () => {
       Effect.flip(
         chatgpt.login(
           login((state) => {
-            visited = visit(`state=${state}&error=${encodeURIComponent("<script>alert(1)</script>")}`);
+            visited = visit(`/auth/callback?state=${state}&error=${encodeURIComponent("<script>alert(1)</script>")}`);
             return new Promise<string>(() => {});
           }),
         ),
@@ -362,8 +373,8 @@ describe("Sign in with ChatGPT", () => {
     );
     await visited;
     expect(String(refused)).toContain("<script>alert(1)</script>");
-    expect(pages.map((page) => page.status)).toEqual([400, 400]);
-    expect(pages[1]!.body).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(pages.map((page) => page.status)).toEqual([400, 400, 400]);
+    expect(pages[2]!.body).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
     expect(pages.some((page) => page.body.includes("<script>"))).toBe(false);
   });
 

@@ -73,8 +73,14 @@ const callback = (state: string) =>
       // Kept from becoming an unhandled rejection when the paste wins and the server closes unanswered.
       result.catch(() => undefined);
       const server = createServer((request, response) => {
-        const url = new URL(request.url ?? "", REDIRECT_URI);
         const send = (status: number, body: string) => response.writeHead(status, { "content-type": "text/html; charset=utf-8" }).end(body);
+        // Any page can send the browser here: a path that is no URL is answered, not thrown where nothing catches it.
+        let url: URL;
+        try {
+          url = new URL(request.url ?? "", REDIRECT_URI);
+        } catch {
+          return send(400, page("Not a callback"));
+        }
         if (url.pathname !== CALLBACK_PATH) return send(404, page("Not found"));
         try {
           const found = authorization(url, state);
