@@ -443,7 +443,8 @@ describe("Sign in with ChatGPT", () => {
     expect(String(refused)).toContain("another login");
     const bodies: URLSearchParams[] = [];
     const fresh = await chatgpt.refresh(
-      { type: "oauth", access: "old", refresh: "ref", expires: 0, clientId: "issued" },
+      // As pi-ai stored a sign-in, which a refresh keeps working.
+      { type: "oauth", access: "old", refresh: "ref", expires: 0, clientId: "issued", scopes: ["openid", "chatgpt.tokens.use.direct"] },
       async (_, init) => {
         bodies.push(new URLSearchParams(String(init?.body)));
         return Response.json({ access_token: "new", refresh_token: "ref2", scope: "chatgpt.tokens.use.direct", expires_in: 3600 });
