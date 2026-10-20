@@ -30,7 +30,9 @@ export const llmCommands = (llm: Context.Service.Shape<typeof Llm>, ask: Ask): r
           })),
         );
         yield* llm.logout(id);
-        return { message: `Logged out of ${providers.find((provider) => provider.id === id)?.name ?? id}` };
+        // Lemma forgets its copy; the provider honors the key or sign-in until it is revoked there.
+        const name = providers.find((provider) => provider.id === id)?.name ?? id;
+        return { message: `Logged out of ${name}. To end its access there too, revoke it with ${name}.` };
       }),
   },
 ];

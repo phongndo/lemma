@@ -21,15 +21,13 @@ export function createNotify(client: ClientService): { readonly notify: NotifySe
   };
   const dispose = client.onEvent((event) => {
     if (event.type !== "notice") return;
-    const { level, message, source, links, code, origin, kind } = event.notice;
+    const { level, message, source, links, origin } = event.notice;
     toast({
       level,
       message,
       ...(source === undefined ? {} : { source }),
       ...(links === undefined ? {} : { links }),
-      ...(code === undefined ? {} : { code }),
       ...(origin === undefined ? {} : { origin }),
-      ...(kind === undefined ? {} : { kind }),
     });
   });
   return {

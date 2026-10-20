@@ -4,13 +4,12 @@ import { definePlugin, Events, makeCore, Registries } from "@lemma/core";
 import type { Core } from "@lemma/core";
 import { channelProblem, Channels, elementsOf, resultOf } from "@lemma/contracts";
 import type { Channel, ChannelCall, ChannelStream } from "@lemma/contracts";
-import { InteractionOrigin } from "@lemma/contracts";
 import { Llm, LlmError, ModelsChanged, serveLlm } from "../src/llm.ts";
 import { callServed } from "@lemma/contracts/testing";
-import type { AuthType } from "../src/llm.ts";
+import type { AuthType, LoginOptions } from "../src/llm.ts";
 
 /** An `Llm` whose login is `login`, serving its channels as a provider does. */
-const provider = (login: (provider: string, type: AuthType) => Effect.Effect<void, LlmError>) =>
+const provider = (login: (provider: string, type: AuthType, options?: LoginOptions) => Effect.Effect<void, LlmError>) =>
   definePlugin({
     id: "llm",
     provides: { llm: Llm },
@@ -25,6 +24,8 @@ const provider = (login: (provider: string, type: AuthType) => Effect.Effect<voi
         imageModels: () => Effect.succeed([]),
         generateImages: (ref) => Effect.fail(new LlmError({ reason: "UnknownModel", message: ref })),
         login,
+        signIns: Stream.make([]),
+        answerSignIn: (provider) => Effect.fail(new LlmError({ reason: "NotAsked", provider, message: "none" })),
         logout: () => Effect.void,
         addCustom: (spec) => Effect.succeed(spec.name),
         removeCustom: () => Effect.void,
@@ -43,15 +44,15 @@ const channelsOf = (core: Core<any>) =>
 
 const call = (channels: ReadonlyMap<string, Channel>, id: string, payload: unknown) => resultOf(channels.get(id) as ChannelCall, payload);
 
-/** A login that waits for `release`, counting its starts, recording its origin, and noting an interruption. */
+/** A login that waits for `release`, counting its starts, recording its options, and noting an interruption. */
 const heldLogin = Effect.gen(function* () {
   const started = yield* Deferred.make<void>();
   const release = yield* Deferred.make<void>();
-  const seen = { starts: 0, origins: [] as (string | undefined)[], interrupted: false };
-  const login = () =>
+  const seen = { starts: 0, options: [] as (LoginOptions | undefined)[], interrupted: false };
+  const login = (_provider: string, _type: AuthType, options?: LoginOptions) =>
     Effect.gen(function* () {
       seen.starts++;
-      seen.origins.push(yield* InteractionOrigin);
+      seen.options.push(options);
       yield* Deferred.succeed(started, undefined);
       yield* Deferred.await(release);
     }).pipe(Effect.onInterrupt(() => Effect.sync(() => (seen.interrupted = true))));
@@ -73,6 +74,8 @@ describe("serveLlm", () => {
           ["llm.models", "call"],
           ["llm.login", "call"],
           ["llm.cancel-login", "call"],
+          ["llm.sign-ins", "stream"],
+          ["llm.answer-sign-in", "call"],
           ["llm.logout", "call"],
           ["llm.add-custom", "call"],
           ["llm.remove-custom", "call"],
@@ -93,7 +96,9 @@ describe("serveLlm", () => {
         const held = yield* heldLogin;
         const core = yield* makeCore([provider(held.login)]);
         const channels = yield* channelsOf(core);
-        const first = yield* Effect.forkChild(call(channels, "llm.login", { provider: "p", type: "oauth" }));
+        const first = yield* Effect.forkChild(
+          call(channels, "llm.login", { provider: "p", type: "oauth", browser: "elsewhere", returnTo: "lemma://settings/providers" }),
+        );
         yield* Deferred.await(held.started);
         // The caller goes away: the login goes on, its question still open.
         yield* Fiber.interrupt(first);
@@ -104,8 +109,8 @@ describe("serveLlm", () => {
         expect(failure(other)).toMatchObject({ _tag: "LlmError", reason: "Busy", provider: "p", message: 'A oauth login to "p" is in progress' });
         yield* Deferred.succeed(held.release, undefined);
         expect(yield* Fiber.await(second)).toEqual(Exit.succeed(undefined));
-        // One flow, under the login's own origin, so its questions and notices show together.
-        expect(held.seen).toMatchObject({ starts: 1, origins: ["login:p"] });
+        // One flow, with the first call's options.
+        expect(held.seen).toMatchObject({ starts: 1, options: [{ browser: "elsewhere", returnTo: "lemma://settings/providers" }] });
         // Ended, a login starts afresh.
         yield* call(channels, "llm.login", { provider: "p", type: "api_key" });
         expect(held.seen.starts).toBe(2);

@@ -21,10 +21,17 @@ Requires `Client` and `Notify`. No config.
   does not offer is clamped (`clampThinking`).
 - **One login at a time.** `login` while another login this page started is
   running resolves false at once, and `loggingIn` names only a login this
-  page started. A failed login is reported and resolves false. Once a login
-  ends, the toasts it raised (its links, device codes, and progress) are
-  dismissed, all but its `signed-in` notice. `logout` reports a failure
-  rather than rejecting.
+  page started. A failed login is reported and resolves false. `logout`
+  reports a failure rather than rejecting, and its message says the provider
+  honors the key or sign-in until it is revoked there.
+- **Sign-ins from any client.** `signIns` is what `llm.sign-ins` lists, the
+  sign-ins running on the host whoever started them, followed again after a
+  reconnect; `answerSignIn` answers one's open step. A login says where this
+  page's browser is (`browserPlace`: on the host's machine when the page came
+  from `localhost`, which lets a flow offering a device code use it only when
+  elsewhere). In the desktop app's window, its sign-in page offers the way
+  back to the app (`signInReturn`: `lemma://settings/providers`); a browser
+  tab's offers none, as a tab it opened would have no copy of the host's token.
 - **Custom providers settle.** `addCustom`, `removeCustom`, and `setLogo`
   change the llm plugin's config, whose reload can finish after the call
   returns, so each waits up to five seconds for `llm.providers` to list the

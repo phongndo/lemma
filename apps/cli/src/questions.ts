@@ -284,5 +284,5 @@ export const hostEvents = (
 export const noticeLine = (event: Extract<RuntimeEvent, { type: "notice" }>) => {
   const notice = event.notice;
   const links = notice.links?.map((link) => ` ${link.label === undefined ? link.url : `${link.label}: ${link.url}`}`).join("") ?? "";
-  return `[${notice.level}]${notice.source === undefined ? "" : ` ${notice.source}:`} ${notice.message}${notice.code === undefined ? "" : ` (code: ${notice.code})`}${links}`;
+  return `[${notice.level}]${notice.source === undefined ? "" : ` ${notice.source}:`} ${notice.message}${links}`;
 };

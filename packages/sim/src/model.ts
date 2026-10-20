@@ -223,6 +223,8 @@ export const simModel = (
           }),
         ),
       login: () => Effect.void,
+      signIns: Stream.make([]),
+      answerSignIn: () => Effect.void,
       logout: () => Effect.void,
       addCustom: () => Effect.succeed("sim"),
       removeCustom: () => Effect.void,

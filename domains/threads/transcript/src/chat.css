@@ -84,6 +84,17 @@
   overflow-wrap: anywhere;
 }
 
+/* What plugins offer to fix it (`ErrorActions`); empty when none applies. */
+.chat-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chat-error-actions:not(:empty) {
+  margin-top: 6px;
+}
+
 .chat-error-summary {
   font-weight: 500;
 }

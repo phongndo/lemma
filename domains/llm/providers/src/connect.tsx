@@ -1,11 +1,10 @@
-import { For, Match, Show, Switch, createSignal } from "solid-js";
+import { For, Match, Show, Switch, createSignal, onCleanup } from "solid-js";
 import type { Accessor } from "solid-js";
-import type { InteractionRequest, NoticePayload } from "@lemma/contracts";
-import type { ProviderInfo } from "@lemma/llm";
+import { asksAnswer } from "@lemma/llm";
+import type { ProviderInfo, SignIn, SignInStep } from "@lemma/llm";
 import { copyText } from "@lemma/web/clipboard";
-import { providerBrand, signInState, ProviderLogo } from "@lemma/llm/web";
+import { browserPlace, providerBrand, timeLeft, ProviderLogo } from "@lemma/llm/web";
 import { usePlugin } from "@lemma/web";
-import type { InteractionsService } from "@lemma/web";
 import { CopyButton, Dialog, ExternalIcon, Spinner } from "@lemma/look";
 
 const hostOf = (url: string) => {
@@ -19,8 +18,7 @@ const hostOf = (url: string) => {
 /** Focus on arrival: a step can appear after the dialog opened, so the dialog's own autofocus has passed. */
 const focus = (element: HTMLElement) => queueMicrotask(() => element.focus());
 
-/** A question's title as a label: pi-ai's end in a colon, as a terminal prompt does. */
-const label = (title: string) => title.replace(/:\s*$/, "");
+type Step<T extends SignInStep["type"]> = Extract<SignInStep, { type: T }>;
 
 /** The address to open, whole and selectable, with a copy button: a browser on any machine can open it. */
 function LinkBox(props: { url: string; label: string }) {
@@ -54,19 +52,15 @@ function Waiting(props: { text: string }) {
   );
 }
 
-/** This page came from another machine, so the host's own address (`localhost`) is not reachable from this browser. */
-const remoteHost = () => !/^(localhost|127(\.\d+){3}|\[::1\])$/.test(location.hostname);
-
 /**
- * A browser that cannot reach the host (on another machine) ends on a page
- * that fails to load; its address finishes the sign-in. Open from the start
- * when this page itself came from a remote host.
+ * A browser that cannot reach the host (on another machine) ends on a page that fails to load; its address finishes
+ * the sign-in. Open from the start when this page itself came from another machine than the host.
  */
-function PasteFallback(props: { interactions: InteractionsService; request: Extract<InteractionRequest, { type: "ask" }>; open?: boolean }) {
+function PasteFallback(props: { placeholder?: string | undefined; answer: (value: string) => void }) {
   const [value, setValue] = createSignal("");
-  const submit = () => value().trim() !== "" && props.interactions.answer(props.request.id, { type: "ask", value: value().trim() });
+  const submit = () => value().trim() !== "" && props.answer(value().trim());
   return (
-    <details class="connect-paste" open={props.open === true || remoteHost()}>
+    <details class="connect-paste" open={browserPlace(location.hostname) === "elsewhere"}>
       <summary>Browser on another device?</summary>
       <p>
         After you approve, the browser may land on a page that doesn't load. That's expected: copy the page's address from the address bar and paste it here.
@@ -83,8 +77,8 @@ function PasteFallback(props: { interactions: InteractionsService; request: Extr
           type="text"
           autocomplete="off"
           spellcheck={false}
-          aria-label={label(props.request.title)}
-          placeholder={props.request.placeholder ?? "Paste the address or code"}
+          aria-label="The address the browser ended on"
+          placeholder={props.placeholder ?? "Paste the address"}
           value={value()}
           onInput={(event) => setValue(event.currentTarget.value)}
         />
@@ -96,8 +90,8 @@ function PasteFallback(props: { interactions: InteractionsService; request: Extr
   );
 }
 
-/** An API key to paste: stored on the host, with a link to where the provider issues one. */
-function KeyField(props: { interactions: InteractionsService; provider: ProviderInfo; request: Extract<InteractionRequest, { type: "ask" }> }) {
+/** An API key to paste: stored on the host, with a link to where the provider issues one, and why the last was refused. */
+function KeyField(props: { provider: ProviderInfo; step: Step<"key">; answer: (value: string) => void }) {
   const [value, setValue] = createSignal("");
   const keyUrl = () => providerBrand(props.provider.id).keyUrl;
   return (
@@ -105,22 +99,29 @@ function KeyField(props: { interactions: InteractionsService; provider: Provider
       class="connect-question"
       onSubmit={(event) => {
         event.preventDefault();
-        if (value().trim() !== "") props.interactions.answer(props.request.id, { type: "ask", value: value().trim() });
+        if (value().trim() !== "") props.answer(value().trim());
       }}
     >
-      <label class="connect-lead" for={`connect-${props.request.id}`}>
-        Paste your {props.provider.name} API key.
+      <label class="connect-lead" for="connect-key">
+        Paste your {props.step.label}.
       </label>
+      <Show when={props.step.problem}>
+        {(problem) => (
+          <p class="connect-problem" role="alert">
+            {problem()}
+          </p>
+        )}
+      </Show>
       <div class="connect-form">
         <input
-          id={`connect-${props.request.id}`}
+          id="connect-key"
           ref={focus}
           class="field"
           type="password"
           autocomplete="off"
           spellcheck={false}
-          aria-label={label(props.request.title)}
-          placeholder={props.request.placeholder ?? "API key"}
+          aria-invalid={props.step.problem !== undefined}
+          placeholder="API key"
           value={value()}
           onInput={(event) => setValue(event.currentTarget.value)}
         />
@@ -129,7 +130,7 @@ function KeyField(props: { interactions: InteractionsService; provider: Provider
         </button>
       </div>
       <p class="connect-note">
-        Stored in the host's credential store and never shown again.
+        Lemma checks it with {props.provider.name}, then stores it on the host; it is never shown again.
         <Show when={keyUrl()}>
           {(url) => (
             <>
@@ -146,120 +147,136 @@ function KeyField(props: { interactions: InteractionsService; provider: Provider
 }
 
 /** A question the flow asks on its way (which account, which domain), in the dialog rather than over it. */
-function Question(props: { interactions: InteractionsService; provider: ProviderInfo; request: InteractionRequest }) {
+function TextField(props: { step: Step<"text">; answer: (value: string) => void }) {
   const [value, setValue] = createSignal("");
   return (
-    <Switch>
-      <Match when={props.request.type === "select" && props.request}>
-        {(request) => (
-          <div class="connect-question" role="group" aria-label={label(request().title)}>
-            <p class="connect-lead">{label(request().title)}</p>
-            <div class="connect-choices">
-              <For each={request().options}>
-                {(option, index) => (
-                  <button
-                    type="button"
-                    class="connect-choice"
-                    ref={(button) => index() === 0 && focus(button)}
-                    onClick={() => props.interactions.answer(request().id, { type: "select", value: option.value })}
-                  >
-                    <span class="connect-choice-label">{option.label}</span>
-                    <Show when={option.description}>
-                      <span class="connect-choice-desc">{option.description}</span>
-                    </Show>
-                  </button>
-                )}
-              </For>
-            </div>
-          </div>
-        )}
-      </Match>
-      <Match when={props.request.type === "ask" && props.request.secret === true && props.request}>
-        {(request) => <KeyField interactions={props.interactions} provider={props.provider} request={request()} />}
-      </Match>
-      <Match when={props.request.type === "ask" && props.request}>
-        {(request) => (
-          <form
-            class="connect-question"
-            onSubmit={(event) => {
-              event.preventDefault();
-              // A blank answer is one: "blank for github.com".
-              props.interactions.answer(request().id, { type: "ask", value: value() });
-            }}
-          >
-            <label class="connect-lead" for={`connect-${request().id}`}>
-              {label(request().title)}
-            </label>
-            <div class="connect-form">
-              <input
-                id={`connect-${request().id}`}
-                ref={focus}
-                class="field"
-                type={request().secret ? "password" : "text"}
-                autocomplete="off"
-                spellcheck={false}
-                placeholder={request().placeholder ?? ""}
-                value={value()}
-                onInput={(event) => setValue(event.currentTarget.value)}
-              />
-              <button type="submit" class="button button-primary">
-                Continue
-              </button>
-            </div>
-          </form>
-        )}
-      </Match>
-      <Match when={props.request.type === "confirm" && props.request}>
-        {(request) => (
-          <div class="connect-question">
-            <p class="connect-lead">{request().title}</p>
-            <Show when={request().detail}>
-              <p class="muted">{request().detail}</p>
-            </Show>
-            <div class="connect-form">
-              <button
-                type="button"
-                ref={focus}
-                class="button button-primary"
-                onClick={() => props.interactions.answer(request().id, { type: "confirm", value: true })}
-              >
-                Yes
-              </button>
-              <button type="button" class="button" onClick={() => props.interactions.answer(request().id, { type: "confirm", value: false })}>
-                No
-              </button>
-            </div>
-          </div>
-        )}
-      </Match>
-    </Switch>
+    <form
+      class="connect-question"
+      onSubmit={(event) => {
+        event.preventDefault();
+        // A blank answer is one: "blank for github.com".
+        props.answer(value());
+      }}
+    >
+      <label class="connect-lead" for="connect-text">
+        {props.step.title}
+      </label>
+      <div class="connect-form">
+        <input
+          id="connect-text"
+          ref={focus}
+          class="field"
+          type={props.step.secret ? "password" : "text"}
+          autocomplete="off"
+          spellcheck={false}
+          placeholder={props.step.placeholder ?? ""}
+          value={value()}
+          onInput={(event) => setValue(event.currentTarget.value)}
+        />
+        <button type="submit" class="button button-primary">
+          Continue
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function Choice(props: { step: Step<"choice">; answer: (value: string) => void }) {
+  return (
+    <div class="connect-question" role="group" aria-label={props.step.title}>
+      <p class="connect-lead">{props.step.title}</p>
+      <div class="connect-choices">
+        <For each={props.step.options}>
+          {(option, index) => (
+            <button type="button" class="connect-choice" ref={(button) => index() === 0 && focus(button)} onClick={() => props.answer(option.value)}>
+              <span class="connect-choice-label">{option.label}</span>
+              <Show when={option.description}>
+                <span class="connect-choice-desc">{option.description}</span>
+              </Show>
+            </button>
+          )}
+        </For>
+      </div>
+    </div>
+  );
+}
+
+/** The one-time code to enter on the provider's site, how long it lasts, and the page to enter it on. */
+function DeviceCode(props: { step: Step<"code"> }) {
+  const plugin = usePlugin();
+  const [now, setNow] = createSignal(Date.now());
+  onCleanup(plugin.every(1000, () => setNow(Date.now())));
+  // Counted from when this page first showed the code, on its own clock: the host's may differ. A page that opened late
+  // shows more time than is left, never less; the host ends the sign-in when the code expires.
+  const deadline = props.step.expiresIn === undefined ? undefined : Date.now() + props.step.expiresIn * 1000;
+  const left = () => (deadline === undefined ? undefined : timeLeft(deadline, now()));
+  return (
+    <>
+      <p class="connect-lead">
+        Enter this code at <strong>{hostOf(props.step.url)}</strong> to approve Lemma.
+      </p>
+      <div class="connect-code">
+        <code aria-label="One-time code">{props.step.code}</code>
+        <CopyButton text={props.step.code} label="Copy code" />
+      </div>
+      <a
+        class="button button-primary connect-open"
+        href={props.step.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        ref={focus}
+        // Copied on the way, so the code is ready to paste on the page that opens.
+        onClick={plugin.action("copy code", () => copyText(props.step.code))}
+      >
+        Copy code and open {hostOf(props.step.url)} <ExternalIcon />
+      </a>
+      <LinkBox url={props.step.url} label="Copy link" />
+      <Show when={deadline !== undefined} fallback={<Waiting text="Waiting for you to approve" />}>
+        <Show when={left()} fallback={<p class="connect-problem">The code expired. Cancel and connect again for a new one.</p>}>
+          {(remaining) => <Waiting text={`Waiting for you to approve · the code expires in ${remaining()}`} />}
+        </Show>
+      </Show>
+      <p class="connect-note">Only enter this code if you started this sign-in in Lemma.</p>
+    </>
   );
 }
 
 /**
- * Connecting a provider in one place, whichever way: the API key to paste, or
- * the page to open (here, or copied into a browser anywhere) and the code to
- * enter there, what it waits for, and the flow's other questions. Closing it
- * cancels the login.
+ * Connecting a provider in one place, whichever way: what its sign-in on the host asks now (`SignIn.step`), whichever
+ * client started it. The API key to paste, or the page to open (here, or copied into a browser anywhere) and the code to
+ * enter there, what it waits for, and the flow's other questions. Answers go to the host, which moves the sign-in on.
+ * Closing it cancels the login.
  */
 export function ConnectDialog(props: {
   provider: ProviderInfo;
   /** How it connects, when the title does not say: `Sign in with ChatGPT`, `API key`. */
   method?: string | undefined;
-  notices: Accessor<readonly NoticePayload[]>;
-  questions: Accessor<readonly InteractionRequest[]>;
-  interactions: InteractionsService;
+  signIn: Accessor<SignIn | undefined>;
+  /** Answers the sign-in's open step. */
+  answer: (signIn: SignIn, value: string) => void;
   onCancel: () => void;
 }) {
-  const plugin = usePlugin();
-  const state = () => signInState(props.notices());
-  const question = () => props.questions()[0];
-  /** The paste-the-address prompt racing the browser's return to the host, as the host marks it. */
-  const paste = () => {
-    const request = question();
-    return request?.type === "ask" && request.kind === "sign-in-code" ? request : undefined;
+  const answer = (value: string) => {
+    const signIn = props.signIn();
+    if (signIn !== undefined) props.answer(signIn, value);
   };
-  const asking = () => (paste() === undefined ? question() : undefined);
+  const step = <T extends SignInStep["type"]>(type: T) => {
+    const current = props.signIn()?.step;
+    return current?.type === type ? (current as Step<T>) : undefined;
+  };
+  /**
+   * What the body is keyed by: a step that asks by its number, so one asked again (a refused key) starts with a clean
+   * field; another by what it shows, so the same page or code shown again (once a paste is withdrawn) stays as it was.
+   */
+  const stepKey = () => {
+    const signIn = props.signIn();
+    if (signIn === undefined) return undefined;
+    const { step } = signIn;
+    if (asksAnswer(step)) return `ask ${signIn.seq}`;
+    return step.type === "browser" ? `browser ${step.url}` : step.type === "code" ? `code ${step.code}` : step.type;
+  };
+  /** A page from another machine than the host: what is stored, is stored on the host. */
+  const remote = () => browserPlace(location.hostname) === "elsewhere";
   return (
     <Dialog
       class="connect"
@@ -279,12 +296,17 @@ export function ConnectDialog(props: {
       // A stray click beside it, on the way back from the browser, should not cancel a login about to finish.
       closeOnBackdrop={false}
       footer={
-        <button type="button" class="button" onClick={props.onCancel}>
-          Cancel
-        </button>
+        <>
+          <Show when={remote()}>
+            <span class="connect-host">Stored on the host at {location.hostname}</span>
+          </Show>
+          <button type="button" class="button" onClick={props.onCancel}>
+            Cancel
+          </button>
+        </>
       }
     >
-      <Show when={state().info}>
+      <Show when={props.signIn()?.info}>
         {(info) => (
           <p class="connect-info">
             {info().message}
@@ -301,60 +323,32 @@ export function ConnectDialog(props: {
           </p>
         )}
       </Show>
-      <Switch fallback={<Waiting text={state().status ?? "Connecting"} />}>
-        <Match when={asking()} keyed>
-          {(request) => <Question interactions={props.interactions} provider={props.provider} request={request} />}
-        </Match>
-        <Match when={state().device}>
-          {(device) => (
-            <>
-              <p class="connect-lead">
-                Enter this code at <strong>{hostOf(device().url)}</strong> to approve Lemma.
-              </p>
-              <div class="connect-code">
-                <code aria-label="One-time code">{device().code}</code>
-                <CopyButton text={device().code} label="Copy code" />
-              </div>
-              <a
-                class="button button-primary connect-open"
-                href={device().url}
-                target="_blank"
-                rel="noopener noreferrer"
-                ref={focus}
-                // Copied on the way, so the code is ready to paste on the page that opens.
-                onClick={plugin.action("copy code", () => copyText(device().code))}
-              >
-                Copy code and open {hostOf(device().url)} <ExternalIcon />
-              </a>
-              <LinkBox url={device().url} label="Copy link" />
-              <Waiting text={state().status ?? "Waiting for you to approve"} />
-              <p class="connect-note">Only enter this code if you started this sign-in in Lemma.</p>
-            </>
-          )}
-        </Match>
-        <Match when={state().link === undefined && paste()} keyed>
-          {/* Its page went by before this window was watching: what the browser ended on still finishes it. */}
-          {(request) => <PasteFallback interactions={props.interactions} request={request} open />}
-        </Match>
-        <Match when={state().link}>
-          {(link) => (
-            <>
-              <p class="connect-lead">Open this page in a browser and approve access. Lemma finishes signing in on its own.</p>
-              <LinkBox url={link().url} label="Copy link" />
-              <div class="connect-actions">
-                <a class="button button-primary connect-open" href={link().url} target="_blank" rel="noopener noreferrer" ref={focus}>
-                  Open in browser <ExternalIcon />
-                </a>
-                <span class="connect-hint">or copy the link into any browser</span>
-              </div>
-              <Waiting text={state().status ?? (paste() === undefined ? "Finishing sign-in" : "Waiting for you to approve in the browser")} />
-              <Show when={paste()} keyed>
-                {(request) => <PasteFallback interactions={props.interactions} request={request} />}
-              </Show>
-            </>
-          )}
-        </Match>
-      </Switch>
+      {/* Before the host lists the sign-in, and once it has ended while the page catches up, it is connecting. */}
+      <Show when={stepKey()} keyed fallback={<Waiting text="Connecting" />}>
+        <Switch fallback={<Waiting text="Connecting" />}>
+          <Match when={step("working")}>{(working) => <Waiting text={working().message} />}</Match>
+          <Match when={step("key")}>{(key) => <KeyField provider={props.provider} step={key()} answer={answer} />}</Match>
+          <Match when={step("text")}>{(text) => <TextField step={text()} answer={answer} />}</Match>
+          <Match when={step("choice")}>{(choice) => <Choice step={choice()} answer={answer} />}</Match>
+          <Match when={step("code")}>{(code) => <DeviceCode step={code()} />}</Match>
+          <Match when={step("browser")}>
+            {(browser) => (
+              <>
+                <p class="connect-lead">Open this page in a browser and approve access. Lemma finishes signing in on its own.</p>
+                <LinkBox url={browser().url} label="Copy link" />
+                <div class="connect-actions">
+                  <a class="button button-primary connect-open" href={browser().url} target="_blank" rel="noopener noreferrer" ref={focus}>
+                    Open in browser <ExternalIcon />
+                  </a>
+                  <span class="connect-hint">or copy the link into any browser</span>
+                </div>
+                <Waiting text="Waiting for you to approve in the browser" />
+                <Show when={browser().paste}>{(paste) => <PasteFallback placeholder={paste().placeholder} answer={answer} />}</Show>
+              </>
+            )}
+          </Match>
+        </Switch>
+      </Show>
     </Dialog>
   );
 }

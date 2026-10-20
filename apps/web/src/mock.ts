@@ -18,7 +18,6 @@ import type {
   ConfigScope,
   InteractionAnswer,
   InteractionRequest,
-  NoticePayload,
   PluginChange,
   PluginStatus,
   RuntimeEvent,
@@ -26,7 +25,7 @@ import type {
   WebComposition,
 } from "@lemma/contracts";
 import type { AgentActivity, AgentView, PromptContent, PromptOutcome, QueuedPrompt, TurnOptions } from "@lemma/agent";
-import type { AssistantMessage, LlmChange, ModelInfo, ProviderInfo, StreamEvent, Usage } from "@lemma/llm";
+import type { AssistantMessage, LlmChange, ModelInfo, ProviderInfo, SignIn, StreamEvent, Usage } from "@lemma/llm";
 import type { EventData, SessionEvent, SessionInfo, SessionsChange } from "@lemma/sessions";
 
 /**
@@ -399,7 +398,8 @@ const createMockTrace = (bundledIds: readonly string[]) => {
 export const createMockHost = (): Host => {
   const fresh = new URLSearchParams(location.search).get("mock") === "fresh";
   const key = { type: "api_key", name: "API key", interactive: true } as const;
-  const oauth = (name: string) => ({ type: "oauth", name, interactive: true }) as const;
+  /** `subscription`: signing in uses the person's plan, as pi-ai marks ChatGPT, Copilot, and the other plans. */
+  const oauth = (name: string, subscription = false) => ({ type: "oauth", name, interactive: true, ...(subscription ? { subscription: true } : {}) }) as const;
   /** The real llm plugin's providers (pi-ai's built-ins), as `Llm.providers` reports them. */
   const providers: ProviderInfo[] = [
     ["amazon-bedrock", "Amazon Bedrock", [key]],
@@ -412,19 +412,19 @@ export const createMockHost = (): Host => {
     ["cloudflare-workers-ai", "Cloudflare Workers AI", [key]],
     ["deepseek", "DeepSeek", [key]],
     ["fireworks", "Fireworks", [key]],
-    ["github-copilot", "GitHub Copilot", [oauth("GitHub Copilot"), key]],
+    ["github-copilot", "GitHub Copilot", [oauth("GitHub Copilot", true), key]],
     ["google", "Google", [key]],
     ["google-vertex", "Google Vertex AI", [key]],
     ["groq", "Groq", [key]],
     ["huggingface", "Hugging Face", [key]],
-    ["kimi-coding", "Kimi For Coding", [oauth("Kimi Code (subscription)"), key]],
-    ["meta", "Meta", [oauth("Meta (Muse subscription)"), key]],
+    ["kimi-coding", "Kimi For Coding", [oauth("Kimi Code (subscription)", true), key]],
+    ["meta", "Meta", [oauth("Meta (Muse subscription)", true), key]],
     ["minimax", "MiniMax", [key]],
     ["mistral", "Mistral", [key]],
     ["moonshotai", "Moonshot AI", [key]],
     ["nvidia", "NVIDIA", [key]],
     // As in the real llm plugin: OpenAI signs in with ChatGPT itself, and the legacy OpenAI Codex is left out.
-    ["openai", "OpenAI", [key, oauth("Sign in with ChatGPT")]],
+    ["openai", "OpenAI", [key, oauth("Sign in with ChatGPT", true)]],
     ["opencode", "OpenCode Zen", [key]],
     ["opencode-go", "OpenCode Go", [key]],
     ["openrouter", "OpenRouter", [oauth("OpenRouter OAuth"), key]],
@@ -433,7 +433,7 @@ export const createMockHost = (): Host => {
     ["together", "Together", [key]],
     ["typesafe", "TypeSafe", [key]],
     ["vercel-ai-gateway", "Vercel AI Gateway", [key]],
-    ["xai", "xAI", [oauth("xAI (Grok/X subscription)"), key]],
+    ["xai", "xAI", [oauth("xAI (Grok/X subscription)", true), key]],
     ["xiaomi", "Xiaomi", [key]],
     ["zai", "Z.AI", [key]],
   ].map(([id, name, auth]) => ({ id: id as string, name: name as string, auth: auth as ProviderInfo["auth"], configured: false }));
@@ -698,12 +698,14 @@ export const createMockHost = (): Host => {
   const openRequests = new Map<string, InteractionRequest>();
   /** Running logins, by provider, so `cancelLogin` can stop one. */
   const logins = new Map<string, AbortController>();
-  /** Closes a question as if dismissed: its asker sees no answer. */
-  const withdrawRequest = (requestId: string) => {
-    pendingAnswers.get(requestId)?.(undefined);
-    pendingAnswers.delete(requestId);
-    openRequests.delete(requestId);
-    emit({ type: "interaction-closed", id: requestId });
+  /** The sign-ins `llm.sign-ins` lists, as the host keeps them, and the answer each open step waits for, by provider. */
+  let signIns: readonly SignIn[] = [];
+  let signInSeq = 0;
+  const signInChanges = feed<readonly SignIn[]>();
+  const awaiting = new Map<string, { readonly seq: number; readonly resolve: (value: string) => void }>();
+  const putSignIn = (signIn: SignIn | undefined, provider: string) => {
+    signIns = [...signIns.filter((other) => other.provider !== provider), ...(signIn === undefined ? [] : [signIn])];
+    signInChanges.publish(signIns);
   };
   const cancelled = new Set<string>();
   const running = new Set<string>();
@@ -968,7 +970,7 @@ export const createMockHost = (): Host => {
     // A turn whose model call failed, with the provider's response body in its message.
     t = t0 - 86400_000 * 2;
     const oauthError =
-      'OAuth refresh failed for openai: OpenAI OAuth token request failed (400): { "error": "invalid_grant", "error_reason": "refresh_token_invalidated", "error_description": "The refresh token has been invalidated. A fresh sign-in is required." }. Run /login openai to sign in again.';
+      'OAuth refresh failed for openai: OpenAI OAuth token request failed (400): { "error": "invalid_grant", "error_reason": "refresh_token_invalidated", "error_description": "The refresh token has been invalidated. A fresh sign-in is required." }. Sign in to OpenAI again on the Providers page, or with `lemma login openai`.';
     append(s2, { type: "turn-start", turnId: "t1" }, at(), true);
     append(
       s2,
@@ -979,7 +981,13 @@ export const createMockHost = (): Host => {
     append(s2, { type: "step-start", turnId: "t1", stepId: "p1" }, at(), true);
     append(
       s2,
-      { type: "message", turnId: "t1", stepId: "p1", timing: { startedAt: t, endedAt: at(363) }, message: assistant([], usage(0, 0), "error", oauthError) },
+      {
+        type: "message",
+        turnId: "t1",
+        stepId: "p1",
+        timing: { startedAt: t, endedAt: at(363) },
+        message: assistant([], usage(0, 0), "error", oauthError, { api: "openai-responses", provider: "openai", id: "gpt-5" }),
+      },
       t,
       true,
     );
@@ -1679,87 +1687,93 @@ export const createMockHost = (): Host => {
       async ({ provider, type }) => {
         const p = providers.find((x) => x.id === provider);
         if (p === undefined) throw new HostError({ code: "UnknownProvider", subject: provider, message: `No provider "${provider}"` });
-        const origin = `login:${p.id}`;
         const cancel = new AbortController();
         logins.set(p.id, cancel);
         const cancelled = () => new HostError({ code: "Cancelled", message: `${p.name} login was cancelled`, subject: p.id });
-        /** Asks under the login's origin; a cancelled login withdraws the question. */
-        const loginAsk = (request: InteractionRequest) => {
-          const withdraw = () => withdrawRequest(request.id);
-          cancel.signal.addEventListener("abort", withdraw, { once: true });
-          return ask({ type: "interaction", request }).finally(() => cancel.signal.removeEventListener("abort", withdraw));
+        const startedAt = Date.now();
+        let current: SignIn = { provider: p.id, method: type, seq: ++signInSeq, step: { type: "working", message: "Starting" }, startedAt };
+        const show = (step: SignIn["step"], extra: Partial<SignIn> = {}) => {
+          current = { ...current, ...extra, step, seq: ++signInSeq };
+          putSignIn(current, p.id);
         };
-        const notice = (notice: Omit<NoticePayload, "level" | "source" | "origin">) =>
-          emit({ type: "notice", notice: { level: "info", source: "llm.pi-ai", origin, ...notice } });
+        /** Shows a step that asks, until a client answers it or the login is cancelled. */
+        const askStep = (step: SignIn["step"]) =>
+          new Promise<string>((resolve, reject) => {
+            // Waiting before it is shown, as the host does: a client may answer as soon as it hears of it.
+            awaiting.set(p.id, { seq: signInSeq + 1, resolve });
+            show(step);
+            cancel.signal.addEventListener("abort", () => reject(cancelled()), { once: true });
+          }).finally(() => awaiting.delete(p.id));
         /** Resolves after `ms`, or rejects once the login is cancelled. */
         const wait = (ms: number) =>
           new Promise<void>((resolve, reject) => {
             const timer = setTimeout(resolve, ms);
             cancel.signal.addEventListener("abort", () => (clearTimeout(timer), reject(cancelled())), { once: true });
           });
+        const end = (ended: NonNullable<SignIn["ended"]>) => {
+          current = { ...current, ended };
+          putSignIn(current, p.id);
+          setTimeout(() => signIns.some((signIn) => signIn === current) && putSignIn(undefined, p.id), 5000);
+        };
+        putSignIn(current, p.id);
         try {
           if (type === "api_key" && p.id === "amazon-bedrock") {
             // As Bedrock's does: documentation first, then a question that a blank answer also settles.
-            notice({
-              message: "Amazon Bedrock supports AWS profiles, IAM credentials, and role-based credentials.",
-              links: [{ url: "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html", label: "AWS profiles" }],
+            show(current.step, {
+              info: {
+                message: "Amazon Bedrock supports AWS profiles, IAM credentials, and role-based credentials",
+                links: [{ url: "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html", label: "AWS profiles" }],
+              },
             });
-            const answer = await loginAsk({ type: "ask", id: id("i"), origin, title: "Enter AWS profile name (blank for default):", placeholder: "default" });
-            if (answer === undefined) throw cancelled();
+            await askStep({ type: "text", title: "Enter AWS profile name (blank for default)", placeholder: "default" });
           } else if (type === "api_key") {
-            const answer = await loginAsk({ type: "ask", id: id("i"), origin, title: `${p.name} API key`, placeholder: "sk-…", secret: true });
-            if (answer === undefined || answer.type !== "ask" || answer.value === "") throw cancelled();
+            // As the host does: a key the provider refuses is asked again, saying why.
+            let problem: string | undefined;
+            for (;;) {
+              const key = await askStep({ type: "key", label: `${p.name} API key`, ...(problem === undefined ? {} : { problem }) });
+              show({ type: "working", message: "Checking the key" });
+              await wait(500);
+              if (!key.includes("wrong")) break;
+              problem = `${p.name} refused this key (401: Incorrect API key provided)`;
+            }
           } else if (p.id === "github-copilot") {
             // As GitHub's device flow does: a code to enter on github.com, then polling until it is approved.
-            notice({
-              kind: "device-code",
-              message: `Enter code WDJB-MJHT at https://github.com/login/device to sign in to ${p.name}.`,
-              code: "WDJB-MJHT",
-              links: [{ url: "https://github.com/login/device", label: "Enter code" }],
-            });
+            show({ type: "code", code: "WDJB-MJHT", url: "https://github.com/login/device", expiresIn: 900 });
             await wait(8000);
-            notice({ kind: "progress", message: "Enabling models..." });
+            show({ type: "working", message: "Enabling models" });
             await wait(600);
           } else {
-            // As ChatGPT's sign-in does: a link, and a paste-the-redirect prompt racing the loopback callback.
-            notice({
-              kind: "sign-in",
-              message: "Complete sign-in in your browser. If the callback does not complete, paste the final redirect URL here.",
-              links: [
-                {
-                  url: `https://auth.example.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&code_challenge=${"x".repeat(43)}&state=${p.id}`,
-                  label: `Sign in to ${p.name}`,
-                },
-              ],
-            });
-            const pasted = loginAsk({
-              type: "ask",
-              id: id("i"),
-              origin,
-              title: "Complete login in your browser, or paste the final redirect URL here:",
-              placeholder: "http://localhost:1455/auth/callback",
-              kind: "sign-in-code",
-            });
+            // As ChatGPT's sign-in does: a link, and a paste of the redirect racing the loopback callback.
+            const url = `https://auth.example.com/oauth/authorize?response_type=code&client_id=app_EMoamEEZ73f0CkXaXp7hrann&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&scope=openid+profile+email+offline_access&code_challenge=${"x".repeat(43)}&state=${p.id}`;
+            show({ type: "browser", url });
+            const pasted = askStep({ type: "browser", url, paste: { placeholder: "http://localhost:1455/auth/callback" } });
             const callback = wait(12000).then(() => "callback" as const);
-            const first = await Promise.race([pasted.then((answer) => ({ answer })), callback]);
-            if (first === "callback") {
-              // The browser reached the host: the paste prompt is no longer needed.
-              const open = [...openRequests.values()].find((request) => request.origin === origin);
-              if (open !== undefined) withdrawRequest(open.id);
-            } else if (first.answer === undefined) throw cancelled();
-            notice({ kind: "progress", message: "Exchanging authorization code for tokens..." });
+            await Promise.race([pasted, callback]);
+            awaiting.delete(p.id);
+            show({ type: "working", message: "Exchanging authorization code for tokens" });
             await wait(700);
           }
         } catch (error) {
-          notice({ kind: "ended", message: cancel.signal.aborted ? `${p.name} login was cancelled` : `${p.name} login failed` });
+          end(cancel.signal.aborted ? { outcome: "cancelled" } : { outcome: "failed", message: `${p.name} login failed` });
           throw error;
         } finally {
           logins.delete(p.id);
         }
         const i = providers.indexOf(p);
-        providers[i] = { ...p, configured: true, source: type === "oauth" ? "OAuth" : "auth.json" };
+        const account = type === "oauth" ? "you@example.com" : undefined;
+        providers[i] = {
+          ...p,
+          configured: true,
+          source: type === "oauth" ? "OAuth" : "stored credential",
+          ...(account === undefined ? {} : { account }),
+          ...(p.id === "openai" && type === "oauth" ? { plan: "plus" } : {}),
+        };
+        end({ outcome: "signed-in", ...(account === undefined ? {} : { detail: `Signed in as ${account}` }) });
         modelChanges.publish({ type: "models-changed" });
-        notice({ kind: "signed-in", message: `Logged in to ${p.name}` });
+        emit({
+          type: "notice",
+          notice: { level: "info", source: "llm.pi-ai", message: `Signed in to ${p.name}${account === undefined ? "" : ` as ${account}`}` },
+        });
       },
       { waits: true },
     ),
@@ -1814,6 +1828,21 @@ export const createMockHost = (): Host => {
     serveStream("llm.pi-ai", LlmChannels.changes, (_, send) => {
       send({ type: "subscribed" });
       return modelChanges.subscribe(send);
+    }),
+    serveStream("llm.pi-ai", LlmChannels.signIns, (_, send) => {
+      send(signIns);
+      return signInChanges.subscribe(send);
+    }),
+    serveCall("llm.pi-ai", LlmChannels.answerSignIn, async ({ provider, seq, value }) => {
+      const waiting = awaiting.get(provider);
+      if (waiting === undefined || waiting.seq !== seq)
+        throw new HostError({
+          code: "NotAsked",
+          subject: provider,
+          message: `The ${provider} sign-in is not asking that now: it was answered, or it moved on`,
+        });
+      awaiting.delete(provider);
+      waiting.resolve(value);
     }),
 
     serveCall("workspace.local", WorkspaceChannels.status, async ({ path }) => workspaceStatus(path)),

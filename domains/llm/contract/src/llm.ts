@@ -4,7 +4,6 @@ import { Event, Hook, Registry } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { defineChannel, eventFeed, inChainOrder, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
-import { InteractionOrigin } from "@lemma/contracts";
 
 // Message shapes follow pi-ai's provider-neutral format so opaque provider
 // state (reasoning signatures, response ids) survives a round trip through the
@@ -286,12 +285,21 @@ export type AuthType = typeof AuthType.Type;
 export const ProviderInfo = Schema.Struct({
   id: Schema.String,
   name: Schema.String,
-  /** Login methods this provider offers in `/login`, with display names. */
-  auth: Schema.Array(Schema.Struct({ type: AuthType, name: Schema.String, interactive: Schema.Boolean })),
+  /**
+   * Login methods this provider offers (`Llm.login`), with display names. `subscription`: signing in this way uses the
+   * person's plan with the provider (ChatGPT, Copilot), rather than paying per token.
+   */
+  auth: Schema.Array(Schema.Struct({ type: AuthType, name: Schema.String, interactive: Schema.Boolean, subscription: Schema.optional(Schema.Boolean) })),
   /** Whether requests can authenticate now (stored credential, env var, ambient config). */
   configured: Schema.Boolean,
   /** Where the working auth comes from: `OPENAI_API_KEY`, `OAuth`, `auth.json`. */
   source: Schema.optional(Schema.String),
+  /** Who it is signed in as (an email), when its sign-in says. */
+  account: Schema.optional(Schema.String),
+  /** The plan its sign-in uses (`plus`, `pro`), when its sign-in says. */
+  plan: Schema.optional(Schema.String),
+  /** Its sign-in has stopped working: the provider refused to renew it, as this says. Signing in again fixes it. */
+  expired: Schema.optional(Schema.String),
   /** Added by the user (`Llm.addCustom`) rather than built in, so it can be removed. */
   custom: Schema.optional(Schema.Boolean),
   /** A custom provider's own logo, as SVG markup (`Llm.setLogo`). */
@@ -300,6 +308,87 @@ export const ProviderInfo = Schema.Struct({
   from: Schema.optional(Schema.String),
 });
 export type ProviderInfo = typeof ProviderInfo.Type;
+
+/** Whether `provider`'s requests use the person's plan now: signed in, by a sign-in that is a subscription. */
+export const usesPlan = (provider: ProviderInfo): boolean =>
+  provider.configured && provider.source === "OAuth" && provider.auth.some((method) => method.type === "oauth" && method.subscription === true);
+
+const SignInLink = Schema.Struct({ url: Schema.String, label: Schema.optional(Schema.String) });
+
+/**
+ * What a running sign-in asks of the person now (`SignIn.step`):
+ * - `browser`: open `url` and approve there; the host hears back by itself. With `paste`, the sign-in also takes the
+ *   address the browser ends on, pasted as the answer, for a browser that cannot reach the host (on another machine).
+ * - `code`: enter `code` at `url` (a device code), within `expiresIn` seconds of when it was shown, when it says. A
+ *   lifetime rather than a time, since a client's clock may differ from the host's: a client counts it down from when it
+ *   first saw the step, so one that joins late shows more time than is left, never less.
+ * - `key`: paste an API key, as the answer. `problem` says why the last one was refused.
+ * - `text`: type the answer to `title` (`secret` masks it); a blank answer is one.
+ * - `choice`: pick one of `options`, answering with its `value`.
+ * - `working`: wait while the host works, `message` saying on what.
+ */
+export const SignInStep = Schema.Union([
+  Schema.Struct({
+    type: Schema.Literal("browser"),
+    url: Schema.String,
+    paste: Schema.optional(Schema.Struct({ placeholder: Schema.optional(Schema.String) })),
+  }),
+  Schema.Struct({ type: Schema.Literal("code"), code: Schema.String, url: Schema.String, expiresIn: Schema.optional(Schema.Number) }),
+  Schema.Struct({ type: Schema.Literal("key"), label: Schema.String, problem: Schema.optional(Schema.String) }),
+  Schema.Struct({ type: Schema.Literal("text"), title: Schema.String, placeholder: Schema.optional(Schema.String), secret: Schema.optional(Schema.Boolean) }),
+  Schema.Struct({
+    type: Schema.Literal("choice"),
+    title: Schema.String,
+    options: Schema.Array(Schema.Struct({ value: Schema.String, label: Schema.String, description: Schema.optional(Schema.String) })),
+  }),
+  Schema.Struct({ type: Schema.Literal("working"), message: Schema.String }),
+]);
+export type SignInStep = typeof SignInStep.Type;
+
+/** Whether `step` waits for an answer (`Llm.answerSignIn`): a key, text, or choice, or a browser step that takes a paste. */
+export const asksAnswer = (step: SignInStep): boolean =>
+  step.type === "key" || step.type === "text" || step.type === "choice" || (step.type === "browser" && step.paste !== undefined);
+
+/** How a sign-in ended: its credential stored (`detail`: who it signed in as), failed (`message`: why), or cancelled. */
+export const SignInEnd = Schema.Union([
+  Schema.Struct({ outcome: Schema.Literal("signed-in"), detail: Schema.optional(Schema.String) }),
+  Schema.Struct({ outcome: Schema.Literal("failed"), message: Schema.String }),
+  Schema.Struct({ outcome: Schema.Literal("cancelled") }),
+]);
+export type SignInEnd = typeof SignInEnd.Type;
+
+/**
+ * A login running on the host, one per provider, as every client sees it (`Llm.signIns`): what it asks of the person
+ * now. It belongs to the host, not to the client that started it, so a client that reloads, or another one, picks it
+ * up where it is.
+ */
+export const SignIn = Schema.Struct({
+  provider: Schema.String,
+  method: AuthType,
+  /** Numbers its steps, rising: an answer names the step it answers, so one meant for a step gone by is refused. */
+  seq: Schema.Number,
+  step: SignInStep,
+  /** What the flow pointed to on its way (documentation for what it asks), the latest. */
+  info: Schema.optional(Schema.Struct({ message: Schema.String, links: Schema.Array(SignInLink) })),
+  /** Epoch ms. */
+  startedAt: Schema.Number,
+  /** How it ended: it stays listed a few seconds after, so every client can say so. */
+  ended: Schema.optional(SignInEnd),
+});
+export type SignIn = typeof SignIn.Type;
+
+/** How a client starting a login (`Llm.login`) helps it along. */
+export const LoginOptions = Schema.Struct({
+  /**
+   * Where the person's browser is: on the host's machine (`here`), where a sign-in page can reach the host's callback,
+   * or `elsewhere` (a remote client), where a flow that offers a device code uses it without asking. `here` decides
+   * nothing: a page reached through an SSH port forward looks local too, so such a flow still asks, as it does unsaid.
+   */
+  browser: Schema.optional(Schema.Literals(["here", "elsewhere"])),
+  /** Where the sign-in's page in the browser offers to go back to: a `lemma://` link to the desktop app, say. */
+  returnTo: Schema.optional(Schema.String),
+});
+export type LoginOptions = typeof LoginOptions.Type;
 
 /** A model a provider in `Providers` serves; what it leaves out has pi's defaults (128k context, 16k output, text only, free). */
 export const ProviderModelSpec = Schema.Struct({
@@ -458,7 +547,8 @@ export type StreamEvent = typeof StreamEvent.Type;
  * names one, as its subject.
  */
 export class LlmError extends Data.TaggedError("LlmError")<{
-  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "Busy" | "InvalidProvider" | "SaveFailed" | "Hook";
+  /** `NotAsked`: an answer to a sign-in step that is not open (answered already, gone by, or never asked). */
+  readonly reason: "UnknownModel" | "UnknownProvider" | "LoginFailed" | "Cancelled" | "Busy" | "NotAsked" | "InvalidProvider" | "SaveFailed" | "Hook";
   readonly message: string;
   readonly provider?: string;
   readonly cause?: unknown;
@@ -597,8 +687,15 @@ export class Llm extends Context.Service<
      * model request, as `classify` is not.
      */
     readonly generateImages: (ref: ModelRef, context: ImagesContext) => Effect.Effect<ImagesResult, LlmError>;
-    /** Runs the provider's login flow through `Interaction` and stores the credential. */
-    readonly login: (provider: string, type: AuthType) => Effect.Effect<void, LlmError>;
+    /**
+     * Runs the provider's login flow and stores the credential. What it asks of the person is its `SignIn`, listed in
+     * `signIns` while it runs and answered with `answerSignIn`.
+     */
+    readonly login: (provider: string, type: AuthType, options?: LoginOptions) => Effect.Effect<void, LlmError>;
+    /** The sign-ins running now (and those ended in the last few seconds), then the list again after each change. */
+    readonly signIns: Stream.Stream<readonly SignIn[]>;
+    /** Answers step `seq` of the provider's sign-in; fails `NotAsked` when that step is not open. */
+    readonly answerSignIn: (provider: string, seq: number, value: string) => Effect.Effect<void, LlmError>;
     readonly logout: (provider: string) => Effect.Effect<void, LlmError>;
     /**
      * Adds a provider of the user's; resolves with its id. It is saved in the
@@ -649,29 +746,52 @@ export const LlmChannels = {
     repeatable: true,
   }),
   /**
-   * Runs a provider's login flow, as `Llm.login`; its questions reach clients
-   * as interactions and its progress as notices, under the origin
-   * `login:<provider>`. The login belongs to the provider, not to the call: it
-   * runs in the provider's scope, so a client that drops its connection leaves
-   * it running, its question waiting for a client to answer, and a second call
-   * for the same provider and type waits for the same login. Fails `Busy` while
-   * a login of the other type to that provider runs, `Cancelled` when
-   * `llm.cancel-login` stops it, and as `Llm.login` does (`UnknownProvider`,
-   * `LoginFailed`, `Cancelled` when its question is dismissed). When the
-   * provider stops or reloads, the call fails `Withdrawn` at once, and the login
-   * ends with the provider: calling again starts one on the replacement. It is
-   * not `repeatable`, since a new login asks the person again: whether to is
-   * the client's to decide.
+   * Runs a provider's login flow, as `Llm.login`; what it asks of the person
+   * is its `SignIn`, which `llm.sign-ins` lists and `llm.answer-sign-in`
+   * answers. The login belongs to the provider, not to the call: it runs in
+   * the provider's scope, so a client that drops its connection leaves it
+   * running, its step waiting for a client to answer, and a second call for the
+   * same provider and type waits for the same login (its options are the
+   * first's). Fails `Busy` while a login of the other type to that provider
+   * runs, `Cancelled` when `llm.cancel-login` stops it, and as `Llm.login` does
+   * (`UnknownProvider`, `LoginFailed`). When the provider stops or reloads, the
+   * call fails `Withdrawn` at once, and the login ends with the provider:
+   * calling again starts one on the replacement. It is not `repeatable`, since
+   * a new login asks the person again: whether to is the client's to decide.
    */
   login: defineChannel({
     kind: "call",
     id: "llm.login",
     title: "Log in",
-    description: "Runs a provider's login flow and stores the credential; its questions and progress reach clients as interactions and notices",
-    payload: Schema.Struct({ ...providerField, type: AuthType }),
+    description: "Runs a provider's login flow and stores the credential; what it asks of the person is listed by llm.sign-ins",
+    payload: Schema.Struct({ ...providerField, type: AuthType, ...LoginOptions.fields }),
     success: Schema.Void,
   }),
-  /** Stops a provider's running login, whoever started it, as dismissing its question would: every call waiting for it fails `Cancelled`. */
+  /**
+   * The sign-ins running now, then the list again after each change: a step
+   * shown, answered, or withdrawn, a sign-in started or ended. An ended one
+   * stays listed a few seconds with how it ended. A client that falls behind
+   * gets the latest list, not a backlog, and one that reconnects reopens it and
+   * is in step again.
+   */
+  signIns: defineChannel({
+    kind: "stream",
+    id: "llm.sign-ins",
+    title: "Sign-ins",
+    description: "The logins running on the host and what each asks of the person now, then the list again whenever it changes",
+    payload: Schema.Void,
+    success: Schema.Array(SignIn),
+  }),
+  /** Answers a sign-in's open step, as `Llm.answerSignIn`: the first answer wins, and a later one fails `NotAsked`. */
+  answerSignIn: defineChannel({
+    kind: "call",
+    id: "llm.answer-sign-in",
+    title: "Answer a sign-in",
+    description: "Answers what a running sign-in asks (a key, a pasted address, a choice), naming the step by its seq",
+    payload: Schema.Struct({ ...providerField, seq: Schema.Number, value: Schema.String }),
+    success: Schema.Void,
+  }),
+  /** Stops a provider's running login, whoever started it, withdrawing its open step: every call waiting for it fails `Cancelled`. */
   cancelLogin: defineChannel({
     kind: "call",
     id: "llm.cancel-login",
@@ -737,11 +857,11 @@ export const LlmChannels = {
  * and the fork are uninterruptible, or a caller interrupted between them would
  * leave the provider busy forever. A caller awaits the login rather than
  * joining it, so one that goes away leaves it running. `cancel` interrupts it,
- * which withdraws its open question.
+ * which withdraws its open step.
  */
 const makeLogins = (llm: Context.Service.Shape<typeof Llm>, scope: Scope.Scope) => {
   const running = new Map<string, { readonly type: AuthType; readonly fiber: Deferred.Deferred<Fiber.Fiber<void, LlmError>> }>();
-  const login = (provider: string, type: AuthType): Effect.Effect<void, LlmError> =>
+  const login = (provider: string, type: AuthType, options: LoginOptions): Effect.Effect<void, LlmError> =>
     Effect.gen(function* () {
       const fiber = yield* Effect.uninterruptible(
         Effect.gen(function* () {
@@ -755,7 +875,7 @@ const makeLogins = (llm: Context.Service.Shape<typeof Llm>, scope: Scope.Scope) 
           const entry = { type, fiber: yield* Deferred.make<Fiber.Fiber<void, LlmError>>() };
           running.set(provider, entry);
           const forked = yield* Effect.forkIn(
-            Effect.interruptible(Effect.provideService(llm.login(provider, type), InteractionOrigin, `login:${provider}`)).pipe(
+            Effect.interruptible(llm.login(provider, type, options)).pipe(
               Effect.ensuring(
                 Effect.sync(() => {
                   if (running.get(provider) === entry) running.delete(provider);
@@ -801,8 +921,16 @@ export const serveLlm = (
       serveChannel(LlmChannels.providers, () => llm.providers),
       serveChannel(LlmChannels.models, ({ available }) => llm.models(available === undefined ? undefined : { available })),
       // The login ends only with the provider, so the call stops waiting when it leaves rather than hold that up.
-      serveChannel(LlmChannels.login, ({ provider, type }, { left }) => Effect.raceFirst(logins.login(provider, type), left)),
+      serveChannel(LlmChannels.login, ({ provider, type, browser, returnTo }, { left }) =>
+        Effect.raceFirst(
+          logins.login(provider, type, { ...(browser === undefined ? {} : { browser }), ...(returnTo === undefined ? {} : { returnTo }) }),
+          left,
+        ),
+      ),
       serveChannel(LlmChannels.cancelLogin, ({ provider }) => logins.cancel(provider)),
+      // A client that falls behind gets the latest list, not a backlog.
+      serveChannel(LlmChannels.signIns, () => llm.signIns.pipe(Stream.buffer({ capacity: 1, strategy: "sliding" }))),
+      serveChannel(LlmChannels.answerSignIn, ({ provider, seq, value }) => llm.answerSignIn(provider, seq, value)),
       serveChannel(LlmChannels.logout, ({ provider }) => llm.logout(provider)),
       serveChannel(LlmChannels.addCustom, ({ spec }) => llm.addCustom(spec)),
       serveChannel(LlmChannels.removeCustom, ({ provider }) => llm.removeCustom(provider)),

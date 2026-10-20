@@ -125,23 +125,20 @@ export interface ClientService {
 }
 export class Client extends Context.Service<Client, ClientService>()("lemma-web/Client") {}
 
-/** A message for the user. One with a `code` or `links` is something to act on, which stays until dismissed. */
+/** A message for the user. One with `links` is something to act on, which stays until dismissed. */
 export interface Toast {
   readonly id: number;
   readonly level: NoticePayload["level"];
   readonly message: string;
   readonly source?: string;
   readonly links?: NoticePayload["links"];
-  readonly code?: string;
-  /** What it belongs to (`login:<provider>`), as the host's notice says. */
+  /** What it belongs to (`session:<id>`), as the host's notice says. */
   readonly origin?: string;
-  /** What a login's notice is (`sign-in`, `device-code`, …), as the host's notice says. */
-  readonly kind?: NoticePayload["kind"];
 }
 
 /**
- * Messages for the user: the app's own, and the host's notices (login
- * progress, faults, reloads). The messages only: a plugin draws them (the
+ * Messages for the user: the app's own, and the host's notices (sign-ins,
+ * faults, reloads). The messages only: a plugin draws them (the
  * `toasts` plugin, in a corner of the page) and decides how long each stays,
  * dismissing it. With nothing drawing them they wait, undrawn.
  */
@@ -156,8 +153,8 @@ export interface NotifyService {
   /** Adds a failure; `context` says what failed. */
   readonly report: (error: unknown, context?: string) => void;
   /**
-   * Shows messages somewhere else: those `which` picks (a sign-in dialog, its
-   * login's link and code). The toasts leave them undrawn until released.
+   * Shows messages somewhere else: those `which` picks (a view that draws its
+   * own work's messages). The toasts leave them undrawn until released.
    */
   readonly claim: (which: (toast: Toast) => boolean) => () => void;
   /** Some view shows this message itself. */

@@ -26,6 +26,7 @@ import {
   ChatWorkingPart,
   ChatWorkGroupPart,
   ChatWorkPart,
+  ErrorActions,
   PromptActions,
   Threads,
   Views,
@@ -233,8 +234,11 @@ function Blocks(props: { chat: Chat; blocks: readonly Block[]; scope: string; tu
   );
 }
 
-/** An error in the transcript, read for a person (see `errorView`), with a button that copies what it shows. */
-function ErrorNote(props: { message: string }) {
+/**
+ * An error in the transcript, read for a person (see `errorView`), with a button that copies what it shows, and what
+ * plugins offer to fix it (`ErrorActions`), for a failed model request.
+ */
+function ErrorNote(props: { message: string; request?: { readonly provider: string; readonly model: string } | undefined }) {
   const view = createMemo(() => errorView(props.message));
   return (
     <div class="callout callout-error chat-error">
@@ -243,6 +247,13 @@ function ErrorNote(props: { message: string }) {
         <p class="chat-error-summary">{view().summary}</p>
         <Show when={view().description}>{(description) => <p>{description()}</p>}</Show>
         <Show when={view().hint}>{(hint) => <p>{hint()}</p>}</Show>
+        <Show when={props.request}>
+          {(request) => (
+            <div class="chat-error-actions">
+              <Each slot={ErrorActions} props={{ provider: request().provider, model: request().model, message: props.message }} />
+            </div>
+          )}
+        </Show>
       </div>
       <CopyButton text={[view().summary, view().description, view().hint].filter((line) => line !== undefined).join("\n")} label="Copy error" />
     </div>
@@ -254,7 +265,10 @@ function StopNote(props: { item: AssistantItem }) {
   return (
     <Switch>
       <Match when={props.item.message.stopReason === "error"}>
-        <ErrorNote message={props.item.message.errorMessage ?? "The model request failed."} />
+        <ErrorNote
+          message={props.item.message.errorMessage ?? "The model request failed."}
+          request={{ provider: props.item.message.provider, model: props.item.message.model }}
+        />
       </Match>
       <Match when={props.item.message.stopReason === "length"}>
         <p class="note">Output hit the model's token limit</p>

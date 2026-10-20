@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import type { NoticePayload } from "@lemma/contracts";
 import type { ProviderInfo } from "@lemma/llm";
-import { customProviderProblem, customProviderSpec, logoProblem, logoSource, endsLogin, providerGroups, signInState } from "../src/web/providers.ts";
+import { usesPlan } from "../src/llm.ts";
+import {
+  browserPlace,
+  customProviderProblem,
+  customProviderSpec,
+  describeProvider,
+  logoProblem,
+  logoSource,
+  providerGroups,
+  signInReturn,
+  timeLeft,
+} from "../src/web/providers.ts";
 
 const key = { type: "api_key", name: "API key", interactive: true } as const;
 const oauth = { type: "oauth", name: "Sign in", interactive: true } as const;
@@ -79,29 +89,37 @@ describe("custom logos", () => {
   });
 });
 
-describe("signInState", () => {
-  const notice = (fields: Partial<NoticePayload>): NoticePayload => ({ level: "info", message: "", origin: "login:openai", ...fields });
-
-  it("shows the latest link or code by kind, and progress only since it", () => {
-    expect(signInState([])).toEqual({});
-    const link = notice({ kind: "sign-in", message: "Complete sign-in in your browser.", links: [{ url: "https://auth.test/authorize", label: "Sign in" }] });
-    expect(signInState([link])).toEqual({ link: { url: "https://auth.test/authorize" }, status: undefined });
-    expect(signInState([link, notice({ kind: "progress", message: "Exchanging authorization code for tokens..." })]).status).toBe(
-      "Exchanging authorization code for tokens",
-    );
-
-    const device = notice({ kind: "device-code", message: "Enter code ABCD-1234", code: "ABCD-1234", links: [{ url: "https://github.com/login/device" }] });
-    const state = signInState([notice({ kind: "progress", message: "Starting…" }), device]);
-    expect(state.device).toEqual({ code: "ABCD-1234", url: "https://github.com/login/device" });
-    expect(state.status).toBeUndefined();
+describe("a provider's connection, as the page says it", () => {
+  const signedIn = (fields: Partial<ProviderInfo>): ProviderInfo => ({
+    ...provider("openai", "OpenAI", true, [key, { ...oauth, subscription: true }]),
+    source: "OAuth",
+    ...fields,
   });
 
-  it("keeps a documentation link apart from a sign-in page", () => {
-    const docs = notice({ message: "Amazon Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test/profiles", label: "AWS profiles" }] });
-    const state = signInState([docs]);
-    expect(state.link).toBeUndefined();
-    expect(state.info).toEqual({ message: "Amazon Bedrock supports AWS profiles.", links: [{ url: "https://docs.aws.test/profiles", label: "AWS profiles" }] });
-    expect(endsLogin(notice({ kind: "ended" }))).toBe(true);
-    expect(endsLogin(docs)).toBe(false);
+  it("says who it is signed in as and on what plan, or that its sign-in expired", () => {
+    expect(describeProvider(signedIn({ account: "you@example.com", plan: "plus" }))).toBe("Signed in as you@example.com · Plus plan");
+    expect(describeProvider(signedIn({}))).toBe("Signed in · uses your plan");
+    expect(describeProvider(signedIn({ account: "you@example.com", expired: "invalid_grant" }))).toBe("Sign-in expired: sign in again");
+    expect(describeProvider({ ...provider("anthropic", "Anthropic", true), source: "ANTHROPIC_API_KEY" })).toBe("From $ANTHROPIC_API_KEY");
+    expect(usesPlan(signedIn({}))).toBe(true);
+    expect(usesPlan({ ...signedIn({}), source: "stored credential" })).toBe(false);
+  });
+});
+
+describe("a sign-in from this page", () => {
+  it("says whether the browser is on the host's machine, and where to come back to", () => {
+    expect(browserPlace("localhost")).toBe("here");
+    expect(browserPlace("127.0.0.1")).toBe("here");
+    expect(browserPlace("[::1]")).toBe("here");
+    expect(browserPlace("devbox.local")).toBe("elsewhere");
+    // A web tab opened from the page has no host token: only the desktop app is offered.
+    expect(signInReturn(false)).toBeUndefined();
+    expect(signInReturn(true)).toBe("lemma://settings/providers");
+  });
+
+  it("counts a device code down, and says nothing once it has expired", () => {
+    expect(timeLeft(1_000 + 845_000, 1_000)).toBe("14:05");
+    expect(timeLeft(1_000 + 400, 1_000)).toBe("0:01");
+    expect(timeLeft(1_000, 1_000)).toBeUndefined();
   });
 });

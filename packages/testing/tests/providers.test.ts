@@ -65,6 +65,8 @@ llmConformance("independent replacement", (scenario) => {
             ),
           ),
         login: () => Effect.void,
+        signIns: Stream.make([]),
+        answerSignIn: () => Effect.void,
         logout: () => Effect.void,
         addCustom: () => Effect.succeed("reference"),
         removeCustom: () => Effect.void,
