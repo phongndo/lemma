@@ -1,7 +1,8 @@
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { Accessor } from "solid-js";
 import { Dialog } from "@lemma/look";
 import { ThreadRoute } from "@lemma/sessions";
+import { usePlugin } from "@lemma/web";
 import type { RouterService } from "@lemma/web";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
 import { HtmlFrame } from "./frame.tsx";
@@ -139,14 +140,28 @@ export function createPages(deps: {
  * A page full screen, over the app: the dialog part, which closes on Escape (in the page too), its ×, or a click
  * outside. Focus goes into the page; Tab out of its end comes round to the dialog's first stop, and Shift+Tab from that
  * stop goes back into the page, since the dialog part keeps focus among its own stops and a frame's are its page's.
+ * Where the browser runs the page in a process of its own (Chromium's full builds, for a sandboxed frame), Tab out of
+ * it skips the stops beside the frame (it went to the button that opened the page), so focus leaving the page for
+ * anywhere outside the dialog comes back to the dialog's first stop.
  */
 export function PageViewer(props: { page: DrawnPage; onClose: () => void }) {
+  const plugin = usePlugin();
   let wrap!: HTMLDivElement;
+  const dialog = () => wrap.closest<HTMLElement>("[role='dialog']");
+  const first = () => dialog()?.querySelector<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
   const round = (event: FocusEvent) => {
-    const first = wrap.closest("[role='dialog']")?.querySelector<HTMLElement>("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])");
-    if (event.relatedTarget !== null && event.relatedTarget === first) wrap.querySelector("iframe")?.focus();
-    else first?.focus();
+    if (event.relatedTarget !== null && event.relatedTarget === first()) wrap.querySelector("iframe")?.focus();
+    else first()?.focus();
   };
+  // On mount, so it ends before the dialog part gives focus back to what opened it, as the dialog closes.
+  onMount(() =>
+    onCleanup(
+      plugin.listen(document, "focusin", (event: FocusEvent) => {
+        if (event.relatedTarget === wrap.querySelector("iframe") && event.target instanceof Node && dialog()?.contains(event.target) === false)
+          first()?.focus();
+      }),
+    ),
+  );
   return (
     <Dialog title={props.page.page.title} label={props.page.page.title} class="html-viewer" onClose={props.onClose}>
       <div ref={wrap} class="html-viewer-page">

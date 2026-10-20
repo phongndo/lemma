@@ -321,6 +321,9 @@ export const pages = async (): Promise<string> => {
   );
   await page.keyboard.press("Escape");
   await viewer.waitFor({ state: "detached", timeout: 5_000 }).catch(() => assert.fail("Escape pressed in a page full screen does not close it"));
+  await page
+    .waitForFunction(() => document.activeElement?.getAttribute("aria-label") === "Open full screen", undefined, { timeout: 3_000 })
+    .catch(async () => assert.fail(`closing a page full screen gives focus to ${await focused()}, not the button that opened it`));
 
   // In the pane: a tab named for the page shows it, filling the tab; opening it again, or another page, shows it there.
   await summary.hover();
