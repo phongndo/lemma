@@ -978,6 +978,8 @@ describe("failures", () => {
 
   it("tells a caller whether asking again can help", () => {
     expect(classify("529 overloaded_error: Overloaded", 529)).toEqual({ kind: "transient" });
+    expect(classify("408 Request Timeout", 408)).toEqual({ kind: "transient" });
+    expect(classify("409 Conflict", 409)).toEqual({ kind: "transient" });
     expect(classify("overloaded_error: Overloaded")).toEqual({ kind: "transient" });
     expect(classify("fetch failed (ECONNREFUSED)")).toEqual({ kind: "transient" });
     expect(classify("read ECONNRESET")).toEqual({ kind: "transient" });
