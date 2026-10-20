@@ -323,6 +323,50 @@ describe("Sign in with ChatGPT", () => {
     expect(credential).toMatchObject({ type: "oauth", access: "acc", refresh: "ref", clientId: "issued", scopes: ["openid", "chatgpt.tokens.use.direct"] });
   });
 
+  it("leaves the login to a callback of its own, and shows what one carried as text", async () => {
+    const pages: { status: number; body: string }[] = [];
+    const visit = async (query: string) => {
+      const response = await fetch(`http://127.0.0.1:1455/auth/callback?${query}`);
+      pages.push({ status: response.status, body: await response.text() });
+    };
+    const fetchImpl: typeof fetch = async () =>
+      Response.json({ access_token: "acc", refresh_token: "ref", scope: "openid chatgpt.tokens.use.direct", expires_in: 3600 });
+    const notices: { links?: readonly { url: string }[] | undefined }[] = [];
+    const login = (answer: (state: string) => Promise<string>): LoginContext => ({
+      notify: (notice) => Effect.sync(() => void notices.push(notice)),
+      ask: () => Effect.promise(() => answer(new URL(notices.at(-1)!.links![0]!.url).searchParams.get("state")!)),
+      deviceId: () => "0b5c3f6e-6a9f-4a51-9a35-2f6f0e3b8a10",
+      fetch: fetchImpl,
+    });
+    // A stale tab's refusal: this login goes on, and signs in with the redirect pasted after.
+    const signedIn = await Effect.runPromise(
+      chatgpt.login(
+        login(async (state) => {
+          await visit("state=old&error=access_denied");
+          return `http://127.0.0.1:1455/auth/callback?code=c&state=${state}&client_id=issued`;
+        }),
+      ),
+    );
+    expect(signedIn).toMatchObject({ access: "acc" });
+    // This login's own refusal ends it, and the page shows its words as text.
+    let visited: Promise<void> | undefined;
+    const refused = await Effect.runPromise(
+      Effect.flip(
+        chatgpt.login(
+          login((state) => {
+            visited = visit(`state=${state}&error=${encodeURIComponent("<script>alert(1)</script>")}`);
+            return new Promise<string>(() => {});
+          }),
+        ),
+      ),
+    );
+    await visited;
+    expect(String(refused)).toContain("<script>alert(1)</script>");
+    expect(pages.map((page) => page.status)).toEqual([400, 400]);
+    expect(pages[1]!.body).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+    expect(pages.some((page) => page.body.includes("<script>"))).toBe(false);
+  });
+
   it("fails, rather than dies, when this installation's device id cannot be kept", async () => {
     const { login } = context(
       () => "unused",

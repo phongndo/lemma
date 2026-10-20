@@ -30,13 +30,16 @@ interface Authorization {
   readonly clientId: string;
 }
 
+/** Whether a callback URL is this login's: what another's says (a stale tab's error) is not this one's to end. */
+const ours = (url: URL, state: string) => url.searchParams.get("state") === state;
+
 /** The code and issued client id a callback URL carries, once its state is this login's. */
 function authorization(url: URL, state: string): Authorization {
+  if (!ours(url, state)) throw new Error("The callback is for another login (its state differs)");
   const error = url.searchParams.get("error");
   if (error) throw new Error(`ChatGPT authorization failed: ${error}`);
   const code = url.searchParams.get("code");
   if (!code) throw new Error("The callback has no authorization code");
-  if (url.searchParams.get("state") !== state) throw new Error("The callback is for another login (its state differs)");
   const clientId = url.searchParams.get("client_id")?.trim();
   if (!clientId) throw new Error("The callback did not name the client id OpenAI issued");
   return { code, clientId };
@@ -54,8 +57,12 @@ function pasted(input: string, state: string): Authorization {
   return authorization(url, state);
 }
 
+const ESCAPES: Readonly<Record<string, string>> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
+const escaped = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char]!);
+
+/** The page the browser is shown; what it says comes from the callback's URL, which anyone can send it, so is escaped. */
 const page = (title: string, detail = "") =>
-  `<!doctype html><meta charset="utf-8"><title>Lemma</title><body style="font-family:system-ui;margin:4rem auto;max-width:32rem"><h1>${title}</h1><p>${detail}</p></body>`;
+  `<!doctype html><meta charset="utf-8"><title>Lemma</title><body style="font-family:system-ui;margin:4rem auto;max-width:32rem"><h1>${escaped(title)}</h1><p>${escaped(detail)}</p></body>`;
 
 /** The local server the browser is sent back to, and the authorization it brings, once one with this login's state does. */
 const callback = (state: string) =>
@@ -76,7 +83,7 @@ const callback = (state: string) =>
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           send(400, page("ChatGPT was not connected", message));
-          if (url.searchParams.has("error")) settle.reject(new Error(message));
+          if (ours(url, state) && url.searchParams.has("error")) settle.reject(new Error(message));
         }
       });
       server.once("error", (error: NodeJS.ErrnoException) =>
