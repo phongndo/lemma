@@ -1,4 +1,4 @@
-import type { AuthType, CustomProviderSpec, ModelInfo, ModelRef, ProviderInfo, ThinkingLevel } from "../llm.ts";
+import type { AuthType, CustomProviderSpec, ModelInfo, ModelRef, ProviderInfo, SignIn, ThinkingLevel } from "../llm.ts";
 import { Context } from "effect";
 import type { Accessor } from "solid-js";
 
@@ -21,10 +21,17 @@ export interface ModelsService {
   readonly toggleFavorite: (ref: string) => void;
   /** What the next turn should use: the agent's `TurnOptions`. */
   readonly turnOptions: () => ModelChoice | undefined;
-  /** The provider whose login is running. */
+  /** The provider whose login this client started and is running. */
   readonly loggingIn: Accessor<string | undefined>;
-  /** Resolves true once the provider is connected; a cancelled login resolves false without a message. */
+  /**
+   * Starts a login, saying where this page's browser is and where its sign-in page should offer to come back to.
+   * Resolves true once the provider is connected; a cancelled login resolves false without a message.
+   */
   readonly login: (provider: ProviderInfo, type: AuthType) => Promise<boolean>;
+  /** The sign-ins running on the host, whichever client started them, as `llm.sign-ins` lists them. */
+  readonly signIns: Accessor<readonly SignIn[]>;
+  /** Answers a sign-in's open step. Rejects when it is not open any more (answered elsewhere, or gone by). */
+  readonly answerSignIn: (signIn: SignIn, value: string) => Promise<void>;
   /** Stops the provider's running login, from this client or another; false when none was running. */
   readonly cancelLogin: (provider: ProviderInfo) => Promise<boolean>;
   readonly logout: (provider: ProviderInfo) => Promise<void>;

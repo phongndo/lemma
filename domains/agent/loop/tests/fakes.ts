@@ -127,6 +127,8 @@ export function fakeLlm(scripts: readonly (Script | ((request: LlmRequest) => Sc
             }),
           ),
         login: () => Effect.void,
+        signIns: Stream.make([]),
+        answerSignIn: () => Effect.void,
         logout: () => Effect.void,
         addCustom: () => Effect.succeed("custom"),
         removeCustom: () => Effect.void,

@@ -1,4 +1,4 @@
-import type { NoticePayload } from "@lemma/contracts";
+import { usesPlan } from "../llm.ts";
 import type { CustomProviderSpec, ProviderInfo } from "../llm.ts";
 import { matchesQuery } from "@lemma/web/match";
 import claude from "./assets/claude-ai-icon.svg?url";
@@ -121,11 +121,18 @@ const hasOAuth = (provider: ProviderInfo) => provider.auth.some((method) => meth
 /** An environment variable name, as opposed to a stored credential the host can remove. */
 export const fromEnv = (source: string | undefined) => source !== undefined && /^[A-Z0-9_]+$/.test(source);
 
+/** The plan a sign-in names, as a person says it: `plus` is `Plus`. */
+const planName = (plan: string) => plan.charAt(0).toUpperCase() + plan.slice(1);
+
 /** How a provider is connected, or how it can be. */
 export const describeProvider = (provider: ProviderInfo): string => {
   if (provider.configured) {
     if (fromEnv(provider.source)) return `From $${provider.source}`;
-    if (provider.source === "OAuth") return "Signed in with your subscription";
+    if (provider.expired !== undefined) return "Sign-in expired: sign in again";
+    if (provider.source === "OAuth") {
+      const who = provider.account === undefined ? "Signed in" : `Signed in as ${provider.account}`;
+      return provider.plan !== undefined ? `${who} · ${planName(provider.plan)} plan` : usesPlan(provider) ? `${who} · uses your plan` : who;
+    }
     if (provider.source === "stored credential") return "API key saved on the host";
     return provider.source === undefined ? "Connected" : `Connected · ${provider.source}`;
   }
@@ -230,33 +237,23 @@ export const logoProblem = (svg: string): string | undefined => {
  */
 export const logoSource = (svg: string): string => `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg.trim())}`;
 
-/** What a login shows, from its notices: the page to open, the code to enter there, what it says on the way, and the latest progress. */
-export interface SignInState {
-  readonly link?: { readonly url: string } | undefined;
-  readonly device?: { readonly code: string; readonly url: string } | undefined;
-  /** The latest of its other notices, such as documentation for the credentials it asks for. */
-  readonly info?: { readonly message: string; readonly links: NonNullable<NoticePayload["links"]> } | undefined;
-  /** Progress since the latest link or code, without its trailing ellipsis. */
-  readonly status?: string | undefined;
-}
+/**
+ * Where the person's browser is, for a login (`LoginOptions.browser`): on the host's machine when this page came from
+ * it (`localhost`), elsewhere otherwise. A page reached through an SSH port forward says `here` too, so `here` makes no
+ * choice for the person; only `elsewhere` does.
+ */
+export const browserPlace = (hostname: string): "here" | "elsewhere" => (/^(localhost|127(\.\d+){3}|\[::1\])$/.test(hostname) ? "here" : "elsewhere");
 
-export const signInState = (notices: readonly NoticePayload[]): SignInState =>
-  notices.reduce<SignInState>((state, notice) => {
-    const url = notice.links?.[0]?.url;
-    switch (notice.kind) {
-      case "device-code":
-        return notice.code === undefined || url === undefined ? state : { ...state, device: { code: notice.code, url }, status: undefined };
-      case "sign-in":
-        return url === undefined ? state : { ...state, link: { url }, status: undefined };
-      case "progress":
-        return { ...state, status: notice.message.replace(/(\.{3}|…)$/, "") };
-      case "signed-in":
-      case "ended":
-        return state;
-      default:
-        return { ...state, info: { message: notice.message, links: notice.links ?? [] } };
-    }
-  }, {});
+/**
+ * Where a sign-in's page in the browser offers to go back to: the desktop app's Providers page (`lemma://`), which opens
+ * in its window. A web page offers none: the tab that opens it has no copy of the host's token, which only the page's
+ * own tab keeps, so it could not connect; its page says to go back to Lemma instead.
+ */
+export const signInReturn = (desktop: boolean): string | undefined => (desktop ? "lemma://settings/providers" : undefined);
 
-/** A login's notices that end it: after one, its earlier link and code are no longer any use. */
-export const endsLogin = (notice: NoticePayload) => notice.kind === "signed-in" || notice.kind === "ended";
+/** How long until `at` (epoch ms), as a sign-in's countdown says it: `14:05`; undefined once past. */
+export const timeLeft = (at: number, now: number): string | undefined => {
+  const seconds = Math.ceil((at - now) / 1000);
+  if (seconds <= 0) return undefined;
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+};
