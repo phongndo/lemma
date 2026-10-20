@@ -44,7 +44,6 @@ export function makeInteraction(hooks: Context.Service.Shape<typeof Hooks>): Con
         title,
         ...(options?.placeholder === undefined ? {} : { placeholder: options.placeholder }),
         ...(options?.secret === undefined ? {} : { secret: options.secret }),
-        ...(options?.kind === undefined ? {} : { kind: options.kind }),
       }),
     select: <V extends string>(
       title: string,

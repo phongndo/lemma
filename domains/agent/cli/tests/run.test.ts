@@ -249,8 +249,8 @@ describe("run --follow", () => {
           const running = yield* startRun(host);
           yield* running.showing("word1 ");
           yield* running.showing("[info] notice 39\n");
-          yield* host.notify({ level: "warning", source: "llm", message: "rate limited", code: "429" });
-          yield* running.showing("[warning] llm: rate limited (code: 429)\n");
+          yield* host.notify({ level: "warning", source: "llm", message: "rate limited", links: [{ url: "https://status.test", label: "Status" }] });
+          yield* running.showing("[warning] llm: rate limited Status: https://status.test\n");
           host.append({ type: "message", turnId, stepId: "t1.1", message: answer("word1 ") }, { type: "step-end", turnId, stepId: "t1.1" }, ended);
           host.act(turnEnded);
           yield* host.answer(1);

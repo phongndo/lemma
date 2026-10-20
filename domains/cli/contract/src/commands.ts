@@ -31,7 +31,7 @@ export interface CliOutput {
   /**
    * The client answers questions carrying `origin` too, besides those its
    * own invocation asks (`CliContext.origin`): a run's tools ask as their
-   * session (`session:<id>`), a login as its provider.
+   * session (`session:<id>`).
    */
   readonly answer: (origin: string) => void;
   /**

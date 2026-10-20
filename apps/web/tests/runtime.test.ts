@@ -150,16 +150,16 @@ describe("createNotify", () => {
     const first = notify.toast({ level: "info", message: "saved" });
     fake.emit({
       type: "notice",
-      notice: { level: "warning", message: "open this", links: [{ url: "https://example.com" }], origin: "login:x", kind: "sign-in" },
+      notice: { level: "warning", message: "open this", links: [{ url: "https://example.com" }], origin: "session:x" },
     });
     notify.report(new Error("boom"), "Sync failed");
     expect(notify.toasts()).toEqual([
       { id: first, level: "info", message: "saved" },
-      { id: first + 1, level: "warning", message: "open this", links: [{ url: "https://example.com" }], origin: "login:x", kind: "sign-in" },
+      { id: first + 1, level: "warning", message: "open this", links: [{ url: "https://example.com" }], origin: "session:x" },
       { id: first + 2, level: "error", message: "Sync failed: boom" },
     ]);
     notify.dismiss(first);
-    notify.dismissWhere((toast) => toast.origin === "login:x");
+    notify.dismissWhere((toast) => toast.origin === "session:x");
     expect(notify.toasts().map((toast) => toast.message)).toEqual(["Sync failed: boom"]);
     // With nothing dismissing them, the latest 50 stay.
     for (let index = 0; index < 60; index++) notify.toast({ level: "info", message: `m${index}` });
@@ -172,11 +172,11 @@ describe("createNotify", () => {
 
   it("claims messages for a view of their own, each claim released alone", () => {
     const { notify } = createNotify(createClient(fakeHost().host).client);
-    const login = notify.toast({ level: "info", message: "code", code: "ABCD", origin: "login:x" });
+    const login = notify.toast({ level: "info", message: "work", origin: "session:x" });
     const plain = notify.toast({ level: "info", message: "plain" });
     const byId = (id: number) => notify.toasts().find((toast) => toast.id === id)!;
-    const release = notify.claim((toast) => toast.origin === "login:x");
-    const again = notify.claim((toast) => toast.origin === "login:x");
+    const release = notify.claim((toast) => toast.origin === "session:x");
+    const again = notify.claim((toast) => toast.origin === "session:x");
     expect([notify.claimed(byId(login)), notify.claimed(byId(plain))]).toEqual([true, false]);
     release();
     expect(notify.claimed(byId(login))).toBe(true);

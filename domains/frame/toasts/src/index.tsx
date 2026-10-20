@@ -5,19 +5,10 @@ import type { Toast } from "@lemma/web";
 import { AlertIcon, CopyButton, ExternalIcon, XIcon } from "@lemma/look";
 import styles from "./toasts.css?inline";
 
-/** How long a message shows, by level, unless it carries a code or links to act on: those stay until dismissed. */
+/** How long a message shows, by level, unless it carries links to act on: those stay until dismissed. */
 const SHOWS_FOR: Readonly<Record<Toast["level"], number>> = { error: 12_000, warning: 8_000, info: 5_000 };
 /** At most this many show at once; one more dismisses the oldest. */
 const AT_MOST = 6;
-
-function CodeBox(props: { code: string }) {
-  return (
-    <div class="device-code">
-      <code>{props.code}</code>
-      <CopyButton text={props.code} label="Copy code" />
-    </div>
-  );
-}
 
 function ToastView(props: { toast: Toast; onDismiss: () => void }) {
   return (
@@ -39,7 +30,6 @@ function ToastView(props: { toast: Toast; onDismiss: () => void }) {
           <XIcon />
         </button>
       </div>
-      <Show when={props.toast.code}>{(code) => <CodeBox code={code()} />}</Show>
       <Show when={props.toast.links?.length}>
         <div class="toast-links">
           <For each={props.toast.links}>
@@ -67,7 +57,7 @@ export default defineWebPlugin({
   requires: { notify: Notify, slots: Slots },
   setup: ({ notify, slots }, plugin) => {
     const shown = createMemo(() => notify.toasts().filter((item) => !notify.claimed(item)));
-    /** Each message's timer, from when this plugin first saw it; one with a code or links has none. */
+    /** Each message's timer, from when this plugin first saw it; one with links has none. */
     const timers = new Map<number, () => void>();
     createEffect(() => {
       const all = notify.toasts();
@@ -77,7 +67,7 @@ export default defineWebPlugin({
         timers.delete(id);
       }
       for (const item of all) {
-        if (timers.has(item.id) || item.code !== undefined || (item.links?.length ?? 0) > 0) continue;
+        if (timers.has(item.id) || (item.links?.length ?? 0) > 0) continue;
         timers.set(
           item.id,
           plugin.after(SHOWS_FOR[item.level], () => notify.dismiss(item.id), { name: "dismiss toast" }),
