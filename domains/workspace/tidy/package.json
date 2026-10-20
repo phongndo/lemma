@@ -9,7 +9,7 @@
     "./web": "./src/web.tsx"
   },
   "scripts": {
-    "check": "tsc --noEmit",
+    "check": "tsrs --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
@@ -28,7 +28,7 @@
     "@lemma/sessions-files": "workspace:*",
     "@lemma/workspace-local": "workspace:*",
     "@types/node": "24.19.2",
-    "typescript": "7.0.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
     "vitest": "5.0.5"
   },
   "lemma": {
