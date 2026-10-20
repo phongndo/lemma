@@ -978,6 +978,88 @@ describe("login", () => {
     expect(credentials.store.get("faux")).toMatchObject({ access: "rotated", refresh: "rotated-refresh" });
   });
 
+  it("refreshes a sign-in once for the requests that find it expired together, failing them all as it failed", async () => {
+    let asked = 0;
+    let refuse!: () => void;
+    const sso: OAuthMethod = {
+      name: "SSO",
+      login: () => Effect.die("not used"),
+      refresh: async () => {
+        asked++;
+        await new Promise<void>((resolve) => (refuse = resolve));
+        throw new Error("503 Service Unavailable");
+      },
+    };
+    const credentials = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
+    const { fetch, sent } = scriptedFetch(() => sseResponse(completion("ok")));
+    const plugins = [
+      credentials.plugin,
+      fakeInteraction(() => Effect.succeed("")).plugin,
+      makeLlmPlugin({ fetch, providers: () => [faux({ oauth: sso })], env: {} }),
+    ];
+    const ends = await runWith(
+      plugins,
+      Effect.gen(function* () {
+        const requests = yield* Effect.forkChild(
+          Effect.all(
+            [1, 2, 3].map(() => collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] }))),
+            { concurrency: "unbounded" },
+          ),
+        );
+        yield* Effect.promise(() => expect.poll(() => asked).toBe(1));
+        refuse();
+        return (yield* Fiber.join(requests)).map((events) => events.at(-1));
+      }),
+    );
+    // One refresh, not three in a line behind the credential's lock, each as slow.
+    expect(asked).toBe(1);
+    expect(sent).toHaveLength(0);
+    for (const end of ends) expect(end).toMatchObject({ type: "error", failure: { kind: "transient" } });
+  });
+
+  it("does not ask for a refresh still waiting for the credential's lock when the plugin stops", async () => {
+    const asked: string[] = [];
+    let release!: () => void;
+    const sso: OAuthMethod = {
+      name: "SSO",
+      login: () => Effect.die("not used"),
+      refresh: async (credential) => {
+        asked.push(credential.access);
+        await new Promise<void>((resolve) => (release = resolve));
+        return { ...credential, access: "rotated", expires: Date.now() + 3_600_000 };
+      },
+    };
+    const expired = (access: string) => ({ type: "oauth" as const, access, refresh: "r", expires: Date.now() - 1 });
+    const credentials = fakeCredentials({ faux: expired("first"), other: expired("second") });
+    const { fetch } = scriptedFetch(() => sseResponse(completion("ok")));
+    const plugins = [
+      credentials.plugin,
+      fakeInteraction(() => Effect.succeed("")).plugin,
+      fakeHost().plugin,
+      makeLlmPlugin({ fetch, providers: () => [faux({ oauth: sso }), faux({ id: "other", name: "Other", oauth: sso })], env: {} }),
+    ];
+    const stopped = await Effect.runPromise(
+      Effect.gen(function* () {
+        const scope = yield* Scope.make();
+        const core = yield* Scope.provide(makeCore(plugins, { deadlines: { dispose: "0 millis" }, shutdownTimeout: "40 seconds" }), scope);
+        const ask = (model: string) => Effect.forkChild(core.run(collect(new LlmRequest({ model, messages: [user("hi")] }))));
+        yield* ask("faux/plain");
+        yield* Effect.promise(() => expect.poll(() => asked).toEqual(["first"]));
+        // The other provider's refresh waits for the store's lock, which the first holds.
+        yield* ask("other/plain");
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        const stopping = yield* Effect.forkChild(Effect.exit(Scope.close(scope, Exit.void)));
+        for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
+        release();
+        return yield* Fiber.join(stopping);
+      }),
+    );
+    expect(Exit.isSuccess(stopped)).toBe(true);
+    expect(asked).toEqual(["first"]);
+    expect(credentials.store.get("faux")).toMatchObject({ access: "rotated" });
+    expect(credentials.store.get("other")).toMatchObject({ access: "second" });
+  });
+
   it("fails a request whose credential store is busy as one to ask again, without sending the user to sign in", async () => {
     const sso: OAuthMethod = { name: "SSO", login: () => Effect.die("not used"), refresh: async (credential) => credential };
     const { service } = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });

@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, Exit, Fiber, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
 import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
 import type { Contribution, HandlerStep } from "@lemma/core";
@@ -21,7 +21,7 @@ import {
   streamThroughHook,
 } from "@lemma/llm";
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, StreamEvent } from "@lemma/llm";
-import { STOP_DEADLINE_MS, authSource, resolveAuth } from "./auth.ts";
+import { STOP_DEADLINE_MS, authSource, makeRefresher, resolveAuth } from "./auth.ts";
 import type { Env } from "./auth.ts";
 import { devSource, mustThinkSource, planModels, planSource } from "./catalog.ts";
 import { deviceId } from "./device.ts";
@@ -135,9 +135,8 @@ export function makeLlmPlugin(options: Options = {}) {
       const scope = yield* Effect.scope;
       const fetchImpl = options.fetch ?? ((input, init) => fetch(input, init));
       const env: Env = (name) => (options.env ?? process.env)[name];
-      /** Runs `effect` in the plugin's scope, its caller waiting: a caller stopped meanwhile leaves it to finish. */
-      const detached = <A, E>(effect: Effect.Effect<A, E>) => Effect.flatMap(Effect.forkIn(effect, scope), Fiber.join);
-      const authOf = (provider: Provider) => resolveAuth(provider, credentials, env, fetchImpl, detached);
+      const refresher = yield* makeRefresher;
+      const authOf = (provider: Provider) => resolveAuth(provider, credentials, env, fetchImpl, refresher);
       const sockets = config.webSocket ? new SocketPool(options.socket ?? nodeSocket) : undefined;
       if (sockets !== undefined) yield* Effect.addFinalizer(() => Effect.sync(() => sockets.closeAll()));
 
