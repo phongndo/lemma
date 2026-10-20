@@ -463,6 +463,24 @@ describe("worktrees", () => {
     expect(listed.find((branch) => branch.name === "main")?.worktree).toBeUndefined();
   });
 
+  it("starts from the base's remote version when asked, fetched first, and not tracking it", async () => {
+    const origin = await repo("origin");
+    const clone = path.join(dir, "clone");
+    sh(dir, "clone", "-q", origin, clone);
+    // The remote moves on after the clone: only a fetch sees it.
+    await commit(origin, "b.txt", "two\n", "on the remote");
+    const ws2 = makeWorkspace({ home: "/nonexistent-home", worktrees: path.join(dir, "trees") });
+    const status = await run(ws2.createWorktree(clone, { branch: "feat/y", fromRemote: true }));
+    expect(sh(status.path, "rev-parse", "HEAD")).toBe(sh(origin, "rev-parse", "HEAD"));
+    expect(sh(clone, "rev-parse", "main")).not.toBe(sh(origin, "rev-parse", "HEAD"));
+    expect(() => sh(status.path, "rev-parse", "--abbrev-ref", "feat/y@{upstream}")).toThrow();
+    // Without it, the local branch as it is.
+    const local = await run(ws2.createWorktree(clone, { branch: "feat/z", base: "main" }));
+    expect(sh(local.path, "rev-parse", "HEAD")).toBe(sh(clone, "rev-parse", "main"));
+    // A repository with no remote has none to start from.
+    expect((await failure(ws2.createWorktree(origin, { branch: "x", fromRemote: true }))).message).toContain("has no remote branch to start from");
+  });
+
   it("rejects invalid names and non-repositories", async () => {
     const root = await repo();
     expect((await failure(ws.createWorktree(root, { branch: "bad..name" }))).reason).toBe("InvalidName");

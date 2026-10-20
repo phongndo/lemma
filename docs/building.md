@@ -172,10 +172,11 @@ Teach the topic the user names, a step at a time:
 - When they get something wrong, say what is right and why, without making them feel slow.
 ```
 
-Pick **tutor** in the composer's profile menu. That thread's agent now
-teaches, offered only the glossary, `read`, and `ask_user`, whatever else is
-installed; another thread keeps its own profile. The choice is logged with
-each turn, so a turn resumed after a restart keeps it.
+Start a new thread and pick **Tutor** in its Mode menu, under the prompt. That
+thread's agent now teaches, offered only the glossary, `read`, and
+`ask_user`, whatever else is installed; another thread keeps its own mode. The
+mode is logged with the thread's first turn and kept from then on, so a turn
+resumed after a restart keeps it too.
 
 What changed:
 

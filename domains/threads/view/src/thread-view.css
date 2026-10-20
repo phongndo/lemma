@@ -221,6 +221,75 @@
 }
 
 /* Over the view's bottom, so what the view shows passes under the composer; the view pads its end by `--composer-height`. Only what it draws takes the pointer, so the view still scrolls beside it. */
+/* The thread card: the open thread's facts, floating over its chat's top right while kept open, as a menu's rows. */
+.thread-card {
+  position: absolute;
+  top: calc(var(--head-height) + 4px);
+  right: 12px;
+  z-index: 7;
+  width: 260px;
+  min-width: 0;
+  max-height: calc(100% - var(--head-height) - 24px);
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-popover);
+}
+
+/* Its rows: quieter and tighter than a menu's, as they mostly show; numbers in columns. */
+.thread-card .menu-item {
+  min-height: 28px;
+  gap: 9px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  font-size: calc(12.5px * var(--text-scale));
+  color: var(--text-2);
+}
+
+.thread-card .menu-label {
+  font-weight: 450;
+}
+
+.thread-card .menu-check,
+.thread-card .menu-check .icon {
+  color: var(--text-3);
+}
+
+.thread-card .menu-hint {
+  font-size: calc(12px * var(--text-scale));
+  font-variant-numeric: tabular-nums;
+}
+
+/* A row with no icon of its own (what the thread cost) has a glyph in its place. */
+.thread-card-glyph {
+  font-size: calc(12px * var(--text-scale));
+  font-weight: 600;
+  line-height: 1;
+}
+
+/* Its groups, set apart by a rule; one whose rows draw nothing is left out. */
+.thread-card-group:not(:has(*)) {
+  display: none;
+}
+
+.thread-card-group:has(*) ~ .thread-card-group:has(*) {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+/* A row that does something (a menu's trigger) shows so under the pointer, as a menu's rows do. */
+.thread-card button.menu-item:hover:not(:disabled),
+.thread-card button.menu-item[aria-expanded="true"] {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.card-toggle.on {
+  color: var(--text);
+}
+
 .composer-dock {
   position: absolute;
   left: 0;
@@ -232,6 +301,33 @@
 
 .composer-dock > * {
   pointer-events: auto;
+}
+
+/*
+ * A new thread, nothing sent yet: its prompt in the middle of the page, and what it starts with under it, in the space
+ * below, so the line does not move the prompt: three rows, the prompt the middle one between two of the same height.
+ */
+.thread-chat.starting .composer-dock {
+  top: 0;
+  display: grid;
+  grid-template-rows: 1fr auto 1fr;
+  /* Not against the page's foot, the composer keeps no space under its box, which would lift it off the middle. */
+  --composer-foot: 0px;
+}
+
+.thread-chat.starting .composer-dock > :not(.thread-start) {
+  grid-row: 2;
+}
+
+.thread-start {
+  grid-row: 3;
+  align-self: start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 8px 20px 0;
 }
 
 .main-head {

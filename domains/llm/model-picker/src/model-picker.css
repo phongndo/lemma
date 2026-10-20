@@ -36,6 +36,16 @@
   color: var(--text);
 }
 
+/* In the composer's row: model · thinking as one quiet line, with no chevrons; under the pointer or open, each shows as a button. */
+.select-chip.quiet > .icon:last-child {
+  display: none;
+}
+
+.control-dot {
+  color: var(--text-3);
+  flex: none;
+}
+
 .select-chip:active {
   transform: scale(0.97);
 }

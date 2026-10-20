@@ -26,7 +26,11 @@ const position = (anchor: DOMRect, menu: HTMLElement, placement: Placement) => {
   menu.style.maxHeight = `${room}px`;
   const shown = Math.min(height, room);
   const width = menu.offsetWidth;
-  const left = placement.endsWith("end") ? anchor.right - width : anchor.left;
+  const left = placement.endsWith("end")
+    ? anchor.right - width
+    : placement === "top" || placement === "bottom"
+      ? anchor.left + (anchor.width - width) / 2
+      : anchor.left;
   menu.style.left = `${Math.max(MARGIN, Math.min(left, vw - width - MARGIN))}px`;
   menu.style.top = `${top ? anchor.top - GAP - shown : anchor.bottom + GAP}px`;
   menu.dataset.side = top ? "top" : "bottom";

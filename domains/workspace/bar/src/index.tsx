@@ -1,12 +1,11 @@
 import { For, Show, createMemo, createSignal } from "solid-js";
-import type { JSX } from "solid-js";
 import { WorkspaceChannels } from "@lemma/workspace";
 import type { GitBranch, WorkspaceStatus } from "@lemma/workspace";
-import { folderName, Workspace, WorkspaceBarItems, WorkspaceActionIds } from "@lemma/workspace/web";
+import { folderName, Workspace, WorkspaceActionIds } from "@lemma/workspace/web";
 import { Actions } from "@lemma/actions";
 import { SectionIds, SettingsGroups } from "@lemma/settings";
-import { ComposerFooter, Threads } from "@lemma/threads";
-import { Client, Notify, Slots, defineWebPlugin, Each, usePlugin } from "@lemma/web";
+import { ThreadCard, Threads, ThreadStart } from "@lemma/threads";
+import { Client, Notify, Slots, defineWebPlugin, usePlugin } from "@lemma/web";
 import type { ThreadsService } from "@lemma/threads";
 import type { ClientService, NotifyService, SlotsService } from "@lemma/web";
 import type { WorkspaceService } from "@lemma/workspace/web";
@@ -17,13 +16,14 @@ import {
   FolderIcon,
   FolderPlusIcon,
   GitBranchIcon,
-  LaptopIcon,
   PlusIcon,
   Popover,
+  RefreshIcon,
   SettingRow,
   Toggle,
   WorktreeIcon,
 } from "@lemma/look";
+import type { Placement } from "@lemma/look";
 import styles from "./workspace-bar.css?inline";
 
 interface Deps {
@@ -35,107 +35,65 @@ interface Deps {
 }
 
 /**
- * The strip under the composer: which project the chat works in, and that
- * project's git branch. A session's directory is fixed once it exists, so the
- * project is only choosable for a new chat.
+ * The thread card's row for where an open thread works (`ThreadCard`): its project (a worktree of one marked so, a
+ * thread of its own as such), and a folder gone from the host. Fixed since the thread began, so it only shows.
  */
-function WorkspaceBar(props: { deps: Deps }) {
+function FolderRow(props: { deps: Deps }) {
+  const { workspace } = props.deps;
+  const standalone = () => workspace.isStandalone(workspace.workingDir() ?? "");
+  const git = () => workspace.status()?.git;
+  const missing = () => workspace.status()?.exists === false;
+  return (
+    <Show when={workspace.workingDir()}>
+      {(dir) => (
+        <div
+          class="menu-item"
+          data-tip={
+            standalone() ? "A thread of its own, in no project" : git()?.worktreeOf === undefined ? dir() : `A worktree of ${git()!.worktreeOf}, at ${dir()}`
+          }
+        >
+          <span class="menu-check">{standalone() ? <ChatIcon /> : git()?.worktreeOf === undefined ? <FolderIcon /> : <WorktreeIcon />}</span>
+          <span class="menu-label">{standalone() ? "No project" : workspace.projectName(git()?.worktreeOf ?? dir())}</span>
+          <span class="menu-hint" classList={{ "workspace-warning": missing() }}>
+            {missing() ? "folder not found" : git()?.worktreeOf === undefined ? "" : "worktree"}
+          </span>
+        </div>
+      )}
+    </Show>
+  );
+}
+
+/** A long branch name with its middle left out, as `backup/main-befo…014-021326`: both ends say which it is. */
+const shortened = (name: string, max = 32): string => {
+  if (name.length <= max) return name;
+  const head = Math.ceil((max - 1) * 0.55);
+  return `${name.slice(0, head)}…${name.slice(name.length - (max - 1 - head))}`;
+};
+
+/**
+ * A new chat's start line (`ThreadStart`): its project, with where in it to work in the project's menu, and the git
+ * branch it works on (or a new worktree starts from), chosen before it starts.
+ */
+function WorkspaceStart(props: { deps: Deps }) {
   const { workspace } = props.deps;
   return (
     <Show when={workspace.workingDir() !== undefined}>
-      <div class="workspace-bar">
-        <Each slot={WorkspaceBarItems} filter={(item) => item.side === "start"} />
-        <span class="spacer" />
-        <Each slot={WorkspaceBarItems} filter={(item) => item.side === "end"} />
-      </div>
+      <ProjectPicker deps={props.deps} />
+      {/* A thread of its own, in no project, has no branch to choose. */}
+      <Show when={!workspace.isStandalone(workspace.workingDir() ?? "") && workspace.status()?.git}>
+        {(git) => <BranchPicker deps={props.deps} git={git()} onChanged={workspace.setStatus} variant="chip" placement="bottom" />}
+      </Show>
+      <Show when={workspace.status()?.exists === false}>
+        <span class="workspace-warning">Folder not found on the host</span>
+      </Show>
     </Show>
   );
 }
 
-/** Local checkout or a new worktree; fixed once the chat's first prompt is sent. */
-function ModePicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]> }) {
-  const { threads, workspace } = props.deps;
-  const isNew = threads.blank;
-  const worktree = () => workspace.worktree().enabled;
-  const workingDir = workspace.workingDir;
-  const setNewWorktree = workspace.setWorktree;
-  return (
-    <Show
-      when={isNew()}
-      fallback={
-        <Show when={props.git.worktreeOf}>
-          {(main) => (
-            <span class="strip-chip static" data-tip={`Worktree of ${main()}`}>
-              <WorktreeIcon />
-              <span class="strip-label">Worktree</span>
-            </span>
-          )}
-        </Show>
-      }
-    >
-      <Popover
-        label="Where to work"
-        tip={worktree() ? "A new worktree on its own branch" : "Directly in the project folder"}
-        triggerClass="strip-chip"
-        placement="top-start"
-        menuClass="mode-menu"
-        trigger={
-          <>
-            {worktree() ? <WorktreeIcon /> : <LaptopIcon />}
-            <span class="strip-label">{worktree() ? "New worktree" : "Local"}</span>
-            <ChevronDownIcon />
-          </>
-        }
-      >
-        {(close) => (
-          <>
-            <button
-              class="menu-item menu-item-tall"
-              role="menuitemradio"
-              aria-checked={!worktree()}
-              onClick={() => {
-                setNewWorktree(false);
-                close();
-              }}
-            >
-              <span class="menu-check">
-                <Show when={!worktree()}>
-                  <CheckIcon />
-                </Show>
-              </span>
-              <span class="menu-stack">
-                <span class="menu-label">Local</span>
-                <span class="menu-desc">
-                  Work directly in {folderName(workingDir() ?? "")} on {props.git.branch ?? "the current commit"}
-                </span>
-              </span>
-            </button>
-            <button
-              class="menu-item menu-item-tall"
-              role="menuitemradio"
-              aria-checked={worktree()}
-              onClick={() => {
-                setNewWorktree(true);
-                close();
-              }}
-            >
-              <span class="menu-check">
-                <Show when={worktree()}>
-                  <CheckIcon />
-                </Show>
-              </span>
-              <span class="menu-stack">
-                <span class="menu-label">New worktree</span>
-                <span class="menu-desc">A separate checkout on a new branch in ~/.lemma/worktrees, so this chat's changes stay apart</span>
-              </span>
-            </button>
-          </>
-        )}
-      </Popover>
-    </Show>
-  );
-}
-
+/**
+ * A new chat's project, and where in it the chat works: its current checkout, or a new worktree on a branch of its own.
+ * Fixed once the first prompt is sent, when the thread card shows it.
+ */
 function ProjectPicker(props: { deps: Deps }) {
   const { threads, workspace, slots } = props.deps;
   const isNew = threads.blank;
@@ -143,8 +101,17 @@ function ProjectPicker(props: { deps: Deps }) {
   const current = () => workspace.workingDir() ?? "";
   const addProject = () => slots.get(Actions, WorkspaceActionIds.addProject);
   const standalone = () => workspace.isStandalone(current());
+  /** Its git checkout, when it has one: only then is a new worktree a choice. */
+  const git = () => (standalone() ? undefined : workspace.status()?.git);
+  const worktree = () => git() !== undefined && workspace.worktree().enabled;
+  const branch = () => git()?.branch ?? "the current commit";
+  const base = () => workspace.worktree().base ?? branch();
   const newStandalone = usePlugin().action("start a chat in no project", () => workspace.newStandalone());
   const pick = usePlugin().action("start the chat in the project picked", (path: string) => threads.newThread(path, { inPlace: true }));
+  const where = (newWorktree: boolean, close: () => void) => {
+    workspace.setWorktree(newWorktree);
+    close();
+  };
   const label = () => (
     <Show
       when={!standalone()}
@@ -155,34 +122,28 @@ function ProjectPicker(props: { deps: Deps }) {
         </>
       }
     >
-      <FolderIcon />
+      {worktree() ? <WorktreeIcon /> : <FolderIcon />}
       <span class="strip-label">{workspace.projectName(current())}</span>
     </Show>
   );
   return (
-    <Show
-      when={isNew()}
-      fallback={
-        <span class="strip-chip static" data-tip={standalone() ? "A thread of its own, in no project" : current()}>
-          {label()}
-        </span>
-      }
-    >
+    <Show when={isNew()}>
       <Popover
         label="Project"
-        tip={standalone() ? "A thread of its own, in no project" : current()}
+        tip={standalone() ? "A thread of its own, in no project" : worktree() ? `A new worktree of ${current()}` : current()}
         trigger={
           <>
             {label()}
             <ChevronDownIcon />
           </>
         }
-        triggerClass="strip-chip"
-        placement="top-start"
+        triggerClass="strip-chip start-chip"
+        placement="bottom"
         menuClass="project-menu"
       >
         {(close) => (
           <>
+            <div class="menu-section">Project</div>
             <For each={projects()}>
               {(path) => (
                 <button
@@ -204,9 +165,6 @@ function ProjectPicker(props: { deps: Deps }) {
                 </button>
               )}
             </For>
-            <Show when={projects().length > 0}>
-              <div class="menu-sep" />
-            </Show>
             <button
               class="menu-item"
               role="menuitemradio"
@@ -226,22 +184,54 @@ function ProjectPicker(props: { deps: Deps }) {
             </button>
             <Show when={addProject()}>
               {(action) => (
-                <>
-                  <button
-                    class="menu-item"
-                    role="menuitem"
-                    onClick={() => {
-                      close();
-                      action().run();
-                    }}
-                  >
-                    <span class="menu-check">
-                      <FolderPlusIcon />
-                    </span>
-                    <span class="menu-label">Add project…</span>
-                  </button>
-                </>
+                <button
+                  class="menu-item"
+                  role="menuitem"
+                  onClick={() => {
+                    close();
+                    action().run();
+                  }}
+                >
+                  <span class="menu-check">
+                    <FolderPlusIcon />
+                  </span>
+                  <span class="menu-label">Add project…</span>
+                </button>
               )}
+            </Show>
+            <Show when={git()}>
+              <div class="menu-sep" />
+              <div class="menu-section">Workspace</div>
+              <button
+                class="menu-item"
+                role="menuitemradio"
+                aria-checked={!worktree()}
+                data-tip={`Work in ${folderName(current())} as it is, on ${branch()}`}
+                onClick={() => where(false, close)}
+              >
+                <span class="menu-check">
+                  <Show when={!worktree()}>
+                    <CheckIcon />
+                  </Show>
+                </span>
+                <span class="menu-label">Current checkout</span>
+                <span class="menu-hint">{branch()}</span>
+              </button>
+              <button
+                class="menu-item"
+                role="menuitemradio"
+                aria-checked={worktree()}
+                data-tip="A separate checkout in ~/.lemma/worktrees, on a new branch named from your first message, so this thread's changes stay apart"
+                onClick={() => where(true, close)}
+              >
+                <span class="menu-check">
+                  <Show when={worktree()}>
+                    <CheckIcon />
+                  </Show>
+                </span>
+                <span class="menu-label">New worktree</span>
+                <span class="menu-hint">from {base()}</span>
+              </button>
             </Show>
           </>
         )}
@@ -250,7 +240,14 @@ function ProjectPicker(props: { deps: Deps }) {
   );
 }
 
-function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git"]>; onChanged: (status: WorkspaceStatus) => void }) {
+function BranchPicker(props: {
+  deps: Deps;
+  git: NonNullable<WorkspaceStatus["git"]>;
+  onChanged: (status: WorkspaceStatus) => void;
+  /** The start line's chip, or the thread card's row (`menu-item`, its counts as its hint). */
+  variant: "chip" | "row";
+  placement: Placement;
+}) {
   const { client, threads, workspace, notify } = props.deps;
   const plugin = usePlugin();
   const workingDir = workspace.workingDir;
@@ -299,7 +296,14 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
   };
 
   const here = () => props.git.branch ?? `detached ${props.git.head ?? ""}`.trim();
-  const label = () => (baseMode() ? `From ${base() ?? here()}` : here());
+  /** The remote a new worktree can start from: the current branch's, else `origin`. */
+  const remote = () => props.git.upstream?.split("/")[0] ?? "origin";
+  /** What a new worktree starts from: the base branch, or its remote version when it starts from the remote. */
+  const from = () => {
+    const branch = base() ?? here();
+    return workspace.fromRemote() && !branch.startsWith(`${remote()}/`) ? `${remote()}/${branch}` : branch;
+  };
+  const label = () => (baseMode() ? `from ${from()}` : here());
   const choose = (branch: GitBranch, close: () => void) => {
     if (baseMode()) {
       workspace.setWorktreeBase(branch.current ? undefined : branch.name);
@@ -319,6 +323,15 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
     }
     void checkout(branch.name, false, close);
   };
+  /** The row's hint: uncommitted changes, and how far it is ahead of and behind its upstream. */
+  const counts = () =>
+    [
+      props.git.changes > 0 ? `${props.git.changes} changed` : undefined,
+      props.git.ahead > 0 ? `↑${props.git.ahead}` : undefined,
+      props.git.behind > 0 ? `↓${props.git.behind}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · ");
   const checked = (branch: GitBranch) => (baseMode() ? branch.name === base() : branch.current);
   const title = () =>
     [
@@ -333,14 +346,25 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
   return (
     <Popover
       label={baseMode() ? "Worktree base branch" : "Git branch"}
-      tip={baseMode() ? "The branch the new worktree starts from" : title()}
+      tip={baseMode() ? "The branch the new worktree starts from; the worktree gets a new branch of its own, named from your first message" : title()}
       disabled={busyHere() || switching()}
-      triggerClass="strip-chip"
-      placement="top-end"
+      triggerClass={props.variant === "row" ? "menu-item" : "strip-chip start-chip"}
+      placement={props.placement}
       menuClass="branch-menu"
       onOpen={plugin.action("load branches", () => load())}
       trigger={
-        <>
+        <Show
+          when={props.variant === "chip"}
+          fallback={
+            <>
+              <span class="menu-check">
+                <GitBranchIcon />
+              </span>
+              <span class="menu-label">{switching() ? "Switching…" : label()}</span>
+              <span class="menu-hint">{counts()}</span>
+            </>
+          }
+        >
           <GitBranchIcon />
           <span class="strip-label">{switching() ? "Switching…" : label()}</span>
           <Show when={!baseMode()}>
@@ -356,15 +380,15 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
               <span class="strip-count">↓{props.git.behind}</span>
             </Show>
           </Show>
-        </>
+        </Show>
       }
     >
       {(close) => (
         <>
           <input
             class="menu-search"
-            placeholder={baseMode() ? "Start the worktree from…" : "Find or create a branch"}
-            aria-label={baseMode() ? "Base branch" : "Find or create a branch"}
+            placeholder={baseMode() ? "Search branches" : "Find or create a branch"}
+            aria-label={baseMode() ? "Search branches" : "Find or create a branch"}
             autocomplete="off"
             spellcheck={false}
             data-autofocus
@@ -387,7 +411,13 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
                   class="menu-item"
                   role="menuitemradio"
                   aria-checked={checked(branch)}
-                  data-tip={!baseMode() && branch.worktree !== undefined ? `Checked out in ${branch.worktree}` : undefined}
+                  data-tip={
+                    !baseMode() && branch.worktree !== undefined
+                      ? `Checked out in ${branch.worktree}`
+                      : shortened(branch.name) === branch.name
+                        ? undefined
+                        : branch.name
+                  }
                   onClick={() => choose(branch, close)}
                 >
                   <span class="menu-check">
@@ -395,13 +425,10 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
                       <CheckIcon />
                     </Show>
                   </span>
-                  <span class="menu-label branch-name">{branch.name}</span>
-                  <Show when={branch.worktree !== undefined}>
-                    <span class="tag">worktree</span>
-                  </Show>
-                  <Show when={branch.remote}>
-                    <span class="tag">remote</span>
-                  </Show>
+                  <span class="menu-label branch-name">{shortened(branch.name)}</span>
+                  <span class="menu-hint">
+                    {baseMode() && branch.current ? "current" : branch.worktree !== undefined ? "worktree" : branch.remote ? "remote" : ""}
+                  </span>
                 </button>
               )}
             </For>
@@ -417,7 +444,12 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
               </Show>
             }
           >
-            <div class="menu-note">The worktree gets its own new branch, named from your first message. Uncommitted changes here stay here.</div>
+            <div class="menu-toggle-row" data-tip={`Fetch the branch first and start from ${remote()}'s version of it, rather than this clone's`}>
+              <RefreshIcon />
+              <span class="menu-label">Start from {remote()}</span>
+              <span class="spacer" />
+              <Toggle label={`Start from ${remote()}`} checked={workspace.fromRemote()} onChange={workspace.setFromRemote} />
+            </div>
           </Show>
         </>
       )}
@@ -425,36 +457,26 @@ function BranchPicker(props: { deps: Deps; git: NonNullable<WorkspaceStatus["git
   );
 }
 
-/** The project and branch strip under the composer, and the worktree setting for new chats. */
+/** The project and branch: a new chat's, under its prompt (`ThreadStart`); an open thread's, in the thread card (`ThreadCard`). And the worktree setting for new chats. */
 export default defineWebPlugin({
   id: "workspace.bar",
   styles,
   requires: { client: Client, threads: Threads, workspace: Workspace, notify: Notify, slots: Slots },
   setup: (deps) => {
-    deps.slots.add(ComposerFooter, { id: "workspace-bar", component: () => <WorkspaceBar deps={deps} /> });
-    // Its own pickers go through the slot other plugins add theirs to.
+    deps.slots.add(ThreadStart, { id: "workspace", order: 0, component: () => <WorkspaceStart deps={deps} /> });
+    // An open thread's: where it works, and its branch, which the row's menu switches (git keeps a running turn's).
     const status = deps.workspace.status;
-    const item = (id: string, order: number, side: "start" | "end", component: () => JSX.Element) =>
-      deps.slots.add(WorkspaceBarItems, { id, order, side, component });
-    item("workspace.project", 0, "start", () => <ProjectPicker deps={deps} />);
-    item("workspace.mode", 10, "start", () => (
-      <Show when={status()?.git}>
-        {(git) => (
-          <>
-            <span class="strip-sep" aria-hidden="true" />
-            <ModePicker deps={deps} git={git()} />
-          </>
-        )}
-      </Show>
-    ));
-    item("workspace.missing", 20, "start", () => (
-      <Show when={status()?.exists === false}>
-        <span class="workspace-warning">Folder not found on the host</span>
-      </Show>
-    ));
-    item("workspace.branch", 0, "end", () => (
-      <Show when={status()?.git}>{(git) => <BranchPicker deps={deps} git={git()} onChanged={deps.workspace.setStatus} />}</Show>
-    ));
+    deps.slots.add(ThreadCard, { id: "workspace.folder", order: 10, group: "workspace", component: () => <FolderRow deps={deps} /> });
+    deps.slots.add(ThreadCard, {
+      id: "workspace.branch",
+      order: 20,
+      group: "workspace",
+      component: () => (
+        <Show when={!deps.workspace.isStandalone(deps.workspace.workingDir() ?? "") && status()?.git}>
+          {(git) => <BranchPicker deps={deps} git={git()} onChanged={deps.workspace.setStatus} variant="row" placement="bottom-end" />}
+        </Show>
+      ),
+    });
     deps.slots.add(SettingsGroups, {
       id: "workspace-bar",
       section: SectionIds.general,

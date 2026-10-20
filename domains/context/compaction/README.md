@@ -19,17 +19,17 @@ divider. Requires `Llm`.
 
 - **Its setting.** Its web half offers `at` in Settings › General › Agent
   (Summarize at), written to its row as the Plugins page would.
-- **The meter.** Its web half adds a ring to the composer's row, beside its buttons
-  (`ComposerActions`), so how full the open thread's context is stays in
-  view. It measures as the estimate below
+- **The meter.** Its web half adds a row to the thread card (`ThreadCard`): a
+  ring and how full the open thread's context is, which stays in view while
+  the card is open. It measures as the estimate below
   does (`measuredTokens`), against the selected model's window, since that is
   the model the next prompt goes to, and reads `at` from the same row. It turns
   the warning color within 10 points of `at`, and the error color past the
   window. It is not measured before the first reply, or after a summary until
   the next reply (the system prompt and tools are sized only on the host). Beside
   it is the share of the last reply's input the provider's cache served
-  (`82% CH`, spelled out in its tooltip); a provider that reports no caching shows
-  0%. Turning the plugin off removes both.
+  (`82% cached`, the window's size in its tooltip); a provider that reports
+  no caching shows 0%. Turning the plugin off removes both.
 - **The estimate.** The last response after the latest compaction reports the
   tokens of the context it was given and of its output; messages since then are
   estimated at four characters a token (an image as 1,200). Without such a

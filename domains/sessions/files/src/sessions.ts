@@ -168,10 +168,12 @@ export const make = ({
       index.set(keyOf(entry.file), scanned);
       indexChanged = true;
     };
+    // Whole or not begun: a write the store's close cut off would go on regardless (a promise is not stopped by
+    // interrupting what awaits it), and land after the close, over what the next start wrote.
     const saveIndex = Effect.suspend(() => {
       if (!indexChanged) return Effect.void;
       indexChanged = false;
-      return writeIndex(fs, root, index);
+      return Effect.uninterruptible(writeIndex(fs, root, index));
     });
     // A failed write's leftover bytes are cut first: the next start would read them as appended. Each open
     // session is then indexed from memory, so the next start reads none of them.

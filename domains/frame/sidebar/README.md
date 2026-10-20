@@ -50,9 +50,12 @@ asked from a turn): `Needs approval`, or `Needs input` for a value. Requires
 - **Dragging.** A thread dragged up and down the list goes where it is
   dropped: among the pinned it is pinned there, among the active it is unpinned
   there (and the active ones keep that order), and onto the archived panel it
-  is archived, first of them. While it is dragged, the sections are named, an
-  empty one offers a place to drop, the panel lights while it is over it, and
-  the thread says what dropping it there does (Pin, Unpin, Archive). Only the
+  is archived, first of them. While it is dragged, it is ringed in the accent,
+  the sections are named over a rule, the name of the one it is in taking the
+  accent (an empty section is its name alone: dragged over it, the thread goes
+  in), the panel lights while it is over it and offers a place to drop while
+  folded, and the thread says what dropping it there does (Pin, Unpin,
+  Archive). Only the
   pointer moves it, so the names appearing under a still pointer move nothing.
   Drafts and archived threads do not drag: one comes back with Unarchive.
 - **Details.** A moment's pointing at a card shows its title, project, branch,

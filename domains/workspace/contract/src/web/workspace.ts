@@ -1,6 +1,5 @@
 import type { MenuAction } from "@lemma/frame";
 import { defineSlot } from "@lemma/web";
-import type { Region } from "@lemma/web";
 import type { WorkspaceStatus } from "../workspace.ts";
 import { Context } from "effect";
 import type { Accessor } from "solid-js";
@@ -48,6 +47,9 @@ export interface WorkspaceService {
   readonly worktree: Accessor<WorktreeDraft>;
   readonly setWorktree: (enabled: boolean) => void;
   readonly setWorktreeBase: (base: string | undefined) => void;
+  /** Whether a new worktree starts from its branch's remote version, fetched first, rather than the local one; kept in this browser. */
+  readonly fromRemote: Accessor<boolean>;
+  readonly setFromRemote: (on: boolean) => void;
   /** Where a new chat's session goes: a fresh worktree named from `text` when one is chosen, else undefined. Throws when git refuses. */
   readonly newChatDir: (text: string) => Promise<string | undefined>;
 }
@@ -58,13 +60,6 @@ export class Workspace extends Context.Service<Workspace, WorkspaceService>()("l
 export type ProjectAction = MenuAction<string>;
 
 export const ProjectActions = defineSlot<ProjectAction>("project.actions");
-
-/** An item in the workspace bar under the composer, at its start or end. The project, mode, and branch pickers are its defaults. */
-export interface WorkspaceBarItem extends Region {
-  readonly side: "start" | "end";
-}
-
-export const WorkspaceBarItems = defineSlot<WorkspaceBarItem>("workspace-bar.items");
 
 /** Actions other plugins run by id (`slots.get(Actions, id)?.run()`), so a replacement keeps the id and what calls it keeps working. */
 export const WorkspaceActionIds = { addProject: "add-project.open" } as const;

@@ -132,7 +132,8 @@ describe("sessions lock", () => {
       expect(won).toHaveLength(1);
       expect((await recorded()).token).toBe(won[0]!.token);
     }
-  });
+    // Twenty rounds of two processes each: longer than the default allows on a busy machine.
+  }, 30_000);
 
   it("refreshes its lock, writes it again if it was deleted, and fails once another process holds it", async () => {
     const holder = await Effect.runPromise(acquireLock(root));

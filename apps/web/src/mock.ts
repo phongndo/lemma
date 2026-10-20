@@ -614,6 +614,8 @@ export const createMockHost = (): Host => {
   let heldScript: { readonly released: Promise<void>; readonly release: () => void } | undefined;
   /** Prompts a plugin answers instead of placing them, by their text (`lemmaMock.answerPrompts`). */
   let answers = new Map<string, PromptOutcome>();
+  /** Each worktree asked for, as asked (`lemmaMock.worktreesAsked`). */
+  const worktreesAsked: unknown[] = [];
   const mockTrace = createMockTrace(plugins.map((plugin) => plugin.id));
   // For the UI check: web halves and stylesheets as the host would list them from `~/.lemma/plugins` (a `blob:` URL stands in for the served file).
   Object.assign(window, {
@@ -660,6 +662,8 @@ export const createMockHost = (): Host => {
       answerPrompts: (outcomes: Readonly<Record<string, PromptOutcome>>) => {
         answers = new Map(Object.entries(outcomes));
       },
+      /** The worktrees the app has asked for, each as its call's payload. */
+      worktreesAsked: () => worktreesAsked,
     },
   });
   const halted = () => {
@@ -1095,7 +1099,8 @@ export const createMockHost = (): Host => {
         },
         step.id,
       );
-    append(sessionId, { type: "turn-start", turnId, model: by.ref });
+    // As the agent does: the turn logs each plugin's choice for it (a thread's mode, `agent.profiles`).
+    append(sessionId, { type: "turn-start", turnId, model: by.ref, ...(options?.plugins === undefined ? {} : { plugins: options.plugins }) });
     append(sessionId, { type: "message", turnId, message: { role: "user", content, timestamp: started }, ...(requestId === undefined ? {} : { requestId }) });
     running.add(sessionId);
     const turn = { turnId, output: new Map<string, string>() };
@@ -1511,13 +1516,17 @@ export const createMockHost = (): Host => {
   /** What the bundled plugins serve, as they serve it (`serveSessions`, `serveAgent`, `serveLlm`, `serveWorkspace`, `serveFiles`, `serveCommands`). */
   const integrations = createIntegrationsMock();
   const served: Served[] = [
-    // The bundled profiles, as `agent.profiles` lists them for any directory.
+    // The bundled modes, as `agent.profiles` lists them for any directory.
     serveCall("agent.profiles", ProfileChannels.list, async () => ({
       profiles: [
-        { name: "coding", description: "A coding agent: reads, edits, and runs code in the project", source: "bundled" as const },
-        { name: "general", description: "A general assistant: answers, research, writing, and files, with every tool", source: "bundled" as const },
+        {
+          name: "creator",
+          description: "Customize Lemma through conversation, writing plugins that add features or UI, and modes of your own",
+          source: "bundled" as const,
+        },
+        { name: "work", description: "Work with code, files, and information, searching, editing, and running commands as needed", source: "bundled" as const },
       ],
-      default: "coding",
+      default: "work",
     })),
     serveCall("sessions.files", SessionChannels.list, async ({ cwd }) =>
       [...sessions.values()]
@@ -1823,7 +1832,9 @@ export const createMockHost = (): Host => {
       return { parent, entries, truncated: false };
     }),
     serveCall("workspace.local", WorkspaceChannels.createDirectory, async ({ path }) => ({ path, exists: true })),
-    serveCall("workspace.local", WorkspaceChannels.createWorktree, async ({ path, branch }) => {
+    serveCall("workspace.local", WorkspaceChannels.createWorktree, async (asked) => {
+      const { path, branch } = asked;
+      worktreesAsked.push(asked);
       await sleep(300);
       const tree = `${HOME}/worktrees/${path.split("/").pop()}/${branch.replace(/\//g, "-")}`;
       return { path: tree, exists: true, git: { root: tree, branch, head: "84c3bfc", changes: 0, ahead: 0, behind: 0, worktreeOf: path } };

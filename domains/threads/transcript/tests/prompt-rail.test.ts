@@ -21,6 +21,13 @@ describe("locate", () => {
     expect(locate(tops, view(0), 992)).toMatchObject({ previous: 0, next: 2 });
   });
 
+  it("steps past a turn that starts just beyond where the view is, so a step always moves it a turn", () => {
+    // Turn 2 starts 5px above the view (its jump target, 8px above its start, is 1992): the step back goes to turn 1.
+    expect(locate(tops, view(1997))).toMatchObject({ previous: 1 });
+    // Turn 1 starts 7px below it: the step forward goes to turn 2.
+    expect(locate(tops, view(985))).toMatchObject({ next: 2 });
+  });
+
   it("skips prompts whose turns are not drawn", () => {
     expect(locate([0, undefined, 2000], view(900))).toMatchObject({ current: 0, next: 2 });
   });

@@ -1,23 +1,4 @@
-.context-meter {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 8px;
-  flex: none;
-  border-radius: var(--radius-sm);
-  color: var(--text-3);
-  font-size: calc(12px * var(--text-scale));
-  font-variant-numeric: tabular-nums;
-  cursor: default;
-}
-
-.context-meter:hover,
-.context-meter:focus-visible {
-  background: var(--bg-hover);
-  color: var(--text-2);
-}
-
+/* The thread card's context row: its ring in the row's icon cell, colored as the context fills. */
 .context-meter-track,
 .context-meter-fill {
   fill: none;
@@ -35,18 +16,13 @@
 }
 
 /* Within reach of `at`: a summary is near. */
-.context-meter-warn {
+.context-meter-warn .menu-check,
+.context-meter-warn [role="meter"] {
   color: var(--warn);
 }
 
 /* Past the window: the next request would be refused unless a summary is written first. */
-.context-meter-over {
+.context-meter-over .menu-check,
+.context-meter-over [role="meter"] {
   color: var(--err);
-}
-
-/* Cache hit: the same color whatever the context's, after a rule. */
-.context-meter-cache {
-  padding-left: 6px;
-  border-left: 1px solid var(--border-strong);
-  color: var(--text-3);
 }

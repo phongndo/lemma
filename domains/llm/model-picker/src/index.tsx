@@ -21,21 +21,30 @@ const LEVEL_LABEL: Record<ThinkingLevel, string> = {
   max: "Max",
 };
 
-/** The selected model's own reasoning levels; the choice is remembered per model. */
-function ThinkingPicker(props: { models: ModelsService; placement?: Placement; afterPick?: () => void }) {
+/**
+ * The selected model's own reasoning levels; the choice is remembered per model. `quiet`: in the composer's row, after
+ * the model with a dot, its level alone, with no chevron.
+ */
+function ThinkingPicker(props: { models: ModelsService; placement?: Placement; afterPick?: () => void; quiet?: boolean }) {
   const { selected: selectedModel, thinking: effectiveThinking, chooseThinking } = props.models;
   const levels = createMemo(() => thinkingLevels(selectedModel()));
   return (
     <Show when={levels().length > 0}>
-      <span class="control-separator" aria-hidden="true" />
+      <Show when={props.quiet} fallback={<span class="control-separator" aria-hidden="true" />}>
+        <span class="control-dot" aria-hidden="true">
+          ·
+        </span>
+      </Show>
       <Popover
         label="Reasoning"
         tip={`Reasoning for ${selectedModel()?.name ?? "this model"}`}
-        triggerClass="select-chip"
+        triggerClass={props.quiet ? "select-chip quiet" : "select-chip"}
         placement={props.placement ?? "top-start"}
         trigger={
           <>
-            <BrainIcon />
+            <Show when={!props.quiet}>
+              <BrainIcon />
+            </Show>
             <span>{LEVEL_LABEL[effectiveThinking() ?? DEFAULT_THINKING]}</span>
             <ChevronDownIcon />
           </>
@@ -78,6 +87,8 @@ function ModelPicker(props: {
   afterPick?: () => void;
   onProviders?: (() => void) | undefined;
   controller?: (handle: { readonly open: () => void }) => void;
+  /** In the composer's row: with no chevron. */
+  quiet?: boolean;
 }) {
   const { selected: selectedModel, favorites: favoriteModels, choose: chooseModel, toggleFavorite } = props.models;
   const [query, setQuery] = createSignal("");
@@ -109,7 +120,7 @@ function ModelPicker(props: {
     <Popover
       label="Model"
       tip={selectedModel() === undefined ? "Model" : `${providerName(selectedModel()!.provider)} · ${selectedModel()!.id}`}
-      triggerClass="select-chip"
+      triggerClass={props.quiet ? "select-chip quiet" : "select-chip"}
       placement={props.placement ?? "top-start"}
       menuClass="model-menu"
       onOpen={() => {
@@ -298,6 +309,7 @@ export default defineWebPlugin({
         id: "model",
         component: () => (
           <ModelPicker
+            quiet
             models={models}
             afterPick={() => runAction(ThreadsActionIds.focusComposer)}
             onProviders={providers()}
@@ -310,7 +322,7 @@ export default defineWebPlugin({
       slots.add(ComposerControls, {
         id: "thinking",
         order: 10,
-        component: () => <ThinkingPicker models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} />,
+        component: () => <ThinkingPicker quiet models={models} afterPick={() => runAction(ThreadsActionIds.focusComposer)} />,
       }),
     );
     /** The models `query` names: the one with that ref first, then those a search finds, in the picker's order. */

@@ -12,6 +12,8 @@ import { expandHome, kindOf } from "@lemma/contracts/fs";
 
 const READ_TIMEOUT_MS = 5_000;
 const CHECKOUT_TIMEOUT_MS = 15_000;
+/** A fetch of one branch from its remote, which a slow network may take a while over. */
+const FETCH_TIMEOUT_MS = 60_000;
 const MAX_BUFFER = 16 * 1024 * 1024;
 
 type GitResult = { readonly ok: true; readonly stdout: string } | { readonly ok: false; readonly message: string };
@@ -275,10 +277,46 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<
       }
     });
 
-  const createWorktree = (path: string, options: { readonly branch: string; readonly base?: string }) =>
+  /**
+   * The remote ref a worktree starts from when it starts from the remote (`fromRemote`), fetched first: `base`'s
+   * upstream, else `origin`'s branch of its name; a base that is a remote branch already is itself.
+   */
+  const remoteBase = (dir: string, base: string | undefined) =>
+    Effect.gen(function* () {
+      const local = base ?? (yield* run(dir, ["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      const remotes = (yield* run(dir, ["remote"]))
+        .split("\n")
+        .map((name) => name.trim())
+        .filter((name) => name !== "");
+      const upstream = local.startsWith("-")
+        ? undefined
+        : yield* Effect.promise(() => git(dir, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", `${local}@{upstream}`]));
+      const slash = local.indexOf("/");
+      const ref =
+        upstream?.ok === true && upstream.stdout.trim() !== ""
+          ? upstream.stdout.trim()
+          : slash > 0 && remotes.includes(local.slice(0, slash))
+            ? local
+            : remotes.includes("origin") && local !== "HEAD" && !local.startsWith("-")
+              ? `origin/${local}`
+              : undefined;
+      const remote = ref === undefined ? undefined : remotes.find((name) => ref.startsWith(`${name}/`));
+      if (ref === undefined || remote === undefined) {
+        return yield* new WorkspaceError({
+          path: dir,
+          reason: "Failed",
+          message: `${local === "HEAD" ? "A detached HEAD" : local} has no remote branch to start from`,
+        });
+      }
+      yield* run(dir, ["fetch", remote, ref.slice(remote.length + 1)], FETCH_TIMEOUT_MS);
+      return ref;
+    });
+
+  const createWorktree = (path: string, options: { readonly branch: string; readonly base?: string; readonly fromRemote?: boolean }) =>
     Effect.gen(function* () {
       const dir = yield* repository(path);
       yield* validBranch(dir, options.branch);
+      const base = options.fromRemote === true ? yield* remoteBase(dir, options.base) : options.base;
       const common = (yield* run(dir, ["rev-parse", "--path-format=absolute", "--git-common-dir"])).trim();
       const repoName = basename(mainWorkTree(common) ?? common.replace(/\.git$/, ""));
       // Take the first free name: `x`, then `x-2`, `x-3`, … for both the branch and its folder.
@@ -292,7 +330,12 @@ export const makeWorkspace = (options: WorkspaceOptions): Context.Service.Shape<
         try: () => mkdir(dirname(target), { recursive: true }),
         catch: (cause) => new WorkspaceError({ path: target, reason: "Failed", message: cause instanceof Error ? cause.message : String(cause), cause }),
       });
-      yield* run(dir, ["worktree", "add", "-b", branch, "--", target, options.base ?? "HEAD"], CHECKOUT_TIMEOUT_MS);
+      // Started from a remote branch, it would track it, and push to it: it pushes as itself instead.
+      yield* run(
+        dir,
+        ["worktree", "add", ...(options.fromRemote === true ? ["--no-track"] : []), "-b", branch, "--", target, base ?? "HEAD"],
+        CHECKOUT_TIMEOUT_MS,
+      );
       return yield* status(target);
     });
 

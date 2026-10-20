@@ -31,7 +31,9 @@ the runtime's `Client`, `Notify`, `Router`, `Slots`, and `WebPlugins`.
   its current step, and shows nowhere in the composer, only in the transcript
   where it will join (`Threads.queue`'s steers). Alt with the send key, or on
   the send button, queues it instead, to go as the next turn, and
-  `whenBusy: "queue"` swaps the two. Queued prompts show just above the box,
+  `whenBusy: "queue"` swaps the two. The toolbar has one button for it: stop
+  while the box is empty, and steer (or queue) in its place once something is
+  written, so the turn is stopped with Escape then. Queued prompts show just above the box,
   in the completion menu's look (the menu covers them while open), under a
   thin header with their count that opens and closes them (closed, the
   queue is that one line, for every thread until it is opened again). Each is

@@ -9,7 +9,9 @@ import { Notice } from "@lemma/contracts";
 import { SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
 import type { EventData } from "@lemma/sessions";
 import { pathsPlugin } from "@lemma/contracts/testing";
-import sessions, { encodeCwd } from "../src/index.ts";
+import { nodeFileSystem } from "@lemma/contracts/fs";
+import type { FileSystem } from "@lemma/contracts/fs";
+import sessions, { encodeCwd, makeSessionsPlugin } from "../src/index.ts";
 
 let dir: string;
 beforeEach(async () => {
@@ -1199,6 +1201,60 @@ describe("the session file", () => {
       }),
     );
     expect(JSON.parse(await fs.readFile(index, "utf8")).files).toEqual({});
+  });
+
+  it("finishes a write of its index under way before what it was writing for stops, so none lands after", async () => {
+    // A first host makes a session; another program then adds a line to it, which the next listing records.
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, title("first"));
+      }),
+    );
+    const index = path.join(dir, "sessions", ".index.json");
+    const saved = JSON.parse(await fs.readFile(index, "utf8")) as { files: Record<string, { info: { leaf?: string } }> };
+    const [file] = await sessionFiles();
+    await fs.appendFile(file!, `${JSON.stringify({ seq: 2, id: "x2", parent: Object.values(saved.files)[0]!.info.leaf, at: Date.now(), data: custom(2) })}\n`);
+    // The next host's index write is held at its rename until let go.
+    let underWay!: () => void;
+    const writing = new Promise<void>((resolve) => (underWay = resolve));
+    let letGo!: () => void;
+    const held = new Promise<void>((resolve) => (letGo = resolve));
+    const holding: FileSystem = {
+      ...nodeFileSystem,
+      rename: async (from, to) => {
+        if (to === index) {
+          underWay();
+          await held;
+        }
+        return nodeFileSystem.rename(from, to);
+      },
+    };
+    const waited = await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          // No sweep for empty sessions, whose listing as the store starts would write the index too.
+          const core = yield* makeCore([paths(), makeSessionsPlugin({ fs: holding })], { configs: { "sessions.files": { emptyAfter: 0 } } });
+          return yield* core.run(
+            Effect.gen(function* () {
+              const listing = yield* Effect.forkChild((yield* Sessions).list());
+              yield* Effect.promise(() => writing);
+              // Stopped while its write is held, the listing stops once the write is done: a promise goes on whether or
+              // not anything awaits it, so a write left behind would land later, over whatever came next.
+              const stopped = yield* Deferred.make<void>();
+              yield* Effect.forkChild(Effect.andThen(Fiber.interrupt(listing), Deferred.succeed(stopped, undefined)));
+              for (let turn = 0; turn < 20; turn++) yield* Effect.yieldNow;
+              const stoppedFirst = yield* Deferred.isDone(stopped);
+              letGo();
+              yield* Deferred.await(stopped);
+              return !stoppedFirst;
+            }),
+          );
+        }),
+      ),
+    );
+    expect(waited).toBe(true);
   });
 
   it("reads a whole file again for the listing when the line it read last has changed", async () => {

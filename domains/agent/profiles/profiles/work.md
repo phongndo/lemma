@@ -1,5 +1,5 @@
 ---
-description: A coding agent: reads, edits, and runs code in the project
+description: Work with code, files, and information, searching, editing, and running commands as needed
 ---
 
 # Working in codebases

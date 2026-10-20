@@ -122,8 +122,8 @@ export const parts = async (): Promise<string> => {
   await marker("ThreadHeader", { side: "end" });
   await marker("SidebarActions");
   await marker("ComposerActions");
-  await marker("WorkspaceBarItems", { side: "start" });
-  for (const slot of ["ThreadHeader", "SidebarActions", "ComposerActions", "WorkspaceBarItems"]) {
+  await marker("ThreadCard");
+  for (const slot of ["ThreadHeader", "SidebarActions", "ComposerActions", "ThreadCard"]) {
     await page.waitForSelector(`.check-${slot}`, { timeout: 5_000 }).catch(() => assert.fail(`${slot} does not render what a plugin adds`));
   }
   // A palette source: its items come up in the palette, and its prefix narrows to it.
@@ -754,6 +754,13 @@ export const parts = async (): Promise<string> => {
   await page
     .waitForSelector(".drop-verb:has-text('Unpin')", { timeout: 5_000 })
     .catch(() => assert.fail("a pinned thread dragged among the rest does not say it unpins"));
+  // The name of the section it is in takes the accent, and a section, empty or not, is its name alone.
+  assert.deepEqual(
+    await page.$$eval(".thread-section.sorted .thread-head-label.target", (labels) => labels.map((label) => label.textContent)),
+    ["Active"],
+    "the section a dragged thread is in is not the one marked",
+  );
+  assert.equal(await page.locator(".thread-section.sorted .thread-head-slot").count(), 0, "an empty section offers a box to drop in");
   await page.mouse.up();
   const dropped = async () => {
     const now = await sorted();
@@ -1146,8 +1153,15 @@ export const parts = async (): Promise<string> => {
 
 /** Shows a view of the open thread by its id in its pane, as its palette command does, once the thread has loaded. */
 async function showView(page: Page, id: string): Promise<void> {
-  // The thread's menu shows once it has loaded: the pane is the thread's, so a view is shown in it once there is one.
-  await page.waitForSelector(".main-head [aria-label='Thread actions']", { timeout: 10_000 });
+  // The pane is the open thread's, so a view is shown in it once the thread (a blank one too) has loaded.
+  await page.waitForFunction(
+    async () => {
+      const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      return (await (window as any).lemma.service(Threads)).active() !== undefined;
+    },
+    undefined,
+    { timeout: 10_000 },
+  );
   await page.waitForFunction(
     async (view) => {
       const { Actions } = (await import("/src/ui/api.ts" as string)).api.contracts;

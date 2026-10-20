@@ -30,11 +30,13 @@ export const separate = async (): Promise<string> => {
     }),
     "reload is not an action",
   );
-  // The dot is the open thread's: in its header, just before the thread's menu.
-  const menu = fresh.locator(".main-head [aria-label='Thread actions']");
-  if ((await menu.count()) > 0) {
-    const [dot, menuButton] = await Promise.all([connection.boundingBox(), menu.boundingBox()]);
-    assert.ok(dot!.x < menuButton!.x, "the connection's dot should sit left of the thread's menu");
+  // The dot is the open thread's: first of its header's end, before the thread card's switch; the thread's actions are
+  // its sidebar row's menu, so the header has none.
+  assert.equal(await fresh.locator(".main-head [aria-label='Thread actions']").count(), 0, "the thread's header has a menu of its actions");
+  const cardToggle = fresh.locator(".main-head .card-toggle");
+  if ((await cardToggle.count()) > 0) {
+    const [dot, toggle] = await Promise.all([connection.boundingBox(), cardToggle.boundingBox()]);
+    assert.ok(dot!.x < toggle!.x, "the connection's dot should sit left of the thread card's switch");
   }
   // Reload is a command (the palette, its keys): run it as one is.
   await Promise.all([
@@ -265,5 +267,34 @@ export const separate = async (): Promise<string> => {
     .catch(() => assert.fail("a form's answer did not reach the command that asked it"));
   await form.close();
   expectNoErrors("answering a form");
-  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over";
+  // A new thread in a git project can start in a new worktree, from the remote's version of its branch: the project's
+  // menu chooses the worktree, the branch menu's switch the remote, which the branch says, and the first prompt asks for it.
+  const fork = await open();
+  fork.on("pageerror", (error) => errors.push(error.message));
+  await fork.goto(`${url}/?mock`);
+  await fork.waitForSelector(".thread-chat.starting .thread-start [aria-label=Project]", { timeout: 10_000 });
+  await fork.click(".thread-start [aria-label=Project]");
+  await fork.click(".project-menu .menu-item >> text=lemma");
+  await fork.click(".thread-start [aria-label=Project]");
+  await fork.click(".project-menu .menu-item >> text=New worktree");
+  await fork.click(".thread-start [aria-label='Worktree base branch']");
+  await fork.click(".branch-menu .menu-toggle-row [role=switch]");
+  await fork
+    .waitForSelector(".thread-start [aria-label='Worktree base branch'] >> text=/from origin\\//", { timeout: 5_000 })
+    .catch(() => assert.fail("a new worktree to start from the remote does not say so on its branch"));
+  await fork.keyboard.press("Escape");
+  await fork.fill("textarea", "work apart");
+  await fork.keyboard.press("Enter");
+  await fork
+    .waitForFunction(() => (window as any).lemmaMock.worktreesAsked().length > 0, undefined, { timeout: 10_000 })
+    .catch(() => assert.fail("a new thread in a new worktree asked for none"));
+  assert.equal(
+    (await fork.evaluate(() => (window as any).lemmaMock.worktreesAsked().at(-1))).fromRemote,
+    true,
+    "a new worktree to start from the remote was asked for without it",
+  );
+  await fork.close();
+  expectNoErrors("starting a new thread in a new worktree from the remote");
+
+  return "a form question is drawn as settings are and answers its command; with no provider it opens in the chat, whose notice leads to Providers and back; providers connect each way in one dialog; a web half's Tailwind classes compile with the app's, from its tokens; a theme pack's theme, accent, and row come and go with it; an older app's appearance carries over; a new thread starts in a new worktree from the remote's branch when asked";
 };
