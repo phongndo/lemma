@@ -189,11 +189,46 @@ export const pages = async (): Promise<string> => {
   assert.ok(Math.abs(stuck.actions.top - stuck.view - 8) <= 2, `a page's buttons do not stay at the top of the chat: ${JSON.stringify(stuck)}`);
   assert.ok(stuck.actions.left >= stuck.figure.right, `a page's buttons cover it, with room beside it: ${JSON.stringify(stuck)}`);
 
+  /**
+   * Clicks `#id` in the Summary page as a person would, the chat scrolled to it first: Playwright's own scroll into
+   * view, from a frame in a process of its own (a sandboxed page's, on Linux), can land after its click, which misses.
+   * The page is as tall as its frame, so a place in it is where it is in the frame however the chat scrolls.
+   */
+  const clickInPage = async (id: string) => {
+    /** The chat has not moved for five frames (a smooth scroll to a place a link went to has ended), and `#id` is in view, when `inFrame` is given. */
+    const still = (inFrame?: number) =>
+      page
+        .waitForFunction(
+          (inFrame) => {
+            const scroller = document.querySelector<HTMLElement>(".chat-view .scroller")!;
+            const watch = window as any;
+            watch.stillFor = watch.lastTop === scroller.scrollTop ? (watch.stillFor ?? 0) + 1 : 0;
+            watch.lastTop = scroller.scrollTop;
+            if (watch.stillFor < 5) return false;
+            if (inFrame === undefined) return true;
+            const view = scroller.getBoundingClientRect();
+            const top = document.querySelector("iframe[title='Summary']")!.getBoundingClientRect().top + inFrame;
+            return top >= view.top + 100 && top <= view.bottom - 300;
+          },
+          inFrame,
+          { timeout: 5_000 },
+        )
+        .catch(() => assert.fail(`the chat does not come to rest${inFrame === undefined ? "" : ` with #${id} in a page in view`}`));
+    const inFrame = await content.evaluate((id) => document.getElementById(id)!.getBoundingClientRect().top, id);
+    await still();
+    await page.evaluate((inFrame) => {
+      const scroller = document.querySelector<HTMLElement>(".chat-view .scroller")!;
+      const frame = document.querySelector("iframe[title='Summary']")!;
+      scroller.scrollTop += frame.getBoundingClientRect().top + inFrame - scroller.getBoundingClientRect().top - 200;
+    }, inFrame);
+    await still(inFrame);
+    await content.locator(`#${id}`).click();
+  };
+
   // A link to a place in the page: the page follows it itself (its address, :target, hashchange, a box of its own
   // scrolled), and the chat scrolls to where the place is.
-  // The page is as tall as its frame, so the place is where it is in the frame however the chat scrolls.
   const farInFrame = await content.evaluate(() => document.getElementById("far")!.getBoundingClientRect().top);
-  await content.locator("#to-far").click();
+  await clickInPage("to-far");
   await page
     .waitForFunction(
       (farInFrame) => {
@@ -210,7 +245,7 @@ export const pages = async (): Promise<string> => {
     { hash: "#far", target: "far", hashes: ["#far"] },
     "a link to a place in a page is not followed by the page: its address, :target, and hashchange",
   );
-  await content.locator("#to-deep").click();
+  await clickInPage("to-deep");
   await content
     .waitForFunction(
       () => {
@@ -228,8 +263,8 @@ export const pages = async (): Promise<string> => {
     const opened: string[] = ((window as any).opened = []);
     window.open = (url?: string | URL) => (opened.push(String(url)), null);
   });
-  await content.locator("#own").click();
-  await content.locator("#out").click();
+  await clickInPage("own");
+  await clickInPage("out");
   // The page's messages arrive in order: once the second link's has, the first's would have.
   await page.waitForFunction(() => (window as any).opened.length > 0, undefined, { timeout: 3_000 }).catch(() => assert.fail("a link elsewhere does not open"));
   assert.deepEqual(
