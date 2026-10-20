@@ -38,6 +38,12 @@ export function authSource(provider: Provider, stored: Credential | undefined, e
 const REFRESH_TIMEOUT_MS = 15_000;
 
 /**
+ * How long the plugin may take to stop. A refresh the provider was asked for is kept, so stopping waits for it: its own
+ * time, after waiting for the credential's lock (the file store gives up after 10 seconds), and its write.
+ */
+export const STOP_DEADLINE_MS = REFRESH_TIMEOUT_MS + 15_000;
+
+/**
  * The key a request to `provider` sends, in the order `authSource` names them. A sign-in whose token has expired is
  * refreshed under the credential's lock (`Credentials.modify`), so two requests, or a request and a login, never
  * refresh it twice or overwrite each other. The refresh runs `detached` from the request, bounded by its own timeout:
@@ -59,7 +65,7 @@ export const resolveAuth = (
       if (stored.expires > Date.now()) return { key: stored.access, oauth: true };
       const fresh = yield* detached(
         // Uninterruptible, the plugin stopping too: once asked, the provider may have rotated the refresh token, and the
-        // new one is kept (stopping waits for it, `REFRESH_TIMEOUT_MS` at most).
+        // new one is kept (stopping waits for it, within `STOP_DEADLINE_MS`).
         Effect.uninterruptible(
           credentials.modify(provider.id, (current) =>
             // Another request may have refreshed it while this one waited for the lock.

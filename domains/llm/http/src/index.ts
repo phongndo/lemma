@@ -1,4 +1,4 @@
-import { Cause, Effect, Exit, Fiber, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
+import { Cause, Duration, Effect, Exit, Fiber, Queue, Schedule, Schema, Semaphore, Stream } from "effect";
 import type { Context } from "effect";
 import { Events, Hooks, Registries, definePlugin } from "@lemma/core";
 import type { Contribution, HandlerStep } from "@lemma/core";
@@ -21,7 +21,7 @@ import {
   streamThroughHook,
 } from "@lemma/llm";
 import type { AuthType, LlmRequest, ProviderHeaders, ProviderInfo, StreamEvent } from "@lemma/llm";
-import { authSource, resolveAuth } from "./auth.ts";
+import { STOP_DEADLINE_MS, authSource, resolveAuth } from "./auth.ts";
 import type { Env } from "./auth.ts";
 import { devSource, mustThinkSource, planModels, planSource } from "./catalog.ts";
 import { deviceId } from "./device.ts";
@@ -125,6 +125,8 @@ export function makeLlmPlugin(options: Options = {}) {
     config: Config,
     provides: { llm: Llm },
     requires: { credentials: Credentials, interaction: Interaction, host: HostControl, paths: Paths },
+    // Room to finish a token refresh in flight, which stopping waits for.
+    deadlines: { dispose: Duration.millis(STOP_DEADLINE_MS) },
     setup: function* ({ credentials, interaction, host, paths }, plugin) {
       const config = plugin.config;
       const hooks = yield* Hooks;

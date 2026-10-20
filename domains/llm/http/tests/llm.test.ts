@@ -10,12 +10,10 @@ import { InteractionError, InteractionOrigin } from "@lemma/contracts";
 import { CredentialError, Credentials } from "@lemma/credentials";
 import { Llm, LlmError, LlmProviderHeadersHook, LlmProviderResponse, LlmRequest, LlmRequestHook, ModelsChanged, Providers, StreamEvent } from "@lemma/llm";
 import { llmConformance } from "@lemma/testing";
-import { resolveAuth } from "../src/auth.ts";
 import { deviceId } from "../src/device.ts";
 import { ProviderError } from "../src/http.ts";
 import { makeLlmPlugin } from "../src/index.ts";
 import type { OAuthMethod } from "../src/index.ts";
-import { builtin } from "../src/providers.ts";
 import {
   catalogModel,
   chunk,
@@ -922,7 +920,7 @@ describe("login", () => {
     );
   });
 
-  it("keeps a refreshed token though the plugin stops while the provider answers", async () => {
+  it("keeps a refreshed token though the plugin stops while the provider answers, given as long as a refresh may take", async () => {
     let asked = false;
     let release!: () => void;
     const sso: OAuthMethod = {
@@ -934,22 +932,31 @@ describe("login", () => {
         return { ...credential, access: "rotated", refresh: "rotated-refresh", expires: Date.now() + 3_600_000 };
       },
     };
-    const { service, store } = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
-    await Effect.runPromise(
+    const credentials = fakeCredentials({ faux: { type: "oauth", access: "old", refresh: "r", expires: Date.now() - 1 } });
+    const { fetch } = scriptedFetch(() => sseResponse(completion("ok")));
+    const plugins = [
+      credentials.plugin,
+      fakeInteraction(() => Effect.succeed("")).plugin,
+      fakeHost().plugin,
+      makeLlmPlugin({ fetch, providers: () => [faux({ oauth: sso })], env: {} }),
+    ];
+    const stopped = await Effect.runPromise(
       Effect.gen(function* () {
-        // The plugin's scope, as `detached` runs a refresh in it.
         const scope = yield* Scope.make();
-        const detached = <A, E>(effect: Effect.Effect<A, E>) => Effect.flatMap(Effect.forkIn(effect, scope), Fiber.join);
-        yield* Effect.forkChild(resolveAuth(builtin(faux({ oauth: sso })), service, () => undefined, offline, detached));
+        // A plugin naming no deadline of its own gets no time to stop, the core as long as the host gives it: the llm
+        // plugin's own must cover a refresh.
+        const core = yield* Scope.provide(makeCore(plugins, { deadlines: { dispose: "0 millis" }, shutdownTimeout: "40 seconds" }), scope);
+        yield* Effect.forkChild(core.run(collect(new LlmRequest({ model: "faux/plain", messages: [user("hi")] }))));
         yield* Effect.promise(() => expect.poll(() => asked).toBe(true));
         // The plugin stops while the provider, asked, has not answered yet; then it answers.
-        const stopping = yield* Effect.forkChild(Scope.close(scope, Exit.void));
+        const stopping = yield* Effect.forkChild(Effect.exit(Scope.close(scope, Exit.void)));
         for (let i = 0; i < 10; i++) yield* Effect.yieldNow;
         release();
-        yield* Fiber.join(stopping);
+        return yield* Fiber.join(stopping);
       }),
     );
-    expect(store.get("faux")).toMatchObject({ access: "rotated", refresh: "rotated-refresh" });
+    expect(Exit.isSuccess(stopped)).toBe(true);
+    expect(credentials.store.get("faux")).toMatchObject({ access: "rotated", refresh: "rotated-refresh" });
   });
 
   it("fails a request whose credential store is busy as one to ask again, without sending the user to sign in", async () => {
