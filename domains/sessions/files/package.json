@@ -24,7 +24,7 @@
     "@types/node": "24.19.2",
     "fast-check": "4.10.2",
     "typescript": "7.0.2",
-    "vitest": "5.0.4"
+    "vitest": "5.0.5"
   },
   "lemma": {
     "host": "./src/index.ts"
