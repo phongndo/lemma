@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import { Effect } from "effect";
 import { refused } from "./http.ts";
+import { signInPage } from "./page.ts";
 import type { LoginContext, OAuthCredential, OAuthMethod } from "./providers.ts";
 
 /**
@@ -58,12 +59,7 @@ function pasted(input: string, state: string): Authorization {
   return authorization(url, state);
 }
 
-const ESCAPES: Readonly<Record<string, string>> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
-const escaped = (text: string) => text.replace(/[&<>"']/g, (char) => ESCAPES[char]!);
-
-/** The page the browser is shown; what it says comes from the callback's URL, which anyone can send it, so is escaped. */
-const page = (title: string, detail = "") =>
-  `<!doctype html><meta charset="utf-8"><title>Lemma</title><body style="font-family:system-ui;margin:4rem auto;max-width:32rem"><h1>${escaped(title)}</h1><p>${escaped(detail)}</p></body>`;
+const NOT_A_SIGN_IN = "This address is where a ChatGPT sign-in comes back to Lemma.";
 
 /** The local server the browser is sent back to, and the authorization it brings, once one with this login's state does. */
 const callback = (state: string) =>
@@ -80,16 +76,16 @@ const callback = (state: string) =>
         try {
           url = new URL(request.url ?? "", REDIRECT_URI);
         } catch {
-          return send(400, page("Not a callback"));
+          return send(400, signInPage("failed", "Not a sign-in", NOT_A_SIGN_IN));
         }
-        if (url.pathname !== CALLBACK_PATH) return send(404, page("Not found"));
+        if (url.pathname !== CALLBACK_PATH) return send(404, signInPage("failed", "Not a sign-in", NOT_A_SIGN_IN));
         try {
           const found = authorization(url, state);
-          send(200, page("Signed in to ChatGPT", "You can close this window."));
+          send(200, signInPage("signed-in", "Signed in to ChatGPT", "You can close this tab and go back to Lemma."));
           settle.resolve(found);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          send(400, page("ChatGPT was not connected", message));
+          send(400, signInPage("failed", "ChatGPT was not connected", message));
           if (ours(url, state) && url.searchParams.has("error")) settle.reject(new Error(message));
         }
       });

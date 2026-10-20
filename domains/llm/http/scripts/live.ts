@@ -112,7 +112,7 @@ const report = (ref: string, check: string, ok: boolean, detail: string) => {
   console.log(`${ok ? "✓" : "✗"} ${ref}  ${check}${detail === "" ? "" : `  (${detail})`}`);
 };
 
-// Long enough for every provider's prompt cache (1,024 tokens at most), so the second request of a round reads it.
+// Well past every provider's prompt cache minimum (1,024 tokens at most), so the second request of a round reads it.
 const PADDING = Array.from(
   { length: 60 },
   (_, at) => `Reference note ${at + 1}: the live check sends this text so that its prompt is long enough to cache.`,
