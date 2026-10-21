@@ -26,16 +26,28 @@ interface Entry {
   readonly decode: (input: unknown) => Effect.Effect<unknown, ToolError>;
 }
 
-/** Each tool's entry, by the tool: made once, and gone with the tool. */
-const entries = new WeakMap<Tool<any>, Entry>();
-const entryOf = (tool: Tool<any>): Entry => {
+/**
+ * Each tool's entry, by the tool: made once, on first use, and gone with the tool. One whose input or output has no
+ * JSON Schema form has, instead, why.
+ */
+const entries = new WeakMap<Tool<any>, Entry | string>();
+const entryOf = (tool: Tool<any>): Entry | string => {
   const known = entries.get(tool);
   if (known !== undefined) return known;
+  const rendered = Result.try(() => ({
+    parameters: toolParameters(tool.input),
+    output: tool.output === undefined ? undefined : toolOutput(tool.output),
+  }));
+  if (Result.isFailure(rendered)) {
+    const why = `its schemas have no JSON Schema form (${message(rendered.failure)})`;
+    entries.set(tool, why);
+    return why;
+  }
   const decodeInput = Schema.decodeUnknownEffect(tool.input);
   const entry: Entry = {
     tool,
-    spec: { name: tool.name, description: tool.description, parameters: toolParameters(tool.input) },
-    output: tool.output === undefined ? undefined : toolOutput(tool.output),
+    spec: { name: tool.name, description: tool.description, parameters: rendered.success.parameters },
+    output: rendered.success.output,
     decode: (input) =>
       decodeInput(input, { errors: "all", onExcessProperty: "ignore" }).pipe(
         Effect.mapError(
@@ -173,27 +185,41 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
     const registries = yield* Registries;
     const added = registries.items(Tools);
     const names = Effect.map(added, (items) => items.map((contribution) => contribution.item.name));
+    /** The tools with no JSON Schema form, each warned of once. */
+    const unlisted = new WeakSet<Tool<any>>();
+    /** The tool named so that has an entry: one with no JSON Schema form is not listed, so it is no tool to call. */
     const find = (name: string) =>
       Effect.map(added, (items) => {
         const found = items.find((contribution) => contribution.item.name === name);
-        return found === undefined ? undefined : entryOf(found.item);
+        const entry = found === undefined ? undefined : entryOf(found.item);
+        return typeof entry === "string" ? undefined : entry;
       });
 
-    const list: Service["list"] = Effect.map(added, (items) =>
-      items
-        .map(({ item: tool, pluginId }) => ({
-          source: pluginId,
-          spec: entryOf(tool).spec,
-          ...(tool.output === undefined ? {} : { output: entryOf(tool).output! }),
-          ...(tool.namespace === undefined ? {} : { namespace: tool.namespace }),
-          ...(tool.display === undefined ? {} : { display: tool.display }),
-          ...(tool.replay === undefined ? {} : { replay: tool.replay }),
-          ...(tool.parallel === undefined ? {} : { parallel: tool.parallel }),
-          ...(tool.direct === undefined ? {} : { direct: tool.direct }),
-          ...(tool.nested === undefined ? {} : { nested: tool.nested }),
-          ...(tool.nests === undefined ? {} : { nests: tool.nests }),
-        }))
-        .sort((a, b) => Order.String(a.spec.name, b.spec.name)),
+    const list: Service["list"] = Effect.flatMap(added, (items) =>
+      Effect.gen(function* () {
+        const listed: ToolContribution[] = [];
+        for (const { item: tool, pluginId } of items) {
+          const entry = entryOf(tool);
+          if (typeof entry === "string") {
+            if (!unlisted.has(tool)) yield* Effect.logWarning(`tools.registry: "${tool.name}" (${pluginId}) is not listed: ${entry}`);
+            unlisted.add(tool);
+            continue;
+          }
+          listed.push({
+            source: pluginId,
+            spec: entry.spec,
+            ...(entry.output === undefined ? {} : { output: entry.output }),
+            ...(tool.namespace === undefined ? {} : { namespace: tool.namespace }),
+            ...(tool.display === undefined ? {} : { display: tool.display }),
+            ...(tool.replay === undefined ? {} : { replay: tool.replay }),
+            ...(tool.parallel === undefined ? {} : { parallel: tool.parallel }),
+            ...(tool.direct === undefined ? {} : { direct: tool.direct }),
+            ...(tool.nested === undefined ? {} : { nested: tool.nested }),
+            ...(tool.nests === undefined ? {} : { nests: tool.nests }),
+          });
+        }
+        return listed.sort((a, b) => Order.String(a.spec.name, b.spec.name));
+      }),
     );
 
     const unknown = (name: string, names: string[]) =>

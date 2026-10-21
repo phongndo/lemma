@@ -32,7 +32,10 @@ with a `subscribed` element. Tools follow the channels: one turned off takes
 its tool with it, one turned on adds its tool, and one a plugin replaces is
 offered as its replacement declares it. One whose payload or result holds a
 declared type with no JSON codec (a `Schema.declare` of a `Map`, say), which no
-JSON decodes to, is left out, and the host warns of it once. A call is made to whatever answers for
+JSON decodes to, is left out, and the host warns of it once; one the tools
+registry cannot otherwise render as JSON Schema it leaves out of its list,
+also warning once ([tools.registry](../registry/README.md)), when the tools
+are first listed rather than as this plugin starts. A call is made to whatever answers for
 the id when it runs, as a client's is, and one marked `repeatable` is made
 again on a replacement when a reload withdraws it. A call that fails says the
 channel and the code (`"sessions.get" failed (NotFound): …`).
