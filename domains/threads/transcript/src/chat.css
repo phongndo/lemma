@@ -398,17 +398,28 @@
   flex-direction: column;
 }
 
+/*
+ * A turn out of view is not styled, laid out, or painted (`content-visibility`), so each frame of a streaming answer
+ * costs the turns on screen, however long the thread. One not drawn yet holds the place of an average turn, and once
+ * drawn, of its own size. A turn so contained clips what it paints to its box: the box reaches past the column by
+ * `--turn-bleed`, as far as rows that hang into the margin go (`.row-head`), and the line between turns is drawn within
+ * the column.
+ */
 .turn {
+  --turn-bleed: 12px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 0 6px;
+  margin-inline: calc(-1 * var(--turn-bleed));
+  padding: 14px var(--turn-bleed) 6px;
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 480px;
 }
 
 .turn + .turn {
-  border-top: 1px solid var(--border);
   margin-top: 8px;
-  padding-top: 22px;
+  padding-top: 23px;
+  background: linear-gradient(var(--border), var(--border)) var(--turn-bleed) 0 / calc(100% - 2 * var(--turn-bleed)) 1px no-repeat;
 }
 
 /*
@@ -953,8 +964,9 @@
 }
 
 .turn[data-end="cancelled"] + .turn {
-  border-top: none;
   margin-top: 0;
+  padding-top: 22px;
+  background: none;
 }
 
 .turn-footer {
