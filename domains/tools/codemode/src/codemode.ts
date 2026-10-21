@@ -1,7 +1,8 @@
 // Adapted from pi (MIT): packages/coding-agent/src/extensions/codemode/{tool,execute}.ts.
 import { randomInt } from "node:crypto";
 import { writeFile } from "node:fs/promises";
-import { CodemodeSandbox, parseCodemodeSource, renderToolSample, renderToolSignature, toCodemodeIdentifier } from "@earendil-works/pi-codemode";
+import { renderToolSample, renderToolSignature, toCodemodeIdentifier } from "@earendil-works/pi-codemode/declarations";
+import { parseCodemodeSource } from "@earendil-works/pi-codemode/source";
 import type { CodemodeDeclaredGlobal, CodemodeDeclaredTool, CodemodeError, CodemodeHostCall, CodemodeOutcome, CodemodeRun } from "@earendil-works/pi-codemode";
 import { Effect, Result, Schema, Semaphore } from "effect";
 import type { Context } from "effect";
@@ -467,6 +468,8 @@ export const codemodeTool = (deps: CodemodeDeps): Tool<CodemodeInput> => ({
         return { outcome, display: kept };
       };
 
+      // The sandbox (QuickJS in WebAssembly, on a worker) loads with the first script rather than with the plugin.
+      const { CodemodeSandbox } = yield* Effect.tryPromise({ try: () => import("@earendil-works/pi-codemode"), catch: (cause) => cause });
       const sandbox = new CodemodeSandbox({ memoryLimitBytes: MEMORY_LIMIT_BYTES });
       // Results are numbered in the order they settle, after those a resumed run answers from its journal.
       let nextSeq = (resumed?.results.size ?? 0) + 1;

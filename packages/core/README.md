@@ -513,8 +513,9 @@ resource, registration, and dependency invariants after every step.
 a failing run prints the `LEMMA_SEQUENCE_PATH` that replays it.
 
 `core:bench` reports warm microbenchmarks (direct Effects, hook dispatch at
-several chain lengths with tracing on and off, event publishing, `core.run`
-entry, mounting and disposing, reloading one plugin) as median/min/max batch
+several chain lengths with tracing on and off, event publishing, alone and
+until every observer has heard, `core.run` entry, mounting and disposing,
+reloading one plugin) as median/min/max batch
 means, not per-request percentiles. `core:stress` measures a cold package
 import, operation latencies, and heap/RSS across 200
 mount/reload/fail/restart/dispose cycles after 20 warmup cycles, forcing GC

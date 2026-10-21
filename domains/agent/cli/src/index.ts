@@ -108,7 +108,7 @@ export const agentCommands = (registries: Reader, events: Context.Service.Shape<
         yield* followHere(
           registries,
           AgentChannels.activity,
-          () => undefined,
+          () => ({ output: false }),
           (element) =>
             element.type === "subscribed" || (element.sessionId === sessionId && (element.type === "turn-ended" || element.type === "queue-changed"))
               ? Effect.flatMap(idle, (now) => (now ? Effect.sync(() => (done = true)).pipe(Effect.andThen(Effect.interrupt)) : Effect.void))

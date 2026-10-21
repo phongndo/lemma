@@ -1,4 +1,4 @@
-import { Effect, JsonSchema as EffectJsonSchema, Schema, SchemaAST, SchemaRepresentation, Stream } from "effect";
+import { Effect, Schema, SchemaAST, Stream } from "effect";
 import type { Context } from "effect";
 import type { Registries } from "@lemma/core";
 import { elementsOf, HostError, InteractionError, resultOf, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
@@ -67,15 +67,6 @@ export const payloadShape = (payload: Schema.Top): PayloadShape => {
   }
   const field = jsonOf(ast);
   return { input: Schema.Struct({ payload: field }) as unknown as Json, payload: (input) => input["payload"], field };
-};
-
-/**
- * Throws when `schema` has no JSON Schema form, as the tools registry renders a tool's input and output: a channel whose
- * schemas cannot be shown is left out rather than break the list of every tool.
- */
-const renderable = (schema: Schema.Top): void => {
-  const { representation, references } = SchemaRepresentation.toRepresentation(schema.ast);
-  EffectJsonSchema.toDocumentDraft07(SchemaRepresentation.toJsonSchemaDocument({ representation, references }, { onExcessProperty: "error" }));
 };
 
 /**
@@ -244,8 +235,6 @@ const callTool = (channel: ChannelCall, options: ChannelToolOptions): Tool => {
   jsonable(channel.success);
   const shape = payloadShape(channel.payload);
   const output = Schema.toEncoded(wireCodec(channel.success));
-  renderable(shape.input);
-  renderable(output);
   const id = channel.id;
   return {
     name: toolName(id),
@@ -308,8 +297,6 @@ const streamTool = (channel: ChannelStream, options: ChannelToolOptions): Tool =
     /** `timeoutMs` passed before `take` elements came. */
     timedOut: Schema.Boolean,
   });
-  renderable(input);
-  renderable(output);
   const id = channel.id;
   return {
     name: toolName(id),
@@ -334,6 +321,6 @@ const streamTool = (channel: ChannelStream, options: ChannelToolOptions): Tool =
   };
 };
 
-/** The tool `channel` becomes. Throws for one whose schemas have no JSON Schema form. */
+/** The tool `channel` becomes. Throws for one whose schemas hold a type no JSON decodes to (`jsonable`). */
 export const channelTool = (channel: Channel, options: ChannelToolOptions): Tool =>
   channel.kind === "call" ? callTool(channel, options) : streamTool(channel, options);

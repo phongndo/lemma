@@ -137,6 +137,21 @@ describe("registry", () => {
     expect(toolParameters(Schema.Unknown)).toEqual({ type: "object", properties: {} });
   });
 
+  it("leaves out of the list a tool whose input has no JSON Schema form, and lists the rest; it is no tool to run", async () => {
+    // A symbol key: the one thing no JSON Schema can name.
+    const unshown: Tool<any> = { ...echo, name: "unshown", input: Schema.Struct({ [Symbol("key")]: Schema.String }) };
+    const outcome = await run(
+      [contributor("odd", [unshown, echo])],
+      Effect.gen(function* () {
+        const listed = (yield* (yield* ToolRunner).list).map((tool) => tool.spec.name);
+        const again = (yield* (yield* ToolRunner).list).map((tool) => tool.spec.name);
+        const called = yield* Effect.flip(call("unshown", {}));
+        return { listed, again, reason: called.reason };
+      }),
+    );
+    expect(outcome).toEqual({ listed: ["echo"], again: ["echo"], reason: "NotFound" });
+  });
+
   it("rejects a duplicate name, failing the second contributor", async () => {
     const failure = await Effect.runPromise(Effect.scoped(Effect.flip(makeCore([tools, contributor("a", [echo]), contributor("b", [echo])]))));
     expect(String(JSON.stringify(failure))).toContain('\\"echo\\" is already contributed to lemma/tools by \\"a\\"');
@@ -614,5 +629,10 @@ describe("execute", () => {
     expect(published[0]!.chunk.length).toBe(64 * 1024);
     expect(published[0]!.chunk.endsWith("end")).toBe(true);
     expect(published[0]!.offset).toBe(70_003 - 64 * 1024);
+    // Many chunks: the last 64 KiB of them all, the next batch's offset after everything printed.
+    const chunks = Array.from({ length: 30 }, (_, i) => String.fromCharCode(65 + (i % 26)).repeat(5_000));
+    for (const chunk of chunks) batcher.update(chunk);
+    batcher.flush();
+    expect(published[1]).toEqual({ chunk: chunks.join("").slice(-64 * 1024), offset: 70_003 + 150_000 - 64 * 1024 });
   });
 });

@@ -5,8 +5,8 @@ one is open, the open thread's log and what is streaming into it, which
 threads are running, and sending prompts. Provides `Threads`
 ([`@lemma/threads`](../contract/src/threads.ts)), which the domain's other
 plugins read. It follows the host through the `sessions.changes` and
-`agent.activity` channels and the open thread's `sessions.log`, and calls the
-other `sessions.*` and `agent.*` channels. Adds `threads.running` to
+`agent.activity` channels and the open thread's `sessions.log` and
+`agent.output`, and calls the other `sessions.*` and `agent.*` channels. Adds `threads.running` to
 `PluginsFacts`: how many turns are running, on the Plugins page, whose reload
 restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
 `Router`, and `Slots`. No config.
@@ -59,9 +59,16 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   deleted.
 - **Only the open thread is followed.** Its log, streaming drafts, running
   tools' output, and queue are held; opening another drops them and reads its
-  log beside what the agent has of it (`agent.view`), so a thread opened or
-  reconnected mid-turn shows the turn so far. A log `preload` fetched is used
-  if its thread opens within 15 seconds.
+  log beside its `agent.output`, which opens with what the agent has of it
+  (`agent.view`'s), so a thread opened or reconnected mid-turn shows the turn
+  so far. Only its model and tool output reach the page: `agent.activity` is
+  opened without output (`{ output: false }`), so threads streaming in the
+  background cost it their turns' starts and ends and their queues' changes,
+  not every delta: a page showing one thread while two others streamed six
+  answers between them received 17 kB in 71 messages rather than 93 kB in
+  412, the rest of it the sidebar's `sessions.changes` and the workspace's
+  calls. A log `preload` fetched is used if its thread opens within 15
+  seconds.
 - **Streaming.** Deltas and tool output are applied together once per
   animation frame, or at once when 256 are waiting (a hidden tab gets no
   frames).
@@ -71,5 +78,6 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   reports it through `Notify` rather than rejecting; `send` resolves false.
 - **For a replacement.** The state it keeps is built with the contract's pure
   functions (`appendLog`, `resolveLeaf`, `trackTurn`, `newerQueue`, and
-  `applyDelta`, `beginJoin`, `joinLive`, `reconcileLive` for `live`), which a
+  `applyDelta`, `joinLive`, `reconcileLive` for `live`, against what is
+  over, `Finished`, noted as the log grows: `noteLogged`, `noteEnded`), which a
   replacement can reuse so the views read the same shapes.

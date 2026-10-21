@@ -46,10 +46,12 @@ type Command =
   | { readonly kind: "crash-during"; readonly session: number; readonly operations: number; readonly text: string }
   | { readonly kind: "tamper"; readonly session: number; readonly how: "append" | "replace" | "truncate" };
 
-// Any code points, lone surrogates and newlines included: a line must read back as it was written.
+// Any code points, lone surrogates and newlines included: a line must read back as it was written. Some are long, as a
+// tool's output is, so a crash can tear one past its head (from which the listing reads every line but the last).
 const text = fc.oneof(
   fc.string({ unit: "binary", maxLength: 24 }),
   fc.string({ maxLength: 24 }).map((text) => text.replaceAll("x", "\n")),
+  fc.tuple(fc.string({ unit: "binary", minLength: 1, maxLength: 24 }), fc.integer({ min: 50, max: 200 })).map(([text, times]) => text.repeat(times)),
 );
 
 const command: fc.Arbitrary<Command> = fc.oneof(
@@ -109,6 +111,7 @@ const reached = {
   tamperedRefused: 0,
   tamperedReadable: 0,
   removedReturned: 0,
+  longLineListed: 0,
 };
 
 type Service = Context.Service.Shape<typeof Sessions>;
@@ -213,6 +216,10 @@ const simulate = (seed: number, faults: Faults, initial: number, commands: reado
           expect(info.lastSeq, `list's lastSeq for ${session.id}`).toBe(session.acked.length);
           const titles = session.acked.flatMap((event) => (event.data.type === "title" ? [event.data.title] : []));
           expect(info.title).toBe(titles.at(-1));
+          // A long line before the last, which the listing reads from its head when the index does not serve the file.
+          const file = fileOf(session.id);
+          const lines = (file === undefined ? "" : (disk.read(file) ?? "")).split("\n").slice(1, -2);
+          if (lines.some((line) => Buffer.byteLength(line) >= 1024)) reached.longLineListed++;
         }
       });
 

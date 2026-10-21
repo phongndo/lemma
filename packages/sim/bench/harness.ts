@@ -238,7 +238,7 @@ for (const target of LENGTHS) {
   record(`Harness / ${target} entries / ms per step`, ms / steps, "ms/step", turnMs);
   for (const [kind, samples] of Object.entries(stepSamples)) {
     assert(samples.length === MEASURED_TURNS, `the benchmark timed ${samples.length} ${kind} steps instead of ${MEASURED_TURNS}`);
-    record(`Harness / ${target} entries / ${kind} ms per step`, samples.reduce((sum, value) => sum + value, 0) / samples.length, "ms/step", samples);
+    record(`Harness / ${target} entries / ${kind} ms per step`, samples.reduce((sum, value) => sum + value, 0) / samples.length, "ms/step", [...samples]);
   }
   per("events read", "eventsRead", "count/step");
   per("bytes written", "bytesWritten", "bytes/step");
@@ -249,8 +249,8 @@ for (const target of LENGTHS) {
     record(`Harness / ${target} entries / max ${what} per turn`, value, what === "bytes" ? "bytes/turn" : "count/turn");
   record(`Harness / ${target} entries / heap MB`, heap / 1e6, "MB");
   heard.sort((a, b) => a - b);
-  record(`Harness / ${target} entries / delta to observer ms p50`, heard[Math.floor(heard.length * 0.5)]!, "ms", heard);
-  record(`Harness / ${target} entries / delta to observer ms p99`, heard[Math.min(heard.length - 1, Math.floor(heard.length * 0.99))]!, "ms", heard);
+  record(`Harness / ${target} entries / delta to observer ms p50`, heard[Math.floor(heard.length * 0.5)]!, "ms", [...heard]);
+  record(`Harness / ${target} entries / delta to observer ms p99`, heard[Math.min(heard.length - 1, Math.floor(heard.length * 0.99))]!, "ms", [...heard]);
 }
 record("Harness / compactions", counts.compactions, "count");
 if (perStep[1_000] !== undefined && perStep[10_000] !== undefined) {

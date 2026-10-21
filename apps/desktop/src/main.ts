@@ -11,6 +11,7 @@ import type { Discovery, Target } from "@lemma/contracts/discovery";
 import { DEFAULT_PROFILE, profileHome, profileNameProblem, profileOf } from "@lemma/contracts/profiles";
 import { callChannel, makeHostRpcHttp } from "@lemma/client";
 import { CliChannels } from "@lemma/cli";
+import { HOST_FLAGS } from "@lemma/host/launch";
 import { deepLinkTarget, isLoopback, ProfileChannels, profileAddress } from "@lemma/profiles";
 import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
 import { hostFiles, resolvePaths } from "@lemma/host/paths";
@@ -151,7 +152,8 @@ const startHost = async (name: string): Promise<Discovery> => {
     cwd: project,
     // It says the app started it, so `lemma status` names its owner and `lemma stop` leaves it to the app.
     env: env as NodeJS.ProcessEnv,
-    execArgv: ["--conditions=lemma-source"],
+    // The host's Node.js flags, which are V8's: Electron's utility process takes them as Chromium's `--js-flags` alone.
+    execArgv: ["--conditions=lemma-source", `--js-flags=${HOST_FLAGS.join(" ")}`],
     stdio: "inherit",
     serviceName: name === DEFAULT_PROFILE ? "lemma host" : `lemma host (${name})`,
   });

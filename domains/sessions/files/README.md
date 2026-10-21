@@ -59,10 +59,14 @@ never taken for damage. The rules for changing the format, so no change makes a
 user's session unreadable:
 
 - Adding a member to `EventData` (`@lemma/sessions`), or an optional field to a
-  line (the header's `parent`), is not a new version: old files hold none of it,
-  and an older reader ignores it. Removing a member, narrowing one, or changing a line's
-  shape is, and the store reads every earlier version through migrations, one
-  per version (`vN` to `vN+1`), applied as a file is read.
+  line (the header's `parent`), is not a new version: old files hold none of it.
+  Nor is making a member's field optional, which old files hold everywhere.
+  Removing a member, narrowing one, or changing a line's shape is, and the store
+  reads every earlier version through migrations, one per version (`vN` to
+  `vN+1`), applied as a file is read. An older reader ignores a line's field it
+  does not know, but reads a session written since as damaged where an event it
+  cannot decode starts (a new member, or a field left out): read-only up to
+  there, its file unchanged.
 - A migration accepts at least everything the reader of its version accepted:
   it may not refuse a field that reader ignored.
 - `tests/fixtures/v<N>/` holds session files version `N` wrote and how every
@@ -71,6 +75,15 @@ user's session unreadable:
   reads each one back the same. `pnpm sim --fixtures <dir>` writes a new
   version's corpus once; a version's corpus is never regenerated, so a change
   that reads an old session differently fails the test.
+
+A `request` event's `contributions` are logged only when they differ from the
+previous request's on its branch (older files have them on every request), and
+a request without them has that request's (`requestState`), which a reader
+always has: it is an ancestor, an event's parent is in the file before it, and
+a torn tail, damage, and a failed write each lose only the file's end, while
+`fork` copies the whole branch to its event. A sibling branch holds no ancestor,
+so a request never takes another branch's, and a compaction removes nothing
+from the log, so one after it finds the request before it.
 
 `<Paths.home>/sessions/.index.json` is the listing index: for each file, its size,
 mtime, and inode when last read or written, the `SessionInfo` it described up
@@ -118,8 +131,9 @@ costs re-reading the files.
   that reads, into a new session that takes writes, and is how a damaged one
   goes on (the web app's composer offers it). A file whose header does not read
   is `Corrupt`, as nothing of it is known to be a session. The listing reads
-  without decoding, so it sees a seq gap at once and other damage once the
-  session is opened, which `SessionChanged` then announces.
+  without decoding, and most lines from their heads (below), so it sees a seq
+  gap at once and other damage once the session is opened, which
+  `SessionChanged` then announces.
 - **Validation.** `append` decodes the event's JSON against the schema first, so
   a line that could not be read back is never written, and memory holds the event
   exactly as a reload will. A field the schema lacks is refused (it would be
@@ -127,10 +141,16 @@ costs re-reading the files.
   it (`NaN` becomes `null`). `parent` must exist (`InvalidParent`).
 - **Listing.** `list` reads directory entries and `stat`s each file. A file whose
   size, mtime, and inode match the listing index is not read; one that grew is read
-  (with `JSON.parse` only, checking only that `seq` runs on without a gap) from
-  where the last read stopped, since sessions are
+  from where the last read stopped, since sessions are
   only appended to, once the line read last is found unchanged (a failed write's
-  line may since have been replaced; if it was, the whole file is read). Sessions
+  line may since have been replaced; if it was, the whole file is read). It reads
+  each event line from its head, the first bytes the store writes (`seq`, `id`,
+  `parent`, `at`, the data's `type`), checking only that `seq` runs on without a
+  gap, and parses the rest: titles, checkout and marks records, a line another
+  writer laid out otherwise, and the file's last line, the one a power loss can
+  leave torn. Reading a head costs a few times less than parsing a short line, and
+  a long one (a tool's output) no more: a host whose index is gone lists 500
+  sessions (3.7 GB) in 0.7 to 1.1 s. Sessions
   are indexed when created, read, unloaded, and when the plugin stops, those last
   two from memory, so a restarted host reads only what changed since. Sessions
   this process has opened are served from memory. A file that cannot be read is
@@ -141,8 +161,11 @@ costs re-reading the files.
   once a minute) then closes the file and drops the events, skipping a session
   in the middle of an operation; `list` keeps its info without re-reading the
   file, and the next use reloads it. A loaded session takes about 1.1× its file
-  size in heap, and reloading a 40 MB one about 70 ms: without unloading, a
-  long-running host's heap and open files grow with every session it touches.
+  size in heap (in a file whose every request logged its contributions, those
+  that repeat the last one's share one array of them), and reloading one of
+  10,000 events (20 MB) about 40 to 45 ms, of 100,000 (207 MB) about 0.42 s:
+  without unloading, a long-running host's heap and open files grow with every
+  session it touches.
 - **Moving an empty session** (`relocate`) writes its new directory to its
   file first, then renames the file into that directory's folder: a `list` or
   `get` meanwhile finds it where it is. A rename that fails leaves the file
@@ -151,7 +174,14 @@ costs re-reading the files.
 - **Search** (`search`) reads the sessions with something in them, the most
   recently updated first, eight at a time, until enough have matched. A
   session in memory is read there; any other is read from its file and let go,
-  not counted as a use, so searching neither loads sessions nor keeps them.
+  not counted as a use, so searching neither loads sessions nor keeps them. From
+  a file it reads what a search needs: the branch from every line's head, as the
+  listing does, and only the prompts and replies whose line holds every word
+  sought parsed and decoded (a word with a character JSON escapes, or a sigma,
+  has every one parsed). A search that matches nothing in 500 sessions (3.7 GB)
+  takes about 1.4 s. It stops where opening stops, but for a line
+  that is JSON yet no event, which only opening checks; a session known to be
+  damaged is read as opening reads it.
 - **Empty sessions** nothing has gone into for `emptyAfter` seconds since they
   were made are deleted, as the store starts and every hour after, unless kept
   (`SessionMarks.kept`: a client holds something for one), pinned, archived,
@@ -185,8 +215,8 @@ costs re-reading the files.
   recreated.
 - **Reading.** Files are read a chunk at a time, so no string holds a whole file
   and a session larger than the longest string Node allows still opens (each line
-  must still fit in one). Opening validates every line; listing uses `JSON.parse`
-  alone.
+  must still fit in one). Opening validates every line; listing and search read
+  lines from their heads (above).
 - **Removal.** Holds (`hold`) are counted per session, in memory: the store
   starts with none, as the plugins that held sessions through it restart with
   it. `remove` of a session nothing holds runs through `SessionRemoveHook`; a
@@ -219,6 +249,12 @@ one seed fixes a run. `LEMMA_SIM_RUNS` (default 100),
 `LEMMA_SIM_SEED`, and `LEMMA_SIM_PATH` (printed by a failure) control it; a
 failing seed becomes a regression test. It also counts the situations runs reach
 (torn tails, failed appends kept and dropped, sessions read again after an
-unload, removals undone by a crash) and
+unload, removals undone by a crash, a long line listed before a file's last) and
 fails if one is never reached, so the generator cannot quietly stop covering
 them.
+
+`pnpm sessions:bench` (`bench/store.ts`) measures appends on the real disk, a
+listing with and without the index, and a long session an agent might leave
+(10,000 events, tool output up to 50 KB): opening it, the heap it holds an
+event, its trajectory, a search that matches nothing in it, and listing it
+without the index. Its budgets are in `packages/core/bench/budgets.ts`.

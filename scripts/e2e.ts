@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
+import { HOST_FLAGS } from "../packages/host/src/launch.mjs";
 
 /*
  * What the CLI's and the examples' end-to-end tests run Lemma with: a home in
@@ -17,7 +18,7 @@ import { fileURLToPath } from "node:url";
  * import it by its path.
  */
 
-const hostMain = fileURLToPath(new URL("../packages/host/src/main.ts", import.meta.url));
+const hostMain = fileURLToPath(new URL("../packages/host/src/start.mjs", import.meta.url));
 const mockProvider = fileURLToPath(new URL("mock-openai.ts", import.meta.url));
 
 /** Calls `read` until `until` accepts what it returns (a throw is "not yet"), or `timeout` ms pass: then undefined. */
@@ -136,7 +137,8 @@ export const startLemma = async (prefix: string, options: LemmaOptions = {}): Pr
     await rm(home, { recursive: true, force: true });
   };
   const startHost = async () => {
-    const host = launch("host", ["--conditions=lemma-source", hostMain, "--no-open"], { LEMMA_HOME: home, INIT_CWD: home });
+    // With the flags every launcher gives it, so it need not start again for them.
+    const host = launch("host", ["--conditions=lemma-source", ...HOST_FLAGS, hostMain, "--no-open"], { LEMMA_HOME: home, INIT_CWD: home });
     processes.push(host);
     hosts.push(host.child);
     // Printed once it runs, after reading the transport.json its transport wrote (a killed host's is left behind).

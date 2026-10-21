@@ -119,6 +119,12 @@ describe("the harness simulation", () => {
     expect(transcriptProblems([user, event(2, "e1", request)])).toEqual([]);
     // A later request that leaves its unchanged system prompt and tools out is attributed against the ones in effect.
     expect(transcriptProblems([user, event(2, "e1", request), event(3, "e2", { ...request, system: undefined, tools: undefined })])).toEqual([]);
+    // So is one that logs no contributions, against those of the request before it on its branch; not a sibling's.
+    const unlogged = { ...request, system: undefined, tools: undefined, contributions: undefined };
+    expect(transcriptProblems([user, event(2, "e1", request), event(3, "e2", unlogged)])).toEqual([]);
+    expect(transcriptProblems([user, event(2, "e1", request), event(3, "e1", unlogged)])).toEqual([
+      "request e3: it logs no contributions, and no request before it on its branch does",
+    ]);
     expect(transcriptProblems([user, event(3, "e1", request)])).toEqual(["event e3: seq 3 at position 2"]);
     expect(transcriptProblems([event(2, "e1", request), { ...user, seq: 2 }].map((logged, index) => ({ ...logged, seq: index + 1 })))).toContain(
       "event e2: its parent e1 is not before it",

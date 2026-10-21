@@ -170,13 +170,15 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
     input: I,
     terminal: (input: I) => Effect.Effect<O, E, R>,
     options?: InvokeOptions<I, O>,
-  ): Effect.Effect<O, E | HookError | CoreClosed, R> => {
-    return Effect.gen({ self: this }, function* () {
-      if (this.closed) return yield* new CoreClosed();
-      const entry = yield* this.entry(hook);
+  ): Effect.Effect<O, E | HookError | CoreClosed, R> =>
+    // One step to look the hook up and read the caller's context: a call through a hook with no handlers costs little more than the terminal.
+    Effect.withFiber((fiber): Effect.Effect<O, E | HookError | CoreClosed, R> => {
+      if (this.closed) return Effect.fail(new CoreClosed());
+      const entry = this.entryOf(hook);
+      if (entry instanceof HookError) return Effect.fail(entry);
       const handlers = entry.handlers;
-      if (handlers.length === 0) return yield* Effect.suspend(() => terminal(input));
-      const caller = servicesOf(yield* Effect.context<R>());
+      if (handlers.length === 0) return terminal(input);
+      const caller = servicesOf(fiber.context as Context.Context<R>);
       const onStep = options?.onStep;
       const summary = hook.summary;
       const check = hook.check;
@@ -253,7 +255,8 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
               });
             });
           const handle = registration.handle as Handler<I, O, E>;
-          let run = Effect.suspend(() => handle(value, next)).pipe(
+          // `handle` defers the handler itself (`OwnerHandle.on`), so making its Effect here runs nothing yet.
+          let run = handle(value, next).pipe(
             Effect.ensuring(
               Effect.sync(() => {
                 alive = false;
@@ -313,49 +316,51 @@ export class HookRegistry implements Context.Service.Shape<typeof Hooks> {
             if (!fiber.getRef(References.TracerEnabled)) return run;
             const attributes =
               summary?.input === undefined ? registration.attributes : { ...registration.attributes, ...summarize("hook.in.", summary.input, value) };
-            const own = Effect.currentSpan.pipe(
-              Effect.tap((current) => Effect.sync(() => void (span = current))),
-              Effect.catch(() => Effect.void),
-            );
-            const traced = Effect.andThen(own, run);
-            const body =
-              summary?.output === undefined
-                ? traced
-                : traced.pipe(Effect.tap((output) => Effect.annotateCurrentSpan(summarize("hook.out.", summary.output!, output))));
-            return body.pipe(
-              Effect.withSpan(
-                "core.hook",
-                { attributes },
-                // This frame is always the dispatcher, not plugin code. Keep attribution
-                // and failure stacks without capturing a redundant stack on every call.
-                { captureStackTrace: false },
-              ),
-            );
+            // `withSpan`, keeping the span it makes for `next` to annotate.
+            return Effect.useSpan("core.hook", { attributes }, (made) => {
+              span = made;
+              const body =
+                summary?.output === undefined
+                  ? run
+                  : run.pipe(
+                      Effect.tap((output) =>
+                        Effect.sync(() => {
+                          for (const [key, entry] of Object.entries(summarize("hook.out.", summary.output!, output))) made.attribute(key, entry);
+                        }),
+                      ),
+                    );
+              // This frame is always the dispatcher, not plugin code. Keep attribution
+              // and failure stacks without capturing a redundant stack on every call.
+              return Effect.withParentSpan(body, made, { captureStackTrace: false });
+            });
           });
         });
-      return yield* dispatch(0, input);
+      return dispatch(0, input);
     });
-  };
 
   private entry(hook: { readonly name: string }): Effect.Effect<Entry, HookError> {
     return Effect.suspend(() => {
-      const existing = this.entries.get(hook.name);
-      if (existing) {
-        if (existing.token !== hook) {
-          return Effect.fail(
-            new HookError({
-              reason: "PointConflict",
-              hook: hook.name,
-              message: `Different hook tokens use the name "${hook.name}"; import the shared token instead`,
-            }),
-          );
-        }
-        return Effect.succeed(existing);
-      }
-      const entry: Entry = { token: hook, name: hook.name, handlers: [], all: [] };
-      this.entries.set(hook.name, entry);
-      return Effect.succeed(entry);
+      const entry = this.entryOf(hook);
+      return entry instanceof HookError ? Effect.fail(entry) : Effect.succeed(entry);
     });
+  }
+
+  /** The hook's entry, made on first use; another token by the same name is a conflict. */
+  private entryOf(hook: { readonly name: string }): Entry | HookError {
+    const existing = this.entries.get(hook.name);
+    if (existing) {
+      if (existing.token !== hook) {
+        return new HookError({
+          reason: "PointConflict",
+          hook: hook.name,
+          message: `Different hook tokens use the name "${hook.name}"; import the shared token instead`,
+        });
+      }
+      return existing;
+    }
+    const entry: Entry = { token: hook, name: hook.name, handlers: [], all: [] };
+    this.entries.set(hook.name, entry);
+    return entry;
   }
 }
 

@@ -4490,6 +4490,9 @@ importers:
       '@types/node':
         specifier: 24.19.2
         version: 24.19.2
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       tsrs:
         specifier: 0.18.0-ts7.1.0-dev.20260929
         version: 0.18.0-ts7.1.0-dev.20260929

@@ -47,12 +47,15 @@ export interface BashDetails {
   readonly exitCode: number | null;
   readonly timedOut?: boolean;
   readonly aborted?: boolean;
-  readonly truncation?: Truncation;
+  /** How the output was cut, when it was: the counts, its text being the result's own, which the log keeps once. */
+  readonly truncation?: Omit<Truncation, "content">;
   /** The complete output, when it was truncated, or for a background command, as it is written. */
   readonly fullOutputPath?: string;
   /** A background command: it runs on, as job `id` (`Job.id`) with `pid`, and its exit is told to the model. */
   readonly background?: { readonly id: string; readonly pid: number };
 }
+
+const withoutContent = ({ content: _, ...counts }: Truncation): Omit<Truncation, "content"> => counts;
 
 /** setTimeout's ceiling. */
 const MAX_TIMEOUT_MS = 2_147_483_647;
@@ -122,12 +125,11 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs
     const output = new OutputAccumulator("lemma-bash");
     const script = new ScriptOutput();
     const child = spawnShell(command, cwd);
-    // Streaming decode: a character split across chunks is held until its last byte arrives.
-    const live = new TextDecoder();
+    // Decoded once, as it streams: a character split across chunks is held until its last byte arrives.
     const onData = (data: Buffer) => {
-      output.append(data);
+      const text = output.append(data);
       script.append(data);
-      update?.(live.decode(data, { stream: true }));
+      update?.(text);
     };
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
@@ -172,7 +174,7 @@ export const makeBashTool = (defaultTimeout: number = DEFAULT_BASH_TIMEOUT, jobs
       exitCode: aborted || timedOut ? null : exitCode,
       ...(timedOut ? { timedOut } : {}),
       ...(aborted ? { aborted } : {}),
-      ...(truncation.truncated ? { truncation } : {}),
+      ...(truncation.truncated ? { truncation: withoutContent(truncation) } : {}),
       ...(fullOutputPath === undefined ? {} : { fullOutputPath }),
     };
     const textBody = status === undefined ? body || "(no output)" : `${body ? `${body}\n\n` : ""}${status}`;

@@ -4,7 +4,7 @@
   "private": true,
   "description": "The lemma command: start and keep hosts, set them up, look inside them, and use what their plugins add",
   "bin": {
-    "lemma": "./src/main.ts"
+    "lemma": "./bin/lemma.js"
   },
   "type": "module",
   "scripts": {

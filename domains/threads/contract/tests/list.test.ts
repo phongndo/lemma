@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { HostError } from "@lemma/contracts";
 import type { SessionEvent, SessionInfo } from "@lemma/sessions";
-import { appendLog, applySessionsChange, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/list.ts";
+import { appendLog, applySessionsChange, growBranch, logFailure, newerQueue, resolveLeaf, trackTurn, upsertSession } from "../src/list.ts";
+import { branchOf } from "@lemma/sessions";
 
 const info = (id: string, cwd: string, updatedAt: number, lastSeq = 0): SessionInfo => ({ id, cwd, createdAt: 0, updatedAt, lastSeq });
 const ev = (id: string, parent: string | null, seq: number): SessionEvent => ({ seq, id, parent, at: seq, data: { type: "title", title: id } });
@@ -70,6 +71,30 @@ describe("resolveLeaf", () => {
     expect(resolveLeaf(events, "zzz")).toBe("4");
     expect(resolveLeaf(events, undefined)).toBe("4");
     expect(resolveLeaf([], "1")).toBeUndefined();
+  });
+  it("reads a log out of order as one in order", () => {
+    // A child before its parent: the walk back from the end cannot tell, and the branch is mapped instead.
+    const shuffled = [ev("2", "1", 2), ev("1", null, 1), ev("3", "2", 3)];
+    expect(resolveLeaf(shuffled, "1", 0)).toBe("3");
+  });
+});
+
+describe("growBranch", () => {
+  const ids = (branch: readonly SessionEvent[] | undefined) => branch?.map((event) => event.id);
+  const log = [ev("1", null, 1), ev("2", "1", 2), ev("3", "2", 3)];
+  const walked = { events: log, leaf: "3", branch: branchOf(log, "3") };
+  it("carries the branch on through events appended along it, and is the same branch while the leaf stays", () => {
+    const grown = [...log, ev("4", "3", 4), ev("5", "4", 5)];
+    expect(ids(growBranch(walked, grown, "5"))).toEqual(ids(branchOf(grown, "5")));
+    expect(growBranch(walked, grown, "3")).toBe(walked.branch);
+  });
+  it("leaves to branchOf a leaf the appended events do not lead to from the last one, or another log", () => {
+    const forked = [...log, ev("4", "2", 4), ev("5", "4", 5)];
+    expect(growBranch(walked, forked, "5")).toBeUndefined();
+    expect(growBranch(walked, forked, "2")).toBeUndefined();
+    expect(growBranch(walked, [ev("1", null, 1), ev("x", "1", 2), ev("3", "x", 3), ev("4", "3", 4)], "4")).toBeUndefined();
+    expect(growBranch(walked, log.slice(0, 2), "2")).toBeUndefined();
+    expect(growBranch({ events: [], leaf: undefined, branch: [] }, log, "3")).toBeUndefined();
   });
 });
 

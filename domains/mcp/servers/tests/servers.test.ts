@@ -116,6 +116,32 @@ describe("a server in mcp.json", () => {
     );
   });
 
+  it("asks a server which protocol it speaks once: connecting again starts no second copy of a local one", async () => {
+    const starts = join(await mkdtemp(join(tmpdir(), "lemma-mcp-starts-")), "starts");
+    const legacy = { command: process.execPath, args: [fileURLToPath(new URL("./fixtures/legacy.ts", import.meta.url))], env: { MCP_STARTS: starts } };
+    const modern = { ...local, env: { MCP_STARTS: starts } };
+    const counted = () => readFile(starts, "utf8").then((text) => text.split("\n").filter(Boolean).sort());
+    await withCore({ legacy, modern }, (core) =>
+      core.run(
+        Effect.gen(function* () {
+          const mcp = yield* Mcp;
+          yield* until((state) => connected("legacy")(state) && connected("modern")(state));
+          // The first connect asks on a second copy of each.
+          expect(yield* Effect.promise(counted)).toEqual(["fixture", "fixture", "legacy", "legacy"]);
+          for (const name of ["legacy", "modern"]) {
+            yield* mcp.reconnect(name);
+            yield* until(connected(name));
+          }
+          const state = yield* mcp.state;
+          expect([server(state, "legacy").protocolVersion, server(state, "modern").protocolVersion]).toEqual(["2025-11-25", "2026-07-28"]);
+          expect(yield* Effect.promise(counted)).toEqual(["fixture", "fixture", "fixture", "legacy", "legacy", "legacy"]);
+          expect(textOf(yield* call("mcp__legacy__ping", {}))).toBe("pong");
+          expect(textOf(yield* call("mcp__modern__echo", { text: "again" }))).toBe("again");
+        }),
+      ),
+    );
+  });
+
   it("keeps a long result's start and end, and the whole of it in a file", async () => {
     await withCore({ fixture: local }, (core) =>
       core.run(

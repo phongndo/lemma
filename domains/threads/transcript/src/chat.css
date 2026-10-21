@@ -117,6 +117,7 @@
 
 /* A scrollbar that takes room (not an overlay) gets a matching gutter on the left, so the transcript stays centered in the pane, under the composer. */
 .chat-view > .scroller {
+  overflow-x: hidden;
   scrollbar-gutter: stable both-edges;
   scroll-padding-bottom: calc(24px + var(--composer-height, 0px));
 }
@@ -398,17 +399,33 @@
   flex-direction: column;
 }
 
+/*
+ * Once the thread has been laid out whole (`data-drawn`), a turn out of view is not styled, laid out, or painted
+ * (`content-visibility`), so each frame of a streaming answer costs the turns on screen, however long the thread. It
+ * holds the place of the size it was last drawn at, so the places in the thread stay put (a turn added out of view
+ * holds an average turn's until it is drawn). A turn so contained clips what it paints to its box: the box reaches
+ * past the column by `--turn-bleed` into the margin, where rows hang (`.row-head`) and a page's buttons sit beside it
+ * (`tools.html`, which measures the room there), and the line between turns is drawn within the column. Where the
+ * margin is narrower, the chat clips the rest of the box, as it would anything wider than it.
+ */
 .turn {
+  --turn-bleed: 48px;
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 0 6px;
+  margin-inline: calc(-1 * var(--turn-bleed));
+  padding: 14px var(--turn-bleed) 6px;
+  contain-intrinsic-block-size: auto 480px;
+}
+
+.content[data-drawn] > .transcript > .turn {
+  content-visibility: auto;
 }
 
 .turn + .turn {
-  border-top: 1px solid var(--border);
   margin-top: 8px;
-  padding-top: 22px;
+  padding-top: 23px;
+  background: linear-gradient(var(--border), var(--border)) var(--turn-bleed) 0 / calc(100% - 2 * var(--turn-bleed)) 1px no-repeat;
 }
 
 /*
@@ -953,8 +970,9 @@
 }
 
 .turn[data-end="cancelled"] + .turn {
-  border-top: none;
   margin-top: 0;
+  padding-top: 22px;
+  background: none;
 }
 
 .turn-footer {

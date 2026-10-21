@@ -1,163 +1,21 @@
-import { Show, createEffect, createMemo, createRoot, getOwner, on, runWithOwner } from "solid-js";
+import { createEffect, createRoot, getOwner, lazy, runWithOwner } from "solid-js";
 import type { JSX } from "solid-js";
-import { ledger, ledgerSpans, parseLedgerFilter, trajectory as projectTrajectory } from "@lemma/sessions";
-import type { LedgerRecord } from "@lemma/sessions";
-import { stepFor } from "@lemma/web/keys";
-import { timeScale } from "./scale.ts";
-import { createNow } from "@lemma/web/now";
 import { Pane, Threads, Views } from "@lemma/threads";
 import type { ThreadViewProps } from "@lemma/threads";
 import { Notify, Slots, defineWebPlugin } from "@lemma/web";
 import { TrajectoryIcon } from "@lemma/look";
 import styles from "./trajectory.css?inline";
-import { createDetails } from "./details.tsx";
-import { createView } from "./state.ts";
-import type { TrajectoryDeps } from "./state.ts";
-import { createTable } from "./table.tsx";
-import { createTimeline } from "./timeline.tsx";
-import { createToolbar } from "./toolbar.tsx";
 import { addCosts } from "./costs.tsx";
 
-/**
- * The Trajectory view, modeled on Chrome DevTools' Network panel and on
- * DeepSeek Harness's trajectory: a filter toolbar, a zoomable three-lane
- * overview, a sortable table with a waterfall column, a details panel with
- * tabs, a context menu, and a status bar. Everything is projected from the
- * session log (`trajectory` → `ledger`). One per tab: its filter, selection,
- * and scroll are that tab's.
- */
-function createTrajectory(deps: TrajectoryDeps): () => JSX.Element {
-  const view = createView(deps);
-  const { selection, tab, setCollapsed, query, setQuery, sort, setRange, setZoom, menu, setMenu, stuck, setStuck, follow, select, typeMatches, refs } = view;
-  const { Toolbar } = createToolbar(view);
-  const { Overview } = createTimeline(view);
-  const { Table, ContextMenu, StatusBar } = createTable(view);
-  const { Details } = createDetails(view);
-  /** The thread it last showed: its state is that thread's. */
-  let shownFor: string | undefined;
-
-  function Trajectory(): JSX.Element {
-    const records = createMemo(() => ledger(projectTrajectory(deps.threads.branch())));
-    // Running bars grow while a turn runs.
-    const now = createNow(500, deps.threads.busy);
-    const allSpans = createMemo(() => ledgerSpans(records()));
-    const spanById = createMemo(() => new Map(allSpans().map((span) => [span.record.id, span])));
-    const scale = createMemo(() => timeScale(allSpans(), now()));
-    const matchesQuery = createMemo(() => parseLedgerFilter(query()));
-    const matches = (record: LedgerRecord) => typeMatches(record) && matchesQuery()(record);
-    const visible = createMemo(() => records().filter(matches));
-    let root!: HTMLDivElement;
-
-    createEffect(
-      on(
-        () => deps.threads.activeId(),
-        (id) => {
-          // Drawn again over the thread it last showed (its tab shown again), it is as it was, where it was scrolled to.
-          if (id === shownFor) {
-            if (stuck() && sort().key === "time") follow();
-            else queueMicrotask(() => refs.scroller?.scrollTo({ top: refs.lastTop }));
-            return;
-          }
-          shownFor = id;
-          select(undefined);
-          setRange(undefined);
-          setQuery("");
-          setZoom({ start: 0, end: 1 });
-          setCollapsed(new Set<string>());
-          setMenu(undefined);
-          if (sort().key === "time") follow();
-        },
-      ),
-    );
-    // In time order the newest row is the one to watch, so the table opens at its end and follows new rows there
-    // (a filter's change too), until the reader scrolls up. Another order has no "newest end" to follow.
-    createEffect(
-      on(visible, () => {
-        if (stuck() && sort().key === "time") follow();
-      }),
-    );
-    createEffect(
-      on(
-        () => sort().key,
-        (key) => {
-          if (key === "time") follow();
-        },
-        { defer: true },
-      ),
-    );
-    const onScroll = () => {
-      const top = refs.scroller!.scrollTop;
-      // Only scrolling up stops following: rows added below move the bottom away too.
-      if (refs.scroller!.scrollHeight - top - refs.scroller!.clientHeight < 24) setStuck(true);
-      else if (top < refs.lastTop) setStuck(false);
-      refs.lastTop = top;
-    };
-
-    // DevTools keys: arrows move the selection, Escape closes the panel (or the menu), "/" and Ctrl/Cmd+F focus the filter.
-    const onKeyDown = (event: KeyboardEvent) => {
-      const typing = event.target instanceof HTMLInputElement;
-      if ((event.key === "/" && !typing) || (event.key === "f" && (event.ctrlKey || event.metaKey))) {
-        event.preventDefault();
-        refs.filterInput?.focus();
-        return;
-      }
-      if (event.key === "Escape") {
-        // Handled here when it closes something; otherwise it is the app's (stopping a turn, say).
-        if (menu() !== undefined) setMenu(undefined);
-        else if (typing && query() !== "") setQuery("");
-        else if (selection() !== undefined) select(undefined);
-        else return;
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-      }
-      if (typing || (event.key !== "ArrowDown" && event.key !== "ArrowUp")) return;
-      event.preventDefault();
-      const rows = [...root.querySelectorAll<HTMLTableRowElement>("tbody tr[data-record]")];
-      const s = selection();
-      const current = rows.findIndex((row) => s?.type === "record" && row.dataset.record === s.id);
-      const next = rows[stepFor(event.key, current, rows.length)!];
-      if (next === undefined) return;
-      select({ type: "record", id: next.dataset.record! }, tab());
-      next.scrollIntoView({ block: "nearest" });
-    };
-
-    return (
-      <div class="trj dt-scope" ref={root} tabindex="-1" onKeyDown={onKeyDown}>
-        <Toolbar />
-        <Overview ledgerSpans={allSpans()} scale={scale()} now={now()} matches={matches} />
-        <div class="trj-body">
-          <div
-            class="trj-scroll"
-            ref={(el) => {
-              refs.scroller = el;
-            }}
-            onScroll={onScroll}
-          >
-            <Show
-              when={records().length > 0}
-              fallback={<p class="trj-empty">{deps.threads.blank() ? "Start a chat to see its trajectory." : "No records on this branch yet."}</p>}
-            >
-              <Table records={records()} visible={visible()} scale={scale()} ledgerSpans={spanById()} now={now()} compact={selection() !== undefined} />
-            </Show>
-          </div>
-          <Details records={records()} />
-        </div>
-        <StatusBar records={records()} visible={visible()} now={now()} />
-        <ContextMenu />
-      </div>
-    );
-  }
-
-  return Trajectory;
-}
+type CreateTrajectory = typeof import("./view.tsx").createTrajectory;
 
 /** The trace of the thread's first view, when it is one: not in a tab. */
 const MAIN = "trajectory";
 
 /**
  * The session as the requests and tool runs behind it, like DevTools' Network panel. Each tab of it has its own
- * (filter, selection, scroll), kept while another tab shows, until the tab closes.
+ * (filter, selection, scroll), kept while another tab shows, until the tab closes. Its code (`view.tsx`) loads the
+ * first time a trace shows, not with the page.
  */
 export default defineWebPlugin({
   id: "threads.trajectory",
@@ -167,13 +25,18 @@ export default defineWebPlugin({
     const owner = getOwner();
     const kept = new Map<string, { readonly draw: () => JSX.Element; readonly dispose: () => void }>();
     /** The tab's trace, made when it first shows; the plugin's, so it outlives being drawn. */
-    const traceFor = (tab: string) => {
+    const traceFor = (createTrajectory: CreateTrajectory, tab: string) => {
       const known = kept.get(tab);
       if (known !== undefined) return known.draw;
       const made = runWithOwner(owner, () => createRoot((dispose) => ({ draw: createTrajectory({ threads, notify, slots }), dispose })))!;
       kept.set(tab, made);
       return made.draw;
     };
+    // A load that fails throws where the trace is drawn, as the plugin's fault.
+    const Trace = lazy(async () => {
+      const { createTrajectory } = await import("./view.tsx");
+      return { default: (props: { readonly tab: string }) => traceFor(createTrajectory, props.tab)() };
+    });
     createEffect(() => {
       const tabs = new Set([MAIN, ...pane.tabs().map((tab) => tab.id)]);
       for (const [tab, trace] of kept)
@@ -188,7 +51,7 @@ export default defineWebPlugin({
       title: "Trace",
       icon: TrajectoryIcon,
       letter: "t",
-      component: (props: ThreadViewProps) => traceFor(props.tab ?? MAIN)(),
+      component: (props: ThreadViewProps) => <Trace tab={props.tab ?? MAIN} />,
     });
     addCosts(threads, slots);
   },

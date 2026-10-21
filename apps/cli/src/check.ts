@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import { Deferred, Effect } from "effect";
 import type { Scope } from "effect";
 import type { PluginStatus } from "@lemma/contracts";
+import { HOST_FLAGS } from "@lemma/host/launch";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { CliError, ExitCode } from "./command.ts";
 import type { Failure, Io, Output } from "./command.ts";
@@ -20,7 +21,8 @@ import type { Failure, Io, Output } from "./command.ts";
  * them; then the host stops and the home is removed. It is the check an author outside this repository runs first.
  */
 
-const cliMain = fileURLToPath(new URL("./main.ts", import.meta.url));
+// From this file's folder, which is the bundle's too (`dist/lemma.mjs`): the launcher either way, as `lemma serve` runs.
+const launcher = fileURLToPath(new URL("../bin/lemma.js", import.meta.url));
 /**
  * How long a host has to start; to stop once asked (`lemma: stopped`), past its own limit; and then to exit, which it
  * does at once unless something its plugin started keeps it running.
@@ -153,7 +155,7 @@ const hostIn = (home: string, env: Readonly<Record<string, string | undefined>>)
     const lines: string[] = [];
     const child = yield* Effect.acquireRelease(
       Effect.sync(() =>
-        spawn(process.execPath, ["--conditions=lemma-source", cliMain, "serve", "--no-open"], {
+        spawn(process.execPath, ["--conditions=lemma-source", ...HOST_FLAGS, launcher, "serve", "--no-open"], {
           env: {
             ...process.env,
             ...env,

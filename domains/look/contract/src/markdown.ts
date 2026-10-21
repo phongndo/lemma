@@ -10,18 +10,29 @@ let placing: { next: number } | undefined;
 const marked = new Marked({ gfm: true, breaks: false, async: false });
 marked.use({ renderer: { code: () => (placing === undefined ? false : `<pre ${PLACE}="${placing.next++}"></pre>`) } });
 
-let hooked = false;
-const hook = () => {
-  if (hooked) return;
-  hooked = true;
-  // No network fetches from model output (images are forbidden below); links open outside the app
+/**
+ * A sanitizer of this module's own, configured once: a config passed with each call is parsed again at each (most of
+ * what sanitizing a block cost), and the page's shared instance keeps another library's hooks and config, as its
+ * holds ours.
+ */
+let purifier: ReturnType<typeof DOMPurify> | undefined;
+const purify = () => {
+  if (purifier !== undefined) return purifier;
+  purifier = DOMPurify(window);
+  purifier.setConfig({
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ["img", "style", "form", "input", "button", "textarea", "select"],
+    FORBID_ATTR: ["style", "class", "id"],
+  });
+  // No network fetches from model output (images are forbidden above); links open outside the app
   // and cannot reach back into it.
-  DOMPurify.addHook("afterSanitizeAttributes", (node) => {
+  purifier.addHook("afterSanitizeAttributes", (node) => {
     if (node.tagName === "A" && node.hasAttribute("href")) {
       node.setAttribute("target", "_blank");
       node.setAttribute("rel", "noopener noreferrer");
     }
   });
+  return purifier;
 };
 
 /**
@@ -30,14 +41,7 @@ const hook = () => {
  * model output could position itself over the app or borrow the app's own
  * classes to fake a dialog or toast.
  */
-const sanitize = (html: string): string => {
-  hook();
-  return DOMPurify.sanitize(html, {
-    USE_PROFILES: { html: true },
-    FORBID_TAGS: ["img", "style", "form", "input", "button", "textarea", "select"],
-    FORBID_ATTR: ["style", "class", "id"],
-  });
-};
+const sanitize = (html: string): string => purify().sanitize(html);
 
 /** Tokens that stand apart from what follows them: their text is followed by a space. */
 const SEPARATE = new Set(["paragraph", "heading", "code", "blockquote", "list_item", "table", "hr", "space", "br"]);

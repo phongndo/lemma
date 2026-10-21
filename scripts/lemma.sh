@@ -13,4 +13,5 @@ while [ -L "$launcher" ]; do
   esac
 done
 root=$(CDPATH='' cd -- "$(dirname -- "$launcher")/.." && pwd)
-exec "$root/runtime/bin/node" --conditions=lemma-source "$root/apps/cli/src/main.ts" "$@"
+# The CLI's launcher (apps/cli/bin/lemma.js): its compile cache, and a host started as the host's launch says.
+exec "$root/runtime/bin/node" --conditions=lemma-source "$root/apps/cli/bin/lemma.js" "$@"

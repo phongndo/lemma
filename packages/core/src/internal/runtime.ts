@@ -262,7 +262,8 @@ function assemble<E>(
                   Effect.asVoid,
                 );
               }),
-            trace: (name, effect) => effect.pipe(Effect.withSpan(name, { attributes: attributes(instance.identity) })),
+            // The stack a span would capture names this frame, never the plugin's: attributed by its attributes instead.
+            trace: (name, effect) => effect.pipe(Effect.withSpan(name, { attributes: attributes(instance.identity) }, { captureStackTrace: false })),
             previous,
             handoff: (save) =>
               Effect.sync(() => {

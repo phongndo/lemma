@@ -164,6 +164,35 @@ describe("callServed", () => {
         }),
       ),
     ));
+
+  test("fails a call whose handler failed with undefined once, rather than taking it for a channel not found and asking again", () =>
+    Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          let asked = 0;
+          const failing = definePlugin({
+            id: "void",
+            layer: Layer.effectDiscard(
+              Effect.flatMap(PluginContext, (owner) =>
+                owner.add(
+                  Channels,
+                  serveChannel({ kind: "call", id: "void.fail", payload: Schema.Void, success: Schema.Void }, () =>
+                    Effect.suspend(() => {
+                      asked++;
+                      return Effect.fail(undefined);
+                    }),
+                  ),
+                ),
+              ).pipe(Effect.orDie),
+            ),
+          });
+          const core = yield* makeCore([failing]);
+          const registries = yield* core.run(Registries);
+          expect(yield* Effect.exit(callServed(registries, "void.fail", undefined))).toEqual(Exit.fail(undefined));
+          expect(asked).toBe(1);
+        }),
+      ),
+    ));
 });
 
 describe("a request while what answers changes", () => {

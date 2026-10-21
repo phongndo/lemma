@@ -2,8 +2,8 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import * as path from "node:path";
 import { Effect, Result } from "effect";
-import { SessionError } from "@lemma/sessions";
-import type { SessionEvent, SessionInfo } from "@lemma/sessions";
+import { searchLog, SessionError } from "@lemma/sessions";
+import type { Contribution, SessionEvent, SessionInfo, SessionSearchMatch } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, unsupportedSync } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
 import { decodeRecord, encodeLine, FORMAT_VERSION } from "./format.ts";
@@ -66,15 +66,40 @@ export const lineHash = (text: string): string => createHash("sha1").update(text
 const CHUNK = 1 << 20;
 
 /**
- * Calls `visit` with each complete line from byte `from` on, and the byte it
- * starts at, reading a chunk at a time: no string ever holds the whole file,
- * so one too big for a single string still reads. `visit` returning false
- * stops the read. Bytes after the last newline are not a line.
+ * Where the last complete line among the bytes from `from` to `size` starts (after the newline before the last one), or
+ * `size` when there is none: the one line a crash can have left torn.
  */
-async function readLines(fs: FileSystem, file: string, from: number, visit: (text: string, start: number) => boolean): Promise<Extent & Stamp> {
+async function lastLineStart(handle: FileHandle, from: number, size: number): Promise<number> {
+  let newlines = 0;
+  // From the end back, in blocks that double from 4 KiB: most last lines are short, a few are an image.
+  for (let end = size, length = 1 << 12; end > from; length = Math.min(length * 2, CHUNK)) {
+    const start = Math.max(from, end - length);
+    const block = Buffer.allocUnsafe(end - start);
+    const { bytesRead } = await handle.read(block, 0, block.length, start);
+    for (let i = bytesRead - 1; i >= 0; i--) if (block[i] === 0x0a && ++newlines === 2) return start + i + 1;
+    end = start;
+  }
+  return newlines === 1 ? from : size;
+}
+
+/**
+ * Calls `visit` with each complete line's bytes from byte `from` on (valid only during the call), and the byte it
+ * starts at, reading a chunk at a time: no string ever holds the whole file, so one too big for a single string still
+ * reads. With `followed`, `visit` is told of each line whether a later one followed it when the file was opened, so it
+ * cannot be a write a crash cut short. `visit` returning false stops the read. Bytes after the last newline are not a
+ * line.
+ */
+async function readLines(
+  fs: FileSystem,
+  file: string,
+  from: number,
+  visit: (bytes: Buffer, start: number, followed: boolean) => boolean,
+  followed = false,
+): Promise<Extent & Stamp> {
   const handle = await fs.open(file, "r");
   try {
     const { mtimeMs, ino, size } = await handle.stat();
+    const last = followed ? await lastLineStart(handle, from, size) : from;
     // Small files get a small buffer: a cold `list` reads many at once.
     const chunk = Buffer.allocUnsafe(Math.min(CHUNK, Math.max(1 << 16, size - from)));
     /** The current line's bytes from earlier chunks. */
@@ -87,12 +112,12 @@ async function readLines(fs: FileSystem, file: string, from: number, visit: (tex
       const view = chunk.subarray(0, bytesRead);
       let at = 0;
       for (let newline = view.indexOf(0x0a); newline !== -1; newline = view.indexOf(0x0a, at)) {
-        const text = carried.length === 0 ? view.toString("utf8", at, newline) : Buffer.concat([...carried, view.subarray(at, newline)]).toString("utf8");
+        const bytes = carried.length === 0 ? view.subarray(at, newline) : Buffer.concat([...carried, view.subarray(at, newline)]);
         carried = [];
         const start = lineStart;
         at = newline + 1;
         lineStart = position + at;
-        if (!visit(text, start)) return { validBytes: lineStart, size: position + bytesRead, mtimeMs, ino };
+        if (!visit(bytes, start, start < last)) return { validBytes: lineStart, size: position + bytesRead, mtimeMs, ino };
       }
       // The chunk is reused, so a line it ends inside is copied out.
       if (at < bytesRead) carried.push(Buffer.from(view.subarray(at)));
@@ -103,6 +128,44 @@ async function readLines(fs: FileSystem, file: string, from: number, visit: (tex
   }
 }
 
+/** An event line's leading fields, read from its first bytes (`eventHead`) rather than by parsing the line. */
+export interface EventHead {
+  readonly seq: number;
+  readonly id: string;
+  readonly parent: string | null;
+  readonly at: number;
+  /** `data.type`. */
+  readonly type: string;
+  /** A message's `role`. */
+  readonly role?: string;
+}
+
+/**
+ * How an event line this store writes begins: `encodeLine` of a decoded event, its fields in the schema's order (`seq`,
+ * `id`, `parent`, `at`, then `data`, whose `type` comes first, as a message's `role` does). Ids are url-safe, so they
+ * hold nothing JSON escapes. A line that begins any other way (another writer's) is parsed instead.
+ */
+const HEAD = /^\{"seq":(\d+),"id":"([\w-]+)","parent":(?:null|"([\w-]+)"),"at":(\d+),"data":\{"type":"([a-z-]+)"(?:,"message":\{"role":"([A-Za-z]+)")?/;
+/** How much of a line `eventHead` reads: more than any head this store writes. */
+const HEAD_BYTES = 256;
+
+const eventHead = (bytes: Buffer): EventHead | undefined => {
+  const match = HEAD.exec(bytes.toString("latin1", 0, Math.min(bytes.length, HEAD_BYTES)));
+  if (match === null) return undefined;
+  const [, seq, id, parent, at, type, role] = match;
+  return { seq: Number(seq), id: id!, parent: parent ?? null, at: Number(at), type: type!, ...(role === undefined ? {} : { role }) };
+};
+
+/**
+ * What a reader does with the event lines it need not parse (`readJson`): `take` says from a line's head whether the
+ * head is enough, and `visit` then reads that line from it, and from its bytes (valid only during the call) if it wants
+ * more. Reading a head is a few times cheaper than parsing a short line, and costs the same for a long one.
+ */
+interface Sniffing {
+  readonly take: (head: EventHead) => boolean;
+  readonly visit: (head: EventHead, bytes: Buffer, line: number) => string | undefined;
+}
+
 /**
  * The lines of a file from byte `from` (line `lines + 1`) on, as JSON, to
  * `visit` in order. A last line that is not JSON is a write a crash cut short
@@ -110,12 +173,18 @@ async function readLines(fs: FileSystem, file: string, from: number, visit: (tex
  * `validBytes` like a torn tail; one with lines after it is damage. Returns
  * the lines taken in all and the last of them, and if reading failed why, and
  * where the line it failed on is (`failedAt`): what came before it is sound.
+ *
+ * With `sniffing`, an event line with a later line after it is not parsed
+ * when its head is enough (`Sniffing.take`), so whether the rest of it is JSON
+ * goes unchecked. The last line is always parsed: it is the one a crash can
+ * have torn.
  */
 async function readJson(
   fs: FileSystem,
   file: string,
   from: { readonly validBytes: number; readonly lines: number } & Partial<LastLine>,
   visit: (json: unknown, line: number) => string | undefined,
+  sniffing?: Sniffing,
 ): Promise<{
   readonly extent: Extent & Stamp;
   readonly lines: number;
@@ -127,35 +196,50 @@ async function readJson(
   let failure: string | undefined;
   let failedAt: { readonly line: number; readonly start: number } | undefined;
   let unreadable: { readonly line: number; readonly start: number } | undefined;
-  /** The last line taken: where it starts, and its text. */
+  /** The last line taken: where it starts, its length, and its text unless it was sniffed (then read again for its hash). */
   let lastStart = -1;
-  let lastText = "";
-  const extent = await readLines(fs, file, from.validBytes, (text, start) => {
-    line++;
-    if (unreadable !== undefined) {
-      failure = `line ${unreadable.line}: not JSON`;
-      failedAt = unreadable;
-      return false;
-    }
-    let json: unknown;
-    try {
-      json = JSON.parse(text);
-    } catch {
-      unreadable = { line, start };
+  let lastLength = 0;
+  let lastText: string | undefined;
+  const extent = await readLines(
+    fs,
+    file,
+    from.validBytes,
+    (bytes, start, followed) => {
+      line++;
+      if (unreadable !== undefined) {
+        failure = `line ${unreadable.line}: not JSON`;
+        failedAt = unreadable;
+        return false;
+      }
+      const head = sniffing !== undefined && followed ? eventHead(bytes) : undefined;
+      let text: string | undefined;
+      if (head !== undefined && sniffing!.take(head)) failure = sniffing!.visit(head, bytes, line);
+      else {
+        text = bytes.toString("utf8");
+        let json: unknown;
+        try {
+          json = JSON.parse(text);
+        } catch {
+          unreadable = { line, start };
+          return true;
+        }
+        failure = visit(json, line);
+      }
+      if (failure !== undefined) {
+        failedAt = { line, start };
+        return false;
+      }
+      lastStart = start;
+      lastLength = bytes.length;
+      lastText = text;
       return true;
-    }
-    failure = visit(json, line);
-    if (failure !== undefined) {
-      failedAt = { line, start };
-      return false;
-    }
-    lastStart = start;
-    lastText = text;
-    return true;
-  });
+    },
+    sniffing !== undefined,
+  );
+  if (lastStart >= 0 && lastText === undefined) lastText = await readText(fs, file, lastStart, lastLength);
   const lastLine =
     lastStart >= 0
-      ? { lastStart, lastHash: lineHash(lastText) }
+      ? { lastStart, lastHash: lineHash(lastText!) }
       : from.lastStart !== undefined && from.lastHash !== undefined
         ? { lastStart: from.lastStart, lastHash: from.lastHash }
         : undefined;
@@ -163,6 +247,18 @@ async function readJson(
   if (failure !== undefined && failedAt !== undefined) return { extent, lines: failedAt.line - 1, failure, failedAt, ...taken };
   if (unreadable === undefined) return { extent, lines: line, ...taken };
   return { extent: { ...extent, validBytes: unreadable.start }, lines: unreadable.line - 1, ...taken };
+}
+
+/** `length` bytes of `file` from byte `start`, as text. */
+async function readText(fs: FileSystem, file: string, start: number, length: number): Promise<string> {
+  const handle = await fs.open(file, "r");
+  try {
+    const bytes = Buffer.alloc(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, start);
+    return bytes.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 /** Whether the line `from` read last is still there, unchanged and complete, so reading on from it is sound. */
@@ -233,10 +329,28 @@ export interface Damage {
   readonly reason: string;
 }
 
+/**
+ * `event`, its request's contributions the array `previous` when they are the same: an older agent logged every
+ * request's in full, most repeating the last ones, so one array for all of them keeps such a session's heap about a
+ * tenth smaller (an agent now logs them only when they change). Sound, as an event is never changed once read.
+ */
+export const shareContributions = (event: SessionEvent, previous: readonly Contribution[] | undefined): SessionEvent => {
+  const data = event.data;
+  if (data.type !== "request" || data.contributions === undefined || previous === undefined || data.contributions === previous) return event;
+  if (data.contributions.length !== previous.length) return event;
+  const same = data.contributions.every((part, i) => {
+    const before = previous[i]!;
+    return part.source === before.source && part.kind === before.kind && part.label === before.label && part.chars === before.chars;
+  });
+  return same ? { ...event, data: { ...data, contributions: previous } } : event;
+};
+
 interface Loaded {
   readonly header: Header;
   readonly events: SessionEvent[];
   readonly byId: Map<string, SessionEvent>;
+  /** The last request's contributions, which the next one most often repeats (`shareContributions`). */
+  readonly contributions: readonly Contribution[] | undefined;
   readonly leaf: string | undefined;
   readonly title: string | undefined;
   readonly marks: FiledAs;
@@ -267,6 +381,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
     let title: string | undefined;
     let marks = unfiled;
     let updatedAt = 0;
+    let contributions: readonly Contribution[] | undefined;
     const visit = (json: unknown, n: number): string | undefined => {
       if (header === undefined) {
         const decoded = decodeRecord(json, true);
@@ -291,11 +406,13 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
       if (line.seq !== events.length + 1) return `line ${n}: expected seq ${events.length + 1}, found ${line.seq}`;
       if (byId.has(line.id)) return `line ${n}: duplicate event id ${line.id}`;
       if (line.parent !== null && !byId.has(line.parent)) return `line ${n}: unknown parent ${line.parent}`;
-      events.push(line);
-      byId.set(line.id, line);
-      leaf = line.id;
-      if (line.data.type === "title") title = line.data.title;
-      updatedAt = Math.max(updatedAt, line.at);
+      const event = shareContributions(line, contributions);
+      events.push(event);
+      byId.set(event.id, event);
+      leaf = event.id;
+      if (event.data.type === "title") title = event.data.title;
+      if (event.data.type === "request" && event.data.contributions !== undefined) contributions = event.data.contributions;
+      updatedAt = Math.max(updatedAt, event.at);
       return undefined;
     };
     return Effect.tryPromise({ try: () => readJson(fs, file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
@@ -312,6 +429,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
           header,
           events,
           byId,
+          contributions,
           leaf,
           title,
           marks,
@@ -391,15 +509,21 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
       leaf = line.leaf;
       return undefined;
     }
+    const failure = event(line.seq, line.id, line.at, n);
+    if (failure === undefined && line.data?.type === "title") title = line.data.title;
+    return failure;
+  };
+  const event = (seq: number | undefined, id: string | undefined, at: number | undefined, n: number): string | undefined => {
     // The one check `load` makes that costs nothing here: a gap would have `list` describe events `load` refuses.
-    if (line.seq !== lastSeq + 1) return `line ${n}: expected seq ${lastSeq + 1}, found ${String(line.seq)}`;
-    if (typeof line.at === "number") updatedAt = Math.max(updatedAt, line.at);
-    leaf = line.id;
-    lastSeq = line.seq;
-    if (line.data?.type === "title") title = line.data.title;
+    if (seq !== lastSeq + 1) return `line ${n}: expected seq ${lastSeq + 1}, found ${String(seq)}`;
+    if (typeof at === "number") updatedAt = Math.max(updatedAt, at);
+    leaf = id;
+    lastSeq = seq;
     return undefined;
   };
-  const { extent, lines, last, failure, failedAt } = await readJson(fs, file, from ?? { validBytes: 0, lines: 0 }, visit);
+  // An event line's head says all the listing needs of it but a title's text.
+  const sniffing: Sniffing = { take: (head) => head.type !== "title", visit: (head, _, n) => event(head.seq, head.id, head.at, n) };
+  const { extent, lines, last, failure, failedAt } = await readJson(fs, file, from ?? { validBytes: 0, lines: 0 }, visit, sniffing);
   if (header === undefined || last === undefined) return failure ?? (extent.size === 0 ? "missing header" : "unreadable header");
   // Damaged: listed as what reads, said to be damaged, so it can be opened read-only and forked rather than vanish.
   const damage = failure === undefined || failedAt === undefined ? undefined : { line: failedAt.line, reason: failure };
@@ -412,6 +536,119 @@ async function scanFrom(fs: FileSystem, file: string, from: Scanned | undefined)
     ...last,
     info: infoOf(header, { leaf, title, marks, updatedAt, lastSeq, ...(damage === undefined ? {} : { damage }) }),
   };
+}
+
+/**
+ * Whether a message's text holding `word` (lower-cased, as `searchLog` compares) means its line, lower-cased, holds it
+ * too, so a line without it need not be parsed: unless the word has a character JSON escapes (a quote, a backslash, a
+ * control character, half of a surrogate pair) or a sigma, whose lower case depends on the letter before it.
+ */
+const foundInLine = (word: string): boolean => {
+  for (let i = 0; i < word.length; i++) {
+    const code = word.charCodeAt(i);
+    if (code < 0x20 || code === 0x22 || code === 0x5c || (code >= 0xd800 && code <= 0xdfff) || code === 0x3a3 || code === 0x3c2 || code === 0x3c3) return false;
+  }
+  return true;
+};
+
+/**
+ * `searchLog` of a session's current branch, read from its file for what a search needs and let go: the branch's shape
+ * from every line (seqs, ids, parents, checkouts), and the prompts and replies whose line holds every one of `words`.
+ * Every other event line is read from its head (`eventHead`), so a search reads a log for a fraction of what opening it
+ * costs. It stops where `load` would at a seq gap, a duplicate id, an unknown parent, a checkout to nowhere, or a prompt
+ * or reply that does not decode; a line whose rest is no event, which only `load` checks, it reads past, so a session
+ * known to be damaged is searched through `load`. Undefined for a file that is not a session.
+ */
+export function searchFile(
+  fs: FileSystem,
+  file: string,
+  sessionId: string,
+  words: readonly string[],
+): Effect.Effect<SessionSearchMatch | undefined, SessionError> {
+  return Effect.tryPromise({ try: () => searchFrom(fs, file, sessionId, words), catch: io(sessionId, `Cannot read ${file}`) });
+}
+
+async function searchFrom(fs: FileSystem, file: string, sessionId: string, words: readonly string[]): Promise<SessionSearchMatch | undefined> {
+  let header = false;
+  /** Each event's parent, in file order. */
+  const parents = new Map<string, string | null>();
+  let leaf: string | undefined;
+  /** The prompts and replies that may match, by id. */
+  const said = new Map<string, SessionEvent>();
+  const filtered = words.every(foundInLine);
+  const event = (seq: unknown, id: unknown, parent: unknown, n: number): string | undefined => {
+    if (seq !== parents.size + 1) return `line ${n}: expected seq ${parents.size + 1}, found ${String(seq)}`;
+    if (typeof id !== "string" || parents.has(id)) return `line ${n}: duplicate event id ${String(id)}`;
+    if (parent !== null && (typeof parent !== "string" || !parents.has(parent))) return `line ${n}: unknown parent ${String(parent)}`;
+    parents.set(id, parent);
+    leaf = id;
+    return undefined;
+  };
+  const message = (json: unknown, n: number): string | undefined => {
+    const decoded = decodeRecord(json, false);
+    if (Result.isFailure(decoded)) return `line ${n}: ${decoded.failure}`;
+    const found = decoded.success as SessionEvent;
+    said.set(found.id, found);
+    return undefined;
+  };
+  const visit = (json: unknown, n: number): string | undefined => {
+    if (!header) {
+      const decoded = decodeRecord(json, true);
+      if (Result.isFailure(decoded)) return decoded.failure;
+      header = true;
+      return undefined;
+    }
+    if (typeof json !== "object" || json === null || Array.isArray(json)) return `line ${n}: not a record`;
+    const line = json as {
+      type?: unknown;
+      leaf?: unknown;
+      seq?: unknown;
+      id?: unknown;
+      parent?: unknown;
+      data?: { type?: unknown; message?: { role?: unknown } };
+    };
+    if (line.type === "marks") return undefined;
+    if (line.type === "checkout") {
+      if (typeof line.leaf !== "string" || !parents.has(line.leaf)) return `line ${n}: checkout to unknown event ${String(line.leaf)}`;
+      leaf = line.leaf;
+      return undefined;
+    }
+    const failure = event(line.seq, line.id, line.parent, n);
+    if (failure !== undefined) return failure;
+    const role = line.data?.type === "message" ? line.data.message?.role : undefined;
+    return role === "user" || role === "assistant" ? message(json, n) : undefined;
+  };
+  const sniffing: Sniffing = {
+    // A message whose role its head does not say (another writer's layout) is parsed.
+    take: (head) => head.type !== "message" || head.role !== undefined,
+    visit: (head, bytes, n) => {
+      const failure = event(head.seq, head.id, head.parent, n);
+      if (failure !== undefined || head.type !== "message" || (head.role !== "user" && head.role !== "assistant")) return failure;
+      const text = bytes.toString("utf8");
+      if (filtered) {
+        const lower = text.toLowerCase();
+        if (!words.every((word) => lower.includes(word))) return undefined;
+      }
+      let json: unknown;
+      try {
+        json = JSON.parse(text);
+      } catch {
+        return `line ${n}: not JSON`;
+      }
+      return message(json, n);
+    },
+  };
+  const { last } = await readJson(fs, file, { validBytes: 0, lines: 0 }, visit, sniffing);
+  if (!header || last === undefined) return undefined;
+  // The branch from its root to its leaf, of the messages that may match: what `searchLog` would find on the whole branch.
+  const branch: SessionEvent[] = [];
+  for (let at = leaf; at !== undefined;) {
+    const found = said.get(at);
+    if (found !== undefined) branch.push(found);
+    const parent = parents.get(at);
+    at = parent === null ? undefined : parent;
+  }
+  return searchLog(sessionId, branch.reverse(), words);
 }
 
 export const infoOf = (

@@ -1,5 +1,5 @@
 import * as os from "node:os";
-import { Cause, Clock, Deferred, Effect, Exit, Fiber, Result, Schema, Scope, Semaphore } from "effect";
+import { Cause, Clock, Deferred, Duration, Effect, Exit, Fiber, Result, Schedule, Schema, Scope, Semaphore } from "effect";
 import type { Context } from "effect";
 import { assert, awaitable, Events, Hooks, Registries } from "@lemma/core";
 import type { PluginSetup } from "@lemma/core";
@@ -31,7 +31,7 @@ import { admission, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from ".
 import type { Item, QueuedTurn, SessionState, Suspended } from "./queue.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, runTurn, toolLoop } from "./turn.ts";
-import type { Ended, Placed, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
+import type { Ended, KeptBranch, Placed, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
 
 /** The agent's settings: its row's `config`, for `agent.loop` and any loop built on the kit. */
 export const AgentConfig = Schema.Struct({
@@ -138,9 +138,15 @@ const ID_BYTES = 6;
 
 /**
  * Sessions whose branch, as their last turn left it, the agent keeps for the next turn to start from, the most recently
- * used: a bound on the memory they hold, which may be events the store has let go of (kept branches do not expire).
+ * used: a bound on the memory they hold.
  */
 const BRANCHES_KEPT = 16;
+/**
+ * How long a kept branch stays unused, at most (it goes after half of that at least): a store lets an idle session's
+ * events go (`sessions.files` after five minutes, by default), and a branch kept longer would hold them alone, and
+ * beside the copy the store reads back when the session is next used.
+ */
+const BRANCH_IDLE_MS = 5 * 60_000;
 
 /** A queued prompt as a turn places it: what its user message carries, or a plugin's `context` event. */
 const placedOf = ({ requestId, content, credit, source, display }: QueuedPrompt): Placed => ({
@@ -315,19 +321,39 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
         );
 
     const requests = makeRequestIndex(sessions);
-    /** Each session's branch as its last turn left it, the most recently used last (`BRANCHES_KEPT`). */
-    const branches = new Map<string, readonly SessionEvent[]>();
+    /**
+     * Each session's branch as its last turn left it, until the next takes it, the most recently kept last
+     * (`BRANCHES_KEPT`), and whether it was kept since the last sweep (`BRANCH_IDLE_MS`).
+     */
+    const branches = new Map<string, { readonly kept: KeptBranch; fresh: boolean }>();
     const kept = (sessionId: string) => ({
-      branch: () => branches.get(sessionId),
-      keep: (branch: readonly SessionEvent[]) => {
+      take: () => {
+        const entry = branches.get(sessionId);
         branches.delete(sessionId);
-        branches.set(sessionId, branch);
+        return entry?.kept;
+      },
+      keep: (branch: KeptBranch) => {
+        branches.delete(sessionId);
+        branches.set(sessionId, { kept: branch, fresh: true });
         for (const oldest of branches.keys()) {
           if (branches.size <= BRANCHES_KEPT) break;
           branches.delete(oldest);
         }
       },
     });
+    // A branch kept before the last sweep, and not taken since, goes: one unused for between half of `BRANCH_IDLE_MS` and all of it.
+    yield* owner.background(
+      "forget idle branches",
+      Effect.repeat(
+        Effect.sync(() => {
+          for (const [sessionId, entry] of branches) {
+            if (entry.fresh) entry.fresh = false;
+            else branches.delete(sessionId);
+          }
+        }),
+        Schedule.spaced(Duration.millis(BRANCH_IDLE_MS / 2)),
+      ),
+    );
     /** The session has no turn and nothing queued: what is kept for it goes (its queue revision stays, to keep growing). */
     const forget = (sessionId: string, state: SessionState<Running>) => {
       if (state.turn !== undefined || state.suspended !== undefined || state.queue.length > 0) return;

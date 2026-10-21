@@ -142,7 +142,7 @@ export function startPrompt(
     });
     close = connection.follow(
       AgentChannels.activity,
-      undefined,
+      { output: false },
       (activity) => {
         if (activity.type === "subscribed") {
           listening = true;

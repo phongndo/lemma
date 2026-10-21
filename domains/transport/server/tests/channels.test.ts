@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { Cause, Data, Deferred, Duration, Effect, Exit, Fiber, Layer, Queue, Schema, SchemaTransformation, Stream } from "effect";
-import { Channels, serveChannel } from "@lemma/contracts";
+import { Channels, eventFeed, serveChannel } from "@lemma/contracts";
 import type { Channel, ChannelInfo } from "@lemma/contracts";
 import { Admitted, definePlugin, PluginContext, Registries } from "@lemma/core";
 import { settled } from "../../../../scripts/e2e.ts";
@@ -786,6 +786,48 @@ describe("channels", () => {
       {},
       undefined,
       [echo],
+    );
+  }, 30_000);
+
+  test("what a stream makes while its client acknowledges a chunk leaves together, in one message and one acknowledgement", () => {
+    // A burst of a domain's events, as a turn's deltas or a command's output come: queued by `eventFeed` while the
+    // client has the first chunk, then sent as one. Encoded element by element, each would cost a round trip, and a
+    // client across a network would lose what the buffers drop.
+    const burst = Array.from({ length: 500 }, (_, index) => index);
+    const plugin = serving(
+      "bursty",
+      serveChannel({ kind: "stream", id: "bursty.feed", payload: Schema.Void, success: Schema.Number }, () =>
+        eventFeed(Effect.succeed(-1), [Stream.fromIterable(burst)]),
+      ),
+    );
+    return withHost(
+      (host) =>
+        Effect.promise(async () => {
+          // A raw client, to count the messages: it acknowledges each chunk as Effect's RPC client does.
+          const socket = new WebSocket(`${host.url.replace(/^http/, "ws")}/rpc?token=${encodeURIComponent(host.token)}`);
+          await new Promise((opened, failed) => {
+            socket.onopen = opened;
+            socket.onerror = failed;
+          });
+          const chunks: unknown[][] = [];
+          socket.onmessage = (event) => {
+            const parsed = JSON.parse(String(event.data));
+            for (const message of Array.isArray(parsed) ? parsed : [parsed]) {
+              if (message._tag !== "Chunk") continue;
+              chunks.push(message.values);
+              socket.send(JSON.stringify({ _tag: "Ack", requestId: message.requestId }));
+            }
+          };
+          socket.send(JSON.stringify({ _tag: "Request", id: "1", tag: "Channel.Open", payload: { id: "bursty.feed" }, headers: [] }));
+          await arrived(() => chunks.flat().length === burst.length + 1);
+          expect(chunks.flat()).toEqual([-1, ...burst]);
+          // The first element, then the burst in as few messages as the producer took turns to make it: never one each.
+          expect(chunks.length).toBeLessThanOrEqual(5);
+          socket.close();
+        }),
+      {},
+      undefined,
+      [plugin],
     );
   }, 30_000);
 

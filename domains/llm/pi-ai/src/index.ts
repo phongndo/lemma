@@ -1,5 +1,6 @@
 import { Effect, Queue, Schedule, Schema, Stream } from "effect";
-import { cleanupSessionResources, createModels } from "@earendil-works/pi-ai";
+// pi-ai's modules, not its index: the index loads TypeBox (~670 modules), which only a provider's requests use.
+import { createModels } from "@earendil-works/pi-ai/models";
 import type { AuthCheck, AuthContext, Provider, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { setOAuthPageRenderer } from "@earendil-works/pi-ai/utils/oauth-page";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
@@ -285,15 +286,16 @@ export function makeLlmPlugin(options: Options = {}) {
             : Effect.succeed(entry);
         });
 
-      // Pooled Codex websockets keep the event loop alive until released.
+      // Pooled Codex websockets keep the event loop alive until released. Only pi-ai's index exports the release, so it
+      // is imported as the plugin stops rather than with it.
       yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          try {
-            cleanupSessionResources();
-          } catch {
-            // Best effort: a socket that fails to close cannot hold the plugin open.
-          }
-        }),
+        Effect.promise(() =>
+          import("@earendil-works/pi-ai")
+            .then(({ cleanupSessionResources }) => cleanupSessionResources())
+            .catch(() => {
+              // Best effort: a socket that fails to close cannot hold the plugin open.
+            }),
+        ),
       );
 
       const listed = () =>
@@ -489,9 +491,14 @@ export function makeLlmPlugin(options: Options = {}) {
                 const idleMs = config.streamTimeout * 1000;
                 let stalled = false;
                 let timer: ReturnType<typeof setTimeout> | undefined;
+                // Armed again on every event of the stream: one timer, restarted (`refresh`), rather than a new one each
+                // time. Never once it has fired, as `refresh` would start it again.
                 const arm = () => {
-                  if (idleMs <= 0) return;
-                  clearTimeout(timer);
+                  if (idleMs <= 0 || stalled) return;
+                  if (timer !== undefined) {
+                    timer.refresh();
+                    return;
+                  }
                   timer = setTimeout(() => {
                     stalled = true;
                     close(

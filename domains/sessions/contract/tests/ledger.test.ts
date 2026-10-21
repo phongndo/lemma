@@ -3,7 +3,7 @@ import { emptyUsage } from "@lemma/llm";
 import { trajectory } from "../src/trajectory.ts";
 import type { AssistantMessage } from "@lemma/llm";
 import type { Contribution, EventData, SessionEvent } from "../src/sessions.ts";
-import { ledger, ledgerSpans, lineDiff, parseLedgerFilter, promptDiff, recordsBetween, recordStart, recordSummary } from "../src/ledger.ts";
+import { ledger, ledgerSpans, lineDiff, parseLedgerFilter, promptDiff, recordName, recordsBetween, recordStart, recordSummary } from "../src/ledger.ts";
 
 const log = (...items: EventData[]): SessionEvent[] =>
   items.map((data, i) => ({ seq: i + 1, id: `e${i + 1}`, parent: i === 0 ? null : `e${i}`, at: 1000 * (i + 1), data }));
@@ -227,5 +227,22 @@ describe("steers", () => {
       ["user", "also this"],
       ["assistant", "e10"],
     ]);
+  });
+
+  it("names a record by the first line of its text that is not blank", () => {
+    const named = (text: string) =>
+      recordName(
+        ledger(
+          trajectory(
+            log(
+              { type: "turn-start", turnId: "t1" },
+              { type: "message", turnId: "t1", message: { role: "user", content: [{ type: "text", text }], timestamp: 0 } },
+            ),
+          ),
+        )[0]!,
+      );
+    expect(named("\n  \n   fix the build  \r\nand more")).toBe("fix the build");
+    expect(named("one line")).toBe("one line");
+    expect(named(" \n \n")).toBe("[image]");
   });
 });

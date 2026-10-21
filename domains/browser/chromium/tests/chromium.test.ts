@@ -293,9 +293,33 @@ describe.skipIf(missing)("an idle Chromium", () => {
         await vi.waitFor(async () => expect(await Effect.runPromise(browser.snapshot)).toMatchObject({ running: false }), { timeout: 10_000 });
         expect(await Effect.runPromise(Effect.flip(browser.service.snapshot("s", {})))).toMatchObject({
           reason: "NoTab",
-          message: expect.stringMatching(/closes 50 ms after its last call/),
+          message: expect.stringMatching(/tabs close 50 ms after its last call/),
         });
         expect(await Effect.runPromise(browser.service.open("s", {}))).toMatchObject({ tabId: "t1" });
+      } finally {
+        await browser.close();
+      }
+    },
+    LAUNCH_MS,
+  );
+
+  it(
+    "closes a quiet session's tabs while another keeps it open",
+    async () => {
+      const browser = makeChromium({ idleMs: 300, headless: true });
+      try {
+        await run(browser.service.open("quiet", { url: page("<p>Quiet</p>") }));
+        await run(browser.service.open("busy", { url: page("<p>Busy</p>") }));
+        // The busy session calls more often than the idle time; the quiet one's tabs go meanwhile.
+        await vi.waitFor(
+          async () => {
+            await run(browser.service.snapshot("busy", {}));
+            expect(await run(browser.service.tabs("quiet"))).toEqual([]);
+          },
+          { timeout: 10_000, interval: 100 },
+        );
+        expect(await Effect.runPromise(browser.snapshot)).toMatchObject({ running: true });
+        expect(await run(browser.service.tabs("busy"))).toHaveLength(1);
       } finally {
         await browser.close();
       }

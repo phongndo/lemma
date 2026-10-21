@@ -3,7 +3,7 @@ import type { Scope } from "effect";
 import { Event, Hook, schemaCheck } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
-import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
+import { defineChannel, eventFeed, HandlerCredit, mapChunks, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, IMAGE_TYPES, ImageContent, LlmFailure, MAX_IMAGE_BYTES, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 import { SessionSearchMatch } from "./search.ts";
@@ -116,11 +116,13 @@ export const EventData = Schema.Union([
     ),
   }),
   /**
-   * The request header, logged before the model call. `system`, `tools`, and
-   * `nested` are omitted when unchanged since the previous `request` on the branch.
-   * `system` is the text of the `system` contributions, in order, with empty
-   * ones dropped, joined by a blank line (`"\n\n"`); `chars` is each text's
-   * length, so `trajectory` can split it back into sections.
+   * The request header, logged before the model call. `system`, `tools`,
+   * `nested`, and `contributions` are omitted when unchanged since the previous
+   * `request` on the branch (the nearest among its ancestors, never a sibling
+   * branch's), and `requestState` resolves them. `system` is the text of the `system`
+   * contributions, in order, with empty ones dropped, joined by a blank line
+   * (`"\n\n"`); `chars` is each text's length, so `trajectory` can split it
+   * back into sections.
    *
    * A request without `restart` continues the previous one on the branch: the
    * same system prompt and tools, and its history with more appended, so a
@@ -145,7 +147,12 @@ export const EventData = Schema.Union([
     nested: Schema.optional(Schema.Array(Schema.String)),
     /** It declares its system prompt and tools afresh, and why (see above); absent on a request an older agent logged. */
     restart: Schema.optional(RequestRestart),
-    contributions: Schema.Array(Contribution),
+    /**
+     * Who put each section and tool there: logged when they differ from the previous request's on the branch, so always
+     * on a branch's first (older logs have them on every request). A request's own, logged or not, are the
+     * `contributions` of `requestState` of the branch ending at it.
+     */
+    contributions: Schema.optional(Schema.Array(Contribution)),
     /** `AgentRequestHook`'s handlers, in the order they ran: each one's own time, and what it changed. */
     handlers: Schema.optional(Schema.Array(HandlerCredit)),
     /** What the provider was told to pass on (`LlmRequest.providerOptions`), as a handler set them. */
@@ -705,37 +712,43 @@ const follow = (
   sessionId: string,
   after: number,
 ): Stream.Stream<SessionLogUpdate, SessionError> =>
-  eventFeed<Heard, SessionError, never>(
-    Effect.map(sessions.events(sessionId, { after }), (log) => ({ type: "subscribed", events: log })),
-    [
-      events.stream(SessionAppended, FEED).pipe(
-        Stream.filter((appended) => appended.sessionId === sessionId),
-        Stream.map(({ event }): Heard => ({ type: "appended", event })),
-      ),
-      events.stream(SessionRemoved, FEED).pipe(
-        Stream.filter((removed) => removed.sessionId === sessionId),
-        Stream.map((): Heard => ({ type: "removed" })),
-      ),
-    ],
-  ).pipe(
-    // The state is the last `seq` sent.
-    Stream.mapAccumEffect(
-      () => after,
-      (last, heard): Effect.Effect<readonly [number, readonly SessionLogUpdate[]], SessionError> => {
-        if (heard.type === "removed") return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `Session ${sessionId} was deleted` }));
-        if (heard.type === "subscribed") return Effect.succeed([heard.events.at(-1)?.seq ?? last, [heard]]);
-        const { seq } = heard.event;
-        // Appended while the log was read, or read already to fill a gap.
-        if (seq <= last) return Effect.succeed([last, []]);
-        if (seq === last + 1) return Effect.succeed([seq, [heard]]);
-        // Appends dropped on the way, as a slow client's are: the log has them.
-        return Effect.map(sessions.events(sessionId, { after: last }), (missed) => [
-          missed.at(-1)?.seq ?? last,
-          missed.map((event): SessionLogUpdate => ({ type: "appended", event })),
-        ]);
-      },
-    ),
-  );
+  Stream.suspend(() => {
+    /** The last `seq` sent. */
+    let last = after;
+    const feed = eventFeed<Heard, SessionError, never>(
+      Effect.map(sessions.events(sessionId, { after }), (log) => ({ type: "subscribed", events: log })),
+      [
+        events.stream(SessionAppended, FEED).pipe(
+          Stream.filter((appended) => appended.sessionId === sessionId),
+          Stream.map(({ event }): Heard => ({ type: "appended", event })),
+        ),
+        events.stream(SessionRemoved, FEED).pipe(
+          Stream.filter((removed) => removed.sessionId === sessionId),
+          Stream.map((): Heard => ({ type: "removed" })),
+        ),
+      ],
+    );
+    // A chunk at a time (`mapChunks`), so the events appended together reach a client together.
+    return mapChunks(feed, (heard): Effect.Effect<readonly SessionLogUpdate[], SessionError> => {
+      if (heard.type === "removed") return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `Session ${sessionId} was deleted` }));
+      if (heard.type === "subscribed") {
+        last = heard.events.at(-1)?.seq ?? last;
+        return Effect.succeed([heard]);
+      }
+      const { seq } = heard.event;
+      // Appended while the log was read, or read already to fill a gap.
+      if (seq <= last) return Effect.succeed([]);
+      if (seq === last + 1) {
+        last = seq;
+        return Effect.succeed([heard]);
+      }
+      // Appends dropped on the way, as a slow client's are: the log has them.
+      return Effect.map(sessions.events(sessionId, { after: last }), (missed) => {
+        last = missed.at(-1)?.seq ?? last;
+        return missed.map((event): SessionLogUpdate => ({ type: "appended", event }));
+      });
+    });
+  });
 
 /** `SessionChannels` served from `sessions`: what a provider of `Sessions` adds to `Channels`, each with `PluginContext.add`. */
 export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [

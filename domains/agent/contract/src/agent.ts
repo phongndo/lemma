@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Predicate, Schema, Stream } from "effect";
+import { Context, Data, Effect, Option, Predicate, Schema, Stream } from "effect";
 import { Event, Hook, Registry, schemaCheck } from "@lemma/core";
 import type { Awaitable, Events } from "@lemma/core";
 import { defineChannel, eventFeed, ResultCredit, serveChannel } from "@lemma/contracts";
@@ -478,27 +478,51 @@ export class Agent extends Context.Service<
   }
 >()("lemma/Agent") {}
 
-/** What `agent.activity` sends: `subscribed` first, then the agent's live output and each turn's and queue's change, in any session. */
+/** `AssistantDelta`: model output, numbered by `seq` within its step. */
+const DeltaElement = Schema.Struct({
+  type: Schema.Literal("delta"),
+  sessionId: Schema.String,
+  turnId: Schema.String,
+  stepId: Schema.String,
+  seq: Schema.Number,
+  event: StreamEvent,
+});
+/** `ToolOutput`: a running tool's output, `offset` being how much it had printed before `chunk`. */
+const ToolOutputElement = Schema.Struct({
+  type: Schema.Literal("tool-output"),
+  sessionId: Schema.String,
+  toolCallId: Schema.String,
+  chunk: Schema.String,
+  offset: Schema.Number,
+});
+
+/**
+ * What `agent.activity` sends: `subscribed` first, then each turn's and queue's change in any session, and the agent's
+ * live output (`delta`, `tool-output`) unless it was opened without it.
+ */
 export const AgentActivity = Schema.Union([
   /** First: from here on the stream hears everything. `running` is the sessions with a turn running as of then (`Agent.running`). */
   Schema.Struct({ type: Schema.Literal("subscribed"), running: Schema.Array(Schema.String) }),
   /** `TurnStarted`: `requestIds` are the prompts it started with, so a client tells its own prompt's turn from another's. */
   Schema.Struct({ type: Schema.Literal("turn-started"), sessionId: Schema.String, turnId: Schema.String, requestIds: Schema.Array(Schema.String) }),
-  /** `AssistantDelta`: model output, numbered by `seq` within its step. */
-  Schema.Struct({
-    type: Schema.Literal("delta"),
-    sessionId: Schema.String,
-    turnId: Schema.String,
-    stepId: Schema.String,
-    seq: Schema.Number,
-    event: StreamEvent,
-  }),
-  /** `ToolOutput`: a running tool's output, `offset` being how much it had printed before `chunk`. */
-  Schema.Struct({ type: Schema.Literal("tool-output"), sessionId: Schema.String, toolCallId: Schema.String, chunk: Schema.String, offset: Schema.Number }),
+  DeltaElement,
+  ToolOutputElement,
   Schema.Struct({ type: Schema.Literal("queue-changed"), sessionId: Schema.String, queue: Schema.Array(QueuedPrompt), revision: Schema.Number }),
   Schema.Struct({ type: Schema.Literal("turn-ended"), sessionId: Schema.String, turnId: Schema.String, usage: Usage, reason: TurnEndReason }),
 ]);
 export type AgentActivity = typeof AgentActivity.Type;
+
+/** What `agent.output` sends of one session: `subscribed` first, then the agent's live output in it. */
+export const AgentOutput = Schema.Union([
+  /**
+   * First: from here on the stream hears the session's output. `view` is what the agent had of the session beyond its
+   * log as of then (`Agent.view`), absent when it could not tell (`Agent.view` failed): what follows goes on from it.
+   */
+  Schema.Struct({ type: Schema.Literal("subscribed"), view: Schema.optional(AgentView) }),
+  DeltaElement,
+  ToolOutputElement,
+]);
+export type AgentOutput = typeof AgentOutput.Type;
 
 const sessionField = { sessionId: Schema.String };
 
@@ -617,19 +641,47 @@ export const AgentChannels = {
    * turn's last `delta`. Losable: a client that falls behind loses the oldest,
    * and one reopening it after a reconnect has missed what came between; it
    * resyncs from `subscribed`'s `running`, `agent.view`, and the log.
+   *
+   * Opened with `{ output: false }`, it leaves the live output out (`delta`,
+   * `tool-output`): a client that shows some sessions hears every session's
+   * turns and queue here, and reads the output of those it shows from
+   * `agent.output`, one stream each, rather than every session's. With no
+   * payload, as before there was one, it sends it all.
    */
   activity: defineChannel({
     kind: "stream",
     id: "agent.activity",
     access: "read",
     title: "Agent activity",
-    description: "Turns starting and ending, model and tool output, and queue changes in every session, after a subscribed acknowledgement",
-    payload: Schema.Void,
+    description:
+      "Turns starting and ending, model and tool output, and queue changes in every session, after a subscribed acknowledgement; output: false leaves the model and tool output out",
+    payload: Schema.UndefinedOr(Schema.Struct({ output: Schema.optional(Schema.Boolean) })),
     success: AgentActivity,
+  }),
+  /**
+   * One session's live output, as `AssistantDelta` and `ToolOutput` report
+   * it, after `subscribed`, which carries what the agent had of the session
+   * as it opened (`agent.view`'s): a client showing the session draws the
+   * running turn from it and goes on with what follows, which may repeat
+   * what the view holds (a delta's `seq`, a chunk's `offset` say). So a
+   * thread opened or reconnected midway shows the turn so far, with no call
+   * of its own. Losable, as `agent.activity` is: a client that falls behind
+   * loses the oldest, and one that reopens it resyncs from its `subscribed`
+   * and the log.
+   */
+  output: defineChannel({
+    kind: "stream",
+    id: "agent.output",
+    access: "read",
+    title: "A session's agent output",
+    description:
+      "The session's model and tool output as it streams, after a subscribed acknowledgement carrying what the agent had of the session then (agent.view's)",
+    payload: Schema.Struct(sessionField),
+    success: AgentOutput,
   }),
 };
 
-/** What each source of a client's `agent.activity` holds: as much as the client does (see `eventFeed`). */
+/** What each source of a client's `agent.activity` or `agent.output` holds: as much as the client does (see `eventFeed`). */
 const FEED = { buffer: 1024 };
 
 /** `AgentChannels` served from `agent`: what a provider of `Agent` adds to `Channels`, each with `PluginContext.add`. */
@@ -645,7 +697,7 @@ export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: C
   serveChannel(AgentChannels.withdraw, ({ sessionId, requestId }) => agent.withdraw(sessionId, requestId)),
   serveChannel(AgentChannels.promote, ({ sessionId, requestId }) => agent.promote(sessionId, requestId)),
   serveChannel(AgentChannels.view, ({ sessionId }) => agent.view(sessionId)),
-  serveChannel(AgentChannels.activity, () =>
+  serveChannel(AgentChannels.activity, (payload) =>
     eventFeed(
       Effect.map(agent.running, (running): AgentActivity => ({ type: "subscribed", running })),
       [
@@ -655,21 +707,7 @@ export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: C
           turnId,
           requestIds,
         })),
-        Stream.map(events.stream(AssistantDelta, FEED), ({ sessionId, turnId, stepId, seq, event }): AgentActivity => ({
-          type: "delta",
-          sessionId,
-          turnId,
-          stepId,
-          seq,
-          event,
-        })),
-        Stream.map(events.stream(ToolOutput, FEED), ({ sessionId, toolCallId, chunk, offset }): AgentActivity => ({
-          type: "tool-output",
-          sessionId,
-          toolCallId,
-          chunk,
-          offset,
-        })),
+        ...(payload?.output === false ? [] : liveOutput(events)),
         Stream.map(events.stream(QueueChanged, FEED), ({ sessionId, queue, revision }): AgentActivity => ({
           type: "queue-changed",
           sessionId,
@@ -686,4 +724,31 @@ export const serveAgent = (agent: Context.Service.Shape<typeof Agent>, events: C
       ],
     ),
   ),
+  serveChannel(AgentChannels.output, ({ sessionId }) =>
+    eventFeed(
+      Effect.map(Effect.option(agent.view(sessionId)), (view): AgentOutput => ({
+        type: "subscribed",
+        ...(Option.isSome(view) ? { view: view.value } : {}),
+      })),
+      liveOutput(events, sessionId),
+    ),
+  ),
 ];
+
+/** `AssistantDelta` and `ToolOutput` as `agent.activity` and `agent.output` send them: every session's, or `only`'s. */
+const liveOutput = (
+  events: Context.Service.Shape<typeof Events>,
+  only?: string,
+): readonly Stream.Stream<typeof DeltaElement.Type | typeof ToolOutputElement.Type>[] => {
+  const mine = ({ sessionId }: { readonly sessionId: string }) => only === undefined || sessionId === only;
+  return [
+    events.stream(AssistantDelta, FEED).pipe(
+      Stream.filter(mine),
+      Stream.map(({ sessionId, turnId, stepId, seq, event }) => ({ type: "delta" as const, sessionId, turnId, stepId, seq, event })),
+    ),
+    events.stream(ToolOutput, FEED).pipe(
+      Stream.filter(mine),
+      Stream.map(({ sessionId, toolCallId, chunk, offset }) => ({ type: "tool-output" as const, sessionId, toolCallId, chunk, offset })),
+    ),
+  ];
+};

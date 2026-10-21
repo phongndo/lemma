@@ -184,7 +184,7 @@ bandwidth and latency):
   harness does; the harness adds nothing to it. Latency is the model's:
   seconds.
 - **Disk.** About six log lines a step (step start, request, answer, the tools'
-  start and results, step end), 2.3 KB, each synced before the next, as resuming
+  start and results, step end), 2.1 KB, each synced before the next, as resuming
   after a crash depends on each: 6 to 8 syncs, at 0.2 to 2 ms on an SSD, 2 to 15
   ms a step. The slowest resource the harness touches, and a cost per step that
   stays the same as the session grows.
@@ -202,12 +202,25 @@ the store about twice (422, 2,664, and 25,159 events at 100, 1,000, and
 10,000 entries) and took 1.38, 1.54, and 2.29 ms: 1.5 times as long at 10,000
 entries as at 1,000. Now a turn keeps its branch as it appends, and a new turn
 starts from the one the last left while the session's leaf is still its end
-(`agent.loop`'s README): a step reads nothing back, and takes 1.39, 1.47, and
-1.25 ms (2026-10-13). Building the request no longer checks its history's
-messages again (`requestFrom`), as they were checked as they were logged. Each
-step writes 8 syncs and 2.4 KB, runs 3 public hooks, and publishes 22.5 events
-(45 a turn); a text delta reaches an observer in 0.01 ms (p50), and 0.4 to 2.4
-ms (p99). The disk's syncs stay
+(`agent.loop`'s README): a step reads nothing back, and took 1.50, 1.59, and
+1.66 ms (2026-10-21, before the changes below). Most of what still grew with
+the session was building the request: 26% of a step at 10,000 entries, and 15%
+more in `LlmRequest`'s constructor, which copies every message of the history
+it is given (`disableChecks` skips only refinements). Now the request is made
+of its logged fields without that copy (`requestFrom`), the model's view of the
+branch is derived once a step and walks the view rather than the whole branch,
+and the kernel's events and hooks take fewer steps: a step takes 1.23, 1.04,
+and 0.93 ms (`scripts/bench-compare.ts --harness`, 10 runs, 2026-10-21) and
+allocates about 1 MB, from 1.4 to 1.8. Each step writes 8 syncs and 2.1 KB
+(2.4 KB until a request logged its contributions only when they change, as it
+did its system prompt and tools), runs 3 public hooks, and publishes 22.5 events (45 a turn); a text delta
+reaches an observer in 0.01 ms (p50) and 0.04 ms (p99). The p99 was 0.4 to
+0.6 ms: a reply's last delta comes with its end, and its observer waited for
+the turn to log the answer, until the turn let observers hear the end first.
+Of a step's time, about 40% is Effect's own running of its fibers (some 1,700
+operations), and 5% the simulation's own code (its driver, which hands the
+event loop a turn between every batch, the model, the tools, and `MemFs`).
+The disk's syncs stay
 as they are: each is a point the agent's resume depends on, and syncing two
 lines at once would need the store's contract to say which may share one.
 

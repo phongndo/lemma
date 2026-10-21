@@ -121,6 +121,8 @@ describe("against a running host", () => {
     expect(find("run")).toMatchObject({ source: "agent.cli" });
     expect(find("login")).toMatchObject({ source: "llm.cli" });
     expect((await invoke(["help"], home)).out).toContain("From the plugins of the host local");
+    // Completion asks the host the same way.
+    expect((await invoke(["__complete", "sessions", "l"], home)).out).toBe("list");
   });
 
   test("a domain error keeps the host's code", async () => {
