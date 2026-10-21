@@ -7,6 +7,8 @@ import { CommandChannels } from "@lemma/commands";
 import { LlmChannels, emptyUsage } from "@lemma/llm";
 import { branchOf, cacheReport, recordsOf, requestOf, SessionChannels, searchLog, searchWords, trajectory } from "@lemma/sessions";
 import { HostChannels, matches, redactJson, redactTexts, selectSpans, TraceChannels } from "@lemma/devtools";
+import { ReleaseChannels } from "@lemma/release";
+import type { ReleaseStatus } from "@lemma/release";
 import { compositionHistory } from "@lemma/composition";
 import { FileChannels, WorkspaceChannels } from "@lemma/workspace";
 import { SkillChannels } from "@lemma/skills";
@@ -336,6 +338,26 @@ type Served =
       readonly handle: (payload: any, send: (element: any) => void, fail: (error: HostError) => void) => () => void;
     };
 
+/** An installed nightly with a newer one out, so Settings › About shows its badge and Update button. */
+const MOCK_RELEASE: ReleaseStatus = {
+  build: {
+    version: "0.2.7",
+    kind: "release",
+    root: "/home/you/.local/share/lemma/releases/lemma-v0.2.7-darwin-arm64.Xk3QpZ",
+    commit: "3f2a1b9c0d12e4f5a6b7c8d9e0f1a2b3c4d5e6f7",
+    built: "2026-10-20T05:41:00Z",
+    channel: "nightly",
+    link: "/home/you/.local/bin/lemma",
+    dataDir: "/home/you/.local/share/lemma",
+    node: "24.22.0",
+  },
+  updatable: true,
+  checks: true,
+  newest: "0.2.9",
+  newer: true,
+  checkedAt: 1_792_000_000_000,
+};
+
 const serveCall = <Payload, Success>(
   source: string,
   declaration: ChannelDeclaration<"call", Payload, Success>,
@@ -449,6 +471,12 @@ export const createMockHost = (): Host => {
   });
   // Mirrors of real config Schemas, so the Plugins page shows settings forms.
   const configs: Record<string, Schema.Codec<any, any>> = {
+    "release.updates": Schema.Struct({
+      check: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+        title: "Check for updates",
+        description: "Ask every few hours whether a newer release is out on this install's channel, and say so when one is.",
+      }),
+    }),
     "agent.loop": Schema.Struct({
       defaultModel: Schema.optional(Schema.String).annotate({
         description: "<provider>/<model> for turns that name none. Absent: the first available model.",
@@ -2052,6 +2080,10 @@ export const createMockHost = (): Host => {
     ),
     serveCall("devtools.trace", TraceChannels.changes, async () => mockTrace.history.get()),
     serveCall("devtools.host", HostChannels.info, async () => ({ cwd: CWD, home: HOME, composition: compositionInfo(), runtime })),
+    serveCall("release.updates", ReleaseChannels.status, async () => MOCK_RELEASE),
+    serveCall("release.updates", ReleaseChannels.check, async () => ({ ...MOCK_RELEASE, checkedAt: Date.now() })),
+    // A mock cannot restart: it says the release is there already.
+    serveCall("release.updates", ReleaseChannels.update, async () => ({ version: MOCK_RELEASE.newest!, updated: false, restarting: false })),
     serveCall("devtools.host", HostChannels.plugins, async ({ ids }) =>
       (ids === undefined ? plugins : plugins.filter((plugin) => ids.includes(plugin.id))).map((plugin) => redactTexts(plugin) as PluginStatus),
     ),

@@ -68,6 +68,12 @@ shell; its browser tools need a Chrome or Chromium on the machine
 
 ## Updating
 
+Settings › About in the web app says which release runs and whether a newer
+one is out on your channel, which the host asks every few hours (its badge
+shows when one is, and `lemma doctor` says so too). Its Update button installs
+it and restarts the host on it, saying first what that cuts off, then reloads
+the page. From a terminal:
+
 ```sh
 lemma update --check            # whether a newer release is out on your channel
 lemma update                    # install it
@@ -84,7 +90,9 @@ the release it started with, which is why the one before stays, until
 on the new one: a user service through the service manager, since it runs the
 `lemma` the installer links (`lemma service install`); any other in the
 background, for the same project and on the same port. `lemma version` says
-which release a `lemma` is ([versioning](versioning.md)).
+which release a `lemma` is ([versioning](versioning.md)). Turning off
+`release.updates`'s `check` stops the host asking
+([release.updates](../domains/release/updates/README.md)).
 
 While Lemma is 0.x, a release may change what plugins are written against: a
 plugin written for another version is left out, and `lemma plugins` says why
