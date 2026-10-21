@@ -1,9 +1,10 @@
 import { For, Show, createSignal } from "solid-js";
 import { CliChannels } from "@lemma/cli";
-import { Dialog, QuestionIcon, SettingRow, Spinner, Toggle } from "@lemma/look";
+import { Layers } from "@lemma/frame";
+import { Dialog, QuestionIcon, RefreshIcon, SettingRow, Spinner, Toggle } from "@lemma/look";
 import { ReleaseChannels } from "@lemma/release";
 import type { ReleaseStatus } from "@lemma/release";
-import { SettingsGroups, SettingsSections, configSetting } from "@lemma/settings";
+import { SettingsGroups, SettingsMenu, SettingsSections, configSetting } from "@lemma/settings";
 import { Client, HostPlugins, Notify, Slots, defineWebPlugin } from "@lemma/web";
 
 const SECTION = "about";
@@ -28,7 +29,8 @@ type Updating =
 
 /**
  * The web half of `release.updates`: Settings › About, what this Lemma is and whether a newer release is out, with a
- * badge when one is, its Update button, and its check's switch.
+ * badge when one is, its Update button, and its check's switch; and a row of the settings button's menu that checks
+ * now, or offers the update once one is out.
  */
 export default defineWebPlugin({
   id: "release.updates",
@@ -46,12 +48,15 @@ export default defineWebPlugin({
     plugin.onCleanup(client.onConnect(plugin.action("load the release's status", load)));
     plugin.every(REFRESH_MS, load);
 
+    /** Asks now whether a newer release is out; false when the check failed, which it reports. */
     const checkNow = async () => {
       setChecking(true);
       try {
         setStatus(await client.channel.call(ReleaseChannels.check, undefined));
+        return true;
       } catch (error) {
         notify.report(error, "Could not check for updates");
+        return false;
       } finally {
         setChecking(false);
       }
@@ -161,6 +166,47 @@ export default defineWebPlugin({
       </Dialog>
     );
 
+    // Over whatever shows: Settings › About and the settings button's menu both start it.
+    slots.add(Layers, { id: "release.update", order: 40, component: () => <Show when={updating()}>{(step) => <UpdateDialog step={step()} />}</Show> });
+
+    /**
+     * Its row of the settings button's menu, while this Lemma can update: a check now, which keeps the menu open and
+     * says what it found, or once a release is out, the update to it, asked first as the About page's button does.
+     */
+    function MenuRow(props: { close: () => void }) {
+      const [checked, setChecked] = createSignal(false);
+      const offered = () => (status()?.newer || status()?.older ? status()?.newest : undefined);
+      const check = plugin.action("check for updates", async () => setChecked(await checkNow()));
+      return (
+        <button
+          class="menu-item"
+          role="menuitem"
+          aria-disabled={checking()}
+          onClick={() => {
+            if (checking()) return;
+            if (offered() === undefined) return check();
+            props.close();
+            plugin.action("ask what updating cuts off", ask)();
+          }}
+        >
+          <Show when={checking()} fallback={<RefreshIcon />}>
+            <Spinner />
+          </Show>
+          <span class="menu-label">
+            {checking()
+              ? "Checking for updates…"
+              : offered() !== undefined
+                ? `${status()?.newer ? "Update to" : "Go back to"} Lemma ${offered()}`
+                : checked()
+                  ? "Lemma is up to date"
+                  : "Check for updates"}
+          </span>
+          <span class="menu-hint">{status()?.build.version}</span>
+        </button>
+      );
+    }
+    slots.add(SettingsMenu, { id: "release.updates", order: 100, when: () => status()?.updatable === true, component: MenuRow });
+
     slots.add(SettingsSections, {
       id: SECTION,
       order: 95,
@@ -220,7 +266,6 @@ export default defineWebPlugin({
                     </button>
                   </Show>
                 </Show>
-                <Show when={updating()}>{(step) => <UpdateDialog step={step()} />}</Show>
               </SettingRow>
             ),
           },

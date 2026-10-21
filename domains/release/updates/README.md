@@ -28,7 +28,10 @@ Update button, which asks first, as `lemma stop` does, what restarting cuts
 off, then reloads the page once the host is back on the new release: once
 its connection dropped and its address answers again over HTTP, so a release
 on another RPC protocol counts too. The section's badge says when an update is
-out.
+out. With an installed release, it also adds a row to the settings button's
+menu (`SettingsMenu`): Check for updates asks now and says what it found, the
+menu still open, and once a release is out the row offers it, as the Update
+button does.
 
 ## Config
 

@@ -1,7 +1,7 @@
-import { For, Show } from "solid-js";
+import { For, Show, createSignal } from "solid-js";
 import type { ConfigField } from "@lemma/contracts";
 import { configEdit, configText } from "./config.ts";
-import type { ConfigFormProps, IconName, IconProps, SearchFieldProps, SegmentedProps, ToggleProps } from "./parts.tsx";
+import type { ConfigFormProps, IconName, IconProps, PopoverProps, SearchFieldProps, SegmentedProps, ToggleProps } from "./parts.tsx";
 
 /*
  * The fallbacks `ui/contracts.ts` declares with its parts (which parts have
@@ -51,6 +51,39 @@ export function SearchFieldFallback(props: SearchFieldProps) {
       />
       {props.children}
     </div>
+  );
+}
+
+let popovers = 0;
+
+/**
+ * A button and its menu as the browser's own popover, which a click outside or Escape closes, placed where the browser
+ * places one; its items draw while it is open.
+ */
+export function PopoverFallback(props: PopoverProps) {
+  const id = `popover-fallback-${++popovers}`;
+  const [open, setOpen] = createSignal(false);
+  let menu!: HTMLDivElement;
+  props.controller?.({ open: () => (props.disabled ? undefined : menu.showPopover()) });
+  return (
+    <>
+      <button type="button" popovertarget={id} aria-label={props.label} aria-haspopup="menu" aria-expanded={open()} disabled={props.disabled}>
+        {props.trigger}
+      </button>
+      <div
+        ref={menu}
+        id={id}
+        popover="auto"
+        role="menu"
+        on:toggle={(event) => {
+          const shown = (event as unknown as ToggleEvent).newState === "open";
+          if (shown) props.onOpen?.();
+          setOpen(shown);
+        }}
+      >
+        <Show when={open()}>{props.children(() => menu.hidePopover())}</Show>
+      </div>
+    </>
   );
 }
 

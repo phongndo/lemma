@@ -26,6 +26,10 @@ requires: a plugin providing `Settings` takes its place. No config.
   forward into settings, still finds it.
 - **`/settings [section]`** in the prompt (`PromptCommands`) opens a section, by id or title, offered among those plugins add; without one, General.
 - **The settings button** opens the first section with a `badge`, showing its
-  count, and otherwise General.
+  count, and otherwise General. While an item of `SettingsMenu` shows (the
+  profiles to switch to, from `profiles.switcher`; the check for updates, from
+  `release.updates`), it opens a menu of their rows instead, with Settings
+  last, and the first item with a `face` takes the gear's place (the profile's
+  avatar). `mod+,` still opens settings directly.
 - **A section no plugin adds** (its plugin off, say) shows the first section in
   its place.

@@ -16,6 +16,7 @@
     "@lemma/cli": "workspace:*",
     "@lemma/contracts": "workspace:*",
     "@lemma/core": "workspace:*",
+    "@lemma/frame": "workspace:*",
     "@lemma/look": "workspace:*",
     "@lemma/release": "workspace:*",
     "@lemma/settings": "workspace:*",

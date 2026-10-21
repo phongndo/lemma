@@ -17,6 +17,15 @@
   font-weight: 600;
 }
 
+/* The settings button, when it opens a menu (`SettingsMenu`), stays lit while the menu is open. */
+.settings-trigger[aria-expanded="true"] {
+  background: var(--bg-hover);
+}
+
+.settings-menu {
+  min-width: 220px;
+}
+
 .settings-nav {
   flex: 1;
   min-width: 0;
