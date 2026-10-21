@@ -278,8 +278,26 @@ interface MutableTurn {
   usage: Usage;
 }
 
+/** A branch's trajectory as it is read, an event at a time: `trajectory` reads a branch whole, and a projector as it grows. */
+interface TrajectoryFold {
+  /** The turns so far, changed in place as events are fed. */
+  readonly turns: MutableTurn[];
+  /** Folds in `branch[position]`, every event before it fed already; returns the ids of the turns it may change. */
+  readonly feed: (branch: readonly SessionEvent[], position: number) => readonly string[];
+  /** Events `context-edit`s named that were not on the branch before them: one fed later would have been edited, read whole. */
+  readonly unresolved: ReadonlySet<string>;
+}
+
 /** Turns in branch order. Events outside a turn (titles, compactions) are not part of it. */
 export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
+  const fold = foldTrajectory(branch);
+  for (let position = 0; position < branch.length; position++) fold.feed(branch, position);
+  return fold.turns;
+}
+
+/** A fold of a branch's events into its turns; `whole`, the branch it will be fed, when known (an edit may name an event after it). */
+function foldTrajectory(whole?: readonly SessionEvent[]): TrajectoryFold {
+  let branch: readonly SessionEvent[] = whole ?? [];
   const turns: MutableTurn[] = [];
   const turnById = new Map<string, MutableTurn>();
   const stepById = new Map<string, MutableStep>();
@@ -303,18 +321,12 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   // branch is walked: the summary once a compaction replaced what came before, then every message from the view's start
   // but those an edit omits.
   const positionOf = new Map(branch.map((event, position) => [event.id, position]));
+  const unresolved = new Set<string>();
   const messagesBefore = [0];
   // Where each tool call's results are, so a response a `context-edit` omits takes its results out of the count too.
   const resultsOf = new Map<string, number[]>();
   // `prompt-update` events count apart: from the latest request that declared the prompt afresh (`restart`) on.
   const updatesBefore = [0];
-  branch.forEach((event, position) => {
-    const update = event.data.type === "prompt-update";
-    const message = update ? undefined : messageOf(event);
-    messagesBefore.push(messagesBefore.at(-1)! + (message === undefined ? 0 : 1));
-    updatesBefore.push(updatesBefore.at(-1)! + (update ? 1 : 0));
-    if (message?.role === "toolResult") resultsOf.set(message.toolCallId, [...(resultsOf.get(message.toolCallId) ?? []), position]);
-  });
   let viewStart = 0;
   let summarized = 0;
   let declaredAt = -1;
@@ -362,8 +374,26 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
     return step;
   };
 
-  branch.forEach((event, position) => {
+  const feed = (events: readonly SessionEvent[], position: number): readonly string[] => {
+    branch = events;
+    const event = events[position]!;
+    positionOf.set(event.id, position);
+    const update = event.data.type === "prompt-update";
+    const message = update ? undefined : messageOf(event);
+    messagesBefore.push(messagesBefore.at(-1)! + (message === undefined ? 0 : 1));
+    updatesBefore.push(updatesBefore.at(-1)! + (update ? 1 : 0));
+    if (message?.role === "toolResult") resultsOf.set(message.toolCallId, [...(resultsOf.get(message.toolCallId) ?? []), position]);
     const data = event.data;
+    if (data.type === "context-edit" && !positionOf.has(data.target)) unresolved.add(data.target);
+    // The turn it names, and the one whose step it names: a step is found by its id alone.
+    const named = (data as { readonly turnId?: string }).turnId;
+    const stepId = (data as { readonly stepId?: string }).stepId;
+    const owner = stepId === undefined ? undefined : stepById.get(stepId)?.turnId;
+    const changes = [...(named === undefined ? [] : [named]), ...(owner === undefined ? [] : [owner])];
+    apply(event, position, data);
+    return changes;
+  };
+  const apply = (event: SessionEvent, position: number, data: EventData): void => {
     switch (data.type) {
       case "turn-start": {
         const turn: MutableTurn = { turnId: data.turnId, index: turns.length + 1, startedAt: event.at, steps: [], steers: [], usage: emptyUsage };
@@ -542,6 +572,49 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
       default:
         return;
     }
-  });
-  return turns;
+  };
+  return { turns, feed, unresolved };
+}
+
+/** A turn as it stands, in objects of its own: the fold goes on changing its turns in place. */
+const settledTurn = (turn: MutableTurn): TrajectoryTurn => ({
+  ...turn,
+  steers: [...turn.steers],
+  steps: turn.steps.map((step) => ({
+    ...step,
+    attempts: [...step.attempts],
+    earlier: [...step.earlier],
+    tools: step.tools.map((run) => ({ ...run })),
+    compactions: [...step.compactions],
+    promptUpdates: [...step.promptUpdates],
+  })),
+});
+
+/**
+ * `trajectory` for one branch as it grows, as a view following a thread reads it: given the branch it had with more at
+ * the end, it folds in only the events appended, and the turns they did not touch are the objects it returned before
+ * (`createLedgerProjector` keeps their records). Unlike `trajectory`'s, the turns it returns never change.
+ */
+export function createTrajectoryProjector(): (branch: readonly SessionEvent[]) => readonly TrajectoryTurn[] {
+  let last: { readonly branch: readonly SessionEvent[]; readonly fold: TrajectoryFold; readonly turns: readonly TrajectoryTurn[] } | undefined;
+  return (branch) => {
+    const before = last?.branch;
+    const appended =
+      last !== undefined &&
+      before !== undefined &&
+      before.length > 0 &&
+      branch.length >= before.length &&
+      branch[0] === before[0] &&
+      branch[before.length - 1] === before.at(-1) &&
+      !branch.slice(before.length).some((event) => last!.fold.unresolved.has(event.id));
+    if (appended && branch.length === before!.length) return last!.turns;
+    const fold = appended ? last!.fold : foldTrajectory(branch);
+    /** The turns the events fed may change; all of them, folded afresh. */
+    const touched = new Set<string>();
+    for (let position = appended ? before!.length : 0; position < branch.length; position++)
+      for (const turnId of fold.feed(branch, position)) touched.add(turnId);
+    const turns = fold.turns.map((turn, at) => (appended && !touched.has(turn.turnId) && last!.turns[at] !== undefined ? last!.turns[at]! : settledTurn(turn)));
+    last = { branch, fold, turns };
+    return turns;
+  };
 }

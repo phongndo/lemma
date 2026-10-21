@@ -52,56 +52,101 @@ type Draft = LedgerRecord extends infer R ? (R extends LedgerRecord ? Omit<R, "t
 
 export function ledger(turns: readonly TrajectoryTurn[]): LedgerRecord[] {
   const records: LedgerRecord[] = [];
-  let requestNumber = 0;
-  let previous: Map<string, string> | undefined;
+  let carried: Carried = { requestNumber: 0, previous: undefined };
   for (const turn of turns) {
-    let first = true;
-    const push = (record: Draft) => {
-      records.push({ ...record, turn, turnStart: first } as LedgerRecord);
-      first = false;
-    };
-    if (turn.prompt !== undefined) {
-      push({ kind: "user", id: `${turn.turnId}:prompt`, message: turn.prompt, at: turn.startedAt });
-    }
-    // Prompts the turn placed later, each after the step it followed.
-    const steersAfter = (index: number) => {
-      for (const steer of turn.steers) if (steer.after === index) push({ kind: "user", id: steer.eventId, message: steer.message, at: steer.at });
-    };
-    steersAfter(0);
-    for (const step of turn.steps) {
-      const request = step.request;
-      if (request !== undefined) {
-        requestNumber++;
-        const changed = request.sections.some((section) => section.changed) || request.removed.length > 0;
-        if (changed) {
-          push({ kind: "system", id: `${request.eventId}:system`, request, requestNumber, ...(previous === undefined ? {} : { previous }) });
-        }
-        previous = new Map(request.sections.map((section) => [section.id, section.text ?? ""]));
-      }
-      const specs = new Map(request?.tools.flatMap((tool) => (tool.spec === undefined ? [] : [[tool.name, tool.spec] as const])) ?? []);
-      for (const attempt of step.attempts) {
-        push({ kind: "assistant", id: attempt.eventId, step, requestNumber, message: attempt.message, timing: attempt.timing, failed: true });
-      }
-      if (step.response !== undefined) {
-        const response = step.response;
-        push({
-          kind: "assistant",
-          id: response.eventId,
-          step,
-          requestNumber,
-          message: response.message,
-          failed: false,
-          ...(response.timing === undefined ? {} : { timing: response.timing }),
-        });
-      }
-      for (const run of step.tools) {
-        const spec = specs.get(run.call.name);
-        push({ kind: "tool", id: run.eventId ?? run.call.id, step, run, ...(spec === undefined ? {} : { spec }) });
-      }
-      steersAfter(step.index);
-    }
+    const made = turnRecords(turn, carried);
+    records.push(...made.records);
+    carried = made.after;
   }
   return records;
+}
+
+/** What one turn's records carry on to the next's: how many requests came before, and the last one's section texts. */
+interface Carried {
+  readonly requestNumber: number;
+  readonly previous: Map<string, string> | undefined;
+}
+
+/** A turn's records, numbered on from the requests before it (`carried`), and what they carry on. */
+const turnRecords = (turn: TrajectoryTurn, carried: Carried): { readonly records: LedgerRecord[]; readonly after: Carried } => {
+  const records: LedgerRecord[] = [];
+  let { requestNumber, previous } = carried;
+  let first = true;
+  const push = (record: Draft) => {
+    records.push({ ...record, turn, turnStart: first } as LedgerRecord);
+    first = false;
+  };
+  if (turn.prompt !== undefined) {
+    push({ kind: "user", id: `${turn.turnId}:prompt`, message: turn.prompt, at: turn.startedAt });
+  }
+  // Prompts the turn placed later, each after the step it followed.
+  const steersAfter = (index: number) => {
+    for (const steer of turn.steers) if (steer.after === index) push({ kind: "user", id: steer.eventId, message: steer.message, at: steer.at });
+  };
+  steersAfter(0);
+  for (const step of turn.steps) {
+    const request = step.request;
+    if (request !== undefined) {
+      requestNumber++;
+      const changed = request.sections.some((section) => section.changed) || request.removed.length > 0;
+      if (changed) {
+        push({ kind: "system", id: `${request.eventId}:system`, request, requestNumber, ...(previous === undefined ? {} : { previous }) });
+      }
+      previous = new Map(request.sections.map((section) => [section.id, section.text ?? ""]));
+    }
+    const specs = new Map(request?.tools.flatMap((tool) => (tool.spec === undefined ? [] : [[tool.name, tool.spec] as const])) ?? []);
+    for (const attempt of step.attempts) {
+      push({ kind: "assistant", id: attempt.eventId, step, requestNumber, message: attempt.message, timing: attempt.timing, failed: true });
+    }
+    if (step.response !== undefined) {
+      const response = step.response;
+      push({
+        kind: "assistant",
+        id: response.eventId,
+        step,
+        requestNumber,
+        message: response.message,
+        failed: false,
+        ...(response.timing === undefined ? {} : { timing: response.timing }),
+      });
+    }
+    for (const run of step.tools) {
+      const spec = specs.get(run.call.name);
+      push({ kind: "tool", id: run.eventId ?? run.call.id, step, run, ...(spec === undefined ? {} : { spec }) });
+    }
+    steersAfter(step.index);
+  }
+  return { records, after: { requestNumber, previous } };
+};
+
+/** Whether two turns' records would be numbered on from the same requests, the last with the same section texts. */
+const sameCarried = (a: Carried, b: Carried): boolean =>
+  a.requestNumber === b.requestNumber &&
+  (a.previous === b.previous ||
+    (a.previous !== undefined &&
+      b.previous !== undefined &&
+      a.previous.size === b.previous.size &&
+      [...a.previous].every(([id, text]) => b.previous!.get(id) === text)));
+
+/**
+ * `ledger` for turns that grow as a branch does (`createTrajectoryProjector`'s, whose untouched turns are the same
+ * objects from one call to the next): a turn that is, numbered on from the same requests, keeps its records, so a view
+ * keyed by them keeps its rows.
+ */
+export function createLedgerProjector(): (turns: readonly TrajectoryTurn[]) => LedgerRecord[] {
+  const known = new WeakMap<TrajectoryTurn, { readonly carried: Carried; readonly records: LedgerRecord[]; readonly after: Carried }>();
+  return (turns) => {
+    const records: LedgerRecord[] = [];
+    let carried: Carried = { requestNumber: 0, previous: undefined };
+    for (const turn of turns) {
+      const kept = known.get(turn);
+      const made = kept !== undefined && sameCarried(kept.carried, carried) ? kept : { carried, ...turnRecords(turn, carried) };
+      known.set(turn, made);
+      for (const record of made.records) records.push(record);
+      carried = made.after;
+    }
+    return records;
+  };
 }
 
 /** The request behind a record, for the request inspector. */
