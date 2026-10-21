@@ -24,12 +24,15 @@ export const DEFAULT_CONFIRM: readonly string[] = [
   "workspace.restore-worktree",
   "workspace.checkout",
   "mcp.reconnect",
+  "mcp.sign-in",
 ];
 
 /**
- * Never offered, even when configured: signing in and out, and the provider and server entries that can hold a
- * credential, and their state as written; and `cli.run`, which runs any `lemma` command, those among them. Those a
- * credential crosses declare `secret`, which keeps them out too; these stay out when a replacement declares less.
+ * Never offered, even when configured: signing in to a provider and out, finishing an MCP server's sign-in (the code it
+ * is given is a credential), and the provider and server entries that can hold a credential, and their state as
+ * written; and `cli.run`, which runs any `lemma` command, those among them. Those a credential crosses declare
+ * `secret`, which keeps them out too; these stay out when a replacement declares less. Starting an MCP server's sign-in
+ * is not among them: it answers with a page the person approves in a browser, and asks first (`DEFAULT_CONFIRM`).
  */
 export const NEVER: ReadonlySet<string> = new Set([
   "llm.login",
@@ -43,6 +46,7 @@ export const NEVER: ReadonlySet<string> = new Set([
   "mcp.state",
   "mcp.changes",
   "mcp.put",
+  "mcp.finish-sign-in",
   "cli.run",
 ]);
 
