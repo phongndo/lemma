@@ -24,6 +24,7 @@ import {
   Avatar,
   CheckIcon,
   ChevronDownIcon,
+  CommandIcon,
   GitBranchIcon,
   PenSquareIcon,
   PinIcon,
@@ -1037,9 +1038,30 @@ export default defineWebPlugin({
       },
     });
 
-    // Its head's buttons, across from the toggle: search, in the palette's thread search, and a new thread.
+    // Its head's buttons, across from the toggle: the palette, search in the palette's thread search, and a new thread.
     const keysOf = (id: string) => shownKeysOf(slots, webPlugins.list(), id);
     const newThread = plugin.action("start a new thread", () => threads.newThread());
+    slots.add(SidebarActions, {
+      id: "sidebar.palette",
+      order: 5,
+      component: (props) => (
+        <Show when={slots.get(Actions, ActionIds.palette)}>
+          {(palette) => (
+            <button
+              class="icon-button"
+              aria-label="Command palette"
+              data-tip={withKeys("Command palette", keysOf(ActionIds.palette))}
+              onClick={() => {
+                palette().run();
+                props.onPick();
+              }}
+            >
+              <CommandIcon />
+            </button>
+          )}
+        </Show>
+      ),
+    });
     slots.add(SidebarActions, {
       id: "sidebar.search",
       order: 10,
