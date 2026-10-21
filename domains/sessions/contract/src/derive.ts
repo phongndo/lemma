@@ -410,20 +410,24 @@ export function requestFrom(state: RequestState, history: History, logged: Sessi
  * The `LlmRequest` `fields` make, when they are one already: logged events, which the store checked as it logged them
  * and serves as they read back. The constructor would make a copy of every message and part in walking them, which
  * `disableChecks` does not skip, on every request of a long session. `tests/derive.test.ts` holds it to the
- * constructor's result. Its messages, tools, and options are the log's own, so it is frozen, and they with it: what
- * reads it (an `LlmRequestHook` handler, a provider) cannot change the log in changing it. Each object is frozen once,
- * the first request it is in, so a request costs a look at each message, not a copy.
+ * constructor's result. Its messages, tools, and options are the log's own, so they are frozen, and it with them: what
+ * reads it (an `LlmRequestHook` handler, a provider) cannot change the log in changing it. Each is frozen once, in the
+ * first request it is in, so a request costs a look at each message rather than a copy of it. Its list of messages is
+ * its own, made for it, and left as it is: a frozen array is slower to read.
  */
-const checkedRequest = (fields: ConstructorParameters<typeof LlmRequest>[0]): LlmRequest =>
-  frozen(Object.assign(Object.create(LlmRequest.prototype) as LlmRequest, fields));
+const checkedRequest = (fields: ConstructorParameters<typeof LlmRequest>[0]): LlmRequest => {
+  for (let i = 0; i < fields.messages.length; i++) frozen(fields.messages[i]);
+  frozen(fields.tools);
+  frozen(fields.providerOptions);
+  return Object.freeze(Object.assign(Object.create(LlmRequest.prototype) as LlmRequest, fields));
+};
 
 /** `value` frozen, and all it holds: what is frozen already is passed over, as it was frozen so. */
-const frozen = <A>(value: A): A => {
-  if (typeof value !== "object" || value === null || Object.isFrozen(value) || ArrayBuffer.isView(value)) return value;
+const frozen = (value: unknown): void => {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value) || ArrayBuffer.isView(value)) return;
   Object.freeze(value);
-  if (Array.isArray(value)) for (const item of value) frozen(item);
-  else for (const item of Object.values(value)) frozen(item);
-  return value;
+  if (Array.isArray(value)) for (let i = 0; i < value.length; i++) frozen(value[i]);
+  else for (const key in value) frozen((value as Record<string, unknown>)[key]);
 };
 
 /**

@@ -364,12 +364,13 @@ describe("request reconstruction", () => {
     expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(constructed));
     expect(String(rebuilt)).toBe(String(constructed));
 
-    // It holds the log's own messages, tools, and options, frozen: what changes it in place fails, and the log is as it was.
+    // It holds the log's own messages, tools, and options, frozen: what changes them in place fails, and the log is as
+    // it was. Its list of messages is its own.
     const logged = JSON.stringify(events);
     const message = rebuilt.messages[1]!;
     expect(message).toBe((events[2]!.data as Extract<EventData, { type: "message" }>).message);
+    (rebuilt.messages as Message[]).length = 0;
     const changes: (() => void)[] = [
-      () => ((rebuilt.messages as Message[]).length = 0),
       () => (message.content as unknown[]).push({ type: "text", text: "x" }),
       () => Object.assign(message.content[1]!, { arguments: {} }),
       () => Object.assign((message.content[1] as { arguments: object }).arguments, { path: "b.ts" }),
