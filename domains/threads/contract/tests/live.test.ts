@@ -4,22 +4,31 @@ import {
   appendOutput,
   applyDelta,
   beginJoin,
+  createFinished,
   draftEntries,
   dropOutput,
   emptyLive,
   endTurn,
   joinLive,
+  noteEnded,
+  noteLogged,
   parseDraftArgs,
   seedLive,
   settleStep,
   reconcileLive,
 } from "../src/live.ts";
-import type { LiveState } from "../src/live.ts";
+import type { Finished, LiveState } from "../src/live.ts";
 import type { StreamEvent } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import { assistant, branch, toolResult } from "../src/testing.ts";
 
 const feed = (events: StreamEvent[], state: LiveState = emptyLive, stepId = "s1") => events.reduce((s, event) => applyDelta(s, "t1", stepId, event), state);
+/** What is over in `log`, noted whole. */
+const over = (log: readonly SessionEvent[]): Finished => {
+  const finished = createFinished();
+  noteLogged(finished, log);
+  return finished;
+};
 
 describe("live drafts", () => {
   it("accumulates text, thinking, and tool call deltas by index", () => {
@@ -117,11 +126,12 @@ describe("reconcileLive", () => {
       }
       return next;
     };
-    const shape = (state: LiveState) => ({
-      drafts: state.drafts,
-      settled: [...state.settled].sort(),
-      output: [...state.output].sort(),
-      printed: [...state.printed].sort(),
+    const shape = (state: LiveState) => ({ drafts: state.drafts, output: [...state.output].sort(), printed: [...state.printed].sort() });
+    const sorted = (finished: Finished) => ({
+      steps: [...finished.steps].sort(),
+      turns: [...finished.turns].sort(),
+      calls: [...finished.calls].sort(),
+      open: [...finished.open].map(([turn, calls]) => [turn, [...calls].sort()]).sort(),
     });
     // mulberry32: the same cases each run.
     let seed = 7;
@@ -148,7 +158,18 @@ describe("reconcileLive", () => {
       for (let i = 0; i < 3; i++) state = appendOutput(state, `c${pick(4)}`, "o");
       const settledBefore = pick(2) === 0 ? state : settleStep(state, `s${pick(4)}`);
       const log = branch(...data);
-      expect(shape(reconcileLive(settledBefore, log)), JSON.stringify(data)).toEqual(shape(stepwise(settledBefore, log)));
+      const reconciled = reconcileLive(settledBefore, over(log));
+      expect(shape(reconciled), JSON.stringify(data)).toEqual(shape(stepwise(settledBefore, log)));
+      // A draft it closed stays closed: its stragglers are ignored.
+      for (const draft of settledBefore.drafts) if (!reconciled.drafts.includes(draft)) expect(reconciled.settled.has(draft.stepId)).toBe(true);
+      // Noted as the log is appended to, a piece at a time, what is over is what the log says whole.
+      const pieces = createFinished();
+      for (let at = 0; at < log.length;) {
+        const end = at + 1 + pick(4);
+        noteLogged(pieces, log.slice(0, end), at);
+        at = end;
+      }
+      expect(sorted(pieces)).toEqual(sorted(over(log)));
     }
   });
 
@@ -156,12 +177,14 @@ describe("reconcileLive", () => {
     let state = applyDelta(emptyLive, "t1", "s1", { type: "text-delta", index: 0, delta: "partial" });
     state = applyDelta(state, "t2", "s2", { type: "text-delta", index: 0, delta: "other" });
     const events = [{ seq: 1, id: "a", parent: null, at: 1, data: { type: "message", message: assistant([]), turnId: "t1", stepId: "s1" } }] as const;
-    const reconciled = reconcileLive(state, events as never);
+    const finished = over(events as never);
+    const reconciled = reconcileLive(state, finished);
     expect(reconciled.drafts.map((draft) => draft.stepId)).toEqual(["s2"]);
-    const ended = reconcileLive(reconciled, [{ seq: 2, id: "b", parent: "a", at: 2, data: { type: "turn-end", turnId: "t2", reason: "done" } }] as never);
+    noteLogged(finished, [...events, { seq: 2, id: "b", parent: "a", at: 2, data: { type: "turn-end", turnId: "t2", reason: "done" } }] as never, 1);
+    const ended = reconcileLive(reconciled, finished);
     expect(ended.drafts).toEqual([]);
     // Nothing to do leaves the state untouched.
-    expect(reconcileLive(ended, events as never)).toBe(ended);
+    expect(reconcileLive(ended, finished)).toBe(ended);
   });
 
   it("keeps a running tool's output tail until its result is logged or the turn ends", () => {
@@ -169,7 +192,7 @@ describe("reconcileLive", () => {
     expect(s.output.get("c1")).toBe("a\nb\n");
     expect(appendOutput(s, "c1", "x".repeat(OUTPUT_TAIL_CHARS)).output.get("c1")).toHaveLength(OUTPUT_TAIL_CHARS);
     expect(dropOutput(s, "c1").output.has("c1")).toBe(false);
-    expect(reconcileLive(s, branch(toolResult("c1", "a\nb"))).output.has("c1")).toBe(false);
+    expect(reconcileLive(s, over(branch(toolResult("c1", "a\nb")))).output.has("c1")).toBe(false);
     s = appendOutput(s, "c2", "y");
     expect(endTurn(s, "t1").output.size).toBe(0);
   });
@@ -183,10 +206,10 @@ describe("reconcileLive", () => {
       { seq: 3, id: "c", parent: "b", at: 3, data: { type: "message", message: assistant([call("now")] as never), turnId: "t1", stepId: "s1" } },
     ];
     // An earlier turn's end leaves the running tool's output alone...
-    expect(reconcileLive(appendOutput(running, "old", "stale"), log as never).output).toEqual(new Map([["now", "building\n"]]));
+    expect(reconcileLive(appendOutput(running, "old", "stale"), over(log as never)).output).toEqual(new Map([["now", "building\n"]]));
     // ...and the running turn's own end drops it.
     const ended = [...log, { seq: 4, id: "d", parent: "c", at: 4, data: { type: "turn-end", turnId: "t1", reason: "cancelled" } }];
-    expect(reconcileLive(running, ended as never).output.size).toBe(0);
+    expect(reconcileLive(running, over(ended as never)).output.size).toBe(0);
   });
 
   it("continues from a view of a turn joined midway, skipping the deltas and output it already holds", () => {
@@ -233,14 +256,14 @@ describe("reconcileLive", () => {
       queue: [],
       queueRevision: 0,
     };
-    const joined = joinLive(s, view, []);
+    const joined = joinLive(s, view, createFinished());
     expect(joined.joining).toBeUndefined();
     // Seeded at their stream index: the gap at 0 stays a gap.
     expect(joined.drafts[0]!.blocks[0]).toBeUndefined();
     expect(joined.drafts[0]!.blocks[1]).toEqual({ kind: "text", text: "w1 … w100 w101 " });
     expect(joined.output.get("c1")).toBe("line 1\nline 2\n");
     // Without a view, what was held is applied as it came.
-    expect(joinLive(s, undefined, []).drafts[0]!.blocks[1]).toEqual({ kind: "text", text: "w101 " });
+    expect(joinLive(s, undefined, createFinished()).drafts[0]!.blocks[1]).toEqual({ kind: "text", text: "w101 " });
   });
 
   it("does not bring back a draft or output from a view older than the log that arrived first", () => {
@@ -263,10 +286,36 @@ describe("reconcileLive", () => {
       { seq: 2, id: "b", parent: "a", at: 2, data: toolResult("c1", "done") },
       { seq: 3, id: "c", parent: "b", at: 3, data: { type: "turn-end", turnId: "t1", reason: "done" } },
     ];
-    const joined = joinLive(emptyLive, view, log as never);
+    const joined = joinLive(emptyLive, view, over(log as never));
     expect(joined.drafts).toEqual([]);
     expect(joined.output.size).toBe(0);
     // Without a log yet, the view is what shows.
-    expect(joinLive(emptyLive, view, []).drafts).toHaveLength(1);
+    expect(joinLive(emptyLive, view, createFinished()).drafts).toHaveLength(1);
+  });
+
+  it("shows no draft or output again from what arrives after the log or the agent said it was over", () => {
+    // The step's answer, its tool's result, and the turn's end are logged; its last deltas and output come after them.
+    const finished = over(
+      branch(
+        { type: "message", message: assistant([{ type: "toolCall", id: "c1", name: "bash", arguments: {} }] as never), turnId: "t1", stepId: "s1" },
+        toolResult("c1", "done"),
+        { type: "message", message: assistant([{ type: "text", text: "Done." }] as never), turnId: "t1", stepId: "s2" },
+        { type: "turn-end", turnId: "t1", reason: "done" },
+      ),
+    );
+    let late = applyDelta(emptyLive, "t1", "s2", { type: "text-delta", index: 0, delta: "Done." }, 1);
+    late = appendOutput(late, "c1", "tail");
+    expect(reconcileLive(late, finished)).toMatchObject({ drafts: [], output: new Map(), printed: new Map() });
+    // Ended as the agent said, before the log says so: a step of it the log has not yet is over too.
+    const told = createFinished();
+    noteEnded(told, "t2");
+    expect(reconcileLive(applyDelta(emptyLive, "t2", "s9", { type: "text-delta", index: 0, delta: "x" }, 1), told).drafts).toEqual([]);
+    // A call logged before its turn's end, with no result, is over once the turn ends.
+    const open = over(
+      branch({ type: "message", message: assistant([{ type: "toolCall", id: "c2", name: "bash", arguments: {} }] as never), turnId: "t3", stepId: "s3" }),
+    );
+    expect(reconcileLive(appendOutput(emptyLive, "c2", "x"), open).output.has("c2")).toBe(true);
+    noteEnded(open, "t3");
+    expect(reconcileLive(appendOutput(emptyLive, "c2", "x"), open).output.has("c2")).toBe(false);
   });
 });

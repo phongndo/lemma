@@ -78,5 +78,6 @@ restarts host plugins mid-turn. Requires the runtime's `Client`, `Notify`,
   reports it through `Notify` rather than rejecting; `send` resolves false.
 - **For a replacement.** The state it keeps is built with the contract's pure
   functions (`appendLog`, `resolveLeaf`, `trackTurn`, `newerQueue`, and
-  `applyDelta`, `joinLive`, `reconcileLive` for `live`), which a
+  `applyDelta`, `joinLive`, `reconcileLive` for `live`, against what is
+  over, `Finished`, noted as the log grows: `noteLogged`, `noteEnded`), which a
   replacement can reuse so the views read the same shapes.

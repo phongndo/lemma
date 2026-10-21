@@ -11,6 +11,7 @@ import {
   appendOutput,
   applyDelta,
   applySessionsChange,
+  createFinished,
   emptyLive,
   endTurn,
   isBlank,
@@ -18,6 +19,8 @@ import {
   LEAVING_MS,
   logFailure,
   newerQueue,
+  noteEnded,
+  noteLogged,
   recentRequests,
   reconcileLive,
   resolveLeaf,
@@ -30,7 +33,7 @@ import {
   waitingPrompts,
   written,
 } from "@lemma/threads";
-import type { LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft, WalkedBranch } from "@lemma/threads";
+import type { Finished, LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft, WalkedBranch } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
@@ -158,6 +161,8 @@ export default defineWebPlugin({
     const [log, setLog] = createSignal<LogState>({ loaded: true });
     /** The open thread's drafts and running tools' output: only the thread shown keeps them, and opening one asks the agent for its own. */
     const [live, setLive] = createSignal<LiveState>(emptyLive);
+    /** What is over of the open thread's live output: its log's events noted as they are appended, and the turns the agent ended. */
+    let finished: Finished = createFinished();
     /** The open thread's queue as the agent last reported it, with its revision: an older report never replaces a newer. */
     const [queue, setQueue] = createSignal<KnownQueue>();
     /**
@@ -308,13 +313,17 @@ export default defineWebPlugin({
       if (deltas.length === 0) return;
       const pending = deltas;
       deltas = [];
+      // Output comes on a stream of its own, so it can come after the log, or the agent, said its step or turn is over.
       updateLive((state) =>
-        pending.reduce(
-          (next, event) =>
-            event.type === "delta"
-              ? applyDelta(next, event.turnId, event.stepId, event.event, event.seq)
-              : appendOutput(next, event.toolCallId, event.chunk, event.offset),
-          state,
+        reconcileLive(
+          pending.reduce(
+            (next, event) =>
+              event.type === "delta"
+                ? applyDelta(next, event.turnId, event.stepId, event.event, event.seq)
+                : appendOutput(next, event.toolCallId, event.chunk, event.offset),
+            state,
+          ),
+          finished,
         ),
       );
     }
@@ -343,7 +352,7 @@ export default defineWebPlugin({
         batch(() => {
           // What streamed before it is older: it applies first.
           flushDeltas();
-          updateLive((state) => joinLive(state, view, untrack(events)));
+          updateLive((state) => joinLive(state, view, finished));
           if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
         });
       });
@@ -368,7 +377,9 @@ export default defineWebPlugin({
             const next = trackTurn({ running: running(), ended: endedTurns }, activity);
             endedTurns = next.ended;
             setRunning(next.running);
-            if (activity.sessionId === activeId()) updateLive((state) => endTurn(state, activity.turnId));
+            if (activity.sessionId !== activeId()) return;
+            noteEnded(finished, activity.turnId);
+            updateLive((state) => endTurn(state, activity.turnId));
             return;
           }
         }
@@ -395,6 +406,7 @@ export default defineWebPlugin({
         setEvents([]);
         setLog({ loaded: sessionId === undefined });
         setLive(emptyLive);
+        finished = createFinished();
         setQueue(undefined);
         setLeaving([]);
         withdrawn = new Set();
@@ -406,10 +418,13 @@ export default defineWebPlugin({
       let first!: () => void;
       opened = new Promise((resolve) => (first = resolve));
       const append = (incoming: readonly SessionEvent[]) => {
-        const next = appendLog(untrack(events), incoming);
-        if (next === untrack(events)) return;
+        const before = untrack(events);
+        const next = appendLog(before, incoming);
+        if (next === before) return;
         setEvents(next);
-        updateLive((state) => reconcileLive(state, next));
+        // Only what was appended is read: what is over of the rest was noted as it came.
+        noteLogged(finished, next, before.length);
+        updateLive((state) => reconcileLive(state, finished));
       };
       // Leaving the thread settles `opened` too, so a `select` of it never waits on a log no longer read.
       let left = false;
