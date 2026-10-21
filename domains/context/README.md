@@ -5,7 +5,7 @@ What the model is told beyond the conversation, and how a conversation is kept w
 | Plugin                                       | Halves    | What it does                                                                                                                                                                                   |
 | -------------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | [`context.project`](project/README.md)       | host      | The AGENTS.md (or CLAUDE.md) instructions from home down to the session's directory, as a `PromptSections` section                                                                             |
-| [`context.prune`](prune/README.md)           | host      | Off until turned on: shortens old, long tool results in what the model sees (`context-edit` events), before compaction summarizes                                                              |
+| [`context.prune`](prune/README.md)           | host      | Off until turned on: shortens old, long tool results in what the model sees (`context-edit` events) in place of a summary                                                                      |
 | [`context.compaction`](compaction/README.md) | host, web | Keeps a conversation within its model's window: an `AgentRequestHook` handler that summarizes older history into a `compaction`; in the web app, a context and cache-hit meter in the composer |
 
 ## Extending it

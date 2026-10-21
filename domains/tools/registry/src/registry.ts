@@ -187,6 +187,7 @@ export const makeRegistry = (options: RegistryOptions): Effect.Effect<Service, n
           ...(tool.direct === undefined ? {} : { direct: tool.direct }),
           ...(tool.nested === undefined ? {} : { nested: tool.nested }),
           ...(tool.nests === undefined ? {} : { nests: tool.nests }),
+          ...(tool.irreplaceable === undefined ? {} : { irreplaceable: tool.irreplaceable }),
         }))
         .sort((a, b) => Order.String(a.spec.name, b.spec.name)),
     );

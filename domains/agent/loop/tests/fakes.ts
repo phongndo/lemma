@@ -45,7 +45,7 @@ const usage = (input: number, output: number): Usage => ({
   cost: { ...emptyUsage.cost, total: (input + output) / 1000 },
 });
 
-const assistant = (
+export const assistant = (
   content: AssistantMessage["content"],
   stopReason: AssistantMessage["stopReason"],
   extra: Partial<AssistantMessage> = {},
@@ -90,8 +90,8 @@ export const failWith = (errorMessage: string, failure?: LlmFailure): Script =>
   ]);
 
 /** A response of `content` that stops for `stopReason`, whatever it holds. */
-export const respond = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"]): Script =>
-  Stream.fromIterable<StreamEvent>([{ type: "start" }, { type: "done", message: assistant(content, stopReason) }]);
+export const respond = (content: AssistantMessage["content"], stopReason: AssistantMessage["stopReason"], extra: Partial<AssistantMessage> = {}): Script =>
+  Stream.fromIterable<StreamEvent>([{ type: "start" }, { type: "done", message: assistant(content, stopReason, extra) }]);
 
 /** Emits some text, then never settles: for cancellation. */
 export const hang = (text: string): Script =>
@@ -235,6 +235,8 @@ export interface AgentSetup {
   readonly plugins?: readonly Plugin[];
   /** The agent's config. */
   readonly config?: Record<string, unknown>;
+  /** Other plugins' configs, by id. */
+  readonly configs?: Record<string, unknown>;
   readonly models?: readonly string[];
   /** In place of the sessions store. */
   readonly sessions?: Plugin;
@@ -266,7 +268,7 @@ export const runAgent = <A, E>(
       Effect.gen(function* () {
         const core = yield* makeCore(
           [paths(dir, dir), host(), setup.sessions ?? sessions, tools, toolset.plugin, llm.plugin, agent, rec.plugin, ...(setup.plugins ?? [])],
-          { configs: { "agent.loop": setup.config ?? {} } },
+          { configs: { ...setup.configs, "agent.loop": setup.config ?? {} } },
         );
         return yield* core.run(body({ requests: llm.requests, rec, executed: toolset.executed }));
       }),

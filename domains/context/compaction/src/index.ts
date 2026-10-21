@@ -277,11 +277,13 @@ export default definePlugin({
           model: draft.model,
           contextWindow: model.contextWindow,
           tokens,
+          threshold: config.at * model.contextWindow,
           reason,
           branch,
           firstKept: first,
           ...(previous?.type === "compaction" ? { previous: previous.summary } : {}),
           ...(asked?.instructions === undefined ? {} : { instructions: asked.instructions }),
+          append: (data) => draft.append(data).pipe(Effect.mapError((error) => new CompactionError({ message: error.message, cause: error }))),
         };
         const steps: HandlerStep<CompactionRequest, CompactionResult>[] = [];
         const result = yield* hooks.invoke(CompactionHook, request, write, { onStep: (step) => void steps.push(step) });

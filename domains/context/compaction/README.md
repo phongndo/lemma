@@ -42,7 +42,8 @@ divider. Requires `Llm`.
   ([`@lemma/context`](../contract/src/index.ts)), whose terminal is this
   plugin's model writing the summary: a handler writes its own (no model call;
   the event's `source` is that plugin), moves the cut, reworks the summary, or
-  skips the compaction.
+  skips the compaction, perhaps having relieved the request another way: it is
+  handed the threshold and the request's `append`.
 - **Asking for one.** A prompt of `/compact`, alone or followed by what the
   summary should focus on (`/compact keep the API decisions`), is handled
   rather than sent (`AgentInputHook`): the session's next model call, in the
@@ -95,7 +96,9 @@ divider. Requires `Llm`.
   would shorten it more cheaply, but it rewrites what earlier requests sent:
   every later token of the cached prefix is sent again, and Anthropic's newest
   models refuse thinking made before the change ([append-only
-  requests](../../agent/loop/README.md#append-only-requests)).
+  requests](../../agent/loop/README.md#append-only-requests)). A summary costs
+  that too, so [`context.prune`](../prune/README.md), when turned on, shortens
+  old tool results in place of one when that frees enough.
 - **Its cost.** The event records the turn it happened in and what writing the
   summary cost (`turnId`, `usage`); the turn's usage (`TurnEnded`, the
   trajectory, `lemma run`, the web app's turn footer) includes it.

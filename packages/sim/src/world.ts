@@ -12,6 +12,7 @@ import prune from "@lemma/context-prune";
 import { SimDisk } from "@lemma/testing";
 import { Checker } from "./checker.ts";
 import type { Outcome } from "./checker.ts";
+import { simEdits } from "./edits.ts";
 import { NO_HOOK_FAULTS, simHooks } from "./hooks.ts";
 import type { HookFaults } from "./hooks.ts";
 import { bundledAgent, HOME, SimHost } from "./host.ts";
@@ -288,14 +289,14 @@ export class World {
       calls: this.calls,
       count,
     });
-    // Half the runs shorten old tool results as they go (context-edit events), from a source of its own so the rest of
-    // the run draws as it did.
-    const prunes = this.sim.random.split("prune").chance(0.5);
+    // Half the runs change what the model sees of old tool results as they go (context-edit events), and run
+    // context.prune, from sources of their own so the rest of the run draws as it did.
+    const edits = this.sim.random.split("prune").chance(0.5);
     return {
       agent: this.agent,
       plugins: [
         compaction,
-        ...(prunes ? [prune] : []),
+        ...(edits ? [prune, simEdits(this.sim.random.split(`edits ${generation}`))] : []),
         model.plugin,
         simTools(this.sim.random.split(`tools ${generation}`), { faults: faults.tools, record: this.tools, count }).plugin,
         simHooks(this.sim.random.split(`hooks ${generation}`), faults.hooks, count),
@@ -303,8 +304,6 @@ export class World {
       ],
       configs: {
         [this.agentId]: { maxSteps: this.maxSteps, stopGrace: this.prng.between(0, 3), retries: 3, retryDelay: 1, maxRetryDelay: 20 },
-        // Against the simulated model's large window and short tool results: shortens nearly every older result.
-        "context.prune": { at: 0.0001, minChars: 10, keepChars: 6, keepTurns: 1 },
       },
     };
   }

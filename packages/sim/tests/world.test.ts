@@ -36,6 +36,7 @@ const REACHED = [
   "request",
   "request start",
   "request compaction",
+  "request edit",
   "prompt-update",
   ...["write", "sync", "truncate", "rename", "open"].map((operation) => `disk ${operation}`),
   "crash",
@@ -51,6 +52,7 @@ const REACHED = [
   ...["placed", "handled", "refused", "unknown", "failed Busy", "failed Retracted"].map((outcome) => `prompt ${outcome}`),
   ...["done", "error", "cancelled", "max-steps"].map((reason) => `turn ${reason}`),
   "appended compaction",
+  "appended context-edit",
   "queue changed",
   "withdrawn",
 ];

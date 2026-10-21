@@ -1234,12 +1234,12 @@ importers:
 
   domains/context/prune:
     dependencies:
-      '@lemma/agent':
-        specifier: workspace:*
-        version: link:../../agent/contract
       '@lemma/context':
         specifier: workspace:*
         version: link:../contract
+      '@lemma/contracts':
+        specifier: workspace:*
+        version: link:../../../packages/contracts
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
@@ -1249,19 +1249,25 @@ importers:
       '@lemma/sessions':
         specifier: workspace:*
         version: link:../../sessions/contract
+      '@lemma/tools':
+        specifier: workspace:*
+        version: link:../../tools/contract
       effect:
         specifier: 4.0.5
         version: 4.0.5
     devDependencies:
+      '@lemma/agent':
+        specifier: workspace:*
+        version: link:../../agent/contract
       '@lemma/agent-loop':
         specifier: workspace:*
         version: link:../../agent/loop
+      '@lemma/context-compaction':
+        specifier: workspace:*
+        version: link:../compaction
       '@lemma/sessions-files':
         specifier: workspace:*
         version: link:../../sessions/files
-      '@lemma/tools':
-        specifier: workspace:*
-        version: link:../../tools/contract
       '@lemma/tools-registry':
         specifier: workspace:*
         version: link:../../tools/registry

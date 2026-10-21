@@ -1,7 +1,8 @@
 import { Data, Predicate } from "effect";
+import type { Effect } from "effect";
 import { Hook } from "@lemma/core";
 import type { ModelRef, Usage } from "@lemma/llm";
-import type { SessionEvent } from "@lemma/sessions";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 
 /*
  * The context domain's contract: what the model is told beyond the conversation, and how a conversation is kept
@@ -18,6 +19,12 @@ export interface CompactionRequest {
   /** The request's size as estimated, in tokens. */
   readonly tokens: number;
   /**
+   * The tokens a request may hold before a compaction is made for it: the plugin's `at` of the window, so a handler
+   * relieving the request another way sees how far below it that leaves the request. Absent from a compaction plugin
+   * written before it.
+   */
+  readonly threshold?: number;
+  /**
    * `threshold`: it would fill more of the window than the plugin's `at`; `overflow`: the model refused the last request
    * as too long; `requested`: the user asked for one (`/compact`).
    */
@@ -30,6 +37,12 @@ export interface CompactionRequest {
   readonly previous?: string;
   /** What the user asked the summary to focus on (`/compact <instructions>`). */
   readonly instructions?: string;
+  /**
+   * Appends an event after the turn's last one, which the request then continues from (`RequestDraft.append`): a
+   * handler relieving the request another way (a `context-edit` shortening what the model sees) appends its events and
+   * skips the compaction. Absent from a compaction plugin written before it.
+   */
+  readonly append?: (data: EventData) => Effect.Effect<SessionEvent, CompactionError>;
 }
 
 /**
@@ -46,15 +59,16 @@ export class CompactionError extends Data.TaggedError("CompactionError")<{ reado
 /**
  * Around every compaction `context.compaction` makes, before a model call that needs one; the terminal has a model
  * write the summary (the plugin's own). A handler writes its own (returns without `next`), skips this one (returns
- * `skip`), moves the cut (`next` with another `firstKept`), or reworks the summary `next` wrote. The history is kept
- * from a message in the model's view, after one at least, and never a tool result (whose call the summary would
- * take): a cut elsewhere fails the compaction. What it returns is appended as the turn's `compaction` event, its
- * `source` the outermost plugin whose summary differs from the one it was handed (the plugin's own model's when none).
+ * `skip`), moves the cut (`next` with another `firstKept`), reworks the summary `next` wrote, or relieves the request
+ * another way, appending events of its own (`append`) and skipping this one. The history is kept from a message in the
+ * model's view, after one at least, and never a tool result (whose call the summary would take): a cut elsewhere fails
+ * the compaction. What it returns is appended as the turn's `compaction` event, its `source` the outermost plugin whose
+ * summary differs from the one it was handed (the plugin's own model's when none).
  *
  * @composition a chain: the terminal writes the summary with the plugin's model; a handler returns its own without
- * `next`, skips, moves the cut, or reworks what `next` wrote. A handler that fails fails the compaction
- * (`CompactionError`): the history stays as it was and the call goes ahead. Checked: a summary or a skip of the right
- * shape.
+ * `next`, skips (having appended events of its own, perhaps), moves the cut, or reworks what `next` wrote. A handler
+ * that fails fails the compaction (`CompactionError`): the history stays as it was and the call goes ahead. Checked: a
+ * summary or a skip of the right shape.
  */
 export const CompactionHook = Hook.make<CompactionRequest, CompactionResult, CompactionError>("lemma/context.compaction", {
   check: {
