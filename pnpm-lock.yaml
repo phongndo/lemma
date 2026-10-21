@@ -2370,6 +2370,9 @@ importers:
       '@lemma/core':
         specifier: workspace:*
         version: link:../../../packages/core
+      '@lemma/frame':
+        specifier: workspace:*
+        version: link:../../frame/contract
       '@lemma/look':
         specifier: workspace:*
         version: link:../../look/contract

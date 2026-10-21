@@ -6,9 +6,9 @@ build, whether a newer release is out on its channel, and installing one
 Its contract is [`@lemma/release`](contract/src/index.ts): the channels
 `ReleaseChannels`, and what they answer.
 
-| Plugin                        | Halves     | What it does                                                                                               |
-| ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
-| [`release.updates`](updates/) | host + web | Serves `ReleaseChannels` by asking the `lemma` command; Settings › About, its check, and its Update button |
+| Plugin                        | Halves     | What it does                                                                                                                                   |
+| ----------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`release.updates`](updates/) | host + web | Serves `ReleaseChannels` by asking the `lemma` command; Settings › About, its check, and its Update button, also in the settings button's menu |
 
 ## Extending it
 
