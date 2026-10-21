@@ -1,9 +1,8 @@
 import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 import { ProfileChannels, profilePage, profileTitle } from "@lemma/profiles";
 import type { AvatarChange, ProfileAvatar, ProfileInfo } from "@lemma/profiles";
-import { SidebarFooter } from "@lemma/frame";
-import { SettingsGroups, SettingsRoute, SettingsSections } from "@lemma/settings";
-import { CheckIcon, LaptopIcon, Popover, SettingRow } from "@lemma/look";
+import { SettingsGroups, SettingsMenu, SettingsRoute, SettingsSections } from "@lemma/settings";
+import { LaptopIcon, Popover, SettingRow } from "@lemma/look";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 import { patternOf, randomSeed } from "./pattern.ts";
 import styles from "./web.css?inline";
@@ -61,9 +60,10 @@ const shrink = async (file: File): Promise<string> => {
 
 /**
  * Switches between the profiles on the host's machine, each a separate Lemma. With one profile there is nothing to
- * switch, and the sidebar shows nothing: Settings › Profiles says what one is and makes another. With more, the
- * sidebar's foot shows the one this page is as its avatar, as a browser shows its profile, and its menu opens another:
- * in a window of its own in the desktop app, else a tab at that profile's address, its host started when none runs.
+ * switch, and the settings button stays a gear: Settings › Profiles says what one is and makes another. With more, the
+ * settings button shows the one this page is as its avatar, as a browser shows its profile, and its menu
+ * (`SettingsMenu`) opens another above Settings: in a window of its own in the desktop app, else a tab at that
+ * profile's address, its host started when none runs.
  * A profile's avatar is a pattern its name makes (`pattern.ts`), until another pattern or a picture of its own is
  * chosen in Settings › Profiles.
  */
@@ -197,60 +197,61 @@ export default defineWebPlugin({
       );
     }
 
-    function Switcher() {
+    /**
+     * Its rows of the settings button's menu: the profile this page is, the others to open, and the way to manage them.
+     * They list again as the menu opens.
+     */
+    function Rows(props: { close: () => void }) {
+      onMount(refresh);
+      const others = () => profiles().filter((profile) => !profile.current);
       return (
-        <Show when={profiles().length > 1 && current()}>
-          {(here) => (
-            <Popover
-              label={`Profile: ${profileTitle(here().name)}`}
-              tip={`Profile: ${profileTitle(here().name)}. Switch to another, a separate Lemma`}
-              triggerClass="icon-button profiles-trigger"
-              menuClass="profiles-menu"
-              placement="top-start"
-              onOpen={refresh}
-              trigger={<Avatar avatar={here().avatar} />}
-            >
-              {(close) => (
-                <>
-                  <For each={profiles()}>
-                    {(profile) => (
-                      <button
-                        class="menu-item profiles-item"
-                        role="menuitemradio"
-                        aria-checked={profile.current}
-                        data-tip={profile.current ? "This one" : profile.running ? "Running: opens it" : "Not running: starts its host, then opens it"}
-                        onClick={() => {
-                          close();
-                          if (!profile.current) open(profile.name);
-                        }}
-                      >
-                        <Avatar avatar={profile.avatar} />
-                        <span class="menu-label">{profileTitle(profile.name)}</span>
-                        <Show when={profile.running && !profile.current}>
-                          <span class="profiles-running" aria-label="running" />
-                        </Show>
-                        <span class="menu-check">
-                          <Show when={profile.current}>
-                            <CheckIcon />
-                          </Show>
-                        </span>
-                      </button>
-                    )}
-                  </For>
-                  <div class="menu-sep" role="separator" />
-                  <a class="menu-item" role="menuitem" href={router.href(SettingsRoute, { section: SECTION })} onClick={() => close()}>
-                    <span class="menu-label">Manage profiles…</span>
-                  </a>
-                </>
-              )}
-            </Popover>
-          )}
-        </Show>
+        <>
+          <Show when={current()}>
+            {(here) => (
+              <div class="profiles-current" role="none">
+                <Avatar avatar={here().avatar} large />
+                <span class="profiles-current-name">{profileTitle(here().name)}</span>
+              </div>
+            )}
+          </Show>
+          <div class="menu-sep" role="separator" />
+          <div class="menu-section">Other profiles</div>
+          <For each={others()}>
+            {(profile) => (
+              <button
+                class="menu-item profiles-item"
+                role="menuitem"
+                data-tip={profile.running ? "Running: opens it" : "Not running: starts its host, then opens it"}
+                onClick={() => {
+                  props.close();
+                  open(profile.name);
+                }}
+              >
+                <Avatar avatar={profile.avatar} />
+                <span class="menu-label">{profileTitle(profile.name)}</span>
+                <Show when={profile.running}>
+                  <span class="profiles-running" aria-label="running" />
+                </Show>
+              </button>
+            )}
+          </For>
+          <a class="menu-item profiles-manage" role="menuitem" href={router.href(SettingsRoute, { section: SECTION })} onClick={() => props.close()}>
+            <span class="menu-label">Manage profiles…</span>
+          </a>
+        </>
       );
     }
 
-    // Before the settings button: which Lemma this is, once there is more than one.
-    slots.add(SidebarFooter, { id: "profiles", order: -10, component: () => <Switcher /> });
+    // The settings button's face and the top of its menu: which Lemma this is, once there is more than one.
+    slots.add(SettingsMenu, {
+      id: "profiles",
+      when: () => profiles().length > 1 && current() !== undefined,
+      face: {
+        icon: () => <Show when={current()}>{(here) => <Avatar avatar={here().avatar} />}</Show>,
+        label: () => `Profile: ${profileTitle(current()?.name ?? "")}`,
+      },
+      component: Rows,
+    });
 
     slots.add(SettingsSections, {
       id: SECTION,

@@ -20,14 +20,16 @@ machine. Requires `Paths`; serves `ProfileChannels` from
   (`createProfile` in `@lemma/profiles/local`); its host starts the first time
   it is opened.
 
-The web half is in the sidebar's foot (`SidebarFooter`) only once there is
-more than one profile: until then a person who has never made one sees
-nothing of profiles. It is an icon, as in a browser: the avatar of the profile
-this page is, and its menu opens another: through the desktop app's bridge in
-a desktop window (`lemmaDesktop.openProfile`), else in a new tab at that
-profile's address (`profilePage`), its token in the address as `lemma open`
-gives it. Settings › Profiles says what a profile is, lists them with their
-pictures and an Open button, and makes one.
+The web half joins the settings button's menu (`SettingsMenu` in
+[`@lemma/settings`](../../settings/contract/src/index.ts)) only once there is
+more than one profile: until then the button stays a gear that opens settings,
+and a person who has never made a profile sees nothing of them. With more, the
+button is the avatar of the profile this page is, as in a browser, and its menu
+names it, lists the others above Settings, and opens one: through the desktop
+app's bridge in a desktop window (`lemmaDesktop.openProfile`), else in a new
+tab at that profile's address (`profilePage`), its token in the address as
+`lemma open` gives it. Settings › Profiles says what a profile is, lists them
+with their pictures and an Open button, and makes one.
 
 ## Pictures
 
