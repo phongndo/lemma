@@ -24,6 +24,18 @@ const formatter = <F extends Intl.DateTimeFormat | Intl.NumberFormat>(locale: st
 /** `n` as `toLocaleString()` writes it. */
 const count = (n: number): string => formatter(undefined, "count", () => new Intl.NumberFormat()).format(n);
 
+/** The page's time zone as last read, and when: read again at most once a second, as reading it makes a formatter. */
+let zone = { name: "", at: -Infinity };
+/**
+ * A date formatter, made for the page's time zone as it is: one keeps the zone it was made in, and the machine's can
+ * change while a page is open (a laptop that travels).
+ */
+const dateFormatter = (locale: string | undefined, name: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat => {
+  const now = Date.now();
+  if (Math.abs(now - zone.at) >= 1000) zone = { name: new Intl.DateTimeFormat().resolvedOptions().timeZone, at: now };
+  return formatter(locale, `${zone.name}\u0000${name}`, () => new Intl.DateTimeFormat(locale, options));
+};
+
 /** Compact footer text plus a detailed tooltip. Input includes cache reads/writes, as providers bill them. */
 export const summarizeUsage = (usage: Usage): UsageSummary => {
   const cached = usage.cacheRead + usage.cacheWrite;
@@ -58,20 +70,21 @@ export const sentTime = (at: number, now: number, locale?: string): { readonly l
   const date = new Date(at);
   const today = new Date(now);
   const days = Math.round((midnight(today) - midnight(date)) / 86_400_000);
-  const time = formatter(locale, "time", () => new Intl.DateTimeFormat(locale, { hour: "numeric", minute: "2-digit" })).format(date);
+  const time = dateFormatter(locale, "time", { hour: "numeric", minute: "2-digit" }).format(date);
   const thisYear = date.getFullYear() === today.getFullYear();
   const label =
     days === 0
       ? time
       : days === 1
         ? `Yesterday ${time}`
-        : formatter(
-            locale,
-            thisYear ? "day" : "day and year",
-            () =>
-              new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", ...(thisYear ? {} : { year: "numeric" }), hour: "numeric", minute: "2-digit" }),
-          ).format(date);
-  return { label, full: formatter(locale, "full", () => new Intl.DateTimeFormat(locale, { dateStyle: "full", timeStyle: "short" })).format(date) };
+        : dateFormatter(locale, thisYear ? "day" : "day and year", {
+            month: "short",
+            day: "numeric",
+            ...(thisYear ? {} : { year: "numeric" }),
+            hour: "numeric",
+            minute: "2-digit",
+          }).format(date);
+  return { label, full: dateFormatter(locale, "full", { dateStyle: "full", timeStyle: "short" }).format(date) };
 };
 
 /** The local midnight starting `date`'s day: days between two count whole, across a daylight-saving change too. */
