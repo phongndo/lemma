@@ -14,6 +14,7 @@ Serves `RuntimeRpcs` from `@lemma/contracts` with `effect/rpc` on Node's HTTP se
 | `port`               | `7433`               | `0` asks the OS for a free port.                                                                            |
 | `token`              | `<Paths.home>/token` | Required on `/rpc*` and `/api*`. The default is read from that file, created at the first start (below).    |
 | `staticDir`          | none                 | Built web app served at `/`; extensionless paths without a file fall back to `index.html`. No token needed. |
+| `compression`        | `true`               | Compress WebSocket messages of 1 KiB or more for a client that accepts it (below).                          |
 | `interactionGraceMs` | `15000`              | How long an open question waits for an answering client to (re)connect before failing `Unavailable`.        |
 | `startupTimeoutMs`   | `60000`              | How long a request held while the host starts (below) waits for its plugins before failing `Unavailable`.   |
 
@@ -23,6 +24,8 @@ Endpoints (token as `Authorization: Bearer <token>` or `?token=`, which browser 
 - `POST /rpc/http` — streaming HTTP, NDJSON serialization. With `effect/rpc`'s HTTP client, add `HttpClient.filterStatusOk`: otherwise it parses a `401` body as NDJSON and waits forever. Also set the request URL whole (`HttpClientRequest.setUrl`), as `makeHostRpcHttp` in `@lemma/client` does: `RpcClient.layerProtocolHttp` posts to `<url>/`, which is not routed.
 - `GET /api/health` — `{ ok: true, version, protocol }`: `protocol` is `HOST_PROTOCOL`, the version of what it serves on the wire (a host without one speaks 1). A client and a host on different protocols cannot talk: the CLI says so and asks for the host to be restarted.
 - `GET /api/web/<source>/<path>` — a web half or stylesheet the host lists for the web app from the plugin directories (`Web.Composition`); any other path is `404`.
+
+With `compression` on, `/rpc` accepts `permessage-deflate`, as browsers and Node's `WebSocket` offer it, and the host compresses what it sends of 1 KiB or more at zlib's fastest level: a thread's log, a listing, a finished message. A 10,000-event log of 6.4 MB crosses as 1.1 MB, which opens the thread three times as fast over a 50 Mbit/s link and costs about 30 ms on this machine. What is smaller, a turn's deltas among it, goes as it is. A browser compresses everything it sends once the extension is on, and the host inflates each message: that adds about 25 µs of CPU, both ends together, to a small message's round trip, as a stream's acknowledgements make. Turn it off when every client runs on the host's machine. Over `/rpc/http`, nothing is compressed.
 
 Without a configured `token`, the host's token is the one in `<Paths.home>/token`. The first start creates that file with a random token (mode 0600, in a 0700 home; never starting with `-`, which `--token <token>` would read as an option), complete before it appears and never replacing one another host created at the same moment; later starts read it, so clients on other machines stay valid across host restarts. Surrounding whitespace is ignored; an empty or unreadable file fails the plugin's activation. Delete the file and restart the host to rotate the token. Remote access is described in [docs/remote.md](../../../docs/remote.md).
 

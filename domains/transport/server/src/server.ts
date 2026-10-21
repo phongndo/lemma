@@ -33,6 +33,8 @@ interface ServerOptions {
   readonly token: string;
   readonly version: string;
   readonly staticDir?: string | undefined;
+  /** Whether WebSocket messages of 1 KiB or more go compressed to a client that accepts it (`COMPRESSION`). */
+  readonly compression: boolean;
   /**
    * The files the web app loads from the plugin directories, which `/api/web/<source>@<version>/<name>` serves, with
    * the modules and stylesheets of a listed package's folder its web half may import (`webFileFor`).
@@ -92,6 +94,13 @@ const webFileFor = (files: readonly WebFile[], path: string): string | undefined
 };
 
 const under = (path: string, prefix: string) => path === prefix || path.startsWith(`${prefix}/`);
+
+/**
+ * `permessage-deflate` for what the host sends of 1 KiB or more (a thread's log, a listing, a finished message): zlib's
+ * fastest level, a sixth of a log's bytes at half the time of the default level's. A delta, far smaller, goes as it
+ * is. `ws` holds to the threshold only without context takeover: with it, it compresses every message.
+ */
+const COMPRESSION = { threshold: 1024, serverNoContextTakeover: true, zlibDeflateOptions: { level: 1 } } as const;
 
 /**
  * A built web app: existing files are served as is; other extensionless GET
@@ -198,7 +207,11 @@ const serve = (options: ServerOptions, handlers: HostHandlers, node: ReturnType<
       return yield* serveStatic(root, path).pipe(Effect.provide(platform));
     });
 
-    const server = yield* NodeHttpServer.make(() => node, { host: options.host, port: options.port });
+    const server = yield* NodeHttpServer.make(() => node, {
+      host: options.host,
+      port: options.port,
+      ...(options.compression ? { websocket: { perMessageDeflate: COMPRESSION } } : {}),
+    });
     yield* server.serve(app);
     const address = node.address();
     if (address === null || typeof address === "string") return yield* Effect.die(new Error("Expected a TCP listener"));

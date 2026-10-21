@@ -31,6 +31,10 @@ const TransportConfig = Schema.Struct({
   staticDir: Schema.optional(Schema.String).annotate({
     description: "A built web app served at /, with index.html as the fallback for client-side routes.",
   }),
+  compression: Schema.Boolean.pipe(Schema.withDecodingDefaultType(Effect.sync(() => true))).annotate({
+    description:
+      "Compress WebSocket messages of 1 KiB or more for clients that accept it (browsers and Node do): a long thread's log crosses a network in a sixth of its bytes. Off saves the host that CPU when every client is on this machine.",
+  }),
   interactionGraceMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0))
     .pipe(Schema.withDecodingDefaultType(Effect.sync(() => 15_000)))
     .annotate({
@@ -82,7 +86,7 @@ export default definePlugin({
       Layer.succeed(Replies, replies(registries, owner.id)),
     );
     const address = yield* startServer(
-      { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, web: control.web },
+      { host: config.host, port: config.port, token, version: VERSION, staticDir: config.staticDir, compression: config.compression, web: control.web },
       handlers,
     );
     const url = `http://${clientHost(address.hostname)}:${address.port}`;
