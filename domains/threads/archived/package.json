@@ -1,0 +1,33 @@
+{
+  "name": "@lemma/threads-archived",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Settings › Archived: every archived thread, as a browser keeps its history: searched, grouped, selected, unarchived, or deleted",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.tsx"
+  },
+  "scripts": {
+    "check": "tsrs --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@lemma/actions": "workspace:*",
+    "@lemma/frame": "workspace:*",
+    "@lemma/look": "workspace:*",
+    "@lemma/sessions": "workspace:*",
+    "@lemma/settings": "workspace:*",
+    "@lemma/threads": "workspace:*",
+    "@lemma/web": "workspace:*",
+    "@lemma/workspace": "workspace:*",
+    "solid-js": "1.9.17"
+  },
+  "devDependencies": {
+    "@types/node": "24.19.2",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "vitest": "5.0.5"
+  },
+  "lemma": {
+    "web": "./src/index.tsx"
+  }
+}

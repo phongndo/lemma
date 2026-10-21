@@ -158,6 +158,7 @@ export const bundledWeb: readonly string[] = [
   "settings.page",
   "settings.plugins",
   "skills.files",
+  "threads.archived",
   "threads.browser",
   "threads.client",
   "threads.composer",

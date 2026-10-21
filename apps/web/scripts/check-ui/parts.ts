@@ -658,6 +658,24 @@ export const parts = async (): Promise<string> => {
     .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
     .catch(async () => assert.fail(`opening an archived thread from the sidebar ended on ${await where()}`));
   await page.click(".archived-head");
+  // Settings › Archived lists it too: its title opens it, and Unarchive on its row brings it back.
+  const archivedRow = `.archived-row:has(a[href^="/threads/${seeded}?"])`;
+  const openArchived = () =>
+    page.evaluate(async () => {
+      const { Settings } = (await import("/src/ui/api.ts" as string)).api.contracts;
+      (await (window as any).lemma.service(Settings)).open("archived");
+    });
+  await openArchived();
+  await page.click(`${archivedRow} .archived-title`);
+  await page
+    .waitForFunction((id) => location.pathname === `/threads/${id}`, seeded, { timeout: 5_000 })
+    .catch(async () => assert.fail(`opening an archived thread from Settings › Archived ended on ${await where()}`));
+  await openArchived();
+  await page.hover(archivedRow);
+  await page.click(`${archivedRow} button[aria-label^=Unarchive]`);
+  await page
+    .waitForSelector(archivedRow, { state: "detached", timeout: 5_000 })
+    .catch(() => assert.fail("a thread unarchived from Settings › Archived is still listed there"));
   await archive(false);
   await page.evaluate(async (id) => {
     const { Threads } = (await import("/src/ui/api.ts" as string)).api.contracts;
