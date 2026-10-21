@@ -2,7 +2,8 @@ name: Promote
 
 # Makes a nightly the stable release (docs/development.md#releases): the release the installer's default channel
 # installs, as GitHub's latest. Nothing is built: stable users get the files nightly users ran. Its notes are rewritten
-# to cover everything since the stable release before it.
+# to cover everything since the stable release before it. With rollback, an older release becomes the stable one again,
+# its notes as they were: `lemma update` takes stable users back to it.
 on:
   workflow_dispatch:
     inputs:
@@ -10,6 +11,11 @@ on:
         description: "The nightly to promote, as 0.2.7; the newest when empty"
         required: false
         type: string
+      rollback:
+        description: "Make this older release the stable one again, rather than refuse it"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -30,6 +36,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           VERSION: ${{ inputs.version }}
+          ROLLBACK: ${{ inputs.rollback }}
         run: |
           set -euo pipefail
           if [[ -n "$VERSION" ]]; then
@@ -38,12 +45,17 @@ jobs:
             tag=$(gh release list --exclude-drafts --limit 1 --json tagName --jq '.[0].tagName // empty')
             [[ -n "$tag" ]] || { echo "::error::No nightly is published"; exit 1; }
           fi
-          prerelease=$(gh release view "$tag" --json isPrerelease --jq .isPrerelease) || { echo "::error::$tag is not a release"; exit 1; }
-          [[ "$prerelease" == true ]] || { echo "::error::$tag is a stable release already"; exit 1; }
+          gh release view "$tag" --json tagName > /dev/null || { echo "::error::$tag is not a release"; exit 1; }
           stable=$(gh release view --json tagName --jq .tagName 2>/dev/null || true)
+          [[ "$tag" != "$stable" ]] || { echo "::error::$tag is the stable release already"; exit 1; }
+          if [[ -n "$stable" && "$(printf '%s\n%s\n' "${stable#v}" "${tag#v}" | sort -V | tail -n 1)" != "${tag#v}" ]]; then
+            [[ "$ROLLBACK" == true ]] ||
+              { echo "::error::$tag is older than the stable release, $stable: run with rollback to make it the stable release again"; exit 1; }
+            gh release edit "$tag" --prerelease=false --latest
+            echo "::notice::$tag is the stable release again, in place of $stable"
+            exit 0
+          fi
           if [[ -n "$stable" ]]; then
-            [[ "$(printf '%s\n%s\n' "${stable#v}" "${tag#v}" | sort -V | tail -n 1)" == "${tag#v}" ]] ||
-              { echo "::error::$tag is older than the stable release, $stable"; exit 1; }
             gh api "repos/$GH_REPO/releases/generate-notes" -f tag_name="$tag" -f previous_tag_name="$stable" --jq .body > "$RUNNER_TEMP/notes.md"
             gh release edit "$tag" --prerelease=false --latest --notes-file "$RUNNER_TEMP/notes.md"
           else

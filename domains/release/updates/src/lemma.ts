@@ -8,7 +8,13 @@ import { ReleaseError } from "@lemma/release";
  */
 
 /** What `lemma update --check --json` answers. */
-export const CheckAnswer = Schema.Struct({ version: Schema.String, channel: Schema.String, newest: Schema.String, newer: Schema.Boolean });
+export const CheckAnswer = Schema.Struct({
+  version: Schema.String,
+  channel: Schema.String,
+  newest: Schema.String,
+  newer: Schema.Boolean,
+  older: Schema.Boolean,
+});
 
 /** What `lemma update --json` answers: the release installed, and whether that took installing. */
 export const UpdateAnswer = Schema.Struct({ updated: Schema.Boolean, version: Schema.String });

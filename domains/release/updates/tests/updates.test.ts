@@ -98,13 +98,13 @@ describe("release.updates", () => {
         return (yield* resultOf(channels.status, undefined)) as ReleaseStatus;
       }),
     );
-    expect(status).toEqual({ build: release(), updatable: true, checks: false, newer: false });
+    expect(status).toEqual({ build: release(), updatable: true, checks: false, newer: false, older: false });
     expect(await asked()).toEqual(["version --json"]);
   });
 
   it("checks for a newer release on the channel, says so once per release, and in lemma doctor", async () => {
     await write("version.json", release());
-    await write("check.json", { version: "0.2.7", channel: "nightly", newest: "0.2.9", newer: true });
+    await write("check.json", { version: "0.2.7", channel: "nightly", newest: "0.2.9", newer: true, older: false });
     const { status, outcome, notices } = await withPlugin(({ channels, doctor, notices }) =>
       Effect.gen(function* () {
         yield* resultOf(channels.check, undefined);
@@ -120,9 +120,25 @@ describe("release.updates", () => {
     expect(await asked()).toContain("update --check --json");
   });
 
+  it("says when the channel went back to an older release, as a rolled-back stable one does", async () => {
+    await write("version.json", { ...release(), channel: "stable" });
+    await write("check.json", { version: "0.2.7", channel: "stable", newest: "0.2.5", newer: false, older: true });
+    const { status, outcome, notices } = await withPlugin(({ channels, doctor, notices }) =>
+      Effect.gen(function* () {
+        const status = (yield* resultOf(channels.check, undefined)) as ReleaseStatus;
+        const outcome = yield* doctor;
+        yield* Effect.yieldNow;
+        return { status, outcome, notices };
+      }),
+    );
+    expect(status).toMatchObject({ newest: "0.2.5", newer: false, older: true });
+    expect(outcome).toMatchObject({ status: "warn", message: "The stable release went back to 0.2.5, and this is 0.2.7" });
+    expect(notices).toEqual(["The stable release went back to Lemma 0.2.5, and this is 0.2.7: Settings › About goes back to it"]);
+  });
+
   it("keeps what it found when a check fails, saying why", async () => {
     await write("version.json", release());
-    await write("check.json", { version: "0.2.7", channel: "nightly", newest: "0.2.7", newer: false });
+    await write("check.json", { version: "0.2.7", channel: "nightly", newest: "0.2.7", newer: false, older: false });
     const status = await withPlugin(({ channels }) =>
       Effect.gen(function* () {
         yield* resultOf(channels.check, undefined);

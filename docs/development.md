@@ -202,7 +202,8 @@ Every build is a release, and stable is the one marked latest:
   newest, or the version you give) the stable release: it marks it latest and
   not a prerelease, and rewrites its notes to cover everything since the last
   stable release. Nothing is rebuilt. It refuses a release older than the
-  stable one.
+  stable one unless asked to roll back: then that release is the stable one
+  again, and `lemma update` and Settings › About take stable users back to it.
 
 To ship a change: merge it, let a nightly carry it (or run the Nightly
 workflow), use that nightly yourself, then promote it:
@@ -210,4 +211,10 @@ workflow), use that nightly yourself, then promote it:
 `apps/cli/package.json`'s version (`0.3.0`) in a pull request; the next
 nightly is `v0.3.0`. A run that fails publishes nothing and is safe to run
 again. A published release's files are never changed; a fix is the next
-nightly.
+nightly. When a stable release turns out bad and the fix is not ready, put the
+one before back: `gh workflow run promote.yml -f version=0.2.5 -f rollback=true`.
+
+The Nightly workflow attests each archive's build provenance before
+publishing it (`actions/attest`): a signed statement, kept by GitHub, that the
+archive was built by that workflow, in this repository, from the commit it
+names ([verifying](installation.md#verifying-a-release)).

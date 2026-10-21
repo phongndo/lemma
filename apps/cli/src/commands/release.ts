@@ -138,12 +138,16 @@ const update = defineBuiltin({
           exit: ExitCode.failed,
         });
       if (flags.check) {
-        const newer = compareVersions(target, build.version) > 0;
+        // Older: the channel went back to it (a stable release rolled back), and lemma update follows it there.
+        const order = compareVersions(target, build.version);
         return {
-          json: { version: build.version, channel, newest: target, newer },
-          text: newer
-            ? `Lemma ${target} is out on ${channel}, and this is ${build.version}: lemma update installs it`
-            : `Lemma ${build.version} is the newest on ${channel}`,
+          json: { version: build.version, channel, newest: target, newer: order > 0, older: order < 0 },
+          text:
+            order > 0
+              ? `Lemma ${target} is out on ${channel}, and this is ${build.version}: lemma update installs it`
+              : order < 0
+                ? `The ${channel} release is ${target}, older than this ${build.version}: lemma update goes back to it`
+                : `Lemma ${build.version} is the newest on ${channel}`,
         };
       }
       if (target === build.version && channel === build.channel)
