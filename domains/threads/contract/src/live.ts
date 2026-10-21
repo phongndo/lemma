@@ -6,7 +6,8 @@ import type { SessionEvent } from "@lemma/sessions";
 /**
  * Streaming state for one session: what the model is producing right now,
  * built from `delta` events until the durable `message`/`attempt` event for
- * the step lands in the log. Pure; the store holds the current value.
+ * the step lands in the log. Pure, but for what is over (`Finished`), which
+ * only grows; the store holds the current value.
  */
 
 export type DraftBlock =
@@ -124,6 +125,49 @@ const applyToDraft = (draft: StepDraft, event: StreamEvent): StepDraft => {
   }
 };
 
+/**
+ * What is over of a session's live output, so none of it shows again: the steps and the tool calls its log holds, and
+ * the turns that ended, as its log or the agent said. A client keeps one for the session it shows, notes each event
+ * its log appends once (`noteLogged`) and each turn the agent says ended (`noteEnded`), and settles drafts and output
+ * against it (`reconcileLive`), at a cost of what changed rather than of the log. What is over stays over, so it is
+ * grown in place.
+ */
+export interface Finished {
+  readonly steps: Set<string>;
+  readonly turns: Set<string>;
+  readonly calls: Set<string>;
+  /** The calls of each turn not ended yet that the log holds no result for: its end finishes them. */
+  readonly open: Map<string, Set<string>>;
+}
+
+export const createFinished = (): Finished => ({ steps: new Set(), turns: new Set(), calls: new Set(), open: new Map() });
+
+/** The turn ended: its steps, and its calls that logged no result, are over. */
+export const noteEnded = (finished: Finished, turnId: string): void => {
+  finished.turns.add(turnId);
+  for (const id of finished.open.get(turnId) ?? []) finished.calls.add(id);
+  finished.open.delete(turnId);
+};
+
+/** Notes what the events of `log` from `from` on, appended to it in order, finish. */
+export const noteLogged = (finished: Finished, log: readonly SessionEvent[], from = 0): void => {
+  for (let at = from; at < log.length; at++) {
+    const data = log[at]!.data;
+    if (data.type === "message" && data.message.role === "toolResult") finished.calls.add(data.message.toolCallId);
+    else if (data.type === "message" && data.message.role === "assistant") {
+      if (data.stepId !== undefined) finished.steps.add(data.stepId);
+      if (data.turnId === undefined) continue;
+      for (const part of data.message.content) {
+        if (part.type !== "toolCall" || finished.calls.has(part.id)) continue;
+        const open = finished.open.get(data.turnId);
+        if (open === undefined) finished.open.set(data.turnId, new Set([part.id]));
+        else open.add(part.id);
+      }
+    } else if (data.type === "attempt") finished.steps.add(data.stepId);
+    else if (data.type === "turn-end") noteEnded(finished, data.turnId);
+  }
+};
+
 /** Applies a stream event; one numbered at or below what the draft holds (it was seeded from a view) is skipped. */
 export const applyDelta = (state: LiveState, turnId: string, stepId: string, event: StreamEvent, seq?: number): LiveState => {
   if (state.settled.has(stepId)) return state;
@@ -204,31 +248,31 @@ export const seedLive = (state: LiveState, view: AgentView): LiveState => {
 };
 
 /**
- * Settles drafts the durable log already covers. Deltas and turn events can be
- * lost while disconnected; the log fetched on reconnect is authoritative. A
- * logged `turn-end` drops the output of that turn's own tool calls only: the
- * log holds every earlier turn's end too.
+ * Settles the drafts and output of what is over (`finished`): a step or turn
+ * the log holds or the agent ended, a call whose result is logged or whose turn
+ * ended. Deltas and turn events can be lost while disconnected, and arrive after
+ * the log on a stream of their own; what is over is authoritative. Its cost is
+ * the drafts' and output's, not the log's: a client settles after each event
+ * the log appends and each batch of deltas.
  */
-export const reconcileLive = (state: LiveState, events: readonly SessionEvent[]): LiveState => {
+export const reconcileLive = (state: LiveState, finished: Finished): LiveState => {
   if (state.drafts.length === 0 && state.output.size === 0 && state.printed.size === 0) return state;
-  let next = state;
-  const calls = new Map<string, string[]>();
-  for (const { data } of events) {
-    if (data.type === "message" && data.message.role === "toolResult") next = dropOutput(next, data.message.toolCallId);
-    else if (data.type === "message" && data.message.role === "assistant") {
-      if (data.turnId !== undefined) {
-        const ids = calls.get(data.turnId) ?? [];
-        for (const part of data.message.content) if (part.type === "toolCall") ids.push(part.id);
-        calls.set(data.turnId, ids);
-      }
-      if (data.stepId !== undefined) next = settleStep(next, data.stepId);
-    } else if (data.type === "attempt") next = settleStep(next, data.stepId);
-    else if (data.type === "turn-end") {
-      next = settleTurn(next, data.turnId);
-      for (const id of calls.get(data.turnId) ?? []) next = dropOutput(next, id);
-    }
-  }
-  return next;
+  const closing = state.drafts.filter((draft) => finished.steps.has(draft.stepId) || finished.turns.has(draft.turnId));
+  const dropped = [...new Set([...state.output.keys(), ...state.printed.keys()])].filter((id) => finished.calls.has(id));
+  if (closing.length === 0 && dropped.length === 0) return state;
+  const without = <V>(map: ReadonlyMap<string, V>) => {
+    if (!dropped.some((id) => map.has(id))) return map;
+    const next = new Map(map);
+    for (const id of dropped) next.delete(id);
+    return next;
+  };
+  return {
+    ...state,
+    drafts: closing.length === 0 ? state.drafts : state.drafts.filter((draft) => !closing.includes(draft)),
+    settled: closing.length === 0 ? state.settled : new Set([...state.settled, ...closing.map((draft) => draft.stepId)]),
+    output: without(state.output),
+    printed: without(state.printed),
+  };
 };
 
 /** A view of the running turn has been asked for: deltas and output from now on are held until it arrives (`joinLive`). */
@@ -237,18 +281,18 @@ export const beginJoin = (state: LiveState): LiveState => (state.joining !== und
 /**
  * The view arrived (or, `undefined`, could not be had): it is applied
  * (`seedLive`), the updates held meanwhile replayed over it, and the result
- * checked against the session's log as it stands now, since the view and the
- * log are fetched side by side and a view older than the log must not bring
- * back drafts or output the log already settled.
+ * checked against what is over as the log stands now (`finished`), since the
+ * view and the log are fetched side by side and a view older than the log must
+ * not bring back drafts or output the log already settled.
  */
-export const joinLive = (state: LiveState, view: AgentView | undefined, log: readonly SessionEvent[]): LiveState => {
+export const joinLive = (state: LiveState, view: AgentView | undefined, finished: Finished): LiveState => {
   const { joining = [], ...rest } = state;
   let next: LiveState = view === undefined ? rest : seedLive(rest, view);
   for (const held of joining) {
     next =
       held.kind === "delta" ? applyDelta(next, held.turnId, held.stepId, held.event, held.seq) : appendOutput(next, held.toolCallId, held.chunk, held.offset);
   }
-  return reconcileLive(next, log);
+  return reconcileLive(next, finished);
 };
 
 /** A draft's block as shown: where it starts in the stream, and whether it is the one being written now. */

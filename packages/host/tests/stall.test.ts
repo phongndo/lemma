@@ -1,9 +1,11 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { describe, expect, test, vi } from "vitest";
 import { makeSpanCollector } from "@lemma/core";
-import { attribute, ownerOfFile, recordStall } from "../src/stall.ts";
+import { attribute, ownerOfFile } from "../src/stall-owners.ts";
+import { recordStall } from "../src/stall.ts";
 
 const run = promisify(execFile);
 const script = fileURLToPath(new URL("./fixtures/stall/run.ts", import.meta.url));
@@ -40,6 +42,13 @@ describe("watchStalls", () => {
     expect(stall).toBe("no stall heard");
     expect(stderr).toBe("");
   }, 30_000);
+
+  test("loads nothing into its worker but Node's own and the attribution: Effect there would cost the host about 35 MB", async () => {
+    const imports = async (file: string) =>
+      [...(await readFile(new URL(`../src/${file}`, import.meta.url), "utf8")).matchAll(/^import (?!type )[^;]*? from "([^"]+)";$/gm)].map((found) => found[1]);
+    expect(await imports("stall-worker.ts")).toEqual(["node:fs", "node:worker_threads", "./stall-owners.ts"]);
+    expect(await imports("stall-owners.ts")).toEqual(["node:path", "node:url"]);
+  });
 });
 
 describe("recordStall", () => {

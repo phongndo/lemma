@@ -8,6 +8,8 @@ import type { LedgerRecord, LedgerSpan } from "@lemma/sessions";
 
 /** The fraction of the axis the idle time between two turns collapses to. */
 export const GAP = 0.012;
+/** The most of the axis the gaps take together: in a thread of many turns each is narrower, so the turns keep the rest. */
+export const GAPS = 0.25;
 
 /**
  * Maps times to fractions of the full axis: actual time within each turn,
@@ -32,12 +34,14 @@ export function timeScale(spans: readonly LedgerSpan[], now: number) {
       return out;
     });
   const total = Math.max(1, active);
-  const usable = 1 - GAP * Math.max(0, segments.length - 1);
+  const gaps = Math.max(0, segments.length - 1);
+  const gap = gaps === 0 ? GAP : Math.min(GAP, GAPS / gaps);
+  const usable = 1 - gap * gaps;
   const fraction = (at: number) => {
     const segment = segments.filter((candidate) => candidate.from <= at).at(-1) ?? segments[0];
     if (segment === undefined) return 0;
     const within = Math.min(Math.max(at - segment.from, 0), Math.max(1, segment.to - segment.from));
-    return segment.index * GAP + ((segment.before + within) / total) * usable;
+    return segment.index * gap + ((segment.before + within) / total) * usable;
   };
   const timeAt = (f: number) => {
     for (const segment of segments) {
@@ -54,7 +58,7 @@ export function timeScale(spans: readonly LedgerSpan[], now: number) {
     fraction,
     timeAt,
     /** Where one turn ends and the next begins: the middle of each gap. */
-    boundaries: segments.slice(1).map((segment) => fraction(segment.from) - GAP / 2),
+    boundaries: segments.slice(1).map((segment) => fraction(segment.from) - gap / 2),
     /** Milliseconds of active time per unit of fraction, for the ruler. */
     msPerFraction: total / usable,
     empty: segments.length === 0,
@@ -100,6 +104,8 @@ export const ticks = (zoom: Zoom, msPerFraction: number, width: number): { reado
   const raw = visibleMs / Math.max(1, width / 90);
   const step = (TICK_STEPS.find((candidate) => candidate >= raw) ?? 600_000) / msPerFraction;
   const out: { at: number; ms: number }[] = [];
+  // A step that does not move along the axis would never end.
+  if (!(step > 0) || !Number.isFinite(step)) return out;
   for (let f = Math.ceil(zoom.start / step) * step; f <= zoom.end; f += step) out.push({ at: f, ms: f * msPerFraction });
   return out;
 };

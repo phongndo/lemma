@@ -24,7 +24,7 @@ describe("the harness benchmark", () => {
     for (const [what, total] of [
       ["events read", 0],
       ["syncs", 160],
-      ["bytes written", 48_477],
+      ["bytes written", 42_497],
       ["hooks run", 60],
       ["events published", 450],
     ] as const) {

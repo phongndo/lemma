@@ -1,6 +1,7 @@
 # @lemma/host
 
-The host process. Importing the package runs it (`src/main.ts`): it resolves
+The host process. Importing the package runs it (`src/start.mjs`, which starts
+`src/main.ts`, [below](#its-start)): it resolves
 paths, reads the config and plugin files into a composition, loads it, and
 reloads when they change. [Usage](../../docs/usage.md) describes running it.
 Clients that need the host's paths without starting one (the CLI, the desktop
@@ -35,6 +36,75 @@ version imported, so a long run of edits grows the host by each one's code.
 A plugin whose code is edited often, or may hang, can run that code in a
 worker thread, which takes its module cache with it when it stops, as
 [isolated](../../examples/isolated/README.md) runs its tools.
+
+## Its start
+
+What the host loads as it starts is what its plugins import at their top
+level, so a bundled plugin imports a dependency only some of its calls use
+where those calls run: Playwright with `browser.chromium`'s first launch, the
+MCP SDK with a server's first connect, codemode's sandbox with its first
+script. `tests/startup.test.ts` holds the bundled plugins to that, and to a
+number of modules.
+
+Most of a start is compiling the modules the host loads and stripping their
+types, which Node.js's compile cache keeps from one start to the next:
+`src/start.mjs` turns it on and then imports `src/main.ts`, as the cache holds
+only what loads after it is on. A warm cache starts the host in about two
+thirds of the time, and spares it Node's type stripper (10–20 MB a thread),
+which is why the one module loaded before it is JavaScript. The stall
+watchdog's worker, [below](#a-blocked-event-loop), uses it too.
+
+- **Where.** The checkout's `packages/host/node_modules/.cache/compile`, so
+  every home, shell, and test's host shares it. `NODE_COMPILE_CACHE` names
+  another directory; `NODE_DISABLE_COMPILE_CACHE=1` turns it off. It can be
+  deleted at any time. What the host's tools run does not inherit it.
+- **Edits.** Each module's entry is checked against its source, so an edited
+  file (this checkout's, or a plugin file's) compiles again. Each version of a
+  plugin file the host loads keeps an entry of its own.
+- **When it is written.** Once the host has started, and again as it exits, so
+  a host killed later (a supervised one's group) keeps it.
+
+Effect, a third of the modules a start loads, loads from a bundle of it
+instead (`useEffectBundle` in `src/launch.mjs`, as the process's entry
+`start.mjs` and `lemma serve` call it first): a start loads about 300 fewer
+modules, in 30 ms less, and holds about 9 MB less once started and 5 MB less
+heap (measured on Linux, Node 24).
+
+- **What it holds.** `scripts/bundle-effect.ts` bundles `effect` and every
+  `@effect/*` package installed with it: each module any of their specifiers
+  exports is an entry, and a resolve hook sends whatever resolves to that
+  module (any specifier, from the host or a plugin file) to its entry, so
+  there is one copy of each. The modules a start loads (what `main.ts`
+  imports, traced through the workspace's sources) share one chunk; split by
+  which entries reach them, they were hundreds. It is unminified, keeping the
+  names classes and functions were given (Effect formats values by their
+  class's name, and stacks name functions), with source maps to Effect's own.
+- **Where.** `packages/host/node_modules/.cache/effect`. `pnpm build` builds
+  it, and leaves one that is fresh as it is. It can be deleted at any time.
+- **When it is not used.** One that is missing, or was built from other
+  packages or another version of the script (each package's manifest and the
+  script are checked against the size and time recorded), is left alone, and
+  Effect loads from its modules as without one. So does the host imported
+  after something loaded Effect already, which would make a second copy.
+- **What differs.** A namespace `effect` exports (`Effect` in
+  `import { Effect } from "effect"`) is the bundle's object, not the
+  namespace of `effect/Effect`, though everything in the two is the same.
+
+The host runs with Node.js flags of its own (`HOST_FLAGS` in `src/launch.mjs`),
+which each launcher passes: `pnpm dev`, `lemma serve --detach`, a `lemma
+service`, `lemma plugins check`, and the desktop app (as `--js-flags`, which is
+how Electron's utility process takes V8's). A host started without them
+(`pnpm start`, the foreground `lemma serve`, a launcher of your own) starts
+again with them, as the same process (`execve`); on Windows, which has no
+such call, it runs without them. A flag given another value is left as given.
+They are Node's flags, which a running process cannot take on:
+
+- `--max-semi-space-size=16` caps V8's young generation at 16 MB. Uncapped, on
+  a machine with memory to spare, it grows to 64 MB as the host starts and
+  works, and stays committed until the host has idled for minutes: capped, a
+  host holds about 8 MB less once started and 30 MB less after 20 turns, for
+  the same time a turn takes (measured end to end) and a harness benchmark
+  step at 10,000 entries about 5% slower.
 
 ## The host runtime
 
@@ -94,8 +164,8 @@ stops every session with it, and nothing on the loop can notice.
 
   The worker hears these as each load is applied, before its plugins start.
 
-  Code in the kernel, in Effect, or in the host counts for the plugin that
-  called it.
+  Code in the kernel, in Effect (its bundle's chunks too), or in the host
+  counts for the plugin that called it.
 
 - **Why stacks, not a profile.** A CPU profile started after the loop began
   misses the loop's own frame once V8 has optimized it, and names its caller

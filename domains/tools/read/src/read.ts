@@ -5,6 +5,8 @@ import { MAX_IMAGE_BYTES } from "@lemma/llm";
 import { ImageBlock, ToolResult } from "@lemma/tools";
 import type { Tool } from "@lemma/tools";
 import { fsMessage, resolveReadPath, sniffImage, throwIfAborted } from "@lemma/tools/files";
+import { readLines } from "./lines.ts";
+import type { LineWindow } from "./lines.ts";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from "@lemma/tools";
 import type { Truncation } from "@lemma/tools";
 
@@ -21,7 +23,8 @@ export type ReadOutput = typeof ReadOutput.Type;
 
 export interface ReadDetails {
   readonly path: string;
-  readonly truncation?: Truncation;
+  /** How the text was cut, when it was: the counts, its text being the result's own, which the log keeps once. */
+  readonly truncation?: Omit<Truncation, "content">;
 }
 
 async function readHead(file: string, length: number): Promise<Uint8Array> {
@@ -73,38 +76,40 @@ export const readTool: Tool<ReadInput> = {
       });
     }
 
-    const allLines = (await readFile(absolute)).toString("utf8").split("\n");
-    const totalFileLines = allLines.length;
+    // Paged as `split("\n")` of the whole file would page it, a chunk at a time: memory is the page, not the file.
     const startLine = offset !== undefined && offset > 0 ? Math.floor(offset) - 1 : 0;
     const startDisplay = startLine + 1;
-    if (startLine >= allLines.length) throw new Error(`Offset ${offset} is beyond end of file (${allLines.length} lines total)`);
-
-    let selected: string;
-    let userLimited: number | undefined;
-    if (limit !== undefined) {
-      const endLine = Math.min(startLine + Math.max(1, Math.floor(limit)), allLines.length);
-      selected = allLines.slice(startLine, endLine).join("\n");
-      userLimited = endLine - startLine;
-    } else {
-      selected = allLines.slice(startLine).join("\n");
+    const asked = limit === undefined ? undefined : startLine + Math.max(1, Math.floor(limit));
+    const handle = await open(absolute, "r");
+    let window: LineWindow;
+    try {
+      window = await readLines(handle, startLine, asked, { maxLines: DEFAULT_MAX_LINES, maxBytes: DEFAULT_MAX_BYTES }, signal);
+    } finally {
+      await handle.close();
     }
+    const { fileLines, selection } = window;
+    if (selection === undefined) throw new Error(`Offset ${offset} is beyond end of file (${fileLines} lines total)`);
+    const userLimited = asked === undefined ? undefined : Math.min(asked, fileLines) - startLine;
 
-    const truncation = truncateHead(selected);
+    // The head holds what `truncateHead` keeps of the whole selection, and is over the limits when the whole is.
+    const kept = truncateHead(selection.head);
+    const truncation: Truncation = kept.truncated ? { ...kept, totalLines: selection.lines, totalBytes: selection.bytes } : kept;
     let output: string;
     if (truncation.firstLineExceedsLimit) {
-      const size = formatSize(Buffer.byteLength(allLines[startLine]!, "utf8"));
+      const size = formatSize(selection.firstLineBytes);
       output = `[Line ${startDisplay} is ${size}, exceeds ${formatSize(DEFAULT_MAX_BYTES)} limit. Use bash: sed -n '${startDisplay}p' ${path} | head -c ${DEFAULT_MAX_BYTES}]`;
     } else if (truncation.truncated) {
       const endDisplay = startDisplay + truncation.outputLines - 1;
       const limitNote = truncation.truncatedBy === "lines" ? "" : ` (${formatSize(DEFAULT_MAX_BYTES)} limit)`;
-      output = `${truncation.content}\n\n[Showing lines ${startDisplay}-${endDisplay} of ${totalFileLines}${limitNote}. Use offset=${endDisplay + 1} to continue.]`;
-    } else if (userLimited !== undefined && startLine + userLimited < allLines.length) {
-      const remaining = allLines.length - (startLine + userLimited);
+      output = `${truncation.content}\n\n[Showing lines ${startDisplay}-${endDisplay} of ${fileLines}${limitNote}. Use offset=${endDisplay + 1} to continue.]`;
+    } else if (userLimited !== undefined && startLine + userLimited < fileLines) {
+      const remaining = fileLines - (startLine + userLimited);
       output = `${truncation.content}\n\n[${remaining} more lines in file. Use offset=${startLine + userLimited + 1} to continue.]`;
     } else {
       output = truncation.content;
     }
-    const details: ReadDetails = { path: absolute, ...(truncation.truncated ? { truncation } : {}) };
+    const { content: _, ...counts } = truncation;
+    const details: ReadDetails = { path: absolute, ...(truncation.truncated ? { truncation: counts } : {}) };
     return new ToolResult({ content: [{ type: "text", text: output }], details, structured: output });
   },
 };

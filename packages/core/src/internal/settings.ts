@@ -42,7 +42,18 @@ const transient: ReadonlySet<string> = new Set([Tracer.ParentSpan.key, Layer.Cur
  * and a Layer build's memo map to that build.
  */
 export function servicesOf<R>(context: Context.Context<R>): Context.Context<R> {
+  // A hook's dispatch asks this of its caller's context on every call: it looks without copying, and copies only a
+  // context that holds what it leaves out.
+  const left = (key: string) => transient.has(key) || runtimeSettings.has(key);
   const map = context.mapUnsafe;
-  if (![...map.keys()].some((key) => transient.has(key) || runtimeSettings.has(key))) return context;
-  return Context.makeUnsafe<R>(new Map([...map].filter(([key]) => !transient.has(key) && !runtimeSettings.has(key))));
+  let leaves = false;
+  for (const key of map.keys())
+    if (left(key)) {
+      leaves = true;
+      break;
+    }
+  if (!leaves) return context;
+  const services = new Map<string, unknown>();
+  for (const [key, value] of map) if (!left(key)) services.set(key, value);
+  return Context.makeUnsafe<R>(services);
 }

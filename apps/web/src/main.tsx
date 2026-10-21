@@ -1,5 +1,3 @@
-// First, so Effect finds it when it loads (see the file).
-import "./lib/immediate.ts";
 import { connect, describeError } from "@lemma/client";
 import type { Host } from "@lemma/client";
 import { preloadPaint } from "@lemma/web/paint";

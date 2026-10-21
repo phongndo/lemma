@@ -29,6 +29,20 @@ export const parts = async (): Promise<string> => {
   assert(page.url().includes("/threads/"), "the first prompt did not move to the thread's address");
   assert.equal(await page.evaluate(() => (document.querySelector("textarea") as any).checkMark), true, "the first prompt remounted the composer");
   assert((await page.locator(".turn .md").count()) > 0, "the default markdown part renders");
+  // Model HTML in markdown is made safe to show: no script, image, control, or styling of its own, and links open outside.
+  const sanitized = await page.evaluate(async () => {
+    const { markdownBlocks } = (await import("/src/ui/api.ts" as string)).api.contracts;
+    const source = `<p class="toast" style="position: fixed" id="over" onclick="alert(1)">hi <a href="https://example.com">a link</a></p>\n\n<img src="https://example.com/x.png"><script>alert(1)</script><button>go</button>`;
+    return markdownBlocks(source)
+      .map((block: { kind: string; html?: () => string }) => (block.kind === "html" ? block.html!() : ""))
+      .join("");
+  });
+  assert.match(
+    sanitized,
+    /<a href="https:\/\/example\.com" target="_blank" rel="noopener noreferrer">a link<\/a>/,
+    `a link in markdown does not open outside: ${sanitized}`,
+  );
+  assert.doesNotMatch(sanitized, /<img|<script|<button|class=|style=|id=|onclick/, `model HTML in markdown is not sanitized: ${sanitized}`);
   await page.evaluate(async () => {
     const { MarkdownPart } = (await import("/src/ui/api.ts" as string)).api.contracts;
     const remove = (window as any).checkSlots.add(MarkdownPart, {

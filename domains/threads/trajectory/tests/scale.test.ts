@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { ledger, trajectory } from "@lemma/sessions";
 import type { EventData, LedgerSpan } from "@lemma/sessions";
-import { GAP, ledgerStats, panned, place, ticks, timeScale, ttftPercent, wheeled } from "../src/scale.ts";
+import { GAP, GAPS, ledgerStats, panned, place, ticks, timeScale, ttftPercent, wheeled } from "../src/scale.ts";
 import { assistant, usage, user } from "@lemma/threads/testing";
 
 /** Spans for `turns`, each a list of [start, end] model calls (no end: still running). */
@@ -30,6 +30,18 @@ describe("timeScale", () => {
     // Back from fractions to times, inside each turn.
     expect(scale.timeAt(usable / 4)).toBeCloseTo(500);
     expect(scale.timeAt(GAP + (usable * 3) / 4)).toBeCloseTo(3_600_500);
+  });
+
+  it("narrows the gaps of a thread of many turns, so they never take the axis", () => {
+    // 200 turns of 1s each, a minute apart: at GAP each, the gaps alone would be more than the axis.
+    const scale = timeScale(spansOf(...Array.from({ length: 200 }, (_, turn): [number, number][] => [[turn * 60_000, turn * 60_000 + 1000]])), 0);
+    expect(scale.msPerFraction).toBeCloseTo(200_000 / (1 - GAPS));
+    expect(scale.fraction(199 * 60_000 + 1000)).toBeCloseTo(1);
+    const ruler = ticks({ start: 0, end: 1 }, scale.msPerFraction, 900);
+    expect(ruler.length).toBeGreaterThan(0);
+    expect(ruler.length).toBeLessThan(20);
+    // A scale that cannot be laid out has no ruler, rather than one without end.
+    expect(ticks({ start: 0, end: 1 }, -1, 900)).toEqual([]);
   });
 
   it("runs a span still going up to now, and is empty without spans", () => {

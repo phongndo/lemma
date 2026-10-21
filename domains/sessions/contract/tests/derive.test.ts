@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { Equal, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   branchOf,
@@ -13,8 +15,10 @@ import {
   requestState,
   summaryText,
 } from "../src/derive.ts";
-import type { EventData, SessionEvent } from "../src/sessions.ts";
-import { contentText, emptyUsage } from "@lemma/llm";
+import { SessionEvent } from "../src/sessions.ts";
+import type { Contribution, EventData } from "../src/sessions.ts";
+import { trajectory } from "../src/trajectory.ts";
+import { contentText, emptyUsage, LlmRequest } from "@lemma/llm";
 import type { Message } from "@lemma/llm";
 
 function log(...items: readonly (EventData | { readonly data: EventData; readonly parent: string })[]): SessionEvent[] {
@@ -315,6 +319,144 @@ describe("request reconstruction", () => {
     const first = rebuildRequest(events, "e2")!;
     expect(first.messages).toHaveLength(1);
     expect(rebuildRequest(events, "e1")).toBeUndefined();
+  });
+
+  it("is the request the constructor makes of the same fields, without its copy of every message", () => {
+    // Made without the constructor's walk (`requestFrom`), which this holds to the constructor's result: an Effect
+    // upgrade that gave a Schema class's instances more than their fields fails here.
+    const tool = { name: "read", description: "Read", parameters: { type: "object", properties: { path: { type: "string" } } } };
+    const call: EventData = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hmm", thinkingSignature: "sig" },
+          { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+        ],
+        api: "anthropic-messages",
+        provider: "p",
+        model: "m",
+        usage: emptyUsage,
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+    };
+    const result: EventData = {
+      type: "message",
+      message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "export {}" }], isError: false, timestamp: 0 },
+    };
+    // As a store serves them: read back through the schema.
+    const events = log(
+      user("one"),
+      request({ system: "SYS", tools: [tool], thinking: "high", providerOptions: { temperature: 0.2 } }),
+      call,
+      result,
+      { type: "context", source: "notes", content: [{ type: "text", text: "a note" }] },
+      request({ restart: "model", model: "p/other", thinking: "low", providerOptions: { temperature: 0.2 } }),
+    ).map((event) => Schema.decodeUnknownSync(SessionEvent)(JSON.parse(JSON.stringify(event))));
+    const rebuilt = rebuildRequest(events, "e6", "sid")!;
+    const constructed = new LlmRequest({ ...rebuilt });
+    expect(rebuilt).toBeInstanceOf(LlmRequest);
+    expect(Object.keys(rebuilt)).toEqual(["model", "system", "messages", "thinkingFrom", "tools", "thinking", "sessionId", "providerOptions"]);
+    expect(rebuilt.thinkingFrom).toBe(4);
+    expect(isDeepStrictEqual(rebuilt, constructed)).toBe(true);
+    expect(Equal.equals(rebuilt, constructed)).toBe(true);
+    expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(constructed));
+    expect(String(rebuilt)).toBe(String(constructed));
+
+    // It holds the log's own messages, tools, and options, frozen: what changes them in place fails, and the log is as
+    // it was. Its list of messages is its own.
+    const logged = JSON.stringify(events);
+    const message = rebuilt.messages[1]!;
+    expect(message).toBe((events[2]!.data as Extract<EventData, { type: "message" }>).message);
+    (rebuilt.messages as Message[]).length = 0;
+    const changes: (() => void)[] = [
+      () => (message.content as unknown[]).push({ type: "text", text: "x" }),
+      () => Object.assign(message.content[1]!, { arguments: {} }),
+      () => Object.assign((message.content[1] as { arguments: object }).arguments, { path: "b.ts" }),
+      () => Object.assign(rebuilt.tools![0]!.parameters as object, { type: "array" }),
+      () => Object.assign(rebuilt.providerOptions!, { temperature: 1 }),
+      () => Object.assign(rebuilt, { system: "other" }),
+    ];
+    for (const change of changes) expect(change).toThrow(TypeError);
+    expect(JSON.stringify(events)).toBe(logged);
+  });
+});
+
+describe("contributions logged only when they change", () => {
+  const read = { name: "read", description: "Read", parameters: {} };
+  const bash = { name: "bash", description: "Run", parameters: {} };
+  const credit = (env: string, tools: readonly (typeof read)[]): Contribution[] => [
+    { source: "agent", kind: "system", label: "base", chars: 1 },
+    { source: "agent", kind: "system", label: "env", chars: env.length },
+    ...tools.map((tool): Contribution => ({ source: `tools.${tool.name}`, kind: "tool", label: tool.name, chars: 10 })),
+  ];
+  const first = credit("date 1", [read]);
+  const more = credit("date 1", [read, bash]);
+  const other = credit("date 22", [read]);
+  /** A request: `logged`, the contributions it logs (none when undefined); `credited`, those an older agent logged. */
+  type Ask = { readonly logged?: Contribution[]; readonly credited: Contribution[]; readonly extra?: Partial<Extract<EventData, { type: "request" }>> };
+  const ask = ({ logged, extra }: Ask, older: boolean, credited: Contribution[]): EventData => {
+    const { contributions: _, ...rest } = request(extra) as Extract<EventData, { type: "request" }>;
+    return older ? { ...rest, contributions: credited } : logged === undefined ? rest : { ...rest, contributions: logged };
+  };
+  /**
+   * Turns on two branches: the first's turns keep their contributions, through a compaction, then declare a tool more;
+   * the sibling, written after it, credits other parts, and a request on the first branch after it credits the first's.
+   * `older`: the log an agent that logged them on every request wrote.
+   */
+  const session = (older: boolean): SessionEvent[] => {
+    const at = (spec: Ask) => ask(spec, older, spec.credited);
+    return log(
+      user("one"),
+      at({ logged: first, credited: first, extra: { system: "B\n\ndate 1", tools: [read], restart: "start" } }),
+      assistant("r1"),
+      user("two"),
+      at({ credited: first }),
+      assistant("r2"),
+      { type: "compaction", summary: "S", firstKeptId: "e4", tokensBefore: 10, source: "compaction" },
+      at({ credited: first, extra: { restart: "compaction" } }),
+      assistant("r3"),
+      at({ logged: more, credited: more, extra: { tools: [read, bash], restart: "tools" } }),
+      assistant("r4"),
+      user("three"),
+      at({ credited: more }),
+      { data: at({ logged: other, credited: other, extra: { system: "B\n\ndate 22", tools: [read], restart: "start" } }), parent: "e1" },
+      { data: assistant("s1"), parent: "e14" },
+      { data: at({ credited: other }), parent: "e15" },
+      { data: user("four"), parent: "e13" },
+      at({ credited: more }),
+    );
+  };
+  const requests = ["e2", "e5", "e8", "e10", "e13", "e14", "e16", "e18"];
+
+  it("are the request's own, or the previous request's on its branch, never a sibling branch's", () => {
+    const events = session(false);
+    expect(events.filter((event) => event.data.type === "request" && event.data.contributions !== undefined).map((event) => event.id)).toEqual([
+      "e2",
+      "e10",
+      "e14",
+    ]);
+    expect(requests.map((id) => requestState(branchOf(events, id)).contributions)).toEqual([first, first, first, more, more, other, other, more]);
+    // A request with none before it on its branch credits nothing: its parts' plugins are not known.
+    const orphan = log(user("one"), ask({ credited: first }, false, first));
+    expect(requestState(orphan).contributions).toBeUndefined();
+    expect(requestState(orphan).sections).toBeUndefined();
+  });
+
+  it("rebuild every request, and project every branch, as the log that repeats them on every request", () => {
+    const events = session(false);
+    const older = session(true);
+    for (const leaf of ["e16", "e18"]) {
+      const branch = branchOf(events, leaf);
+      const before = branchOf(older, leaf);
+      expect(trajectory(branch)).toEqual(trajectory(before));
+      for (const id of requests.filter((request) => branch.some((event) => event.id === request))) {
+        const upTo = (events: readonly SessionEvent[]) => events.slice(0, events.findIndex((event) => event.id === id) + 1);
+        expect(rebuildRequest(branch, id, "sid"), id).toEqual(rebuildRequest(before, id, "sid"));
+        expect(requestState(upTo(branch)), id).toEqual(requestState(upTo(before)));
+      }
+    }
   });
 });
 

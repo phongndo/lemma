@@ -4,8 +4,10 @@ Provides `Agent` (`@lemma/agent`): the turn loop. Requires `Sessions`, `Llm`,
 `ToolRunner`, `HostControl`, and `Paths`. Adds its `agent.base` and `agent.environment`
 sections to `PromptSections` (in its phases `base` and `environment`). Exclusive: a reload stops it, suspending
 its turns, before the new instance resumes them. Serves the `agent.*` channels
-(`AgentChannels`, through `serveAgent`): the calls clients make, and
-`agent.activity`, its live output and each turn's and queue's change.
+(`AgentChannels`, through `serveAgent`): the calls clients make;
+`agent.activity`, each turn's and queue's change and its live output, which
+a client may leave out; and `agent.output`, one session's live output, for a
+client that shows it.
 
 Its web half (`./web`) offers `maxSteps`, `maxRunning`, and `keepCancelled` in
 Settings › General › Agent, read from and written to its host half's row through
@@ -77,14 +79,15 @@ moves results, either way, so each is worth measuring against the
    `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
    change what the model sees by appending events with `append` (a
    `compaction`, whose `usage` the turn's then includes); the `request` event with
-   per-section and per-tool `contributions`, the hook's `handlers` (each one's own
-   time, and what it changed: `+section skills`, `-tool bash`, `model a → b`,
-   `+compaction`), the `HostControl.composition` id, and `system`/`tools` only
-   when they differ from `requestState(branch)`. The request
-   actually sent is built from the branch and request state the turn keeps as it
-   appends (`requestFrom`), which is `rebuildRequest` over the branch ending at
-   that event: where `Verify` is on (every simulated run), each request is
-   checked against a rebuild from the store's branch.
+   the hook's `handlers` (each one's own time, and what it changed: `+section
+   skills`, `-tool bash`, `model a → b`, `+compaction`), the
+   `HostControl.composition` id, and `system`, `tools`, and the per-section and
+   per-tool `contributions` only when they differ from `requestState(branch)`'s.
+   The request actually sent is built from the branch and request state the turn
+   keeps as it appends (`requestFrom`), which is `rebuildRequest` over the branch
+   ending at that event: where `Verify` is on (every simulated run), each request
+   is checked against a rebuild from the store's branch, and its contributions
+   against those the branch resolves for it.
 
    A request extends the previous one on the branch (see [Append-only
    requests](#append-only-requests)): it sends that request's system prompt and
@@ -373,10 +376,14 @@ asked again, or run (or reported interrupted) when the turn resumes.
 - **A kept branch.** A turn keeps its branch as it appends to it, with the
   request state it resolves (`nextRequestState`), so a step builds its request
   without reading the session back (`requestFrom`); and a new turn starts from
-  the branch the last one left while the session's leaf is still its end, for
-  the 16 sessions used most recently. A step's work then stays the same as a
-  session grows (`packages/sim`'s harness benchmark). Where `Verify` is on (a
-  simulation), each request is checked against a rebuild from the store.
+  the branch the last one left while the session's leaf is still its end, with
+  its request state, for the 16 sessions used most recently. A step's work then
+  stays the same as a session grows (`packages/sim`'s harness benchmark). A
+  kept branch goes once no turn has used it for five minutes at most: a store
+  lets an idle session's events go (`sessions.files` after five minutes), and
+  the branch would hold them alone, then beside the copy the store reads back.
+  Where `Verify` is on (a simulation), each request is checked against a
+  rebuild from the store.
 - **Explicit parents.** After `turn-start`, every append names the previous event
   as its parent, so a `checkout` during a turn cannot splice the turn into another
   branch. Request handlers append through the turn too (`RequestDraft.append`),

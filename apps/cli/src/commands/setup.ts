@@ -1,7 +1,6 @@
 import { existsSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Duration, Effect } from "effect";
 import { applyEdits, modify, parse as parseJsonc, printParseErrorCode } from "jsonc-parser";
 import type { ParseError } from "jsonc-parser";
@@ -17,6 +16,7 @@ import { callOn } from "../channels.ts";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Io } from "../command.ts";
 import { connectTo, findTarget, homeOf, noLocalHost, reasonOf, rootOf, statusOf, toCliError } from "../connect.ts";
+import { webIndex } from "../open.ts";
 
 /*
  * Setting this client up: which hosts it reaches (`env`), the local host's
@@ -375,8 +375,6 @@ const trustRemove = defineBuiltin({
 
 /** The node this CLI runs on must be at least this. */
 const NODE_MAJOR = 24;
-
-const webIndex = fileURLToPath(new URL("../../../web/dist/index.html", import.meta.url));
 
 const check = (id: string, title: string, status: CheckResult["status"], message: string, fix?: string): CheckResult => ({
   id,

@@ -6,8 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
-import { SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
-import type { EventData } from "@lemma/sessions";
+import { branchOf, requestState, SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
@@ -315,6 +315,127 @@ describe("sessions", () => {
     expect(answer.listed?.damaged?.line).toBe(3);
     expect(answer.listed?.damaged?.reason).toContain(reason);
     expect(answer.write.reason).toBe("ReadOnly");
+  });
+
+  it("keeps one array of contributions for the requests that repeat them, as appended and as read back", async () => {
+    const request = (step: number, chars: number): EventData => ({
+      type: "request",
+      turnId: "t1",
+      stepId: `s${step}`,
+      model: "p/m",
+      composition: "c",
+      contributions: [
+        { source: "agent", kind: "system", label: "base", chars },
+        { source: "tools", kind: "tool", label: "read", chars: 100 },
+      ],
+    });
+    const contributions = (event: SessionEvent) => (event.data.type === "request" ? event.data.contributions : undefined);
+    const shared = (log: readonly SessionEvent[]) => [contributions(log[1]!) === contributions(log[0]!), contributions(log[2]!) === contributions(log[1]!)];
+    const { id, appended } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const appended = [yield* store.append(id, request(1, 4)), yield* store.append(id, request(2, 4)), yield* store.append(id, request(3, 5))];
+        return { id, appended };
+      }),
+    );
+    expect(shared(appended)).toEqual([true, false]);
+    const read = await run(Effect.flatMap(Sessions, (store) => store.events(id)));
+    expect(read).toEqual(appended);
+    expect(shared(read)).toEqual([true, false]);
+  });
+
+  it("keeps a request that logs no contributions as it was appended, its branch crediting its parts after a torn tail and in a fork", async () => {
+    const credit = (chars: number) => [
+      { source: "agent", kind: "system" as const, label: "base", chars },
+      { source: "tools", kind: "tool" as const, label: "read", chars: 100 },
+    ];
+    const request = (step: number, contributions?: ReturnType<typeof credit>): EventData => ({
+      type: "request",
+      turnId: "t1",
+      stepId: `s${step}`,
+      model: "p/m",
+      composition: "c",
+      ...(contributions === undefined ? {} : { contributions }),
+    });
+    const { id, appended, forked } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const root = yield* store.append(id, title("root"));
+        const first = yield* store.append(id, request(1, credit(4)));
+        const second = yield* store.append(id, request(2));
+        // A sibling branch, crediting other parts, written after the first branch's requests.
+        const sibling = yield* store.append(id, request(3, credit(9)), { parent: root.id });
+        const after = yield* store.append(id, request(4), { parent: sibling.id });
+        const forked = yield* store.fork(id, second.id);
+        return { id, appended: [root, first, second, sibling, after], forked: yield* store.events(forked.id) };
+      }),
+    );
+    const [file] = (await sessionFiles()).filter((name) => name.endsWith(`_${id}.jsonl`));
+    const lines = (await fs.readFile(file!, "utf8")).trimEnd().split("\n");
+    expect(lines.filter((line) => line.includes('"contributions"'))).toHaveLength(2);
+    await fs.appendFile(file!, '{"seq":6,"id":"torn","par');
+    const read = await run(Effect.flatMap(Sessions, (store) => store.events(id)));
+    expect(read).toEqual(appended);
+    const credited = (events: readonly SessionEvent[], eventId: string) => requestState(branchOf(events, eventId)).contributions;
+    expect(appended.slice(1).map((event) => credited(read, event.id))).toEqual([credit(4), credit(4), credit(9), credit(9)]);
+    expect(forked.map((event) => event.id)).toEqual(appended.slice(0, 3).map((event) => event.id));
+    expect(credited(forked, appended[2]!.id)).toEqual(credit(4));
+  });
+
+  /** A custom event with a long line, as a tool's output has. */
+  const long = (n: number): EventData => ({ type: "custom", kind: "test/long", data: { n, text: "x".repeat(2000) } });
+  /** The line of a long event to follow the file's last: its seq and id, after event `parent`. */
+  const longLine = (seq: number, parent: string) => JSON.stringify({ seq, id: `long${String(seq).padStart(4, "0")}`, parent, at: 2, data: long(seq) });
+
+  it("lists events from their heads, and the last line whole, which a power loss can leave torn", async () => {
+    const { id, last } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        yield* store.append(id, long(1));
+        yield* store.append(id, title("named"));
+        const last = yield* store.append(id, long(3));
+        return { id, last: last.id };
+      }),
+    );
+    const [file] = await sessionFiles();
+    // The head of a long line and its newline reached the disk; the bytes between them did not.
+    await fs.appendFile(file!, `${longLine(4, last).slice(0, 1500)}${"\0".repeat(600)}\n`);
+    await fs.rm(path.join(dir, "sessions", ".index.json"));
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect(yield* store.list()).toMatchObject([{ id, lastSeq: 3, title: "named", leaf: last }]);
+        expect(yield* store.events(id)).toHaveLength(3);
+        expect((yield* store.get(id)).damaged).toBeUndefined();
+      }),
+    );
+  });
+
+  it("lists an event from its head, so damage past its head is seen once the session is opened", async () => {
+    const { id, first } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const first = yield* store.append(id, custom(1));
+        return { id, first: first.id };
+      }),
+    );
+    const [file] = await sessionFiles();
+    // Another program broke a long line after its head (a quote ends its text early), and a line follows it.
+    const broken = longLine(2, first);
+    await fs.appendFile(file!, `${broken.slice(0, 1500)}"${broken.slice(1500)}\n${longLine(3, "long0002")}\n`);
+    await fs.rm(path.join(dir, "sessions", ".index.json"));
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect(yield* store.list()).toMatchObject([{ id, lastSeq: 3 }]);
+        expect(yield* store.events(id)).toHaveLength(1);
+        expect(yield* store.get(id)).toMatchObject({ lastSeq: 1, damaged: { line: 3 } });
+      }),
+    );
   });
 
   it("forks a session from an event into a new one that takes writes, a damaged one too", async () => {
@@ -645,6 +766,69 @@ describe("sessions", () => {
     );
     expect(flags.length).toBeGreaterThan(0);
     expect(flags.every((how) => how === "r" || how === undefined)).toBe(true);
+  });
+
+  it("searches a session's file as it searches the session loaded: long prompts and replies on its branch, nothing else", async () => {
+    const big = "word ".repeat(300);
+    const usage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+    const user = (text: string): EventData => ({ type: "message", message: { role: "user", content: [{ type: "text", text }], timestamp: 0 } });
+    const reply = (text: string, thinking: string): EventData => ({
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking },
+          { type: "text", text },
+        ],
+        api: "x",
+        provider: "x",
+        model: "x",
+        usage,
+        stopReason: "stop",
+        timestamp: 0,
+      },
+    });
+    const result = (text: string): EventData => ({
+      type: "message",
+      message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text }], isError: false, timestamp: 0 },
+    });
+    const queries = ["alpha", "BETA", "gamma", "delta", '"quoted"', "c:\\path", "σ", "epsilon", "word alpha", "word"];
+    const search = Effect.flatMap(Sessions, (store) =>
+      Effect.forEach(queries, (query) => Effect.map(store.search(query), (found) => found.map((match) => [match.eventId, match.role]))),
+    );
+    const { loaded, ids } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const ids = [
+          yield* store.append(id, user(`${big} alpha`)),
+          yield* store.append(id, reply(`${big} Beta`, `${big} gamma`)),
+          yield* store.append(id, result(`${big} delta`)),
+          // JSON escapes the quote and the backslash, and a sigma's lower case depends on the letter before it (here an
+          // escaped newline's): the line holds none of these words as the text does.
+          yield* store.append(id, user(`${big} say "quoted" in c:\\path\nΣ`)),
+        ].map((event) => event.id);
+        // On another branch.
+        yield* store.append(id, user(`${big} epsilon`));
+        yield* store.checkout(id, ids[3]!);
+        return { loaded: yield* search, ids };
+      }),
+    );
+    const [alpha, beta, , quoted] = ids;
+    expect(loaded).toEqual([
+      [[alpha, "user"]],
+      [[beta, "assistant"]],
+      [],
+      [],
+      [[quoted, "user"]],
+      [[quoted, "user"]],
+      [[quoted, "user"]],
+      [],
+      [[alpha, "user"]],
+      [[quoted, "user"]],
+    ]);
+    // A restarted host has nothing loaded: it reads the file, and finds the same.
+    expect(await run(search)).toEqual(loaded);
   });
 
   it("deletes a session left empty past emptyAfter, but not one kept, filed, or with something in it", async () => {

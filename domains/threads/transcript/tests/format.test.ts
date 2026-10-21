@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { usage } from "@lemma/threads/testing";
 import { diffStats, parseDiff, readDetails } from "../src/details.ts";
 import { sentTime, summarizeUsage } from "../src/format.ts";
@@ -24,6 +24,25 @@ describe("sentTime", () => {
 
   it("says the moment in full for its tooltip", () => {
     expect(at(2026, 9, 19, 0, 28).full).toBe("Monday, October 19, 2026 at 12:28 AM");
+  });
+
+  describe("when the machine's time zone changes while the page is open", () => {
+    const zone = process.env.TZ;
+    afterEach(() => {
+      vi.useRealTimers();
+      if (zone === undefined) delete process.env.TZ;
+      else process.env.TZ = zone;
+    });
+
+    it("writes the time in the zone it changed to, a second on", () => {
+      vi.useFakeTimers({ now: Date.UTC(2026, 9, 19, 12, 0) });
+      const moment = Date.UTC(2026, 9, 19, 9, 5);
+      process.env.TZ = "UTC";
+      expect(sentTime(moment, Date.now(), "en-US").label).toBe("9:05 AM");
+      vi.setSystemTime(Date.now() + 2000);
+      process.env.TZ = "Asia/Tokyo";
+      expect(sentTime(moment, Date.now(), "en-US")).toMatchObject({ label: "6:05 PM", full: "Monday, October 19, 2026 at 6:05 PM" });
+    });
   });
 });
 

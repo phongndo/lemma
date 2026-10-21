@@ -1,8 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Option, Schema, Stream } from "effect";
 import type { Context } from "effect";
 import { Events, makeCore } from "@lemma/core";
-import { AgentChannels, serveAgent } from "../src/agent.ts";
+import { AgentChannels, AgentError, AssistantDelta, serveAgent, TurnEnded, TurnStarted } from "../src/agent.ts";
 import type { Agent } from "../src/agent.ts";
 import { elementsOf, resultOf, wireCodec } from "@lemma/contracts";
 import type { Channel, ChannelCall, ChannelStream } from "@lemma/contracts";
@@ -89,6 +89,61 @@ describe("serveAgent", () => {
           { type: "subscribed", running: ["s1"] },
           { type: "tool-output", sessionId: "s1", toolCallId: "c1", chunk: "ok", offset: 3 },
         ]);
+      }),
+    ));
+
+  /** What a turn in `sessionId` publishes: its start, one delta, one chunk of a tool's output, its end. */
+  const turn = (events: Context.Service.Shape<typeof Events>, sessionId: string) =>
+    Effect.all([
+      events.publish(TurnStarted, { sessionId, turnId: `t-${sessionId}`, requestIds: [] }),
+      events.publish(AssistantDelta, { sessionId, turnId: `t-${sessionId}`, stepId: "st", seq: 1, event: { type: "start" } }),
+      events.publish(ToolOutput, { sessionId, toolCallId: `c-${sessionId}`, chunk: "ok", offset: 0 }),
+      events.publish(TurnEnded, { sessionId, turnId: `t-${sessionId}`, usage, reason: "done" as const }),
+    ]);
+  const usage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+
+  test("activity opened without output hears every session's turns and none of their output; with no payload, all of it", () =>
+    withServed((channels, _, events) =>
+      Effect.gen(function* () {
+        const heard = (payload: unknown) =>
+          elementsOf(channels.get("agent.activity") as ChannelStream, Schema.decodeUnknownSync(wireCodec(AgentChannels.activity.payload))(payload)).pipe(
+            Stream.tap((element: any) => (element.type === "subscribed" ? Effect.andThen(turn(events, "s1"), turn(events, "s2")) : Effect.void)),
+            Stream.takeUntil((element: any) => element.type === "turn-ended" && element.sessionId === "s2"),
+            Stream.runCollect,
+          );
+        const scoped: any[] = yield* heard({ output: false });
+        expect(scoped.map((element) => element.type).filter((type) => type === "delta" || type === "tool-output")).toEqual([]);
+        expect(scoped.filter((element) => element.type === "turn-started").map((element) => element.sessionId)).toEqual(["s1", "s2"]);
+        // As a client calling it by id sends no payload, `null` on the wire.
+        const all: any[] = yield* heard(null);
+        expect(all.filter((element) => element.type === "tool-output").map((element) => element.sessionId)).toEqual(["s1", "s2"]);
+      }),
+    ));
+
+  test("output opens with the agent's view of its session, then sends that session's output alone; with no view to tell, none", () =>
+    withServed((channels, asked, events) =>
+      Effect.gen(function* () {
+        const output = (sessionId: string) =>
+          elementsOf(channels.get("agent.output") as ChannelStream, { sessionId }).pipe(
+            Stream.tap((element: any) => (element.type === "subscribed" ? Effect.andThen(turn(events, "s2"), turn(events, sessionId)) : Effect.void)),
+            Stream.take(3),
+            Stream.runCollect,
+          );
+        expect(yield* output("s1")).toEqual([
+          { type: "subscribed", view: { output: [], queue: [], queueRevision: 1 } },
+          { type: "delta", sessionId: "s1", turnId: "t-s1", stepId: "st", seq: 1, event: { type: "start" } },
+          { type: "tool-output", sessionId: "s1", toolCallId: "c-s1", chunk: "ok", offset: 0 },
+        ]);
+        expect(asked).toContainEqual(["view", "s1"]);
+
+        const failing = new Map(
+          serveAgent(
+            { ...recording().agent, view: (sessionId) => Effect.fail(new AgentError({ sessionId, reason: "Session", message: "unreadable" })) },
+            events,
+          ).map((channel) => [channel.id, channel]),
+        );
+        const first = yield* Stream.runHead(elementsOf(failing.get("agent.output") as ChannelStream, { sessionId: "s1" }));
+        expect(first).toEqual(Option.some({ type: "subscribed" }));
       }),
     ));
 });

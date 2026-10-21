@@ -3,7 +3,8 @@ import { emptyUsage } from "@lemma/llm";
 import type { AssistantMessage, ToolSpec } from "@lemma/llm";
 import type { Contribution, EventData, SessionEvent } from "../src/sessions.ts";
 import { deriveMessages } from "../src/derive.ts";
-import { cacheReport, latestRequest, pluginShares, splitSystem, trajectory } from "../src/trajectory.ts";
+import { cacheReport, createTrajectoryProjector, latestRequest, pluginShares, splitSystem, trajectory } from "../src/trajectory.ts";
+import { createLedgerProjector, ledger } from "../src/ledger.ts";
 
 function log(...items: readonly EventData[]): SessionEvent[] {
   return items.map((data, i) => ({ seq: i + 1, id: `e${i + 1}`, parent: i === 0 ? null : `e${i}`, at: 1000 + i, data }));
@@ -352,5 +353,155 @@ describe("trajectory", () => {
       { type: "turn-end", turnId: "t", reason: "cancelled" },
     );
     expect(trajectory(closing)[0]!.steps[0]!.tools[0]!.result?.isError).toBe(true);
+  });
+});
+
+describe("createTrajectoryProjector", () => {
+  it("draws a turn again when an event names its step from another turn", () => {
+    const project = createTrajectoryProjector();
+    const events = log(
+      { type: "turn-start", turnId: "t0" },
+      { type: "step-start", turnId: "t0", stepId: "s1" },
+      { type: "turn-start", turnId: "t1" },
+      // A step is found by its id: this request is the first turn's step's.
+      {
+        type: "request",
+        turnId: "t1",
+        stepId: "s1",
+        model: "p/m",
+        composition: "c",
+        system: "You are an agent.",
+        tools: [read],
+        contributions: [section("base", "You are an agent."), tool(read)],
+      },
+    );
+    const before = project(events.slice(0, 3));
+    const after = project(events);
+    expect(after).toEqual(trajectory(events));
+    expect(after[0]).not.toBe(before[0]);
+    expect(after[0]!.steps[0]!.request?.eventId).toBe("e4");
+  });
+
+  it("folds in what is appended as reading the branch whole would, keeping the turns it did not touch and their records", () => {
+    // mulberry32: the same cases each run.
+    let seed = 5;
+    const pick = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    let turns = 0;
+    let made = 0;
+    const turnId = () => `t${pick(turns + 1)}`;
+    // A step's id is its turn's: events of one step name its turn.
+    const inStep = () => {
+      const named = turnId();
+      return { turnId: named, stepId: `${named}.s${pick(4)}` };
+    };
+    const callId = () => `c${pick(5)}`;
+    const eventId = () => `e${1 + pick(made + 2)}`;
+    const call = (id: string) => ({ type: "toolCall" as const, id, name: pick(2) === 0 ? "read" : "bash", arguments: {} });
+    // Steps that ask again, results long after their calls, compactions and edits naming events before or after them,
+    // requests that change their prompt or tools.
+    const anyEvent = (): EventData => {
+      made++;
+      switch (pick(14)) {
+        case 0:
+          return { type: "turn-start", turnId: `t${turns++}` };
+        case 1:
+          return { type: "message", turnId: turnId(), message: { role: "user", content: [{ type: "text", text: "go" }], timestamp: 0 } };
+        case 2:
+        case 3:
+          return { type: "step-start", ...inStep() };
+        case 4: {
+          const text = ["You are an agent.", "You are a fixture."][pick(2)]!;
+          const specs = [[read], [read, bash]][pick(2)]!;
+          return {
+            type: "request",
+            ...inStep(),
+            model: "p/m",
+            composition: "c",
+            ...(pick(2) === 0 ? { system: text, tools: specs, restart: "start" as const } : {}),
+            contributions: [section("base", text), ...specs.map((spec) => tool(spec))],
+          };
+        }
+        case 5:
+        case 6:
+          return {
+            type: "message",
+            ...inStep(),
+            message: assistant([call(callId()), ...(pick(2) === 0 ? [call(callId())] : [])], "toolUse"),
+          };
+        case 7:
+          return {
+            type: "message",
+            turnId: turnId(),
+            message: {
+              role: "toolResult",
+              toolCallId: callId(),
+              toolName: "bash",
+              content: [{ type: "text", text: "out" }],
+              isError: pick(2) === 0,
+              timestamp: 0,
+            },
+          };
+        case 8:
+          return {
+            type: "attempt",
+            ...inStep(),
+            message: assistant([], "error"),
+            timing: { startedAt: 0, endedAt: 1 },
+            retry: { reason: "failure", attempt: 1, at: 2 },
+          };
+        case 9:
+          return { type: "step-end", ...inStep(), decision: { result: "continue", why: "tools" } };
+        case 10:
+          return { type: "turn-end", turnId: turnId(), reason: (["done", "cancelled", "error"] as const)[pick(3)]! };
+        case 11:
+          return { type: "compaction", summary: "s", firstKeptId: eventId(), tokensBefore: 10, source: "c", turnId: turnId(), usage: usage(3, 1) };
+        case 12:
+          return { type: "context-edit", target: eventId(), op: "omit", source: "x" };
+        default:
+          return { type: "prompt-update", turnId: turnId(), sections: [{ id: "base", source: "agent", text: "new" }] };
+      }
+    };
+    for (let round = 0; round < 300; round++) {
+      turns = 0;
+      made = 0;
+      const events = log(...Array.from({ length: 1 + pick(30) }, anyEvent));
+      const project = createTrajectoryProjector();
+      const records = createLedgerProjector();
+      // One array grown in place, as a caller that keeps its branch may pass it: each call sees the events pushed since.
+      const inPlace = createTrajectoryProjector();
+      const grown: SessionEvent[] = [];
+      let shown: { readonly turns: ReturnType<typeof project>; readonly records: ReturnType<typeof records>; readonly end: number } | undefined;
+      for (let end = pick(3); end <= events.length; end += 1 + pick(3)) {
+        const prefix = events.slice(0, end);
+        const now = project(prefix);
+        const whole = trajectory(prefix);
+        expect(JSON.parse(JSON.stringify(now)), JSON.stringify(prefix.map((event) => event.data))).toEqual(JSON.parse(JSON.stringify(whole)));
+        grown.push(...events.slice(grown.length, end));
+        expect(JSON.parse(JSON.stringify(inPlace(grown)))).toEqual(JSON.parse(JSON.stringify(whole)));
+        const listed = records(now);
+        expect(JSON.parse(JSON.stringify(listed))).toEqual(JSON.parse(JSON.stringify(ledger(whole))));
+        // A turn no event appended names is the same object, and so are its records (unless an event appended is one an
+        // edit before it named: the branch is folded afresh then, as reading it whole would apply the edit).
+        const appended = events.slice(shown?.end ?? 0, end);
+        const named = new Set(appended.map((event) => (event.data as { readonly turnId?: string }).turnId));
+        const edited = new Set(prefix.flatMap((event) => (event.data.type === "context-edit" ? [event.data.target] : [])));
+        if (shown !== undefined && !appended.some((event) => edited.has(event.id)))
+          now.forEach((turn, at) => {
+            const before = shown!.turns[at];
+            if (before === undefined || named.has(turn.turnId)) return;
+            expect(turn).toBe(before);
+            const mine = (list: typeof listed, of: typeof turn) => list.filter((record) => record.turn === of);
+            // Its records too, when no turn before it changed (whose requests number its own).
+            if (now.slice(0, at).every((earlier) => !named.has(earlier.turnId)))
+              mine(listed, turn).forEach((record, index) => expect(record).toBe(mine(shown!.records, before)[index]));
+          });
+        shown = { turns: now, records: listed, end };
+      }
+    }
   });
 });

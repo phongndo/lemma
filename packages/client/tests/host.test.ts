@@ -29,6 +29,7 @@ const control = definePlugin({
 const double = defineChannel({ kind: "call", id: "doubler.double", title: "Double", payload: Schema.Number, success: Schema.Number });
 const instanceOf = defineChannel({ kind: "stream", id: "doubler.instance", payload: Schema.Void, success: Schema.Number });
 const later = defineChannel({ kind: "call", id: "doubler.later", payload: Schema.Struct({ from: Schema.Date }), success: Schema.Date });
+const words = defineChannel({ kind: "call", id: "doubler.words", payload: Schema.Number, success: Schema.String });
 
 let instances = 0;
 const running = new Set<number>();
@@ -55,6 +56,10 @@ const doubler = definePlugin({
       yield* owner.add(
         Channels,
         serveChannel(later, ({ from }) => new Date(from.getTime() + 86_400_000)),
+      );
+      yield* owner.add(
+        Channels,
+        serveChannel(words, (n) => "lemma ".repeat(n)),
       );
     }).pipe(Effect.orDie),
   ),
@@ -104,6 +109,7 @@ describe("the channel facade", () => {
         { id: "doubler.double", kind: "call", title: "Double", source: "doubler" },
         { id: "doubler.instance", kind: "stream", source: "doubler" },
         { id: "doubler.later", kind: "call", source: "doubler" },
+        { id: "doubler.words", kind: "call", source: "doubler" },
       ]);
       expect(await host.channel.call("doubler.double", 21)).toBe(42);
       const refused = await host.channel.call("doubler.double", "21").catch((error: unknown) => error);
@@ -134,6 +140,8 @@ describe("the channel facade", () => {
               const doubled: number = yield* callChannel(rpc, double, 21);
               expect(doubled).toBe(42);
               expect(yield* callChannel(rpc, later, { from: new Date(0) })).toEqual(new Date(86_400_000));
+              // 1.8 MB, which over HTTP the host compresses and `fetch` inflates in chunks of 16 KB.
+              expect(yield* callChannel(rpc, words, 300_000)).toBe("lemma ".repeat(300_000));
               const older = defineChannel({ kind: "call", id: "doubler.double", payload: Schema.Number, success: Schema.String });
               expect(yield* Effect.flip(callChannel(rpc, older, 21))).toMatchObject({ code: "Mismatch", subject: "doubler.double" });
             }

@@ -1,11 +1,13 @@
 import { writeSync } from "node:fs";
 import { parentPort, workerData } from "node:worker_threads";
-import { attribute } from "./stall.ts";
-import type { CodeOwner, OwnersMessage, StallWorkerData, WorkerMessage } from "./stall.ts";
+import { attribute } from "./stall-owners.ts";
+import type { CodeOwner } from "./stall-owners.ts";
+import type { OwnersMessage, StallWorkerData, WorkerMessage } from "./stall.ts";
 
 /*
  * The stall watchdog's thread (see `watchStalls`): it runs on a loop of its own, so it sees the main thread's counter
- * stop, and says so while the main thread is still blocked.
+ * stop, and says so while the main thread is still blocked. It imports only Node's own and `stall-owners.ts` (stall.ts
+ * for its types alone), so its isolate holds no module of the host's but those.
  */
 
 const { shared, thresholdMs, tickMs, snapshots, gapMs, inspectable } = workerData as StallWorkerData;

@@ -1,9 +1,11 @@
+import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { HOST_FLAGS } from "@lemma/host/launch";
 import { settled, startLemma } from "../../../scripts/e2e.ts";
 import type { Lemma } from "../../../scripts/e2e.ts";
 import { ExitCode, run } from "../src/cli.ts";
@@ -61,6 +63,9 @@ describe("a host started in the background", () => {
     pid = serving.pid;
     expect(serving).toMatchObject({ home, log: join(home, "logs", "host.log"), url: expect.stringMatching(/^http:\/\/127\.0\.0\.1:\d+$/) });
     expect(alive(serving.pid)).toBe(true);
+    // With the host's Node.js flags, which the command it ran again (`self`) was started without.
+    const args = spawnSync("ps", ["-o", "args=", "-p", String(serving.pid)], { encoding: "utf8" }).stdout;
+    for (const flag of HOST_FLAGS) expect(args).toContain(flag);
 
     const status = JSON.parse((await invoke(["status", "--json"], home)).out);
     expect(status).toMatchObject({ environment: "local", url: serving.url, pid: serving.pid, info: { pid: serving.pid, startedBy: "cli", home } });

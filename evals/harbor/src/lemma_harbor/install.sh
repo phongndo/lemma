@@ -35,7 +35,7 @@ npm install --global --prefix "$root/pnpm" --no-fund --no-audit --loglevel=error
 
 cat >"$root/bin/lemma" <<EOF
 #!/bin/sh
-exec "$root/node/bin/node" --conditions=lemma-source "$root/src/apps/cli/src/main.ts" "\$@"
+exec "$root/node/bin/node" --conditions=lemma-source "$root/src/apps/cli/bin/lemma.js" "\$@"
 EOF
 chmod 755 "$root/bin/lemma"
 chmod -R a+rX "$root"

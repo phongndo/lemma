@@ -132,7 +132,11 @@ export const SessionCache = Schema.Struct({
 export type SessionCache = typeof SessionCache.Type;
 
 /** `value` without its `undefined` fields, which JSON cannot carry. */
-const defined = <T extends object>(value: T): T => Object.fromEntries(Object.entries(value).filter(([, field]) => field !== undefined)) as T;
+const defined = <T extends object>(value: T): T => {
+  const out: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) if (field !== undefined) out[key] = field;
+  return out as T;
+};
 
 /** Whether a branch's last turn is still running: one with no turn is not. */
 export const lastTurnRunning = (turns: readonly TrajectoryTurn[]): boolean => turns.length > 0 && turns.at(-1)!.end === undefined;

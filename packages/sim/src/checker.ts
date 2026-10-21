@@ -42,8 +42,9 @@ export function malformed(messages: readonly Message[]): string[] {
 
 /**
  * Problems with a session's log as served: its `seq`s must run 1, 2, … in file order, each event's parent come before
- * it, and each request say who contributed its parts (`Contribution`): its system sections' sizes must split its
- * system prompt (`splitSystem`), and each of its tools must be attributed.
+ * it, and each request say who contributed its parts (`Contribution`), itself or, where it logs none, by the request
+ * before it on its branch: its system sections' sizes must split its system prompt (`splitSystem`), and each of its
+ * tools must be attributed.
  */
 export function transcriptProblems(events: readonly SessionEvent[]): string[] {
   const problems: string[] = [];
@@ -58,11 +59,16 @@ export function transcriptProblems(events: readonly SessionEvent[]): string[] {
     if (data.type === "prompt-update")
       for (const section of data.sections) if (section.source.trim() === "") problems.push(`prompt-update ${event.id}: ${section.id} names no source`);
     if (data.type !== "request") continue;
-    for (const part of data.contributions) if (part.source.trim() === "") problems.push(`request ${event.id}: ${part.label} names no source`);
-    const { system, tools } = requestState(branchOf(events, event.id));
-    if (splitSystem(system, data.contributions) === undefined) problems.push(`request ${event.id}: its system sections do not make up its system prompt`);
+    // Its own, or, where it logged none, those of the request before it on its branch.
+    const { system, tools, contributions } = requestState(branchOf(events, event.id));
+    if (contributions === undefined) {
+      problems.push(`request ${event.id}: it logs no contributions, and no request before it on its branch does`);
+      continue;
+    }
+    for (const part of contributions) if (part.source.trim() === "") problems.push(`request ${event.id}: ${part.label} names no source`);
+    if (splitSystem(system, contributions) === undefined) problems.push(`request ${event.id}: its system sections do not make up its system prompt`);
     for (const tool of tools ?? [])
-      if (!data.contributions.some((part) => part.kind === "tool" && part.label === tool.name))
+      if (!contributions.some((part) => part.kind === "tool" && part.label === tool.name))
         problems.push(`request ${event.id}: tool ${tool.name} is not attributed`);
   }
   return problems;

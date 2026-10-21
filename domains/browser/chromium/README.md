@@ -1,16 +1,16 @@
 # browser.chromium
 
-Provides [`Browser`](../contract/src/browser.ts) over a Chromium that [Playwright](https://playwright.dev) (`playwright-core`) launches headless on the first call, with a browser context per session. Nothing starts until a tool asks for a page.
+Provides [`Browser`](../contract/src/browser.ts) over a Chromium that [Playwright](https://playwright.dev) (`playwright-core`) launches headless on the first call, with a browser context per session. Nothing starts until a tool asks for a page, and nothing of Playwright loads until then either: it is most of the code the host would load at start. A Playwright that cannot be loaded fails the call `Unavailable`, saying why, as a missing Chromium does.
 
 ```jsonc
 { "plugins": { "browser.chromium": { "config": { "idleSeconds": 900, "headless": false } } } }
 ```
 
-| Config           | Default | Meaning                                                                                              |
-| ---------------- | ------- | ---------------------------------------------------------------------------------------------------- |
-| `executablePath` | none    | The Chromium or Chrome to launch, instead of looking for one                                         |
-| `idleSeconds`    | `300`   | Seconds after its last call that the browser closes, every session's tabs with it; `0` keeps it open |
-| `headless`       | `true`  | `false` shows the browser's windows on the host's screen, to watch the agent work                    |
+| Config           | Default | Meaning                                                                                                                            |
+| ---------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `executablePath` | none    | The Chromium or Chrome to launch, instead of looking for one                                                                       |
+| `idleSeconds`    | `300`   | Seconds after a session's last call that its tabs close, and after the last call of all that the browser does; `0` keeps them open |
+| `headless`       | `true`  | `false` shows the browser's windows on the host's screen, to watch the agent work                                                  |
 
 ## Behavior
 
@@ -27,8 +27,11 @@ Provides [`Browser`](../contract/src/browser.ts) over a Chromium that [Playwrigh
   sign-in popup) becomes a tab of its own and the current one, and the action
   that opened it (a click) resolves to it: Chromium says a window is coming
   while the action runs (`Page.windowOpen`), and only then does the action wait
-  for it, up to 3 seconds. Closing for
-  idleness ends them; a later call says the browser closed and to open a tab
+  for it, up to 3 seconds. A session's tabs close `idleSeconds` after its
+  own last call, though other sessions keep the browser open: each session's
+  profile is a renderer or more (about 70MB with one tab of a light page,
+  measured 2026-10-21), which a session gone quiet would otherwise hold until
+  the browser closed. A later call says they closed and to open a tab
   again. `browser.chromium` (`lemma inspectors browser.chromium`) shows the
   executable, whether it runs, and each session's tabs.
 - **Snapshots** are Playwright's AI-mode aria snapshots

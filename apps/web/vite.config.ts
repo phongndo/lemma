@@ -1,9 +1,11 @@
 /// <reference types="vitest/config" />
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { promisify } from "node:util";
+import { brotliCompress, constants as zlib, gzip } from "node:zlib";
 import { Scanner } from "@tailwindcss/oxide";
 import tailwindcss from "@tailwindcss/vite";
 import { compile } from "tailwindcss";
@@ -92,13 +94,56 @@ function utilityCandidates(): Plugin {
   };
 }
 
+/** What `precompress` compresses: the build's text, but its source maps, which only devtools fetch. */
+const COMPRESSIBLE = /\.(?:js|css|html|svg|json|txt|wasm)$/;
+const brotli = promisify(brotliCompress);
+const gzipped = promisify(gzip);
+
+/**
+ * Writes `<file>.br` and `<file>.gz` beside each file of the build that is text of 1 KiB or more, where they come out
+ * smaller. `transport.server` sends the copy a browser accepts, so the page's first load crosses as about a quarter of
+ * its bytes, with nothing compressed as it is served. Brotli's quality 10 adds about a second to the build, in the
+ * threads `node:zlib` runs it on; its best, 11, makes the first load 2% smaller and adds three.
+ */
+function precompress(): Plugin {
+  return {
+    name: "lemma:precompress",
+    apply: "build",
+    async writeBundle({ dir }, bundle) {
+      if (dir === undefined) return;
+      await Promise.all(
+        Object.keys(bundle)
+          .filter((name) => COMPRESSIBLE.test(name))
+          .map(async (name) => {
+            const path = join(dir, name);
+            const data = await readFile(path);
+            if (data.length < 1024) return;
+            const [br, gz] = await Promise.all([
+              brotli(data, { params: { [zlib.BROTLI_PARAM_QUALITY]: 10, [zlib.BROTLI_PARAM_SIZE_HINT]: data.length } }),
+              gzipped(data, { level: zlib.Z_BEST_COMPRESSION }),
+            ]);
+            await Promise.all([
+              br.length < data.length ? writeFile(`${path}.br`, br) : undefined,
+              gz.length < data.length ? writeFile(`${path}.gz`, gz) : undefined,
+            ]);
+          }),
+      );
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [solid(), tailwindcss(), utilityCandidates()],
+  plugins: [solid(), tailwindcss(), utilityCandidates(), precompress()],
   resolve: { conditions: ["lemma-source"] },
   server: {
     host: process.env.LEMMA_DEV_HOST ?? "127.0.0.1",
     proxy: { "/rpc": { target: hostUrl, ws: true, ...auth }, "/api": { target: hostUrl, ...auth } },
   },
-  build: { target: "es2022", sourcemap: true },
+  build: {
+    target: "es2022",
+    sourcemap: true,
+    // An image (a provider's logo) is a file of its own, loaded where it shows, rather than text in the script every page loads.
+    assetsInlineLimit: (file) => (file.endsWith(".svg") ? false : undefined),
+  },
   test: { environment: "node", include: ["tests/**/*.test.ts"] },
 });

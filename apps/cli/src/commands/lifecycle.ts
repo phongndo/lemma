@@ -3,19 +3,20 @@ import { existsSync } from "node:fs";
 import { mkdir, open, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { Duration, Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import type { Discovery } from "@lemma/contracts/discovery";
 import { profileOf } from "@lemma/contracts/profiles";
 import { CliChannels } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
+import { missingHostFlags } from "@lemma/host/launch";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { hostFiles } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
 import type { Builtin, Globals, Io } from "../command.ts";
 import { connect, homeOf, otherProtocol, rootOf, toCliError } from "../connect.ts";
 import { startedByText } from "../format.ts";
+import { webIndex } from "../open.ts";
 import { readBuild } from "../release.ts";
 
 /*
@@ -33,9 +34,6 @@ const localOnly = (globals: Globals, what: string): CliError | undefined =>
   globals.env !== undefined && globals.env !== "local"
     ? usage(`${what} acts on this machine's host; run it on the machine --env ${globals.env} names`)
     : undefined;
-
-/** The built web app the host serves by default: a checkout's, which `pnpm start` builds. */
-const webIndex = fileURLToPath(new URL("../../../web/dist/index.html", import.meta.url));
 
 const isAlive = (pid: number): boolean => {
   try {
@@ -58,6 +56,15 @@ const tail = (path: string, count: number): Effect.Effect<readonly string[]> =>
       () => [],
     ),
   );
+
+/**
+ * What runs `serve` in a process of its own (`--detach`, a service): this lemma (`io.self`), given the host's Node.js
+ * flags it was not started with, so that the host need not start again for them (`@lemma/host/launch`).
+ */
+const serveCommand = (io: Io, self: readonly string[]): string[] => {
+  const [node, ...rest] = self;
+  return [node!, ...missingHostFlags([...rest.slice(0, -1), ...(io.env.NODE_OPTIONS ?? "").split(/\s+/)]), ...rest, "serve", "--no-open"];
+};
 
 /** The host's own flags, from `serve`'s. */
 const hostArgs = (flags: { readonly port: number | undefined; readonly host: string | undefined; readonly safe: boolean }): string[] => [
@@ -94,8 +101,8 @@ const startInBackground = (io: Io, home: string, cwd: string, args: readonly str
   Effect.gen(function* () {
     if (io.self === undefined)
       return yield* new CliError({ code: "Unsupported", message: "This lemma cannot start itself in the background", exit: ExitCode.failed });
-    const [command, ...rest] = io.self;
-    const child = spawn(command!, [...rest, "serve", "--no-open", ...args], {
+    const [command, ...rest] = serveCommand(io, io.self);
+    const child = spawn(command!, [...rest, ...args], {
       cwd,
       env: { ...io.env, INIT_CWD: cwd, LEMMA_STARTED_BY: "cli" } as NodeJS.ProcessEnv,
       detached: true,
@@ -532,12 +539,12 @@ const serviceManager = (profile?: string): ServiceManager | undefined => {
 /**
  * What a service runs: `serve`, for the home and profile this command uses, of the `lemma` command the installer
  * links, so that once restarted it runs the release installed last (`lemma update`); else this lemma's own, as a
- * checkout runs it.
+ * checkout runs it, given the host's Node.js flags (`serveCommand`).
  */
 const serviceCommand = (io: Io): readonly string[] | undefined => {
   const { link } = readBuild();
   if (link !== undefined) return [link, "serve", "--no-open"];
-  return io.self === undefined ? undefined : [...io.self, "serve", "--no-open"];
+  return io.self === undefined ? undefined : serveCommand(io, io.self);
 };
 
 const serviceDefinition = (command: readonly string[], io: Io, manager: ServiceManager) => {

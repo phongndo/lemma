@@ -31,7 +31,8 @@ export const applySessionsChange = (sessions: readonly SessionInfo[], change: Ex
 export const appendLog = (events: readonly SessionEvent[], incoming: readonly SessionEvent[]): readonly SessionEvent[] => {
   const last = events.at(-1)?.seq ?? 0;
   const fresh = incoming.filter((event) => event.seq > last);
-  return fresh.length === 0 ? events : [...events, ...fresh];
+  // A new array, as what read the last one holds it: `concat` copies one of 100,000 events in half the time a spread takes.
+  return fresh.length === 0 ? events : events.concat(fresh);
 };
 
 /**
@@ -57,9 +58,61 @@ export const logFailure = (error: unknown): string | undefined => {
 export const resolveLeaf = (events: readonly SessionEvent[], leaf: string | undefined, lastSeq = 0): string | undefined => {
   const newest = events.at(-1);
   if (newest === undefined) return undefined;
-  if (leaf === undefined || !events.some((event) => event.id === leaf)) return newest.id;
+  if (leaf === undefined || !hasEvent(events, leaf)) return newest.id;
   if (leaf === newest.id || newest.seq <= lastSeq) return leaf;
-  return branchOf(events, newest.id).some((event) => event.id === leaf) ? newest.id : leaf;
+  return (descends(events, newest.id, leaf) ?? branchOf(events, newest.id).some((event) => event.id === leaf)) ? newest.id : leaf;
+};
+
+/** A branch (`branchOf`), with the log and leaf it was read from. */
+export interface WalkedBranch {
+  readonly events: readonly SessionEvent[];
+  readonly leaf: string | undefined;
+  readonly branch: readonly SessionEvent[];
+}
+
+/**
+ * The branch to `leaf` in `events`, carried on from `last` when `events` is `last`'s log grown at its end and the
+ * events added lead from `last`'s leaf to `leaf`, read back from the leaf: `last`'s branch itself when the leaf is
+ * unchanged. Undefined otherwise (a checkout, a branch of its own in what was added, another log), for `branchOf`,
+ * which maps the whole log: a client following a log calls this on every event appended.
+ */
+export const growBranch = (last: WalkedBranch, events: readonly SessionEvent[], leaf: string | undefined): readonly SessionEvent[] | undefined => {
+  const from = last.events.length;
+  if (from === 0 || events.length < from || events[from - 1] !== last.events[from - 1]) return undefined;
+  if (leaf === last.leaf) return last.branch;
+  if (leaf === undefined || last.leaf === undefined) return undefined;
+  const tail: SessionEvent[] = [];
+  let wanted: string | null = leaf;
+  for (let at = events.length - 1; at >= from && wanted !== null; at--) {
+    const event = events[at]!;
+    if (event.id !== wanted) continue;
+    tail.push(event);
+    if (event.parent === last.leaf) return last.branch.concat(tail.reverse());
+    wanted = event.parent;
+  }
+  return undefined;
+};
+
+/** Whether the log has `id`, looked for from its end, where a leaf usually is. */
+const hasEvent = (events: readonly SessionEvent[], id: string): boolean => {
+  for (let at = events.length - 1; at >= 0; at--) if (events[at]!.id === id) return true;
+  return false;
+};
+
+/**
+ * Whether `ancestor` is on the branch ending at `from`, read back from the log's end without mapping it (this runs on
+ * every event appended, and a log may hold a hundred thousand): in a log in order, a parent comes before its child.
+ * Undefined when the log is not in that order, so the walk cannot tell.
+ */
+const descends = (events: readonly SessionEvent[], from: string, ancestor: string): boolean | undefined => {
+  let wanted: string | null = from;
+  for (let at = events.length - 1; at >= 0 && wanted !== null; at--) {
+    const event = events[at]!;
+    if (event.id !== wanted) continue;
+    if (event.id === ancestor) return true;
+    wanted = event.parent;
+  }
+  return wanted === null ? false : undefined;
 };
 
 export const sessionTitle = (session: SessionInfo | undefined): string => session?.title?.trim() || "Thread";

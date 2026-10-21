@@ -10,13 +10,39 @@ interface UsageSummary {
   readonly title: string;
 }
 
+/**
+ * The formatters for `locale` (the page's when undefined) by what they write: made once each, since making one costs
+ * far more than using it, and a long thread writes a figure and a date for each of its turns as it opens.
+ */
+const formatters = new Map<string, Intl.DateTimeFormat | Intl.NumberFormat>();
+const formatter = <F extends Intl.DateTimeFormat | Intl.NumberFormat>(locale: string | undefined, name: string, make: () => F): F => {
+  const key = `${locale ?? ""}\u0000${name}`;
+  let made = formatters.get(key) as F | undefined;
+  if (made === undefined) formatters.set(key, (made = make()));
+  return made;
+};
+/** `n` as `toLocaleString()` writes it. */
+const count = (n: number): string => formatter(undefined, "count", () => new Intl.NumberFormat()).format(n);
+
+/** The page's time zone as last read, and when: read again at most once a second, as reading it makes a formatter. */
+let zone = { name: "", at: -Infinity };
+/**
+ * A date formatter, made for the page's time zone as it is: one keeps the zone it was made in, and the machine's can
+ * change while a page is open (a laptop that travels).
+ */
+const dateFormatter = (locale: string | undefined, name: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat => {
+  const now = Date.now();
+  if (Math.abs(now - zone.at) >= 1000) zone = { name: new Intl.DateTimeFormat().resolvedOptions().timeZone, at: now };
+  return formatter(locale, `${zone.name}\u0000${name}`, () => new Intl.DateTimeFormat(locale, options));
+};
+
 /** Compact footer text plus a detailed tooltip. Input includes cache reads/writes, as providers bill them. */
 export const summarizeUsage = (usage: Usage): UsageSummary => {
   const cached = usage.cacheRead + usage.cacheWrite;
   const lines = [
-    `Input ${(usage.input + cached).toLocaleString()} tokens`,
-    `Output ${usage.output.toLocaleString()} tokens${usage.reasoning ? ` (${usage.reasoning.toLocaleString()} reasoning)` : ""}`,
-    `Cache read ${usage.cacheRead.toLocaleString()}, write ${usage.cacheWrite.toLocaleString()}${usage.cacheRead === 0 ? "" : ` (${percent(cacheHitRate(usage)!)} of input)`}`,
+    `Input ${count(usage.input + cached)} tokens`,
+    `Output ${count(usage.output)} tokens${usage.reasoning ? ` (${count(usage.reasoning)} reasoning)` : ""}`,
+    `Cache read ${count(usage.cacheRead)}, write ${count(usage.cacheWrite)}${usage.cacheRead === 0 ? "" : ` (${percent(cacheHitRate(usage)!)} of input)`}`,
     `Cost ${formatCost(usage.cost.total)} (in ${formatCost(usage.cost.input)}, out ${formatCost(usage.cost.output)}, cache ${formatCost(usage.cost.cacheRead + usage.cost.cacheWrite)})`,
   ];
   return {
@@ -44,20 +70,21 @@ export const sentTime = (at: number, now: number, locale?: string): { readonly l
   const date = new Date(at);
   const today = new Date(now);
   const days = Math.round((midnight(today) - midnight(date)) / 86_400_000);
-  const time = date.toLocaleTimeString(locale, { hour: "numeric", minute: "2-digit" });
+  const time = dateFormatter(locale, "time", { hour: "numeric", minute: "2-digit" }).format(date);
+  const thisYear = date.getFullYear() === today.getFullYear();
   const label =
     days === 0
       ? time
       : days === 1
         ? `Yesterday ${time}`
-        : date.toLocaleString(locale, {
+        : dateFormatter(locale, thisYear ? "day" : "day and year", {
             month: "short",
             day: "numeric",
-            ...(date.getFullYear() === today.getFullYear() ? {} : { year: "numeric" }),
+            ...(thisYear ? {} : { year: "numeric" }),
             hour: "numeric",
             minute: "2-digit",
-          });
-  return { label, full: date.toLocaleString(locale, { dateStyle: "full", timeStyle: "short" }) };
+          }).format(date);
+  return { label, full: dateFormatter(locale, "full", { dateStyle: "full", timeStyle: "short" }).format(date) };
 };
 
 /** The local midnight starting `date`'s day: days between two count whole, across a daylight-saving change too. */

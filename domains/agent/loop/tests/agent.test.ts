@@ -2,6 +2,7 @@ import { promises } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, PluginContext } from "@lemma/core";
 import type { Handler } from "@lemma/core";
@@ -10,12 +11,12 @@ import { nodeFileSystem } from "@lemma/contracts/fs";
 import { Agent, AgentContinueHook, AgentError, AgentInputHook, AgentRequestHook, ModelNotice, PromptSections, QueueChanged } from "@lemma/agent";
 import type { PromptDecision, PromptInput } from "@lemma/agent";
 import { contentText, emptyUsage, LlmRequest, LlmRequestHook } from "@lemma/llm";
-import { branchOf, rebuildRequest, SessionError, SessionRemoveHook, Sessions } from "@lemma/sessions";
+import { branchOf, rebuildRequest, requestState, SessionError, SessionRemoveHook, Sessions, splitSystem } from "@lemma/sessions";
 import { ToolResult } from "@lemma/tools";
 import type { ToolResultMessage, UserMessage } from "@lemma/llm";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import type { Tool } from "@lemma/tools";
-import sessions from "@lemma/sessions-files";
+import sessions, { makeSessionsPlugin } from "@lemma/sessions-files";
 import { readJournals } from "@lemma/agent/kit";
 import { BRANCHED_CALL, unansweredCalls } from "@lemma/agent/kit";
 import { call, failWith, gated, hang, log, newSession, ofType, reply, runAgent, tempDir, text, types, useTools, waitFor } from "./fakes.ts";
@@ -168,15 +169,54 @@ const prompts = (events: readonly SessionEvent[]) =>
     return [];
   });
 
-/** Every `request` event rebuilds to exactly what the model received, in order. */
+/**
+ * Every `request` event rebuilds to exactly what the model received, in order, each part credited (by the request, or
+ * the one before it on its branch): its sections make up the system prompt sent, and its tools are those declared.
+ */
 const expectLogInvariant = (events: readonly SessionEvent[], sessionId: string, requests: readonly LlmRequest[]) => {
   const logged = events.filter((event) => event.data.type === "request");
   expect(logged.length).toBe(requests.length);
   logged.forEach((event, i) => {
-    const rebuilt = rebuildRequest(branchOf(events, event.id), event.id, sessionId);
+    const branch = branchOf(events, event.id);
+    const rebuilt = rebuildRequest(branch, event.id, sessionId);
     expect(rebuilt).toEqual(requests[i]);
+    const { contributions } = requestState(branch);
+    expect(splitSystem(rebuilt!.system, contributions ?? []), `request ${i}'s sections`).toBeDefined();
+    expect((contributions ?? []).filter((part) => part.kind === "tool").map((part) => part.label)).toEqual((rebuilt!.tools ?? []).map((tool) => tool.name));
   });
 };
+
+describe("a kept branch", () => {
+  it("starts the next turn without reading the session back, until no turn has used it for five minutes", async () => {
+    // The store's reads of a branch, counted: a turn starting from the branch the last one left reads none.
+    let reads = 0;
+    const counting = makeSessionsPlugin({
+      wrap: (store) => ({ ...store, branch: (sessionId, options) => Effect.tap(store.branch(sessionId, options), () => Effect.sync(() => void reads++)) }),
+    });
+    const read = await withAgent({ testClock: true, sessions: counting, scripts: [reply("one"), reply("two"), reply("three")] }, () =>
+      Effect.gen(function* () {
+        const { id } = yield* newSession;
+        const agent = yield* Agent;
+        const counted = (prompt: string) =>
+          Effect.map(
+            Effect.andThen(
+              Effect.sync(() => (reads = 0)),
+              agent.prompt(id, text(prompt)),
+            ),
+            () => reads,
+          );
+        const first = yield* counted("one");
+        const soon = yield* counted("two");
+        // Gone by then, as the store lets the session's events go: the next turn reads its branch back.
+        yield* TestClock.adjust("5 minutes");
+        const later = yield* counted("three");
+        return { first, soon, later };
+      }),
+    );
+    expect(read.soon).toBe(read.first - 1);
+    expect(read.later).toBe(read.first);
+  });
+});
 
 describe("agent", () => {
   it("runs a text-only turn and logs it with timing, title, and usage", async () => {
@@ -636,6 +676,10 @@ describe("agent", () => {
           // The prompt stays as declared, so the third request extends the second's prefix; the change is told after it.
           expect(logged[2]!.system).toBeUndefined();
           expect(logged[2]!.tools).toBeUndefined();
+          // Nor are the contributions logged again: each request's are the first's, as its branch resolves them.
+          expect(logged.map((request) => request.contributions !== undefined)).toEqual([true, false, false]);
+          const requestEvents = events.filter((event) => event.data.type === "request");
+          for (const event of requestEvents) expect(requestState(branchOf(events, event.id)).contributions).toEqual(logged[0]!.contributions);
           expect(logged.map((request) => request.restart)).toEqual(["start", undefined, undefined]);
           expect(ofType(events, "prompt-update")).toEqual([
             { type: "prompt-update", turnId: expect.any(String), sections: [{ id: "notes", source: "project-notes", text: "Notes v2" }] },
@@ -687,6 +731,12 @@ describe("agent", () => {
           yield* a.prompt(id, text("third"), { model: "fake/m2" });
           const events = yield* log(id);
           expect(ofType(events, "request").map((request) => request.restart)).toEqual(["start", undefined, undefined, "tools", "model"]);
+          // Logged where they change: by the first request, and the one that declares shout too.
+          expect(
+            ofType(events, "request")
+              .slice(0, 4)
+              .map((request) => request.contributions?.filter((part) => part.kind === "tool").map((part) => part.label)),
+          ).toEqual([["echo"], undefined, undefined, ["echo", "shout"]]);
           expect(ofType(events, "prompt-update").map((update) => update.unavailable)).toEqual([["echo"], []]);
           // Still declared, so the prefix holds; the model is told, and its call refused.
           expect(requests[1]!.tools!.map((tool) => tool.name)).toEqual(["echo"]);

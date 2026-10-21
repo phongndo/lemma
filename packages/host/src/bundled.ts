@@ -52,11 +52,11 @@ export const optIn: ReadonlySet<string> = new Set(["context.prune"]);
 export const webDist = fileURLToPath(new URL("../../../apps/web/dist", import.meta.url));
 
 /**
- * How the agent, and `release.updates`, run the `lemma` CLI beside this host from a shell: on the Node.js the host runs
- * on, which a release carries and need not put on PATH; a host in the desktop app runs on Electron, so they use the
- * `node` on PATH.
+ * How the agent, and `release.updates`, run the `lemma` CLI beside this host from a shell (its bundle when built, see
+ * apps/cli): on the Node.js the host runs on, which a release carries and need not put on PATH; a host in the desktop
+ * app runs on Electron, so they use the `node` on PATH.
  */
-export const cliCommand = `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/src/main.ts", import.meta.url)))}`;
+export const cliCommand = `${process.versions.electron === undefined ? shellWord(process.execPath) : "node"} --conditions=lemma-source ${shellWord(fileURLToPath(new URL("../../../apps/cli/bin/lemma.js", import.meta.url)))}`;
 
 /**
  * Everything a fresh install runs. What the host provides itself (`Paths`,

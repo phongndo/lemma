@@ -4,14 +4,14 @@ import { HostError } from "@lemma/contracts";
 import { AgentChannels } from "@lemma/agent";
 import { branchOf, SessionChannels, NewThreadRoute, ThreadRoute } from "@lemma/sessions";
 import { isRoute } from "@lemma/router";
-import type { AgentActivity, AgentView, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
+import type { AgentActivity, PromptContent, QueuedPrompt, TurnOptions } from "@lemma/agent";
 import type { SessionEvent, SessionInfo, SessionMarks, SessionsChange } from "@lemma/sessions";
 import {
   appendLog,
   appendOutput,
   applyDelta,
   applySessionsChange,
-  beginJoin,
+  createFinished,
   emptyLive,
   endTurn,
   isBlank,
@@ -19,10 +19,13 @@ import {
   LEAVING_MS,
   logFailure,
   newerQueue,
+  noteEnded,
+  noteLogged,
   recentRequests,
   reconcileLive,
   resolveLeaf,
   ThreadHolds,
+  growBranch,
   Threads,
   THREADS_CONTRACT,
   trackTurn,
@@ -30,7 +33,7 @@ import {
   waitingPrompts,
   written,
 } from "@lemma/threads";
-import type { LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft } from "@lemma/threads";
+import type { Finished, LiveState, KnownQueue, LogState, PromptAnswer, ThreadDraft, WalkedBranch } from "@lemma/threads";
 import { PluginsFacts } from "@lemma/settings";
 import { Client, Notify, Router, Slots, defineWebPlugin } from "@lemma/web";
 import { loadJson, recordOf, save } from "@lemma/web/storage";
@@ -158,6 +161,8 @@ export default defineWebPlugin({
     const [log, setLog] = createSignal<LogState>({ loaded: true });
     /** The open thread's drafts and running tools' output: only the thread shown keeps them, and opening one asks the agent for its own. */
     const [live, setLive] = createSignal<LiveState>(emptyLive);
+    /** What is over of the open thread's live output: its log's events noted as they are appended, and the turns the agent ended. */
+    let finished: Finished = createFinished();
     /** The open thread's queue as the agent last reported it, with its revision: an older report never replaces a newer. */
     const [queue, setQueue] = createSignal<KnownQueue>();
     /**
@@ -204,7 +209,20 @@ export default defineWebPlugin({
       return session === undefined || unsent(session);
     });
     const leaf = createMemo(() => resolveLeaf(events(), active()?.leaf, active()?.lastSeq));
-    const branch = createMemo(() => branchOf(events(), leaf()));
+    /** The log and leaf the branch was last read from, to go on from as the log grows. */
+    let walked: WalkedBranch | undefined;
+    /**
+     * The branch shown, root to leaf. A log grown at its end along the branch (a turn appending) extends the last one
+     * (`growBranch`): `branchOf` maps the whole log, and this runs on every event appended.
+     */
+    const branch = createMemo(() => {
+      const all = events();
+      const at = leaf();
+      const last = walked;
+      const next = (last === undefined ? undefined : growBranch(last, all, at)) ?? branchOf(all, at);
+      walked = { events: all, leaf: at, branch: next };
+      return next;
+    });
     const busy = createMemo(() => {
       const id = activeId();
       return id !== undefined && running().includes(id);
@@ -295,13 +313,17 @@ export default defineWebPlugin({
       if (deltas.length === 0) return;
       const pending = deltas;
       deltas = [];
+      // Output comes on a stream of its own, so it can come after the log, or the agent, said its step or turn is over.
       updateLive((state) =>
-        pending.reduce(
-          (next, event) =>
-            event.type === "delta"
-              ? applyDelta(next, event.turnId, event.stepId, event.event, event.seq)
-              : appendOutput(next, event.toolCallId, event.chunk, event.offset),
-          state,
+        reconcileLive(
+          pending.reduce(
+            (next, event) =>
+              event.type === "delta"
+                ? applyDelta(next, event.turnId, event.stepId, event.event, event.seq)
+                : appendOutput(next, event.toolCallId, event.chunk, event.offset),
+            state,
+          ),
+          finished,
         ),
       );
     }
@@ -310,49 +332,41 @@ export default defineWebPlugin({
     });
 
     /**
-     * What the agent has of the open thread beyond its log (a turn running
-     * since before this page saw it: its output so far; and the queue), so a
-     * thread opened or reconnected midway shows it all. The numbered deltas
-     * that follow continue from it: they are held while it is on its way and
-     * replayed over it. Fetched beside the log, it may be older than the log
-     * that arrived first, so it is checked against the log as it stands. Only
-     * the latest view asked for is applied.
+     * The open thread's model and tool output (`agent.output`). It opens, and
+     * opens again after a reconnect, with what the agent has of the thread
+     * beyond its log (a turn running since before this page saw it: its output
+     * so far; and the queue), so a thread opened or reconnected midway shows it
+     * all, and the numbered deltas that follow go on from it. That may be older
+     * than the log that arrived first, so it is checked against the log as it
+     * stands.
      */
-    let joins = 0;
-    const joinTurn = (sessionId: string) => {
-      const join = ++joins;
-      // What arrived before asking is older than the view: it applies as usual. What arrives from now is held.
-      flushDeltas();
-      updateLive(beginJoin);
-      const done = (view: AgentView | undefined) =>
-        batch(() => {
-          if (joins !== join) return;
-          flushDeltas();
-          updateLive((state) => joinLive(state, view, untrack(events)));
-          if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
-        });
-      return client.channel.call(AgentChannels.view, { sessionId }).then(done, () => done(undefined));
-    };
-
-    plugin.onCleanup(
-      client.follow(AgentChannels.activity, undefined, (activity) => {
-        if (activity.type === "delta" || activity.type === "tool-output") {
-          if (activity.sessionId !== activeId()) return;
-          deltas.push(activity);
+    const followOutput = (sessionId: string) =>
+      client.follow(AgentChannels.output, { sessionId }, (element) => {
+        if (element.type !== "subscribed") {
+          deltas.push(element);
           if (deltas.length >= QUEUE_LIMIT) flushDeltas();
           else frame ??= requestAnimationFrame(flushDeltas);
           return;
         }
-        // Everything else sees the deltas that came before it.
+        const { view } = element;
+        batch(() => {
+          // What streamed before it is older: it applies first.
+          flushDeltas();
+          updateLive((state) => joinLive(state, view, finished));
+          if (view !== undefined) reportQueue({ queue: view.queue, revision: view.queueRevision });
+        });
+      });
+
+    // Every thread's turns and queue; only the open thread's output, on a stream of its own (`followOutput`).
+    plugin.onCleanup(
+      client.follow(AgentChannels.activity, { output: false }, (activity) => {
+        // What the open thread streamed before it comes first.
         flushDeltas();
         switch (activity.type) {
-          case "subscribed": {
-            // Heard from now on; what came before is the turns running now, and what the agent has of the open thread.
+          case "subscribed":
+            // Heard from now on; what came before is the turns running now.
             setRunning(activity.running);
-            const id = activeId();
-            if (id !== undefined) void joinTurn(id);
             return;
-          }
           case "turn-started":
             setRunning(trackTurn({ running: running(), ended: endedTurns }, activity).running);
             return;
@@ -363,29 +377,36 @@ export default defineWebPlugin({
             const next = trackTurn({ running: running(), ended: endedTurns }, activity);
             endedTurns = next.ended;
             setRunning(next.running);
-            if (activity.sessionId === activeId()) updateLive((state) => endTurn(state, activity.turnId));
+            if (activity.sessionId !== activeId()) return;
+            noteEnded(finished, activity.turnId);
+            updateLive((state) => endTurn(state, activity.turnId));
             return;
           }
         }
       }),
     );
 
-    /** The open thread's `sessions.log`. */
+    /** The open thread's `sessions.log`, and its `agent.output`. */
     let stopLog: (() => void) | undefined;
-    plugin.onCleanup(() => stopLog?.());
+    let stopOutput: (() => void) | undefined;
+    plugin.onCleanup(() => {
+      stopLog?.();
+      stopOutput?.();
+    });
     /** Settles once the active thread's log has first loaded. */
     let opened: Promise<void> = Promise.resolve();
     /** Follows the log of the thread the address names, and what the agent has of it, in place of the last one's. */
     const open = (sessionId: string | undefined) => {
       stopLog?.();
-      stopLog = undefined;
-      // What streamed, and what the agent was asked for, belong to the thread left.
+      stopOutput?.();
+      stopLog = stopOutput = undefined;
+      // What streamed belongs to the thread left.
       deltas = [];
-      joins++;
       batch(() => {
         setEvents([]);
         setLog({ loaded: sessionId === undefined });
         setLive(emptyLive);
+        finished = createFinished();
         setQueue(undefined);
         setLeaving([]);
         withdrawn = new Set();
@@ -397,10 +418,13 @@ export default defineWebPlugin({
       let first!: () => void;
       opened = new Promise((resolve) => (first = resolve));
       const append = (incoming: readonly SessionEvent[]) => {
-        const next = appendLog(untrack(events), incoming);
-        if (next === untrack(events)) return;
+        const before = untrack(events);
+        const next = appendLog(before, incoming);
+        if (next === before) return;
         setEvents(next);
-        updateLive((state) => reconcileLive(state, next));
+        // Only what was appended is read: what is over of the rest was noted as it came.
+        noteLogged(finished, next, before.length);
+        updateLive((state) => reconcileLive(state, finished));
       };
       // Leaving the thread settles `opened` too, so a `select` of it never waits on a log no longer read.
       let left = false;
@@ -447,7 +471,7 @@ export default defineWebPlugin({
       preloaded.delete(sessionId);
       if (fresh(warm)) warm!.events.then(follow, () => follow([]));
       else follow([]);
-      void joinTurn(sessionId);
+      stopOutput = followOutput(sessionId);
     };
     createEffect(on(activeId, open));
 

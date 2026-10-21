@@ -1,11 +1,38 @@
-import { Client, SdkHttpError, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import type { Tool as McpTool } from "@modelcontextprotocol/client";
-import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import type { Client, StreamableHTTPClientTransport, Tool as McpTool } from "@modelcontextprotocol/client";
+import type { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import type { McpServerConfig } from "@lemma/mcp";
 import { isImageAddress } from "./form.ts";
 import type { CallResult } from "./tools.ts";
 
 export type { McpTool };
+
+type Sdk = typeof import("@modelcontextprotocol/client") & typeof import("@modelcontextprotocol/client/stdio");
+/**
+ * The SDK, imported by the first connect rather than with the plugin: with zod it is most of the code the plugin
+ * loads, for servers a host may have none of. One that cannot be loaded fails the connect, saying why.
+ */
+let sdk: Sdk | undefined;
+let loading: Promise<Sdk> | undefined;
+const loadSdk = (): Promise<Sdk> =>
+  (loading ??= Promise.all([import("@modelcontextprotocol/client"), import("@modelcontextprotocol/client/stdio")]).then(
+    ([client, stdio]) => (sdk = { ...client, ...stdio }),
+    (error: unknown) => {
+      loading = undefined;
+      throw error;
+    },
+  ));
+
+/**
+ * The protocol era each server spoke when it last connected in this process, by how it is started. The SDK asks a
+ * server which it speaks (`server/discover`), a local one on a second copy of it, a process of its own (for a Node.js
+ * server, 70–100 MB more while it runs), since a 2025 server may exit on a request it does not know. Once known, it is
+ * not asked so again: a 2025 server is initialized at once (`prior`), and a 2026-07-28 one is asked on its own process,
+ * which answers. A connect that fails forgets it, so the next asks as the first did.
+ */
+const eras = new Map<string, "legacy" | "modern">();
+const eraKey = (config: McpServerConfig) => JSON.stringify([config.command, config.args, config.env, config.cwd, config.url, config.headers]);
+/** The SDK's stdio transport, but asking which era on the process it starts: a subclass is asked in place. */
+let inPlace: Sdk["StdioClientTransport"] | undefined;
 
 /** How much of a local server's stderr is kept for clients to show (`McpServerStatus.stderr`). */
 const STDERR_TAIL = 4096;
@@ -22,7 +49,7 @@ export interface ConnectionEvents {
 
 /** What went wrong, in words a person can act on. */
 export function describe(error: unknown, config: McpServerConfig): string {
-  if (error instanceof SdkHttpError && (error.status === 401 || error.status === 403))
+  if (sdk !== undefined && error instanceof sdk.SdkHttpError && (error.status === 401 || error.status === 403))
     return `The server answered ${error.status}: it needs sign-in, which Lemma does not do yet. Give it an Authorization header in "headers".`;
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === "ENOENT" && config.command !== undefined) return `Command not found: ${config.command}`;
@@ -110,7 +137,8 @@ export class Connection {
     this.state = "connecting";
     this.error = undefined;
     this.events.changed();
-    const client = new Client(
+    const loaded = await loadSdk().catch((error: unknown) => this.failed(error));
+    const client = new loaded.Client(
       { name: "lemma", version: this.clientVersion },
       {
         versionNegotiation: { mode: "auto" },
@@ -136,15 +164,17 @@ export class Connection {
       void transport?.close().catch(() => {});
       void client.close().catch(() => {});
     };
+    const key = eraKey(this.config);
+    const era = eras.get(key);
     try {
-      transport = this.transport();
-      if (transport instanceof StdioClientTransport) {
+      transport = this.transport(loaded, era === "modern");
+      if (transport instanceof loaded.StdioClientTransport) {
         transport.stderr?.on("data", (chunk: Buffer) => {
           this.stderr = (this.stderr + chunk.toString("utf8")).slice(-STDERR_TAIL);
         });
       }
       if (this.closing) throw new Error("The server was stopped");
-      await client.connect(transport, { timeout: this.timeoutMs });
+      await client.connect(transport, { timeout: this.timeoutMs, ...(era === "legacy" ? { prior: { kind: "legacy" as const } } : {}) });
       const tools = client.getServerCapabilities()?.tools === undefined ? [] : (await client.listTools(undefined, { timeout: this.timeoutMs })).tools;
       if (this.closing) throw new Error("The server was stopped");
       const info = client.getServerVersion();
@@ -153,32 +183,45 @@ export class Connection {
       this.icon = (icons.find((candidate) => candidate.theme === undefined) ?? icons[0])?.src;
       this.protocolVersion = client.getNegotiatedProtocolVersion();
       this.instructions = client.getInstructions();
+      const spoke = client.getProtocolEra();
+      if (spoke === undefined) eras.delete(key);
+      else eras.set(key, spoke);
       this.client = client;
       this.state = "connected";
       this.events.tools(tools);
       this.events.changed();
       return client;
     } catch (error) {
+      eras.delete(key);
       await client.close().catch(() => {});
       // One that never connected is not the client's to close.
       await transport?.close().catch(() => {});
-      if (!this.closing) {
-        this.state = "failed";
-        this.error = describe(error, this.config);
-        this.events.changed();
-      }
-      throw new Error(this.error ?? describe(error, this.config), { cause: error });
+      return this.failed(error);
     } finally {
       this.cancel = undefined;
     }
   }
 
-  /** Throws for a `url` that is not one. */
-  private transport(): StreamableHTTPClientTransport | StdioClientTransport {
+  /** Says why the connect failed, unless it was stopped, and throws it. */
+  private failed(error: unknown): never {
+    if (!this.closing) {
+      this.state = "failed";
+      this.error = describe(error, this.config);
+      this.events.changed();
+    }
+    throw new Error(this.error ?? describe(error, this.config), { cause: error });
+  }
+
+  /** Throws for a `url` that is not one. A local server known to speak 2026-07-28 is asked which era `inPlace`. */
+  private transport(loaded: Sdk, modern: boolean): StreamableHTTPClientTransport | StdioClientTransport {
     const { command, url } = this.config;
     if (url !== undefined)
-      return new StreamableHTTPClientTransport(new URL(url), this.config.headers === undefined ? {} : { requestInit: { headers: { ...this.config.headers } } });
-    return new StdioClientTransport({
+      return new loaded.StreamableHTTPClientTransport(
+        new URL(url),
+        this.config.headers === undefined ? {} : { requestInit: { headers: { ...this.config.headers } } },
+      );
+    const Transport = modern ? (inPlace ??= class extends loaded.StdioClientTransport {}) : loaded.StdioClientTransport;
+    return new Transport({
       command: command!,
       args: [...(this.config.args ?? [])],
       ...(this.config.env === undefined ? {} : { env: { ...this.config.env } }),

@@ -27,7 +27,9 @@ changed, with its diff.
   off](https://aider.chat/docs/unified-diffs.html#be-flexible-when-applying-edits)
   (2023). It also accepts the shapes pi repairs: top-level `oldText`/`newText`,
   and `edits` as a JSON string or single object. The model sees only the
-  canonical schema.
+  canonical schema. Lemma changes one thing in the code: the file is
+  normalized for the fallback once a call, where pi normalizes it again for
+  each edit to count its matches (150ms an edit on a 45MB file).
 - **Lemma's writing.** Matching is on LF text, with the BOM aside, and the file
   is written back with its line ending and BOM, as pi does; what Lemma adds is
   how the file is written, below.

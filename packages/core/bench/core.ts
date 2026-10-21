@@ -220,6 +220,38 @@ for (const count of [0, 1, 8]) {
     ),
   );
 }
+// Publishing and hearing: each event heard by every observer, which keeps it (`suspend`, as the agent's own observers
+// do, with room for the batch); a batch ends when the last observer has heard the last event.
+for (const count of [1, 8]) {
+  let heard = 0;
+  let all: () => void = () => {};
+  const listening = Array.from({ length: count }, (_, index) =>
+    definePlugin({
+      id: `listener-${index}`,
+      layer: Layer.effectDiscard(
+        Effect.flatMap(PluginContext, (owner) =>
+          owner.observe(tick, () => Effect.sync(() => void (++heard === iterations * count && all())), { overflow: "suspend", buffer: iterations }),
+        ),
+      ),
+    }),
+  );
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const core = yield* makeCore(listening);
+        const events = yield* core.run(Events);
+        const batch = Effect.andThen(
+          Effect.sync(() => void (heard = 0)),
+          Effect.andThen(
+            core.run(repeat(events.publish(tick, 1), iterations)),
+            Effect.promise(() => (heard === iterations * count ? Promise.resolve() : new Promise<void>((resolve) => void (all = resolve)))),
+          ),
+        );
+        yield* Effect.promise(() => measure(`Event publish, heard / ${count} observers`, iterations, batch));
+      }),
+    ),
+  );
+}
 
 // Registries: reading the items (what a view does on every render), and adding then removing one while `count` others stay.
 const contributors = (count: number) =>

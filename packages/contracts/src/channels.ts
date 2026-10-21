@@ -208,6 +208,31 @@ export const eventFeed = <A, E, R>(first: Effect.Effect<A, E, R>, sources: reado
     }),
   );
 
+/**
+ * `stream` with each element replaced by what `f` makes of it, none or many, a chunk at a time: the transport sends a
+ * chunk as one message and the next once the client acknowledged it, so what comes meanwhile leaves together, where
+ * `Stream.mapEffect` or `mapAccumEffect` would make each element a chunk, and a round trip, of its own. When `f` fails,
+ * the stream fails once what it made of the elements before has gone.
+ */
+export const mapChunks = <A, E, R, B, E2>(stream: Stream.Stream<A, E, R>, f: (element: A) => Effect.Effect<readonly B[], E2>): Stream.Stream<B, E | E2, R> =>
+  Stream.transformPull(stream, (pull) => {
+    let failed: { readonly error: E2 } | undefined;
+    const next: Effect.Effect<readonly [B, ...B[]], E | E2 | Cause.Done> = Effect.suspend(() => {
+      if (failed !== undefined) return Effect.fail(failed.error);
+      return Effect.flatMap(pull, (values) => {
+        const made: (readonly B[])[] = [];
+        return Effect.forEach(values, (value) => Effect.map(f(value), (each) => void made.push(each)), { discard: true }).pipe(
+          Effect.catch((error) => Effect.sync(() => void (failed = { error }))),
+          Effect.flatMap(() => {
+            const all = made.flat();
+            return all.length === 0 ? next : Effect.succeed(all as unknown as readonly [B, ...B[]]);
+          }),
+        );
+      });
+    });
+    return Effect.succeed(next);
+  });
+
 const codecs = new WeakMap<Schema.Top, Schema.Codec<unknown, unknown>>();
 
 /**
@@ -231,8 +256,8 @@ const stoppedFor = (cause: Cause.Cause<unknown>, reason: unknown): boolean => {
  * A call's result, however its handler gives it (see `ChannelCall.handle`).
  * `served` is the lifetime of the plugin serving it: `left` completes when
  * that plugin leaves (`Registries.run`'s), and a handler that stops for it
- * fails with `withdrawn`. Without it, as outside a host, the plugin never
- * leaves. Either way the handler's `signal` aborts if the call is interrupted.
+ * fails with `withdrawn`, read only then. Without it, as outside a host, the
+ * plugin never leaves. Either way the handler's `signal` aborts if interrupted.
  */
 export const resultOf = (
   channel: ChannelCall,
@@ -245,7 +270,7 @@ export const resultOf = (
     let aborter: Fiber.Fiber<void> | undefined;
     let interrupted = false;
     const lifetime: CallLifetime = {
-      left: served === undefined ? Effect.never : Effect.andThen(served.left, Effect.fail(served.withdrawn)),
+      left: served === undefined ? Effect.never : Effect.flatMap(served.left, () => Effect.fail(served.withdrawn)),
       get signal() {
         if (controller === undefined) {
           const made = (controller = new AbortController());
@@ -272,8 +297,7 @@ export const resultOf = (
       Effect.ensuring(Effect.suspend(() => (aborter === undefined ? Effect.void : Fiber.interrupt(aborter)))),
     );
     if (served === undefined) return result;
-    const { withdrawn } = served;
-    return Effect.catchCause(result, (cause) => (stoppedFor(cause, withdrawn) ? Effect.fail(withdrawn) : Effect.failCause(cause)));
+    return Effect.catchCause(result, (cause) => (stoppedFor(cause, served.withdrawn) ? Effect.fail(served.withdrawn) : Effect.failCause(cause)));
   });
 
 /**
@@ -467,10 +491,10 @@ export const withChannel = <Kind extends ChannelKind, A, E, R>(
    */
   const serve = (look: "first" | "last" | "again", gone?: Contribution<Channel>): Effect.Effect<A, E | HostError, R> =>
     Effect.suspend(() => {
-      // The channel the work ran with, and whether a look found one: what decides what comes next.
+      // The channel the work ran with, whether a look found one, and its error if not, made only then (a stack is dear).
       let ran: Contribution<Channel> | undefined;
       let seen = false;
-      const missing = look === "again" ? unanswered(id) : notFound(id);
+      let missing: HostError | undefined;
       const served = withContribution(
         registries,
         () =>
@@ -484,14 +508,14 @@ export const withChannel = <Kind extends ChannelKind, A, E, R>(
           ran = contribution;
           return work(contribution, left);
         },
-        { missing: () => missing, expired: () => withdrawnFrom(id, kind) },
+        { missing: () => (missing ??= look === "again" ? unanswered(id) : notFound(id)), expired: () => withdrawnFrom(id, kind) },
       );
+      // Only once made is it `missing`: a handler may fail with `undefined` too.
+      const isMissing = (error: E | HostError) => missing !== undefined && error === missing;
       const waits = (error: E | HostError) =>
-        error === missing
-          ? look === "first" || (look === "again" && seen)
-          : ran?.item.kind === "call" && ran.item.repeatable === true && isWithdrawn(error, id);
+        isMissing(error) ? look === "first" || (look === "again" && seen) : ran?.item.kind === "call" && ran.item.repeatable === true && isWithdrawn(error, id);
       return Effect.catchIf(served, waits, (error) =>
-        error === missing
+        isMissing(error)
           ? Effect.andThen(answeredOrSettled(registries, id, gone), serve(look === "first" ? "last" : "again", gone))
           : Effect.andThen(answeredOrSettled(registries, id, ran), serve("again", ran)),
       );

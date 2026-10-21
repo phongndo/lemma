@@ -81,6 +81,8 @@ import type { ToolState } from "./tools.tsx";
 
 /** The chat's scroll position, kept with each history entry. */
 const SCROLL_STATE = "chat.scroll";
+/** How often, at most, the prompt rail measures where the prompts are while the layout changes (ms): each frame while a turn streams. */
+const MEASURE_MS = 200;
 
 /** A prompt's text as written: its text parts, a blank line between them. */
 const textOf = (content: ChatUserProps["content"]): string =>
@@ -838,6 +840,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
       steer.source === undefined ? [{ key: pendingMark(steer.requestId), prompt: promptText(steer.content), reply: "" }] : [],
     ),
   ]);
+  const railShown = () => props.chat.config.promptRail && marks().length > 1;
   const [current, setCurrent] = createSignal(0);
   const [steps, setSteps] = createSignal<{ previous: number | undefined; next: number | undefined }>(
     { previous: undefined, next: undefined },
@@ -855,14 +858,32 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   /** Where a jump is taking the view, until the scroll gets there or the reader takes it elsewhere. */
   let heading: number | undefined;
   /**
+   * Where each prompt's place starts (`topOf`), by its key: measured again once the layout has changed (`moved`), at
+   * most every `MEASURE_MS`, since measuring reads every place in a transcript that may be long; a scroll moves none.
+   */
+  let places = new Map<string | undefined, number>();
+  let moved = true;
+  let measuredAt = -Infinity;
+  let measureLater: ReturnType<typeof setTimeout> | undefined;
+  /**
    * Which prompts' turns are in view (a turn runs to the next prompt, the last
    * to the end); the one being read: the last whose turn starts above the top
    * third of the view, or the last one at the bottom; and the nearest turns
    * starting above and below where the view is (or is going), for stepping.
+   * Only while the rail shows it.
    */
   const locate = () => {
-    const places = new Map<string | undefined, number>();
-    for (const element of content.querySelectorAll<HTMLElement>("[data-mark]")) places.set(element.dataset.mark, topOf(element));
+    if (!railShown()) return;
+    if (moved && measureLater === undefined) {
+      const wait = measuredAt + MEASURE_MS - performance.now();
+      if (wait > 0) measureLater = setTimeout(() => ((measureLater = undefined), locateSoon()), wait);
+      else {
+        places = new Map();
+        for (const element of content.querySelectorAll<HTMLElement>("[data-mark]")) places.set(element.dataset.mark, topOf(element));
+        moved = false;
+        measuredAt = performance.now();
+      }
+    }
     const found = locatePrompts(
       marks().map((mark) => places.get(mark.key)),
       { top: scroller.scrollTop, height: scroller.clientHeight, scrollHeight: scroller.scrollHeight },
@@ -876,6 +897,11 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
   const locateSoon = () => {
     cancelAnimationFrame(locating);
     locating = requestAnimationFrame(locate);
+  };
+  /** The layout changed: the places are measured again before the next locating, or as soon after the last as allowed. */
+  const relocate = () => {
+    moved = true;
+    locateSoon();
   };
   const jump = (key: string) => {
     const element = markElement(key);
@@ -942,7 +968,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
         setStuck(scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80);
       } else if (restoring !== undefined) restore();
       else if (stuck()) toBottom();
-      locateSoon();
+      relocate();
     });
     // Its border box: the end it pads for the composer grows with the composer, and the end stays in view.
     observer.observe(content, { box: "border-box" });
@@ -952,9 +978,12 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
       observer.disconnect();
       content.removeEventListener("click", noteToggle, true);
       cancelAnimationFrame(locating);
+      clearTimeout(measureLater);
       cancelAnimationFrame(saving);
     });
   });
+  // The rail shown again (its setting, a second prompt) is located at once.
+  createEffect(on(railShown, (shown) => shown && relocate()));
   createEffect(
     on(threads.activeId, () => {
       heading = undefined;
@@ -984,11 +1013,20 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
     return true;
   };
   let settling = 0;
+  /**
+   * The loaded transcript has been laid out whole once (`data-drawn`): from then on a turn out of view is not drawn
+   * (chat.css), and holds the place of the size it was drawn at, so every place in the thread stays where it is.
+   */
+  const [drawn, setDrawn] = createSignal(false);
+  const settled = () => {
+    setDrawn(true);
+    if (!goToLinked()) restore(true);
+  };
   createEffect(() => {
     cancelAnimationFrame(settling);
-    if (!threads.log().loaded) return;
+    if (!threads.log().loaded) return setDrawn(false);
     // Two frames: the loaded transcript is laid out (and the resize observer has had its turn) before the wait ends.
-    settling = requestAnimationFrame(() => (settling = requestAnimationFrame(() => goToLinked() || restore(true))));
+    settling = requestAnimationFrame(() => (settling = requestAnimationFrame(settled)));
   });
   onCleanup(() => cancelAnimationFrame(settling));
   // A link to a prompt of the thread shown, followed here: the address changes, and the thread stays.
@@ -1020,7 +1058,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
         <FindBar content={content} scroller={scroller} input={(element) => (findInput = element)} onClose={closeFind} />
       </Show>
       <div class="scroller" ref={scroller} onScroll={onScroll}>
-        <div class="content" ref={content}>
+        <div class="content" ref={content} data-drawn={drawn() ? "" : undefined}>
           <Show when={threads.activeId() !== undefined && !threads.log().loaded}>
             <div class="loading">
               <Spinner /> Loading session…
@@ -1044,7 +1082,7 @@ function ChatView(props: { chat: Chat; turns: () => readonly TurnView[]; findWit
           </button>
         </Show>
       </div>
-      <Show when={props.chat.config.promptRail && marks().length > 1}>
+      <Show when={railShown()}>
         <PromptRail marks={marks()} current={current()} previous={steps().previous} next={steps().next} seen={seen()} room={room()} onJump={jump} />
       </Show>
     </div>
