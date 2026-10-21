@@ -570,9 +570,49 @@ export interface ToolView {
    * its arguments, only `title` (`Tool.display`). A call it draws nothing for takes no room in the turn.
    */
   readonly display?: Component<ToolBodyProps>;
+  /**
+   * `true`: its `display` is drawn while a call runs too, from its arguments (`result` absent), as an agent's row shows
+   * it working. Absent: only once a call has a result.
+   */
+  readonly live?: true;
+  /**
+   * Several calls of it in a row in one fold, drawn as one where their displays go: a response that started three
+   * agents shows "3 agents", which opens to each. Absent, or for a call alone, each call's `display` is drawn.
+   */
+  readonly displays?: Component<ToolDisplaysProps>;
+}
+
+/** The calls a tool's `displays` draws as one, in order. */
+export interface ToolDisplaysProps {
+  readonly calls: readonly ToolBodyProps[];
 }
 
 export const ToolViews = defineSlot<ToolView>("chat.tools");
+
+/** A `context` event (what a plugin told the model), as the chat shows it. */
+export interface ContextViewProps {
+  readonly id: string;
+  /** The plugin that told the model. */
+  readonly source: string;
+  /** What the model read: the event's content, its text. */
+  readonly content: string;
+  /** What the event says a transcript shows of it (`display`), if it says. */
+  readonly display?: string | undefined;
+  /** Its submission's id, when the agent placed it for the plugin (`ModelNotice`): `<source>:<id>`. */
+  readonly requestId?: string | undefined;
+  /** When it was logged, epoch ms. */
+  readonly at: number;
+}
+
+/**
+ * How the chat shows what a plugin told the model (its `context` events); the item's id is the plugin's. Without one, a
+ * line names the plugin and the first line of what it said. A finished agent's notice shows as the agent.
+ */
+export interface ContextView {
+  readonly component: Component<ContextViewProps>;
+}
+
+export const ContextViews = defineSlot<ContextView>("chat.context");
 
 /** An inspector tab in the trajectory view, for the records `when` picks. */
 export interface TrajectoryTab {

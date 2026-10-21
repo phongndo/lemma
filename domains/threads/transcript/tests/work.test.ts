@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EventData } from "@lemma/sessions";
-import { displayedCalls, summarizeTools, workEntries } from "../src/work.ts";
+import { displayedCalls, displayEntries, summarizeTools, workEntries } from "../src/work.ts";
 import type { ActionOf, WorkEntry } from "../src/work.ts";
 import { assistant, branch, toolResult, transcriptOf, user } from "@lemma/threads/testing";
 
@@ -77,9 +77,34 @@ describe("displayedCalls", () => {
       { type: "message", turnId: "t1", stepId: "s2", message: assistant([call("c3", "html_render"), call("c4", "html_render")]) },
       toolResult("c4", "shown"),
     );
-    const shows = (name: string) => name === "html_render";
+    const shows = (name: string) => (name === "html_render" ? { live: false } : undefined);
     // c3 has no result yet (it runs), so it shows nothing yet.
     expect(displayedCalls(items, shows).map((block) => block.call.id)).toEqual(["c1", "c4"]);
-    expect(displayedCalls(items, () => false)).toEqual([]);
+    expect(displayedCalls(items, () => undefined)).toEqual([]);
+    // A view drawn live shows a running call too.
+    expect(displayedCalls(items, (name) => (name === "html_render" ? { live: true } : undefined)).map((block) => block.call.id)).toEqual(["c1", "c3", "c4"]);
+  });
+});
+
+describe("displayEntries", () => {
+  it("draws two or more calls of a tool in a row as one where its view groups them, and each alone otherwise", () => {
+    const items = itemsOf(
+      { type: "message", turnId: "t1", stepId: "s1", message: assistant([call("a1", "delegate"), call("a2", "delegate"), call("h1", "html_render")]) },
+      toolResult("a1", "started"),
+      toolResult("a2", "started"),
+      toolResult("h1", "shown"),
+      { type: "message", turnId: "t1", stepId: "s2", message: assistant([call("a3", "delegate")]) },
+      toolResult("a3", "started"),
+    );
+    const blocks = displayedCalls(items, () => ({ live: true }));
+    const entries = displayEntries(blocks, (name) => name === "delegate");
+    expect(entries.map((entry) => (entry.kind === "many" ? entry.blocks.map((block) => block.call.id) : entry.block.call.id))).toEqual([
+      ["a1", "a2"],
+      "h1",
+      "a3",
+    ]);
+    // Keyed by the run's first call, so a run that grows keeps its key.
+    expect(entries[0]!.key).toBe("many:a1");
+    expect(displayEntries(blocks, () => false).map((entry) => entry.kind)).toEqual(["one", "one", "one", "one"]);
   });
 });
