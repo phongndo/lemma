@@ -31,7 +31,7 @@ import { admission, makeQueues, REVISIONS_PER_INSTANCE, WITHDRAWN_KEPT } from ".
 import type { Item, QueuedTurn, SessionState, Suspended } from "./queue.ts";
 import { baseSection, environmentSection } from "./prompt.ts";
 import { failedAs, runTurn, toolLoop } from "./turn.ts";
-import type { Ended, Placed, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
+import type { Ended, KeptBranch, Placed, TurnOutcome, TurnPolicy, TurnResume } from "./turn.ts";
 
 /** The agent's settings: its row's `config`, for `agent.loop` and any loop built on the kit. */
 export const AgentConfig = Schema.Struct({
@@ -316,10 +316,10 @@ export const makeAgent = (deps: AgentDeps, owner: PluginSetup<AgentConfig>, opti
 
     const requests = makeRequestIndex(sessions);
     /** Each session's branch as its last turn left it, the most recently used last (`BRANCHES_KEPT`). */
-    const branches = new Map<string, readonly SessionEvent[]>();
+    const branches = new Map<string, KeptBranch>();
     const kept = (sessionId: string) => ({
       branch: () => branches.get(sessionId),
-      keep: (branch: readonly SessionEvent[]) => {
+      keep: (branch: KeptBranch) => {
         branches.delete(sessionId);
         branches.set(sessionId, branch);
         for (const oldest of branches.keys()) {

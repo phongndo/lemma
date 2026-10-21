@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { Equal, Schema } from "effect";
 import { describe, expect, it } from "vitest";
 import {
   branchOf,
@@ -13,8 +15,9 @@ import {
   requestState,
   summaryText,
 } from "../src/derive.ts";
-import type { EventData, SessionEvent } from "../src/sessions.ts";
-import { contentText, emptyUsage } from "@lemma/llm";
+import { SessionEvent } from "../src/sessions.ts";
+import type { EventData } from "../src/sessions.ts";
+import { contentText, emptyUsage, LlmRequest } from "@lemma/llm";
 import type { Message } from "@lemma/llm";
 
 function log(...items: readonly (EventData | { readonly data: EventData; readonly parent: string })[]): SessionEvent[] {
@@ -315,6 +318,50 @@ describe("request reconstruction", () => {
     const first = rebuildRequest(events, "e2")!;
     expect(first.messages).toHaveLength(1);
     expect(rebuildRequest(events, "e1")).toBeUndefined();
+  });
+
+  it("is the request the constructor makes of the same fields, without its copy of every message", () => {
+    // Made without the constructor's walk (`requestFrom`), which this holds to the constructor's result: an Effect
+    // upgrade that gave a Schema class's instances more than their fields fails here.
+    const tool = { name: "read", description: "Read", parameters: { type: "object", properties: { path: { type: "string" } } } };
+    const call: EventData = {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hmm", thinkingSignature: "sig" },
+          { type: "toolCall", id: "c1", name: "read", arguments: { path: "a.ts" } },
+        ],
+        api: "anthropic-messages",
+        provider: "p",
+        model: "m",
+        usage: emptyUsage,
+        stopReason: "toolUse",
+        timestamp: 0,
+      },
+    };
+    const result: EventData = {
+      type: "message",
+      message: { role: "toolResult", toolCallId: "c1", toolName: "read", content: [{ type: "text", text: "export {}" }], isError: false, timestamp: 0 },
+    };
+    // As a store serves them: read back through the schema.
+    const events = log(
+      user("one"),
+      request({ system: "SYS", tools: [tool], thinking: "high", providerOptions: { temperature: 0.2 } }),
+      call,
+      result,
+      { type: "context", source: "notes", content: [{ type: "text", text: "a note" }] },
+      request({ restart: "model", model: "p/other", thinking: "low", providerOptions: { temperature: 0.2 } }),
+    ).map((event) => Schema.decodeUnknownSync(SessionEvent)(JSON.parse(JSON.stringify(event))));
+    const rebuilt = rebuildRequest(events, "e6", "sid")!;
+    const constructed = new LlmRequest({ ...rebuilt });
+    expect(rebuilt).toBeInstanceOf(LlmRequest);
+    expect(Object.keys(rebuilt)).toEqual(["model", "system", "messages", "thinkingFrom", "tools", "thinking", "sessionId", "providerOptions"]);
+    expect(rebuilt.thinkingFrom).toBe(4);
+    expect(isDeepStrictEqual(rebuilt, constructed)).toBe(true);
+    expect(Equal.equals(rebuilt, constructed)).toBe(true);
+    expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(constructed));
+    expect(String(rebuilt)).toBe(String(constructed));
   });
 });
 

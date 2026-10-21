@@ -5,7 +5,7 @@ import { assert, CoreClosed, Hook, PluginContext, Verify } from "@lemma/core";
 import type { Events, HandlerStep, Hooks } from "@lemma/core";
 import { AgentContinueHook, AgentError, AgentRequestHook, AssistantDelta, TurnEnded, TurnStarted } from "../agent.ts";
 import { addUsage, emptyUsage } from "@lemma/llm";
-import { deriveHistory, deriveMessages, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
+import { deriveHistory, historyOf, modelEntries, nextRequestState, rebuildRequest, requestFrom, requestState } from "@lemma/sessions";
 import { declaredTools, ToolInvocation } from "@lemma/tools";
 import { creditOf, inChainOrder } from "@lemma/contracts";
 import type { HostControl, ResultCredit } from "@lemma/contracts";
@@ -159,6 +159,12 @@ function promptUpdate(
   if (changed.length === 0 && !toolsChanged) return undefined;
   return { sections: changed, ...(toolsChanged ? { unavailable } : {}) };
 }
+/** A session's branch as a turn left it, with the request state at its end (`requestState(events)`), for the next turn. */
+export interface KeptBranch {
+  readonly events: readonly SessionEvent[];
+  readonly request: RequestState;
+}
+
 /** A prompt as a turn places it: a user message carrying the submission's id. */
 export interface Placed {
   readonly requestId: string;
@@ -227,7 +233,7 @@ interface TurnInput {
    * The session's branch as the last turn left it, which a new turn starts from rather than read it again when the
    * session's leaf is still its end; and where the turn leaves its own when it ends.
    */
-  readonly kept?: { readonly branch: () => readonly SessionEvent[] | undefined; readonly keep: (branch: readonly SessionEvent[]) => void };
+  readonly kept?: { readonly branch: () => KeptBranch | undefined; readonly keep: (kept: KeptBranch) => void };
   /**
    * The turn ended so, but closing it in the log failed (a full disk): it is left open there, `TurnEnded` unpublished,
    * for the agent to close as it ended when the session is next taken up (`TurnResume.closing`).
@@ -482,11 +488,11 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
     // reading it all back.
     const kept = input.kept?.branch();
     const leaf = kept === undefined ? undefined : (yield* sessions.get(sessionId).pipe(Effect.mapError(sessionError))).leaf;
-    const branch =
-      kept !== undefined && leaf !== undefined && kept.at(-1)?.id === leaf ? kept : yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError));
+    const current = kept !== undefined && leaf !== undefined && kept.events.at(-1)?.id === leaf ? kept : undefined;
+    const branch = current?.events ?? (yield* sessions.branch(sessionId).pipe(Effect.mapError(sessionError)));
     // The turn follows the leaf just read, answered or not: a checkout meanwhile cannot move it onto unanswered calls.
     state.lastId = branch.at(-1)?.id;
-    keep(branch);
+    keep(branch, current?.request);
     const open = unansweredCalls(branch);
     if (open === undefined || open.event.data.type !== "message") return;
     const { turnId: callTurn, stepId: callStep } = open.event.data;
@@ -503,10 +509,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
   /** The model a turn that runs steps asks: it has one (see `TurnInput.model`). */
   const asked = Effect.suspend(() => (input.model === undefined ? Effect.die(new Error(`Turn ${turnId} has no model to ask`)) : Effect.succeed(input.model)));
 
-  /** `branch`, read from the store, as the turn's branch from here on (`state.branch`). */
-  const keep = (branch: readonly SessionEvent[]) => {
+  /** `branch`, read from the store or kept, as the turn's branch from here on (`state.branch`), with its request state. */
+  const keep = (branch: readonly SessionEvent[], request: RequestState = requestState(branch)) => {
     state.branch = [...branch];
-    state.request = requestState(branch);
+    state.request = request;
   };
   /** The turn's branch, ending at `lastId`: kept, or read from the store when it is not. */
   const branchNow: Effect.Effect<SessionEvent[], AgentError> = Effect.suspend(() =>
@@ -536,6 +542,8 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         branch,
         ...(input.plugins === undefined ? {} : { plugins: input.plugins }),
       });
+      // The model's view of it, derived once: the request's history comes from it too, when nothing is appended meanwhile.
+      const view = modelEntries(branch);
       /** The events each plugin's handler appended, by type, for its credit. */
       const appended = new Map<string, string[]>();
       const draft: RequestDraft = {
@@ -549,7 +557,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
         tools: listed,
         ...(state.streak.shorten ? { overflow: true } : {}),
         branch,
-        history: deriveMessages(branch),
+        history: view.map((entry) => entry.message),
         // Through the turn's own append, so the event chains after the turn's last one and the turn continues from it.
         append: (data) =>
           Effect.uninterruptible(
@@ -621,7 +629,10 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
               ...plan.sections.map((section): Contribution => ({ source: section.source, kind: "system", label: section.id, chars: section.text.length })),
               ...declared.map((tool): Contribution => ({ source: tool.source, kind: "tool", label: tool.spec.name, chars: specChars(tool.spec) })),
             ];
-      const history = deriveHistory(before, { restart: restart !== undefined });
+      const history =
+        restart === undefined && before.length === branch.length && before.at(-1) === branch.at(-1)
+          ? historyOf(branch, view)
+          : deriveHistory(before, { restart: restart !== undefined });
       const unchanged = sameSpecs(state.loggedSpecs, sent) || isDeepStrictEqual(previous.tools ?? [], sent);
       // Offered beside them, logged so a call resumed after a restart is held to them (the first request logs none too).
       const declaredNames = new Set(sent.map((spec) => spec.name));
@@ -1219,7 +1230,7 @@ export function runTurn(services: TurnServices, settings: TurnSettings, input: T
       if (step !== undefined) yield* append({ type: "step-end", turnId, stepId: step.id });
       yield* append({ type: "turn-end", turnId, reason: ended.reason, ...(ended.error === undefined ? {} : { error: ended.error }) });
       closed = true;
-      if (state.branch !== undefined) input.kept?.keep(state.branch);
+      if (state.branch !== undefined) input.kept?.keep({ events: state.branch, request: state.request! });
       // A closed turn has answered every call it made, or the next request would be malformed.
       if (yield* Verify) {
         const branch = yield* sessions.branch(sessionId, { leaf: state.lastId! });
