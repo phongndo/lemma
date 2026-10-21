@@ -310,7 +310,10 @@ export interface RequestState {
   readonly tools?: readonly ToolSpec[];
   /** The `nested` tools offered beside `tools`; undefined when the log predates their being logged. */
   readonly nested?: readonly string[];
-  /** The last request's contributions: who made its system prompt and tools. */
+  /**
+   * The last request's contributions, who made its system prompt and tools: its own, or, when it logged none, those of
+   * the request before it on the branch. Absent when no request on the branch logged any.
+   */
   readonly contributions?: readonly Contribution[];
   /**
    * Each section as the model was last told it: the system prompt's, as the request that declared it splits by its
@@ -344,8 +347,9 @@ function updated(sections: readonly SectionUpdate[], updates: readonly SectionUp
 }
 
 /**
- * The request state after `event`: a `request` event's header, its omitted fields kept from `state`; a
- * `prompt-update` event's sections and unavailable tools; any other, `state`.
+ * The request state after `event`: a `request` event's header, its omitted fields kept from `state` (the request before
+ * it on the branch, as the branch is folded in order); a `prompt-update` event's sections and unavailable tools; any
+ * other, `state`.
  */
 export function nextRequestState(state: RequestState, event: SessionEvent): RequestState {
   const data = event.data;
@@ -358,15 +362,16 @@ export function nextRequestState(state: RequestState, event: SessionEvent): Requ
   }
   if (data.type !== "request") return state;
   const system = data.system ?? state.system;
+  const contributions = data.contributions ?? state.contributions;
   const declared = data.restart !== undefined || data.system !== undefined || state.sections === undefined;
-  const sections = declared ? sectionsOf(system, data.contributions) : state.sections;
+  const sections = !declared ? state.sections : contributions === undefined ? undefined : sectionsOf(system, contributions);
   return {
     model: data.model,
     ...(data.thinking === undefined ? {} : { thinking: data.thinking }),
     ...(system === undefined ? {} : { system }),
     ...(data.tools !== undefined ? { tools: data.tools } : state.tools === undefined ? {} : { tools: state.tools }),
     ...(data.nested !== undefined ? { nested: data.nested } : state.nested === undefined ? {} : { nested: state.nested }),
-    contributions: data.contributions,
+    ...(contributions === undefined ? {} : { contributions }),
     ...(sections === undefined ? {} : { sections }),
     ...(data.restart === undefined && state.unavailable !== undefined ? { unavailable: state.unavailable } : {}),
   };

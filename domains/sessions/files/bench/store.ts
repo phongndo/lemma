@@ -106,8 +106,8 @@ function* agentSession(count: number): Generator<EventData> {
         stepId,
         model: "p/m",
         composition: "c",
-        ...(n === 2 ? { system, tools: specs, restart: "start" as const } : {}),
-        contributions,
+        // As the agent logs them: the system prompt, tools, and contributions when they change, here on the first request.
+        ...(n === 2 ? { system, tools: specs, restart: "start" as const, contributions } : {}),
       };
       yield {
         type: "message",

@@ -16,7 +16,8 @@ import {
   summaryText,
 } from "../src/derive.ts";
 import { SessionEvent } from "../src/sessions.ts";
-import type { EventData } from "../src/sessions.ts";
+import type { Contribution, EventData } from "../src/sessions.ts";
+import { trajectory } from "../src/trajectory.ts";
 import { contentText, emptyUsage, LlmRequest } from "@lemma/llm";
 import type { Message } from "@lemma/llm";
 
@@ -362,6 +363,83 @@ describe("request reconstruction", () => {
     expect(Equal.equals(rebuilt, constructed)).toBe(true);
     expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(constructed));
     expect(String(rebuilt)).toBe(String(constructed));
+  });
+});
+
+describe("contributions logged only when they change", () => {
+  const read = { name: "read", description: "Read", parameters: {} };
+  const bash = { name: "bash", description: "Run", parameters: {} };
+  const credit = (env: string, tools: readonly (typeof read)[]): Contribution[] => [
+    { source: "agent", kind: "system", label: "base", chars: 1 },
+    { source: "agent", kind: "system", label: "env", chars: env.length },
+    ...tools.map((tool): Contribution => ({ source: `tools.${tool.name}`, kind: "tool", label: tool.name, chars: 10 })),
+  ];
+  const first = credit("date 1", [read]);
+  const more = credit("date 1", [read, bash]);
+  const other = credit("date 22", [read]);
+  /** A request: `logged`, the contributions it logs (none when undefined); `credited`, those an older agent logged. */
+  type Ask = { readonly logged?: Contribution[]; readonly credited: Contribution[]; readonly extra?: Partial<Extract<EventData, { type: "request" }>> };
+  const ask = ({ logged, extra }: Ask, older: boolean, credited: Contribution[]): EventData => {
+    const { contributions: _, ...rest } = request(extra) as Extract<EventData, { type: "request" }>;
+    return older ? { ...rest, contributions: credited } : logged === undefined ? rest : { ...rest, contributions: logged };
+  };
+  /**
+   * Turns on two branches: the first's turns keep their contributions, through a compaction, then declare a tool more;
+   * the sibling, written after it, credits other parts, and a request on the first branch after it credits the first's.
+   * `older`: the log an agent that logged them on every request wrote.
+   */
+  const session = (older: boolean): SessionEvent[] => {
+    const at = (spec: Ask) => ask(spec, older, spec.credited);
+    return log(
+      user("one"),
+      at({ logged: first, credited: first, extra: { system: "B\n\ndate 1", tools: [read], restart: "start" } }),
+      assistant("r1"),
+      user("two"),
+      at({ credited: first }),
+      assistant("r2"),
+      { type: "compaction", summary: "S", firstKeptId: "e4", tokensBefore: 10, source: "compaction" },
+      at({ credited: first, extra: { restart: "compaction" } }),
+      assistant("r3"),
+      at({ logged: more, credited: more, extra: { tools: [read, bash], restart: "tools" } }),
+      assistant("r4"),
+      user("three"),
+      at({ credited: more }),
+      { data: at({ logged: other, credited: other, extra: { system: "B\n\ndate 22", tools: [read], restart: "start" } }), parent: "e1" },
+      { data: assistant("s1"), parent: "e14" },
+      { data: at({ credited: other }), parent: "e15" },
+      { data: user("four"), parent: "e13" },
+      at({ credited: more }),
+    );
+  };
+  const requests = ["e2", "e5", "e8", "e10", "e13", "e14", "e16", "e18"];
+
+  it("are the request's own, or the previous request's on its branch, never a sibling branch's", () => {
+    const events = session(false);
+    expect(events.filter((event) => event.data.type === "request" && event.data.contributions !== undefined).map((event) => event.id)).toEqual([
+      "e2",
+      "e10",
+      "e14",
+    ]);
+    expect(requests.map((id) => requestState(branchOf(events, id)).contributions)).toEqual([first, first, first, more, more, other, other, more]);
+    // A request with none before it on its branch credits nothing: its parts' plugins are not known.
+    const orphan = log(user("one"), ask({ credited: first }, false, first));
+    expect(requestState(orphan).contributions).toBeUndefined();
+    expect(requestState(orphan).sections).toBeUndefined();
+  });
+
+  it("rebuild every request, and project every branch, as the log that repeats them on every request", () => {
+    const events = session(false);
+    const older = session(true);
+    for (const leaf of ["e16", "e18"]) {
+      const branch = branchOf(events, leaf);
+      const before = branchOf(older, leaf);
+      expect(trajectory(branch)).toEqual(trajectory(before));
+      for (const id of requests.filter((request) => branch.some((event) => event.id === request))) {
+        const upTo = (events: readonly SessionEvent[]) => events.slice(0, events.findIndex((event) => event.id === id) + 1);
+        expect(rebuildRequest(branch, id, "sid"), id).toEqual(rebuildRequest(before, id, "sid"));
+        expect(requestState(upTo(branch)), id).toEqual(requestState(upTo(before)));
+      }
+    }
   });
 });
 

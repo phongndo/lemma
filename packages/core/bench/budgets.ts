@@ -51,9 +51,11 @@ export const budgets = {
   "Harness / 100 entries / syncs per step": 8,
   "Harness / 1000 entries / syncs per step": 8,
   "Harness / 10000 entries / syncs per step": 8,
-  "Harness / 100 entries / bytes written per step": 2_600,
-  "Harness / 1000 entries / bytes written per step": 2_600,
-  "Harness / 10000 entries / bytes written per step": 2_600,
+  // A request logs its contributions only when they change (2026-10-21): 2,424 -> 2,125 bytes a step at 100 entries,
+  // 2,437 -> 2,138 at 10,000, and a turn's most 4,946 -> 4,348.
+  "Harness / 100 entries / bytes written per step": 2_300,
+  "Harness / 1000 entries / bytes written per step": 2_300,
+  "Harness / 10000 entries / bytes written per step": 2_300,
   "Harness / 100 entries / hooks run per step": 3,
   "Harness / 1000 entries / hooks run per step": 3,
   "Harness / 10000 entries / hooks run per step": 3,
@@ -65,9 +67,9 @@ export const budgets = {
   "Harness / 100 entries / max syncs per turn": 16,
   "Harness / 1000 entries / max syncs per turn": 16,
   "Harness / 10000 entries / max syncs per turn": 16,
-  "Harness / 100 entries / max bytes per turn": 5200,
-  "Harness / 1000 entries / max bytes per turn": 5200,
-  "Harness / 10000 entries / max bytes per turn": 5200,
+  "Harness / 100 entries / max bytes per turn": 4_600,
+  "Harness / 1000 entries / max bytes per turn": 4_600,
+  "Harness / 10000 entries / max bytes per turn": 4_600,
   "Harness / 100 entries / max hooks per turn": 6,
   "Harness / 1000 entries / max hooks per turn": 6,
   "Harness / 10000 entries / max hooks per turn": 6,
@@ -81,8 +83,8 @@ export const budgets = {
   "Harness / 10000 entries / heap MB": 64,
   "Harness / step time 10k vs 1k entries": 1.2,
   // The session store's long session (domains/sessions/files/bench/store.ts, 2026-10-21, same machine): 10,018 events,
-  // 22.5 MB. A host holds 2,220 bytes an event (0.99x the file; 2,520 before requests shared their contributions, and
-  // holding each line's text as well would be about twice that). Search with no match 25 ms and a listing without the
+  // 20.3 MB (22.5 while every request logged its contributions). A host holds 2,220 bytes an event (1.09x the file;
+  // 2,520 before requests shared their contributions, and holding each line's text as well would be about twice that). Search with no match 25 ms and a listing without the
   // index 14 ms, reading events from their heads (75 and 42 ms parsing every line); trajectory 12-14 ms (about 50 ms
   // when every request's tool specs were stringified). Advisory, as timings and the heap are.
   sessionHeapPerEventBytes: 2_700,

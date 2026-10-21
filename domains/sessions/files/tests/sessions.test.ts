@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/core";
 import type { Plugin } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
-import { SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
+import { branchOf, requestState, SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
 import type { EventData, SessionEvent } from "@lemma/sessions";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { nodeFileSystem } from "@lemma/contracts/fs";
@@ -330,6 +330,45 @@ describe("sessions", () => {
     const read = await run(Effect.flatMap(Sessions, (store) => store.events(id)));
     expect(read).toEqual(appended);
     expect(shared(read)).toEqual([true, false]);
+  });
+
+  it("keeps a request that logs no contributions as it was appended, its branch crediting its parts after a torn tail and in a fork", async () => {
+    const credit = (chars: number) => [
+      { source: "agent", kind: "system" as const, label: "base", chars },
+      { source: "tools", kind: "tool" as const, label: "read", chars: 100 },
+    ];
+    const request = (step: number, contributions?: ReturnType<typeof credit>): EventData => ({
+      type: "request",
+      turnId: "t1",
+      stepId: `s${step}`,
+      model: "p/m",
+      composition: "c",
+      ...(contributions === undefined ? {} : { contributions }),
+    });
+    const { id, appended, forked } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const root = yield* store.append(id, title("root"));
+        const first = yield* store.append(id, request(1, credit(4)));
+        const second = yield* store.append(id, request(2));
+        // A sibling branch, crediting other parts, written after the first branch's requests.
+        const sibling = yield* store.append(id, request(3, credit(9)), { parent: root.id });
+        const after = yield* store.append(id, request(4), { parent: sibling.id });
+        const forked = yield* store.fork(id, second.id);
+        return { id, appended: [root, first, second, sibling, after], forked: yield* store.events(forked.id) };
+      }),
+    );
+    const [file] = (await sessionFiles()).filter((name) => name.endsWith(`_${id}.jsonl`));
+    const lines = (await fs.readFile(file!, "utf8")).trimEnd().split("\n");
+    expect(lines.filter((line) => line.includes('"contributions"'))).toHaveLength(2);
+    await fs.appendFile(file!, '{"seq":6,"id":"torn","par');
+    const read = await run(Effect.flatMap(Sessions, (store) => store.events(id)));
+    expect(read).toEqual(appended);
+    const credited = (events: readonly SessionEvent[], eventId: string) => requestState(branchOf(events, eventId)).contributions;
+    expect(appended.slice(1).map((event) => credited(read, event.id))).toEqual([credit(4), credit(4), credit(9), credit(9)]);
+    expect(forked.map((event) => event.id)).toEqual(appended.slice(0, 3).map((event) => event.id));
+    expect(credited(forked, appended[2]!.id)).toEqual(credit(4));
   });
 
   /** A custom event with a long line, as a tool's output has. */

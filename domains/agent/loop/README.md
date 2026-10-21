@@ -77,14 +77,15 @@ moves results, either way, so each is worth measuring against the
    `deriveMessages(branch)`, and `append`; `AgentRequestHook`, whose handlers
    change what the model sees by appending events with `append` (a
    `compaction`, whose `usage` the turn's then includes); the `request` event with
-   per-section and per-tool `contributions`, the hook's `handlers` (each one's own
-   time, and what it changed: `+section skills`, `-tool bash`, `model a → b`,
-   `+compaction`), the `HostControl.composition` id, and `system`/`tools` only
-   when they differ from `requestState(branch)`. The request
-   actually sent is built from the branch and request state the turn keeps as it
-   appends (`requestFrom`), which is `rebuildRequest` over the branch ending at
-   that event: where `Verify` is on (every simulated run), each request is
-   checked against a rebuild from the store's branch.
+   the hook's `handlers` (each one's own time, and what it changed: `+section
+   skills`, `-tool bash`, `model a → b`, `+compaction`), the
+   `HostControl.composition` id, and `system`, `tools`, and the per-section and
+   per-tool `contributions` only when they differ from `requestState(branch)`'s.
+   The request actually sent is built from the branch and request state the turn
+   keeps as it appends (`requestFrom`), which is `rebuildRequest` over the branch
+   ending at that event: where `Verify` is on (every simulated run), each request
+   is checked against a rebuild from the store's branch, and its contributions
+   against those the branch resolves for it.
 
    A request extends the previous one on the branch (see [Append-only
    requests](#append-only-requests)): it sends that request's system prompt and
