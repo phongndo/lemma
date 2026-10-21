@@ -363,6 +363,22 @@ describe("request reconstruction", () => {
     expect(Equal.equals(rebuilt, constructed)).toBe(true);
     expect(JSON.stringify(rebuilt)).toBe(JSON.stringify(constructed));
     expect(String(rebuilt)).toBe(String(constructed));
+
+    // It holds the log's own messages, tools, and options, frozen: what changes it in place fails, and the log is as it was.
+    const logged = JSON.stringify(events);
+    const message = rebuilt.messages[1]!;
+    expect(message).toBe((events[2]!.data as Extract<EventData, { type: "message" }>).message);
+    const changes: (() => void)[] = [
+      () => ((rebuilt.messages as Message[]).length = 0),
+      () => (message.content as unknown[]).push({ type: "text", text: "x" }),
+      () => Object.assign(message.content[1]!, { arguments: {} }),
+      () => Object.assign((message.content[1] as { arguments: object }).arguments, { path: "b.ts" }),
+      () => Object.assign(rebuilt.tools![0]!.parameters as object, { type: "array" }),
+      () => Object.assign(rebuilt.providerOptions!, { temperature: 1 }),
+      () => Object.assign(rebuilt, { system: "other" }),
+    ];
+    for (const change of changes) expect(change).toThrow(TypeError);
+    expect(JSON.stringify(events)).toBe(logged);
   });
 });
 

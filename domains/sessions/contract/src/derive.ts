@@ -410,10 +410,21 @@ export function requestFrom(state: RequestState, history: History, logged: Sessi
  * The `LlmRequest` `fields` make, when they are one already: logged events, which the store checked as it logged them
  * and serves as they read back. The constructor would make a copy of every message and part in walking them, which
  * `disableChecks` does not skip, on every request of a long session. `tests/derive.test.ts` holds it to the
- * constructor's result.
+ * constructor's result. Its messages, tools, and options are the log's own, so it is frozen, and they with it: what
+ * reads it (an `LlmRequestHook` handler, a provider) cannot change the log in changing it. Each object is frozen once,
+ * the first request it is in, so a request costs a look at each message, not a copy.
  */
 const checkedRequest = (fields: ConstructorParameters<typeof LlmRequest>[0]): LlmRequest =>
-  Object.assign(Object.create(LlmRequest.prototype) as LlmRequest, fields);
+  frozen(Object.assign(Object.create(LlmRequest.prototype) as LlmRequest, fields));
+
+/** `value` frozen, and all it holds: what is frozen already is passed over, as it was frozen so. */
+const frozen = <A>(value: A): A => {
+  if (typeof value !== "object" || value === null || Object.isFrozen(value) || ArrayBuffer.isView(value)) return value;
+  Object.freeze(value);
+  if (Array.isArray(value)) for (const item of value) frozen(item);
+  else for (const item of Object.values(value)) frozen(item);
+  return value;
+};
 
 /**
  * The exact request sent for the `request` event `requestId`: its resolved
