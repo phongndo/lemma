@@ -145,9 +145,11 @@ costs re-reading the files.
   used it for `unloadAfter` seconds. A sweep (every `unloadAfter / 2`, at least
   once a minute) then closes the file and drops the events, skipping a session
   in the middle of an operation; `list` keeps its info without re-reading the
-  file, and the next use reloads it. A loaded session takes about 1.1× its file
-  size in heap, and reloading a 40 MB one about 70 ms: without unloading, a
-  long-running host's heap and open files grow with every session it touches.
+  file, and the next use reloads it. A loaded session takes about 1.05× its file
+  size in heap (the requests that repeat the last one's contributions share one
+  array of them), and reloading one of 10,000 events (26 MB) about 90 ms, of
+  100,000 (284 MB) about 0.8 s: without unloading, a long-running host's heap
+  and open files grow with every session it touches.
 - **Moving an empty session** (`relocate`) writes its new directory to its
   file first, then renames the file into that directory's folder: a `list` or
   `get` meanwhile finds it where it is. A rename that fails leaves the file

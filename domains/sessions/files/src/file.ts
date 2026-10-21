@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import * as path from "node:path";
 import { Effect, Result } from "effect";
 import { searchLog, SessionError } from "@lemma/sessions";
-import type { SessionEvent, SessionInfo, SessionSearchMatch } from "@lemma/sessions";
+import type { Contribution, SessionEvent, SessionInfo, SessionSearchMatch } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, unsupportedSync } from "@lemma/contracts/fs";
 import type { FileHandle, FileSystem } from "@lemma/contracts/fs";
 import { decodeRecord, encodeLine, FORMAT_VERSION } from "./format.ts";
@@ -329,10 +329,27 @@ export interface Damage {
   readonly reason: string;
 }
 
+/**
+ * `event`, its request's contributions the array `previous` when they are the same: an agent logs every request's in
+ * full, and most repeat the last ones, so one array for all of them keeps a long session's heap about a tenth smaller.
+ * Sound, as an event is never changed once read.
+ */
+export const shareContributions = (event: SessionEvent, previous: readonly Contribution[] | undefined): SessionEvent => {
+  const data = event.data;
+  if (data.type !== "request" || previous === undefined || data.contributions === previous || data.contributions.length !== previous.length) return event;
+  const same = data.contributions.every((part, i) => {
+    const before = previous[i]!;
+    return part.source === before.source && part.kind === before.kind && part.label === before.label && part.chars === before.chars;
+  });
+  return same ? { ...event, data: { ...data, contributions: previous } } : event;
+};
+
 interface Loaded {
   readonly header: Header;
   readonly events: SessionEvent[];
   readonly byId: Map<string, SessionEvent>;
+  /** The last request's contributions, which the next one most often repeats (`shareContributions`). */
+  readonly contributions: readonly Contribution[] | undefined;
   readonly leaf: string | undefined;
   readonly title: string | undefined;
   readonly marks: FiledAs;
@@ -363,6 +380,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
     let title: string | undefined;
     let marks = unfiled;
     let updatedAt = 0;
+    let contributions: readonly Contribution[] | undefined;
     const visit = (json: unknown, n: number): string | undefined => {
       if (header === undefined) {
         const decoded = decodeRecord(json, true);
@@ -387,11 +405,13 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
       if (line.seq !== events.length + 1) return `line ${n}: expected seq ${events.length + 1}, found ${line.seq}`;
       if (byId.has(line.id)) return `line ${n}: duplicate event id ${line.id}`;
       if (line.parent !== null && !byId.has(line.parent)) return `line ${n}: unknown parent ${line.parent}`;
-      events.push(line);
-      byId.set(line.id, line);
-      leaf = line.id;
-      if (line.data.type === "title") title = line.data.title;
-      updatedAt = Math.max(updatedAt, line.at);
+      const event = shareContributions(line, contributions);
+      events.push(event);
+      byId.set(event.id, event);
+      leaf = event.id;
+      if (event.data.type === "title") title = event.data.title;
+      if (event.data.type === "request") contributions = event.data.contributions;
+      updatedAt = Math.max(updatedAt, event.at);
       return undefined;
     };
     return Effect.tryPromise({ try: () => readJson(fs, file, { validBytes: 0, lines: 0 }, visit), catch: io(sessionId, `Cannot read ${file}`) }).pipe(
@@ -408,6 +428,7 @@ export function load(fs: FileSystem, file: string, sessionId: string): Effect.Ef
           header,
           events,
           byId,
+          contributions,
           leaf,
           title,
           marks,

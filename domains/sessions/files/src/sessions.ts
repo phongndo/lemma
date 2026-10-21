@@ -18,10 +18,24 @@ import {
   searchLog,
   searchWords,
 } from "@lemma/sessions";
-import type { SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
+import type { Contribution, SessionInfo, SessionSearchMatch, Sessions } from "@lemma/sessions";
 import { errorCode, syncDirectory, syncParents, writeFileAtomic } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
-import { applyMarks, CHANGED_ON_DISK, confirmLast, createFile, infoOf, io, lineHash, load, openFile, scan, searchFile, unfiled } from "./file.ts";
+import {
+  applyMarks,
+  CHANGED_ON_DISK,
+  confirmLast,
+  createFile,
+  infoOf,
+  io,
+  lineHash,
+  load,
+  openFile,
+  scan,
+  searchFile,
+  shareContributions,
+  unfiled,
+} from "./file.ts";
 import type { Damage, FiledAs, LastLine, Scanned, Writer } from "./file.ts";
 import { encodeCwd, encodeLine, EVENT_ID_BYTES, FORMAT_VERSION, idFromFileName, SESSION_ID_BYTES, sessionFile } from "./format.ts";
 import type { Header, Line } from "./format.ts";
@@ -36,6 +50,8 @@ interface Open {
   readonly header: Header;
   readonly events: SessionEvent[];
   readonly byId: Map<string, SessionEvent>;
+  /** The last request's contributions, which the next one most often repeats (`shareContributions`). */
+  contributions: readonly Contribution[] | undefined;
   leaf: string | undefined;
   title: string | undefined;
   marks: FiledAs;
@@ -400,6 +416,7 @@ export const make = ({
               header,
               events: [],
               byId: new Map(),
+              contributions: undefined,
               leaf: undefined,
               title: undefined,
               marks: unfiled,
@@ -438,7 +455,7 @@ export const make = ({
             if (Result.isFailure(read)) {
               return yield* new SessionError({ sessionId, reason: "Corrupt", message: `Refusing to append an invalid event: ${read.failure}` });
             }
-            const event = read.success;
+            const event = shareContributions(read.success, open.contributions);
             yield* commit(
               entry,
               open,
@@ -449,6 +466,7 @@ export const make = ({
                 open.leaf = id;
                 open.updatedAt = Math.max(open.updatedAt, event.at);
                 if (event.data.type === "title") open.title = event.data.title;
+                if (event.data.type === "request") open.contributions = event.data.contributions;
                 // As `load` checks each line it reads back: seqs count from 1 without a gap, and every id is new.
                 assert(open.events.length === event.seq, `session ${sessionId}: event ${id} has seq ${event.seq} at ${open.events.length}`);
                 assert(open.byId.size === open.events.length, `session ${sessionId}: ${open.byId.size} ids for ${open.events.length} events`);

@@ -7,7 +7,7 @@ import { definePlugin, Events, makeCore, makeLoader, PluginFault } from "@lemma/
 import type { Plugin } from "@lemma/core";
 import { Notice } from "@lemma/contracts";
 import { SessionAppended, SessionChanged, SessionRemoved, Sessions } from "@lemma/sessions";
-import type { EventData } from "@lemma/sessions";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 import { pathsPlugin } from "@lemma/contracts/testing";
 import { nodeFileSystem } from "@lemma/contracts/fs";
 import type { FileSystem } from "@lemma/contracts/fs";
@@ -302,6 +302,34 @@ describe("sessions", () => {
     expect(answer.listed?.damaged?.line).toBe(3);
     expect(answer.listed?.damaged?.reason).toContain(reason);
     expect(answer.write.reason).toBe("ReadOnly");
+  });
+
+  it("keeps one array of contributions for the requests that repeat them, as appended and as read back", async () => {
+    const request = (step: number, chars: number): EventData => ({
+      type: "request",
+      turnId: "t1",
+      stepId: `s${step}`,
+      model: "p/m",
+      composition: "c",
+      contributions: [
+        { source: "agent", kind: "system", label: "base", chars },
+        { source: "tools", kind: "tool", label: "read", chars: 100 },
+      ],
+    });
+    const contributions = (event: SessionEvent) => (event.data.type === "request" ? event.data.contributions : undefined);
+    const shared = (log: readonly SessionEvent[]) => [contributions(log[1]!) === contributions(log[0]!), contributions(log[2]!) === contributions(log[1]!)];
+    const { id, appended } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const { id } = yield* store.create();
+        const appended = [yield* store.append(id, request(1, 4)), yield* store.append(id, request(2, 4)), yield* store.append(id, request(3, 5))];
+        return { id, appended };
+      }),
+    );
+    expect(shared(appended)).toEqual([true, false]);
+    const read = await run(Effect.flatMap(Sessions, (store) => store.events(id)));
+    expect(read).toEqual(appended);
+    expect(shared(read)).toEqual([true, false]);
   });
 
   /** A custom event with a long line, as a tool's output has. */
