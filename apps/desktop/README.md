@@ -29,9 +29,13 @@ nix develop -c pnpm dev:desktop   # the window again while `pnpm dev` runs, as a
   and the profile's port, never through a loopback address, which may be a
   tunnel carrying one port. A link to a profile it cannot open is said so, and
   the first profile's window opens instead.
-  Another profile's window says whose it is in its title, and its browser pages keep their
+  Another profile's window says whose it is in its title, by the name it is
+  shown by, and its browser pages keep their
   sign-ins in the profile's own partition (`persist:lemma-browser-<name>`; the
-  default's is `persist:lemma-browser`).
+  default's is `persist:lemma-browser`). A page that deletes a profile says so
+  (`lemmaDesktop.profileRemoved(name)`): once its home is gone, its windows
+  close, and its partition and its pages' storage at its address are cleared,
+  so a profile made later with its name or port starts with none of them.
 - **A host it started stops when it quits,** every profile's. One it attached to keeps running.
   On macOS, closing the last window leaves the app (and its host) running until
   you quit it. Before stopping its host, quitting asks the host what that cuts

@@ -2,7 +2,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileS
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, shell, utilityProcess } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, session, shell, utilityProcess } from "electron";
 import type { UtilityProcess } from "electron";
 import { Effect } from "effect";
 import { appUrl, DEEP_LINK_SCHEME } from "@lemma/contracts";
@@ -12,7 +12,8 @@ import { DEFAULT_PROFILE, profileHome, profileNameProblem, profileOf } from "@le
 import { callChannel, makeHostRpcHttp } from "@lemma/client";
 import { CliChannels } from "@lemma/cli";
 import { HOST_FLAGS } from "@lemma/host/launch";
-import { deepLinkTarget, isLoopback, ProfileChannels, profileAddress } from "@lemma/profiles";
+import { deepLinkTarget, isLoopback, ProfileChannels, profileAddress, profileTitle } from "@lemma/profiles";
+import { readTitle } from "@lemma/profiles/local";
 import { SHUTDOWN_TIMEOUT_MS as HOST_SHUTDOWN_MS } from "@lemma/host/limits";
 import { hostFiles, resolvePaths } from "@lemma/host/paths";
 import { browserPartition, hostBrowser } from "./browser.ts";
@@ -307,6 +308,27 @@ ipcMain.handle("lemma:open-profile", async (event, name: unknown) => {
   await openProfile(name);
 });
 
+// A page deleted a profile (`profiles.switcher`): its windows close, and what its pages kept (their browser view's
+// logins, the page's own storage at its address) goes with it, so a profile made later with its name or port starts
+// with none of it. Only for a profile of this machine that is gone.
+ipcMain.handle("lemma:profile-removed", async (event, name: unknown) => {
+  if (senderOf(event) === undefined) throw new Error("Only an app window's page can say a profile was deleted.");
+  if (typeof name !== "string" || name === DEFAULT_PROFILE || profileNameProblem(name) !== undefined)
+    throw new Error(`No profile can be named ${JSON.stringify(name)}.`);
+  if (remote !== undefined || existsSync(profileHome(paths.root, name))) return;
+  const served = hosts.get(name)?.served;
+  hosts.delete(name);
+  for (const window of windows(name)) window.close();
+  await session.fromPartition(browserPartition(name)).clearStorageData();
+  if (served !== undefined) await session.defaultSession.clearStorageData({ origin: new URL(served.url).origin });
+});
+
+/** What the profile `name` is called, as its pages show it (`profileTitle`): on this machine, the name it was given. */
+const shownName = async (name: string) => {
+  const title = remote === undefined ? await Effect.runPromise(readTitle(profileHome(paths.root, name))) : undefined;
+  return profileTitle({ name, default: name === DEFAULT_PROFILE, ...(title === undefined ? {} : { title }) });
+};
+
 /**
  * The page's heads (`--head-height`, the sidebar's and the page's bars): the window's title bar, whose controls sit
  * in them, centered. On macOS the traffic lights' middle is 7px below their position (measured: at y 13 it sat at
@@ -359,12 +381,18 @@ const openWindow = (name: string, url: string) => {
     if (appWindows.size === 0 && process.platform !== "darwin") app.quit();
   });
   hostBrowser(window, partition);
-  // The page names itself; another profile's window says whose it is too, so windows tell apart in the OS's switcher.
-  if (name !== DEFAULT_PROFILE)
+  // The page names itself; another profile's window says whose it is too, by the name it is shown by as the title
+  // changes, so windows tell apart in the OS's switcher.
+  if (name !== DEFAULT_PROFILE) {
+    let titled = 0;
     window.on("page-title-updated", (event, title) => {
       event.preventDefault();
-      window.setTitle(`${title} · ${name}`);
+      const asked = ++titled;
+      void shownName(name).then((shown) => {
+        if (asked === titled && !window.isDestroyed()) window.setTitle(`${title} · ${shown}`);
+      });
     });
+  }
   window.once("ready-to-show", () => window.show());
   // Links leave for the system browser, as they would leave the app's tab.
   const external = (target: string) => {
