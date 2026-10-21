@@ -1,6 +1,10 @@
 // A server that speaks only the 2025 protocol, written by hand: `initialize` first, and an error for any method it
 // does not know, `server/discover` included, as servers from before 2026-07-28 answer.
+import { appendFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+
+// Each start, where a test counts them.
+if (process.env["MCP_STARTS"] !== undefined) appendFileSync(process.env["MCP_STARTS"], "legacy\n");
 
 const send = (message: unknown) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const tools = [{ name: "ping", description: "Answers pong", inputSchema: { type: "object", properties: {} } }];
