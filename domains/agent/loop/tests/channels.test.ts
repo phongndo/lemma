@@ -118,6 +118,73 @@ describe("the agent channels, through the transport", () => {
       }),
     ));
 
+  test("a client showing one session of three hears every session's turns and queue on activity without output, and only its session's output on agent.output", () =>
+    withAgent([reply("from b"), reply("from c"), reply("from a")], (client) =>
+      Effect.gen(function* () {
+        const [a, b, c] = (yield* Effect.all([0, 1, 2].map(() => call(client, "sessions.create", {})))) as SessionInfo[];
+        const turns = yield* open(client, "agent.activity", { output: false });
+        expect(yield* turns.next).toEqual({ type: "subscribed", running: [] });
+        const shown = yield* open(client, "agent.output", { sessionId: a!.id });
+        expect(yield* shown.next).toEqual({ type: "subscribed", view: { output: [], queue: [], queueRevision: expect.any(Number) } });
+        // As every client before `output` was: everything.
+        const everything = yield* open(client, "agent.activity");
+        yield* everything.next;
+
+        // Read as they come: a client that stops taking a stream's elements stalls its connection.
+        const reading = yield* Effect.forkChild(
+          Effect.all([
+            collect(everything, (seen) => count(seen, "turn-ended") === 3 && count(seen, "delta") === 12),
+            collect(turns, (seen) => count(seen, "turn-ended") === 3),
+            collect(shown, (seen) => count(seen, "delta") === 4),
+          ]),
+        );
+        // B's turn, then C's, then A's.
+        for (const [session, requestId] of [
+          [b!, "rb"],
+          [c!, "rc"],
+          [a!, "ra"],
+        ] as const)
+          yield* call(client, "agent.prompt", { sessionId: session.id, content: text("go"), requestId });
+        const [all, heard, output] = yield* Fiber.join(reading);
+
+        expect(new Set(all.filter((element) => element.type === "delta").map((element) => element.sessionId))).toEqual(new Set([a!.id, b!.id, c!.id]));
+        expect(heard.filter((element) => element.type === "turn-started").map((element) => element.sessionId)).toEqual([b!.id, c!.id, a!.id]);
+        expect(heard.filter((element) => element.type === "turn-ended").map((element) => element.sessionId)).toEqual([b!.id, c!.id, a!.id]);
+        expect(heard.filter((element) => element.type === "delta" || element.type === "tool-output")).toEqual([]);
+        // A's own, none of B's or C's, which streamed first.
+        expect(output.map((element) => [element.sessionId, element.seq, element.event.type])).toEqual([
+          [a!.id, 1, "start"],
+          [a!.id, 2, "text-delta"],
+          [a!.id, 3, "text-delta"],
+          [a!.id, 4, "done"],
+        ]);
+      }),
+    ));
+
+  test("agent.output opened again midway, as after a reconnect, opens with the turn so far, and goes on from it", () =>
+    withAgent([hang("thinking")], (client) =>
+      Effect.gen(function* () {
+        const { id } = (yield* call(client, "sessions.create", {})) as SessionInfo;
+        const first = yield* open(client, "agent.output", { sessionId: id });
+        yield* first.next;
+        const prompt = yield* Effect.forkChild(call(client, "agent.prompt", { sessionId: id, content: text("go"), requestId: "r1" }));
+        expect((yield* collect(first, (seen) => count(seen, "delta") === 2)).map((element) => element.seq)).toEqual([1, 2]);
+
+        const again = yield* open(client, "agent.output", { sessionId: id });
+        const resynced = (yield* again.next) as { readonly type: string; readonly view: AgentView };
+        expect(resynced).toMatchObject({
+          type: "subscribed",
+          view: { turnId: expect.any(String), draft: { seq: 2, blocks: [{ index: 0, block: { type: "text", text: "thinking" } }] } },
+        });
+
+        yield* call(client, "agent.cancel", { sessionId: id });
+        expect(yield* Fiber.join(prompt)).toEqual({ kind: "placed" });
+        // A session the agent cannot tell of still opens: its subscribed says nothing of it.
+        const unknown = yield* open(client, "agent.output", { sessionId: "nope" });
+        expect(yield* unknown.next).toMatchObject({ type: "subscribed" });
+      }),
+    ));
+
   test("a prompt's error keeps its reason as the code and names the session; a malformed payload names the channel", () =>
     withAgent([], (client) =>
       Effect.gen(function* () {

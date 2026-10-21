@@ -78,6 +78,42 @@ export const makeHostRpc = (
     return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
   });
 
+const MAX_LINE = 16 * 1024 * 1024;
+/**
+ * Effect's NDJSON (a line not JSON skipped, one over `MAX_LINE`, its default, failing the call), read in time linear in
+ * a reply: Effect's scans all it holds at each chunk, so a 7.4 MB log in the 16 KB chunks `fetch` inflates took 0.65 s,
+ * not 0.2 s. Here a line's start (`held`) is searched no more, and joined once, when its end comes.
+ */
+export const ndjson = RpcSerialization.RpcSerialization.of({
+  ...RpcSerialization.ndjson,
+  makeUnsafe: () => {
+    const decoder = new TextDecoder();
+    let held = "";
+    const parse = (line: string): unknown[] => {
+      try {
+        return [JSON.parse(line)];
+      } catch {
+        return [];
+      }
+    };
+    return {
+      encode: RpcSerialization.ndjson.makeUnsafe().encode,
+      decode: (bytes) => {
+        const text = typeof bytes === "string" ? bytes : decoder.decode(bytes, { stream: true });
+        const lines: unknown[] = [];
+        let start = 0;
+        for (let end = text.indexOf("\n"); end !== -1; start = end + 1, end = text.indexOf("\n", start)) {
+          lines.push(...parse(held + text.slice(start, end)));
+          held = "";
+        }
+        held += text.slice(start);
+        if (held.length <= MAX_LINE) return lines;
+        throw new RpcSerialization.MaxBufferSizeExceeded({ maxBufferSize: MAX_LINE });
+      },
+    };
+  },
+});
+
 /**
  * Connects over streaming HTTP (`POST <base>/rpc/http`, NDJSON), one request
  * per call: for scripts and CLIs that make a few calls and exit. A non-2xx
@@ -97,7 +133,7 @@ export const makeHostRpcHttp = (base: string, token: string | undefined): Effect
         ),
       ),
       Layer.provide(FetchHttpClient.layer),
-      Layer.provide(RpcSerialization.layerNdjson),
+      Layer.provide(Layer.succeed(RpcSerialization.RpcSerialization)(ndjson)),
     );
     const context = yield* Layer.build(protocol);
     return yield* RpcClient.make(RuntimeRpcs).pipe(Effect.provide(context));
