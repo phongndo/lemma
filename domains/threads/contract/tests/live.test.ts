@@ -16,6 +16,7 @@ import {
 } from "../src/live.ts";
 import type { LiveState } from "../src/live.ts";
 import type { StreamEvent } from "@lemma/llm";
+import type { EventData, SessionEvent } from "@lemma/sessions";
 import { assistant, branch, toolResult } from "../src/testing.ts";
 
 const feed = (events: StreamEvent[], state: LiveState = emptyLive, stepId = "s1") => events.reduce((s, event) => applyDelta(s, "t1", stepId, event), state);
@@ -92,6 +93,65 @@ describe("draftEntries", () => {
 });
 
 describe("reconcileLive", () => {
+  it("settles what an event at a time would, for any log and state", () => {
+    // The fold it replaced, an event at a time (settling each step made a set per step: quadratic in a long log).
+    const stepwise = (state: LiveState, events: readonly SessionEvent[]): LiveState => {
+      if (state.drafts.length === 0 && state.output.size === 0 && state.printed.size === 0) return state;
+      let next = state;
+      const calls = new Map<string, string[]>();
+      for (const { data } of events) {
+        if (data.type === "message" && data.message.role === "toolResult") next = dropOutput(next, data.message.toolCallId);
+        else if (data.type === "message" && data.message.role === "assistant") {
+          if (data.turnId !== undefined)
+            calls.set(data.turnId, [...(calls.get(data.turnId) ?? []), ...data.message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))]);
+          if (data.stepId !== undefined) next = settleStep(next, data.stepId);
+        } else if (data.type === "attempt") next = settleStep(next, data.stepId);
+        else if (data.type === "turn-end") {
+          if (next.drafts.some((draft) => draft.turnId === data.turnId)) {
+            const settled = new Set(next.settled);
+            for (const draft of next.drafts) if (draft.turnId === data.turnId) settled.add(draft.stepId);
+            next = { ...next, drafts: next.drafts.filter((draft) => draft.turnId !== data.turnId), settled };
+          }
+          for (const id of calls.get(data.turnId) ?? []) next = dropOutput(next, id);
+        }
+      }
+      return next;
+    };
+    const shape = (state: LiveState) => ({
+      drafts: state.drafts,
+      settled: [...state.settled].sort(),
+      output: [...state.output].sort(),
+      printed: [...state.printed].sort(),
+    });
+    // mulberry32: the same cases each run.
+    let seed = 7;
+    const pick = (n: number) => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) % n;
+    };
+    for (let round = 0; round < 200; round++) {
+      const data: EventData[] = [];
+      for (let i = 0; i < 12; i++) {
+        const turnId = `t${pick(3)}`;
+        const stepId = `s${pick(4)}`;
+        const call = `c${pick(4)}`;
+        const kind = pick(4);
+        if (kind === 0) data.push({ type: "message", message: assistant([{ type: "toolCall", id: call, name: "bash", arguments: {} }]), turnId, stepId });
+        else if (kind === 1) data.push(toolResult(call, "out"));
+        else if (kind === 2) data.push({ type: "attempt", turnId, stepId, message: assistant([]), timing: { startedAt: 0, endedAt: 1 } });
+        else data.push({ type: "turn-end", turnId, reason: "done" });
+      }
+      let state = emptyLive;
+      for (let i = 0; i < 4; i++) state = applyDelta(state, `t${pick(3)}`, `s${pick(4)}`, { type: "text-delta", index: 0, delta: "x" });
+      for (let i = 0; i < 3; i++) state = appendOutput(state, `c${pick(4)}`, "o");
+      const settledBefore = pick(2) === 0 ? state : settleStep(state, `s${pick(4)}`);
+      const log = branch(...data);
+      expect(shape(reconcileLive(settledBefore, log)), JSON.stringify(data)).toEqual(shape(stepwise(settledBefore, log)));
+    }
+  });
+
   it("settles drafts the recovered log already covers", () => {
     let state = applyDelta(emptyLive, "t1", "s1", { type: "text-delta", index: 0, delta: "partial" });
     state = applyDelta(state, "t2", "s2", { type: "text-delta", index: 0, delta: "other" });
