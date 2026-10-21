@@ -373,10 +373,14 @@ asked again, or run (or reported interrupted) when the turn resumes.
 - **A kept branch.** A turn keeps its branch as it appends to it, with the
   request state it resolves (`nextRequestState`), so a step builds its request
   without reading the session back (`requestFrom`); and a new turn starts from
-  the branch the last one left while the session's leaf is still its end, for
-  the 16 sessions used most recently. A step's work then stays the same as a
-  session grows (`packages/sim`'s harness benchmark). Where `Verify` is on (a
-  simulation), each request is checked against a rebuild from the store.
+  the branch the last one left while the session's leaf is still its end, with
+  its request state, for the 16 sessions used most recently. A step's work then
+  stays the same as a session grows (`packages/sim`'s harness benchmark). A
+  kept branch goes once no turn has used it for five minutes at most: a store
+  lets an idle session's events go (`sessions.files` after five minutes), and
+  the branch would hold them alone, then beside the copy the store reads back.
+  Where `Verify` is on (a simulation), each request is checked against a
+  rebuild from the store.
 - **Explicit parents.** After `turn-start`, every append names the previous event
   as its parent, so a `checkout` during a turn cannot splice the turn into another
   branch. Request handlers append through the turn too (`RequestDraft.append`),
