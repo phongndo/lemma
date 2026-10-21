@@ -239,12 +239,15 @@ export const parseLedgerFilter = (input: string) => {
   return (record: LedgerRecord) => terms.every((term) => term.test(record) !== term.negate);
 };
 
-const firstLine = (text: string) =>
-  text
-    .trim()
-    .split("\n")
-    .find((line) => line.trim() !== "")
-    ?.trim() ?? "";
+/** The first line of `text` that is not blank, trimmed: found without splitting the rest, which may be a long tool output. */
+const firstLine = (text: string): string => {
+  for (let at = 0; ;) {
+    const end = text.indexOf("\n", at);
+    const line = text.slice(at, end === -1 ? text.length : end).trim();
+    if (line !== "" || end === -1) return line;
+    at = end + 1;
+  }
+};
 const thinkingText = (message: AssistantMessage) => message.content.flatMap((part) => (part.type === "thinking" ? [part.thinking] : [])).join("\n\n");
 const toolCallNames = (message: AssistantMessage) => message.content.flatMap((part) => (part.type === "toolCall" ? [part.name] : []));
 

@@ -285,7 +285,18 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
   const stepById = new Map<string, MutableStep>();
   // Resolved header state, as `requestState` folds it, plus what the previous request contributed.
   let system: string | undefined;
-  let specs: readonly ToolSpec[] = [];
+  let specByName = new Map<string, ToolSpec>();
+  // Each spec's JSON, which says whether its tool changed: made once a spec, as requests that declare no tools keep the
+  // last ones (stringifying every spec of every request was most of a long branch's time).
+  const signatures = new Map<ToolSpec, string>();
+  const signatureOf = (spec: ToolSpec): string => {
+    let signature = signatures.get(spec);
+    if (signature === undefined) {
+      signature = JSON.stringify(spec);
+      signatures.set(spec, signature);
+    }
+    return signature;
+  };
   let previousSections = new Map<string, string | number>();
   let previousTools = new Map<string, string>();
   // How many messages each request carried, as `deriveMessages` of the branch before it would count them, kept as the
@@ -381,7 +392,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
       }
       case "request": {
         if (data.system !== undefined) system = data.system;
-        if (data.tools !== undefined) specs = data.tools;
+        if (data.tools !== undefined) specByName = new Map(data.tools.map((spec) => [spec.name, spec]));
         const texts = splitSystem(system, data.contributions);
         const sectionContributions = data.contributions.filter((contribution) => contribution.kind === "system");
         const sections = sectionContributions.map((contribution, i): TrajectorySection => {
@@ -395,12 +406,11 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
             changed: previous === undefined || previous !== (text ?? contribution.chars),
           };
         });
-        const specByName = new Map(specs.map((spec) => [spec.name, spec]));
         const tools = data.contributions
           .filter((contribution) => contribution.kind === "tool")
           .map((contribution): TrajectoryTool => {
             const spec = specByName.get(contribution.label);
-            const signature = spec === undefined ? String(contribution.chars) : JSON.stringify(spec);
+            const signature = spec === undefined ? String(contribution.chars) : signatureOf(spec);
             return {
               name: contribution.label,
               source: contribution.source,
@@ -414,7 +424,7 @@ export function trajectory(branch: readonly SessionEvent[]): TrajectoryTurn[] {
           ...[...previousTools.keys()].filter((name) => !tools.some((tool) => tool.name === name)),
         ];
         previousSections = new Map(sections.map((section) => [section.id, section.text ?? section.chars]));
-        previousTools = new Map(tools.map((tool) => [tool.name, tool.spec === undefined ? String(tool.chars) : JSON.stringify(tool.spec)]));
+        previousTools = new Map(tools.map((tool) => [tool.name, tool.spec === undefined ? String(tool.chars) : signatureOf(tool.spec)]));
         const told = data.restart === undefined ? updatesBefore[position]! - updatesBefore[Math.max(viewStart, declaredAt + 1)]! : 0;
         if (data.restart !== undefined) declaredAt = position;
         const step = stepFor(data.turnId, data.stepId, event.at);
