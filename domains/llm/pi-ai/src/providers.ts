@@ -1,6 +1,6 @@
 import { ProviderSpec } from "@lemma/llm";
 import type { CustomProviderSpec, ProviderModelSpec } from "@lemma/llm";
-import { createProvider, isModelType } from "@earendil-works/pi-ai";
+import { createProvider, isModelType } from "@earendil-works/pi-ai/models";
 import type { Api, ApiKeyAuth, Model, Provider, ProviderStreams } from "@earendil-works/pi-ai";
 import { anthropicMessagesApi } from "@earendil-works/pi-ai/api/anthropic-messages.lazy";
 import { azureOpenAIResponsesApi } from "@earendil-works/pi-ai/api/azure-openai-responses.lazy";
