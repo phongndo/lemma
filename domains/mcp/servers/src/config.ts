@@ -180,6 +180,7 @@ export function expandConfig(config: McpServerConfig, env: Readonly<Record<strin
     values === undefined ? undefined : Object.fromEntries(Object.entries(values).map(([key, value]) => [key, expand(value, env)]));
   const env_ = record(config.env);
   const headers = record(config.headers);
+  const { oauth } = config;
   return {
     ...config,
     ...(config.command === undefined ? {} : { command: expand(config.command, env, true) }),
@@ -188,12 +189,45 @@ export function expandConfig(config: McpServerConfig, env: Readonly<Record<strin
     ...(config.url === undefined ? {} : { url: expand(config.url, env) }),
     ...(env_ === undefined ? {} : { env: env_ }),
     ...(headers === undefined ? {} : { headers }),
+    ...(oauth === undefined
+      ? {}
+      : {
+          oauth: {
+            ...oauth,
+            ...(oauth.clientId === undefined ? {} : { clientId: expand(oauth.clientId, env) }),
+            ...(oauth.clientSecret === undefined ? {} : { clientSecret: expand(oauth.clientSecret, env) }),
+          },
+        }),
   };
 }
 
+/**
+ * What the `${VAR}` references in `config` read from `env`, each with its reference, for an error to show the
+ * reference in its place: a token in a URL's query or a header must not reach a page or a model. Values too short to
+ * be secrets (`1`, `on`) are left, as replacing them would garble the message.
+ */
+export function secretsOf(config: McpServerConfig, env: Readonly<Record<string, string | undefined>>): ReadonlyMap<string, string> {
+  const secrets = new Map<string, string>();
+  for (const [, name] of JSON.stringify(config).matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-[^}]*)?\}/g)) {
+    const value = env[name!];
+    if (value !== undefined && value.length >= 4) secrets.set(value, `\${${name}}`);
+  }
+  return secrets;
+}
+
+/**
+ * `text` with each of `secrets` replaced by its reference, the longest first: a value inside a longer one (a host in
+ * a URL holding a key) would otherwise break the longer one up, and leave the rest of it showing.
+ */
+export const redact = (text: string, secrets: ReadonlyMap<string, string>): string => {
+  let out = text;
+  for (const [value, reference] of [...secrets].sort(([a], [b]) => b.length - a.length)) out = out.split(value).join(reference);
+  return out;
+};
+
 /** What makes a connection: a change to any of these connects again; to anything else, only re-adds the tools. */
 export const connectionKey = (config: McpServerConfig): string =>
-  JSON.stringify([config.type, config.command, config.args, config.env, config.cwd, config.url, config.headers, config.timeout]);
+  JSON.stringify([config.type, config.command, config.args, config.env, config.cwd, config.url, config.headers, config.timeout, config.oauth]);
 
 /**
  * Writes `change` into the server's entry, keeping everything else in the file. A value that is what the server would

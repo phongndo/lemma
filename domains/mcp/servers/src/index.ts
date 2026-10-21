@@ -27,7 +27,7 @@ const Config = Schema.Struct({
  */
 const section = (servers: readonly { readonly name: string; readonly description?: string }[]): string =>
   [
-    'MCP servers, whose tools are named `mcp__<server>__<tool>`. Those not in your tool list are called from scripts, as `tools.mcp__<server>__<tool>(args)`, found first with `await searchTools("<server> <what you need>")`.',
+    'MCP servers, whose tools are named `mcp__<server>__<tool>`. Those not in your tool list are called from scripts, as `tools.mcp__<server>__<tool>(args)`, found first with `await searchTools("<server> <what you need>")`. A server whose tools you cannot find may be waiting for the person to sign in to it, or failing to connect: Settings › Integrations shows which.',
     ...servers.map(({ name, description }) => `- ${name}${description === undefined ? "" : `: ${description}`}`),
   ].join("\n");
 
@@ -65,7 +65,7 @@ export default definePlugin({
         changed: (state) => void run(events.publish(McpChanged, state)).catch(() => {}),
         warn: (message) => void run(Effect.logWarning(`mcp: ${message}`)).catch(() => {}),
       },
-      { file, maxOutputChars: owner.config.maxOutputChars, version: VERSION, env: process.env },
+      { file, authFile: join(paths.home, "mcp-auth.json"), maxOutputChars: owner.config.maxOutputChars, version: VERSION, env: process.env },
     );
     yield* Effect.addFinalizer(() => Effect.promise(() => servers.close()));
     yield* Effect.promise(async () =>
@@ -109,6 +109,10 @@ export default definePlugin({
       reconnect: (name) => Effect.tryPromise({ try: () => servers.reconnect(name), catch: toMcpError }),
       configure: (name, change) => Effect.tryPromise({ try: () => servers.configure(name, change), catch: toMcpError }),
       put: (name, entry) => Effect.tryPromise({ try: () => servers.put(name, entry), catch: toMcpError }),
+      signIn: (name) => Effect.tryPromise({ try: () => servers.signIn(name), catch: toMcpError }),
+      finishSignIn: (name, address) => Effect.tryPromise({ try: () => servers.finishSignIn(name, address), catch: toMcpError }),
+      cancelSignIn: (name) => Effect.tryPromise({ try: () => servers.cancelSignIn(name), catch: toMcpError }),
+      signOut: (name) => Effect.tryPromise({ try: () => servers.signOut(name), catch: toMcpError }),
     };
     for (const channel of serveMcp(mcp, events)) yield* owner.add(Channels, channel);
     return { mcp };

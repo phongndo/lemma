@@ -22,7 +22,13 @@ const LABELS = Object.fromEntries(EXPOSURES.map(({ value, label }) => [value, la
 /** The exposure the file gives a tool by its name, or none of its own (`default`): a pattern's, the plugin's, or the server's. */
 const TOOL_EXPOSURES = [{ value: "default", label: "Default" }, ...EXPOSURES];
 
-const STATES: Readonly<Record<McpServerStatus["state"], string>> = { connected: "Connected", connecting: "Connecting…", failed: "Failed", off: "Off" };
+const STATES: Readonly<Record<McpServerStatus["state"], string>> = {
+  connected: "Connected",
+  connecting: "Connecting…",
+  failed: "Failed",
+  "needs-sign-in": "Needs sign-in",
+  off: "Off",
+};
 
 const EXAMPLE = `{
   "mcpServers": {
@@ -44,6 +50,9 @@ const statusOf = (server: McpServerStatus): IntegrationStatus => {
       return { tone: "busy", text: "Connecting…" };
     case "failed":
       return { tone: "error", text: "Failed" };
+    // Its tools wait on the person: as much trouble as a failure, and counted with them.
+    case "needs-sign-in":
+      return { tone: "error", text: "Needs sign-in" };
     case "off":
       return { tone: "off", text: server.error === undefined ? "Off" : "Off · needs attention" };
   }

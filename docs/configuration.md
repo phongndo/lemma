@@ -19,7 +19,8 @@ with config of its own is told it does not apply there, while that project's
 project row overrides the user row for the same plugin, `enabled` and `config`
 separately; a project `config` replaces the user's whole object. `$LEMMA_HOME`
 moves `~/.lemma` (run from a checkout, it defaults to `~/.lemma-dev`:
-[development](development.md)). MCP servers have a file of their own, `~/.lemma/mcp.json`
+[development](development.md)). MCP servers have a file of their own, `~/.lemma/mcp.json`, and
+the sign-ins Lemma holds for them another, `mcp-auth.json`
 ([mcp.servers](../domains/mcp/servers/README.md)).
 
 The Plugins settings page and `lemma plugins` write these rows and apply them;

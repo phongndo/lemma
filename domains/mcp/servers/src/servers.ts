@@ -1,9 +1,13 @@
 import { createHash } from "node:crypto";
 import { McpError, SERVER_NAME } from "@lemma/mcp";
-import type { McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
+import type { McpAuthStatus, McpServer, McpServerChange, McpServerConfig, McpServerState, McpServerStatus, McpState, McpToolInfo } from "@lemma/mcp";
 import { ToolResult } from "@lemma/tools";
 import type { Tool, ToolNamespace } from "@lemma/tools";
 import { boundOutput } from "@lemma/tools/files";
+import { bearer, callbackParams, finishSignIn, needsSignIn, newState, SignInStore, startSignIn, unionScopes } from "./auth.ts";
+import type { Challenge, Flow, SignInTarget } from "./auth.ts";
+import { listenForCallback } from "./callback.ts";
+import type { Arrival, Callback } from "./callback.ts";
 import {
   connectionKey,
   decodeServer,
@@ -12,7 +16,9 @@ import {
   exposureOf,
   MissingVariable,
   readServersFile,
+  redact,
   ruleOf,
+  secretsOf,
   writeChange,
   writeEntry,
 } from "./config.ts";
@@ -37,12 +43,63 @@ export interface Kernel {
 export interface Options {
   /** The user's `mcp.json`. */
   readonly file: string;
+  /** Where the sign-ins Lemma holds are kept, `<home>/mcp-auth.json`. */
+  readonly authFile: string;
   /** Text characters a result keeps before the rest goes to a temp file. */
   readonly maxOutputChars: number;
   /** Sent to servers as the client's version. */
   readonly version: string;
   /** Where `${VAR}` is read from. */
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** How long a remote server that could not be reached waits before each try to connect again, the last repeating. */
+  readonly retryDelaysMs?: readonly number[];
+  /** How long a sign-in waits on the person's browser. */
+  readonly signInTimeoutMs?: number;
+}
+
+const RETRY_DELAYS_MS = [2_000, 5_000, 15_000, 30_000, 60_000, 120_000, 300_000];
+const SIGN_IN_TIMEOUT_MS = 10 * 60_000;
+
+/** A remote server Lemma signs in to, when it asks: one that does not send an `Authorization` header of its own. */
+const signsIn = (config: McpServerConfig): boolean =>
+  config.url !== undefined && !Object.keys(config.headers ?? {}).some((header) => header.toLowerCase() === "authorization");
+
+/** What a tool call to a server that needs signing in fails with, for the model to pass on. */
+const signInNeeded = (server: string) =>
+  `MCP server "${server}" needs the person to sign in before its tools work: they can from Settings › Integrations, or with /mcp login ${server}.`;
+
+const messageOf = (cause: unknown) => (cause instanceof Error ? cause.message : String(cause));
+
+/** A sign-in stopped by the person, or replaced by another: nothing to report. */
+const STOPPED = "The sign-in was stopped";
+
+/**
+ * The code the browser brought back, checked: the authorization server's refusal, an address from another sign-in
+ * (its `state` not this one's), and one without a code fail with what to do. Only a pasted code may come without a
+ * `state` (an authorization server's page showing one to copy): the person gives it, where the browser's own way
+ * back must prove it is this sign-in's.
+ */
+function codeOf(params: URLSearchParams, flow: Flow, pasted: boolean): string {
+  const error = params.get("error");
+  const state = params.get("state");
+  if ((state !== null || !pasted) && state !== flow.state)
+    throw new Error("That address is from another sign-in: paste the one this sign-in's browser landed on.");
+  if (error !== null) throw new Error(`The authorization server refused: ${params.get("error_description") ?? error}.`);
+  const code = params.get("code");
+  if (code === null || code === "") throw new Error("That address has no code: paste the whole address the browser landed on.");
+  return code;
+}
+
+/** A browser sign-in under way: its page (once the authorization server is found), the listener, and a paste. */
+interface SignInRun {
+  flow: Flow | undefined;
+  url: string | undefined;
+  readonly callback: Callback;
+  readonly stop: AbortController;
+  readonly paste: (params: URLSearchParams) => void;
+  readonly pasted: Promise<URLSearchParams>;
+  /** How it ended: `undefined` once signed in, else why not. */
+  ended: Promise<string | undefined> | undefined;
 }
 
 interface Registered {
@@ -65,6 +122,16 @@ interface Entry {
   namespace: Registered | undefined;
   /** Serializes adding and removing its tools. */
   syncing: Promise<void>;
+  /** A remote server Lemma signs in to, as its connection was made: the sign-in it holds is the one for this address. */
+  target: SignInTarget | undefined;
+  signIn: SignInRun | undefined;
+  /** Why the last sign-in failed. */
+  signInError: string | undefined;
+  /** What the server said when it last refused, for the next sign-in. */
+  challenge: Challenge | undefined;
+  /** The try to connect again that is waiting, and how many tries have failed since it last connected. */
+  retry: { readonly timer: ReturnType<typeof setTimeout>; readonly at: number } | undefined;
+  attempts: number;
 }
 
 const enabled = (definition: Definition) => definition.error === undefined && definition.config.enabled !== false;
@@ -81,11 +148,13 @@ export class Servers {
   private closed = false;
   private readonly kernel: Kernel;
   private readonly options: Options;
+  private readonly store: SignInStore;
 
   constructor(kernel: Kernel, options: Options) {
     this.kernel = kernel;
     this.options = options;
     this.file = { path: options.file, entries: new Map() };
+    this.store = new SignInStore(options.authFile);
   }
 
   state(): McpState {
@@ -96,9 +165,10 @@ export class Servers {
     };
   }
 
-  /** Reads the file, and starts its servers and the plugins'. */
-  start(plugins: readonly { readonly item: McpServer; readonly pluginId: string }[]): Promise<void> {
+  /** Reads the file and the sign-ins, and starts the file's servers and the plugins'. */
+  async start(plugins: readonly { readonly item: McpServer; readonly pluginId: string }[]): Promise<void> {
     this.plugins = plugins;
+    await this.store.load();
     return this.reload();
   }
 
@@ -144,7 +214,7 @@ export class Servers {
     });
   }
 
-  /** Writes the server's whole entry (or removes it), and applies the file. */
+  /** Writes the server's whole entry (or removes it, with the sign-in Lemma holds for it), and applies the file. */
   put(name: string, entry: McpServerConfig | null): Promise<void> {
     return this.serially(async () => {
       if (entry !== null) {
@@ -159,13 +229,222 @@ export class Servers {
       }
       this.file = await readServersFile(this.options.file);
       await this.apply();
+      if (entry === null)
+        await this.store.set(name, undefined).catch((cause: unknown) => this.kernel.warn(`${name}'s sign-in was not removed: ${messageOf(cause)}`));
     });
+  }
+
+  /**
+   * Starts signing in to a remote server that asks, replacing a sign-in under way: answers with the page to approve
+   * on, once the server's authorization server is found (and Lemma registered with it). The sign-in then waits on the
+   * browser coming back, or a paste (`finishSignIn`), and connects the server again once it is stored.
+   */
+  async signIn(name: string): Promise<{ readonly url: string }> {
+    const entry = this.find(name);
+    const target = this.signInTarget(entry);
+    // The one it replaces lets go of its port first, which this one may listen on.
+    await this.stopSignIn(entry);
+    entry.signInError = undefined;
+    const state = newState();
+    const callback = await this.listen(target, state);
+    let paste!: (params: URLSearchParams) => void;
+    const pasted = new Promise<URLSearchParams>((resolve) => (paste = resolve));
+    const flow: Flow = { redirectUrl: callback.redirectUrl, state };
+    const run: SignInRun = { flow: undefined, url: undefined, callback, stop: new AbortController(), paste, pasted, ended: undefined };
+    entry.signIn = run;
+    this.publish();
+    let url: string;
+    try {
+      url = await startSignIn(this.store, target, flow, entry.challenge);
+    } catch (cause) {
+      await callback.close();
+      const message = this.redact(entry, `Could not start signing in: ${messageOf(cause)}`);
+      if (entry.signIn === run) {
+        entry.signIn = undefined;
+        entry.signInError = message;
+        this.publish();
+      }
+      throw new McpError({ reason: "Failed", message, cause });
+    }
+    if (entry.signIn !== run) {
+      await callback.close();
+      throw new McpError({ reason: "Failed", message: STOPPED });
+    }
+    run.flow = flow;
+    run.url = url;
+    run.ended = this.awaitSignIn(entry, run, target);
+    this.publish();
+    return { url };
+  }
+
+  /** Finishes the sign-in under way with the address its browser landed on, answering once it is stored. */
+  async finishSignIn(name: string, address: string): Promise<void> {
+    const entry = this.find(name);
+    const run = entry.signIn;
+    if (run?.flow === undefined || run.ended === undefined)
+      throw new McpError({ reason: "Invalid", message: `No sign-in to ${name} is waiting on the browser: start one first` });
+    const params = callbackParams(address);
+    try {
+      codeOf(params, run.flow, true);
+    } catch (cause) {
+      // A wrong paste leaves the sign-in waiting, for the right one.
+      throw new McpError({ reason: "Invalid", message: messageOf(cause) });
+    }
+    run.paste(params);
+    const failure = await run.ended;
+    if (failure !== undefined) throw new McpError({ reason: "Failed", message: failure });
+  }
+
+  /** Stops the sign-in under way, if any. */
+  async cancelSignIn(name: string): Promise<void> {
+    const entry = this.find(name);
+    if (entry.signIn === undefined) return;
+    const stopped = this.stopSignIn(entry);
+    this.publish();
+    await stopped;
+  }
+
+  /** Forgets the sign-in Lemma holds for the server, stopping one under way, and connects again. */
+  async signOut(name: string): Promise<void> {
+    const entry = this.find(name);
+    this.signInTarget(entry);
+    await this.stopSignIn(entry);
+    entry.signInError = undefined;
+    try {
+      await this.store.set(name, undefined);
+    } catch (cause) {
+      throw new McpError({ reason: "Failed", message: messageOf(cause), cause });
+    }
+    await this.reconnect(name);
+  }
+
+  /** The server to sign in to, its variables read; fails `Invalid` for one Lemma does not sign in to. */
+  private signInTarget(entry: Entry): SignInTarget {
+    const { name, config, error } = entry.definition;
+    if (error !== undefined) throw new McpError({ reason: "Invalid", message: error });
+    if (config.url === undefined) throw new McpError({ reason: "Invalid", message: `${name} is a local server: Lemma signs in only to remote ones` });
+    if (!signsIn(config))
+      throw new McpError({ reason: "Invalid", message: `${name} sends its own Authorization header: remove it from "headers" to sign in instead` });
+    if (config.enabled === false) throw new McpError({ reason: "Invalid", message: `${name} is off: turn it on to sign in` });
+    try {
+      const expanded = expandConfig(config, this.options.env);
+      return { name, url: expanded.url!, oauth: expanded.oauth };
+    } catch (cause) {
+      throw new McpError({ reason: "Invalid", message: messageOf(cause) });
+    }
+  }
+
+  /**
+   * Listens for the browser coming back: on the port the server's entry fixes, else the one Lemma registered with its
+   * authorization server, so the registration still holds, else (that one taken) any, registering again.
+   */
+  private async listen(target: SignInTarget, state: string): Promise<Callback> {
+    const fixed = target.oauth?.callbackPort;
+    const registered = this.store.get(target.name, target.url)?.redirectUrl;
+    const port = fixed ?? (registered === undefined ? 0 : Number(new URL(registered).port) || 0);
+    try {
+      return await listenForCallback(port, target.name, state);
+    } catch (cause) {
+      if (fixed === undefined && port !== 0) return listenForCallback(0, target.name, state).catch((again: unknown) => this.cannotListen(port, again));
+      return this.cannotListen(port, cause);
+    }
+  }
+
+  private cannotListen(port: number, cause: unknown): never {
+    throw new McpError({ reason: "Failed", message: `Could not listen on port ${port} for the browser to come back to Lemma: ${messageOf(cause)}`, cause });
+  }
+
+  /**
+   * Waits for the browser to come back with a code (or a paste of where it landed), exchanges it for tokens, and
+   * connects the server again. Says how it ended: `undefined` once signed in, else why not. One stopped or replaced
+   * meanwhile leaves the server to whoever stopped it.
+   */
+  private async awaitSignIn(entry: Entry, run: SignInRun, target: SignInTarget): Promise<string | undefined> {
+    let arrival: Arrival | undefined;
+    let failure: string | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const params = await new Promise<URLSearchParams>((resolve, reject) => {
+        void run.callback.arrived.then((arrived) => {
+          arrival = arrived;
+          resolve(arrived.params);
+        });
+        void run.pasted.then(resolve);
+        run.stop.signal.addEventListener("abort", () => reject(new Error(STOPPED)), { once: true });
+        timer = setTimeout(
+          () => reject(new Error("The sign-in timed out waiting on the browser: start it again.")),
+          this.options.signInTimeoutMs ?? SIGN_IN_TIMEOUT_MS,
+        );
+      });
+      await finishSignIn(this.store, target, run.flow!, codeOf(params, run.flow!, arrival === undefined), params.get("iss") ?? undefined);
+    } catch (cause) {
+      failure = this.redact(entry, messageOf(cause));
+    } finally {
+      clearTimeout(timer);
+    }
+    arrival?.answer(failure);
+    await run.callback.close();
+    if (entry.signIn !== run) return failure;
+    entry.signIn = undefined;
+    entry.signInError = failure === STOPPED ? undefined : failure;
+    if (failure === undefined) await this.reconnect(entry.definition.name).catch(() => {});
+    else this.publish();
+    return failure;
+  }
+
+  /** Stops the sign-in under way, which then says nothing of how it ended; settles once its port is free. */
+  private stopSignIn(entry: Entry): Promise<void> {
+    const run = entry.signIn;
+    if (run === undefined) return Promise.resolve();
+    entry.signIn = undefined;
+    run.stop.abort();
+    return run.callback.close();
   }
 
   async close(): Promise<void> {
     this.closed = true;
+    const stopped = [...this.entries.values()].map((entry) => {
+      this.cancelRetry(entry);
+      return this.stopSignIn(entry);
+    });
+    await Promise.all(stopped);
     await this.queue.catch(() => {});
     await Promise.all([...this.entries.values()].map((entry) => entry.connection?.close()));
+  }
+
+  /** What the server said when it refused, kept for the next sign-in: a scope asked for joins those asked before. */
+  private heard(entry: Entry, challenge: Challenge): void {
+    const scope = unionScopes(entry.challenge?.scope, challenge.scope);
+    entry.challenge = { ...entry.challenge, ...challenge, ...(scope === undefined ? {} : { scope }) };
+  }
+
+  /** The values `${VAR}` references in the server's entry read, replaced in `text` by their references. */
+  private redact(entry: Entry, text: string): string {
+    return redact(text, secretsOf(entry.definition.config, this.options.env));
+  }
+
+  /**
+   * Tries to connect again later, for a remote server that could not be reached or dropped its connection: sooner
+   * after the first failures, then every few minutes, until it connects or is reconnected, changed, or turned off.
+   */
+  private retryLater(entry: Entry, connection: Connection): void {
+    if (entry.retry !== undefined || this.closed || entry.connection !== connection || connection.state !== "failed" || !connection.retryable) return;
+    const delays = this.options.retryDelaysMs ?? RETRY_DELAYS_MS;
+    const delay = delays[Math.min(entry.attempts, delays.length - 1)]!;
+    entry.attempts++;
+    const timer = setTimeout(() => {
+      if (entry.retry?.timer !== timer) return;
+      entry.retry = undefined;
+      if (entry.connection === connection && !this.closed) connection.ready().catch(() => {});
+    }, delay);
+    timer.unref?.();
+    entry.retry = { timer, at: Date.now() + delay };
+  }
+
+  private cancelRetry(entry: Entry): void {
+    if (entry.retry !== undefined) clearTimeout(entry.retry.timer);
+    entry.retry = undefined;
+    entry.attempts = 0;
   }
 
   /** Lines for the model: each server whose tools only scripts call, and what it offers. */
@@ -203,6 +482,7 @@ export class Servers {
     for (const [name, entry] of this.entries) {
       if (names.has(name)) continue;
       this.entries.delete(name);
+      await this.stopSignIn(entry);
       await this.disconnect(entry);
     }
     for (const definition of next) {
@@ -218,10 +498,22 @@ export class Servers {
           registered: new Map(),
           namespace: undefined,
           syncing: Promise.resolve(),
+          target: undefined,
+          signIn: undefined,
+          signInError: undefined,
+          challenge: undefined,
+          retry: undefined,
+          attempts: 0,
         };
         this.entries.set(definition.name, entry);
       }
       const reconnect = entry.connection === undefined || entry.connectionKey !== key;
+      // A sign-in for the server as it was reaches it no more, nor does what was said of it.
+      if (entry.connectionKey !== key || !enabled(definition)) {
+        await this.stopSignIn(entry);
+        entry.signInError = undefined;
+        entry.challenge = undefined;
+      }
       entry.definition = definition;
       entry.connectionKey = key;
       if (!enabled(definition)) await this.disconnect(entry);
@@ -247,12 +539,18 @@ export class Servers {
       entry.error = cause instanceof MissingVariable ? cause.message : String(cause);
       return;
     }
+    const name = entry.definition.name;
+    entry.target = signsIn(config) ? { name, url: config.url!, oauth: config.oauth } : undefined;
     const connection: Connection = new Connection(
       config,
       {
         changed: () => {
-          if (entry.connection === connection) this.publish();
+          if (entry.connection !== connection) return;
+          if (connection.state === "connected") entry.attempts = 0;
+          else if (connection.state === "failed") this.retryLater(entry, connection);
+          this.publish();
         },
+        challenged: (challenge) => this.heard(entry, challenge),
         tools: (tools) => {
           if (entry.connection !== connection) return;
           entry.listed = tools;
@@ -263,6 +561,7 @@ export class Servers {
         },
       },
       this.options.version,
+      entry.target === undefined ? undefined : bearer(this.store, entry.target, (challenge) => this.heard(entry, challenge)),
     );
     entry.connection = connection;
     // Failures are the connection's state; the page shows them.
@@ -272,6 +571,7 @@ export class Servers {
   private async disconnect(entry: Entry): Promise<void> {
     const connection = entry.connection;
     entry.connection = undefined;
+    this.cancelRetry(entry);
     entry.listed = [];
     entry.error = undefined;
     await this.sync(entry);
@@ -357,7 +657,14 @@ export class Servers {
       execute: async (input, context) => {
         const connection = entry.connection;
         if (connection === undefined) throw new Error(`MCP server "${server}" is off`);
-        const result = await connection.call(listed.name, input, context.signal, context.update);
+        let result;
+        try {
+          result = await connection.call(listed.name, input, context.signal, context.update);
+        } catch (cause) {
+          if (needsSignIn(cause)) throw new Error(signInNeeded(server), { cause });
+          // What reaches the model shows a `${VAR}`'s reference, as the page does.
+          throw new Error(this.redact(entry, messageOf(cause)), { cause });
+        }
         const { content, fullOutputPath } = await boundOutput(toContent(result), {
           budget: this.options.maxOutputChars,
           maxResultChars: context.maxResultChars,
@@ -378,12 +685,26 @@ export class Servers {
     };
   }
 
+  /** How signing in stands, for a remote server Lemma signs in to that asked, or for which it holds a sign-in. */
+  private authOf(entry: Entry): McpAuthStatus | undefined {
+    if (!signsIn(entry.definition.config) || entry.definition.error !== undefined) return undefined;
+    const error = entry.signInError === undefined ? {} : { error: entry.signInError };
+    if (entry.signIn !== undefined) return { state: "signing-in", ...(entry.signIn.url === undefined ? {} : { url: entry.signIn.url }), ...error };
+    if (entry.connection?.state === "needs-sign-in") return { state: "signed-out", ...error };
+    if (entry.target !== undefined && this.store.get(entry.target.name, entry.target.url)?.tokens !== undefined) return { state: "signed-in", ...error };
+    // A server that connects without a sign-in asks for none, whatever a sign-in tried on it said.
+    if (entry.connection?.state === "connected") return undefined;
+    return entry.signInError === undefined ? undefined : { state: "signed-out", ...error };
+  }
+
   private status(entry: Entry): McpServerStatus {
     const { definition, connection } = entry;
     const { config } = definition;
     const on = enabled(definition);
-    const error = definition.error ?? entry.error ?? (connection?.state === "failed" ? connection.error : undefined);
+    const failure = definition.error ?? entry.error ?? (connection?.state === "failed" ? connection.error : undefined);
+    const error = failure === undefined ? undefined : this.redact(entry, failure);
     const state: McpServerState = error !== undefined ? "failed" : !on || connection === undefined || connection.state === "closed" ? "off" : connection.state;
+    const auth = on ? this.authOf(entry) : undefined;
     const names = toolNames(
       definition.name,
       entry.listed.map((tool) => tool.name),
@@ -414,7 +735,9 @@ export class Servers {
       exposure: config.exposure ?? "codemode",
       ...(config.description === undefined ? {} : { description: config.description }),
       ...(error === undefined ? {} : { error }),
-      ...(connection === undefined || connection.stderr === "" ? {} : { stderr: connection.stderr }),
+      ...(state === "failed" && entry.retry !== undefined ? { retryIn: Math.max(0, entry.retry.at - Date.now()) } : {}),
+      ...(auth === undefined ? {} : { auth }),
+      ...(connection === undefined || connection.stderr === "" ? {} : { stderr: this.redact(entry, connection.stderr) }),
       ...(connection?.server === undefined ? {} : { server: connection.server }),
       ...(connection?.protocolVersion === undefined ? {} : { protocolVersion: connection.protocolVersion }),
       ...(iconOf(config.icon, connection?.icon) === undefined ? {} : { icon: iconOf(config.icon, connection?.icon)! }),
