@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import { Result, Schema } from "effect";
-import { SessionEvent } from "@lemma/sessions";
+import { SessionEvent, SessionParent } from "@lemma/sessions";
 
 /** The format version this store reads and writes; a file of another version says which, rather than "unreadable". */
 export const FORMAT_VERSION = 1;
@@ -18,6 +18,11 @@ export const Header = Schema.Struct({
   id: Schema.String,
   cwd: Schema.String,
   createdAt: Schema.Number,
+  /**
+   * The session that started this one, for an agent's session (`SessionInfo.parent`). Optional, so adding it was not a
+   * new version: a file from before has none, and a reader from before ignores it.
+   */
+  parent: Schema.optional(SessionParent),
 });
 export type Header = typeof Header.Type;
 

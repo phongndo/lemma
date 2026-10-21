@@ -491,6 +491,51 @@ describe("sessions", () => {
     );
   });
 
+  it("keeps an agent's parent in its header, across a restart, whether it was listed from the index or read again", async () => {
+    const { parent, agent } = await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const parent = yield* store.create();
+        const agent = yield* store.create({ parent: { sessionId: parent.id, toolCallId: "call-1" } });
+        yield* store.append(agent.id, custom(1));
+        return { parent, agent };
+      }),
+    );
+    const header = JSON.parse(
+      (
+        await fs.readFile(
+          (await sessionFiles()).find((file) => file.endsWith(`_${agent.id}.jsonl`))!,
+          "utf8",
+        )
+      ).split("\n")[0]!,
+    );
+    expect(header).toMatchObject({ type: "session", version: 1, id: agent.id, parent: { sessionId: parent.id, toolCallId: "call-1" } });
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        const listed = (yield* store.list()).find((info) => info.id === agent.id)!;
+        expect(listed.parent).toEqual({ sessionId: parent.id, toolCallId: "call-1" });
+        expect((yield* store.get(parent.id)).parent).toBeUndefined();
+        // Another writer appends: the file is read on from the last scan, which keeps the header's parent.
+        const file = (yield* Effect.promise(sessionFiles)).find((name) => name.endsWith(`_${agent.id}.jsonl`))!;
+        const line = { seq: 2, id: "x2", parent: listed.leaf, at: Date.now() + 1000, data: title("external") };
+        yield* Effect.promise(() => fs.appendFile(file, `${JSON.stringify(line)}\n`));
+        expect((yield* store.list()).find((info) => info.id === agent.id)).toMatchObject({
+          title: "external",
+          parent: { sessionId: parent.id, toolCallId: "call-1" },
+        });
+      }),
+    );
+    // Without the index, read from the file alone.
+    await fs.rm(path.join(dir, "sessions", ".index.json"), { force: true });
+    await run(
+      Effect.gen(function* () {
+        const store = yield* Sessions;
+        expect((yield* store.get(agent.id)).parent).toEqual({ sessionId: parent.id, toolCallId: "call-1" });
+      }),
+    );
+  });
+
   it("moves an empty session to another directory, its file with it, and keeps it there across a restart", async () => {
     const id = await run(
       Effect.gen(function* () {
