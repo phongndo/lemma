@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "pnpm --filter @lemma/core --filter @lemma/router --filter @lemma/cli-app build",
+    "build": "pnpm --filter @lemma/core --filter @lemma/router --filter @lemma/cli-app --filter @lemma/host build",
     "check": "pnpm build && node scripts/check-boundaries.ts && node scripts/size.ts && node scripts/examples-coverage.ts && tsrs -p scripts && pnpm lint && pnpm format:check && pnpm -r --workspace-concurrency=4 check",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt",

@@ -8,11 +8,13 @@ import { fileURLToPath } from "node:url";
 // growth is then a decision someone made where it shows, not drift. `pnpm check` runs this.
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-/** Lines of `src` per runtime package, at most. */
+/** Lines of `src` per runtime package, at most: TypeScript and JavaScript alike. */
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
   "packages/contracts": 2_600,
-  "packages/host": 2_800,
+  // Its launch is JavaScript (start.mjs, launch.mjs: the compile cache, Effect's bundle, its Node.js flags), which
+  // loads before the compile cache is on, and is counted with the rest.
+  "packages/host": 2_950,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,
@@ -21,7 +23,7 @@ const BUDGET: Readonly<Record<string, number>> = {
 const sources = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
-    return statSync(path).isDirectory() ? sources(path) : /\.(ts|tsx)$/.test(name) ? [path] : [];
+    return statSync(path).isDirectory() ? sources(path) : /\.(ts|tsx|mts|js|mjs|cjs)$/.test(name) ? [path] : [];
   });
 const lines = (file: string) => readFileSync(file, "utf8").split("\n").length - 1;
 

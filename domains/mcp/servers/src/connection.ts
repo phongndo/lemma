@@ -22,6 +22,18 @@ const loadSdk = (): Promise<Sdk> =>
     },
   ));
 
+/**
+ * The protocol era each server spoke when it last connected in this process, by how it is started. The SDK asks a
+ * server which it speaks (`server/discover`), a local one on a second copy of it, a process of its own (for a Node.js
+ * server, 70–100 MB more while it runs), since a 2025 server may exit on a request it does not know. Once known, it is
+ * not asked so again: a 2025 server is initialized at once (`prior`), and a 2026-07-28 one is asked on its own process,
+ * which answers. A connect that fails forgets it, so the next asks as the first did.
+ */
+const eras = new Map<string, "legacy" | "modern">();
+const eraKey = (config: McpServerConfig) => JSON.stringify([config.command, config.args, config.env, config.cwd, config.url, config.headers]);
+/** The SDK's stdio transport, but asking which era on the process it starts: a subclass is asked in place. */
+let inPlace: Sdk["StdioClientTransport"] | undefined;
+
 /** How much of a local server's stderr is kept for clients to show (`McpServerStatus.stderr`). */
 const STDERR_TAIL = 4096;
 const DEFAULT_TIMEOUT_SECONDS = 60;
@@ -152,15 +164,17 @@ export class Connection {
       void transport?.close().catch(() => {});
       void client.close().catch(() => {});
     };
+    const key = eraKey(this.config);
+    const era = eras.get(key);
     try {
-      transport = this.transport(loaded);
+      transport = this.transport(loaded, era === "modern");
       if (transport instanceof loaded.StdioClientTransport) {
         transport.stderr?.on("data", (chunk: Buffer) => {
           this.stderr = (this.stderr + chunk.toString("utf8")).slice(-STDERR_TAIL);
         });
       }
       if (this.closing) throw new Error("The server was stopped");
-      await client.connect(transport, { timeout: this.timeoutMs });
+      await client.connect(transport, { timeout: this.timeoutMs, ...(era === "legacy" ? { prior: { kind: "legacy" as const } } : {}) });
       const tools = client.getServerCapabilities()?.tools === undefined ? [] : (await client.listTools(undefined, { timeout: this.timeoutMs })).tools;
       if (this.closing) throw new Error("The server was stopped");
       const info = client.getServerVersion();
@@ -169,12 +183,16 @@ export class Connection {
       this.icon = (icons.find((candidate) => candidate.theme === undefined) ?? icons[0])?.src;
       this.protocolVersion = client.getNegotiatedProtocolVersion();
       this.instructions = client.getInstructions();
+      const spoke = client.getProtocolEra();
+      if (spoke === undefined) eras.delete(key);
+      else eras.set(key, spoke);
       this.client = client;
       this.state = "connected";
       this.events.tools(tools);
       this.events.changed();
       return client;
     } catch (error) {
+      eras.delete(key);
       await client.close().catch(() => {});
       // One that never connected is not the client's to close.
       await transport?.close().catch(() => {});
@@ -194,15 +212,16 @@ export class Connection {
     throw new Error(this.error ?? describe(error, this.config), { cause: error });
   }
 
-  /** Throws for a `url` that is not one. */
-  private transport(loaded: Sdk): StreamableHTTPClientTransport | StdioClientTransport {
+  /** Throws for a `url` that is not one. A local server known to speak 2026-07-28 is asked which era `inPlace`. */
+  private transport(loaded: Sdk, modern: boolean): StreamableHTTPClientTransport | StdioClientTransport {
     const { command, url } = this.config;
     if (url !== undefined)
       return new loaded.StreamableHTTPClientTransport(
         new URL(url),
         this.config.headers === undefined ? {} : { requestInit: { headers: { ...this.config.headers } } },
       );
-    return new loaded.StdioClientTransport({
+    const Transport = modern ? (inPlace ??= class extends loaded.StdioClientTransport {}) : loaded.StdioClientTransport;
+    return new Transport({
       command: command!,
       args: [...(this.config.args ?? [])],
       ...(this.config.env === undefined ? {} : { env: { ...this.config.env } }),

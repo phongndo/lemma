@@ -54,7 +54,11 @@ const greet = definePlugin({
   field is offered as its value type and a number as `number`. To show the
   model other parameters than the schema implies (an input that repairs
   malformed shapes before decoding), put a check with a `toJsonSchema`
-  annotation on its encoded side, as the builtin `edit` tool does.
+  annotation on its encoded side, as the builtin `edit` tool does. Each tool's
+  is made the first time it is listed or run, and kept while the tool is there.
+  A tool whose input or output has no JSON Schema form is left out of `list`,
+  and warned of once, rather than fail the list of every tool; it is no tool to
+  run either.
 - `execute(invocation, signal)`:
   1. unknown tool, or one the request did not offer (`ToolInvocation.offered`),
      or, for the model's own call, did not declare to it (`declared`): fails

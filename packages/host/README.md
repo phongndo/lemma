@@ -59,14 +59,47 @@ watchdog's worker, [below](#a-blocked-event-loop), uses it too.
 - **When it is written.** Once the host has started, and again as it exits, so
   a host killed later (a supervised one's group) keeps it.
 
-`pnpm start` and `pnpm dev` also cap V8's young generation
-(`--max-semi-space-size=16`, in MB). Uncapped, on a machine with memory to
-spare, it grows to 64 MB as the host starts and works, and stays committed
-until the host has idled for minutes: capped, a host holds about 25 MB less
-once started and 65 MB less after a few turns, for the same CPU a turn
-(measured end to end) and a harness benchmark step about 7% slower. It is a
-flag of Node's, which a running process cannot change, so it is each
-launcher's to pass; `lemma serve` and the desktop app do not yet.
+Effect, a third of the modules a start loads, loads from a bundle of it
+instead (`useEffectBundle` in `src/launch.mjs`, as the process's entry
+`start.mjs` and `lemma serve` call it first): a start loads about 300 fewer
+modules, in 30 ms less, and holds about 9 MB less once started and 5 MB less
+heap (measured on Linux, Node 24).
+
+- **What it holds.** `scripts/bundle-effect.ts` bundles `effect` and every
+  `@effect/*` package installed with it: each module any of their specifiers
+  exports is an entry, and a resolve hook sends whatever resolves to that
+  module (any specifier, from the host or a plugin file) to its entry, so
+  there is one copy of each. The modules a start loads (what `main.ts`
+  imports, traced through the workspace's sources) share one chunk; split by
+  which entries reach them, they were hundreds. It is unminified, keeping the
+  names classes and functions were given (Effect formats values by their
+  class's name, and stacks name functions), with source maps to Effect's own.
+- **Where.** `packages/host/node_modules/.cache/effect`. `pnpm build` builds
+  it, and leaves one that is fresh as it is. It can be deleted at any time.
+- **When it is not used.** One that is missing, or was built from other
+  packages or another version of the script (each package's manifest and the
+  script are checked against the size and time recorded), is left alone, and
+  Effect loads from its modules as without one. So does the host imported
+  after something loaded Effect already, which would make a second copy.
+- **What differs.** A namespace `effect` exports (`Effect` in
+  `import { Effect } from "effect"`) is the bundle's object, not the
+  namespace of `effect/Effect`, though everything in the two is the same.
+
+The host runs with Node.js flags of its own (`HOST_FLAGS` in `src/launch.mjs`),
+which each launcher passes: `pnpm dev`, `lemma serve --detach`, a `lemma
+service`, `lemma plugins check`, and the desktop app (as `--js-flags`, which is
+how Electron's utility process takes V8's). A host started without them
+(`pnpm start`, the foreground `lemma serve`, a launcher of your own) starts
+again with them, as the same process (`execve`); on Windows, which has no
+such call, it runs without them. A flag given another value is left as given.
+They are Node's flags, which a running process cannot take on:
+
+- `--max-semi-space-size=16` caps V8's young generation at 16 MB. Uncapped, on
+  a machine with memory to spare, it grows to 64 MB as the host starts and
+  works, and stays committed until the host has idled for minutes: capped, a
+  host holds about 8 MB less once started and 30 MB less after 20 turns, for
+  the same time a turn takes (measured end to end) and a harness benchmark
+  step at 10,000 entries about 5% slower.
 
 ## The host runtime
 
@@ -126,8 +159,8 @@ stops every session with it, and nothing on the loop can notice.
 
   The worker hears these as each load is applied, before its plugins start.
 
-  Code in the kernel, in Effect, or in the host counts for the plugin that
-  called it.
+  Code in the kernel, in Effect (its bundle's chunks too), or in the host
+  counts for the plugin that called it.
 
 - **Why stacks, not a profile.** A CPU profile started after the loop began
   misses the loop's own frame once V8 has optimized it, and names its caller

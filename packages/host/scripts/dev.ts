@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { appUrl } from "@lemma/contracts";
 import { readDiscovery } from "@lemma/contracts/discovery";
+import { HOST_FLAGS } from "../src/launch.mjs";
 import { resolvePaths } from "../src/paths.ts";
 
 /**
@@ -86,19 +87,12 @@ const run = (name: string, command: string, args: readonly string[], options: Sp
 const once = (command: string, args: readonly string[]) =>
   new Promise<boolean>((resolve) => spawn(command, args, { cwd: root, stdio: "inherit" }).once("exit", (code) => resolve(code === 0)));
 
-// The host's own output stays: watch mode would clear the terminal the web server shares. Its young generation is capped
-// as `pnpm start` caps it (the host's README, "Its start").
+// The host's own output stays: watch mode would clear the terminal the web server shares. It gets the host's Node.js
+// flags here: under watch mode it cannot start again for them (the host's README, "Its start").
 run(
   "host",
   process.execPath,
-  [
-    "--watch",
-    "--watch-preserve-output",
-    "--conditions=lemma-source",
-    "--max-semi-space-size=16",
-    fileURLToPath(new URL("../src/start.mjs", import.meta.url)),
-    "--no-open",
-  ],
+  ["--watch", "--watch-preserve-output", "--conditions=lemma-source", ...HOST_FLAGS, fileURLToPath(new URL("../src/start.mjs", import.meta.url)), "--no-open"],
   {
     cwd: project,
     env: { ...process.env, INIT_CWD: project },

@@ -1,5 +1,6 @@
 // An MCP server for the tests, over stdio, speaking both the 2026-07-28 protocol and the earlier ones (`serveStdio`):
 // what it offers is what they check against.
+import { appendFileSync } from "node:fs";
 import { McpServer } from "@modelcontextprotocol/server";
 import { serveStdio } from "@modelcontextprotocol/server/stdio";
 import { z } from "zod";
@@ -49,4 +50,6 @@ const make = () => {
 };
 
 console.error("fixture: started");
+// Each start, where a test counts them.
+if (process.env["MCP_STARTS"] !== undefined) appendFileSync(process.env["MCP_STARTS"], "fixture\n");
 serveStdio(make);

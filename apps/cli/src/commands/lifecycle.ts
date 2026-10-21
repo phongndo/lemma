@@ -7,6 +7,7 @@ import { Duration, Effect } from "effect";
 import { readDiscovery } from "@lemma/contracts/discovery";
 import { CliChannels } from "@lemma/cli";
 import { callChannel } from "@lemma/client";
+import { missingHostFlags } from "@lemma/host/launch";
 import { SHUTDOWN_TIMEOUT_MS } from "@lemma/host/limits";
 import { hostFiles } from "@lemma/host/paths";
 import { CliError, defineBuiltin, ExitCode, usage } from "../command.ts";
@@ -52,6 +53,15 @@ const tail = (path: string, count: number): Effect.Effect<readonly string[]> =>
       () => [],
     ),
   );
+
+/**
+ * What runs `serve` in a process of its own (`--detach`, a service): this lemma (`io.self`), given the host's Node.js
+ * flags it was not started with, so that the host need not start again for them (`@lemma/host/launch`).
+ */
+const serveCommand = (io: Io, self: readonly string[]): string[] => {
+  const [node, ...rest] = self;
+  return [node!, ...missingHostFlags([...rest.slice(0, -1), ...(io.env.NODE_OPTIONS ?? "").split(/\s+/)]), ...rest, "serve", "--no-open"];
+};
 
 /** The host's own flags, from `serve`'s. */
 const hostArgs = (flags: { readonly port: number | undefined; readonly host: string | undefined; readonly safe: boolean }): string[] => [
@@ -102,8 +112,8 @@ const serve = defineBuiltin({
       }
       if (io.self === undefined)
         return yield* new CliError({ code: "Unsupported", message: "This lemma cannot start itself in the background", exit: ExitCode.failed });
-      const [command, ...rest] = io.self;
-      const child = spawn(command!, [...rest, "serve", "--no-open", ...args], {
+      const [command, ...rest] = serveCommand(io, io.self);
+      const child = spawn(command!, [...rest, ...args], {
         cwd: io.cwd,
         env: { ...io.env, INIT_CWD: io.cwd, LEMMA_STARTED_BY: "cli" } as NodeJS.ProcessEnv,
         detached: true,
@@ -378,7 +388,7 @@ const serviceManager = (): ServiceManager | undefined => {
 
 /** What a service runs: this lemma's `serve`, for the home this command uses. */
 const serviceDefinition = (io: Io, manager: ServiceManager) => {
-  const command = [...(io.self ?? []), "serve", "--no-open"];
+  const command = io.self === undefined ? ["serve", "--no-open"] : serveCommand(io, io.self);
   const env: Record<string, string> = { LEMMA_STARTED_BY: "service", ...(io.env.LEMMA_HOME === undefined ? {} : { LEMMA_HOME: homeOf(io) }) };
   return { command, text: manager.render(command, env, join(hostFiles(homeOf(io)).logs, "service.log")) };
 };
