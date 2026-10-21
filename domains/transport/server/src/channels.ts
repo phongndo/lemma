@@ -3,7 +3,7 @@ import { RpcGroup, RpcMiddleware } from "effect/rpc";
 import type { Rpc } from "effect/rpc";
 import { Admitted } from "@lemma/core";
 import type { Contribution, Registries } from "@lemma/core";
-import { answering, Channels, elementsOf, HostError, resultOf, RuntimeRpcs, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
+import { answering, Channels, elementsOf, HostError, mapChunks, resultOf, RuntimeRpcs, wireCodec, withChannel, withdrawnFrom } from "@lemma/contracts";
 import type { Channel, ChannelInfo, ChannelStream } from "@lemma/contracts";
 import { isTagged, toHostError } from "./errors.ts";
 import { Replies } from "./replies.ts";
@@ -163,15 +163,19 @@ const openChannel = <A, E, R>(registries: Reader, request: { readonly id: string
     ),
   );
 
-/** The stream `ChannelLifetime` opened for this request, encoded for the wire. */
+/**
+ * The stream `ChannelLifetime` opened for this request, encoded for the wire a chunk at a time (`mapChunks`): the RPC
+ * server sends a chunk as one message and the next once the client has acknowledged it, so what the stream makes
+ * meanwhile leaves together, and a client across a network keeps up with a stream faster than its round trips.
+ */
 export const openedStream: Stream.Stream<unknown, HostError> = Stream.unwrap(
   Effect.gen(function* () {
     const opened = yield* Opened;
     if (opened === undefined) return Stream.die(new Error("Channel.Open was served without ChannelLifetime"));
     const { channel, input } = opened;
-    return elementsOf(channel, input).pipe(
+    const elements = elementsOf(channel, input).pipe(
       Stream.catchCause((cause) => (Cause.hasInterruptsOnly(cause) ? Stream.failCause(cause as Cause.Cause<never>) : Stream.fail(failed(channel.id, cause)))),
-      Stream.mapEffect((element) => encode(channel, element)),
     );
+    return mapChunks(elements, (element) => Effect.map(encode(channel, element), (wire) => [wire]));
   }),
 );

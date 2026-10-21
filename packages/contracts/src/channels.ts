@@ -208,6 +208,31 @@ export const eventFeed = <A, E, R>(first: Effect.Effect<A, E, R>, sources: reado
     }),
   );
 
+/**
+ * `stream` with each element replaced by what `f` makes of it, none or many, a chunk at a time: the transport sends a
+ * chunk as one message and the next once the client acknowledged it, so what comes meanwhile leaves together, where
+ * `Stream.mapEffect` or `mapAccumEffect` would make each element a chunk, and a round trip, of its own. When `f` fails,
+ * the stream fails once what it made of the elements before has gone.
+ */
+export const mapChunks = <A, E, R, B, E2>(stream: Stream.Stream<A, E, R>, f: (element: A) => Effect.Effect<readonly B[], E2>): Stream.Stream<B, E | E2, R> =>
+  Stream.transformPull(stream, (pull) => {
+    let failed: { readonly error: E2 } | undefined;
+    const next: Effect.Effect<readonly [B, ...B[]], E | E2 | Cause.Done> = Effect.suspend(() => {
+      if (failed !== undefined) return Effect.fail(failed.error);
+      return Effect.flatMap(pull, (values) => {
+        const made: (readonly B[])[] = [];
+        return Effect.forEach(values, (value) => Effect.map(f(value), (each) => void made.push(each)), { discard: true }).pipe(
+          Effect.catch((error) => Effect.sync(() => void (failed = { error }))),
+          Effect.flatMap(() => {
+            const all = made.flat();
+            return all.length === 0 ? next : Effect.succeed(all as unknown as readonly [B, ...B[]]);
+          }),
+        );
+      });
+    });
+    return Effect.succeed(next);
+  });
+
 const codecs = new WeakMap<Schema.Top, Schema.Codec<unknown, unknown>>();
 
 /**

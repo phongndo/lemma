@@ -93,9 +93,15 @@ The file is written as soon as the transport listens, before the plugins after i
   lower order), so a client that reopens reaches the one answering now; a call
   in flight is left to finish. A stream is pulled at its client's pace over
   either protocol: one chunk ahead of the client over the WebSocket, as far as
-  the connection's buffers allow over HTTP. Effect's RPC client reads a
+  the connection's buffers allow over HTTP. What it makes while its client
+  acknowledges a chunk goes out together, as the next (`mapChunks` in
+  `@lemma/contracts`): encoded element by element, every element would wait a
+  round trip, and a client across a network would fall behind a turn's deltas
+  and lose what the stream's buffers drop. So a stream costs a message per
+  round trip at most, however fast it runs. Effect's RPC client reads a
   WebSocket in order, so a client that stops taking a stream's elements stalls
-  its own connection, never the host.
+  its own connection, never the host: the host holds no more for it than its
+  stream's own bounded buffers (`eventFeed`), one chunk on the way.
 - **Replies.** Every request but a stream runs as the transport's own work
   (`Registries.run` with an item of a registry of its own), from its handler
   until its reply has left: written to the WebSocket, or, over streaming HTTP,

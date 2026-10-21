@@ -3,7 +3,7 @@ import type { Scope } from "effect";
 import { Event, Hook, schemaCheck } from "@lemma/core";
 import type { Events } from "@lemma/core";
 import { defineRoute } from "@lemma/router";
-import { defineChannel, eventFeed, HandlerCredit, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
+import { defineChannel, eventFeed, HandlerCredit, mapChunks, optionalPayload, ResultCredit, serveChannel } from "@lemma/contracts";
 import type { Channel } from "@lemma/contracts";
 import { AssistantMessage, IMAGE_TYPES, ImageContent, LlmFailure, MAX_IMAGE_BYTES, Message, TextContent, ThinkingLevel, ToolSpec, Usage } from "@lemma/llm";
 import { SessionSearchMatch } from "./search.ts";
@@ -689,37 +689,43 @@ const follow = (
   sessionId: string,
   after: number,
 ): Stream.Stream<SessionLogUpdate, SessionError> =>
-  eventFeed<Heard, SessionError, never>(
-    Effect.map(sessions.events(sessionId, { after }), (log) => ({ type: "subscribed", events: log })),
-    [
-      events.stream(SessionAppended, FEED).pipe(
-        Stream.filter((appended) => appended.sessionId === sessionId),
-        Stream.map(({ event }): Heard => ({ type: "appended", event })),
-      ),
-      events.stream(SessionRemoved, FEED).pipe(
-        Stream.filter((removed) => removed.sessionId === sessionId),
-        Stream.map((): Heard => ({ type: "removed" })),
-      ),
-    ],
-  ).pipe(
-    // The state is the last `seq` sent.
-    Stream.mapAccumEffect(
-      () => after,
-      (last, heard): Effect.Effect<readonly [number, readonly SessionLogUpdate[]], SessionError> => {
-        if (heard.type === "removed") return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `Session ${sessionId} was deleted` }));
-        if (heard.type === "subscribed") return Effect.succeed([heard.events.at(-1)?.seq ?? last, [heard]]);
-        const { seq } = heard.event;
-        // Appended while the log was read, or read already to fill a gap.
-        if (seq <= last) return Effect.succeed([last, []]);
-        if (seq === last + 1) return Effect.succeed([seq, [heard]]);
-        // Appends dropped on the way, as a slow client's are: the log has them.
-        return Effect.map(sessions.events(sessionId, { after: last }), (missed) => [
-          missed.at(-1)?.seq ?? last,
-          missed.map((event): SessionLogUpdate => ({ type: "appended", event })),
-        ]);
-      },
-    ),
-  );
+  Stream.suspend(() => {
+    /** The last `seq` sent. */
+    let last = after;
+    const feed = eventFeed<Heard, SessionError, never>(
+      Effect.map(sessions.events(sessionId, { after }), (log) => ({ type: "subscribed", events: log })),
+      [
+        events.stream(SessionAppended, FEED).pipe(
+          Stream.filter((appended) => appended.sessionId === sessionId),
+          Stream.map(({ event }): Heard => ({ type: "appended", event })),
+        ),
+        events.stream(SessionRemoved, FEED).pipe(
+          Stream.filter((removed) => removed.sessionId === sessionId),
+          Stream.map((): Heard => ({ type: "removed" })),
+        ),
+      ],
+    );
+    // A chunk at a time (`mapChunks`), so the events appended together reach a client together.
+    return mapChunks(feed, (heard): Effect.Effect<readonly SessionLogUpdate[], SessionError> => {
+      if (heard.type === "removed") return Effect.fail(new SessionError({ sessionId, reason: "NotFound", message: `Session ${sessionId} was deleted` }));
+      if (heard.type === "subscribed") {
+        last = heard.events.at(-1)?.seq ?? last;
+        return Effect.succeed([heard]);
+      }
+      const { seq } = heard.event;
+      // Appended while the log was read, or read already to fill a gap.
+      if (seq <= last) return Effect.succeed([]);
+      if (seq === last + 1) {
+        last = seq;
+        return Effect.succeed([heard]);
+      }
+      // Appends dropped on the way, as a slow client's are: the log has them.
+      return Effect.map(sessions.events(sessionId, { after: last }), (missed) => {
+        last = missed.at(-1)?.seq ?? last;
+        return missed.map((event): SessionLogUpdate => ({ type: "appended", event }));
+      });
+    });
+  });
 
 /** `SessionChannels` served from `sessions`: what a provider of `Sessions` adds to `Channels`, each with `PluginContext.add`. */
 export const serveSessions = (sessions: Context.Service.Shape<typeof Sessions>, events: Context.Service.Shape<typeof Events>): readonly Channel[] => [
