@@ -12,7 +12,9 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const BUDGET: Readonly<Record<string, number>> = {
   "packages/core": 5_600,
   "packages/contracts": 2_600,
-  "packages/host": 2_800,
+  // Raised from 2,800 for renamed plugins: a row under a former id moves to the plugin's as it is written, the host's
+  // own, beneath any plugin.
+  "packages/host": 2_810,
   "packages/composition": 850,
   "packages/web": 2_000,
   "packages/client": 800,

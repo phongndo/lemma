@@ -102,7 +102,6 @@ export function planComposition(input: PlanInput): Plan {
   const provided = input.provided ?? [];
   const appKeys = new Set(provided.map((tag) => tag.key));
   const reserved = reservedKeys(provided);
-  const rows = input.rows;
   const diagnostics: Diagnostic[] = [];
 
   const byId = new Map<string, KnownPlugin>();
@@ -112,7 +111,24 @@ export function planComposition(input: PlanInput): Plan {
     const shadows = previous?.source === "bundled" || previous?.shadows === true;
     byId.set(plugin.id, { plugin, source, ...(shadows ? { shadows } : {}), ...(resources === undefined ? {} : { resources }) });
   }
+  /** Says what a rename (`formerly`) left under the old id. */
+  const renamed = (pluginId: string, message: string, suggestion: string) =>
+    diagnostics.push(new Diagnostic({ severity: "warning", pluginId, message, suggestion }));
+  // A file's plugin with a bundled plugin's former id (`formerly`) was written to replace it before the rename: it still does.
+  for (const bundled of input.bundled) {
+    const mine = bundled.formerly?.find((id) => byId.get(id)?.source !== undefined && byId.get(id)?.source !== "bundled");
+    if (mine === undefined || byId.get(bundled.id)?.source !== "bundled") continue;
+    byId.delete(bundled.id);
+    byId.set(mine, { ...byId.get(mine)!, shadows: true });
+    renamed(mine, `"${mine}" replaces "${bundled.id}", its id since a rename`, `Give it the id "${bundled.id}"`);
+  }
   const known = [...byId.values()];
+  const { rows, carried } = carryFormerRows(input.rows, known);
+  for (const [former, id] of carried) {
+    // Said once: by the app that checks the plugin's config.
+    if (input.keysCheckedElsewhere?.(id) !== true)
+      renamed(id, `The row for "${former}" applies to "${id}", its id since a rename`, `Rename the row to "${id}"`);
+  }
 
   const plugins: Record<string, PluginEntry> = {};
   for (const { plugin, source } of known) {
@@ -138,7 +154,7 @@ export function planComposition(input: PlanInput): Plan {
       // Not one with a row of its own: renaming this row to it would make two.
       const meant = closestId(
         id,
-        [...known.map(({ plugin }) => plugin.id), ...(input.elsewhereIds ?? [])].filter((candidate) => input.rows[candidate] === undefined),
+        [...known.map(({ plugin }) => plugin.id), ...(input.elsewhereIds ?? [])].filter((candidate) => rows[candidate] === undefined),
       );
       diagnostics.push(
         new Diagnostic({
@@ -279,6 +295,31 @@ export function planComposition(input: PlanInput): Plan {
   }
 
   return { known, composition, resolved, required: [...requested].filter((id) => byId.has(id)), problems, diagnostics };
+}
+
+/**
+ * The rows with each under a known plugin's former id (`formerly`) carried to the plugin, beneath a row of its own, its
+ * `config` key by key; `carried` maps each former id carried to the plugin's. A former id a known plugin has stays its.
+ */
+export function carryFormerRows(
+  rows: Readonly<Record<string, PluginRow>>,
+  known: readonly { readonly plugin: Plugin }[],
+): { readonly rows: Readonly<Record<string, PluginRow>>; readonly carried: ReadonlyMap<string, string> } {
+  const ids = new Set(known.map(({ plugin }) => plugin.id));
+  const carried = new Map<string, string>();
+  const out: Record<string, PluginRow> = { ...rows };
+  for (const { plugin } of known) {
+    for (const former of plugin.formerly ?? []) {
+      const row = rows[former];
+      if (row === undefined || ids.has(former) || carried.has(former)) continue;
+      carried.set(former, plugin.id);
+      delete out[former];
+      const own = out[plugin.id];
+      const config = Predicate.isObject(row.config) && Predicate.isObject(own?.config) ? { ...row.config, ...own.config } : (own?.config ?? row.config);
+      out[plugin.id] = { ...row, ...own, ...(config === undefined ? {} : { config }) };
+    }
+  }
+  return { rows: carried.size === 0 ? rows : out, carried };
 }
 
 /** A row over an entry: `config` replaces the entry's, keeping app defaults beneath it key by key. `required` is the planner's. */

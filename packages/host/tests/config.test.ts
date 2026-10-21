@@ -166,6 +166,26 @@ describe("loadComposition", () => {
 });
 
 describe("patchConfig", () => {
+  test("moves a renamed plugin's row from its former id as it writes it, so the change decides alone", () => {
+    const start = `{
+  "plugins": {
+    // from before the rename
+    "agent.profiles": { "enabled": false, "config": { "default": "writing", "other": 1 } },
+  },
+}`;
+    const formerly = { "agent.modes": ["agent.profiles"] };
+    // Turning it on in the user file writes no key: the former row's `enabled: false` must not survive it.
+    expect(parseJsonc(patchConfig(start, { "agent.modes": { enabled: true } }, "user", formerly), [], { allowTrailingComma: true })).toEqual({
+      plugins: { "agent.modes": { config: { default: "writing", other: 1 } } },
+    });
+    // A setting reset comes back as the plugin's default, not the former row's value.
+    expect(parseJsonc(patchConfig(start, { "agent.modes": { values: { default: null } } }, "user", formerly), [], { allowTrailingComma: true })).toEqual({
+      plugins: { "agent.modes": { enabled: false, config: { other: 1 } } },
+    });
+    // Without a former row, nothing moves.
+    expect(patchConfig(`{ "plugins": {} }`, { "agent.modes": { enabled: false } }, "user", formerly)).not.toContain("agent.profiles");
+  });
+
   test("adds rows to an empty file and removes defaults, keeping comments and other rows", () => {
     const empty = patchConfig("", { bash: { enabled: false } });
     expect(parseJsonc(empty)).toEqual({ plugins: { bash: { enabled: false } } });
